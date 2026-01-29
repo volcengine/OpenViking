@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://www.openviking.ai/docs
+    about: Check the documentation for guides and API reference
+  - name: Discord Community
+    url: https://discord.com/invite/eHvx8E9XF3
+    about: Join our Discord server for discussions and support
+  - name: Questions & Discussions
+    url: https://github.com/volcengine/OpenViking/discussions
+    about: Ask questions and share ideas in GitHub Discussions

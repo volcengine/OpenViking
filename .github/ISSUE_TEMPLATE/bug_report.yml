@@ -1,0 +1,106 @@
+name: Bug Report
+description: Report a bug or unexpected behavior
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug! Please fill out the form below.
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Bug Description
+      description: A clear and concise description of what the bug is.
+      placeholder: Describe the bug...
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to Reproduce
+      description: Steps to reproduce the behavior.
+      placeholder: |
+        1. Initialize client with '...'
+        2. Call method '...'
+        3. See error
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected Behavior
+      description: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual Behavior
+      description: What actually happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: code
+    attributes:
+      label: Minimal Reproducible Example
+      description: If applicable, provide a minimal code example that reproduces the issue.
+      render: python
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error Logs
+      description: If applicable, paste any error messages or stack traces.
+      render: shell
+
+  - type: input
+    id: version
+    attributes:
+      label: OpenViking Version
+      description: What version of OpenViking are you using?
+      placeholder: e.g., 0.1.0
+    validations:
+      required: true
+
+  - type: input
+    id: python-version
+    attributes:
+      label: Python Version
+      description: What version of Python are you using?
+      placeholder: e.g., 3.10.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating System
+      options:
+        - Linux
+        - macOS
+        - Windows
+        - Other
+    validations:
+      required: true
+
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Model Backend
+      description: Which model backend are you using?
+      options:
+        - Volcengine (Doubao)
+        - OpenAI
+        - Other
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Add any other context about the problem here.

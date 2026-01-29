@@ -1,0 +1,80 @@
+name: Feature Request
+description: Suggest a new feature or enhancement
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for suggesting a feature! Please fill out the form below.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem Statement
+      description: Is your feature request related to a problem? Please describe.
+      placeholder: A clear description of what the problem is. Ex. I'm always frustrated when...
+    validations:
+      required: true
+
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: Describe the solution you'd like.
+      placeholder: A clear description of what you want to happen.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives Considered
+      description: Describe any alternative solutions or features you've considered.
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Feature Area
+      description: Which area of OpenViking does this feature relate to?
+      options:
+        - Core (Client/Engine)
+        - Filesystem Operations
+        - Retrieval/Search
+        - Session Management
+        - Model Integration
+        - Storage/VectorDB
+        - CLI Tools
+        - Documentation
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: use-case
+    attributes:
+      label: Use Case
+      description: Describe the use case for this feature.
+      placeholder: How would you use this feature in your project?
+    validations:
+      required: true
+
+  - type: textarea
+    id: code-example
+    attributes:
+      label: Example API (Optional)
+      description: If applicable, provide an example of how the API might look.
+      render: python
+
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional Context
+      description: Add any other context, screenshots, or references about the feature request.
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      options:
+        - label: I am willing to contribute to implementing this feature

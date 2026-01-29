@@ -1,0 +1,55 @@
+name: Question
+description: Ask a question about OpenViking usage
+title: "[Question]: "
+labels: ["question"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Have a question about OpenViking? We're here to help!
+
+  - type: textarea
+    id: question
+    attributes:
+      label: Your Question
+      description: What would you like to know?
+      placeholder: Describe your question clearly...
+    validations:
+      required: true
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Provide any relevant context or background.
+      placeholder: |
+        - What are you trying to achieve?
+        - What have you tried so far?
+
+  - type: textarea
+    id: code
+    attributes:
+      label: Code Example (Optional)
+      description: If applicable, share relevant code.
+      render: python
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Related Area
+      options:
+        - Installation / Setup
+        - Configuration
+        - API Usage
+        - Retrieval / Search
+        - Session Management
+        - Performance
+        - Other
+
+  - type: checkboxes
+    id: checked-docs
+    attributes:
+      label: Before Asking
+      options:
+        - label: I have checked the [documentation](https://www.openviking.ai/docs)
+          required: true
