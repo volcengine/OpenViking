@@ -21,69 +21,76 @@ class CMakeBuildExtension(build_ext):
         for ext in self.extensions:
             self.build_extension(ext)
 
+    def _copy_binary(self, src, dst):
+        """Helper to copy binary and set permissions."""
+        print(f"Copying AGFS binary from {src} to {dst}")
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(str(src), str(dst))
+        if sys.platform != "win32":
+            os.chmod(str(dst), 0o755)
+
     def build_agfs(self):
         """Build AGFS server, fallback to prebuilt binary if build fails."""
-        agfs_server_dir = Path("third_party/agfs/agfs-server").resolve()
+        # Paths
         binary_name = "agfs-server.exe" if sys.platform == "win32" else "agfs-server"
+        agfs_server_dir = Path("third_party/agfs/agfs-server").resolve()
         agfs_prebuilt_binary = Path(f"third_party/agfs/bin/{binary_name}").resolve()
+        
+        # Target in source tree (for development/install)
         agfs_bin_dir = Path("openviking/bin").resolve()
         agfs_target_binary = agfs_bin_dir / binary_name
 
-        agfs_bin_dir.mkdir(parents=True, exist_ok=True)
-
+        # 1. Try to build from source
         build_success = False
-        if agfs_server_dir.exists():
-            go_executable = shutil.which("go")
-            if go_executable:
-                print("Building AGFS server from source...")
-                import subprocess
-                try:
-                    if sys.platform == "win32":
-                        # Now that we fixed the code compatibility, we can use go build directly on Windows
-                        build_cmd = ["go", "build", "-o", f"build/{binary_name}", "cmd/server/main.go"]
-                    else:
-                        build_cmd = ["make", "build"]
+        if agfs_server_dir.exists() and shutil.which("go"):
+            print("Building AGFS server from source...")
+            import subprocess
+            try:
+                build_args = ["go", "build", "-o", f"build/{binary_name}", "cmd/server/main.go"] if sys.platform == "win32" else ["make", "build"]
+                
+                subprocess.run(
+                    build_args,
+                    cwd=str(agfs_server_dir),
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
 
-                    subprocess.run(
-                        build_cmd,
-                        cwd=str(agfs_server_dir),
-                        check=True,
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.PIPE
-                    )
+                agfs_built_binary = agfs_server_dir / "build" / binary_name
+                if agfs_built_binary.exists():
+                    self._copy_binary(agfs_built_binary, agfs_target_binary)
+                    print(f"[OK] AGFS server built successfully from source")
+                    build_success = True
+            except (subprocess.CalledProcessError, Exception) as e:
+                print(f"Warning: Failed to build AGFS from source: {e}")
+                if isinstance(e, subprocess.CalledProcessError):
+                    if e.stdout: print(f"Build stdout:\n{e.stdout.decode('utf-8', errors='replace')}")
+                    if e.stderr: print(f"Build stderr:\n{e.stderr.decode('utf-8', errors='replace')}")
+        else:
+             if not agfs_server_dir.exists():
+                 print("Warning: AGFS source directory not found")
+             else:
+                 print("Warning: Go compiler not found, will use prebuilt binary")
 
-                    agfs_built_binary = agfs_server_dir / "build" / binary_name
-                    if agfs_built_binary.exists():
-                        shutil.copy2(str(agfs_built_binary), str(agfs_target_binary))
-                        if sys.platform != "win32":
-                            os.chmod(str(agfs_target_binary), 0o755)
-                        print(f"[OK] AGFS server built successfully from source")
-                        build_success = True
-                except subprocess.CalledProcessError as e:
-                    print(f"Warning: Failed to build AGFS from source: {e}")
-                    if e.stdout:
-                        print(f"Build stdout:\n{e.stdout.decode('utf-8', errors='replace')}")
-                    if e.stderr:
-                        print(f"Build stderr:\n{e.stderr.decode('utf-8', errors='replace')}")
-                except Exception as e:
-                    print(f"Warning: Failed to build AGFS from source: {e}")
-            else:
-                print("Warning: Go compiler not found, will use prebuilt binary")
-
+        # 2. Fallback to prebuilt binary if build failed
         if not build_success:
             if agfs_prebuilt_binary.exists():
                 print(f"Using prebuilt AGFS binary from {agfs_prebuilt_binary}")
-                shutil.copy2(str(agfs_prebuilt_binary), str(agfs_target_binary))
-                if sys.platform != "win32":
-                    os.chmod(str(agfs_target_binary), 0o755)
+                self._copy_binary(agfs_prebuilt_binary, agfs_target_binary)
                 print(f"[OK] AGFS server copied from prebuilt binary")
             else:
-                print("Error: No AGFS binary available (build failed and no prebuilt binary found)")
                 raise FileNotFoundError(
                     f"AGFS binary not available. Please either:\n"
                     f"  1. Install Go and build from source, or\n"
                     f"  2. Ensure prebuilt binary exists at third_party/agfs/bin/{binary_name}"
                 )
+
+        # 3. Ensure AGFS binary is copied to the build directory (where wheel is packaged from)
+        if self.build_lib:
+            agfs_bin_dir_build = Path(self.build_lib) / "openviking/bin"
+            dst = agfs_bin_dir_build / binary_name
+            if agfs_target_binary.exists():
+                self._copy_binary(agfs_target_binary, dst)
 
     def build_extension(self, ext):
         """Build a single C++ extension module using CMake."""

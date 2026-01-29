@@ -9,13 +9,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "openviking"
-version = "0.1.2"
+version = "0.1.5"
 description = "An Agent-native context database: Data in, Context out"
 readme = "README.md"
 authors = [
     {name = "ByteDance", email = "noreply@bytedance.com"}
 ]
-license = "Apache-2.0"
+license = { text = "Apache-2.0" }
 requires-python = ">=3.9"
 classifiers = [
     "Development Status :: 3 - Alpha",

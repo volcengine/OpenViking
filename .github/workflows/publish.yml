@@ -12,6 +12,7 @@ jobs:
     strategy:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
+        python-version: ['3.9', '3.10', '3.11', '3.12']
 
     steps:
     - uses: actions/checkout@v4
@@ -21,12 +22,12 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v6
       with:
-        python-version: '3.11'
+        python-version: ${{ matrix.python-version }}
 
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
-        go-version: '1.21'
+        go-version: '1.25'
 
     - name: Install uv
       uses: astral-sh/setup-uv@v7
@@ -58,10 +59,22 @@ jobs:
     - name: Build package
       run: uv run python -m build
 
+    - name: Repair wheels (Linux)
+      if: runner.os == 'Linux'
+      run: |
+        uv pip install auditwheel
+        # Repair wheels and output to a temporary directory
+        uv run auditwheel repair dist/*.whl -w dist_fixed
+        # Remove original non-compliant wheels
+        rm dist/*.whl
+        # Move repaired wheels back to dist
+        mv dist_fixed/*.whl dist/
+        rmdir dist_fixed
+
     - name: Store the distribution packages
       uses: actions/upload-artifact@v4
       with:
-        name: python-package-distributions-${{ matrix.os }}
+        name: python-package-distributions-${{ matrix.os }}-${{ matrix.python-version }}
         path: dist/
 
   publish-to-pypi:

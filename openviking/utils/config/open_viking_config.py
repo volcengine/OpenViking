@@ -100,7 +100,7 @@ class OpenVikingConfig(BaseModel):
     )
 
     log_level: str = Field(
-        default="INFO", description="Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL"
+        default="WARNING", description="Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL"
     )
 
     log_format: str = Field(
