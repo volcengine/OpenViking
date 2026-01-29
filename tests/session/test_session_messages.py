@@ -46,7 +46,7 @@ class TestAddMessage:
             ContextPart(
                 uri="viking://user/test/resources/doc.md",
                 context_type="resource",
-                content="Some context content"
+                abstract="Some context abstract"
             )
         ]
         msg = session.add_message("assistant", parts)
