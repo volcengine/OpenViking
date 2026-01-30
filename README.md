@@ -41,9 +41,9 @@ In the AI era, data is abundant, but high-quality context is hard to come by. Wh
 
 **OpenViking** is an open-source **Context Database** designed specifically for AI Agents.
 
-It unifies the management of the context needed by Agents (memories, resources, and skills) using a filesystem paradigm. It enables tiered context delivery and self-iteration, with the ultimate goal of lowering the barrier for Agent development, allowing developers to focus more on business innovation rather than low-level context management.
+We aim to define a minimalist context interaction paradigm for Agents, allowing developers to completely say goodbye to the hassle of context management. OpenViking abandons the fragmented vector storage model of traditional RAG and innovatively adopts a **"file system paradigm"** to unify the structured organization of memories, resources, and skills needed by Agents.
 
-OpenViking is the context database designed to solve these pain points. Addressing the above challenges, OpenViking provides corresponding solutions:
+With OpenViking, developers can build an Agent's brain just like managing local files:
 
 - **Filesystem Management Paradigm** → **Solves Fragmentation**: Unified context management of memories, resources, and skills based on a filesystem paradigm.
 - **Tiered Context Loading** → **Reduces Token Consumption**: L0/L1/L2 three-tier structure, loaded on demand, significantly saving costs.

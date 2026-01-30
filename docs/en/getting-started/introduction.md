@@ -1,8 +1,6 @@
 # Introduction
 
-**OpenViking** is a context database designed for AI Agents. The core philosophy is **"Data in, Context out"** — transforming raw data into structured context that AI Agents can directly use.
-
-By unifying the management of context (memory, resources, and skills) that Agents need through a file system paradigm, and enabling hierarchical context delivery with self-iteration, the ultimate goal is to lower the barrier for Agent development, allowing developers to focus on business innovation rather than underlying context management.
+**OpenViking** is an open-source context database designed specifically for AI Agents. OpenViking unifies the management of context (memory, resources, and skills) that Agents need through a **file system paradigm**, enabling **hierarchical context delivery** and **self-iteration**. The ultimate goal is to lower the barrier for Agent development, allowing developers to focus on business innovation rather than underlying context management.
 
 ## Why OpenViking
 
