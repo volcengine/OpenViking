@@ -3,8 +3,32 @@ name: Test
 on:
   push:
     branches: [ main, develop ]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - 'LICENSE'
+      - 'CONTRIBUTING.md'
+      - '**.png'
+      - '**.jpg'
+      - '**.jpeg'
+      - '**.gif'
+      - '**.svg'
+      - '.gitignore'
+      - '.editorconfig'
   pull_request:
     branches: [ main, develop ]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - 'LICENSE'
+      - 'CONTRIBUTING.md'
+      - '**.png'
+      - '**.jpg'
+      - '**.jpeg'
+      - '**.gif'
+      - '**.svg'
+      - '.gitignore'
+      - '.editorconfig'
 
 jobs:
   test:

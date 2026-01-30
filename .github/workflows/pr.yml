@@ -3,6 +3,18 @@ name: Pull Request Checks
 on:
   pull_request:
     branches: [ main, develop ]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - 'LICENSE'
+      - 'CONTRIBUTING.md'
+      - '**.png'
+      - '**.jpg'
+      - '**.jpeg'
+      - '**.gif'
+      - '**.svg'
+      - '.gitignore'
+      - '.editorconfig'
 
 jobs:
   lint:

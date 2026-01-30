@@ -3,8 +3,32 @@ name: CodeQL Security Scan
 on:
   push:
     branches: [ main, develop ]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - 'LICENSE'
+      - 'CONTRIBUTING.md'
+      - '**.png'
+      - '**.jpg'
+      - '**.jpeg'
+      - '**.gif'
+      - '**.svg'
+      - '.gitignore'
+      - '.editorconfig'
   pull_request:
     branches: [ main, develop ]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - 'LICENSE'
+      - 'CONTRIBUTING.md'
+      - '**.png'
+      - '**.jpg'
+      - '**.jpeg'
+      - '**.gif'
+      - '**.svg'
+      - '.gitignore'
+      - '.editorconfig'
   schedule:
     - cron: '0 0 * * 0'  # 每周日运行一次
 
