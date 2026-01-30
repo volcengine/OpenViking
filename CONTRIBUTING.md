@@ -11,6 +11,13 @@ Thank you for your interest in OpenViking! We welcome contributions of all kinds
 
 ## Development Setup
 
+### Prerequisites
+
+- **Python**: 3.9+
+- **Go**: 1.25.1+ (Required for building AGFS components)
+- **C++ Compiler**: GCC 9+ or Clang 11+ (Required for building core extensions, must support C++17)
+- **CMake**: 3.12+
+
 ### 1. Fork and Clone
 
 ```bash
@@ -31,19 +38,9 @@ uv sync
 source .venv/bin/activate  # Linux/macOS
 # or .venv\Scripts\activate  # Windows
 
-# Install AGFS SDK
-uv pip install -e third_party/agfs/agfs-sdk/python
 ```
 
-### 3. Build AGFS (First Time Only)
-
-```bash
-cd third_party/agfs/agfs-server && make build
-cp build/agfs-server ../bin/
-cd ../../..
-```
-
-### 4. Configure Environment
+### 3. Configure Environment
 
 Create a configuration file `ov.conf`:
 
@@ -73,7 +70,7 @@ Set the environment variable:
 export OPENVIKING_CONFIG_FILE=ov.conf
 ```
 
-### 5. Verify Installation
+### 4. Verify Installation
 
 ```python
 import asyncio

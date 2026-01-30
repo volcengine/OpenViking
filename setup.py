@@ -30,18 +30,16 @@ class CMakeBuildExtension(build_ext):
             os.chmod(str(dst), 0o755)
 
     def build_agfs(self):
-        """Build AGFS server, fallback to prebuilt binary if build fails."""
+        """Build AGFS server from source."""
         # Paths
         binary_name = "agfs-server.exe" if sys.platform == "win32" else "agfs-server"
         agfs_server_dir = Path("third_party/agfs/agfs-server").resolve()
-        agfs_prebuilt_binary = Path(f"third_party/agfs/bin/{binary_name}").resolve()
         
         # Target in source tree (for development/install)
         agfs_bin_dir = Path("openviking/bin").resolve()
         agfs_target_binary = agfs_bin_dir / binary_name
 
         # 1. Try to build from source
-        build_success = False
         if agfs_server_dir.exists() and shutil.which("go"):
             print("Building AGFS server from source...")
             import subprocess
@@ -60,32 +58,21 @@ class CMakeBuildExtension(build_ext):
                 if agfs_built_binary.exists():
                     self._copy_binary(agfs_built_binary, agfs_target_binary)
                     print(f"[OK] AGFS server built successfully from source")
-                    build_success = True
+                else:
+                    raise FileNotFoundError(f"Build succeeded but binary not found at {agfs_built_binary}")
             except (subprocess.CalledProcessError, Exception) as e:
-                print(f"Warning: Failed to build AGFS from source: {e}")
+                error_msg = f"Failed to build AGFS from source: {e}"
                 if isinstance(e, subprocess.CalledProcessError):
-                    if e.stdout: print(f"Build stdout:\n{e.stdout.decode('utf-8', errors='replace')}")
-                    if e.stderr: print(f"Build stderr:\n{e.stderr.decode('utf-8', errors='replace')}")
+                    if e.stdout: error_msg += f"\nBuild stdout:\n{e.stdout.decode('utf-8', errors='replace')}"
+                    if e.stderr: error_msg += f"\nBuild stderr:\n{e.stderr.decode('utf-8', errors='replace')}"
+                raise RuntimeError(error_msg)
         else:
-             if not agfs_server_dir.exists():
-                 print("Warning: AGFS source directory not found")
-             else:
-                 print("Warning: Go compiler not found, will use prebuilt binary")
-
-        # 2. Fallback to prebuilt binary if build failed
-        if not build_success:
-            if agfs_prebuilt_binary.exists():
-                print(f"Using prebuilt AGFS binary from {agfs_prebuilt_binary}")
-                self._copy_binary(agfs_prebuilt_binary, agfs_target_binary)
-                print(f"[OK] AGFS server copied from prebuilt binary")
+            if not agfs_server_dir.exists():
+                 raise FileNotFoundError(f"AGFS source directory not found at {agfs_server_dir}")
             else:
-                raise FileNotFoundError(
-                    f"AGFS binary not available. Please either:\n"
-                    f"  1. Install Go and build from source, or\n"
-                    f"  2. Ensure prebuilt binary exists at third_party/agfs/bin/{binary_name}"
-                )
+                 raise RuntimeError("Go compiler not found. Please install Go to build AGFS server.")
 
-        # 3. Ensure AGFS binary is copied to the build directory (where wheel is packaged from)
+        # 2. Ensure AGFS binary is copied to the build directory (where wheel is packaged from)
         if self.build_lib:
             agfs_bin_dir_build = Path(self.build_lib) / "openviking/bin"
             dst = agfs_bin_dir_build / binary_name
