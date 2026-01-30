@@ -70,7 +70,7 @@ class HierarchicalRetriever:
             logger.info(f"[HierarchicalRetriever] Rerank config available, threshold={self.threshold}")
         else:
             self._rerank_client = None
-            logger.warning(f"[HierarchicalRetriever] Rerank not configured, using vector search only with threshold={self.threshold}") 
+            logger.info(f"[HierarchicalRetriever] Rerank not configured, using vector search only with threshold={self.threshold}") 
 
     async def retrieve(
         self,
