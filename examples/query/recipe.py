@@ -44,7 +44,7 @@ class Recipe:
         self.client = ov.SyncOpenViking(path=data_path, config=config)
         self.client.initialize()
 
-    def search(self, query: str, top_k: int = 3, target_uri: Optional[str] = None) -> List[Dict[str, Any]]:
+    def search(self, query: str, top_k: int = 3, target_uri: Optional[str] = None, score_threshold: float = 0.2) -> List[Dict[str, Any]]:
         """
         Search for relevant content using semantic search
 
@@ -52,6 +52,7 @@ class Recipe:
             query: Search query
             top_k: Number of results to return
             target_uri: Optional specific URI to search in. If None, searches all resources.
+            score_threshold: Minimum relevance score for search results (default: 0.2)
 
         Returns:
             List of search results with content and scores
@@ -59,7 +60,8 @@ class Recipe:
         print(f"🔍 Searching for: '{query}'")
 
         # Search all resources or specific target
-        results = self.client.find(query, target_uri=target_uri)
+        # `find` has better performance, but not so smart
+        results = self.client.search(query, target_uri=target_uri, score_threshold=score_threshold)
 
         # Extract top results
         search_results = []
@@ -139,7 +141,8 @@ class Recipe:
               search_top_k: int = 3,
               temperature: float = 0.7,
               max_tokens: int = 2048,
-              system_prompt: Optional[str] = None) -> Dict[str, Any]:
+              system_prompt: Optional[str] = None,
+              score_threshold: float = 0.2) -> Dict[str, Any]:
         """
         Full RAG pipeline: search → retrieve → generate
 
@@ -149,12 +152,13 @@ class Recipe:
             temperature: LLM sampling temperature
             max_tokens: Maximum tokens to generate
             system_prompt: Optional system prompt to prepend
+            score_threshold: Minimum relevance score for search results (default: 0.2)
 
         Returns:
             Dictionary with answer, context, and metadata
         """
         # Step 1: Search for relevant content
-        search_results = self.search(user_query, top_k=search_top_k)
+        search_results = self.search(user_query, top_k=search_top_k, score_threshold=score_threshold)
 
         if not search_results:
             return {

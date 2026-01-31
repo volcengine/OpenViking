@@ -14,39 +14,10 @@ uv run add.py https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads
 
 # 2. Query with LLM
 uv run query.py "What do we have here?"
-# or
-./q "What do we have here?" # add to .bashrc alias if you like. alias q=${pwd}/q
+uv run query.py "What do we have here?" --score-threshold 0.5
 
 # 3. redo
 mv data/ data.bak/ # or rm -rf if you want
-```
-
-## Usage
-
-### Add Resources
-
-```bash
-# Add PDF
-uv run add.py document.pdf
-
-# Add URL
-uv run add.py https://example.com/README.md
-
-# Add directory
-uv run add.py ~/Documents/research/
-```
-
-### Query
-
-```bash
-# Quick query (recommended)
-./q "Your question here"
-
-# With options
-uv run query.py "Your question" --top-k 10 --temperature 0.3
-
-# Verbose output
-./q "Your question" --verbose
 ```
 
 ### Query Options
@@ -57,11 +28,7 @@ uv run query.py "Your question" --top-k 10 --temperature 0.3
 | `--temperature` | 0.7 | LLM creativity (0.0-1.0) |
 | `--max-tokens` | 2048 | Maximum response length |
 | `--verbose` | false | Show detailed information |
-
-**Temperature Guide:**
-- `0.0-0.3` → Factual, consistent
-- `0.4-0.7` → Balanced (default)
-- `0.8-1.0` → Creative, exploratory
+| `--score-threshold` | 0.0 | Minimum similarity score for results |
 
 ## Debug Mode
 

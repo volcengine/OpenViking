@@ -78,6 +78,7 @@ def query(
     top_k: int = 5,
     temperature: float = 0.7,
     max_tokens: int = 2048,
+    score_threshold: float = 0.2,
     verbose: bool = False
 ):
     """
@@ -90,13 +91,9 @@ def query(
         top_k: Number of search results to use as context
         temperature: LLM temperature (0.0-1.0)
         max_tokens: Maximum tokens to generate
+        score_threshold: Minimum relevance score for search results (default: 0.2)
         verbose: Show detailed information
     """
-    # Display header with constrained width
-    header_text = Text("🚀 OpenViking Query", style="bold cyan")
-    console.print(Panel(header_text, style="bold blue", padding=(0, 1), width=PANEL_WIDTH))
-    console.print()
-
     if verbose:
         # Config info table
         info_table = Table(show_header=False, box=None, padding=(0, 2))
@@ -107,7 +104,7 @@ def query(
         info_table.add_row("Top-K", str(top_k))
         info_table.add_row("Temperature", str(temperature))
         info_table.add_row("Max tokens", str(max_tokens))
-        console.print(info_table)
+        console.print(Panel(info_table, style="bold blue", padding=(0, 1), width=PANEL_WIDTH))
         console.print()
 
     # Initialize pipeline
@@ -120,23 +117,21 @@ def query(
     try:
         # Display question with constrained width
         question_text = Text(question, style="bold yellow")
-        console.print(Panel(question_text, title="❓ Question", style="bold", padding=(0, 1), width=PANEL_WIDTH))
+        console.print(Panel(question_text, title="✅ Roger That", style="bold", padding=(0, 1), width=PANEL_WIDTH))
         console.print()
 
         # Query with loading spinner
         result = show_loading_with_spinner(
-            "🤖 Thinking...",
+            "Wait a sec...",
             pipeline.query,
             user_query=question,
             search_top_k=top_k,
             temperature=temperature,
-            max_tokens=max_tokens
+            max_tokens=max_tokens,
+            score_threshold=score_threshold
         )
-
-        # Display answer with optimal line width and constrained panel width
-        wrapped_answer = textwrap.fill(result['answer'], width=OPTIMAL_LINE_WIDTH)
-        answer_text = Text(wrapped_answer, style="white")
-        console.print(Panel(answer_text, title="🤖 Answer", style="bold green", padding=(1, 1), width=PANEL_WIDTH))
+        answer_text = Text(result['answer'], style="white")
+        console.print(Panel(answer_text, title="🍔 Check This Out", style="bold bright_cyan", padding=(1, 1), width=PANEL_WIDTH))
         console.print()
 
         # Show sources
@@ -216,6 +211,11 @@ Top-K Guide:
   3-5   → Quick, focused answers (default: 5)
   5-10  → More comprehensive context
   10+   → Maximum context (may include less relevant info)
+
+Score Threshold Guide:
+  0.0-0.1 → Very permissive, includes low relevance results
+  0.2      → Balanced (default)
+  0.3-0.5  → Strict, only highly relevant results
         """
     )
 
@@ -261,6 +261,13 @@ Top-K Guide:
     )
 
     parser.add_argument(
+        '--score-threshold',
+        type=float,
+        default=0.2,
+        help='Minimum relevance score for search results (default: 0.2)'
+    )
+
+    parser.add_argument(
         '--verbose', '-v',
         action='store_true',
         help='Show detailed information'
@@ -278,6 +285,10 @@ Top-K Guide:
         console.print(Panel("❌ Error: top-k must be at least 1", style="bold red", padding=(0, 1)))
         sys.exit(1)
 
+    if not 0.0 <= args.score_threshold <= 1.0:
+        console.print(Panel("❌ Error: score-threshold must be between 0.0 and 1.0", style="bold red", padding=(0, 1)))
+        sys.exit(1)
+
     # Run query
     success = query(
         question=args.question,
@@ -286,6 +297,7 @@ Top-K Guide:
         top_k=args.top_k,
         temperature=args.temperature,
         max_tokens=args.max_tokens,
+        score_threshold=args.score_threshold,
         verbose=args.verbose
     )
 
