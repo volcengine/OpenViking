@@ -2,13 +2,73 @@
 """
 Query - CLI tool to search and generate answers using OpenViking + LLM
 """
-import boring_logging_config  # Configure logging (set OV_DEBUG=1 for debug mode)
 import argparse
-import json
 import sys
-import os
-from pathlib import Path
+import textwrap
+import threading
+
+import boring_logging_config  # Configure logging (set OV_DEBUG=1 for debug mode)
+
 from recipe import Recipe
+from rich import box
+from rich.console import Console
+from rich.live import Live
+from rich.panel import Panel
+from rich.spinner import Spinner
+from rich.table import Table
+from rich.text import Text
+
+console = Console()
+
+# Optimal line width for readability: 50-75 characters (66 is sweet spot)
+# Using 72 for balance between readability and information density
+OPTIMAL_LINE_WIDTH = 72
+
+# Panel width: 72 chars + 4 for borders + 4 for padding = 80
+# But we want it more constrained for better visual appearance
+PANEL_WIDTH = 78
+
+
+def show_loading_with_spinner(message: str, target_func, *args, **kwargs):
+    """
+    Show a loading spinner while a function executes.
+
+    Args:
+        message: Message to display
+        target_func: Function to execute
+        *args, **kwargs: Arguments to pass to target_func
+
+    Returns:
+        Result from target_func
+    """
+    spinner = Spinner("dots", text=message)
+    result = None
+    exception = None
+
+    def run_target():
+        nonlocal result, exception
+        try:
+            result = target_func(*args, **kwargs)
+        except Exception as e:
+            exception = e
+
+    # Start of target function in a thread
+    thread = threading.Thread(target=run_target)
+    thread.start()
+
+    # Show spinner while thread is running
+    # Use transient=True to auto-clear when done
+    with Live(spinner, console=console, refresh_per_second=10, transient=True):
+        thread.join()
+
+    # Add newline for space before answer panel
+    console.print()
+
+    # Raise exception if one occurred
+    if exception:
+        raise exception
+
+    return result
 
 
 def query(
@@ -32,66 +92,89 @@ def query(
         max_tokens: Maximum tokens to generate
         verbose: Show detailed information
     """
-    print("=" * 80)
-    print("  🚀 OpenViking RAG Query")
-    print("=" * 80 + "\n")
+    # Display header with constrained width
+    header_text = Text("🚀 OpenViking Query", style="bold cyan")
+    console.print(Panel(header_text, style="bold blue", padding=(0, 1), width=PANEL_WIDTH))
+    console.print()
 
     if verbose:
-        print(f"📋 Config: {config_path}")
-        print(f"📂 Data: {data_path}")
-        print(f"🔍 Top-K: {top_k}")
-        print(f"🌡️  Temperature: {temperature}")
-        print(f"📝 Max tokens: {max_tokens}\n")
+        # Config info table
+        info_table = Table(show_header=False, box=None, padding=(0, 2))
+        info_table.add_column("Key", style="bold green")
+        info_table.add_column("Value")
+        info_table.add_row("Config", config_path)
+        info_table.add_row("Data", data_path)
+        info_table.add_row("Top-K", str(top_k))
+        info_table.add_row("Temperature", str(temperature))
+        info_table.add_row("Max tokens", str(max_tokens))
+        console.print(info_table)
+        console.print()
 
     # Initialize pipeline
     try:
         pipeline = Recipe(config_path=config_path, data_path=data_path)
     except Exception as e:
-        print(f"❌ Error initializing pipeline: {e}")
+        console.print(Panel(f"❌ Error initializing pipeline: {e}", style="bold red", padding=(0, 1)))
         return False
 
     try:
-        # Display question
-        print(f"❓ Question:")
-        print(f"   {question}\n")
-        print("=" * 80 + "\n")
+        # Display question with constrained width
+        question_text = Text(question, style="bold yellow")
+        console.print(Panel(question_text, title="❓ Question", style="bold", padding=(0, 1), width=PANEL_WIDTH))
+        console.print()
 
-        # Query
-        result = pipeline.query(
+        # Query with loading spinner
+        result = show_loading_with_spinner(
+            "🤖 Thinking...",
+            pipeline.query,
             user_query=question,
             search_top_k=top_k,
             temperature=temperature,
             max_tokens=max_tokens
         )
 
-        # Display answer
-        print("🤖 ANSWER")
-        print("=" * 80)
-        print(result['answer'])
-        print("=" * 80 + "\n")
+        # Display answer with optimal line width and constrained panel width
+        wrapped_answer = textwrap.fill(result['answer'], width=OPTIMAL_LINE_WIDTH)
+        answer_text = Text(wrapped_answer, style="white")
+        console.print(Panel(answer_text, title="🤖 Answer", style="bold green", padding=(1, 1), width=PANEL_WIDTH))
+        console.print()
 
         # Show sources
         if result['context']:
-            print(f"📚 Sources ({len(result['context'])} documents)")
-            print("-" * 80)
+            sources_table = Table(
+                title=f"📚 Sources ({len(result['context'])} documents)",
+                box=box.ROUNDED,
+                show_header=True,
+                header_style="bold magenta",
+                title_style="bold magenta"
+            )
+            sources_table.add_column("#", style="cyan", width=4)
+            sources_table.add_column("File", style="bold white")
+            sources_table.add_column("Relevance", style="green", justify="right")
+
+            if verbose:
+                sources_table.add_column("URI", style="dim")
+                sources_table.add_column("Preview", style="dim")
+
             for i, ctx in enumerate(result['context'], 1):
                 uri_parts = ctx['uri'].split('/')
                 filename = uri_parts[-1] if uri_parts else ctx['uri']
-                print(f"{i}. {filename}")
-                print(f"   Relevance: {ctx['score']:.4f}")
+                score_text = Text(f"{ctx['score']:.4f}", style="bold green")
 
                 if verbose:
-                    print(f"   URI: {ctx['uri']}")
-                    print(f"   Preview: {ctx['content'][:120]}...")
+                    preview = ctx['content'][:100] + "..." if len(ctx['content']) > 100 else ctx['content']
+                    sources_table.add_row(str(i), filename, score_text, ctx['uri'], preview)
+                else:
+                    sources_table.add_row(str(i), filename, score_text)
 
-                print()
+            console.print(sources_table)
         else:
-            print("⚠️  No relevant sources found\n")
+            console.print(Panel("⚠️  No relevant sources found", style="yellow", padding=(0, 1), width=PANEL_WIDTH))
 
         return True
 
     except Exception as e:
-        print(f"\n❌ Error during query: {e}")
+        console.print(Panel(f"❌ Error during query: {e}", style="bold red", padding=(0, 1)))
         import traceback
         traceback.print_exc()
         return False
@@ -187,12 +270,12 @@ Top-K Guide:
 
     # Validate temperature
     if not 0.0 <= args.temperature <= 1.0:
-        print("❌ Error: Temperature must be between 0.0 and 1.0")
+        console.print(Panel("❌ Error: Temperature must be between 0.0 and 1.0", style="bold red", padding=(0, 1)))
         sys.exit(1)
 
     # Validate top-k
     if args.top_k < 1:
-        print("❌ Error: top-k must be at least 1")
+        console.print(Panel("❌ Error: top-k must be at least 1", style="bold red", padding=(0, 1)))
         sys.exit(1)
 
     # Run query
