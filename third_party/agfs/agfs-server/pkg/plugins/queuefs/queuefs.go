@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"path/filepath"
+	"path"
 	"strconv"
 	"strings"
 	"sync"
@@ -388,19 +388,19 @@ var queueOperations = map[string]bool{
 
 // parseQueuePath parses a path like "/queue_name/operation" or "/dir/queue_name/operation"
 // Returns (queueName, operation, isDir, error)
-func parseQueuePath(path string) (queueName string, operation string, isDir bool, err error) {
+func parseQueuePath(p string) (queueName string, operation string, isDir bool, err error) {
 	// Clean the path
-	path = filepath.Clean(path)
+	p = path.Clean(p)
 
-	if path == "/" || path == "." {
+	if p == "/" || p == "." {
 		return "", "", true, nil
 	}
 
 	// Remove leading slash
-	path = strings.TrimPrefix(path, "/")
+	p = strings.TrimPrefix(p, "/")
 
 	// Split path into components
-	parts := strings.Split(path, "/")
+	parts := strings.Split(p, "/")
 
 	if len(parts) == 0 {
 		return "", "", true, nil
@@ -754,8 +754,8 @@ func (qfs *queueFS) getQueueControlFiles(queueName string, now time.Time) ([]fil
 	return files, nil
 }
 
-func (qfs *queueFS) Stat(path string) (*filesystem.FileInfo, error) {
-	if path == "/" {
+func (qfs *queueFS) Stat(p string) (*filesystem.FileInfo, error) {
+	if p == "/" {
 		return &filesystem.FileInfo{
 			Name:    "/",
 			Size:    0,
@@ -772,7 +772,7 @@ func (qfs *queueFS) Stat(path string) (*filesystem.FileInfo, error) {
 	}
 
 	// Special case: README at root
-	if path == "/README" {
+	if p == "/README" {
 		readme := qfs.plugin.GetReadme()
 		return &filesystem.FileInfo{
 			Name:    "README",
@@ -784,7 +784,7 @@ func (qfs *queueFS) Stat(path string) (*filesystem.FileInfo, error) {
 		}, nil
 	}
 
-	queueName, operation, isDir, err := parseQueuePath(path)
+	queueName, operation, isDir, err := parseQueuePath(p)
 	if err != nil {
 		return nil, err
 	}
@@ -793,7 +793,7 @@ func (qfs *queueFS) Stat(path string) (*filesystem.FileInfo, error) {
 
 	// Directory stat
 	if isDir {
-		name := filepath.Base(path)
+		name := path.Base(p)
 		if name == "." || name == "/" {
 			name = "/"
 		}
@@ -823,7 +823,7 @@ func (qfs *queueFS) Stat(path string) (*filesystem.FileInfo, error) {
 			}
 			if !hasChildren {
 				qfs.plugin.mu.RUnlock()
-				return nil, fmt.Errorf("no such file or directory: %s", path)
+				return nil, fmt.Errorf("no such file or directory: %s", p)
 			}
 		}
 		qfs.plugin.mu.RUnlock()
@@ -840,7 +840,7 @@ func (qfs *queueFS) Stat(path string) (*filesystem.FileInfo, error) {
 
 	// Control file stat
 	if operation == "" {
-		return nil, fmt.Errorf("no such file: %s", path)
+		return nil, fmt.Errorf("no such file: %s", p)
 	}
 
 	mode := uint32(0644)

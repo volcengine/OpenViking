@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"path/filepath"
+	"path"
 	"regexp"
 	"strconv"
 	"time"
@@ -1002,9 +1002,8 @@ func (h *Handler) grepDirectoryStream(dirPath string, re *regexp.Regexp, callbac
 
 	for _, entry := range entries {
 		// Build full path
-		fullPath := filepath.Join(dirPath, entry.Name)
-		// Clean path to use forward slashes
-		fullPath = filepath.ToSlash(fullPath)
+		// Use path.Join for VFS paths to ensure forward slashes on all OS
+		fullPath := path.Join(dirPath, entry.Name)
 
 		if entry.IsDir {
 			// Recursively search subdirectories
@@ -1070,9 +1069,8 @@ func (h *Handler) grepDirectory(dirPath string, re *regexp.Regexp) ([]GrepMatch,
 
 	for _, entry := range entries {
 		// Build full path
-		fullPath := filepath.Join(dirPath, entry.Name)
-		// Clean path to use forward slashes
-		fullPath = filepath.ToSlash(fullPath)
+		// Use path.Join for VFS paths to ensure forward slashes on all OS
+		fullPath := path.Join(dirPath, entry.Name)
 
 		if entry.IsDir {
 			// Recursively search subdirectories

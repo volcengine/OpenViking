@@ -5,6 +5,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -54,10 +55,16 @@ func NewLocalFS(basePath string) (*LocalFS, error) {
 
 // resolvePath resolves a virtual path to the actual local path
 func (fs *LocalFS) resolvePath(path string) string {
-	// Clean the path and ensure it starts with /
-	cleanPath := filepath.Clean("/" + path)
-	// Remove leading / and join with base path
-	relativePath := filepath.Clean(cleanPath[1:])
+	// Remove leading slash to make it relative (VFS paths always start with /)
+	relativePath := strings.TrimPrefix(path, "/")
+
+	// Convert to OS-specific path separators
+	// On Windows, this converts "/" to "\"
+	relativePath = filepath.FromSlash(relativePath)
+
+	// Clean the path
+	relativePath = filepath.Clean(relativePath)
+
 	if relativePath == "." {
 		return fs.basePath
 	}
