@@ -114,7 +114,104 @@ class ChatREPL:
 
     def run(self):
         """Main REPL loop"""
-        pass  # To be implemented in Task 6
+        try:
+            self.recipe = Recipe(config_path=self.config_path, data_path=self.data_path)
+        except Exception as e:
+            console.print(Panel(f"❌ Error initializing: {e}", style="bold red", padding=(0, 1)))
+            return
+
+        self._show_welcome()
+
+        try:
+            import readline
+        except ImportError:
+            pass
+
+        try:
+            while not self.should_exit:
+                try:
+                    user_input = console.input("[bold cyan]You:[/bold cyan] ").strip()
+
+                    if not user_input:
+                        continue
+
+                    if user_input.startswith("/"):
+                        if self.handle_command(user_input):
+                            break
+                        continue
+
+                    self.ask_question(user_input)
+
+                except EOFError:
+                    console.print("\n")
+                    console.print(
+                        Panel("👋 Goodbye!", style="bold yellow", padding=(0, 1), width=PANEL_WIDTH)
+                    )
+                    break
+
+        finally:
+            if self.recipe:
+                self.recipe.close()
+
+
+def main():
+    """Main entry point"""
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="Multi-turn chat with OpenViking RAG",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Start chat with default settings
+  uv run chat.py
+
+  # Adjust creativity
+  uv run chat.py --temperature 0.9
+
+  # Use more context
+  uv run chat.py --top-k 10
+
+  # Enable debug logging
+  OV:DEBUG=1 uv run chat.py
+        """,
+    )
+
+    parser.add_argument("--config", type=str, default="./ov.conf", help="Path to config file")
+    parser.add_argument("--data", type=str, default="./data", help="Path to data directory")
+    parser.add_argument("--top-k", type=int, default=5, help="Number of search results")
+    parser.add_argument("--temperature", type=float, default=0.7, help="LLM temperature 0.0-1.0")
+    parser.add_argument("--max-tokens", type=int, default=2048, help="Max tokens to generate")
+    parser.add_argument("--score-threshold", type=float, default=0.2, help="Min relevance score")
+
+    args = parser.parse_args()
+
+    if not 0.0 <= args.temperature <= 1.0:
+        console.print("❌ Temperature must be between 0.0 and 1.0", style="bold red")
+        sys.exit(1)
+
+    if args.top_k < 1:
+        console.print("❌ top-k must be at least 1", style="bold red")
+        sys.exit(1)
+
+    if not 0.0 <= args.score_threshold <= 1.0:
+        console.print("❌ score-threshold must be between 0.0 and 1.0", style="bold red")
+        sys.exit(1)
+
+    repl = ChatREPL(
+        config_path=args.config,
+        data_path=args.data,
+        temperature=args.temperature,
+        max_tokens=args.max_tokens,
+        top_k=args.top_k,
+        score_threshold=args.score_threshold,
+    )
+
+    repl.run()
+
+
+if __name__ == "__main__":
+    main()
 
     def _show_welcome(self):
         """Display welcome banner"""
