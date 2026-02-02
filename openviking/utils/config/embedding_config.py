@@ -14,37 +14,52 @@ class EmbeddingModelConfig(BaseModel):
     dimension: Optional[int] = Field(default=None, description="Embedding dimension")
     batch_size: int = Field(default=32, description="Batch size for embedding generation")
     input: str = Field(default="multimodal", description="Input type: 'text' or 'multimodal'")
-    backend: Optional[str] = Field(default="volcengine", description="Backend type: 'openai', 'volcengine', 'vikingdb'")
+    provider: Optional[str] = Field(default="volcengine", description="Provider type: 'openai', 'volcengine', 'vikingdb'")
+    backend: Optional[str] = Field(default="volcengine", description="Backend type (Deprecated, use 'provider' instead): 'openai', 'volcengine', 'vikingdb'")
     version: Optional[str] = Field(default=None, description="Model version")
     ak: Optional[str] = Field(default=None, description="Access Key ID for VikingDB API")
     sk: Optional[str] = Field(default=None, description="Access Key Secretfor VikingDB API")
     region: Optional[str] = Field(default=None, description="Region for VikingDB API")
     host: Optional[str] = Field(default=None, description="Host for VikingDB API")
 
+    @model_validator(mode='before')
+    @classmethod
+    def sync_provider_backend(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            provider = data.get('provider')
+            backend = data.get('backend')
+            
+            if backend is not None and provider is None:
+                data['provider'] = backend
+        return data
+
     @model_validator(mode='after')
     def validate_config(self):
         """Validate configuration completeness and consistency"""
+        if self.backend and not self.provider:
+            self.provider = self.backend
+
         if not self.model:
             raise ValueError("Embedding model name is required")
 
-        if not self.backend:
-            raise ValueError("Embedding backend is required")
+        if not self.provider:
+            raise ValueError("Embedding provider is required")
 
-        if self.backend not in ["openai", "volcengine", "vikingdb"]:
+        if self.provider not in ["openai", "volcengine", "vikingdb"]:
             raise ValueError(
-                f"Invalid embedding backend: '{self.backend}'. Must be one of: 'openai', 'volcengine', 'vikingdb'"
+                f"Invalid embedding provider: '{self.provider}'. Must be one of: 'openai', 'volcengine', 'vikingdb'"
             )
 
-        # Backend-specific validation
-        if self.backend == "openai":
+        # Provider-specific validation
+        if self.provider == "openai":
             if not self.api_key:
-                raise ValueError("OpenAI backend requires 'api_key' to be set")
+                raise ValueError("OpenAI provider requires 'api_key' to be set")
 
-        elif self.backend == "volcengine":
+        elif self.provider == "volcengine":
             if not self.api_key:
-                raise ValueError("Volcengine backend requires 'api_key' to be set")
+                raise ValueError("Volcengine provider requires 'api_key' to be set")
 
-        elif self.backend == "vikingdb":
+        elif self.provider == "vikingdb":
             missing = []
             if not self.ak:
                 missing.append("ak")
@@ -55,7 +70,7 @@ class EmbeddingModelConfig(BaseModel):
 
             if missing:
                 raise ValueError(
-                    f"VikingDB backend requires the following fields: {', '.join(missing)}"
+                    f"VikingDB provider requires the following fields: {', '.join(missing)}"
                 )
 
         return self
@@ -92,7 +107,7 @@ class EmbeddingConfig(BaseModel):
         env_fields = {
             "model": str, "api_key": str, "api_base": str,
             "dimension": int, "batch_size": int,
-            "input": str, "backend": str, "version": str,
+            "input": str, "provider": str, "backend": str, "version": str,
             "ak": str, "sk": str, "region": str, "host": str
         }
 
@@ -127,11 +142,11 @@ class EmbeddingConfig(BaseModel):
             )
         return self
 
-    def _create_embedder(self, backend: str, embedder_type: str, config: EmbeddingModelConfig):
-        """Factory method to create embedder instance based on backend and type.
+    def _create_embedder(self, provider: str, embedder_type: str, config: EmbeddingModelConfig):
+        """Factory method to create embedder instance based on provider and type.
 
         Args:
-            backend: Backend type ('openai', 'volcengine', 'vikingdb')
+            provider: Provider type ('openai', 'volcengine', 'vikingdb')
             embedder_type: Embedder type ('dense', 'sparse', 'hybrid')
             config: EmbeddingModelConfig instance
 
@@ -139,7 +154,7 @@ class EmbeddingConfig(BaseModel):
             Embedder instance
 
         Raises:
-            ValueError: If backend/type combination is not supported
+            ValueError: If provider/type combination is not supported
         """
         from openviking.models.embedder import (
             OpenAIDenseEmbedder,
@@ -151,7 +166,7 @@ class EmbeddingConfig(BaseModel):
             VikingDBHybridEmbedder
         )
 
-        # Factory registry: (backend, type) -> (embedder_class, param_builder)
+        # Factory registry: (provider, type) -> (embedder_class, param_builder)
         factory_registry = {
             ('openai', 'dense'): (
                 OpenAIDenseEmbedder,
@@ -229,10 +244,10 @@ class EmbeddingConfig(BaseModel):
             ),
         }
 
-        key = (backend, embedder_type)
+        key = (provider, embedder_type)
         if key not in factory_registry:
             raise ValueError(
-                f"Unsupported combination: backend='{backend}', type='{embedder_type}'. "
+                f"Unsupported combination: provider='{provider}', type='{embedder_type}'. "
                 f"Supported combinations: {list(factory_registry.keys())}"
             )
 
@@ -252,15 +267,15 @@ class EmbeddingConfig(BaseModel):
         from openviking.models.embedder import CompositeHybridEmbedder
 
         if self.hybrid:
-            return self._create_embedder(self.hybrid.backend.lower(), 'hybrid', self.hybrid)
+            return self._create_embedder(self.hybrid.provider.lower(), 'hybrid', self.hybrid)
 
         if self.dense and self.sparse:
-            dense_embedder = self._create_embedder(self.dense.backend.lower(), 'dense', self.dense)
-            sparse_embedder = self._create_embedder(self.sparse.backend.lower(), 'sparse', self.sparse)
+            dense_embedder = self._create_embedder(self.dense.provider.lower(), 'dense', self.dense)
+            sparse_embedder = self._create_embedder(self.sparse.provider.lower(), 'sparse', self.sparse)
             return CompositeHybridEmbedder(dense_embedder, sparse_embedder)
 
         if self.dense:
-            return self._create_embedder(self.dense.backend.lower(), 'dense', self.dense)
+            return self._create_embedder(self.dense.provider.lower(), 'dense', self.dense)
 
         raise ValueError("No embedding configuration found (dense, sparse, or hybrid)")
 

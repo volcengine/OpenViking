@@ -62,35 +62,35 @@ class ModelTokenUsage:
 
     model_name: str
     total_usage: TokenUsage = field(default_factory=TokenUsage)
-    usage_by_backend: Dict[str, TokenUsage] = field(default_factory=dict)
+    usage_by_provider: Dict[str, TokenUsage] = field(default_factory=dict)
 
-    def update(self, backend: str, prompt_tokens: int, completion_tokens: int) -> None:
-        """Update token usage for specified backend
+    def update(self, provider: str, prompt_tokens: int, completion_tokens: int) -> None:
+        """Update token usage for specified provider
 
         Args:
-            backend: Backend name (openai, volcengine)
+            provider: Provider name (openai, volcengine)
             prompt_tokens: Number of input tokens
             completion_tokens: Number of output tokens
         """
         # Update total usage
         self.total_usage.update(prompt_tokens, completion_tokens)
 
-        # Update backend usage
-        if backend not in self.usage_by_backend:
-            self.usage_by_backend[backend] = TokenUsage()
+        # Update provider usage
+        if provider not in self.usage_by_provider:
+            self.usage_by_provider[provider] = TokenUsage()
 
-        self.usage_by_backend[backend].update(prompt_tokens, completion_tokens)
+        self.usage_by_provider[provider].update(prompt_tokens, completion_tokens)
 
-    def get_backend_usage(self, backend: str) -> Optional[TokenUsage]:
-        """Get token usage for specified backend
+    def get_provider_usage(self, provider: str) -> Optional[TokenUsage]:
+        """Get token usage for specified provider
 
         Args:
-            backend: Backend name
+            provider: Provider name
 
         Returns:
-            TokenUsage object, or None if backend doesn't exist
+            TokenUsage object, or None if provider doesn't exist
         """
-        return self.usage_by_backend.get(backend)
+        return self.usage_by_provider.get(provider)
 
     def to_dict(self) -> Dict:
         """Convert to dictionary format
@@ -101,19 +101,19 @@ class ModelTokenUsage:
         result = {
             "model_name": self.model_name,
             "total_usage": self.total_usage.to_dict(),
-            "usage_by_backend": {},
+            "usage_by_provider": {},
         }
 
-        for backend, usage in self.usage_by_backend.items():
-            result["usage_by_backend"][backend] = usage.to_dict()
+        for provider, usage in self.usage_by_provider.items():
+            result["usage_by_provider"][provider] = usage.to_dict()
 
         return result
 
     def __str__(self) -> str:
-        backends = ", ".join(
-            [f"{backend}: {usage.total_tokens}" for backend, usage in self.usage_by_backend.items()]
+        providers = ", ".join(
+            [f"{provider}: {usage.total_tokens}" for provider, usage in self.usage_by_provider.items()]
         )
-        return f"ModelTokenUsage(model={self.model_name}, total={self.total_usage.total_tokens}, backends=[{backends}])"
+        return f"ModelTokenUsage(model={self.model_name}, total={self.total_usage.total_tokens}, providers=[{providers}])"
 
 
 class TokenUsageTracker:
@@ -123,20 +123,20 @@ class TokenUsageTracker:
         self._usage_by_model: Dict[str, ModelTokenUsage] = {}
 
     def update(
-        self, model_name: str, backend: str, prompt_tokens: int, completion_tokens: int
+        self, model_name: str, provider: str, prompt_tokens: int, completion_tokens: int
     ) -> None:
         """Update token usage
 
         Args:
             model_name: Model name
-            backend: Backend name
+            provider: Provider name
             prompt_tokens: Number of input tokens
             completion_tokens: Number of output tokens
         """
         if model_name not in self._usage_by_model:
             self._usage_by_model[model_name] = ModelTokenUsage(model_name)
 
-        self._usage_by_model[model_name].update(backend, prompt_tokens, completion_tokens)
+        self._usage_by_model[model_name].update(provider, prompt_tokens, completion_tokens)
 
     def get_model_usage(self, model_name: str) -> Optional[ModelTokenUsage]:
         """Get token usage for specified model

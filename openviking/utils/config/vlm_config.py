@@ -16,14 +16,28 @@ class VLMConfig(BaseModel):
     api_base: Optional[str] = Field(default=None, description="API base URL")
     temperature: float = Field(default=0.0, description="Generation temperature")
     max_retries: int = Field(default=2, description="Maximum retry attempts")
+    provider: Optional[Literal["openai", "volcengine"]] = Field(
+        default="volcengine", description="Provider type"
+    )
     backend: Literal["openai", "volcengine"] = Field(
-        default="openai", description="Backend provider"
+        default="volcengine", description="Backend provider (Deprecated, use 'provider' instead)"
     )
 
     _vlm_instance: Optional[VLMBase] = None
 
     class Config:
         arbitrary_types_allowed = True
+
+    @model_validator(mode='before')
+    @classmethod
+    def sync_provider_backend(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            provider = data.get('provider')
+            backend = data.get('backend')
+            
+            if backend is not None and provider is None:
+                data['provider'] = backend
+        return data
 
     @model_validator(mode="before")
     @classmethod
@@ -34,6 +48,7 @@ class VLMConfig(BaseModel):
                 "api_key": "OPENVIKING_VLM_API_KEY",
                 "model": "OPENVIKING_VLM_MODEL",
                 "api_base": "OPENVIKING_VLM_API_BASE",
+                "provider": "OPENVIKING_VLM_PROVIDER",
                 "backend": "OPENVIKING_VLM_BACKEND",
             }
             for field, env_var in env_mapping.items():
@@ -46,6 +61,9 @@ class VLMConfig(BaseModel):
     @model_validator(mode='after')
     def validate_config(self):
         """Validate configuration completeness and consistency"""
+        if self.backend and not self.provider:
+            self.provider = self.backend
+
         # VLM is optional, but if configured, must have required fields
         if self.api_key or self.model or self.api_base:
             # If any VLM config is provided, require model and api_key

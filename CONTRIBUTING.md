@@ -48,7 +48,7 @@ Create a configuration file `ov.conf`:
 {
   "embedding": {
     "dense": {
-      "backend": "volcengine",
+      "provider": "volcengine",
       "api_key": "your-api-key",
       "model": "doubao-embedding-vision-250615",
       "api_base": "https://ark.cn-beijing.volces.com/api/v3",

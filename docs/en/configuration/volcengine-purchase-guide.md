@@ -93,7 +93,7 @@ Create an `ov.conf` file using the following template:
 ```json
 {
   "vlm": {
-    "backend": "<backend-type>",
+    "provider": "<provider-type>",
     "api_key": "<your-api-key>",
     "model": "<model-id>",
     "api_base": "<api-endpoint>",
@@ -102,7 +102,7 @@ Create an `ov.conf` file using the following template:
   },
   "embedding": {
     "dense": {
-      "backend": "<backend-type>",
+      "provider": "<provider-type>",
       "api_key": "<your-api-key>",
       "model": "<model-id>",
       "api_base": "<api-endpoint>",
@@ -119,7 +119,7 @@ Create an `ov.conf` file using the following template:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `backend` | string | Yes | Model service provider, fill in `"volcengine"` for Volcengine |
+| `provider` | string | Yes | Model service provider, fill in `"volcengine"` for Volcengine |
 | `api_key` | string | Yes | Volcano Ark API Key |
 | `model` | string | Yes | Model ID, e.g., `doubao-seed-1-8-251228` |
 | `api_base` | string | No | API endpoint address, defaults to Beijing region endpoint, see Appendix - Regional Endpoints for details |
@@ -130,7 +130,7 @@ Create an `ov.conf` file using the following template:
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `backend` | string | Yes | Model service provider, fill in `"volcengine"` for Volcengine |
+| `provider` | string | Yes | Model service provider, fill in `"volcengine"` for Volcengine |
 | `api_key` | string | Yes | Volcano Ark API Key |
 | `model` | string | Yes | Model ID, e.g., `doubao-embedding-vision-250615` |
 | `api_base` | string | No | API endpoint address, defaults to Beijing region endpoint, see Appendix - Regional Endpoints for details |
@@ -144,7 +144,7 @@ Save the following content as `ov.conf`:
 ```json
 {
   "vlm": {
-    "backend": "volcengine",
+    "provider": "volcengine",
     "api_key": "sk-1234567890abcdef1234567890abcdef",
     "model": "doubao-seed-1-8-251228",
     "api_base": "https://ark.cn-beijing.volces.com/api/v3",
@@ -153,7 +153,7 @@ Save the following content as `ov.conf`:
   },
   "embedding": {
     "dense": {
-      "backend": "volcengine",
+      "provider": "volcengine",
       "api_key": "sk-1234567890abcdef1234567890abcdef",
       "model": "doubao-embedding-vision-250615",
       "api_base": "https://ark.cn-beijing.volces.com/api/v3",

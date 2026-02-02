@@ -8,7 +8,7 @@
 {
   "embedding": {
     "dense": {
-      "backend": "volcengine",
+      "provider": "volcengine",
       "api_key": "your-volcengine-api-key",
       "model": "doubao-embedding-vision-250615",
       "dimension": 1024,
@@ -22,7 +22,7 @@
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
-| `backend` | str | `"volcengine"` |
+| `provider` | str | `"volcengine"` |
 | `api_key` | str | 火山引擎 API Key |
 | `model` | str | 模型名称 |
 | `dimension` | int | 向量维度 |
@@ -54,7 +54,7 @@ export VOLCENGINE_API_KEY="your-api-key"
 {
   "embedding": {
     "dense": {
-      "backend": "volcengine",
+      "provider": "volcengine",
       "model": "doubao-embedding-vision-250615",
       "dimension": 1024
     }
@@ -69,7 +69,7 @@ from openviking.utils.config import EmbeddingConfig, DenseEmbeddingConfig
 
 embedding_config = EmbeddingConfig(
     dense=DenseEmbeddingConfig(
-        backend="volcengine",
+        provider="volcengine",
         api_key="your-api-key",
         model="doubao-embedding-vision-250615",
         dimension=1024,

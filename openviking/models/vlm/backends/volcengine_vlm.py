@@ -16,8 +16,8 @@ class VolcEngineVLM(OpenAIVLM):
         super().__init__(config)
         self._sync_client = None
         self._async_client = None
-        # Ensure backend type is correct
-        self.backend = "volcengine"
+        # Ensure provider type is correct
+        self.provider = "volcengine"
 
         # VolcEngine-specific defaults
         if not self.api_base:

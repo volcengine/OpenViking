@@ -29,7 +29,7 @@
         "api_key": "{your-api-key}",
         "api_base": "https://ark.cn-beijing.volces.com/api/v3",
         "dimension": 1024,
-        "backend": "volcengine",
+        "provider": "volcengine",
         "input": "multimodal"
     }
   },
@@ -39,7 +39,7 @@
     "api_base": "https://ark.cn-beijing.volces.com/api/v3",
     "temperature": 0.0,
     "max_retries": 2,
-    "backend": "volcengine"
+    "provider": "volcengine"
   },
   "rerank": {
     "ak": null,

@@ -74,9 +74,9 @@ pip install openviking
 ```json
 {
   "user": "default_user",
-  "embedding": {
+    "embedding": {
     "dense": {
-      "backend": "volcengine",
+      "provider": "volcengine",
       "api_key": "your-api-key",
       "model": "doubao-embedding-vision-250615",
       "dimension": 1024,
@@ -84,13 +84,13 @@ pip install openviking
     }
   },
   "vlm": {
-    "backend": "volcengine",
+    "provider": "volcengine",
     "api_key": "your-api-key",
     "model": "doubao-seed-1-8-251228",
     "api_base": "https://ark.cn-beijing.volces.com/api/v3"
   },
   "rerank": {
-    "backend": "volcengine",
+    "provider": "volcengine",
     "api_key": "your-api-key",
     "model": "doubao-rerank-250615"
   },
@@ -103,9 +103,9 @@ pip install openviking
 
 配置优先级：构造函数参数 > Config 对象 > 配置文件 > 环境变量 > 默认值
 
-### 支持哪些 Embedding 后端？
+### 支持哪些 Embedding Provider？
 
-| 后端 | 说明 |
+| Provider | 说明 |
 |------|------|
 | `volcengine` | 火山引擎 Embedding API（推荐） |
 | `openai` | OpenAI Embedding API |

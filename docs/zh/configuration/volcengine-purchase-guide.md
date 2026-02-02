@@ -95,7 +95,7 @@ OpenViking 需要以下模型服务：
 ```json
 {
   "vlm": {
-    "backend": "<backend-type>",
+    "provider": "<provider-type>",
     "api_key": "<your-api-key>",
     "model": "<model-id>",
     "api_base": "<api-endpoint>",
@@ -104,7 +104,7 @@ OpenViking 需要以下模型服务：
   },
   "embedding": {
     "dense": {
-      "backend": "<backend-type>",
+      "provider": "<provider-type>",
       "api_key": "<your-api-key>",
       "model": "<model-id>",
       "api_base": "<api-endpoint>",
@@ -121,7 +121,7 @@ OpenViking 需要以下模型服务：
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `backend` | string | 是 | 模型服务提供商，火山引擎填 `"volcengine"` |
+| `provider` | string | 是 | 模型服务提供商，火山引擎填 `"volcengine"` |
 | `api_key` | string | 是 | 火山方舟 API Key |
 | `model` | string | 是 | 模型 ID，如 `doubao-seed-1-8-251228` |
 | `api_base` | string | 否 | API 端点地址，默认为北京区域端点，具体可见附录-区域端点 |
@@ -132,7 +132,7 @@ OpenViking 需要以下模型服务：
 
 | 字段 | 类型 | 必填 | 说明 |
 |------|------|------|------|
-| `backend` | string | 是 | 模型服务提供商，火山引擎填 `"volcengine"` |
+| `provider` | string | 是 | 模型服务提供商，火山引擎填 `"volcengine"` |
 | `api_key` | string | 是 | 火山方舟 API Key |
 | `model` | string | 是 | 模型 ID，如 `doubao-embedding-vision-250615` |
 | `api_base` | string | 否 | API 端点地址，默认为北京区域端点，具体可见附录-区域端点 |
@@ -146,7 +146,7 @@ OpenViking 需要以下模型服务：
 ```json
 {
   "vlm": {
-    "backend": "volcengine",
+    "provider": "volcengine",
     "api_key": "sk-1234567890abcdef1234567890abcdef",
     "model": "doubao-seed-1-8-251228",
     "api_base": "https://ark.cn-beijing.volces.com/api/v3",
@@ -155,7 +155,7 @@ OpenViking 需要以下模型服务：
   },
   "embedding": {
     "dense": {
-      "backend": "volcengine",
+      "provider": "volcengine",
       "api_key": "sk-1234567890abcdef1234567890abcdef",
       "model": "doubao-embedding-vision-250615",
       "api_base": "https://ark.cn-beijing.volces.com/api/v3",

@@ -91,7 +91,7 @@ OpenViking 支持多种模型服务：
     "dense": {
       "api_base" : "<api-endpoint>",   // API 服务端点地址
       "api_key"  : "<your-api-key>",   // 模型服务的 API 密钥
-      "backend"  : "<backend-type>",   // 后端类型（volcengine 或 openai）
+      "provider" : "<provider-type>",  // 提供商类型（volcengine 或 openai）
       "dimension": 1024,               // 向量维度
       "model"    : "<model-name>"      // Embedding 模型名称（如 doubao-embedding-vision-250615 或 text-embedding-3-large）
     }
@@ -99,7 +99,7 @@ OpenViking 支持多种模型服务：
   "vlm": {
     "api_base" : "<api-endpoint>",     // API 服务端点地址
     "api_key"  : "<your-api-key>",     // 模型服务的 API 密钥
-    "backend"  : "<backend-type>",     // 后端类型（volcengine 或 openai）
+    "provider" : "<provider-type>",    // 提供商类型（volcengine 或 openai）
     "model"    : "<model-name>"        // VLM 模型名称（如 doubao-seed-1-8-251228 或 gpt-4-vision-preview）
   }
 }
@@ -118,7 +118,7 @@ OpenViking 支持多种模型服务：
     "dense": {
       "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
       "api_key"  : "your-volcengine-api-key",
-      "backend"  : "volcengine",
+      "provider" : "volcengine",
       "dimension": 1024,
       "model"    : "doubao-embedding-vision-250615"
     }
@@ -126,7 +126,7 @@ OpenViking 支持多种模型服务：
   "vlm": {
     "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
     "api_key"  : "your-volcengine-api-key",
-    "backend"  : "volcengine",
+    "provider" : "volcengine",
     "model"    : "doubao-seed-1-8-251228"
   }
 }
@@ -143,7 +143,7 @@ OpenViking 支持多种模型服务：
     "dense": {
       "api_base" : "https://api.openai.com/v1",
       "api_key"  : "your-openai-api-key",
-      "backend"  : "openai",
+      "provider" : "openai",
       "dimension": 3072,
       "model"    : "text-embedding-3-large"
     }
@@ -151,7 +151,7 @@ OpenViking 支持多种模型服务：
   "vlm": {
     "api_base" : "https://api.openai.com/v1",
     "api_key"  : "your-openai-api-key",
-    "backend"  : "openai",
+    "provider" : "openai",
     "model"    : "gpt-4-vision-preview"
   }
 }

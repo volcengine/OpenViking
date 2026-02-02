@@ -9,6 +9,7 @@ Used for generating L0/L1 content from resources.
 ```json
 {
   "vlm": {
+    "provider": "volcengine",
     "api_key": "your-volcengine-api-key",
     "model": "doubao-seed-1-8-251228",
     "base_url": "https://ark.cn-beijing.volces.com/api/v3"
@@ -38,7 +39,7 @@ Used for search result refinement.
 ```json
 {
   "rerank": {
-    "backend": "volcengine",
+    "provider": "volcengine",
     "api_key": "your-volcengine-api-key",
     "model": "doubao-rerank-250615"
   }
@@ -49,7 +50,7 @@ Used for search result refinement.
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `backend` | str | `"volcengine"` |
+| `provider` | str | `"volcengine"` |
 | `api_key` | str | Volcengine API key |
 | `model` | str | Model name |
 
@@ -70,7 +71,7 @@ config = OpenVikingConfig(
         "model": "doubao-seed-1-8-251228"
     },
     rerank={
-        "backend": "volcengine",
+        "provider": "volcengine",
         "api_key": "your-api-key",
         "model": "doubao-rerank-250615"
     }

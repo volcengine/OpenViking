@@ -10,18 +10,19 @@ Create `ov.conf` in your project directory:
 {
   "embedding": {
     "dense": {
-      "backend": "volcengine",
+      "provider": "volcengine",
       "api_key": "your-api-key",
       "model": "doubao-embedding-vision-250615",
       "dimension": 1024
     }
   },
   "vlm": {
+    "provider": "volcengine",
     "api_key": "your-api-key",
     "model": "doubao-seed-1-8-251228"
   },
   "rerank": {
-    "backend": "volcengine",
+    "provider": "volcengine",
     "api_key": "your-api-key",
     "model": "doubao-rerank-250615"
   },
@@ -48,7 +49,7 @@ Embedding model configuration for vector search.
 {
   "embedding": {
     "dense": {
-      "backend": "volcengine",
+      "provider": "volcengine",
       "api_key": "your-api-key",
       "model": "doubao-embedding-vision-250615",
       "dimension": 1024,
@@ -83,7 +84,7 @@ Reranking model for search refinement.
 ```json
 {
   "rerank": {
-    "backend": "volcengine",
+    "provider": "volcengine",
     "api_key": "your-api-key",
     "model": "doubao-rerank-250615"
   }
@@ -152,7 +153,7 @@ config = OpenVikingConfig(
     ),
     embedding=EmbeddingConfig(
         dense=DenseEmbeddingConfig(
-            backend="volcengine",
+            provider="volcengine",
             api_key="your-api-key",
             model="doubao-embedding-vision-250615",
             dimension=1024
@@ -171,7 +172,7 @@ client = ov.AsyncOpenViking(config=config)
 {
   "embedding": {
     "dense": {
-      "backend": "volcengine",
+      "provider": "volcengine",
       "api_key": "string",
       "model": "string",
       "dimension": 1024,
@@ -179,12 +180,13 @@ client = ov.AsyncOpenViking(config=config)
     }
   },
   "vlm": {
+    "provider": "string",
     "api_key": "string",
     "model": "string",
     "base_url": "string"
   },
   "rerank": {
-    "backend": "volcengine",
+    "provider": "volcengine",
     "api_key": "string",
     "model": "string"
   },

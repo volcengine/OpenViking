@@ -74,9 +74,9 @@ Create an `ov.conf` configuration file in your project directory:
 ```json
 {
   "user": "default_user",
-  "embedding": {
+    "embedding": {
     "dense": {
-      "backend": "volcengine",
+      "provider": "volcengine",
       "api_key": "your-api-key",
       "model": "doubao-embedding-vision-250615",
       "dimension": 1024,
@@ -84,13 +84,13 @@ Create an `ov.conf` configuration file in your project directory:
     }
   },
   "vlm": {
-    "backend": "volcengine",
+    "provider": "volcengine",
     "api_key": "your-api-key",
     "model": "doubao-seed-1-8-251228",
     "api_base": "https://ark.cn-beijing.volces.com/api/v3"
   },
   "rerank": {
-    "backend": "volcengine",
+    "provider": "volcengine",
     "api_key": "your-api-key",
     "model": "doubao-rerank-250615"
   },
@@ -103,9 +103,9 @@ Create an `ov.conf` configuration file in your project directory:
 
 Configuration priority: Constructor parameters > Config object > Config file > Environment variables > Default values
 
-### What Embedding backends are supported?
+### What Embedding providers are supported?
 
-| Backend | Description |
+| Provider | Description |
 |---------|-------------|
 | `volcengine` | Volcengine Embedding API (Recommended) |
 | `openai` | OpenAI Embedding API |
