@@ -92,7 +92,7 @@ Create a configuration file `ov.conf`:
     "dense": {
       "api_base" : "<api-endpoint>",   // API endpoint address
       "api_key"  : "<your-api-key>",   // Model service API Key
-      "provider" : "<provider-type>",  // Provider type (volcengine or openai)
+      "backend" : "<provider-type>",  // Provider type (volcengine or openai)
       "dimension": 1024,               // Vector dimension
       "model"    : "<model-name>"      // Embedding model name (e.g., doubao-embedding-vision-250615 or text-embedding-3-large)
     }
@@ -100,7 +100,7 @@ Create a configuration file `ov.conf`:
   "vlm": {
     "api_base" : "<api-endpoint>",     // API endpoint address
     "api_key"  : "<your-api-key>",     // Model service API Key
-    "provider" : "<provider-type>",    // Provider type (volcengine or openai)
+    "backend" : "<provider-type>",    // Provider type (volcengine or openai)
     "model"    : "<model-name>"        // VLM model name (e.g., doubao-seed-1-8-251228 or gpt-4-vision-preview)
   }
 }
@@ -119,7 +119,7 @@ Create a configuration file `ov.conf`:
     "dense": {
       "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
       "api_key"  : "your-volcengine-api-key",
-      "provider" : "volcengine",
+      "backend" : "volcengine",
       "dimension": 1024,
       "model"    : "doubao-embedding-vision-250615"
     }
@@ -127,7 +127,7 @@ Create a configuration file `ov.conf`:
   "vlm": {
     "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
     "api_key"  : "your-volcengine-api-key",
-    "provider" : "volcengine",
+    "backend" : "volcengine",
     "model"    : "doubao-seed-1-8-251228"
   }
 }
@@ -144,7 +144,7 @@ Create a configuration file `ov.conf`:
     "dense": {
       "api_base" : "https://api.openai.com/v1",
       "api_key"  : "your-openai-api-key",
-      "provider" : "openai",
+      "backend" : "openai",
       "dimension": 3072,
       "model"    : "text-embedding-3-large"
     }
@@ -152,8 +152,8 @@ Create a configuration file `ov.conf`:
   "vlm": {
     "api_base" : "https://api.openai.com/v1",
     "api_key"  : "your-openai-api-key",
-    "provider" : "openai",
-    "model"    : "gpt-4-vision-preview"
+    "backend" : "openai",
+    "model"    : "gpt-5.1"
   }
 }
 ```
