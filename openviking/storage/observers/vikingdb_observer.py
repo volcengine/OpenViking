@@ -6,9 +6,9 @@ VikingDBObserver: VikingDB storage observability tool.
 Provides methods to observe and report VikingDB collection status.
 """
 
-import asyncio
 from typing import Dict
 
+from openviking.storage.observers.async_utils import run_coroutine_sync
 from openviking.storage.observers.base_observer import BaseObserver
 from openviking.storage.vikingdb_manager import VikingDBManager
 from openviking.utils.logger import get_logger
@@ -26,14 +26,20 @@ class VikingDBObserver(BaseObserver):
     def __init__(self, vikingdb_manager: VikingDBManager):
         self._vikingdb_manager = vikingdb_manager
 
-    def get_status_table(self) -> str:
-        collection_names = asyncio.run(self._vikingdb_manager.list_collections())
+    async def get_status_table_async(self) -> str:
+        if not self._vikingdb_manager:
+            return "VikingDB manager not initialized."
+
+        collection_names = await self._vikingdb_manager.list_collections()
 
         if not collection_names:
             return "No collections found."
 
-        statuses = asyncio.run(self._get_collection_statuses(collection_names))
+        statuses = await self._get_collection_statuses(collection_names)
         return self._format_status_as_table(statuses)
+
+    def get_status_table(self) -> str:
+        return run_coroutine_sync(self.get_status_table_async)
 
     def __str__(self) -> str:
         return self.get_status_table()
@@ -148,7 +154,9 @@ class VikingDBObserver(BaseObserver):
             True if errors exist, False otherwise
         """
         try:
-            asyncio.run(self._vikingdb_manager.health_check())
+            if not self._vikingdb_manager:
+                return True
+            run_coroutine_sync(self._vikingdb_manager.health_check)
             return False
         except Exception as e:
             logger.error(f"VikingDB health check failed: {e}")

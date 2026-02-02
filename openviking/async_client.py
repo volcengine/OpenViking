@@ -122,8 +122,11 @@ class AsyncOpenViking:
             vectordb_url=vectordb_url,
             agfs_url=agfs_url,
         )
+        self._config = config
         self.user = config.user
 
+        self._agfs_manager = None
+        self._agfs_url = None
         self._vikingdb_manager = self.__init_storage(config.storage)
 
         # Get embedder instance - must succeed for proper initialization
@@ -177,6 +180,13 @@ class AsyncOpenViking:
             await self._vikingdb_manager.close()
             self._vikingdb_manager = None
 
+        self._viking_fs = None
+        self._resource_processor = None
+        self._skill_processor = None
+        self._session_compressor = None
+        self._initialized = False
+        self._singleton_initialized = False
+
     @classmethod
     async def reset(cls) -> None:
         """Reset the singleton instance (mainly for testing)."""
@@ -193,6 +203,12 @@ class AsyncOpenViking:
 
     async def _ensure_initialized(self):
         """Ensure storage collections are initialized."""
+        if self._vikingdb_manager is None:
+            self._vikingdb_manager = self.__init_storage(self._config.storage)
+
+        if self._embedder is None:
+            self._embedder = self._config.embedding.get_embedder()
+
         if self._initialized:
             logger.debug(
                 f"Already initialized, _session_compressor={bool(self._session_compressor)}"

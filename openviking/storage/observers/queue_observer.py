@@ -6,9 +6,9 @@ QueueObserver: Queue system observability tool.
 Provides methods to observe and report queue status in various formats.
 """
 
-import asyncio
 from typing import Dict
 
+from openviking.storage.observers.async_utils import run_coroutine_sync
 from openviking.storage.observers.base_observer import BaseObserver
 from openviking.storage.queuefs.named_queue import QueueStatus
 from openviking.storage.queuefs.queue_manager import QueueManager
@@ -27,9 +27,12 @@ class QueueObserver(BaseObserver):
     def __init__(self, queue_manager: QueueManager):
         self._queue_manager = queue_manager
 
-    def get_status_table(self) -> str:
-        statuses = asyncio.run(self._queue_manager.check_status())
+    async def get_status_table_async(self) -> str:
+        statuses = await self._queue_manager.check_status()
         return self._format_status_as_table(statuses)
+
+    def get_status_table(self) -> str:
+        return run_coroutine_sync(self.get_status_table_async)
 
     def __str__(self) -> str:
         return self.get_status_table()
