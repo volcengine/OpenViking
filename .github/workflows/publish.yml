@@ -6,12 +6,156 @@ on:
   workflow_dispatch:  # 允许手动触发
 
 jobs:
+  permission-check:
+    name: Check write permission
+    runs-on: ubuntu-latest
+    permissions: read-all
+    outputs:
+      allowed: ${{ steps.check.outputs.allowed }}
+    steps:
+    - name: Verify actor permission
+      id: check
+      uses: actions/github-script@v7
+      with:
+        script: |
+          if (context.eventName !== 'workflow_dispatch') {
+            core.setOutput('allowed', 'true');
+            return;
+          }
+          const { owner, repo } = context.repo;
+          const actor = context.actor;
+          const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+            owner,
+            repo,
+            username: actor,
+          });
+          const perm = data.permission;
+          core.info(`Actor ${actor} permission: ${perm}`);
+          const allowed = ['admin', 'maintain', 'write'].includes(perm);
+          core.setOutput('allowed', allowed ? 'true' : 'false');
+          if (!allowed) {
+            core.setFailed(`User ${actor} does not have write permission`);
+          }
+
+  build-linux:
+    name: Build distribution on Linux (glibc 2.31) py${{ matrix.python-version }}
+    needs: [permission-check]
+    if: needs.permission-check.outputs.allowed == 'true'
+    runs-on: ubuntu-latest
+    container: ubuntu:20.04
+    env:
+      DEBIAN_FRONTEND: noninteractive
+      TZ: Etc/UTC
+    strategy:
+      matrix:
+        include:
+          - python-version: '3.9'
+            python-full: '3.9.18'
+          - python-version: '3.10'
+            python-full: '3.10.13'
+          - python-version: '3.11'
+            python-full: '3.11.8'
+          - python-version: '3.12'
+            python-full: '3.12.2'
+
+    steps:
+    - name: Install system dependencies (Linux)
+      run: |
+        apt-get update
+        apt-get install -y \
+          git ca-certificates cmake build-essential tzdata curl \
+          libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev \
+          libffi-dev liblzma-dev libgdbm-dev libnss3-dev libncurses5-dev \
+          libncursesw5-dev tk-dev uuid-dev libexpat1-dev
+        ln -fs /usr/share/zoneinfo/Etc/UTC /etc/localtime
+        dpkg-reconfigure -f noninteractive tzdata
+
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Build CPython ${{ matrix.python-full }} (Linux)
+      run: |
+        PYTHON_FULL="${{ matrix.python-full }}"
+        PYTHON_PREFIX="/opt/python/${PYTHON_FULL}"
+        PYTHON_BIN="${PYTHON_PREFIX}/bin/python${{ matrix.python-version }}"
+        if [ ! -x "$PYTHON_BIN" ]; then
+          curl -fsSL -o /tmp/Python-${PYTHON_FULL}.tgz \
+            https://www.python.org/ftp/python/${PYTHON_FULL}/Python-${PYTHON_FULL}.tgz
+          tar -xzf /tmp/Python-${PYTHON_FULL}.tgz -C /tmp
+          cd /tmp/Python-${PYTHON_FULL}
+          CFLAGS="-fPIC" \
+          ./configure --prefix="${PYTHON_PREFIX}" --with-ensurepip=install --enable-shared
+          make -j"$(nproc)"
+          make install
+        fi
+        echo "PYTHON_BIN=${PYTHON_BIN}" >> "$GITHUB_ENV"
+        echo "LD_LIBRARY_PATH=${PYTHON_PREFIX}/lib:${LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
+        export LD_LIBRARY_PATH="${PYTHON_PREFIX}/lib:${LD_LIBRARY_PATH}"
+        "$PYTHON_BIN" -V
+
+    - name: Set up Go
+      uses: actions/setup-go@v6
+      with:
+        go-version: '1.25.1'
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+      with:
+        enable-cache: true
+
+    - name: Create venv (Linux)
+      run: uv venv --python "$PYTHON_BIN"
+
+    - name: Seed pip (Linux)
+      run: uv run python -m ensurepip --upgrade
+
+    - name: Install dependencies
+      run: uv sync
+
+    - name: Install build dependencies
+      run: uv pip install setuptools pybind11 cmake wheel build
+
+    - name: Build package
+      run: uv run python -m build
+
+    - name: Install patchelf (Linux)
+      run: |
+        PATCHELF_VERSION=0.18.0
+        curl -fsSL -o /tmp/patchelf-${PATCHELF_VERSION}.tar.gz \
+          https://github.com/NixOS/patchelf/releases/download/${PATCHELF_VERSION}/patchelf-${PATCHELF_VERSION}.tar.gz
+        tar -xzf /tmp/patchelf-${PATCHELF_VERSION}.tar.gz -C /tmp
+        cd /tmp/patchelf-${PATCHELF_VERSION}
+        ./configure
+        make -j"$(nproc)"
+        make install
+        patchelf --version
+
+    - name: Repair wheels (Linux)
+      run: |
+        uv pip install auditwheel
+        # Repair wheels and output to a temporary directory
+        uv run auditwheel repair dist/*.whl -w dist_fixed
+        # Remove original non-compliant wheels
+        rm dist/*.whl
+        # Move repaired wheels back to dist
+        mv dist_fixed/*.whl dist/
+        rmdir dist_fixed
+
+    - name: Store the distribution packages
+      uses: actions/upload-artifact@v4
+      with:
+        name: python-package-distributions-linux-${{ matrix.python-version }}
+        path: dist/
+
   build:
     name: Build distribution on ${{ matrix.os }}
+    needs: [permission-check]
+    if: needs.permission-check.outputs.allowed == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       matrix:
-        os: [ubuntu-latest, macos-latest, macos-15-intel, windows-latest]
+        os: [macos-latest, macos-15-intel, windows-latest]
         python-version: ['3.9', '3.10', '3.11', '3.12']
 
     steps:
@@ -20,6 +164,7 @@ jobs:
         submodules: recursive
 
     - name: Set up Python
+      id: setup-python
       uses: actions/setup-python@v6
       with:
         python-version: ${{ matrix.python-version }}
@@ -33,12 +178,6 @@ jobs:
       uses: astral-sh/setup-uv@v7
       with:
         enable-cache: true
-
-    - name: Install system dependencies (Linux)
-      if: runner.os == 'Linux'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y cmake build-essential
 
     - name: Install system dependencies (macOS)
       if: runner.os == 'macOS'
@@ -59,18 +198,6 @@ jobs:
     - name: Build package
       run: uv run python -m build
 
-    - name: Repair wheels (Linux)
-      if: runner.os == 'Linux'
-      run: |
-        uv pip install auditwheel
-        # Repair wheels and output to a temporary directory
-        uv run auditwheel repair dist/*.whl -w dist_fixed
-        # Remove original non-compliant wheels
-        rm dist/*.whl
-        # Move repaired wheels back to dist
-        mv dist_fixed/*.whl dist/
-        rmdir dist_fixed
-
     - name: Store the distribution packages
       uses: actions/upload-artifact@v4
       with:
@@ -79,7 +206,7 @@ jobs:
 
   publish-to-pypi:
     name: Publish to PyPI
-    needs: [build]
+    needs: [build-linux, build]
     runs-on: ubuntu-latest
     environment:
       name: pypi
@@ -100,7 +227,7 @@ jobs:
 
   publish-to-testpypi:
     name: Publish to TestPyPI
-    needs: [build]
+    needs: [build-linux, build]
     runs-on: ubuntu-latest
     if: github.event_name == 'workflow_dispatch'
     environment:
