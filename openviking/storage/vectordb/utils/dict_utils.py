@@ -132,8 +132,7 @@ def filter_dict_key_with_prefix(d: Dict[str, Any], prefix: str = "_") -> Dict[st
             filtered[key] = filter_dict_key_with_prefix(value, prefix)
         elif isinstance(value, list):
             filtered[key] = [
-                filter_dict_key_with_prefix(v, prefix) if isinstance(v, dict) else v
-                for v in value
+                filter_dict_key_with_prefix(v, prefix) if isinstance(v, dict) else v for v in value
             ]
         else:
             filtered[key] = value

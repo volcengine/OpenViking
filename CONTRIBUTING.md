@@ -140,9 +140,7 @@ We use the following tools to maintain code consistency:
 
 | Tool | Purpose | Config |
 |------|---------|--------|
-| **Black** | Code formatting | `pyproject.toml` |
-| **isort** | Import sorting | `pyproject.toml` |
-| **Ruff** | Linting | `pyproject.toml` |
+| **Ruff** | Linting, Formatting, Import sorting | `pyproject.toml` |
 | **mypy** | Type checking | `pyproject.toml` |
 
 ### Automated Checks (Recommended)
@@ -159,14 +157,13 @@ We use [pre-commit](https://pre-commit.com/) to automatically run these checks b
    pre-commit install
    ```
 
-Now, `black`, `isort`, and `ruff` will run automatically when you run `git commit`. If any check fails, it may automatically fix the file. You just need to add the changes and commit again.
+Now, `ruff` (check & format) will run automatically when you run `git commit`. If any check fails, it may automatically fix the file. You just need to add the changes and commit again.
 
 ### Running Checks
 
 ```bash
 # Format code
-black openviking/
-isort openviking/
+ruff format openviking/
 
 # Lint
 ruff check openviking/

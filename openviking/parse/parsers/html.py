@@ -18,7 +18,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlparse
-from openviking.parse.parsers.base_parser import BaseParser
+
 from openviking.parse.base import (
     NodeType,
     ParseResult,
@@ -26,6 +26,7 @@ from openviking.parse.base import (
     create_parse_result,
     lazy_import,
 )
+from openviking.parse.parsers.base_parser import BaseParser
 
 
 class URLType(Enum):
@@ -68,9 +69,7 @@ class URLTypeDetector:
         "application/xhtml+xml": URLType.WEBPAGE,
     }
 
-    async def detect(
-        self, url: str, timeout: float = 10.0
-    ) -> Tuple[URLType, Dict[str, Any]]:
+    async def detect(self, url: str, timeout: float = 10.0) -> Tuple[URLType, Dict[str, Any]]:
         """
         Detect URL content type.
 
@@ -157,6 +156,7 @@ class HTMLParser(BaseParser):
         if not hasattr(self, "_readabilipy") or self._readabilipy is None:
             try:
                 from readabilipy import simple_json
+
                 self._readabilipy = simple_json
             except ImportError:
                 raise ImportError(
@@ -170,6 +170,7 @@ class HTMLParser(BaseParser):
         if not hasattr(self, "_markdownify") or self._markdownify is None:
             try:
                 import markdownify
+
                 self._markdownify = markdownify
             except ImportError:
                 raise ImportError(
@@ -400,9 +401,7 @@ class HTMLParser(BaseParser):
         """
         httpx = lazy_import("httpx")
 
-        async with httpx.AsyncClient(
-            timeout=self.timeout, follow_redirects=True
-        ) as client:
+        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
             headers = {"User-Agent": self.user_agent}
             response = await client.get(url, headers=headers)
             response.raise_for_status()
@@ -433,9 +432,7 @@ class HTMLParser(BaseParser):
         temp_file.close()
 
         # Download
-        async with httpx.AsyncClient(
-            timeout=self.timeout, follow_redirects=True
-        ) as client:
+        async with httpx.AsyncClient(timeout=self.timeout, follow_redirects=True) as client:
             headers = {"User-Agent": self.user_agent}
             response = await client.get(url, headers=headers)
             response.raise_for_status()

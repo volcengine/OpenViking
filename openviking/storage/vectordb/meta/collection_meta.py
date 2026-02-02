@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 import copy
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from openviking.storage.vectordb.meta.dict import IDict
 from openviking.storage.vectordb.meta.local_dict import PersistentDict, VolatileDict
@@ -102,11 +102,7 @@ class CollectionMeta:
             "",
         )
         inner_meta["SparseVectorKey"] = next(
-            (
-                item["FieldName"]
-                for item in fields
-                if item.get("FieldType") == "sparse_vector"
-            ),
+            (item["FieldName"] for item in fields if item.get("FieldType") == "sparse_vector"),
             "",
         )
         return inner_meta
@@ -124,9 +120,7 @@ class CollectionMeta:
         user_meta = copy.deepcopy(inner_meta)
         if not user_meta.get("HasPrimaryKey", False):
             fields = user_meta.get("Fields", [])
-            new_list = [
-                item for item in fields if "AUTO_ID" != item.get("FieldName", "")
-            ]
+            new_list = [item for item in fields if "AUTO_ID" != item.get("FieldName", "")]
             user_meta["Fields"] = new_list
         user_meta.pop("HasPrimaryKey", None)
         user_meta.pop("FieldsCount", None)

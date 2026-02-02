@@ -8,40 +8,37 @@ and rerank-based relevance scoring.
 """
 
 import heapq
-import re
-from typing import Any, Callable, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
-from openviking.utils.config import RerankConfig
+from openviking.models.embedder.base import EmbedResult
 from openviking.retrieve.types import (
     ContextType,
     MatchedContext,
     QueryResult,
     RelatedContext,
-    ScoreDistribution,
-    ThinkingTrace,
-    TraceEventType,
     TypedQuery,
 )
 from openviking.storage import VikingDBInterface
 from openviking.storage.viking_fs import get_viking_fs
-from openviking.models.embedder.base import EmbedResult
+from openviking.utils.config import RerankConfig
 from openviking.utils.logger import get_logger
-from openviking.utils.rerank import RerankClient
 
 logger = get_logger(__name__)
+
 
 class RetrieverMode(str):
     THINKING = "thinking"
     QUICK = "quick"
 
+
 class HierarchicalRetriever:
     """Hierarchical retriever with dense and sparse vector support."""
 
-    MAX_CONVERGENCE_ROUNDS = 3      # Stop after multiple rounds with unchanged topk
-    MAX_RELATIONS = 5               # Maximum relations per resource
-    SCORE_PROPAGATION_ALPHA = 0.5   # Score propagation coefficient
-    DIRECTORY_DOMINANCE_RATIO = 1.2 # Directory score must exceed max child score
-    GLOBAL_SEARCH_TOPK = 3          # Global retrieval count
+    MAX_CONVERGENCE_ROUNDS = 3  # Stop after multiple rounds with unchanged topk
+    MAX_RELATIONS = 5  # Maximum relations per resource
+    SCORE_PROPAGATION_ALPHA = 0.5  # Score propagation coefficient
+    DIRECTORY_DOMINANCE_RATIO = 1.2  # Directory score must exceed max child score
+    GLOBAL_SEARCH_TOPK = 3  # Global retrieval count
 
     def __init__(
         self,
@@ -67,10 +64,14 @@ class HierarchicalRetriever:
         if rerank_config and rerank_config.is_available():
             # TODO: Support later - initialize RerankClient here
             self._rerank_client = None
-            logger.info(f"[HierarchicalRetriever] Rerank config available, threshold={self.threshold}")
+            logger.info(
+                f"[HierarchicalRetriever] Rerank config available, threshold={self.threshold}"
+            )
         else:
             self._rerank_client = None
-            logger.info(f"[HierarchicalRetriever] Rerank not configured, using vector search only with threshold={self.threshold}") 
+            logger.info(
+                f"[HierarchicalRetriever] Rerank not configured, using vector search only with threshold={self.threshold}"
+            )
 
     async def retrieve(
         self,
@@ -105,10 +106,7 @@ class HierarchicalRetriever:
         if metadata_filter:
             filters_to_merge.append(metadata_filter)
 
-        final_metadata_filter = {
-            "op": "and",
-            "conds": filters_to_merge
-        }
+        final_metadata_filter = {"op": "and", "conds": filters_to_merge}
 
         # Step 1: Determine starting directories based on context_type
         root_uris = self._get_root_uris_for_type(query.context_type)
@@ -163,13 +161,16 @@ class HierarchicalRetriever:
             return []
         sparse_query_vector = result.sparse_vector or {}
 
-        global_filter = {"op": "and", "conds": [filter, {"op": "must", "field": "is_leaf", "conds": [False]}]}
+        global_filter = {
+            "op": "and",
+            "conds": [filter, {"op": "must", "field": "is_leaf", "conds": [False]}],
+        }
         results = await self.storage.search(
             collection=collection,
             query_vector=query_vector,
             sparse_query_vector=sparse_query_vector,
             filter=global_filter,
-            limit=limit
+            limit=limit,
         )
         return results
 
@@ -192,7 +193,7 @@ class HierarchicalRetriever:
         if self._rerank_client and mode == RetrieverMode.THINKING:
             for r in global_results:
                 # todo: multi-modal
-                doc = r['abstract']
+                doc = r["abstract"]
                 docs.append(doc)
             rerank_scores = self._rerank_client.rerank_batch(query, docs)
             for i, r in enumerate(global_results):
@@ -244,10 +245,7 @@ class HierarchicalRetriever:
             """Merge filter conditions."""
             if not extra_filter:
                 return base_filter
-            return {
-                "op": "and",
-                "conds": [base_filter, extra_filter]
-            }
+            return {"op": "and", "conds": [base_filter, extra_filter]}
 
         # Generate query vectors
         query_vector = None
@@ -288,7 +286,9 @@ class HierarchicalRetriever:
                 collection=collection,
                 query_vector=query_vector,
                 sparse_query_vector=sparse_query_vector,  # Pass sparse vector
-                filter=merge_filter({'op': 'must', "field": "parent_uri", "conds":[current_uri]}, metadata_filter),
+                filter=merge_filter(
+                    {"op": "must", "field": "parent_uri", "conds": [current_uri]}, metadata_filter
+                ),
                 limit=pre_filter_limit,
             )
 
@@ -300,7 +300,7 @@ class HierarchicalRetriever:
                 documents = []
                 for r in results:
                     # todo: multi-modal
-                    doc = r['abstract']
+                    doc = r["abstract"]
                     documents.append(doc)
 
                 rerank_scores = self._rerank_client.rerank_batch(query, documents)
@@ -311,23 +311,29 @@ class HierarchicalRetriever:
 
             for r, score in zip(results, query_scores):
                 uri = r.get("uri", "")
-                final_score = alpha * score + (1 - alpha) * current_score if current_score else score
+                final_score = (
+                    alpha * score + (1 - alpha) * current_score if current_score else score
+                )
 
                 if passes_threshold(final_score) and uri not in visited:
                     r["_final_score"] = final_score
                     collected.append(r)
                     visited.add(uri)
-                    logger.info(f"[RecursiveSearch] Added URI: {uri} to candidates with score: {final_score}")
+                    logger.info(
+                        f"[RecursiveSearch] Added URI: {uri} to candidates with score: {final_score}"
+                    )
                     if not r.get("is_leaf"):
                         continue
                     heapq.heappush(dir_queue, (-final_score, uri))
                 else:
-                    logger.info(f"[RecursiveSearch] URI {uri} score {final_score} did not pass threshold {effective_threshold}")
+                    logger.info(
+                        f"[RecursiveSearch] URI {uri} score {final_score} did not pass threshold {effective_threshold}"
+                    )
 
             # Convergence check
-            current_topk = sorted(
-                collected, key=lambda x: x.get("_final_score", 0), reverse=True
-            )[:limit]
+            current_topk = sorted(collected, key=lambda x: x.get("_final_score", 0), reverse=True)[
+                :limit
+            ]
             current_topk_uris = {c.get("uri", "") for c in current_topk}
 
             if current_topk_uris == prev_topk_uris and len(current_topk_uris) >= limit:

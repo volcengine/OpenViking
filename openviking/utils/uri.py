@@ -108,7 +108,7 @@ class VikingURI:
             True if matches, False otherwise
         """
         return self.uri.startswith(prefix)
-    
+
     @property
     def parent(self) -> Optional["VikingURI"]:
         """
@@ -126,7 +126,7 @@ class VikingURI:
         if scheme_end == -1:
             return None
 
-        after_scheme = uri[scheme_end + len(scheme_sep):]
+        after_scheme = uri[scheme_end + len(scheme_sep) :]
 
         # If no / in after_scheme, only scope exists, no path
         if "/" not in after_scheme:

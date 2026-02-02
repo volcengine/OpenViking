@@ -2,18 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Document parsers for various formats."""
 
-from openviking.parse.base import (
-    NodeType,
-    ParseResult,
-    ResourceNode,
-    create_parse_result,
-)
+from openviking.parse.base import NodeType, ParseResult, ResourceNode, create_parse_result
 from openviking.parse.converter import DocumentConverter
-from openviking.parse.custom import (
-    CallbackParserWrapper,
-    CustomParserProtocol,
-    CustomParserWrapper,
-)
+from openviking.parse.custom import CallbackParserWrapper, CustomParserProtocol, CustomParserWrapper
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.code import CodeParser
 from openviking.parse.parsers.html import HTMLParser

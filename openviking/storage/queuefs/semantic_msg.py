@@ -3,15 +3,16 @@
 """SemanticMsg: Semantic extraction queue message dataclass."""
 
 import json
-from uuid import uuid4
-from dataclasses import dataclass, asdict, field
-from typing import List, Dict, Any, Optional
+from dataclasses import asdict, dataclass
 from datetime import datetime
+from typing import Any, Dict
+from uuid import uuid4
 
 
 @dataclass
 class SemanticMsg:
     """Semantic extraction queue message."""
+
     id: str  # UUID
     uri: str  # Directory URI
     context_type: str  # resource, memory, skill

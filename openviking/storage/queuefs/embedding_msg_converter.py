@@ -7,8 +7,6 @@ This module provides a unified interface for converting Context objects
 to EmbeddingMsg objects for asynchronous vector processing.
 """
 
-import json
-
 from openviking.core.context import Context
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.utils import get_logger
@@ -36,5 +34,3 @@ class EmbeddingMsgConverter:
             if hasattr(embedding_msg.context_data, key) and value is not None:
                 setattr(embedding_msg.context_data, key, value)
         return embedding_msg
-    
-    

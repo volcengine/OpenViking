@@ -14,10 +14,10 @@ Responsibilities:
 
 import asyncio
 import json
-from pathlib import PurePath
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from pathlib import PurePath
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from openviking.storage.vikingdb_interface import VikingDBInterface
 from openviking.utils.logger import get_logger
@@ -173,8 +173,8 @@ class VikingFS:
         path = self._uri_to_path(uri)
         result = await asyncio.to_thread(self.agfs.grep, path, pattern, True, case_insensitive)
         # Change file to uri
-        if result.get('matches', None) is None:
-            result['matches'] = []
+        if result.get("matches", None) is None:
+            result["matches"] = []
         for match in result.get("matches", []):
             match["uri"] = self._path_to_uri(match.pop("file"))
         return result
@@ -357,8 +357,11 @@ class VikingFS:
             FindResult
         """
         from openviking.retrieve import (
-            ContextType, FindResult, HierarchicalRetriever,
-            QueryPlan, TypedQuery,
+            ContextType,
+            FindResult,
+            HierarchicalRetriever,
+            QueryPlan,
+            TypedQuery,
         )
         from openviking.retrieve.intent_analyzer import IntentAnalyzer
 
@@ -423,7 +426,8 @@ class VikingFS:
 
         async def _execute(tq: TypedQuery):
             return await retriever.retrieve(
-                tq, limit=limit,
+                tq,
+                limit=limit,
                 score_threshold=score_threshold,
                 metadata_filter=filter,
             )
@@ -468,9 +472,7 @@ class VikingFS:
 
         link_id = next(f"link_{i}" for i in range(1, 10000) if f"link_{i}" not in existing_ids)
 
-        entries.append(
-            RelationEntry(id=link_id, uris=uris, reason=reason)
-        )
+        entries.append(RelationEntry(id=link_id, uris=uris, reason=reason))
 
         await self._write_relation_table(from_path, entries)
         logger.info(f"[VikingFS] Created link: {from_uri} -> {uris}")
@@ -544,6 +546,7 @@ class VikingFS:
     def _infer_context_type(self, uri: str):
         """Infer context_type from URI."""
         from openviking.retrieve import ContextType
+
         if "/memories" in uri:
             return ContextType.MEMORY
         elif "/skills" in uri:
@@ -590,7 +593,9 @@ class VikingFS:
             except Exception as e:
                 logger.warning(f"[VikingFS] Failed to delete {uri} from vector store: {e}")
 
-    async def _update_vector_store_uris(self, uris: List[str], old_base: str, new_base: str) -> None:
+    async def _update_vector_store_uris(
+        self, uris: List[str], old_base: str, new_base: str
+    ) -> None:
         """Update URIs in vector store (when moving files).
 
         Preserves vector data, only updates uri and parent_uri fields, no need to regenerate embeddings.
@@ -619,12 +624,18 @@ class VikingFS:
                 new_uri = uri.replace(old_base_uri, new_base_uri, 1)
 
                 old_parent_uri = record.get("parent_uri", "")
-                new_parent_uri = old_parent_uri.replace(old_base_uri, new_base_uri, 1) if old_parent_uri else ""
+                new_parent_uri = (
+                    old_parent_uri.replace(old_base_uri, new_base_uri, 1) if old_parent_uri else ""
+                )
 
-                await storage.update("context", record_id, {
-                    "uri": new_uri,
-                    "parent_uri": new_parent_uri,
-                })
+                await storage.update(
+                    "context",
+                    record_id,
+                    {
+                        "uri": new_uri,
+                        "parent_uri": new_parent_uri,
+                    },
+                )
                 logger.info(f"[VikingFS] Updated URI: {uri} -> {new_uri}")
             except Exception as e:
                 logger.warning(f"[VikingFS] Failed to update {uri} in vector store: {e}")
@@ -656,12 +667,10 @@ class VikingFS:
         table_path = f"{dir_path}/.relations.json"
         try:
             content = await asyncio.to_thread(self.agfs.read, table_path)
-            data = json.loads(
-                content.decode("utf-8") if isinstance(content, bytes) else content
-            )
+            data = json.loads(content.decode("utf-8") if isinstance(content, bytes) else content)
         except FileNotFoundError:
             return []
-        except Exception as e:
+        except Exception:
             # logger.warning(f"[VikingFS] Failed to read relation table {table_path}: {e}")
             return []
 
@@ -673,8 +682,8 @@ class VikingFS:
                 entries.append(RelationEntry.from_dict(entry_data))
         elif isinstance(data, dict):
             # Old format: nested {namespace: {user: [entries]}}
-            for namespace, user_dict in data.items():
-                for user, entry_list in user_dict.items():
+            for _namespace, user_dict in data.items():
+                for _user, entry_list in user_dict.items():
                     for entry_data in entry_list:
                         entries.append(RelationEntry.from_dict(entry_data))
         return entries
@@ -811,6 +820,7 @@ class VikingFS:
     def create_temp_uri(self) -> str:
         """Create temp directory URI."""
         import uuid
+
         temp_id = uuid.uuid4().hex[:8]
         return f"viking://temp/{temp_id}"
 

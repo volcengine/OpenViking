@@ -7,10 +7,10 @@ Supports multiple programming languages with syntax-aware parsing.
 """
 
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import List, Optional, Union
 
+from openviking.parse.base import ParseResult
 from openviking.parse.parsers.base_parser import BaseParser
-from openviking.parse.base import NodeType, ParseResult, ResourceNode
 from openviking.utils.config.parser_config import CodeConfig
 from openviking.utils.logger import get_logger
 

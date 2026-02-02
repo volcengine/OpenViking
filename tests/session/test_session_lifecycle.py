@@ -3,8 +3,6 @@
 
 """Session lifecycle tests"""
 
-import pytest
-
 from openviking import AsyncOpenViking
 from openviking.session import Session
 
@@ -46,7 +44,9 @@ class TestSessionCreate:
 class TestSessionLoad:
     """Test Session loading"""
 
-    async def test_load_existing_session(self, session_with_messages: Session, client: AsyncOpenViking):
+    async def test_load_existing_session(
+        self, session_with_messages: Session, client: AsyncOpenViking
+    ):
         """Test loading existing session"""
         session_id = session_with_messages.session_id
 

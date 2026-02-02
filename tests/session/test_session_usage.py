@@ -3,10 +3,8 @@
 
 """Usage record tests"""
 
-import pytest
-
-from openviking.session import Session
 from openviking.message import TextPart
+from openviking.session import Session
 
 
 class TestUsed:
@@ -18,10 +16,12 @@ class TestUsed:
         session.add_message("user", [TextPart("Test message")])
 
         # Record used contexts
-        session.used(contexts=[
-            "viking://user/test/resources/doc1.md",
-            "viking://user/test/resources/doc2.md"
-        ])
+        session.used(
+            contexts=[
+                "viking://user/test/resources/doc1.md",
+                "viking://user/test/resources/doc2.md",
+            ]
+        )
 
         # Verify usage records
         assert len(session.usage_records) > 0
@@ -30,10 +30,7 @@ class TestUsed:
         """Test recording used skill"""
         session.add_message("user", [TextPart("Test message")])
 
-        session.used(skill={
-            "uri": "viking://agent/skills/search",
-            "name": "search_skill"
-        })
+        session.used(skill={"uri": "viking://agent/skills/search", "name": "search_skill"})
 
         assert len(session.usage_records) > 0
 
@@ -43,10 +40,7 @@ class TestUsed:
 
         session.used(
             contexts=["viking://user/test/resources/doc.md"],
-            skill={
-                "uri": "viking://agent/skills/analyze",
-                "name": "analyze_skill"
-            }
+            skill={"uri": "viking://agent/skills/analyze", "name": "analyze_skill"},
         )
 
         assert len(session.usage_records) > 0

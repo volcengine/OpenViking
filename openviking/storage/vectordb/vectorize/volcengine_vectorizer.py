@@ -10,10 +10,7 @@ from volcengine.auth.SignerV4 import SignerV4
 from volcengine.base.Request import Request
 from volcengine.Credentials import Credentials
 
-from openviking.storage.vectordb.vectorize.base import (
-    BaseVectorizer,
-    VectorizeResult,
-)
+from openviking.storage.vectordb.vectorize.base import BaseVectorizer, VectorizeResult
 
 
 class ClientForDataApi:

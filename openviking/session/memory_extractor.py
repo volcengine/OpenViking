@@ -9,17 +9,15 @@ Extracts 6 categories of memories from session:
 """
 
 from dataclasses import dataclass
-from datetime import datetime
 from enum import Enum
-from typing import Any, List, Optional
+from typing import List, Optional
 from uuid import uuid4
 
-from openviking.utils.config import get_openviking_config
 from openviking.core.context import Context, ContextType, Vectorize
-from openviking.message import Message
 from openviking.prompts import render_prompt
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.utils import get_logger
+from openviking.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 
@@ -82,11 +80,7 @@ class MemoryExtractor:
         # Format all messages
         messages = context["messages"]
 
-        formatted_messages = "\n".join([
-            f"[{m.role}]: {m.content}"
-            for m in messages
-            if m.content
-        ])
+        formatted_messages = "\n".join([f"[{m.role}]: {m.content}" for m in messages if m.content])
 
         if not formatted_messages:
             return []

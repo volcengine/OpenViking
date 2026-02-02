@@ -9,15 +9,12 @@ Supports both in-memory and local persistent storage modes.
 
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple, Union
+from typing import Any, Dict, List, Optional, Tuple
 
-from openviking.storage.vikingdb_interface import (
-    CollectionNotFoundError,
-    VikingDBInterface,
-)
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.result import FetchDataInCollectionResult
 from openviking.storage.vectordb.utils.logging_init import init_cpp_logging
+from openviking.storage.vikingdb_interface import CollectionNotFoundError, VikingDBInterface
 from openviking.utils import get_logger
 from openviking.utils.config.vectordb_config import VectorDBBackendConfig
 
@@ -82,25 +79,23 @@ class VikingVectorIndexBackend(VikingDBInterface):
 
         self.vector_dim = config.vector_dim
         self.distance_metric = config.distance_metric
-        
+
         if config.backend == "volcengine":
             if not (
-                config.volcengine 
+                config.volcengine
                 and config.volcengine.ak
                 and config.volcengine.sk
                 and config.volcengine.region
             ):
-                raise ValueError(
-                    "Volcengine backend requires AK, SK, and Region configuration"
-                )
-                
+                raise ValueError("Volcengine backend requires AK, SK, and Region configuration")
+
             # Volcengine VikingDB mode
             self._mode = config.backend
             # Convert lowercase keys to uppercase for consistency with volcengine_collection
             volc_config = {
-                    "AK": config.volcengine.ak,
-                    "SK": config.volcengine.sk,
-                    "Region": config.volcengine.region,
+                "AK": config.volcengine.ak,
+                "SK": config.volcengine.sk,
+                "Region": config.volcengine.region,
             }
 
             from openviking.storage.vectordb.project.volcengine_project import (
@@ -239,7 +234,11 @@ class VikingVectorIndexBackend(VikingDBInterface):
                 is_primary_key = field.get("IsPrimaryKey", False)
                 # Index all non-vector, non-primary-key, and non-date_time fields by default
                 # Volcengine VikingDB doesn't support indexing date_time fields
-                if field_name and field_type not in ("vector", "sparse_vector", "date_time") and not is_primary_key:
+                if (
+                    field_name
+                    and field_type not in ("vector", "sparse_vector", "date_time")
+                    and not is_primary_key
+                ):
                     scalar_index_fields.append(field_name)
 
             # Create default index for the collection
@@ -308,9 +307,7 @@ class VikingVectorIndexBackend(VikingDBInterface):
             if not self.project.has_collection(name):
                 return None
 
-            collection = self.project.get_collection(name)
             config = self._collection_configs.get(name, {})
-            meta_data = self._get_meta_data(name, collection)
 
             return {
                 "name": name,
@@ -354,7 +351,7 @@ class VikingVectorIndexBackend(VikingDBInterface):
                 new_data[k] = data[k]
 
         try:
-            result = coll.upsert_data([new_data])
+            coll.upsert_data([new_data])
             return record_id
         except Exception as e:
             logger.error(f"Error inserting record: {e}")
@@ -445,22 +442,22 @@ class VikingVectorIndexBackend(VikingDBInterface):
             result = coll.search_by_random(
                 index_name=self.DEFAULT_INDEX_NAME,
                 limit=10,
-                filters={"op": "must", "field": "uri", "conds": [uri]}
+                filters={"op": "must", "field": "uri", "conds": [uri]},
             )
             records = []
             for item in result.data:
                 record = dict(item.fields) if item.fields else {}
                 record["id"] = item.id
                 records.append(record)
-            if (len(records) > 0):
+            if len(records) > 0:
                 raise ValueError(f"Duplicate records found for URI: {uri}")
-            if (len(records) == 0):
+            if len(records) == 0:
                 raise ValueError(f"Record not found for URI: {uri}")
             return records[0]
         except Exception as e:
             logger.error(f"Error fetching record by URI '{uri}': {e}")
             return None
-    
+
     async def exists(self, collection: str, id: str) -> bool:
         """Check if a record exists."""
         try:
@@ -842,7 +839,7 @@ class VikingVectorIndexBackend(VikingDBInterface):
         """Check if storage backend is healthy and accessible."""
         try:
             # Simple check: verify we can access the project
-            collections = self.project.list_collections()
+            self.project.list_collections()
             return True
         except Exception:
             return False
@@ -858,9 +855,7 @@ class VikingVectorIndexBackend(VikingDBInterface):
                 try:
                     coll = self._get_collection(collection_name)
                     result = coll.aggregate_data(
-                        index_name=self.DEFAULT_INDEX_NAME,
-                        op="count",
-                        filters=None
+                        index_name=self.DEFAULT_INDEX_NAME, op="count", filters=None
                     )
                     total_records += result.agg.get("_total", 0)
                 except Exception as e:

@@ -1,12 +1,12 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 
-import unittest
+import gc
+import random
 import shutil
 import time
-import random
-import string
-import gc
+import unittest
+
 from openviking.storage.vectordb.collection.local_collection import get_or_create_local_collection
 
 db_path_basic = "./db_test_filters_basic/"
@@ -14,11 +14,14 @@ db_path_complex = "./db_test_filters_complex/"
 db_path_lifecycle = "./db_test_filters_lifecycle/"
 db_path_scale = "./db_test_filters_scale/"
 
+
 def clean_dir(path):
     shutil.rmtree(path, ignore_errors=True)
 
+
 class TestFilterOpsBasic(unittest.TestCase):
     """Basic Filter operator tests"""
+
     def setUp(self):
         clean_dir(db_path_basic)
         self.path = db_path_basic
@@ -46,11 +49,41 @@ class TestFilterOpsBasic(unittest.TestCase):
 
     def _insert_data(self):
         data = [
-            {"id": 1, "embedding": [1.0, 0, 0, 0], "val_int": 10, "val_float": 1.1, "val_str": "apple"},
-            {"id": 2, "embedding": [1.0, 0, 0, 0], "val_int": 20, "val_float": 2.2, "val_str": "banana"},
-            {"id": 3, "embedding": [1.0, 0, 0, 0], "val_int": 30, "val_float": 3.3, "val_str": "cherry"},
-            {"id": 4, "embedding": [1.0, 0, 0, 0], "val_int": 40, "val_float": 4.4, "val_str": "date"},
-            {"id": 5, "embedding": [1.0, 0, 0, 0], "val_int": 50, "val_float": 5.5, "val_str": "elderberry"},
+            {
+                "id": 1,
+                "embedding": [1.0, 0, 0, 0],
+                "val_int": 10,
+                "val_float": 1.1,
+                "val_str": "apple",
+            },
+            {
+                "id": 2,
+                "embedding": [1.0, 0, 0, 0],
+                "val_int": 20,
+                "val_float": 2.2,
+                "val_str": "banana",
+            },
+            {
+                "id": 3,
+                "embedding": [1.0, 0, 0, 0],
+                "val_int": 30,
+                "val_float": 3.3,
+                "val_str": "cherry",
+            },
+            {
+                "id": 4,
+                "embedding": [1.0, 0, 0, 0],
+                "val_int": 40,
+                "val_float": 4.4,
+                "val_str": "date",
+            },
+            {
+                "id": 5,
+                "embedding": [1.0, 0, 0, 0],
+                "val_int": 50,
+                "val_float": 5.5,
+                "val_str": "elderberry",
+            },
         ]
         self.collection.upsert_data(data)
 
@@ -64,10 +97,7 @@ class TestFilterOpsBasic(unittest.TestCase):
 
     def _search(self, filters):
         res = self.collection.search_by_vector(
-            "idx_basic", 
-            dense_vector=[1.0, 0, 0, 0], 
-            limit=100, 
-            filters=filters
+            "idx_basic", dense_vector=[1.0, 0, 0, 0], limit=100, filters=filters
         )
         return sorted([item.id for item in res.data])
 
@@ -79,11 +109,14 @@ class TestFilterOpsBasic(unittest.TestCase):
         # Prefix
         self.assertEqual(self._search({"op": "prefix", "field": "val_str", "prefix": "ap"}), [1])
         # Contains
-        self.assertEqual(self._search({"op": "contains", "field": "val_str", "substring": "er"}), [3, 5]) # chERry, eldERbERry
+        self.assertEqual(
+            self._search({"op": "contains", "field": "val_str", "substring": "er"}), [3, 5]
+        )  # chERry, eldERbERry
 
 
 class TestFilterOpsComplex(unittest.TestCase):
     """Complex mixed logic tests"""
+
     def setUp(self):
         clean_dir(db_path_complex)
         self.path = db_path_complex
@@ -105,7 +138,10 @@ class TestFilterOpsComplex(unittest.TestCase):
                 {"FieldName": "category", "FieldType": "string"},
                 {"FieldName": "tags", "FieldType": "string"},
                 {"FieldName": "price", "FieldType": "int64"},
-                {"FieldName": "rating_int", "FieldType": "int64"}, # Use int64 instead of float32 to avoid potential bug
+                {
+                    "FieldName": "rating_int",
+                    "FieldType": "int64",
+                },  # Use int64 instead of float32 to avoid potential bug
             ],
         }
         return get_or_create_local_collection(meta_data=collection_meta, path=self.path)
@@ -114,16 +150,86 @@ class TestFilterOpsComplex(unittest.TestCase):
         # Build some slightly complex data scenarios
         # id 1-10
         data = [
-            {"id": 1, "embedding": [1.0, 0, 0, 0], "category": "electronics", "tags": "mobile,apple,new", "price": 8000, "rating_int": 48},
-            {"id": 2, "embedding": [1.0, 0, 0, 0], "category": "electronics", "tags": "mobile,android,sale", "price": 3000, "rating_int": 45},
-            {"id": 3, "embedding": [1.0, 0, 0, 0], "category": "electronics", "tags": "laptop,apple,pro", "price": 15000, "rating_int": 49},
-            {"id": 4, "embedding": [1.0, 0, 0, 0], "category": "electronics", "tags": "laptop,windows,budget", "price": 4000, "rating_int": 40},
-            {"id": 5, "embedding": [1.0, 0, 0, 0], "category": "home", "tags": "furniture,sofa", "price": 2000, "rating_int": 42},
-            {"id": 6, "embedding": [1.0, 0, 0, 0], "category": "home", "tags": "kitchen,blender", "price": 300, "rating_int": 38},
-            {"id": 7, "embedding": [1.0, 0, 0, 0], "category": "books", "tags": "fiction,sci-fi", "price": 50, "rating_int": 47},
-            {"id": 8, "embedding": [1.0, 0, 0, 0], "category": "books", "tags": "fiction,fantasy", "price": 60, "rating_int": 46},
-            {"id": 9, "embedding": [1.0, 0, 0, 0], "category": "clothing", "tags": "shirt,summer", "price": 100, "rating_int": 41},
-            {"id": 10, "embedding": [1.0, 0, 0, 0], "category": "clothing", "tags": "pants,winter", "price": 200, "rating_int": 43},
+            {
+                "id": 1,
+                "embedding": [1.0, 0, 0, 0],
+                "category": "electronics",
+                "tags": "mobile,apple,new",
+                "price": 8000,
+                "rating_int": 48,
+            },
+            {
+                "id": 2,
+                "embedding": [1.0, 0, 0, 0],
+                "category": "electronics",
+                "tags": "mobile,android,sale",
+                "price": 3000,
+                "rating_int": 45,
+            },
+            {
+                "id": 3,
+                "embedding": [1.0, 0, 0, 0],
+                "category": "electronics",
+                "tags": "laptop,apple,pro",
+                "price": 15000,
+                "rating_int": 49,
+            },
+            {
+                "id": 4,
+                "embedding": [1.0, 0, 0, 0],
+                "category": "electronics",
+                "tags": "laptop,windows,budget",
+                "price": 4000,
+                "rating_int": 40,
+            },
+            {
+                "id": 5,
+                "embedding": [1.0, 0, 0, 0],
+                "category": "home",
+                "tags": "furniture,sofa",
+                "price": 2000,
+                "rating_int": 42,
+            },
+            {
+                "id": 6,
+                "embedding": [1.0, 0, 0, 0],
+                "category": "home",
+                "tags": "kitchen,blender",
+                "price": 300,
+                "rating_int": 38,
+            },
+            {
+                "id": 7,
+                "embedding": [1.0, 0, 0, 0],
+                "category": "books",
+                "tags": "fiction,sci-fi",
+                "price": 50,
+                "rating_int": 47,
+            },
+            {
+                "id": 8,
+                "embedding": [1.0, 0, 0, 0],
+                "category": "books",
+                "tags": "fiction,fantasy",
+                "price": 60,
+                "rating_int": 46,
+            },
+            {
+                "id": 9,
+                "embedding": [1.0, 0, 0, 0],
+                "category": "clothing",
+                "tags": "shirt,summer",
+                "price": 100,
+                "rating_int": 41,
+            },
+            {
+                "id": 10,
+                "embedding": [1.0, 0, 0, 0],
+                "category": "clothing",
+                "tags": "pants,winter",
+                "price": 200,
+                "rating_int": 43,
+            },
         ]
         self.collection.upsert_data(data)
 
@@ -137,10 +243,7 @@ class TestFilterOpsComplex(unittest.TestCase):
 
     def _search(self, filters):
         res = self.collection.search_by_vector(
-            "idx_complex", 
-            dense_vector=[1.0, 0, 0, 0], 
-            limit=100, 
-            filters=filters
+            "idx_complex", dense_vector=[1.0, 0, 0, 0], limit=100, filters=filters
         )
         return sorted([item.id for item in res.data])
 
@@ -160,10 +263,10 @@ class TestFilterOpsComplex(unittest.TestCase):
                     "op": "or",
                     "conds": [
                         {"op": "contains", "field": "tags", "substring": "apple"},
-                        {"op": "range", "field": "rating_int", "gt": 48}
-                    ]
-                }
-            ]
+                        {"op": "range", "field": "rating_int", "gt": 48},
+                    ],
+                },
+            ],
         }
         self.assertEqual(self._search(filters), [1, 3])
 
@@ -181,8 +284,8 @@ class TestFilterOpsComplex(unittest.TestCase):
             "conds": [
                 {"op": "range", "field": "price", "lt": 5000},
                 {"op": "must_not", "field": "category", "conds": ["clothing"]},
-                {"op": "range", "field": "rating_int", "gte": 40}
-            ]
+                {"op": "range", "field": "rating_int", "gte": 40},
+            ],
         }
         # Price < 5000: 2, 4, 5, 6, 7, 8, 9, 10
         # Not clothing: 1, 2, 3, 4, 5, 6, 7, 8 (excludes 9, 10)
@@ -200,8 +303,8 @@ class TestFilterOpsComplex(unittest.TestCase):
             "op": "and",
             "conds": [
                 {"op": "prefix", "field": "tags", "prefix": "f"},
-                {"op": "range", "field": "price", "gte": 50, "lte": 100}
-            ]
+                {"op": "range", "field": "price", "gte": 50, "lte": 100},
+            ],
         }
         self.assertEqual(self._search(filters), [7, 8])
 
@@ -210,21 +313,21 @@ class TestFilterOpsComplex(unittest.TestCase):
         # Logic:
         # ((Category="electronics" OR Category="home") AND
         #  (Price < 1000 OR (Tags contains "fiction" AND Rating > 4.5)))
-        
+
         # A: Category="electronics" -> 1, 2, 3, 4
         # B: Category="home" -> 5, 6
         # A OR B -> 1, 2, 3, 4, 5, 6
-        
+
         # C: Price < 1000 -> 6(300), 7(50), 8(60), 9(100), 10(200)
         # D: Tags contains "fiction" -> 7, 8
         # E: Rating > 4.5 -> 1(48), 3(49), 7(47), 8(46)
         # D AND E -> 7, 8
         # C OR (D AND E) -> 6, 7, 8, 9, 10 (7,8 already in C, so union is same as C)
-        
+
         # Intersection (A OR B) AND (C OR (D AND E)):
         # {1, 2, 3, 4, 5, 6} INTERSECT {6, 7, 8, 9, 10}
         # Result: 6
-        
+
         filters = {
             "op": "and",
             "conds": [
@@ -232,8 +335,8 @@ class TestFilterOpsComplex(unittest.TestCase):
                     "op": "or",
                     "conds": [
                         {"op": "must", "field": "category", "conds": ["electronics"]},
-                        {"op": "must", "field": "category", "conds": ["home"]}
-                    ]
+                        {"op": "must", "field": "category", "conds": ["home"]},
+                    ],
                 },
                 {
                     "op": "or",
@@ -243,12 +346,12 @@ class TestFilterOpsComplex(unittest.TestCase):
                             "op": "and",
                             "conds": [
                                 {"op": "contains", "field": "tags", "substring": "fiction"},
-                                {"op": "range", "field": "rating_int", "gt": 45}
-                            ]
-                        }
-                    ]
-                }
-            ]
+                                {"op": "range", "field": "rating_int", "gt": 45},
+                            ],
+                        },
+                    ],
+                },
+            ],
         }
         self.assertEqual(self._search(filters), [6])
 
@@ -260,33 +363,25 @@ class TestFilterOpsComplex(unittest.TestCase):
         # < 3000: 5, 6, 7, 8, 9, 10
         # Result: 3, 5, 6, 7, 8, 9, 10
         # (Assuming range_out(gte=3000, lte=8000) means NOT [3000, 8000])
-        
-        filters = {
-            "op": "range_out",
-            "field": "price",
-            "gte": 3000,
-            "lte": 8000
-        }
+
+        filters = {"op": "range_out", "field": "price", "gte": 3000, "lte": 8000}
         res = self._search(filters)
         self.assertEqual(res, [3, 5, 6, 7, 8, 9, 10])
-        
+
         # range_out combined with Must
         # (price < 3000 OR price > 8000) AND Category="electronics"
         # Electronics: 1, 2, 3, 4
         # Intersection with above: 3
         filters_combined = {
             "op": "and",
-            "conds": [
-                filters,
-                {"op": "must", "field": "category", "conds": ["electronics"]}
-            ]
+            "conds": [filters, {"op": "must", "field": "category", "conds": ["electronics"]}],
         }
         self.assertEqual(self._search(filters_combined), [3])
 
     def test_multi_layer_logic(self):
         """Test multi-layer logic structure (A OR (B AND (C OR D)))"""
         # (Category="books" OR (Category="clothing" AND (Price > 150 OR Rating > 4.2)))
-        
+
         # A: Category="books" -> 7, 8
         # B: Category="clothing" -> 9, 10
         # C: Price > 150 -> 1, 2, 3, 4, 5, 6, 10
@@ -294,7 +389,7 @@ class TestFilterOpsComplex(unittest.TestCase):
         # C OR D -> 1, 2, 3, 4, 5, 6, 7, 8, 10
         # B AND (C OR D) -> {9, 10} INTERSECT {1..8, 10} -> {10}
         # A OR (B AND ...) -> {7, 8} UNION {10} -> {7, 8, 10}
-        
+
         filters = {
             "op": "or",
             "conds": [
@@ -307,29 +402,29 @@ class TestFilterOpsComplex(unittest.TestCase):
                             "op": "or",
                             "conds": [
                                 {"op": "range", "field": "price", "gt": 150},
-                                {"op": "range", "field": "rating_int", "gt": 42}
-                            ]
-                        }
-                    ]
-                }
-            ]
+                                {"op": "range", "field": "rating_int", "gt": 42},
+                            ],
+                        },
+                    ],
+                },
+            ],
         }
         self.assertEqual(self._search(filters), [7, 8, 10])
 
     def test_mixed_type_logic(self):
         """Test mixed type field filtering (String Prefix + Int Range + Logic)"""
         # (Tags prefix "mobile" AND Price < 5000) OR (Tags prefix "kitchen" AND Price < 500)
-        
+
         # Part 1: Tags prefix "mobile" -> 1, 2
         #         Price < 5000 -> 2, 4, 5, 6, 7, 8, 9, 10
         #         Intersection -> 2
-        
+
         # Part 2: Tags prefix "kitchen" -> 6
         #         Price < 500 -> 6, 7, 8, 9, 10
         #         Intersection -> 6
-        
+
         # Union -> 2, 6
-        
+
         filters = {
             "op": "or",
             "conds": [
@@ -337,17 +432,17 @@ class TestFilterOpsComplex(unittest.TestCase):
                     "op": "and",
                     "conds": [
                         {"op": "prefix", "field": "tags", "prefix": "mobile"},
-                        {"op": "range", "field": "price", "lt": 5000}
-                    ]
+                        {"op": "range", "field": "price", "lt": 5000},
+                    ],
                 },
                 {
                     "op": "and",
                     "conds": [
                         {"op": "prefix", "field": "tags", "prefix": "kitchen"},
-                        {"op": "range", "field": "price", "lt": 500}
-                    ]
-                }
-            ]
+                        {"op": "range", "field": "price", "lt": 500},
+                    ],
+                },
+            ],
         }
         self.assertEqual(self._search(filters), [2, 6])
 
@@ -363,8 +458,8 @@ class TestFilterOpsComplex(unittest.TestCase):
             "conds": [
                 {"op": "must", "field": "category", "conds": ["books"]},
                 {"op": "must", "field": "category", "conds": ["clothing"]},
-                {"op": "range", "field": "price", "gt": 10000}
-            ]
+                {"op": "range", "field": "price", "gt": 10000},
+            ],
         }
         self.assertEqual(self._search(filters), [3, 7, 8, 9, 10])
 
@@ -378,15 +473,15 @@ class TestFilterOpsComplex(unittest.TestCase):
             "op": "and",
             "conds": [
                 {"op": "must_not", "field": "category", "conds": ["electronics"]},
-                {"op": "range", "field": "price", "gte": 100} # Equivalent to MustNot(Price < 100)
-            ]
+                {"op": "range", "field": "price", "gte": 100},  # Equivalent to MustNot(Price < 100)
+            ],
         }
         self.assertEqual(self._search(filters), [5, 6, 9, 10])
 
 
-
 class TestFilterOpsLifecycle(unittest.TestCase):
     """Insert/update/delete and restart tests"""
+
     def setUp(self):
         clean_dir(db_path_lifecycle)
         self.path = db_path_lifecycle
@@ -431,17 +526,16 @@ class TestFilterOpsLifecycle(unittest.TestCase):
     def _search(self, filters, coll=None):
         c = coll if coll else self.collection
         res = c.search_by_vector(
-            "idx_lifecycle", 
-            dense_vector=[1.0, 0, 0, 0], 
-            limit=100, 
-            filters=filters
+            "idx_lifecycle", dense_vector=[1.0, 0, 0, 0], limit=100, filters=filters
         )
         return sorted([item.id for item in res.data])
 
     def test_update_impact(self):
         """Test Update impact on Filter"""
         # Initial state: status=active -> 1, 2
-        self.assertEqual(self._search({"op": "must", "field": "status", "conds": ["active"]}), [1, 2])
+        self.assertEqual(
+            self._search({"op": "must", "field": "status", "conds": ["active"]}), [1, 2]
+        )
 
         # Update id=2 status to inactive
         # Update id=3 status to active
@@ -452,7 +546,9 @@ class TestFilterOpsLifecycle(unittest.TestCase):
         self.collection.upsert_data(updates)
 
         # Verify after update: status=active -> 1, 3
-        self.assertEqual(self._search({"op": "must", "field": "status", "conds": ["active"]}), [1, 3])
+        self.assertEqual(
+            self._search({"op": "must", "field": "status", "conds": ["active"]}), [1, 3]
+        )
         # Verify count update: count > 30 -> 3 (35)
         self.assertEqual(self._search({"op": "range", "field": "count", "gt": 30}), [3])
 
@@ -479,7 +575,7 @@ class TestFilterOpsLifecycle(unittest.TestCase):
         # Ensure data is written
         # Simulate restart: release old object, reload
         del self.collection
-        self.collection = None # Avoid tearDown accessing deleted attribute
+        self.collection = None  # Avoid tearDown accessing deleted attribute
         gc.collect()
         time.sleep(0.1)
 
@@ -500,9 +596,9 @@ class TestFilterOpsLifecycle(unittest.TestCase):
         # tearDown will handle drop
 
 
-
 class TestFilterOpsPath(unittest.TestCase):
     """Path type Filter tests"""
+
     def setUp(self):
         clean_dir("./db_test_filters_path/")
         self.path = "./db_test_filters_path/"
@@ -547,28 +643,35 @@ class TestFilterOpsPath(unittest.TestCase):
 
     def _search(self, filters):
         res = self.collection.search_by_vector(
-            "idx_path", 
-            dense_vector=[1.0, 0, 0, 0], 
-            limit=100, 
-            filters=filters
+            "idx_path", dense_vector=[1.0, 0, 0, 0], limit=100, filters=filters
         )
         return sorted([item.id for item in res.data])
 
     def test_path_must(self):
         """Test Must matching path prefix"""
         # Must /a -> /a/b/c, /a/b/d, /a/e
-        self.assertEqual(self._search({"op": "must", "field": "file_path", "conds": ["/a"]}), [1, 2, 3])
+        self.assertEqual(
+            self._search({"op": "must", "field": "file_path", "conds": ["/a"]}), [1, 2, 3]
+        )
         # Must /a/b -> /a/b/c, /a/b/d
-        self.assertEqual(self._search({"op": "must", "field": "file_path", "conds": ["/a/b"]}), [1, 2])
+        self.assertEqual(
+            self._search({"op": "must", "field": "file_path", "conds": ["/a/b"]}), [1, 2]
+        )
         # Must /f -> /f/g, /f/h/i
-        self.assertEqual(self._search({"op": "must", "field": "file_path", "conds": ["/f"]}), [4, 5])
+        self.assertEqual(
+            self._search({"op": "must", "field": "file_path", "conds": ["/f"]}), [4, 5]
+        )
 
     def test_path_must_not(self):
         """Test MustNot excluding path prefix"""
         # MustNot /a/b -> exclude 1, 2 -> remaining 3, 4, 5
-        self.assertEqual(self._search({"op": "must_not", "field": "file_path", "conds": ["/a/b"]}), [3, 4, 5])
+        self.assertEqual(
+            self._search({"op": "must_not", "field": "file_path", "conds": ["/a/b"]}), [3, 4, 5]
+        )
         # MustNot /a -> exclude 1, 2, 3 -> remaining 4, 5
-        self.assertEqual(self._search({"op": "must_not", "field": "file_path", "conds": ["/a"]}), [4, 5])
+        self.assertEqual(
+            self._search({"op": "must_not", "field": "file_path", "conds": ["/a"]}), [4, 5]
+        )
 
     def test_path_depth(self):
         """Test path type depth parameter"""
@@ -607,28 +710,28 @@ class TestFilterOpsPath(unittest.TestCase):
         # Must /a, depth=1
         # /a/e -> Yes
         # /a/b/c -> No (depth 2)
-        
+
         self.assertEqual(
-            self._search({"op": "must", "field": "file_path", "conds": ["/a"], "para": "-d=1"}), 
-            [3]
+            self._search({"op": "must", "field": "file_path", "conds": ["/a"], "para": "-d=1"}), [3]
         )
 
         # Must /a, depth=2 (default recursive all? Or specified depth)
         # /a/e (depth 1) -> Yes
         # /a/b/c (depth 2) -> Yes
         self.assertEqual(
-            self._search({"op": "must", "field": "file_path", "conds": ["/a"], "para": "-d=2"}), 
-            [1, 2, 3]
+            self._search({"op": "must", "field": "file_path", "conds": ["/a"], "para": "-d=2"}),
+            [1, 2, 3],
         )
 
 
 class TestFilterOpsScale(unittest.TestCase):
     """Scale tests"""
+
     def setUp(self):
         clean_dir(db_path_scale)
         self.path = db_path_scale
         self.collection = self._create_collection()
-        self.data_count = 500000 # 50w
+        self.data_count = 500000  # 50w
         self._insert_large_data()
         self._create_index()
 
@@ -657,35 +760,37 @@ class TestFilterOpsScale(unittest.TestCase):
         # SubGroup: X (even id), Y (odd id)
         # Score: id % 100
         # Tag: prefix_{id%1000}
-        
+
         batch_size = 10000
         data = []
         print(f"Inserting {self.data_count} items...")
         start_time = time.time()
-        
+
         for i in range(self.data_count):
             group = "A" if i < self.data_count / 2 else "B"
             sub_group = "X" if i % 2 == 0 else "Y"
             score = i % 100
             tag = f"tag_{i % 1000}"
-            
-            data.append({
-                "id": i,
-                "embedding": [random.random() for _ in range(4)],
-                "group": group,
-                "sub_group": sub_group,
-                "score": score,
-                "tag": tag
-            })
-            
+
+            data.append(
+                {
+                    "id": i,
+                    "embedding": [random.random() for _ in range(4)],
+                    "group": group,
+                    "sub_group": sub_group,
+                    "score": score,
+                    "tag": tag,
+                }
+            )
+
             if len(data) >= batch_size:
                 self.collection.upsert_data(data)
                 data = []
                 # print(f"Inserted {i+1} items")
-                
+
         if data:
             self.collection.upsert_data(data)
-            
+
         print(f"Insert finished in {time.time() - start_time:.2f}s")
 
     def _create_index(self):
@@ -702,10 +807,7 @@ class TestFilterOpsScale(unittest.TestCase):
     def _search(self, filters, limit=10000):
         # For large scale test, we just check count mainly
         res = self.collection.search_by_vector(
-            "idx_scale", 
-            dense_vector=[0.0, 0.0, 0.0, 0.0], 
-            limit=limit, 
-            filters=filters
+            "idx_scale", dense_vector=[0.0, 0.0, 0.0, 0.0], limit=limit, filters=filters
         )
         return [item.id for item in res.data]
 
@@ -721,23 +823,23 @@ class TestFilterOpsScale(unittest.TestCase):
             "op": "and",
             "conds": [
                 {"op": "must", "field": "group", "conds": ["A"]},
-                {"op": "range", "field": "score", "gt": 90}
-            ]
+                {"op": "range", "field": "score", "gt": 90},
+            ],
         }
         # limit needs to be large enough to catch all or we verify count returned is limit
         # If limit < expected, we get limit. If limit > expected, we get expected.
         # Let's set a large limit for counting test, but verify performance
         # 22500 results is large. Let's just sample top 100 but rely on a smaller range for exact count verification
         # or verify standard limit behavior.
-        
+
         # Search with smaller result set for verification
         # Group A AND Score = 99 (1 per 100) -> 2500 expected
         filters = {
             "op": "and",
             "conds": [
                 {"op": "must", "field": "group", "conds": ["A"]},
-                {"op": "must", "field": "score", "conds": [99]}
-            ]
+                {"op": "must", "field": "score", "conds": [99]},
+            ],
         }
         ids = self._search(filters, limit=5000)
         print(f"Filter 1 time: {time.time() - start_time:.4f}s")
@@ -752,22 +854,22 @@ class TestFilterOpsScale(unittest.TestCase):
         # Group B (250000-499999) AND Score < 5 (0,1,2,3,4 -> 5 per 100) -> 2500 * 5 = 12500 items
         # Total = 137500 items. Too many to fetch all.
         # Let's add more conditions to reduce result set.
-        
-        # (Group A AND SubGroup X AND Tag="tag_0") 
+
+        # (Group A AND SubGroup X AND Tag="tag_0")
         # Tag="tag_0" -> id % 1000 == 0.
         # Group A (0-249999): 250 items with tag_0.
         # SubGroup X (Even): tag_0 implies id%1000=0 which is even. So all 250 items match X.
         # Result: 250 items.
-        
+
         # OR
-        
+
         # (Group B AND Score=0 AND SubGroup Y)
         # Group B (250000-499999)
         # Score=0 -> id % 100 == 0.
         # SubGroup Y (Odd) -> id is Odd.
         # id % 100 == 0 implies id is Even. So (Even AND Odd) -> Empty.
         # Result: 0 items.
-        
+
         # Total expected: 250 items.
         print("Testing Filter 2: Complex Nested Logic")
         filters = {
@@ -778,18 +880,18 @@ class TestFilterOpsScale(unittest.TestCase):
                     "conds": [
                         {"op": "must", "field": "group", "conds": ["A"]},
                         {"op": "must", "field": "sub_group", "conds": ["X"]},
-                        {"op": "must", "field": "tag", "conds": ["tag_0"]}
-                    ]
+                        {"op": "must", "field": "tag", "conds": ["tag_0"]},
+                    ],
                 },
                 {
                     "op": "and",
                     "conds": [
                         {"op": "must", "field": "group", "conds": ["B"]},
                         {"op": "must", "field": "score", "conds": [0]},
-                        {"op": "must", "field": "sub_group", "conds": ["Y"]}
-                    ]
-                }
-            ]
+                        {"op": "must", "field": "sub_group", "conds": ["Y"]},
+                    ],
+                },
+            ],
         }
         start_time = time.time()
         ids = self._search(filters, limit=1000)
@@ -812,5 +914,6 @@ class TestFilterOpsScale(unittest.TestCase):
         for i in ids:
             self.assertEqual(i % 1000, 999)
 
-if __name__ == '__main__':
+
+if __name__ == "__main__":
     unittest.main()

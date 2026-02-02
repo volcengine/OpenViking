@@ -10,16 +10,16 @@ import json
 import re
 from typing import Any, Dict, Optional, Type, TypeVar
 
+import json_repair
 from pydantic import BaseModel
 
 from openviking.utils.logger import get_logger
-import json_repair
 
 logger = get_logger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
 
-    
+
 def parse_json_from_response(response: str) -> Optional[Any]:
     """
     Parse JSON object from LLM text response.
@@ -78,6 +78,7 @@ def parse_json_from_response(response: str) -> Optional[Any]:
 
     return None
 
+
 def _fix_json_quotes(json_str: str) -> str:
     """
     Fix quote issues in JSON string
@@ -105,6 +106,7 @@ def _fix_json_quotes(json_str: str) -> str:
         return fixed
     except:
         return json_str
+
 
 def parse_json_to_model(response: str, model_class: Type[T]) -> Optional[T]:
     """
@@ -170,6 +172,7 @@ class StructuredLLM:
     def _get_vlm(self):
         """Get VLM singleton."""
         from openviking.utils.config import get_openviking_config
+
         return get_openviking_config().vlm
 
     def complete_json(

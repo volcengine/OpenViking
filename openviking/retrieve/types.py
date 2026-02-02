@@ -272,6 +272,7 @@ class QueryPlan:
 @dataclass
 class RelatedContext:
     """Related context with summary."""
+
     uri: str
     abstract: str
 

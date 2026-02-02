@@ -21,12 +21,11 @@ IMPORTANT (v5.0 Architecture):
 """
 
 import logging
-from typing import TYPE_CHECKING, List, Optional, Tuple
-from openviking.utils.config import get_openviking_config
-from openviking.utils.uri import VikingURI
+from typing import TYPE_CHECKING, Optional
+
 from openviking.core.building_tree import BuildingTree
-from openviking.prompts import render_prompt
 from openviking.storage.viking_fs import get_viking_fs
+from openviking.utils.uri import VikingURI
 
 if TYPE_CHECKING:
     pass
@@ -206,9 +205,7 @@ class TreeBuilder:
             if "exist" not in str(e).lower():
                 logger.debug(f"Parent dir {parent_uri} may already exist: {e}")
 
-    async def _enqueue_semantic_generation(
-        self, uri: str, context_type: str
-    ) -> None:
+    async def _enqueue_semantic_generation(self, uri: str, context_type: str) -> None:
         """
         Enqueue a directory for semantic generation.
 
@@ -216,16 +213,12 @@ class TreeBuilder:
             uri: Directory URI to enqueue
             context_type: resource/memory/skill
         """
-        from openviking.storage.queuefs import get_queue_manager, SemanticMsg
+        from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 
-        viking_fs = get_viking_fs()
         queue_manager = get_queue_manager()
 
         # Get semantic queue
-        semantic_queue = queue_manager.get_queue(
-            queue_manager.SEMANTIC,
-            allow_create=True
-        )
+        semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
 
         # Sort by depth (descending) for bottom-up processing
         msg = SemanticMsg(
@@ -251,8 +244,8 @@ class TreeBuilder:
         if isinstance(result, str):
             return result
         elif isinstance(result, bytes):
-            return result.decode('utf-8')
-        elif hasattr(result, 'to_dict') and not isinstance(result, list):
+            return result.decode("utf-8")
+        elif hasattr(result, "to_dict") and not isinstance(result, list):
             # Handle FindResult by converting to dict (skip lists)
             return str(result.to_dict())
         elif isinstance(result, list):
@@ -260,5 +253,3 @@ class TreeBuilder:
             return json.dumps(result)
         else:
             return str(result)
-
-

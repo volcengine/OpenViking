@@ -3,6 +3,7 @@
 import unittest
 from dataclasses import dataclass, field
 from typing import List
+
 from openviking.storage.vectordb.store.serializable import serializable
 
 
@@ -16,12 +17,7 @@ class TestBytesRow(unittest.TestCase):
             active: bool = False
             name: str = ""
 
-        data = BasicData(
-            id=1234567890,
-            score=0.95,
-            active=True,
-            name="viking_db"
-        )
+        data = BasicData(id=1234567890, score=0.95, active=True, name="viking_db")
 
         # Serialize
         serialized = data.serialize()
@@ -50,9 +46,7 @@ class TestBytesRow(unittest.TestCase):
             counts: List[int] = field(default_factory=list)
 
         data = ListData(
-            tags=["AI", "Vector", "Search"],
-            embedding=[0.1, 0.2, 0.3, 0.4],
-            counts=[1, 10, 100]
+            tags=["AI", "Vector", "Search"], embedding=[0.1, 0.2, 0.3, 0.4], counts=[1, 10, 100]
         )
 
         serialized = data.serialize()
@@ -97,11 +91,12 @@ class TestBytesRow(unittest.TestCase):
         class BinaryData:
             raw: bytes = b""
 
-        blob = b"\x00\x01\x02\xFF\xFE"
+        blob = b"\x00\x01\x02\xff\xfe"
         data = BinaryData(raw=blob)
         serialized = data.serialize()
         val = BinaryData.bytes_row.deserialize_field(serialized, "raw")
         self.assertEqual(val, blob)
+
 
 if __name__ == "__main__":
     unittest.main()

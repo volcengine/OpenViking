@@ -2,7 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 import json
 import logging
-from typing import Any, Dict, List, Union, Optional
+from typing import Dict, List, Union
+
 
 def convert_dict(p: Union[str, Dict, List], no_exception: bool = False) -> Union[Dict, List]:
     """

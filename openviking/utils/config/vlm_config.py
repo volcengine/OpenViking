@@ -1,11 +1,11 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 import os
-from typing import Any, Dict, Literal, Optional
+from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
-from openviking.models.vlm import VLMFactory, VLMBase
+from openviking.models.vlm import VLMBase, VLMFactory
 
 
 class VLMConfig(BaseModel):
@@ -28,15 +28,15 @@ class VLMConfig(BaseModel):
     class Config:
         arbitrary_types_allowed = True
 
-    @model_validator(mode='before')
+    @model_validator(mode="before")
     @classmethod
     def sync_provider_backend(cls, data: Any) -> Any:
         if isinstance(data, dict):
-            provider = data.get('provider')
-            backend = data.get('backend')
-            
+            provider = data.get("provider")
+            backend = data.get("backend")
+
             if backend is not None and provider is None:
-                data['provider'] = backend
+                data["provider"] = backend
         return data
 
     @model_validator(mode="before")
@@ -58,7 +58,7 @@ class VLMConfig(BaseModel):
                         data[field] = env_val
         return data
 
-    @model_validator(mode='after')
+    @model_validator(mode="after")
     def validate_config(self):
         """Validate configuration completeness and consistency"""
         if self.backend and not self.provider:

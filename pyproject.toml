@@ -41,8 +41,6 @@ dependencies = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
     "pytest-cov>=4.0.0",
-    "black>=23.0.0",
-    "isort>=5.12.0",
     "mypy>=1.0.0",
     "ruff>=0.1.0",
     "sphinx>=7.0.0",
@@ -78,15 +76,6 @@ exclude = ["tests*", "docs*", "examples*"]
 [tool.setuptools.package-data]
 openviking = ["prompts/templates/**/*.yaml"]
 
-[tool.black]
-line-length = 100
-target-version = ["py39", "py310", "py311", "py312"]
-include = '\.pyi?$'
-
-[tool.isort]
-profile = "black"
-line_length = 100
-
 [tool.mypy]
 python_version = "3.9"
 warn_return_any = false
@@ -109,6 +98,8 @@ addopts = "-v --cov=openviking --cov-report=term-missing"
 
 [tool.ruff]
 line-length = 100
+exclude = ["third_party"]
+target-version = "py39"
 
 [tool.ruff.lint]
 select = [
@@ -132,3 +123,10 @@ ignore = [
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]  # Allow unused imports in __init__.py
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+

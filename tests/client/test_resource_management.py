@@ -5,22 +5,15 @@
 
 from pathlib import Path
 
-import pytest
-
 from openviking import AsyncOpenViking
 
 
 class TestAddResource:
     """Test add_resource"""
 
-    async def test_add_resource_success(
-        self, client: AsyncOpenViking, sample_markdown_file: Path
-    ):
+    async def test_add_resource_success(self, client: AsyncOpenViking, sample_markdown_file: Path):
         """Test successful resource addition"""
-        result = await client.add_resource(
-            path=str(sample_markdown_file),
-            reason="Test resource"
-        )
+        result = await client.add_resource(path=str(sample_markdown_file), reason="Test resource")
 
         assert "root_uri" in result
         assert result["root_uri"].startswith("viking://")
@@ -44,9 +37,7 @@ class TestAddResource:
     ):
         """Test adding resource without waiting (async mode)"""
         result = await client.add_resource(
-            path=str(sample_markdown_file),
-            reason="Test resource",
-            wait=False
+            path=str(sample_markdown_file), reason="Test resource", wait=False
         )
 
         assert "root_uri" in result
@@ -61,7 +52,7 @@ class TestAddResource:
         result = await client.add_resource(
             path=str(sample_markdown_file),
             target="viking://resources/custom/",
-            reason="Test resource"
+            reason="Test resource",
         )
 
         assert "root_uri" in result
@@ -69,12 +60,9 @@ class TestAddResource:
 
     async def test_add_resource_file_not_found(self, client: AsyncOpenViking):
         """Test adding nonexistent file"""
-        
-        res = await client.add_resource(
-                path="/nonexistent/file.txt",
-                reason="Test"
-            )
-        
+
+        res = await client.add_resource(path="/nonexistent/file.txt", reason="Test")
+
         assert "errors" in res and len(res["errors"]) > 0
 
 
@@ -85,10 +73,7 @@ class TestWaitProcessed:
         self, client: AsyncOpenViking, sample_markdown_file: Path
     ):
         """Test waiting for processing to complete"""
-        await client.add_resource(
-            path=str(sample_markdown_file),
-            reason="Test"
-        )
+        await client.add_resource(path=str(sample_markdown_file), reason="Test")
 
         status = await client.wait_processed(timeout=60.0)
 

@@ -2,6 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Storage layer interfaces and implementations."""
 
+from openviking.storage.observers import BaseObserver, QueueObserver
+from openviking.storage.queuefs import QueueManager, get_queue_manager, init_queue_manager
+from openviking.storage.viking_fs import VikingFS, get_viking_fs, init_viking_fs
+from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
 from openviking.storage.vikingdb_interface import (
     CollectionNotFoundError,
     ConnectionError,
@@ -11,16 +15,7 @@ from openviking.storage.vikingdb_interface import (
     StorageException,
     VikingDBInterface,
 )
-
-from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
 from openviking.storage.vikingdb_manager import VikingDBManager
-from openviking.storage.queuefs import QueueManager, get_queue_manager, init_queue_manager
-from openviking.storage.viking_fs import (
-    VikingFS,
-    get_viking_fs,
-    init_viking_fs,
-)
-from openviking.storage.observers import BaseObserver, QueueObserver
 
 __all__ = [
     # Interface

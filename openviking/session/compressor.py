@@ -8,11 +8,10 @@ Uses MemoryExtractor for 6-category extraction and MemoryDeduplicator for LLM-ba
 """
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Dict, List
 
 from openviking.core.context import Context
 from openviking.message import Message
-from openviking.utils.config import get_openviking_config
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.utils import get_logger
@@ -48,6 +47,7 @@ class SessionCompressor:
     async def _index_memory(self, memory: Context) -> bool:
         """Add memory to vectorization queue."""
         from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
+
         embedding_msg = EmbeddingMsgConverter.from_context(memory)
         await self.vikingdb.enqueue_embedding_msg(embedding_msg)
         logger.info(f"Enqueued memory for vectorization: {memory.uri}")
@@ -149,16 +149,22 @@ class SessionCompressor:
             for memory_uri in memory_uris:
                 if resource_uris:
                     await viking_fs.link(
-                        memory_uri, resource_uris, reason="Memory extracted from session using these resources"
+                        memory_uri,
+                        resource_uris,
+                        reason="Memory extracted from session using these resources",
                     )
                 if skill_uris:
                     await viking_fs.link(
-                        memory_uri, skill_uris, reason="Memory extracted from session calling these skills"
+                        memory_uri,
+                        skill_uris,
+                        reason="Memory extracted from session calling these skills",
                     )
 
             # Resources/skills -> memories (reverse)
             for resource_uri in resource_uris:
-                await viking_fs.link(resource_uri, memory_uris, reason="Referenced by these memories")
+                await viking_fs.link(
+                    resource_uri, memory_uris, reason="Referenced by these memories"
+                )
             for skill_uri in skill_uris:
                 await viking_fs.link(skill_uri, memory_uris, reason="Called by these memories")
 

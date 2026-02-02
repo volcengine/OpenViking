@@ -16,7 +16,7 @@ import logging
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
-from openviking.parse.parsers.base_parser import BaseParser
+
 from openviking.parse.base import (
     NodeType,
     ParseResult,
@@ -24,6 +24,7 @@ from openviking.parse.base import (
     create_parse_result,
     lazy_import,
 )
+from openviking.parse.parsers.base_parser import BaseParser
 from openviking.utils.config.parser_config import PDFConfig
 
 logger = logging.getLogger(__name__)

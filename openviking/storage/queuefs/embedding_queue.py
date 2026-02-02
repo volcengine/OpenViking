@@ -1,14 +1,14 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
-import json
-from dataclasses import asdict
-from typing import Any, Dict, Optional, Union
+from typing import Optional
 
-from .named_queue import NamedQueue
-from .embedding_msg import EmbeddingMsg
 from openviking.utils.logger import get_logger
 
+from .embedding_msg import EmbeddingMsg
+from .named_queue import NamedQueue
+
 logger = get_logger(__name__)
+
 
 class EmbeddingQueue(NamedQueue):
     """EmbeddingQueue: Named queue specifically for processing EmbeddingMsg.
@@ -43,13 +43,13 @@ class EmbeddingQueue(NamedQueue):
         data_dict = await super().peek()
         if not data_dict:
             return None
-            
+
         if "data" in data_dict and isinstance(data_dict["data"], str):
             try:
                 return EmbeddingMsg.from_json(data_dict["data"])
             except Exception:
                 return None
-                
+
         try:
             return EmbeddingMsg.from_dict(data_dict)
         except Exception:

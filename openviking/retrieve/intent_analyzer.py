@@ -6,12 +6,12 @@ Intent analyzer for OpenViking retrieval.
 Analyzes session context to generate query plans.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
-from openviking.utils.config import get_openviking_config
 from openviking.message import Message
 from openviking.prompts import render_prompt
 from openviking.retrieve.types import ContextType, QueryPlan, TypedQuery
+from openviking.utils.config import get_openviking_config
 from openviking.utils.llm import parse_json_from_response
 from openviking.utils.logger import get_logger
 
@@ -59,9 +59,7 @@ class IntentAnalyzer:
         )
 
         # Call LLM
-        response = await get_openviking_config().vlm.get_completion_async(
-            prompt
-        )
+        response = await get_openviking_config().vlm.get_completion_async(prompt)
 
         # Parse result
         parsed = parse_json_from_response(response)
@@ -88,7 +86,7 @@ class IntentAnalyzer:
         # Log analysis result
         for i, q in enumerate(queries):
             logger.info(
-                f'  [{i+1}] type={q.context_type.value}, priority={q.priority}, query="{q.query}"'
+                f'  [{i + 1}] type={q.context_type.value}, priority={q.priority}, query="{q.query}"'
             )
         logger.debug(f"[IntentAnalyzer] Reasoning: {parsed.get('reasoning', '')[:200]}...")
 
@@ -111,11 +109,9 @@ class IntentAnalyzer:
         summary = compression_summary if compression_summary else "None"
 
         # Format recent messages
-        recent = messages[-self.max_recent_messages:] if messages else []
+        recent = messages[-self.max_recent_messages :] if messages else []
         recent_messages = (
-            "\n".join(f"[{m.role}]: {m.content}" for m in recent if m.content)
-            if recent
-            else "None"
+            "\n".join(f"[{m.role}]: {m.content}" for m in recent if m.content) if recent else "None"
         )
 
         # Current message

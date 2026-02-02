@@ -17,21 +17,13 @@ The parser handles scenarios:
 5. Oversized sections without subsections → split by paragraphs
 """
 
-import json
 import re
 import time
-import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
-from openviking.utils.config import get_openviking_config
+from openviking.parse.base import NodeType, ParseResult, ResourceNode, create_parse_result
 from openviking.parse.parsers.base_parser import BaseParser
-from openviking.parse.base import (
-    NodeType,
-    ParseResult,
-    ResourceNode,
-    create_parse_result,
-)
 from openviking.utils.config.parser_config import ParserConfig
 from openviking.utils.logger import get_logger
 
@@ -382,9 +374,7 @@ class MarkdownParser(BaseParser):
         await viking_fs.mkdir(root_dir)
 
         # Get document name
-        doc_name = self._sanitize_for_path(
-            Path(source_path).stem if source_path else "content"
-        )
+        doc_name = self._sanitize_for_path(Path(source_path).stem if source_path else "content")
 
         # Small document: save as single file
         if estimated_tokens <= max_size:
@@ -410,22 +400,26 @@ class MarkdownParser(BaseParser):
             pre_content = content[:first_heading_start].strip()
             if pre_content:
                 pre_tokens = self._estimate_token_count(pre_content)
-                sections.append({
-                    "name": doc_name,
-                    "content": pre_content,
-                    "tokens": pre_tokens,
-                    "has_children": False,
-                    "heading_idx": None,
-                })
+                sections.append(
+                    {
+                        "name": doc_name,
+                        "content": pre_content,
+                        "tokens": pre_tokens,
+                        "has_children": False,
+                        "heading_idx": None,
+                    }
+                )
 
         # Add real sections (top-level only for this pass)
         min_level = min(h[3] for h in headings)
         i = 0
         while i < len(headings):
             if headings[i][3] == min_level:
-                sections.append({
-                    "heading_idx": i,
-                })
+                sections.append(
+                    {
+                        "heading_idx": i,
+                    }
+                )
             i += 1
 
         # Process sections with merge logic
@@ -448,7 +442,8 @@ class MarkdownParser(BaseParser):
 
         # Expand section info
         expanded = [
-            section if section.get("heading_idx") is None
+            section
+            if section.get("heading_idx") is None
             else self._get_section_info(content, headings, section["heading_idx"])
             for section in sections
         ]
@@ -481,10 +476,7 @@ class MarkdownParser(BaseParser):
 
     def _can_merge(self, pending: List, tokens: int, max_size: int, has_children: bool) -> bool:
         """Check if section can merge with pending."""
-        return (
-            sum(t for _, _, t in pending) + tokens <= max_size
-            and not has_children
-        )
+        return sum(t for _, _, t in pending) + tokens <= max_size and not has_children
 
     async def _try_add_to_pending(
         self, viking_fs, parent_dir: str, pending: List, item: Tuple, max_size: int
@@ -547,13 +539,15 @@ class MarkdownParser(BaseParser):
         """Build and process child sections."""
         children = []
         if section.get("direct_content"):
-            children.append({
-                "name": name,
-                "content": section["direct_content"],
-                "tokens": self._estimate_token_count(section["direct_content"]),
-                "has_children": False,
-                "heading_idx": None,
-            })
+            children.append(
+                {
+                    "name": name,
+                    "content": section["direct_content"],
+                    "tokens": self._estimate_token_count(section["direct_content"]),
+                    "has_children": False,
+                    "heading_idx": None,
+                }
+            )
         for child_idx in section.get("child_indices", []):
             children.append({"heading_idx": child_idx})
 
@@ -650,4 +644,3 @@ class MarkdownParser(BaseParser):
         cjk_chars = len(re.findall(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]", content))
         other_chars = len(re.findall(r"[^\s]", content)) - cjk_chars
         return int(cjk_chars * 0.7 + other_chars * 0.3)
-

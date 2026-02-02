@@ -14,7 +14,9 @@ class AGFSConfig(BaseModel):
 
     log_level: str = Field(default="warn", description="AGFS log level")
 
-    url: Optional[str] = Field(default="http://localhost:8080", description="AGFS service URL for service mode")
+    url: Optional[str] = Field(
+        default="http://localhost:8080", description="AGFS service URL for service mode"
+    )
 
     backend: str = Field(
         default="local", description="AGFS storage backend: 'local' | 's3' | 'memory'"
@@ -33,7 +35,7 @@ class AGFSConfig(BaseModel):
 
     s3_secret_key: Optional[str] = Field(default=None, description="S3 secret key")
 
-    @model_validator(mode='after')
+    @model_validator(mode="after")
     def validate_config(self):
         """Validate configuration completeness and consistency"""
         if self.backend not in ["local", "s3", "memory"]:

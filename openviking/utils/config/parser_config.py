@@ -8,10 +8,10 @@ scattered across different modules. All configurations inherit from ParserConfig
 and can be loaded from ov.conf files.
 """
 
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
 import os
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, Optional, Union
 
 
 @dataclass
@@ -111,11 +111,11 @@ class ParserConfig:
                 value = os.environ[env_var]
                 # Type conversion
                 field_type = cls.__dataclass_fields__[field_name].type
-                if field_type == bool:
+                if field_type is bool:
                     data[field_name] = value.lower() in ("true", "1", "yes")
-                elif field_type == int:
+                elif field_type is int:
                     data[field_name] = int(value)
-                elif field_type == float:
+                elif field_type is float:
                     data[field_name] = float(value)
                 else:
                     data[field_name] = value

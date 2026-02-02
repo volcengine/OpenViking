@@ -193,9 +193,9 @@ class Collection:
         Raises:
             AssertionError: If the provided `collection` is not an instance of ICollection.
         """
-        assert isinstance(
-            collection, ICollection
-        ), "collection must be an instance of CollectionInterface"
+        assert isinstance(collection, ICollection), (
+            "collection must be an instance of CollectionInterface"
+        )
         self.__collection: Optional[ICollection] = collection
 
     def __del__(self):
@@ -392,9 +392,7 @@ class Collection:
         """
         if self.__collection is None:
             raise RuntimeError("Collection is closed")
-        return self.__collection.search_by_id(
-            index_name, id, limit, offset, filters, output_fields
-        )
+        return self.__collection.search_by_id(index_name, id, limit, offset, filters, output_fields)
 
     def search_by_multimodal(
         self,
@@ -459,9 +457,7 @@ class Collection:
         """
         if self.__collection is None:
             raise RuntimeError("Collection is closed")
-        return self.__collection.search_by_random(
-            index_name, limit, offset, filters, output_fields
-        )
+        return self.__collection.search_by_random(index_name, limit, offset, filters, output_fields)
 
     def search_by_scalar(
         self,

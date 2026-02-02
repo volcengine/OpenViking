@@ -50,11 +50,8 @@ jobs:
     - name: Install dependencies
       run: uv sync
 
-    - name: Check code formatting with black
-      run: uv run black --check --diff openviking/
-
-    - name: Check import sorting with isort
-      run: uv run isort --check-only --diff openviking/
+    - name: Format with ruff
+      run: uv run ruff format --check openviking/
 
     - name: Lint with ruff
       run: uv run ruff check openviking/

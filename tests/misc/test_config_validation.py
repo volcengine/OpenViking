@@ -4,10 +4,12 @@
 """Test if config validators work correctly"""
 
 import sys
+
 from openviking.utils.config.agfs_config import AGFSConfig
+from openviking.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
 from openviking.utils.config.vectordb_config import VectorDBBackendConfig
-from openviking.utils.config.embedding_config import EmbeddingModelConfig, EmbeddingConfig
 from openviking.utils.config.vlm_config import VLMConfig
+
 
 def test_agfs_validation():
     """Test AGFS config validation"""
@@ -27,7 +29,7 @@ def test_agfs_validation():
     print("\n2. Test invalid backend...")
     try:
         config = AGFSConfig(backend="invalid")
-        print(f"   Should fail but passed")
+        print("   Should fail but passed")
     except ValueError as e:
         print(f"   Correctly raised exception: {e}")
 
@@ -35,7 +37,7 @@ def test_agfs_validation():
     print("\n3. Test S3 backend missing required fields...")
     try:
         config = AGFSConfig(backend="s3")
-        print(f"   Should fail but passed")
+        print("   Should fail but passed")
     except ValueError as e:
         print(f"   Correctly raised exception: {e}")
 
@@ -47,11 +49,12 @@ def test_agfs_validation():
             s3_bucket="my-bucket",
             s3_region="us-west-1",
             s3_access_key="fake-access-key-for-testing",
-            s3_secret_key="fake-secret-key-for-testing-12345"
+            s3_secret_key="fake-secret-key-for-testing-12345",
         )
-        print(f"   Pass")
+        print("   Pass")
     except ValueError as e:
         print(f"   Fail: {e}")
+
 
 def test_vectordb_validation():
     """Test VectorDB config validation"""
@@ -62,33 +65,30 @@ def test_vectordb_validation():
     # Test 1: local backend missing path
     print("\n1. Test local backend missing path...")
     try:
-        config = VectorDBBackendConfig(backend="local", path=None)
-        print(f"   Should fail but passed")
+        _ = VectorDBBackendConfig(backend="local", path=None)
+        print("   Should fail but passed")
     except ValueError as e:
         print(f"   Correctly raised exception: {e}")
 
     # Test 2: http backend missing url
     print("\n2. Test http backend missing url...")
     try:
-        config = VectorDBBackendConfig(backend="http", url=None)
-        print(f"   Should fail but passed")
+        _ = VectorDBBackendConfig(backend="http", url=None)
+        print("   Should fail but passed")
     except ValueError as e:
         print(f"   Correctly raised exception: {e}")
 
     # Test 3: volcengine backend complete config
     print("\n3. Test volcengine backend complete config...")
     try:
-        config = VectorDBBackendConfig(
+        _ = VectorDBBackendConfig(
             backend="volcengine",
-            volcengine={
-                "ak": "test_ak",
-                "sk": "test_sk",
-                "region": "cn-beijing"
-            }
+            volcengine={"ak": "test_ak", "sk": "test_sk", "region": "cn-beijing"},
         )
-        print(f"   Pass")
+        print("   Pass")
     except ValueError as e:
         print(f"   Fail: {e}")
+
 
 def test_embedding_validation():
     """Test Embedding config validation"""
@@ -99,36 +99,33 @@ def test_embedding_validation():
     # Test 1: no embedder config
     print("\n1. Test no embedder config...")
     try:
-        config = EmbeddingConfig()
-        print(f"   Should fail but passed")
+        _ = EmbeddingConfig()
+        print("   Should fail but passed")
     except ValueError as e:
         print(f"   Correctly raised exception: {e}")
 
     # Test 2: OpenAI provider missing api_key
     print("\n2. Test OpenAI provider missing api_key...")
     try:
-        config = EmbeddingConfig(
-            dense=EmbeddingModelConfig(
-                provider="openai",
-                model="text-embedding-3-small"
-            )
+        _ = EmbeddingConfig(
+            dense=EmbeddingModelConfig(provider="openai", model="text-embedding-3-small")
         )
-        print(f"   Should fail but passed")
+        print("   Should fail but passed")
     except ValueError as e:
         print(f"   Correctly raised exception: {e}")
 
     # Test 3: OpenAI provider complete config
     print("\n3. Test OpenAI provider complete config...")
     try:
-        config = EmbeddingConfig(
+        _ = EmbeddingConfig(
             dense=EmbeddingModelConfig(
                 provider="openai",
                 model="text-embedding-3-small",
                 api_key="fake-api-key-for-testing",
-                dimension=1536
+                dimension=1536,
             )
         )
-        print(f"   Pass")
+        print("   Pass")
     except ValueError as e:
         print(f"   Fail: {e}")
 
@@ -136,28 +133,26 @@ def test_embedding_validation():
     print("\n4. Test Embedding Provider/Backend sync...")
     # Case A: Only backend provided -> provider should be synced
     config_a = EmbeddingModelConfig(
-        backend="openai",
-        model="text-embedding-3-small",
-        api_key="test-key",
-        dimension=1536
+        backend="openai", model="text-embedding-3-small", api_key="test-key", dimension=1536
     )
     if config_a.provider == "openai":
-        print(f"   Pass (backend='openai' -> provider='openai')")
+        print("   Pass (backend='openai' -> provider='openai')")
     else:
         print(f"   Fail (backend='openai' -> provider='{config_a.provider}')")
 
     # Case B: Both provided -> provider takes precedence
     config_b = EmbeddingModelConfig(
         provider="volcengine",
-        backend="openai", # Conflicting backend
+        backend="openai",  # Conflicting backend
         model="doubao",
         api_key="test-key",
-        dimension=1024
+        dimension=1024,
     )
     if config_b.provider == "volcengine":
-        print(f"   Pass (provider='volcengine' priority over backend='openai')")
+        print("   Pass (provider='volcengine' priority over backend='openai')")
     else:
         print(f"   Fail (provider='volcengine' should have priority, got '{config_b.provider}')")
+
 
 def test_vlm_validation():
     """Test VLM config validation"""
@@ -168,55 +163,45 @@ def test_vlm_validation():
     # Test 1: VLM not configured (optional)
     print("\n1. Test VLM not configured (optional)...")
     try:
-        config = VLMConfig()
-        print(f"   Pass (VLM is optional)")
+        _ = VLMConfig()
+        print("   Pass (VLM is optional)")
     except ValueError as e:
         print(f"   Fail: {e}")
 
     # Test 2: VLM partial config (has model but no api_key)
     print("\n2. Test VLM partial config...")
     try:
-        config = VLMConfig(model="gpt-4")
-        print(f"   Should fail but passed")
+        _ = VLMConfig(model="gpt-4")
+        print("   Should fail but passed")
     except ValueError as e:
         print(f"   Correctly raised exception: {e}")
 
     # Test 3: VLM complete config
     print("\n3. Test VLM complete config...")
     try:
-        config = VLMConfig(
-            model="gpt-4",
-            api_key="fake-api-key-for-testing",
-            provider="openai"
-        )
-        print(f"   Pass")
+        _ = VLMConfig(model="gpt-4", api_key="fake-api-key-for-testing", provider="openai")
+        print("   Pass")
     except ValueError as e:
         print(f"   Fail: {e}")
 
     # Test 4: VLM Provider/Backend sync
     print("\n4. Test VLM Provider/Backend sync...")
     # Case A: Only backend provided -> provider should be synced
-    config_a = VLMConfig(
-        backend="openai",
-        model="gpt-4",
-        api_key="test-key"
-    )
+    config_a = VLMConfig(backend="openai", model="gpt-4", api_key="test-key")
     if config_a.provider == "openai":
-        print(f"   Pass (backend='openai' -> provider='openai')")
+        print("   Pass (backend='openai' -> provider='openai')")
     else:
         print(f"   Fail (backend='openai' -> provider='{config_a.provider}')")
 
     # Case B: Both provided -> provider takes precedence
     config_b = VLMConfig(
-        provider="volcengine",
-        backend="openai",
-        model="doubao",
-        api_key="test-key"
+        provider="volcengine", backend="openai", model="doubao", api_key="test-key"
     )
     if config_b.provider == "volcengine":
-        print(f"   Pass (provider='volcengine' priority over backend='openai')")
+        print("   Pass (provider='volcengine' priority over backend='openai')")
     else:
         print(f"   Fail (provider='volcengine' should have priority, got '{config_b.provider}')")
+
 
 if __name__ == "__main__":
     print("\nStarting config validator tests...\n")
@@ -234,5 +219,6 @@ if __name__ == "__main__":
     except Exception as e:
         print(f"\nUnexpected error during tests: {e}")
         import traceback
+
         traceback.print_exc()
         sys.exit(1)

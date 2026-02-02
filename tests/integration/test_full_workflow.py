@@ -5,7 +5,6 @@
 
 from pathlib import Path
 
-import pytest
 import pytest_asyncio
 
 from openviking import AsyncOpenViking
@@ -17,10 +16,7 @@ async def integration_client(test_data_dir: Path):
     """Integration test client"""
     await AsyncOpenViking.reset()
 
-    client = AsyncOpenViking(
-        path=str(test_data_dir),
-        user="integration_test_user"
-    )
+    client = AsyncOpenViking(path=str(test_data_dir), user="integration_test_user")
     await client.initialize()
 
     yield client
@@ -59,12 +55,7 @@ class TestResourceToSearchWorkflow:
         client = integration_client
 
         # 1. Add resource
-        add_result = await client.add_resource(
-            path=str(sample_markdown_file),
-            reason="Workflow test",
-            wait=True
-        )
-        uri = add_result["root_uri"]
+        await client.add_resource(path=str(sample_markdown_file), reason="Workflow test", wait=True)
 
         # 2. Search
         search_result = await client.find(query="sample document")
@@ -77,10 +68,10 @@ class TestResourceToSearchWorkflow:
             else:
                 res = await client.tree(search_result.resources[0].uri)
                 for data in res:
-                    if not data['isDir']:
-                        content = await client.read(data['uri'])
+                    if not data["isDir"]:
+                        content = await client.read(data["uri"])
                         assert len(content) > 0
-                
+
 
 class TestSessionWorkflow:
     """Session management full workflow"""
@@ -92,12 +83,9 @@ class TestSessionWorkflow:
         client = integration_client
 
         # 1. Add resource
-        result = await client.add_resource(
-            path=str(sample_markdown_file),
-            reason="Session workflow test",
-            wait=True
+        await client.add_resource(
+            path=str(sample_markdown_file), reason="Session workflow test", wait=True
         )
-        resource_uri = result["root_uri"]
 
         # 2. Create session
         session = client.session(session_id="workflow_test_session")
@@ -166,8 +154,8 @@ class TestImportExportWorkflow:
         original_content = ""
         entries = await client.tree(original_uri)
         for data in entries:
-            if not data['isDir']:
-                original_content += await client.read(data['uri'])
+            if not data["isDir"]:
+                original_content += await client.read(data["uri"])
 
         # 3. Export
         export_path = temp_dir / "workflow_export.ovpack"
@@ -179,17 +167,15 @@ class TestImportExportWorkflow:
 
         # 5. Import
         import_uri = await client.import_ovpack(
-            str(export_path),
-            "viking://resources/imported/",
-            vectorize=False
+            str(export_path), "viking://resources/imported/", vectorize=False
         )
 
         # 6. Verify content consistency
         imported_content = ""
         entries = await client.tree(import_uri)
         for data in entries:
-            if not data['isDir']:
-                imported_content += await client.read(data['uri'])
+            if not data["isDir"]:
+                imported_content += await client.read(data["uri"])
         assert original_content == imported_content
 
 
@@ -242,8 +228,7 @@ class TestFullEndToEndWorkflow:
 
             # Import to new location
             import_uri = await client.import_ovpack(
-                str(export_path),
-                "viking://resources/e2e_imported/"
+                str(export_path), "viking://resources/e2e_imported/"
             )
 
             # Verify import success

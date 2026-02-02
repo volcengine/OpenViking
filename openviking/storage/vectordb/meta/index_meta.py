@@ -29,9 +29,7 @@ def create_index_meta(
     """
     inner_meta = {}
     if user_meta:
-        if not validation.is_valid_index_meta_data(
-            user_meta, collection_meta.fields_dict
-        ):
+        if not validation.is_valid_index_meta_data(user_meta, collection_meta.fields_dict):
             raise ValueError(
                 "invalid index_meta {} fields_dict {}".format(
                     user_meta, collection_meta.fields_dict
@@ -120,9 +118,7 @@ class IndexMeta:
             if "flat" in inner_meta["VectorIndex"]["IndexType"]:
                 vector_index["IndexType"] = "flat"
                 if "EnableSparse" in inner_meta["VectorIndex"]:
-                    vector_index["EnableSparse"] = inner_meta[
-                        "VectorIndex"
-                    ]["EnableSparse"]
+                    vector_index["EnableSparse"] = inner_meta["VectorIndex"]["EnableSparse"]
                 if "SearchWithSparseLogitAlpha" in inner_meta["VectorIndex"]:
                     vector_index["SearchWithSparseLogitAlpha"] = inner_meta["VectorIndex"][
                         "SearchWithSparseLogitAlpha"

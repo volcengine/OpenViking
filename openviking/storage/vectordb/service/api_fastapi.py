@@ -5,8 +5,7 @@ import time
 from dataclasses import asdict
 from typing import Any, Optional
 
-from fastapi import APIRouter, Query, Request, Depends, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, Depends, Query, Request
 
 from openviking.storage.vectordb.project.project_group import get_or_create_project_group
 from openviking.storage.vectordb.service.app_models import (
@@ -28,7 +27,6 @@ from openviking.storage.vectordb.service.app_models import (
 )
 from openviking.storage.vectordb.service.code import ErrorCode
 from openviking.storage.vectordb.utils import data_utils
-from openviking.storage.vectordb.utils.api_utils import form_error, form_res
 from openviking.utils.logger import default_logger as logger
 
 
@@ -85,34 +83,38 @@ search_router = APIRouter(prefix="/api/vikingdb/data/search", tags=["Search"])
 
 # ==================== Dependencies ====================
 
+
 def get_project(project_name: str = "default"):
     """Get project instance"""
     return project_group.get_or_create_project(project_name)
+
 
 def get_collection_or_raise(collection_name: str, project_name: str = "default"):
     """Get collection instance or raise exception if not found"""
     if not collection_name:
         raise VikingDBException(ErrorCode.INVALID_PARAM, "collection name is empty")
-    
+
     project = project_group.get_or_create_project(project_name)
     collection = project.get_collection(collection_name)
     if not collection:
         raise VikingDBException(ErrorCode.COLLECTION_NOT_EXIST, "collection not exist")
     return collection
 
+
 # Dependency for GET requests using Query parameters
 def get_collection_dependency(
     CollectionName: str = Query(..., description="Collection name"),
-    ProjectName: Optional[str] = Query("default", description="Project name")
+    ProjectName: Optional[str] = Query("default", description="Project name"),
 ):
     if not CollectionName:
         raise VikingDBException(ErrorCode.INVALID_PARAM, "collection name is empty")
     return get_collection_or_raise(CollectionName, ProjectName)
 
+
 # Dependency for snake_case query params
 def get_collection_dependency_snake(
     collection_name: str = Query(..., description="Collection name"),
-    project: Optional[str] = Query("default", description="Project name")
+    project: Optional[str] = Query("default", description="Project name"),
 ):
     if not collection_name:
         raise VikingDBException(ErrorCode.INVALID_PARAM, "collection name is empty")
@@ -164,8 +166,12 @@ async def update_collection(request: CollectionUpdateRequest, req: Request):
     """Update an existing collection"""
     try:
         if not request.CollectionName:
-             return error_response("CollectionName is empty", ErrorCode.INVALID_PARAM.value, request=req)
-        collection = get_collection_or_raise(request.CollectionName, request.ProjectName or "default")
+            return error_response(
+                "CollectionName is empty", ErrorCode.INVALID_PARAM.value, request=req
+            )
+        collection = get_collection_or_raise(
+            request.CollectionName, request.ProjectName or "default"
+        )
         description = request.Description
         fields = data_utils.convert_dict(request.Fields)
         collection.update(fields, description)
@@ -175,10 +181,7 @@ async def update_collection(request: CollectionUpdateRequest, req: Request):
 
 
 @collection_router.get("/GetVikingdbCollection", response_model=ApiResponse)
-async def get_collection_info(
-    req: Request,
-    collection: Any = Depends(get_collection_dependency)
-):
+async def get_collection_info(req: Request, collection: Any = Depends(get_collection_dependency)):
     """Get collection information"""
     meta_data = collection.get_meta_data()
     return success_response("collection info", meta_data, request=req)
@@ -229,7 +232,7 @@ async def upsert_data(request: DataUpsertRequest, req: Request):
     """Upsert data to collection"""
     try:
         collection = get_collection_or_raise(request.collection_name, request.project or "default")
-        
+
         ttl = request.ttl or 0
         data_list = data_utils.convert_dict(request.fields)
 
@@ -247,7 +250,7 @@ async def upsert_data(request: DataUpsertRequest, req: Request):
 async def fetch_data(
     req: Request,
     ids: str = Query(..., description="Primary key list"),
-    collection: Any = Depends(get_collection_dependency_snake)
+    collection: Any = Depends(get_collection_dependency_snake),
 ):
     """Fetch data from collection"""
     primary_keys = data_utils.convert_dict(ids)
@@ -260,7 +263,7 @@ async def delete_data(request: DataDeleteRequest, req: Request):
     """Delete data from collection"""
     try:
         collection = get_collection_or_raise(request.collection_name, request.project or "default")
-        
+
         primary_keys = data_utils.convert_dict(request.ids) if request.ids else []
         del_all = request.del_all or False
 
@@ -281,8 +284,10 @@ async def delete_data(request: DataDeleteRequest, req: Request):
 async def create_index(request: IndexCreateRequest, req: Request):
     """Create an index"""
     try:
-        collection = get_collection_or_raise(request.CollectionName, request.ProjectName or "default")
-        
+        collection = get_collection_or_raise(
+            request.CollectionName, request.ProjectName or "default"
+        )
+
         index_name = request.IndexName
         if not index_name:
             return error_response("index name is empty", ErrorCode.INVALID_PARAM.value, request=req)
@@ -312,8 +317,10 @@ async def create_index(request: IndexCreateRequest, req: Request):
 async def update_index(request: IndexUpdateRequest, req: Request):
     """Update an index"""
     try:
-        collection = get_collection_or_raise(request.CollectionName, request.ProjectName or "default")
-        
+        collection = get_collection_or_raise(
+            request.CollectionName, request.ProjectName or "default"
+        )
+
         index_name = request.IndexName
         if not index_name:
             return error_response("index name is empty", ErrorCode.INVALID_PARAM.value, request=req)
@@ -331,7 +338,7 @@ async def update_index(request: IndexUpdateRequest, req: Request):
 async def get_index_info(
     req: Request,
     IndexName: str = Query(..., description="Index name"),
-    collection: Any = Depends(get_collection_dependency)
+    collection: Any = Depends(get_collection_dependency),
 ):
     """Get index information"""
     if not IndexName:
@@ -342,10 +349,7 @@ async def get_index_info(
 
 
 @index_router.get("/ListVikingdbIndex", response_model=ApiResponse)
-async def list_indexes(
-    req: Request,
-    collection: Any = Depends(get_collection_dependency)
-):
+async def list_indexes(req: Request, collection: Any = Depends(get_collection_dependency)):
     """List all indexes"""
     data = collection.list_indexes()
     return success_response("list indexes success", data, request=req)
@@ -355,8 +359,10 @@ async def list_indexes(
 async def drop_index(request: IndexDropRequest, req: Request):
     """Delete an index"""
     try:
-        collection = get_collection_or_raise(request.CollectionName, request.ProjectName or "default")
-        
+        collection = get_collection_or_raise(
+            request.CollectionName, request.ProjectName or "default"
+        )
+
         index_name = request.IndexName
         if not index_name:
             return error_response("index name is empty", ErrorCode.INVALID_PARAM.value, request=req)
@@ -375,7 +381,7 @@ async def search_by_vector(request: SearchByVectorRequest, req: Request):
     """Search by vector"""
     try:
         collection = get_collection_or_raise(request.collection_name, request.project or "default")
-        
+
         index_name = request.index_name
         if not index_name:
             return error_response("index name is empty", ErrorCode.INVALID_PARAM.value, request=req)
@@ -392,7 +398,9 @@ async def search_by_vector(request: SearchByVectorRequest, req: Request):
         offset = request.offset or 0
         if offset < 0:
             return error_response(
-                "offset must be greater than or equal to 0", ErrorCode.INVALID_PARAM.value, request=req
+                "offset must be greater than or equal to 0",
+                ErrorCode.INVALID_PARAM.value,
+                request=req,
             )
 
         result = collection.search_by_vector(
@@ -414,7 +422,7 @@ async def search_by_id(request: SearchByIdRequest, req: Request):
     """Search by ID"""
     try:
         collection = get_collection_or_raise(request.collection_name, request.project or "default")
-        
+
         index_name = request.index_name
         if not index_name:
             return error_response("index name is empty", ErrorCode.INVALID_PARAM.value, request=req)
@@ -433,7 +441,9 @@ async def search_by_id(request: SearchByIdRequest, req: Request):
         offset = request.offset or 0
         if offset < 0:
             return error_response(
-                "offset must be greater than or equal to 0", ErrorCode.INVALID_PARAM.value, request=req
+                "offset must be greater than or equal to 0",
+                ErrorCode.INVALID_PARAM.value,
+                request=req,
             )
 
         result = collection.search_by_id(
@@ -454,7 +464,7 @@ async def search_by_multimodal(request: SearchByMultiModalRequest, req: Request)
     """Search by multimodal"""
     try:
         collection = get_collection_or_raise(request.collection_name, request.project or "default")
-        
+
         index_name = request.index_name
         if not index_name:
             return error_response("index name is empty", ErrorCode.INVALID_PARAM.value, request=req)
@@ -480,7 +490,9 @@ async def search_by_multimodal(request: SearchByMultiModalRequest, req: Request)
         offset = request.offset or 0
         if offset < 0:
             return error_response(
-                "offset must be greater than or equal to 0", ErrorCode.INVALID_PARAM.value, request=req
+                "offset must be greater than or equal to 0",
+                ErrorCode.INVALID_PARAM.value,
+                request=req,
             )
 
         try:
@@ -507,7 +519,7 @@ async def search_by_scalar(request: SearchByScalarRequest, req: Request):
     """Search by scalar field"""
     try:
         collection = get_collection_or_raise(request.collection_name, request.project or "default")
-        
+
         index_name = request.index_name
         if not index_name:
             return error_response("index name is empty", ErrorCode.INVALID_PARAM.value, request=req)
@@ -527,7 +539,9 @@ async def search_by_scalar(request: SearchByScalarRequest, req: Request):
         offset = request.offset or 0
         if offset < 0:
             return error_response(
-                "offset must be greater than or equal to 0", ErrorCode.INVALID_PARAM.value, request=req
+                "offset must be greater than or equal to 0",
+                ErrorCode.INVALID_PARAM.value,
+                request=req,
             )
 
         result = collection.search_by_scalar(
@@ -549,7 +563,7 @@ async def search_by_random(request: SearchByRandomRequest, req: Request):
     """Search by random"""
     try:
         collection = get_collection_or_raise(request.collection_name, request.project or "default")
-        
+
         index_name = request.index_name
         if not index_name:
             return error_response("index name is empty", ErrorCode.INVALID_PARAM.value, request=req)
@@ -564,7 +578,9 @@ async def search_by_random(request: SearchByRandomRequest, req: Request):
         offset = request.offset or 0
         if offset < 0:
             return error_response(
-                "offset must be greater than or equal to 0", ErrorCode.INVALID_PARAM.value, request=req
+                "offset must be greater than or equal to 0",
+                ErrorCode.INVALID_PARAM.value,
+                request=req,
             )
 
         result = collection.search_by_random(
@@ -584,7 +600,7 @@ async def search_by_keywords(request: SearchByKeywordsRequest, req: Request):
     """Search by keywords"""
     try:
         collection = get_collection_or_raise(request.collection_name, request.project or "default")
-        
+
         index_name = request.index_name
         if not index_name:
             return error_response("index name is empty", ErrorCode.INVALID_PARAM.value, request=req)
@@ -609,7 +625,9 @@ async def search_by_keywords(request: SearchByKeywordsRequest, req: Request):
         offset = request.offset or 0
         if offset < 0:
             return error_response(
-                "offset must be greater than or equal to 0", ErrorCode.INVALID_PARAM.value, request=req
+                "offset must be greater than or equal to 0",
+                ErrorCode.INVALID_PARAM.value,
+                request=req,
             )
 
         try:

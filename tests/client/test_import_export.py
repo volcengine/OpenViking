@@ -5,8 +5,6 @@
 
 from pathlib import Path
 
-import pytest
-
 from openviking import AsyncOpenViking
 
 
@@ -33,10 +31,7 @@ class TestExportOvpack:
 
         # Export entire resource directory
         export_path = temp_dir / "dir_export.ovpack"
-        result = await client.export_ovpack(
-            "viking://resources/",
-            str(export_path)
-        )
+        result = await client.export_ovpack("viking://resources/", str(export_path))
 
         assert isinstance(result, str)
 
@@ -54,9 +49,7 @@ class TestImportOvpack:
 
         # Import to new location
         import_uri = await client.import_ovpack(
-            str(export_path),
-            "viking://resources/imported/",
-            vectorize=False
+            str(export_path), "viking://resources/imported/", vectorize=False
         )
 
         assert isinstance(import_uri, str)
@@ -72,39 +65,30 @@ class TestImportOvpack:
 
         # First import
         await client.import_ovpack(
-            str(export_path),
-            "viking://resources/force_test/",
-            vectorize=False
+            str(export_path), "viking://resources/force_test/", vectorize=False
         )
 
         # Second force import (overwrite)
         import_uri = await client.import_ovpack(
-            str(export_path),
-            "viking://resources/force_test/",
-            force=True,
-            vectorize=False
+            str(export_path), "viking://resources/force_test/", force=True, vectorize=False
         )
 
         assert isinstance(import_uri, str)
-
 
     async def test_import_export_roundtrip(
         self, client: AsyncOpenViking, sample_markdown_file: Path, temp_dir: Path
     ):
         """Test export-import roundtrip"""
         # Add resource
-        result = await client.add_resource(
-            path=str(sample_markdown_file),
-            reason="Roundtrip test"
-        )
+        result = await client.add_resource(path=str(sample_markdown_file), reason="Roundtrip test")
         original_uri = result["root_uri"]
 
         # Read original content
         original_content = ""
         entries = await client.tree(original_uri)
         for e in entries:
-            if not e['isDir']:
-                original_content = await client.read(e['uri'])
+            if not e["isDir"]:
+                original_content = await client.read(e["uri"])
 
         # Export
         export_path = temp_dir / "roundtrip.ovpack"
@@ -115,17 +99,15 @@ class TestImportOvpack:
 
         # Import
         import_uri = await client.import_ovpack(
-            str(export_path),
-            "viking://resources/roundtrip/",
-            vectorize=False
+            str(export_path), "viking://resources/roundtrip/", vectorize=False
         )
 
         # Read imported content
         imported_content = ""
         entries = await client.tree(import_uri)
         for e in entries:
-            if not e['isDir']:
-                imported_content = await client.read(e['uri'])
+            if not e["isDir"]:
+                imported_content = await client.read(e["uri"])
 
         # Verify content consistency
         assert original_content == imported_content

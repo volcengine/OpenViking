@@ -7,19 +7,20 @@ Provides centralized schema definitions and factory functions for creating colle
 similar to how init_viking_fs encapsulates VikingFS initialization.
 """
 
-import abc
 import json
-from typing import Dict, Any, Optional
-from openviking.storage.queuefs.named_queue import DequeueHandlerBase
+from typing import Any, Dict, Optional
+
+from openviking.models.embedder.base import EmbedResult
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
+from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.vikingdb_interface import VikingDBInterface
 from openviking.utils import get_logger
 from openviking.utils.config.open_viking_config import OpenVikingConfig
-from openviking.models.embedder.base import EmbedResult
 
 logger = get_logger(__name__)
 
 COLLECTION_NAME = "context"
+
 
 class CollectionSchemas:
     """
@@ -72,11 +73,13 @@ async def init_context_collection(storage) -> bool:
         True if collection was created, False if already exists
     """
     from openviking.utils.config import get_openviking_config
+
     config = get_openviking_config()
     name = config.storage.vectordb.name
     vector_dim = config.embedding.dimension
     schema = CollectionSchemas.context_collection(name, vector_dim)
     return await storage.create_collection(name, schema)
+
 
 class TextEmbeddingHandler(DequeueHandlerBase):
     """
@@ -97,6 +100,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
             vikingdb: VikingDBInterface instance for writing to vector database
         """
         from openviking.utils.config import get_openviking_config
+
         self._vikingdb = vikingdb
         self._embedder = None
         config = get_openviking_config()
@@ -128,6 +132,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
             # Initialize embedder if not already initialized
             if not self._embedder:
                 from openviking.utils.config import get_openviking_config
+
                 config = get_openviking_config()
                 self._initialize_embedder(config)
 
@@ -159,10 +164,13 @@ class TextEmbeddingHandler(DequeueHandlerBase):
             try:
                 record_id = await self._vikingdb.insert(self._collection_name, inserted_data)
                 if record_id:
-                    logger.debug(f"Successfully wrote embedding to database: {record_id} abstract {inserted_data['abstract']} vector {inserted_data['vector'][:5]}")
+                    logger.debug(
+                        f"Successfully wrote embedding to database: {record_id} abstract {inserted_data['abstract']} vector {inserted_data['vector'][:5]}"
+                    )
             except Exception as db_err:
                 logger.error(f"Failed to write to vector database: {db_err}")
                 import traceback
+
                 traceback.print_exc()
                 self.report_error(str(db_err), data)
                 return None
@@ -173,6 +181,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
         except Exception as e:
             logger.error(f"Error processing embedding message: {e}")
             import traceback
+
             traceback.print_exc()
             self.report_error(str(e), data)
             return None

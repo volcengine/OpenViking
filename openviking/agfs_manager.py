@@ -8,11 +8,14 @@ import socket
 import subprocess
 import time
 from pathlib import Path
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
 import yaml
 
 from openviking.utils import get_logger
+
+if TYPE_CHECKING:
+    from openviking.utils.config.agfs_config import AGFSConfig
 
 logger = get_logger(__name__)
 
@@ -79,7 +82,6 @@ class AGFSManager:
         self.config_file: Optional[Path] = None
 
         atexit.register(self.stop)
-
 
     @property
     def vikingfs_path(self) -> Path:
@@ -211,7 +213,7 @@ class AGFSManager:
             try:
                 resp = requests.get(f"{self.url}/api/v1/health", timeout=0.5)
                 if resp.status_code == 200:
-                    logger.info(f"[AGFSManager] AGFS is ready")
+                    logger.info("[AGFSManager] AGFS is ready")
                     return
             except requests.RequestException as e:
                 logger.debug(f"[AGFSManager] Health check failed: {e}")
@@ -219,7 +221,9 @@ class AGFSManager:
             time.sleep(0.1)
 
         # Timeout, try reading output
-        logger.error(f"[AGFSManager] Timeout after {timeout}s, process still running: {self.process.poll() is None}")
+        logger.error(
+            f"[AGFSManager] Timeout after {timeout}s, process still running: {self.process.poll() is None}"
+        )
         raise TimeoutError(f"AGFS failed to start within {timeout}s")
 
     def stop(self) -> None:
@@ -241,4 +245,3 @@ class AGFSManager:
     def is_running(self) -> bool:
         """Check if AGFS is running."""
         return self.process is not None and self.process.poll() is None
-

@@ -2,13 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """Core context abstractions for OpenViking."""
 
+from openviking.core.building_tree import BuildingTree
 from openviking.core.context import Context, ResourceContentType
 from openviking.core.directories import (
     PRESET_DIRECTORIES,
     DirectoryDefinition,
     DirectoryInitializer,
 )
-from openviking.core.building_tree import BuildingTree
 from openviking.core.skill_loader import SkillLoader
 
 __all__ = [

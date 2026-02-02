@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from typing import Any, Dict, Optional
 
+
 def form_error(err: Any, code: int = 400, data: Optional[Dict] = None) -> tuple:
     if data is None:
         data = {}

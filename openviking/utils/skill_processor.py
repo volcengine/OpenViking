@@ -6,13 +6,12 @@ Skill Processor for OpenViking.
 Handles skill parsing, LLM generation, and storage operations.
 """
 
-from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from openviking.core.context import Context, ContextType, Vectorize
+from openviking.core.mcp_converter import is_mcp_format, mcp_to_skill
 from openviking.core.skill_loader import SkillLoader
-from openviking.core.mcp_converter import mcp_to_skill, is_mcp_format
 from openviking.storage import VikingDBManager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.viking_fs import VikingFS
@@ -72,7 +71,7 @@ class SkillProcessor:
                 "allowed_tools": skill_dict.get("allowed_tools", []),
                 "tags": skill_dict.get("tags", []),
                 "source_path": skill_dict.get("source_path", ""),
-            }
+            },
         )
         context.set_vectorize(Vectorize(text=context.abstract))
 

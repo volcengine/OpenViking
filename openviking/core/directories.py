@@ -8,10 +8,11 @@ This module defines the preset directory structure that is created on initializa
 """
 
 from dataclasses import dataclass, field
-from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
+
 from openviking.core.context import Context, ContextType, Vectorize
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
+
 if TYPE_CHECKING:
     from openviking.storage import VikingDBManager
 
@@ -198,8 +199,6 @@ class DirectoryInitializer:
         count = 1 if created else 0
         count += await self._initialize_children("user", user_tree.children, user_root_uri)
 
-        from openviking.utils.logger import get_logger
-
         return count
 
     async def _ensure_directory(
@@ -225,11 +224,11 @@ class DirectoryInitializer:
         )
         if not existing:
             context = Context(
-              uri=uri,
-              parent_uri=parent_uri,
-              is_leaf=False,
-              context_type=get_context_type_for_uri(uri),
-              abstract=defn.abstract,
+                uri=uri,
+                parent_uri=parent_uri,
+                is_leaf=False,
+                context_type=get_context_type_for_uri(uri),
+                abstract=defn.abstract,
             )
             context.set_vectorize(Vectorize(text=defn.overview))
             dir_emb_msg = EmbeddingMsgConverter.from_context(context)
@@ -282,6 +281,7 @@ class DirectoryInitializer:
     async def _create_agfs_structure(self, uri: str, abstract: str, overview: str) -> None:
         """Create L0/L1 file structure for directory in AGFS."""
         from openviking.storage.viking_fs import get_viking_fs
+
         await get_viking_fs().write_context(
             uri=uri,
             abstract=abstract,

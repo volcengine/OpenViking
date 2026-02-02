@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """MCP to Skill converter."""
 
-from typing import Dict, Any
+from typing import Any, Dict
 
 
 def mcp_to_skill(mcp_config: Dict[str, Any]) -> Dict[str, Any]:
@@ -42,7 +42,9 @@ def mcp_to_skill(mcp_config: Dict[str, Any]) -> Dict[str, Any]:
     # Add usage section
     body_parts.append("\n## Usage\n\n")
     body_parts.append(f"This tool wraps the MCP tool `{name}`. ")
-    body_parts.append("Call this when the user needs functionality matching the description above.\n")
+    body_parts.append(
+        "Call this when the user needs functionality matching the description above.\n"
+    )
 
     content = "".join(frontmatter_parts) + "".join(body_parts)
 

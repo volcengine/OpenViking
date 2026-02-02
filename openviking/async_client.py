@@ -10,29 +10,23 @@ from typing import Any, Dict, List, Optional
 
 # Local imports - Core modules
 from openviking.agfs_manager import AGFSManager
-from openviking.utils.config import (
-    OpenVikingConfig,
-    get_openviking_config,
-)
-from openviking.utils.uri import VikingURI
-from openviking.utils.config.open_viking_config import initialize_openviking_config
 from openviking.core.directories import DirectoryInitializer
 from openviking.session import Session
 from openviking.session.compressor import SessionCompressor
 from openviking.storage import VikingDBManager
 from openviking.storage.collection_schemas import init_context_collection
-from openviking.storage.queuefs import get_queue_manager
+from openviking.storage.local_fs import export_ovpack as local_export_ovpack
+from openviking.storage.local_fs import import_ovpack as local_import_ovpack
 from openviking.storage.observers import QueueObserver, VikingDBObserver, VLMObserver
-from openviking.storage.local_fs import (
-    export_ovpack as local_export_ovpack,
-    import_ovpack as local_import_ovpack,
-)
+from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.viking_fs import VikingFS, init_viking_fs
 from openviking.utils import get_logger
+from openviking.utils.config import OpenVikingConfig, get_openviking_config
+from openviking.utils.config.open_viking_config import initialize_openviking_config
 from openviking.utils.config.storage_config import StorageConfig
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking.utils.skill_processor import SkillProcessor
-
+from openviking.utils.uri import VikingURI
 
 logger = get_logger(__name__)
 
@@ -597,7 +591,7 @@ class AsyncOpenViking:
         if not self._viking_fs:
             raise RuntimeError("VikingFS not initialized")
         await self._viking_fs.mkdir(uri)
-    
+
     async def stat(self, uri: str) -> Dict:
         """Get resource status"""
         await self._ensure_initialized()

@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 import time
-from typing import List, Optional, Tuple, Union
+from typing import List, Optional, Tuple
 
 from openviking.storage.vectordb.store.data import CandidateData, DeltaRecord
 from openviking.storage.vectordb.store.local_store import create_store_engine_proxy
@@ -80,9 +80,7 @@ class StoreManager:
                 )
                 for bytes_data in bytes_list
             ]
-            delta_list = [
-                DeltaRecord(type=DeltaRecord.Type.UPSERT) for _ in range(len(cands_list))
-            ]
+            delta_list = [DeltaRecord(type=DeltaRecord.Type.UPSERT) for _ in range(len(cands_list))]
             for i, old_fields in enumerate(old_cands_fields_list):
                 delta_list[i].label = cands_list[i].label
                 delta_list[i].vector = cands_list[i].vector
@@ -154,9 +152,7 @@ class StoreManager:
                 )
                 for bytes_data in bytes_list
             ]
-            delta_list = [
-                DeltaRecord(type=DeltaRecord.Type.DELETE) for _ in range(len(label_list))
-            ]
+            delta_list = [DeltaRecord(type=DeltaRecord.Type.DELETE) for _ in range(len(label_list))]
             for i, data in enumerate(old_cands_fields_list):
                 delta_list[i].label = label_list[i]
                 delta_list[i].old_fields = data
@@ -181,9 +177,7 @@ class StoreManager:
         self.storage.exec_sequence_batch_op(batch_op_list)
         return delta_list
 
-    def fetch_cands_data(
-        self, label_list: List[int]
-    ) -> List[Optional[CandidateData]]:
+    def fetch_cands_data(self, label_list: List[int]) -> List[Optional[CandidateData]]:
         """Fetch candidate data by labels.
 
         Args:
@@ -272,13 +266,13 @@ class StoreManager:
         # Optimize: Avoid full deserialization if only checking expire_ns_ts
         # But we need label and fields later for DeltaRecord.
         # Let's filter first by expire_ns_ts which is in CandidateData.
-        
+
         expired_cands_data: List[Tuple[int, str]] = []
-        
+
         for byte_data in cands_bytes_list:
             if not byte_data:
                 continue
-            
+
             # Efficiently check expiration without full object creation if possible
             # But CandidateData takes bytes_data in init, so we might as well use helper
             expire_ts = CandidateData.bytes_row.deserialize_field(byte_data, "expire_ns_ts")
@@ -291,7 +285,7 @@ class StoreManager:
         delta_list = [
             DeltaRecord(type=DeltaRecord.Type.DELETE) for _ in range(len(expired_cands_data))
         ]
-        
+
         if expired_cands_data:
             batch_op_list.append(
                 BatchOp(
@@ -304,7 +298,7 @@ class StoreManager:
             for i, data in enumerate(expired_cands_data):
                 delta_list[i].label = data[0]
                 delta_list[i].old_fields = data[1]
-            
+
             base_ts = time.time_ns()
             batch_op_list.append(
                 BatchOp(
@@ -324,6 +318,6 @@ class StoreManager:
                     ["" for _ in range(len(ttl_kv_list))],
                 )
             )
-            
+
         self.storage.exec_sequence_batch_op(batch_op_list)
         return delta_list

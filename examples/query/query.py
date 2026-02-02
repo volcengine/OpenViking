@@ -2,12 +2,10 @@
 """
 Query - CLI tool to search and generate answers using OpenViking + LLM
 """
+
 import argparse
 import sys
-import textwrap
 import threading
-
-import boring_logging_config  # Configure logging (set OV_DEBUG=1 for debug mode)
 
 from recipe import Recipe
 from rich import box
@@ -79,7 +77,7 @@ def query(
     temperature: float = 0.7,
     max_tokens: int = 2048,
     score_threshold: float = 0.2,
-    verbose: bool = False
+    verbose: bool = False,
 ):
     """
     Query the database and generate an answer using LLM
@@ -111,13 +109,23 @@ def query(
     try:
         pipeline = Recipe(config_path=config_path, data_path=data_path)
     except Exception as e:
-        console.print(Panel(f"❌ Error initializing pipeline: {e}", style="bold red", padding=(0, 1)))
+        console.print(
+            Panel(f"❌ Error initializing pipeline: {e}", style="bold red", padding=(0, 1))
+        )
         return False
 
     try:
         # Display question with constrained width
         question_text = Text(question, style="bold yellow")
-        console.print(Panel(question_text, title="✅ Roger That", style="bold", padding=(0, 1), width=PANEL_WIDTH))
+        console.print(
+            Panel(
+                question_text,
+                title="✅ Roger That",
+                style="bold",
+                padding=(0, 1),
+                width=PANEL_WIDTH,
+            )
+        )
         console.print()
 
         # Query with loading spinner
@@ -128,20 +136,28 @@ def query(
             search_top_k=top_k,
             temperature=temperature,
             max_tokens=max_tokens,
-            score_threshold=score_threshold
+            score_threshold=score_threshold,
         )
-        answer_text = Text(result['answer'], style="white")
-        console.print(Panel(answer_text, title="🍔 Check This Out", style="bold bright_cyan", padding=(1, 1), width=PANEL_WIDTH))
+        answer_text = Text(result["answer"], style="white")
+        console.print(
+            Panel(
+                answer_text,
+                title="🍔 Check This Out",
+                style="bold bright_cyan",
+                padding=(1, 1),
+                width=PANEL_WIDTH,
+            )
+        )
         console.print()
 
         # Show sources
-        if result['context']:
+        if result["context"]:
             sources_table = Table(
                 title=f"📚 Sources ({len(result['context'])} documents)",
                 box=box.ROUNDED,
                 show_header=True,
                 header_style="bold magenta",
-                title_style="bold magenta"
+                title_style="bold magenta",
             )
             sources_table.add_column("#", style="cyan", width=4)
             sources_table.add_column("File", style="bold white")
@@ -151,26 +167,38 @@ def query(
                 sources_table.add_column("URI", style="dim")
                 sources_table.add_column("Preview", style="dim")
 
-            for i, ctx in enumerate(result['context'], 1):
-                uri_parts = ctx['uri'].split('/')
-                filename = uri_parts[-1] if uri_parts else ctx['uri']
+            for i, ctx in enumerate(result["context"], 1):
+                uri_parts = ctx["uri"].split("/")
+                filename = uri_parts[-1] if uri_parts else ctx["uri"]
                 score_text = Text(f"{ctx['score']:.4f}", style="bold green")
 
                 if verbose:
-                    preview = ctx['content'][:100] + "..." if len(ctx['content']) > 100 else ctx['content']
-                    sources_table.add_row(str(i), filename, score_text, ctx['uri'], preview)
+                    preview = (
+                        ctx["content"][:100] + "..."
+                        if len(ctx["content"]) > 100
+                        else ctx["content"]
+                    )
+                    sources_table.add_row(str(i), filename, score_text, ctx["uri"], preview)
                 else:
                     sources_table.add_row(str(i), filename, score_text)
 
             console.print(sources_table)
         else:
-            console.print(Panel("⚠️  No relevant sources found", style="yellow", padding=(0, 1), width=PANEL_WIDTH))
+            console.print(
+                Panel(
+                    "⚠️  No relevant sources found",
+                    style="yellow",
+                    padding=(0, 1),
+                    width=PANEL_WIDTH,
+                )
+            )
 
         return True
 
     except Exception as e:
         console.print(Panel(f"❌ Error during query: {e}", style="bold red", padding=(0, 1)))
         import traceback
+
         traceback.print_exc()
         return False
 
@@ -216,68 +244,54 @@ Score Threshold Guide:
   0.0-0.1 → Very permissive, includes low relevance results
   0.2      → Balanced (default)
   0.3-0.5  → Strict, only highly relevant results
-        """
+        """,
+    )
+
+    parser.add_argument("question", type=str, help="Your question to ask the LLM")
+
+    parser.add_argument(
+        "--config", type=str, default="./ov.conf", help="Path to config file (default: ./ov.conf)"
     )
 
     parser.add_argument(
-        'question',
-        type=str,
-        help='Your question to ask the LLM'
+        "--data", type=str, default="./data", help="Path to data directory (default: ./data)"
     )
 
     parser.add_argument(
-        '--config',
-        type=str,
-        default='./ov.conf',
-        help='Path to config file (default: ./ov.conf)'
-    )
-
-    parser.add_argument(
-        '--data',
-        type=str,
-        default='./data',
-        help='Path to data directory (default: ./data)'
-    )
-
-    parser.add_argument(
-        '--top-k',
+        "--top-k",
         type=int,
         default=5,
-        help='Number of search results to use as context (default: 5)'
+        help="Number of search results to use as context (default: 5)",
     )
 
     parser.add_argument(
-        '--temperature',
-        type=float,
-        default=0.7,
-        help='LLM temperature 0.0-1.0 (default: 0.7)'
+        "--temperature", type=float, default=0.7, help="LLM temperature 0.0-1.0 (default: 0.7)"
     )
 
     parser.add_argument(
-        '--max-tokens',
-        type=int,
-        default=2048,
-        help='Maximum tokens to generate (default: 2048)'
+        "--max-tokens", type=int, default=2048, help="Maximum tokens to generate (default: 2048)"
     )
 
     parser.add_argument(
-        '--score-threshold',
+        "--score-threshold",
         type=float,
         default=0.2,
-        help='Minimum relevance score for search results (default: 0.2)'
+        help="Minimum relevance score for search results (default: 0.2)",
     )
 
-    parser.add_argument(
-        '--verbose', '-v',
-        action='store_true',
-        help='Show detailed information'
-    )
+    parser.add_argument("--verbose", "-v", action="store_true", help="Show detailed information")
 
     args = parser.parse_args()
 
     # Validate temperature
     if not 0.0 <= args.temperature <= 1.0:
-        console.print(Panel("❌ Error: Temperature must be between 0.0 and 1.0", style="bold red", padding=(0, 1)))
+        console.print(
+            Panel(
+                "❌ Error: Temperature must be between 0.0 and 1.0",
+                style="bold red",
+                padding=(0, 1),
+            )
+        )
         sys.exit(1)
 
     # Validate top-k
@@ -286,7 +300,13 @@ Score Threshold Guide:
         sys.exit(1)
 
     if not 0.0 <= args.score_threshold <= 1.0:
-        console.print(Panel("❌ Error: score-threshold must be between 0.0 and 1.0", style="bold red", padding=(0, 1)))
+        console.print(
+            Panel(
+                "❌ Error: score-threshold must be between 0.0 and 1.0",
+                style="bold red",
+                padding=(0, 1),
+            )
+        )
         sys.exit(1)
 
     # Run query
@@ -298,7 +318,7 @@ Score Threshold Guide:
         temperature=args.temperature,
         max_tokens=args.max_tokens,
         score_threshold=args.score_threshold,
-        verbose=args.verbose
+        verbose=args.verbose,
     )
 
     sys.exit(0 if success else 1)

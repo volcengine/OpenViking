@@ -3,9 +3,11 @@
 """
 Elegant serialization decorator: automatically generate schema and serialization methods from type annotations
 """
-from dataclasses import fields, is_dataclass, asdict
-from typing import Any, get_origin, get_args
-from openviking.storage.vectordb.store.bytes_row import Schema, BytesRow, FieldType
+
+from dataclasses import asdict, fields, is_dataclass
+from typing import Any, get_args, get_origin
+
+from openviking.storage.vectordb.store.bytes_row import BytesRow, FieldType, Schema
 
 
 def _python_type_to_field_type(py_type: Any, field_name: str) -> FieldType:

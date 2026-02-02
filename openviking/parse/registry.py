@@ -8,15 +8,15 @@ Provides automatic parser selection based on file type.
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Type, Union
+from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 
 from openviking.parse.base import ParseResult
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking.parse.parsers.code import CodeParser
 from openviking.parse.parsers.html import HTMLParser
 from openviking.parse.parsers.markdown import MarkdownParser
 from openviking.parse.parsers.pdf import PDFParser
 from openviking.parse.parsers.text import TextParser
-from openviking.parse.parsers.code import CodeParser
 
 if TYPE_CHECKING:
     from openviking.parse.custom import CustomParserProtocol
@@ -53,6 +53,7 @@ class ParserRegistry:
         if register_optional:
             try:
                 from openviking.parse.parsers.media import ImageParser
+
                 self.register("image", ImageParser())
                 logger.info("Registered ImageParser for image formats")
             except ImportError as e:

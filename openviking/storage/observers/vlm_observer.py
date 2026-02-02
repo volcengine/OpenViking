@@ -6,8 +6,8 @@ VLMObserver: VLM system observability tool.
 Provides methods to observe and report token usage across VLM models and backends.
 """
 
-from openviking.storage.observers.base_observer import BaseObserver
 from openviking.models.vlm.base import VLMBase
+from openviking.storage.observers.base_observer import BaseObserver
 from openviking.utils.logger import get_logger
 
 logger = get_logger(__name__)

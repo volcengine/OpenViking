@@ -3,16 +3,16 @@
 """SemanticProcessor: Processes messages from SemanticQueue, generates .abstract.md and .overview.md."""
 
 import asyncio
-from typing import List, Dict, Any, Tuple
+from typing import Any, Dict, List, Tuple
 
-from openviking.utils import VikingURI
-from openviking.utils.logger import get_logger
-from openviking.utils.config import get_openviking_config
+from openviking.core.context import Context, ResourceContentType, Vectorize
 from openviking.prompts import render_prompt
-from openviking.storage.viking_fs import get_viking_fs
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
-from openviking.core.context import Context, Vectorize, ResourceContentType
+from openviking.storage.viking_fs import get_viking_fs
+from openviking.utils import VikingURI
+from openviking.utils.config import get_openviking_config
+from openviking.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -77,6 +77,7 @@ class SemanticProcessor(DequeueHandlerBase):
         """Process dequeued SemanticMsg, recursively process all subdirectories."""
         try:
             import json
+
             if "data" in data and isinstance(data["data"], str):
                 data = json.loads(data["data"])
 
@@ -146,9 +147,7 @@ class SemanticProcessor(DequeueHandlerBase):
         except Exception as e:
             logger.error(f"Failed to vectorize files in {uri}: {e}", exc_info=True)
 
-    async def _collect_children_abstracts(
-        self, children_uris: List[str]
-    ) -> List[Dict[str, str]]:
+    async def _collect_children_abstracts(self, children_uris: List[str]) -> List[Dict[str, str]]:
         """Collect .abstract.md from subdirectories."""
         viking_fs = get_viking_fs()
         results = []
@@ -159,9 +158,7 @@ class SemanticProcessor(DequeueHandlerBase):
             results.append({"name": dir_name, "abstract": abstract})
         return results
 
-    async def _generate_file_summaries(
-        self, file_paths: List[str]
-    ) -> List[Dict[str, str]]:
+    async def _generate_file_summaries(self, file_paths: List[str]) -> List[Dict[str, str]]:
         """Concurrently generate file summaries."""
         if not file_paths:
             return []
@@ -218,26 +215,26 @@ class SemanticProcessor(DequeueHandlerBase):
 
     def _extract_abstract_from_overview(self, overview_content: str) -> str:
         """Extract abstract from overview.md."""
-        lines = overview_content.split('\n')
+        lines = overview_content.split("\n")
 
         # Skip header lines (starting with #)
         content_lines = []
         in_header = True
 
         for line in lines:
-            if in_header and line.startswith('#'):
+            if in_header and line.startswith("#"):
                 continue
             elif in_header and line.strip():
                 in_header = False
 
             if not in_header:
                 # Stop at first ##
-                if line.startswith('##'):
+                if line.startswith("##"):
                     break
                 if line.strip():
                     content_lines.append(line.strip())
 
-        return '\n'.join(content_lines).strip()
+        return "\n".join(content_lines).strip()
 
     async def _generate_overview(
         self,
@@ -256,6 +253,7 @@ class SemanticProcessor(DequeueHandlerBase):
             Overview content
         """
         import re
+
         vlm = get_openviking_config().vlm
 
         if not vlm.is_available():
@@ -266,14 +264,16 @@ class SemanticProcessor(DequeueHandlerBase):
         file_index_map = {}
         file_summaries_lines = []
         for idx, item in enumerate(file_summaries, 1):
-            file_index_map[idx] = item['name']
+            file_index_map[idx] = item["name"]
             file_summaries_lines.append(f"[{idx}] {item['name']}: {item['summary']}")
         file_summaries_str = "\n".join(file_summaries_lines) if file_summaries_lines else "None"
 
         # Build subdirectory summary string
-        children_abstracts_str = "\n".join(
-            f"- {item['name']}/: {item['abstract']}" for item in children_abstracts
-        ) if children_abstracts else "None"
+        children_abstracts_str = (
+            "\n".join(f"- {item['name']}/: {item['abstract']}" for item in children_abstracts)
+            if children_abstracts
+            else "None"
+        )
 
         # Generate overview
         try:
@@ -293,7 +293,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 idx = int(match.group(1))
                 return file_index_map.get(idx, match.group(0))
 
-            overview = re.sub(r'\[(\d+)\]', replace_index, overview)
+            overview = re.sub(r"\[(\d+)\]", replace_index, overview)
 
             return overview.strip()
 
@@ -305,9 +305,9 @@ class SemanticProcessor(DequeueHandlerBase):
         self, uri: str, context_type: str, abstract: str, overview: str
     ) -> None:
         """Create directory Context and enqueue to EmbeddingQueue."""
+
         from openviking.storage.queuefs import get_queue_manager
         from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
-        from datetime import datetime
 
         parent_uri = VikingURI(uri).parent.uri
         context = Context(
@@ -315,7 +315,7 @@ class SemanticProcessor(DequeueHandlerBase):
             parent_uri=parent_uri,
             is_leaf=False,
             abstract=abstract,
-            context_type=context_type
+            context_type=context_type,
         )
         context.set_vectorize(Vectorize(text=overview))
 
@@ -333,10 +333,11 @@ class SemanticProcessor(DequeueHandlerBase):
         file_summaries: List[Dict[str, str]],
     ) -> None:
         """Vectorize files in directory."""
+        from datetime import datetime
+
         from openviking.core.context import Context
         from openviking.storage.queuefs import get_queue_manager
         from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
-        from datetime import datetime
 
         queue_manager = get_queue_manager()
         embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING)
@@ -361,7 +362,7 @@ class SemanticProcessor(DequeueHandlerBase):
             embedding_msg = EmbeddingMsgConverter.from_context(context)
             await embedding_queue.enqueue(embedding_msg)
             logger.debug(f"Enqueued file for vectorization: {file_path}")
-      
+
     def get_resource_content_type(self, file_name: str) -> ResourceContentType:
         def _is_image_file(file_name: str) -> bool:
             image_extensions = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".webp"}
@@ -370,11 +371,11 @@ class SemanticProcessor(DequeueHandlerBase):
         def _is_video_file(file_name: str) -> bool:
             video_extensions = {".mp4", ".avi", ".mov", ".wmv", ".flv"}
             return any(file_name.endswith(ext) for ext in video_extensions)
-        
+
         def _is_text_file(file_name: str) -> bool:
             text_extensions = {".txt", ".md", ".csv", ".json", ".xml"}
             return any(file_name.endswith(ext) for ext in text_extensions)
-          
+
         def _is_audio_file(file_name: str) -> bool:
             audio_extensions = {".mp3", ".wav", ".aac", ".flac"}
             return any(file_name.endswith(ext) for ext in audio_extensions)
@@ -387,5 +388,5 @@ class SemanticProcessor(DequeueHandlerBase):
             return ResourceContentType.VIDEO
         elif _is_audio_file(file_name):
             return ResourceContentType.AUDIO
-        
+
         return ResourceContentType.TEXT

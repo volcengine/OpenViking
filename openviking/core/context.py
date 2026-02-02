@@ -10,10 +10,12 @@ from uuid import uuid4
 
 class ResourceContentType(str, Enum):
     """Resource content type"""
+
     TEXT = "text"
     IMAGE = "image"
     VIDEO = "video"
     AUDIO = "audio"
+
 
 class ContextType(str, Enum):
     """Context type"""
@@ -21,6 +23,7 @@ class ContextType(str, Enum):
     SKILL = "skill"
     MEMORY = "memory"
     RESOURCE = "resource"
+
 
 class Vectorize:
     text: str = ""
@@ -30,6 +33,7 @@ class Vectorize:
 
     def __init__(self, text: str = ""):
         self.text = text
+
 
 class Context:
     """
@@ -80,7 +84,7 @@ class Context:
             return "memory"
         else:
             return "resource"
-          
+
     def _derive_category(self) -> str:
         """Derive category from URI prefix."""
         if self.uri.startswith("viking://agent/memories"):
@@ -105,7 +109,7 @@ class Context:
 
     def set_vectorize(self, vectorize: Vectorize):
         self.vectorize = vectorize
-    
+
     def get_vectorization_text(self) -> str:
         """Get text for vectorization."""
         # todo: multi-modal support

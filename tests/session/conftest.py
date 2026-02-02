@@ -5,12 +5,11 @@
 
 from typing import AsyncGenerator
 
-import pytest
 import pytest_asyncio
 
 from openviking import AsyncOpenViking
-from openviking.session import Session
 from openviking.message import TextPart, ToolPart
+from openviking.session import Session
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -42,7 +41,7 @@ async def session_with_messages(client: AsyncOpenViking) -> AsyncGenerator[Sessi
 
 @pytest_asyncio.fixture(scope="function")
 async def session_with_tool_call(
-    client: AsyncOpenViking
+    client: AsyncOpenViking,
 ) -> AsyncGenerator[tuple[Session, str, str], None]:
     """Create Session with tool call"""
     session = client.session(session_id="test_session_with_tool")
@@ -54,12 +53,9 @@ async def session_with_tool_call(
         tool_uri=f"viking://session/{session.session_id}/tools/{tool_id}",
         skill_uri="viking://agent/skills/test_skill",
         tool_input={"param": "value"},
-        tool_status="running"
+        tool_status="running",
     )
 
-    msg = session.add_message("assistant", [
-        TextPart("Executing tool..."),
-        tool_part
-    ])
+    msg = session.add_message("assistant", [TextPart("Executing tool..."), tool_part])
 
     yield session, msg.id, tool_id

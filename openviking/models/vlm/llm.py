@@ -10,10 +10,10 @@ import json
 import re
 from typing import Any, Dict, Optional, Type, TypeVar
 
+import json_repair
 from pydantic import BaseModel
 
 from openviking.utils.logger import get_logger
-import json_repair
 
 logger = get_logger(__name__)
 

@@ -131,8 +131,7 @@ class CustomParserWrapper:
         """
         if not self.custom_parser.can_handle(source):
             raise ValueError(
-                f"Parser {type(self.custom_parser).__name__} "
-                f"cannot handle source: {source}"
+                f"Parser {type(self.custom_parser).__name__} cannot handle source: {source}"
             )
 
         return await self.custom_parser.parse(source, **kwargs)

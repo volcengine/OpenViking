@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from typing import Any, Dict, List, Optional, Tuple, TypedDict
 
+
 class DenseMeta(TypedDict, total=False):
     ModelName: str
     Version: str
@@ -10,13 +11,16 @@ class DenseMeta(TypedDict, total=False):
     ImageField: str
     VideoField: str
 
+
 class SparseMeta(TypedDict, total=False):
     ModelName: str
     Version: str
 
+
 class VectorizeMeta(TypedDict, total=False):
     Dense: DenseMeta
     Sparse: SparseMeta
+
 
 class VectorizerAdapter:
     """Adapter for vectorizer to handle data vectorization.
@@ -63,7 +67,9 @@ class VectorizerAdapter:
         """
         return self.dim
 
-    def vectorize_raw_data(self, raw_data_list: List[Dict[str, Any]]) -> Tuple[List[List[float]], List[Dict[str, float]]]:
+    def vectorize_raw_data(
+        self, raw_data_list: List[Dict[str, Any]]
+    ) -> Tuple[List[List[float]], List[Dict[str, float]]]:
         """Vectorize a list of raw data items.
 
         Args:

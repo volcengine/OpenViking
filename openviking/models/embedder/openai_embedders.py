@@ -1,14 +1,17 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 """OpenAI Embedder Implementation"""
+
 import os
-from typing import List, Optional, Dict, Any
+from typing import Any, Dict, List, Optional
+
 import openai
+
 from openviking.models.embedder.base import (
     DenseEmbedderBase,
-    SparseEmbedderBase,
+    EmbedResult,
     HybridEmbedderBase,
-    EmbedResult
+    SparseEmbedderBase,
 )
 
 
@@ -34,7 +37,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         dimension: Optional[int] = None,
-        config: Optional[Dict[str, Any]] = None
+        config: Optional[Dict[str, Any]] = None,
     ):
         """Initialize OpenAI Dense Embedder
 
@@ -50,7 +53,9 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         """
         super().__init__(model_name, config)
 
-        self.api_key = api_key or os.getenv("OPENVIKING_EMBEDDING_API_KEY") or os.getenv("OPENAI_API_KEY")
+        self.api_key = (
+            api_key or os.getenv("OPENVIKING_EMBEDDING_API_KEY") or os.getenv("OPENAI_API_KEY")
+        )
         self.api_base = api_base or os.getenv("OPENVIKING_EMBEDDING_API_BASE")
         self.dimension = dimension
 
@@ -128,10 +133,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
 
             response = self.client.embeddings.create(**kwargs)
 
-            return [
-                EmbedResult(dense_vector=item.embedding)
-                for item in response.data
-            ]
+            return [EmbedResult(dense_vector=item.embedding) for item in response.data]
         except openai.APIError as e:
             raise RuntimeError(f"OpenAI API error: {e.message}") from e
         except Exception as e:

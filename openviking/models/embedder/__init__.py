@@ -14,31 +14,24 @@ Supported providers:
 """
 
 from openviking.models.embedder.base import (
-    EmbedResult,
-    EmbedderBase,
-    DenseEmbedderBase,
-    SparseEmbedderBase,
-    HybridEmbedderBase,
     CompositeHybridEmbedder,
+    DenseEmbedderBase,
+    EmbedderBase,
+    EmbedResult,
+    HybridEmbedderBase,
+    SparseEmbedderBase,
 )
-
-from openviking.models.embedder.openai_embedders import (
-    OpenAIDenseEmbedder,
-)
-
-from openviking.models.embedder.volcengine_embedders import (
-    VolcengineDenseEmbedder,
-    VolcengineSparseEmbedder,
-    VolcengineHybridEmbedder,
-)
-
+from openviking.models.embedder.openai_embedders import OpenAIDenseEmbedder
 from openviking.models.embedder.vikingdb_embedders import (
     VikingDBDenseEmbedder,
-    VikingDBSparseEmbedder,
     VikingDBHybridEmbedder,
+    VikingDBSparseEmbedder,
 )
-
-
+from openviking.models.embedder.volcengine_embedders import (
+    VolcengineDenseEmbedder,
+    VolcengineHybridEmbedder,
+    VolcengineSparseEmbedder,
+)
 
 __all__ = [
     # Base classes
@@ -48,15 +41,12 @@ __all__ = [
     "SparseEmbedderBase",
     "HybridEmbedderBase",
     "CompositeHybridEmbedder",
-
     # OpenAI implementations
     "OpenAIDenseEmbedder",
-
     # Volcengine implementations
     "VolcengineDenseEmbedder",
     "VolcengineSparseEmbedder",
     "VolcengineHybridEmbedder",
-
     # VikingDB implementations
     "VikingDBDenseEmbedder",
     "VikingDBSparseEmbedder",

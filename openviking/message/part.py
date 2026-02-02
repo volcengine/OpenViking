@@ -6,7 +6,7 @@ Message consists of multiple Parts, each Part has different type and purpose.
 """
 
 from dataclasses import dataclass
-from typing import Literal, Union, Optional
+from typing import Literal, Optional, Union
 
 
 @dataclass

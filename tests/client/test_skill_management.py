@@ -4,9 +4,6 @@
 """Skill management tests"""
 
 from pathlib import Path
-import tempfile
-
-import pytest
 
 from openviking import AsyncOpenViking
 
@@ -18,7 +15,8 @@ class TestAddSkill:
         """Test adding skill from file"""
         # Create skill file in SKILL.md format
         skill_file = temp_dir / "test_skill.md"
-        skill_file.write_text("""---
+        skill_file.write_text(
+            """---
 name: test-skill
 description: A test skill for unit testing
 tags:
@@ -38,7 +36,8 @@ Use this skill when you need to test skill functionality.
 1. Step one: Initialize the skill
 2. Step two: Execute the skill
 3. Step three: Verify the result
-""")
+"""
+        )
 
         result = await client.add_skill(data=skill_file)
 
@@ -71,14 +70,9 @@ This skill was created from a string.
             "description": "A test MCP tool",
             "inputSchema": {
                 "type": "object",
-                "properties": {
-                    "query": {
-                        "type": "string",
-                        "description": "The search query"
-                    }
-                },
-                "required": ["query"]
-            }
+                "properties": {"query": {"type": "string", "description": "The search query"}},
+                "required": ["query"],
+            },
         }
         result = await client.add_skill(data=mcp_tool)
 
@@ -91,7 +85,8 @@ This skill was created from a string.
         skill_dir.mkdir()
 
         # Create SKILL.md
-        (skill_dir / "SKILL.md").write_text("""---
+        (skill_dir / "SKILL.md").write_text(
+            """---
 name: dir-skill
 description: A skill from directory
 tags:
@@ -102,7 +97,8 @@ tags:
 
 ## Instructions
 This skill was loaded from a directory.
-""")
+"""
+        )
 
         # Create auxiliary file
         (skill_dir / "reference.md").write_text("# Reference\nAdditional reference content.")
@@ -120,7 +116,8 @@ class TestSkillSearch:
         """Test searching skills"""
         # Add skill first
         skill_file = temp_dir / "search_skill.md"
-        skill_file.write_text("""---
+        skill_file.write_text(
+            """---
 name: search-test-skill
 description: A skill for testing search functionality
 tags:
@@ -132,7 +129,8 @@ tags:
 
 ## Instructions
 Use this skill to test search functionality.
-""")
+"""
+        )
         await client.add_skill(data=skill_file)
 
         # Search skills

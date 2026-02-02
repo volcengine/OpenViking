@@ -8,8 +8,9 @@ Delegates to MarkdownParser since plain text is just unformatted markdown.
 
 from pathlib import Path
 from typing import List, Optional, Union
-from openviking.parse.parsers.base_parser import BaseParser
+
 from openviking.parse.base import ParseResult
+from openviking.parse.parsers.base_parser import BaseParser
 from openviking.utils.config.parser_config import ParserConfig
 
 

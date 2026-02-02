@@ -1,39 +1,45 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 import os
-from typing import List, Optional, Union, Dict, Any
-import openai
-import volcenginesdkarkruntime
+from typing import Any, Optional
+
 from pydantic import BaseModel, Field, model_validator
+
 
 class EmbeddingModelConfig(BaseModel):
     """Configuration for a specific embedding model"""
+
     model: Optional[str] = Field(default=None, description="Model name")
     api_key: Optional[str] = Field(default=None, description="API key")
     api_base: Optional[str] = Field(default=None, description="API base URL")
     dimension: Optional[int] = Field(default=None, description="Embedding dimension")
     batch_size: int = Field(default=32, description="Batch size for embedding generation")
     input: str = Field(default="multimodal", description="Input type: 'text' or 'multimodal'")
-    provider: Optional[str] = Field(default="volcengine", description="Provider type: 'openai', 'volcengine', 'vikingdb'")
-    backend: Optional[str] = Field(default="volcengine", description="Backend type (Deprecated, use 'provider' instead): 'openai', 'volcengine', 'vikingdb'")
+    provider: Optional[str] = Field(
+        default="volcengine", description="Provider type: 'openai', 'volcengine', 'vikingdb'"
+    )
+    backend: Optional[str] = Field(
+        default="volcengine",
+        description="Backend type (Deprecated, use 'provider' instead): 'openai', 'volcengine', 'vikingdb'",
+    )
     version: Optional[str] = Field(default=None, description="Model version")
     ak: Optional[str] = Field(default=None, description="Access Key ID for VikingDB API")
     sk: Optional[str] = Field(default=None, description="Access Key Secretfor VikingDB API")
     region: Optional[str] = Field(default=None, description="Region for VikingDB API")
     host: Optional[str] = Field(default=None, description="Host for VikingDB API")
 
-    @model_validator(mode='before')
+    @model_validator(mode="before")
     @classmethod
     def sync_provider_backend(cls, data: Any) -> Any:
         if isinstance(data, dict):
-            provider = data.get('provider')
-            backend = data.get('backend')
-            
+            provider = data.get("provider")
+            backend = data.get("backend")
+
             if backend is not None and provider is None:
-                data['provider'] = backend
+                data["provider"] = backend
         return data
 
-    @model_validator(mode='after')
+    @model_validator(mode="after")
     def validate_config(self):
         """Validate configuration completeness and consistency"""
         if self.backend and not self.provider:
@@ -101,14 +107,23 @@ class EmbeddingConfig(BaseModel):
         config_sections = [
             ("dense", "OPENVIKING_EMBEDDING_DENSE_"),
             ("sparse", "OPENVIKING_EMBEDDING_SPARSE_"),
-            ("hybrid", "OPENVIKING_EMBEDDING_HYBRID_")
+            ("hybrid", "OPENVIKING_EMBEDDING_HYBRID_"),
         ]
 
         env_fields = {
-            "model": str, "api_key": str, "api_base": str,
-            "dimension": int, "batch_size": int,
-            "input": str, "provider": str, "backend": str, "version": str,
-            "ak": str, "sk": str, "region": str, "host": str
+            "model": str,
+            "api_key": str,
+            "api_base": str,
+            "dimension": int,
+            "batch_size": int,
+            "input": str,
+            "provider": str,
+            "backend": str,
+            "version": str,
+            "ak": str,
+            "sk": str,
+            "region": str,
+            "host": str,
         }
 
         for section, prefix in config_sections:
@@ -133,7 +148,7 @@ class EmbeddingConfig(BaseModel):
 
         return data
 
-    @model_validator(mode='after')
+    @model_validator(mode="after")
     def validate_config(self):
         """Validate configuration completeness and consistency"""
         if not self.dense and not self.sparse and not self.hybrid:
@@ -158,89 +173,89 @@ class EmbeddingConfig(BaseModel):
         """
         from openviking.models.embedder import (
             OpenAIDenseEmbedder,
-            VolcengineDenseEmbedder,
-            VolcengineSparseEmbedder,
-            VolcengineHybridEmbedder,
             VikingDBDenseEmbedder,
+            VikingDBHybridEmbedder,
             VikingDBSparseEmbedder,
-            VikingDBHybridEmbedder
+            VolcengineDenseEmbedder,
+            VolcengineHybridEmbedder,
+            VolcengineSparseEmbedder,
         )
 
         # Factory registry: (provider, type) -> (embedder_class, param_builder)
         factory_registry = {
-            ('openai', 'dense'): (
+            ("openai", "dense"): (
                 OpenAIDenseEmbedder,
                 lambda cfg: {
-                    'model_name': cfg.model,
-                    'api_key': cfg.api_key,
-                    'api_base': cfg.api_base,
-                    'dimension': cfg.dimension
-                }
+                    "model_name": cfg.model,
+                    "api_key": cfg.api_key,
+                    "api_base": cfg.api_base,
+                    "dimension": cfg.dimension,
+                },
             ),
-            ('volcengine', 'dense'): (
+            ("volcengine", "dense"): (
                 VolcengineDenseEmbedder,
                 lambda cfg: {
-                    'model_name': cfg.model,
-                    'api_key': cfg.api_key,
-                    'api_base': cfg.api_base,
-                    'dimension': cfg.dimension,
-                    'input_type': cfg.input
-                }
+                    "model_name": cfg.model,
+                    "api_key": cfg.api_key,
+                    "api_base": cfg.api_base,
+                    "dimension": cfg.dimension,
+                    "input_type": cfg.input,
+                },
             ),
-            ('volcengine', 'sparse'): (
+            ("volcengine", "sparse"): (
                 VolcengineSparseEmbedder,
                 lambda cfg: {
-                    'model_name': cfg.model,
-                    'api_key': cfg.api_key,
-                    'api_base': cfg.api_base
-                }
+                    "model_name": cfg.model,
+                    "api_key": cfg.api_key,
+                    "api_base": cfg.api_base,
+                },
             ),
-            ('volcengine', 'hybrid'): (
+            ("volcengine", "hybrid"): (
                 VolcengineHybridEmbedder,
                 lambda cfg: {
-                    'model_name': cfg.model,
-                    'api_key': cfg.api_key,
-                    'api_base': cfg.api_base,
-                    'dimension': cfg.dimension,
-                    'input_type': cfg.input
-                }
+                    "model_name": cfg.model,
+                    "api_key": cfg.api_key,
+                    "api_base": cfg.api_base,
+                    "dimension": cfg.dimension,
+                    "input_type": cfg.input,
+                },
             ),
-            ('vikingdb', 'dense'): (
+            ("vikingdb", "dense"): (
                 VikingDBDenseEmbedder,
                 lambda cfg: {
-                    'model_name': cfg.model,
-                    'model_version': cfg.version,
-                    'ak': cfg.ak,
-                    'sk': cfg.sk,
-                    'region': cfg.region,
-                    'host': cfg.host,
-                    'dimension': cfg.dimension,
-                    'input_type': cfg.input
-                }
+                    "model_name": cfg.model,
+                    "model_version": cfg.version,
+                    "ak": cfg.ak,
+                    "sk": cfg.sk,
+                    "region": cfg.region,
+                    "host": cfg.host,
+                    "dimension": cfg.dimension,
+                    "input_type": cfg.input,
+                },
             ),
-            ('vikingdb', 'sparse'): (
+            ("vikingdb", "sparse"): (
                 VikingDBSparseEmbedder,
                 lambda cfg: {
-                    'model_name': cfg.model,
-                    'model_version': cfg.version,
-                    'ak': cfg.ak,
-                    'sk': cfg.sk,
-                    'region': cfg.region,
-                    'host': cfg.host
-                }
+                    "model_name": cfg.model,
+                    "model_version": cfg.version,
+                    "ak": cfg.ak,
+                    "sk": cfg.sk,
+                    "region": cfg.region,
+                    "host": cfg.host,
+                },
             ),
-            ('vikingdb', 'hybrid'): (
+            ("vikingdb", "hybrid"): (
                 VikingDBHybridEmbedder,
                 lambda cfg: {
-                    'model_name': cfg.model,
-                    'model_version': cfg.version,
-                    'ak': cfg.ak,
-                    'sk': cfg.sk,
-                    'region': cfg.region,
-                    'host': cfg.host,
-                    'dimension': cfg.dimension,
-                    'input_type': cfg.input
-                }
+                    "model_name": cfg.model,
+                    "model_version": cfg.version,
+                    "ak": cfg.ak,
+                    "sk": cfg.sk,
+                    "region": cfg.region,
+                    "host": cfg.host,
+                    "dimension": cfg.dimension,
+                    "input_type": cfg.input,
+                },
             ),
         }
 
@@ -267,15 +282,17 @@ class EmbeddingConfig(BaseModel):
         from openviking.models.embedder import CompositeHybridEmbedder
 
         if self.hybrid:
-            return self._create_embedder(self.hybrid.provider.lower(), 'hybrid', self.hybrid)
+            return self._create_embedder(self.hybrid.provider.lower(), "hybrid", self.hybrid)
 
         if self.dense and self.sparse:
-            dense_embedder = self._create_embedder(self.dense.provider.lower(), 'dense', self.dense)
-            sparse_embedder = self._create_embedder(self.sparse.provider.lower(), 'sparse', self.sparse)
+            dense_embedder = self._create_embedder(self.dense.provider.lower(), "dense", self.dense)
+            sparse_embedder = self._create_embedder(
+                self.sparse.provider.lower(), "sparse", self.sparse
+            )
             return CompositeHybridEmbedder(dense_embedder, sparse_embedder)
 
         if self.dense:
-            return self._create_embedder(self.dense.provider.lower(), 'dense', self.dense)
+            return self._create_embedder(self.dense.provider.lower(), "dense", self.dense)
 
         raise ValueError("No embedding configuration found (dense, sparse, or hybrid)")
 
@@ -291,4 +308,3 @@ class EmbeddingConfig(BaseModel):
         if self.dense:
             return self.dense.dimension or 2048
         return 2048
-

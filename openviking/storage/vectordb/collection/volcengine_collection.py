@@ -20,9 +20,7 @@ from openviking.storage.vectordb.collection.volcengine_clients import (
 from openviking.utils.logger import default_logger as logger
 
 
-def get_or_create_volcengine_collection(
-    config: Dict[str, Any], meta_data: Dict[str, Any]
-):
+def get_or_create_volcengine_collection(config: Dict[str, Any], meta_data: Dict[str, Any]):
     """
     Get or create a Volcengine Collection.
 

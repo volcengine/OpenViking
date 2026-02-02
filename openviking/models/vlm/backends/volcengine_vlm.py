@@ -2,12 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """VolcEngine VLM backend implementation"""
 
-import base64
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union, TYPE_CHECKING
+from typing import Any, Dict, List, Union
 
-from ..base import VLMBase
 from .openai_vlm import OpenAIVLM
+
 
 class VolcEngineVLM(OpenAIVLM):
     """VolcEngine VLM backend"""
@@ -74,4 +73,3 @@ class VolcEngineVLM(OpenAIVLM):
         images: List[Union[str, Path, bytes]],
     ) -> str:
         return await super().get_vision_completion_async(prompt, images)
-        

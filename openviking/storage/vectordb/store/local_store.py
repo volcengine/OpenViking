@@ -1,13 +1,13 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
-import time
-from typing import List, Tuple, Union, Any
+from typing import List, Tuple, Union
 
 import openviking.storage.vectordb.engine as engine
 from openviking.storage.vectordb.store.store import BatchOp, IMutiTableStore, Op, OpType
 
 # Constant for the maximum Unicode character, used for range queries to cover all possible keys
-MAX_UNICODE_CHAR = "\U0010FFFF"
+MAX_UNICODE_CHAR = "\U0010ffff"
+
 
 def create_store_engine_proxy(path: str = "") -> "StoreEngineProxy":
     """Create a storage engine proxy.
@@ -175,9 +175,7 @@ class StoreEngineProxy(IMutiTableStore):
                 # batch_op.op_type can be a list or a single value
                 if isinstance(batch_op.op_type, list):
                     op_type = (
-                        batch_op.op_type[i]
-                        if i < len(batch_op.op_type)
-                        else batch_op.op_type[0]
+                        batch_op.op_type[i] if i < len(batch_op.op_type) else batch_op.op_type[0]
                     )
                 else:
                     op_type = batch_op.op_type
@@ -189,8 +187,6 @@ class StoreEngineProxy(IMutiTableStore):
 
                 engine_op.key = batch_op.table + key
                 # Safety check for data_list
-                engine_op.value = (
-                    batch_op.data_list[i] if i < len(batch_op.data_list) else ""
-                )
+                engine_op.value = batch_op.data_list[i] if i < len(batch_op.data_list) else ""
                 engine_op_list.append(engine_op)
         self.storage_engine.exec_op(engine_op_list)

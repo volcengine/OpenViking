@@ -45,8 +45,7 @@ app = FastAPI(
 @app.exception_handler(VikingDBException)
 async def vikingdb_exception_handler(request: Request, exc: VikingDBException):
     return JSONResponse(
-        status_code=200,
-        content=error_response(exc.message, exc.code.value, request=request)
+        status_code=200, content=error_response(exc.message, exc.code.value, request=request)
     )
 
 

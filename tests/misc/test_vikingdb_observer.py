@@ -6,6 +6,7 @@ Test VikingDBObserver functionality
 """
 
 import asyncio
+
 import openviking as ov
 
 

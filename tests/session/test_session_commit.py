@@ -3,11 +3,9 @@
 
 """Commit tests"""
 
-import pytest
-
 from openviking import AsyncOpenViking
-from openviking.session import Session
 from openviking.message import TextPart
+from openviking.session import Session
 
 
 class TestCommit:
@@ -21,7 +19,9 @@ class TestCommit:
         assert result.get("status") == "committed"
         assert "session_id" in result
 
-    async def test_commit_extracts_memories(self, session_with_messages: Session, client: AsyncOpenViking):
+    async def test_commit_extracts_memories(
+        self, session_with_messages: Session, client: AsyncOpenViking
+    ):
         """Test commit extracts memories"""
         result = session_with_messages.commit()
 

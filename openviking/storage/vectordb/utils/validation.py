@@ -1,20 +1,13 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Union, Annotated
-import random
+from typing import Annotated, Any, List, Literal, Optional
 
-from pydantic import (
-    BaseModel,
-    Field,
-    ValidationError as PydanticValidationError,
-    field_validator,
-    model_validator,
-    StringConstraints,
-    ConfigDict
-)
-from openviking.utils.logger import default_logger as logger
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import ValidationError as PydanticValidationError
+
 from openviking.storage.vectordb.utils.id_generator import generate_auto_id
+
 
 # Custom ValidationError for compatibility
 class ValidationError(Exception):
@@ -22,7 +15,9 @@ class ValidationError(Exception):
         self.field_path = field_path
         super().__init__(message)
 
+
 # --- Basic Validators ---
+
 
 def validate_name_str(name: str) -> str:
     if not name:
@@ -33,12 +28,20 @@ def validate_name_str(name: str) -> str:
         raise ValueError(f"name must start with a letter, got '{name[0]}'")
     invalid_chars = [c for c in name if not (c.isalnum() or c == "_")]
     if invalid_chars:
-        raise ValueError(f"name can only contain letters, numbers and underscore, found invalid characters: {invalid_chars}")
+        raise ValueError(
+            f"name can only contain letters, numbers and underscore, found invalid characters: {invalid_chars}"
+        )
     return name
 
-ValidName = Annotated[str, Field(min_length=1, max_length=128), field_validator('name', mode='before', check_fields=False)(validate_name_str)]
+
+ValidName = Annotated[
+    str,
+    Field(min_length=1, max_length=128),
+    field_validator("name", mode="before", check_fields=False)(validate_name_str),
+]
 
 # --- Models ---
+
 
 class FieldTypeEnum(str, Enum):
     INT64 = "int64"
@@ -56,9 +59,10 @@ class FieldTypeEnum(str, Enum):
     DATE_TIME = "date_time"
     GEO_POINT = "geo_point"
 
+
 class DenseVectorize(BaseModel):
-    model_config = ConfigDict(extra='forbid')
-    
+    model_config = ConfigDict(extra="forbid")
+
     ModelName: str
     ModelVersion: Optional[str] = None
     TextField: Optional[str] = None
@@ -67,66 +71,69 @@ class DenseVectorize(BaseModel):
     Dim: Optional[int] = None
     Dimension: Optional[int] = None
 
-    @field_validator('TextField', 'ImageField', 'VideoField')
+    @field_validator("TextField", "ImageField", "VideoField")
     @classmethod
     def check_fields(cls, v):
-        # We enforce presence logic in model_validator if needed, 
+        # We enforce presence logic in model_validator if needed,
         # but the original code had strict checks inside validate_dense_vectorize
         # Original: "TextField" is required
         return v
-    
-    @model_validator(mode='after')
+
+    @model_validator(mode="after")
     def check_required(self):
         if self.TextField is None and self.ImageField is None and self.VideoField is None:
-             # Original logic: if "text_field" not in vectorize["dense"]
-             # The old code strictly required "TextField" (or "text_field" in logic, but schema used "TextField")
-             # Actually, old code: if "text_field" not in vectorize["dense"]: return False
-             # But ALLOWED keys used "TextField". It seems there's a case sensitivity issue in old code or intended.
-             # The old code check keys: 'ModelName', 'TextField' against ALLOWED_COLLECTION_DENSE_VECTORIZE_CHECK
-             # Let's assume PascalCase as per ALLOWED dictionary keys.
-             if not self.TextField:
-                 raise ValueError("vectorize dense must contain TextField")
+            # Original logic: if "text_field" not in vectorize["dense"]
+            # The old code strictly required "TextField" (or "text_field" in logic, but schema used "TextField")
+            # Actually, old code: if "text_field" not in vectorize["dense"]: return False
+            # But ALLOWED keys used "TextField". It seems there's a case sensitivity issue in old code or intended.
+            # The old code check keys: 'ModelName', 'TextField' against ALLOWED_COLLECTION_DENSE_VECTORIZE_CHECK
+            # Let's assume PascalCase as per ALLOWED dictionary keys.
+            if not self.TextField:
+                raise ValueError("vectorize dense must contain TextField")
         return self
 
+
 class SparseVectorize(BaseModel):
-    model_config = ConfigDict(extra='forbid')
-    
+    model_config = ConfigDict(extra="forbid")
+
     ModelName: str
     ModelVersion: Optional[str] = None
     TextField: Optional[str] = None
 
+
 class VectorizeConfig(BaseModel):
-    model_config = ConfigDict(extra='forbid')
-    
+    model_config = ConfigDict(extra="forbid")
+
     Dense: Optional[DenseVectorize] = None
     Sparse: Optional[SparseVectorize] = None
 
+
 class CollectionField(BaseModel):
-    model_config = ConfigDict(extra='forbid')
-    
+    model_config = ConfigDict(extra="forbid")
+
     FieldName: str
     FieldType: FieldTypeEnum
     Dim: Optional[int] = Field(None, ge=4, le=4096)
     IsPrimaryKey: Optional[bool] = False
     DefaultValue: Optional[Any] = None
-    
+
     # Internal fields
     _FieldID: Optional[int] = None
 
-    @field_validator('FieldName')
+    @field_validator("FieldName")
     @classmethod
     def validate_fieldname(cls, v):
         return validate_name_str(v)
 
-    @field_validator('Dim')
+    @field_validator("Dim")
     @classmethod
     def validate_dim(cls, v):
         if v is not None:
             if v % 4 != 0:
                 raise ValueError(f"dimension must be a multiple of 4, got {v}")
         return v
-    
-    @model_validator(mode='after')
+
+    @model_validator(mode="after")
     def validate_field_logic(cls, m):
         if m.FieldType == FieldTypeEnum.VECTOR:
             if m.Dim is None:
@@ -136,25 +143,27 @@ class CollectionField(BaseModel):
                 raise ValueError(f"primary key must be int64 or string, got '{m.FieldType}'")
         return m
 
+
 class CollectionMetaConfig(BaseModel):
-    model_config = ConfigDict(extra='forbid')
-    
+    model_config = ConfigDict(extra="forbid")
+
     CollectionName: str
     Fields: List[CollectionField]
     ProjectName: Optional[str] = None
     Description: Optional[str] = Field(None, max_length=65535)
     Vectorize: Optional[VectorizeConfig] = None
-    
+
     # Internal fields
     _FieldsCount: Optional[int] = None
 
-    @field_validator('CollectionName', 'ProjectName')
+    @field_validator("CollectionName", "ProjectName")
     @classmethod
     def validate_names(cls, v):
-        if v is None: return v
+        if v is None:
+            return v
         return validate_name_str(v)
 
-    @field_validator('Fields')
+    @field_validator("Fields")
     @classmethod
     def validate_fields_list(cls, fields):
         names = set()
@@ -169,9 +178,10 @@ class CollectionMetaConfig(BaseModel):
                 has_pk = True
         return fields
 
+
 class VectorIndexConfig(BaseModel):
-    model_config = ConfigDict(extra='forbid')
-    
+    model_config = ConfigDict(extra="forbid")
+
     IndexType: Literal["flat", "flat_hybrid", "FLAT", "FLAT_HYBRID"]
     Distance: Optional[Literal["l2", "ip", "cosine", "L2", "IP", "COSINE"]] = None
     Quant: Optional[Literal["int8", "float", "fix16", "pq", "INT8", "FLOAT", "FIX16", "PQ"]] = None
@@ -183,7 +193,7 @@ class VectorIndexConfig(BaseModel):
     IndexWithSparseLogitAlpha: Optional[float] = None
     EnableSparse: Optional[bool] = None
 
-    @field_validator('IndexType', 'Distance', 'Quant', mode='before')
+    @field_validator("IndexType", "Distance", "Quant", mode="before")
     @classmethod
     def case_insensitive(cls, v):
         if isinstance(v, str):
@@ -191,33 +201,34 @@ class VectorIndexConfig(BaseModel):
             # Actually user input might be mixed. Pydantic validates against Literals.
             # Let's normalize everything to lower case if the Literal allows it, or just pass through.
             # The old code did .lower() checks.
-            pass 
+            pass
         return v
-    
-    @field_validator('IndexType')
+
+    @field_validator("IndexType")
     @classmethod
     def validate_index_type(cls, v):
         if v.lower() not in ["flat", "flat_hybrid"]:
-             raise ValueError(f"invalid index type '{v}'")
+            raise ValueError(f"invalid index type '{v}'")
         return v
 
-    @field_validator('Distance')
+    @field_validator("Distance")
     @classmethod
     def validate_distance(cls, v):
         if v and v.lower() not in ["l2", "ip", "cosine"]:
-             raise ValueError(f"invalid distance type '{v}'")
+            raise ValueError(f"invalid distance type '{v}'")
         return v
-    
-    @field_validator('Quant')
+
+    @field_validator("Quant")
     @classmethod
     def validate_quant(cls, v):
         if v and v.lower() not in ["int8", "float", "fix16", "pq"]:
-             raise ValueError(f"invalid quant type '{v}'")
+            raise ValueError(f"invalid quant type '{v}'")
         return v
 
+
 class IndexMetaConfig(BaseModel):
-    model_config = ConfigDict(extra='forbid')
-    
+    model_config = ConfigDict(extra="forbid")
+
     IndexName: str
     VectorIndex: VectorIndexConfig
     ScalarIndex: Optional[List[str]] = None
@@ -225,15 +236,17 @@ class IndexMetaConfig(BaseModel):
     ProjectName: Optional[str] = None
     CollectionName: Optional[str] = None
 
-    @field_validator('IndexName', 'ProjectName', 'CollectionName')
+    @field_validator("IndexName", "ProjectName", "CollectionName")
     @classmethod
     def validate_names(cls, v):
-        if v is None: return v
+        if v is None:
+            return v
         return validate_name_str(v)
 
+
 class IndexMetaUpdateConfig(BaseModel):
-    model_config = ConfigDict(extra='forbid')
-    
+    model_config = ConfigDict(extra="forbid")
+
     IndexName: Optional[str] = None
     VectorIndex: Optional[VectorIndexConfig] = None
     ScalarIndex: Optional[List[str]] = None
@@ -241,31 +254,35 @@ class IndexMetaUpdateConfig(BaseModel):
     ProjectName: Optional[str] = None
     CollectionName: Optional[str] = None
 
-    @field_validator('IndexName', 'ProjectName', 'CollectionName')
+    @field_validator("IndexName", "ProjectName", "CollectionName")
     @classmethod
     def validate_names(cls, v):
-        if v is None: return v
+        if v is None:
+            return v
         return validate_name_str(v)
 
+
 class CollectionMetaUpdateConfig(BaseModel):
-    model_config = ConfigDict(extra='forbid')
-    
+    model_config = ConfigDict(extra="forbid")
+
     CollectionName: Optional[str] = None
     Fields: Optional[List[CollectionField]] = None
     ProjectName: Optional[str] = None
     Description: Optional[str] = Field(None, max_length=65535)
     Vectorize: Optional[VectorizeConfig] = None
-    
-    @field_validator('CollectionName', 'ProjectName')
+
+    @field_validator("CollectionName", "ProjectName")
     @classmethod
     def validate_names(cls, v):
-        if v is None: return v
+        if v is None:
+            return v
         return validate_name_str(v)
 
-    @field_validator('Fields')
+    @field_validator("Fields")
     @classmethod
     def validate_fields_list(cls, fields):
-        if fields is None: return fields
+        if fields is None:
+            return fields
         names = set()
         has_pk = False
         for f in fields:
@@ -278,27 +295,31 @@ class CollectionMetaUpdateConfig(BaseModel):
                 has_pk = True
         return fields
 
+
 # --- Helper / Compatibility Functions ---
+
 
 def _handle_validation_error(e: PydanticValidationError):
     # Convert Pydantic ValidationError to our custom ValidationError string format
-    # to maintain some resemblance of old error messages if needed, 
+    # to maintain some resemblance of old error messages if needed,
     # or just raise our custom exception.
     msg = str(e)
     # Extract first error for cleaner message
     try:
         err = e.errors()[0]
-        field = ".".join(str(x) for x in err['loc'])
+        field = ".".join(str(x) for x in err["loc"])
         msg = f"{err['msg']} (field: {field})"
     except:
         pass
     raise ValidationError(msg)
+
 
 def validate_collection_meta_data(meta_data: dict) -> None:
     try:
         CollectionMetaConfig.model_validate(meta_data)
     except PydanticValidationError as e:
         _handle_validation_error(e)
+
 
 def is_valid_collection_meta_data(meta_data: dict) -> bool:
     try:
@@ -307,11 +328,13 @@ def is_valid_collection_meta_data(meta_data: dict) -> bool:
     except ValidationError:
         return False
 
+
 def validate_collection_meta_data_for_update(meta_data: dict, field_meta_dict: dict = None) -> None:
     try:
         CollectionMetaUpdateConfig.model_validate(meta_data)
     except PydanticValidationError as e:
         _handle_validation_error(e)
+
 
 def is_valid_collection_meta_data_for_update(meta_data: dict, field_meta_dict: dict = None) -> bool:
     try:
@@ -320,6 +343,7 @@ def is_valid_collection_meta_data_for_update(meta_data: dict, field_meta_dict: d
     except ValidationError:
         return False
 
+
 def validate_index_meta_data(meta_data: dict, field_meta_dict: dict) -> None:
     try:
         model = IndexMetaConfig.model_validate(meta_data)
@@ -327,9 +351,12 @@ def validate_index_meta_data(meta_data: dict, field_meta_dict: dict) -> None:
         if model.ScalarIndex:
             unknown_fields = set(model.ScalarIndex) - set(field_meta_dict.keys())
             if unknown_fields:
-                raise ValidationError(f"scalar index contains unknown fields: {list(unknown_fields)}")
+                raise ValidationError(
+                    f"scalar index contains unknown fields: {list(unknown_fields)}"
+                )
     except PydanticValidationError as e:
         _handle_validation_error(e)
+
 
 def is_valid_index_meta_data(meta_data: dict, field_meta_dict: dict) -> bool:
     try:
@@ -338,15 +365,19 @@ def is_valid_index_meta_data(meta_data: dict, field_meta_dict: dict) -> bool:
     except ValidationError:
         return False
 
+
 def validate_index_meta_data_for_update(meta_data: dict, field_meta_dict: dict) -> None:
     try:
         model = IndexMetaUpdateConfig.model_validate(meta_data)
         if model.ScalarIndex:
             unknown_fields = set(model.ScalarIndex) - set(field_meta_dict.keys())
             if unknown_fields:
-                raise ValidationError(f"scalar index contains unknown fields: {list(unknown_fields)}")
+                raise ValidationError(
+                    f"scalar index contains unknown fields: {list(unknown_fields)}"
+                )
     except PydanticValidationError as e:
         _handle_validation_error(e)
+
 
 def is_valid_index_meta_data_for_update(meta_data: dict, field_meta_dict: dict) -> bool:
     try:
@@ -354,6 +385,7 @@ def is_valid_index_meta_data_for_update(meta_data: dict, field_meta_dict: dict) 
         return True
     except ValidationError:
         return False
+
 
 def fix_collection_meta(meta_data: dict) -> dict:
     # This logic mutates the input dict to add AUTO_ID if missing, etc.
@@ -365,23 +397,26 @@ def fix_collection_meta(meta_data: dict) -> dict:
         if item.get("IsPrimaryKey", False):
             has_pk = True
             break
-    
+
     if not has_pk:
-        fields.append({
-            "FieldName": "AUTO_ID",
-            "FieldType": "int64",
-            "IsPrimaryKey": True,
-        })
-    
+        fields.append(
+            {
+                "FieldName": "AUTO_ID",
+                "FieldType": "int64",
+                "IsPrimaryKey": True,
+            }
+        )
+
     field_count = meta_data.get("_FieldsCount", 0)
     for item in fields:
         if "_FieldID" not in item:
             item["_FieldID"] = field_count
             field_count += 1
-    
+
     meta_data["_FieldsCount"] = field_count
     meta_data["Fields"] = fields
     return meta_data
+
 
 # Data validation logic - kept mostly manual or lightweight as creating models for dynamic data row is expensive
 REQUIRED_COLLECTION_FIELD_TYPE_CHECK = {
@@ -398,7 +433,7 @@ REQUIRED_COLLECTION_FIELD_TYPE_CHECK = {
     "vector": (
         [list],
         # dim check is done elsewhere or we assume valid if it's a list of floats
-        lambda l: all(isinstance(item, (int, float)) for item in l), 
+        lambda l: all(isinstance(item, (int, float)) for item in l),
         [],
     ),
     "text": ([str], None, ""),
@@ -410,9 +445,12 @@ REQUIRED_COLLECTION_FIELD_TYPE_CHECK = {
     "sparse_vector": ([dict], None, {}),
 }
 
+
 def validate_fields_data(field_data_dict: dict, field_meta_dict: dict) -> None:
     if len(field_data_dict) > len(field_meta_dict):
-        raise ValidationError(f"too many fields: got {len(field_data_dict)}, expected max {len(field_meta_dict)}")
+        raise ValidationError(
+            f"too many fields: got {len(field_data_dict)}, expected max {len(field_meta_dict)}"
+        )
 
     for field_name, field_value in field_data_dict.items():
         if field_name not in field_meta_dict:
@@ -420,28 +458,32 @@ def validate_fields_data(field_data_dict: dict, field_meta_dict: dict) -> None:
 
         field_type = field_meta_dict[field_name]["FieldType"]
         # Compatibility with enum if using Pydantic model for meta dict
-        if hasattr(field_type, "value"): 
+        if hasattr(field_type, "value"):
             field_type = field_type.value
-            
+
         if field_type not in REQUIRED_COLLECTION_FIELD_TYPE_CHECK:
-             # Should be caught by meta validation, but safety check
-             continue
+            # Should be caught by meta validation, but safety check
+            continue
 
         allowed_types, validator, _ = REQUIRED_COLLECTION_FIELD_TYPE_CHECK[field_type]
-        
+
         if type(field_value) not in allowed_types:
-             raise ValidationError(f"field type mismatch for '{field_name}': expected {field_type}, got {type(field_value).__name__}")
-        
+            raise ValidationError(
+                f"field type mismatch for '{field_name}': expected {field_type}, got {type(field_value).__name__}"
+            )
+
         if validator and not validator(field_value):
-             raise ValidationError(f"invalid value for field '{field_name}'")
+            raise ValidationError(f"invalid value for field '{field_name}'")
+
 
 def is_valid_fields_data(field_data_dict: dict, field_meta_dict: dict) -> bool:
     try:
         validate_fields_data(field_data_dict, field_meta_dict)
         return True
-    except ValidationError as e:
+    except ValidationError:
         # print(f"ValidationError {e}") # Reduce noise
         return False
+
 
 def fix_fields_data(field_data_dict: dict, field_meta_dict: dict) -> dict:
     if len(field_data_dict) >= len(field_meta_dict):
@@ -457,7 +499,8 @@ def fix_fields_data(field_data_dict: dict, field_meta_dict: dict) -> dict:
                 field_type = field_meta.FieldType
                 default_val = field_meta.DefaultValue
 
-            if hasattr(field_type, "value"): field_type = field_type.value
+            if hasattr(field_type, "value"):
+                field_type = field_type.value
 
             if default_val is not None:
                 field_data_dict[field_name] = default_val
@@ -466,4 +509,3 @@ def fix_fields_data(field_data_dict: dict, field_meta_dict: dict) -> dict:
             else:
                 field_data_dict[field_name] = REQUIRED_COLLECTION_FIELD_TYPE_CHECK[field_type][2]
     return field_data_dict
-

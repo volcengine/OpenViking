@@ -1,17 +1,20 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
-from typing import Any, Dict, Optional
+from typing import Optional
 
 from pydantic import BaseModel, Field, model_validator
 
+
 class VolcengineConfig(BaseModel):
     """Configuration for Volcengine VikingDB."""
+
     ak: Optional[str] = Field(default=None, description="Volcengine Access Key")
     sk: Optional[str] = Field(default=None, description="Volcengine Secret Key")
     region: Optional[str] = Field(
         default=None, description="Volcengine region (e.g., 'cn-beijing')"
     )
     host: Optional[str] = Field(default=None, description="Volcengine VikingDB host (optional)")
+
 
 class VectorDBBackendConfig(BaseModel):
     """
@@ -20,6 +23,7 @@ class VectorDBBackendConfig(BaseModel):
     This configuration class consolidates all settings related to the VectorDB backend,
     including type, connection details, and backend-specific parameters.
     """
+
     backend: str = Field(
         default="local",
         description="VectorDB backend type: 'local' (file-based), 'http' (remote service), or 'volcengine' (VikingDB)",
@@ -49,7 +53,7 @@ class VectorDBBackendConfig(BaseModel):
         description="Volcengine VikingDB configuration for 'volcengine' type",
     )
 
-    @model_validator(mode='after')
+    @model_validator(mode="after")
     def validate_config(self):
         """Validate configuration completeness and consistency"""
         if self.backend not in ["local", "http", "volcengine"]:

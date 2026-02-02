@@ -56,15 +56,15 @@ class TestRead:
         entries = await client.tree(uri)
         content = ""
         for e in entries:
-            if not e['isDir']:
-                content = await client.read(e['uri'])
+            if not e["isDir"]:
+                content = await client.read(e["uri"])
                 assert isinstance(content, str)
                 assert len(content) > 0
-                assert "Sample Document" in content 
+                assert "Sample Document" in content
 
     async def test_read_nonexistent_file(self, client: AsyncOpenViking):
         """Test reading nonexistent file"""
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017
             await client.read("viking://nonexistent/file.txt")
 
 

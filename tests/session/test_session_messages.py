@@ -3,10 +3,8 @@
 
 """Message management tests"""
 
-import pytest
-
+from openviking.message import ContextPart, TextPart, ToolPart
 from openviking.session import Session
-from openviking.message import TextPart, ContextPart, ToolPart
 
 
 class TestAddMessage:
@@ -31,10 +29,7 @@ class TestAddMessage:
 
     async def test_add_message_with_multiple_parts(self, session: Session):
         """Test adding message with multiple parts"""
-        parts = [
-            TextPart("Here is some context:"),
-            TextPart("And here is more text.")
-        ]
+        parts = [TextPart("Here is some context:"), TextPart("And here is more text.")]
         msg = session.add_message("assistant", parts)
 
         assert len(msg.parts) == 2
@@ -46,8 +41,8 @@ class TestAddMessage:
             ContextPart(
                 uri="viking://user/test/resources/doc.md",
                 context_type="resource",
-                abstract="Some context abstract"
-            )
+                abstract="Some context abstract",
+            ),
         ]
         msg = session.add_message("assistant", parts)
 
@@ -61,12 +56,9 @@ class TestAddMessage:
             tool_uri="viking://session/test/tools/tool_123",
             skill_uri="viking://agent/skills/search",
             tool_input={"query": "test"},
-            tool_status="running"
+            tool_status="running",
         )
-        msg = session.add_message("assistant", [
-            TextPart("Executing search..."),
-            tool_part
-        ])
+        msg = session.add_message("assistant", [TextPart("Executing search..."), tool_part])
 
         assert len(msg.parts) == 2
 
@@ -91,7 +83,7 @@ class TestUpdateToolPart:
             message_id=message_id,
             tool_id=tool_id,
             output="Tool execution completed successfully",
-            status="completed"
+            status="completed",
         )
 
         # Verify tool status updated
@@ -107,7 +99,7 @@ class TestUpdateToolPart:
             message_id=message_id,
             tool_id=tool_id,
             output="Tool execution failed: error message",
-            status="failed"
+            status="failed",
         )
 
         # Verify tool status updated

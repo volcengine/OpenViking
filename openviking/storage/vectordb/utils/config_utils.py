@@ -3,6 +3,7 @@
 import os
 from typing import Any, Dict, Optional
 
+
 def get_config_value(
     config: Optional[Dict[str, Any]], config_key: str, env_var: str, default_value: Any
 ) -> Any:

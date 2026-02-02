@@ -6,7 +6,7 @@ import json
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union, Callable, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
 from openviking.utils.logger import get_logger
 
@@ -19,6 +19,7 @@ logger = get_logger(__name__)
 @dataclass
 class QueueError:
     """Error record."""
+
     timestamp: datetime
     message: str
     data: Optional[Dict[str, Any]] = None
@@ -27,6 +28,7 @@ class QueueError:
 @dataclass
 class QueueStatus:
     """Queue status."""
+
     pending: int = 0
     in_progress: int = 0
     processed: int = 0
@@ -138,13 +140,15 @@ class NamedQueue:
         with self._lock:
             self._in_progress -= 1
             self._error_count += 1
-            self._errors.append(QueueError(
-                timestamp=datetime.now(),
-                message=error_msg,
-                data=data,
-            ))
+            self._errors.append(
+                QueueError(
+                    timestamp=datetime.now(),
+                    message=error_msg,
+                    data=data,
+                )
+            )
             if len(self._errors) > self.MAX_ERRORS:
-                self._errors = self._errors[-self.MAX_ERRORS:]
+                self._errors = self._errors[-self.MAX_ERRORS :]
 
     async def get_status(self) -> QueueStatus:
         """Get queue status."""
@@ -194,7 +198,9 @@ class NamedQueue:
             data = json.dumps(data)
 
         loop = asyncio.get_event_loop()
-        msg_id = await loop.run_in_executor(None, self._agfs.write, enqueue_file, data.encode("utf-8"))
+        msg_id = await loop.run_in_executor(
+            None, self._agfs.write, enqueue_file, data.encode("utf-8")
+        )
         return msg_id if isinstance(msg_id, str) else str(msg_id)
 
     async def dequeue(self) -> Optional[Dict[str, Any]]:
@@ -223,7 +229,7 @@ class NamedQueue:
         """Peek at head message without removing."""
         await self._ensure_initialized()
         peek_file = f"{self.path}/peek"
-        
+
         loop = asyncio.get_event_loop()
         try:
             content = await loop.run_in_executor(None, self._agfs.read, peek_file)
@@ -238,7 +244,7 @@ class NamedQueue:
         """Get queue size."""
         await self._ensure_initialized()
         size_file = f"{self.path}/size"
-        
+
         loop = asyncio.get_event_loop()
         try:
             content = await loop.run_in_executor(None, self._agfs.read, size_file)
@@ -253,7 +259,7 @@ class NamedQueue:
         """Clear queue."""
         await self._ensure_initialized()
         clear_file = f"{self.path}/clear"
-        
+
         loop = asyncio.get_event_loop()
         try:
             await loop.run_in_executor(None, self._agfs.write, clear_file, b"")

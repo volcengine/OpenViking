@@ -1,8 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 from abc import ABC, abstractmethod
-from typing import List, Dict, Any, Optional
 from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 
 
 def truncate_and_normalize(embedding: List[float], dimension: Optional[int]) -> List[float]:
@@ -19,6 +19,7 @@ def truncate_and_normalize(embedding: List[float], dimension: Optional[int]) -> 
         return embedding
 
     import math
+
     embedding = embedding[:dimension]
     norm = math.sqrt(sum(x**2 for x in embedding))
     if norm > 0:
@@ -34,6 +35,7 @@ class EmbedResult:
         dense_vector: Dense vector in List[float] format
         sparse_vector: Sparse vector in Dict[str, float] format, e.g. {'token1': 0.5, 'token2': 0.3}
     """
+
     dense_vector: Optional[List[float]] = None
     sparse_vector: Optional[Dict[str, float]] = None
 
@@ -170,7 +172,6 @@ class SparseEmbedderBase(EmbedderBase):
         return True
 
 
-
 class HybridEmbedderBase(EmbedderBase):
     """Hybrid embedder base class that returns both dense and sparse vectors
 
@@ -225,9 +226,7 @@ class CompositeHybridEmbedder(HybridEmbedderBase):
 
     def __init__(self, dense_embedder: DenseEmbedderBase, sparse_embedder: SparseEmbedderBase):
         """Initialize with two separate embedders"""
-        super().__init__(
-            model_name=f"{dense_embedder.model_name}+{sparse_embedder.model_name}"
-        )
+        super().__init__(model_name=f"{dense_embedder.model_name}+{sparse_embedder.model_name}")
         self.dense_embedder = dense_embedder
         self.sparse_embedder = sparse_embedder
 
@@ -235,22 +234,18 @@ class CompositeHybridEmbedder(HybridEmbedderBase):
         """Combine results from both embedders"""
         dense_res = self.dense_embedder.embed(text)
         sparse_res = self.sparse_embedder.embed(text)
-        
+
         return EmbedResult(
-            dense_vector=dense_res.dense_vector,
-            sparse_vector=sparse_res.sparse_vector
+            dense_vector=dense_res.dense_vector, sparse_vector=sparse_res.sparse_vector
         )
 
     def embed_batch(self, texts: List[str]) -> List[EmbedResult]:
         """Combine batch results"""
         dense_results = self.dense_embedder.embed_batch(texts)
         sparse_results = self.sparse_embedder.embed_batch(texts)
-        
+
         return [
-            EmbedResult(
-                dense_vector=d.dense_vector,
-                sparse_vector=s.sparse_vector
-            )
+            EmbedResult(dense_vector=d.dense_vector, sparse_vector=s.sparse_vector)
             for d, s in zip(dense_results, sparse_results)
         ]
 

@@ -2,11 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 from .embedding_msg import EmbeddingMsg
 from .embedding_queue import EmbeddingQueue
-from .semantic_msg import SemanticMsg
-from .semantic_queue import SemanticQueue
-from .semantic_processor import SemanticProcessor
-from .named_queue import NamedQueue, QueueStatus, QueueError
+from .named_queue import NamedQueue, QueueError, QueueStatus
 from .queue_manager import QueueManager, get_queue_manager, init_queue_manager
+from .semantic_msg import SemanticMsg
+from .semantic_processor import SemanticProcessor
+from .semantic_queue import SemanticQueue
 
 __all__ = [
     "QueueManager",

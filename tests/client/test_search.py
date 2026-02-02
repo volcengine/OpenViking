@@ -3,9 +3,6 @@
 
 """Search tests"""
 
-import pytest
-
-from openviking import AsyncOpenViking
 from openviking.message import TextPart
 
 
@@ -23,34 +20,25 @@ class TestFind:
         assert hasattr(result, "skills")
         assert hasattr(result, "total")
 
-
         """Test limiting result count"""
         result = await client.find(query="test", limit=5)
 
         assert len(result.resources) <= 5
 
         """Test search with target URI"""
-        result = await client.find(
-            query="sample",
-            target_uri=uri
-        )
+        result = await client.find(query="sample", target_uri=uri)
 
         assert hasattr(result, "resources")
 
         """Test score threshold filtering"""
-        result = await client.find(
-            query="sample document",
-            score_threshold=0.1
-        )
+        result = await client.find(query="sample document", score_threshold=0.1)
 
         # Verify all results have score >= threshold
         for res in result.resources:
             assert res.score >= 0.1
 
         """Test no matching results"""
-        result = await client.find(
-            query="completely_random_nonexistent_query_xyz123"
-        )
+        result = await client.find(query="completely_random_nonexistent_query_xyz123")
 
         assert result.total >= 0
 
@@ -71,27 +59,18 @@ class TestSearch:
         # Add some messages to establish context
         session.add_message("user", [TextPart("I need help with testing")])
 
-        result = await client.search(
-            query="testing help",
-            session=session
-        )
+        result = await client.search(query="testing help", session=session)
 
         assert hasattr(result, "resources")
 
         """Test limiting result count"""
-        result = await client.search(
-            query="sample",
-            limit=3
-        )
+        result = await client.search(query="sample", limit=3)
 
         assert len(result.resources) <= 3
 
         """Test complex search with target URI"""
         parent_uri = "/".join(uri.split("/")[:-1]) + "/"
 
-        result = await client.search(
-            query="sample",
-            target_uri=parent_uri
-        )
+        result = await client.search(query="sample", target_uri=parent_uri)
 
         assert hasattr(result, "resources")

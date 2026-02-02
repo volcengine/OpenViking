@@ -7,15 +7,14 @@ Following PageIndex philosophy: preserve natural document structure
 rather than arbitrary chunking.
 """
 
-from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
-    from openviking.storage.viking_fs import VikingFS
+    pass
 
 # ============================================================================
 # Common utility functions
@@ -97,7 +96,9 @@ def lazy_import(module_name: str, package_name: Optional[str] = None) -> Any:
         return importlib.import_module(module_name)
     except ImportError:
         pkg = package_name or module_name
-        raise ImportError(f"Module '{module_name}' not available. Please install: pip install {pkg}")
+        raise ImportError(
+            f"Module '{module_name}' not available. Please install: pip install {pkg}"
+        )
 
 
 class ResourceCategory(Enum):
@@ -154,6 +155,7 @@ class NodeType(Enum):
     ROOT = "root"
     SECTION = "section"
 
+
 @dataclass
 class ResourceNode:
     """
@@ -200,6 +202,7 @@ class ResourceNode:
     async def get_detail_content_async(self, temp_uri: str) -> str:
         """Read detail file content from VikingFS temp directory."""
         from openviking.storage.viking_fs import get_viking_fs
+
         if not self.detail_file:
             return ""
         file_uri = f"{temp_uri}/{self.detail_file}"

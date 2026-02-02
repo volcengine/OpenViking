@@ -1,5 +1,88 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
+from abc import ABC, abstractmethod
+from typing import Any, Dict
+
+
+class IProject(ABC):
+    """Interface defining the contract for project implementations.
+
+    All project implementations must inherit from this interface and implement
+    all abstract methods for managing collections.
+    """
+
+    def __init__(self, project_name: str = "default"):
+        """Initialize the project interface.
+
+        Args:
+            project_name (str): Name of the project. Defaults to 'default'.
+        """
+        self.project_name = project_name
+
+    @abstractmethod
+    def close(self):
+        """Close the project and release resources.
+
+        Must be implemented by subclasses to properly clean up resources.
+        """
+        pass
+
+    @abstractmethod
+    def has_collection(self, collection_name: str) -> bool:
+        """Check if a collection exists.
+
+        Args:
+            collection_name (str): Name of the collection to check.
+
+        Returns:
+            bool: True if collection exists, False otherwise.
+        """
+        pass
+
+    @abstractmethod
+    def get_collection(self, collection_name: str) -> Any:
+        """Retrieve a collection by name.
+
+        Args:
+            collection_name (str): Name of the collection to retrieve.
+
+        Returns:
+            Collection: The collection instance, or None if not found.
+        """
+        pass
+
+    @abstractmethod
+    def get_collections(self) -> Dict[str, Any]:
+        """Get all collections in the project.
+
+        Returns:
+            Dict[str, Collection]: Mapping of collection names to Collection instances.
+        """
+        pass
+
+    @abstractmethod
+    def create_collection(self, collection_name: str, collection_meta: Dict[str, Any]) -> Any:
+        """Create a new collection.
+
+        Args:
+            collection_name (str): Unique name for the collection.
+            collection_meta (Dict[str, Any]): Collection metadata and configuration.
+
+        Returns:
+            Collection: The newly created collection instance.
+        """
+        pass
+
+    @abstractmethod
+    def drop_collection(self, collection_name: str):
+        """Delete a collection.
+
+        Args:
+            collection_name (str): Name of the collection to delete.
+        """
+        pass
+
+
 class Project:
     """Wrapper class for managing project operations.
 
@@ -81,85 +164,3 @@ class Project:
             associated with the collection.
         """
         return self.__project.drop_collection(collection_name)
-
-
-from abc import ABC, abstractmethod
-from typing import Any, Dict, Optional
-
-class IProject(ABC):
-    """Interface defining the contract for project implementations.
-
-    All project implementations must inherit from this interface and implement
-    all abstract methods for managing collections.
-    """
-
-    def __init__(self, project_name: str = "default"):
-        """Initialize the project interface.
-
-        Args:
-            project_name (str): Name of the project. Defaults to 'default'.
-        """
-        self.project_name = project_name
-
-    @abstractmethod
-    def close(self):
-        """Close the project and release resources.
-
-        Must be implemented by subclasses to properly clean up resources.
-        """
-        pass
-
-    @abstractmethod
-    def has_collection(self, collection_name: str) -> bool:
-        """Check if a collection exists.
-
-        Args:
-            collection_name (str): Name of the collection to check.
-
-        Returns:
-            bool: True if collection exists, False otherwise.
-        """
-        pass
-
-    @abstractmethod
-    def get_collection(self, collection_name: str) -> Any:
-        """Retrieve a collection by name.
-
-        Args:
-            collection_name (str): Name of the collection to retrieve.
-
-        Returns:
-            Collection: The collection instance, or None if not found.
-        """
-        pass
-
-    @abstractmethod
-    def get_collections(self) -> Dict[str, Any]:
-        """Get all collections in the project.
-
-        Returns:
-            Dict[str, Collection]: Mapping of collection names to Collection instances.
-        """
-        pass
-
-    @abstractmethod
-    def create_collection(self, collection_name: str, collection_meta: Dict[str, Any]) -> Any:
-        """Create a new collection.
-
-        Args:
-            collection_name (str): Unique name for the collection.
-            collection_meta (Dict[str, Any]): Collection metadata and configuration.
-
-        Returns:
-            Collection: The newly created collection instance.
-        """
-        pass
-
-    @abstractmethod
-    def drop_collection(self, collection_name: str):
-        """Delete a collection.
-
-        Args:
-            collection_name (str): Name of the collection to delete.
-        """
-        pass

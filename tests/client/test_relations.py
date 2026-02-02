@@ -3,10 +3,6 @@
 
 """Relation tests"""
 
-import pytest
-
-from openviking import AsyncOpenViking
-
 
 class TestLink:
     """Test link creating relations"""
@@ -16,11 +12,7 @@ class TestLink:
         client, uri = client_with_resource
         target_uri = "viking://resources/target/"
 
-        await client.link(
-            from_uri=uri,
-            uris=target_uri,
-            reason="Test link"
-        )
+        await client.link(from_uri=uri, uris=target_uri, reason="Test link")
 
         relations = await client.relations(uri)
         assert any(r.get("uri") == target_uri for r in relations)
@@ -28,16 +20,9 @@ class TestLink:
     async def test_link_multiple_uris(self, client_with_resource):
         """Test creating multiple relations"""
         client, uri = client_with_resource
-        target_uris = [
-            "viking://resources/target1/",
-            "viking://resources/target2/"
-        ]
+        target_uris = ["viking://resources/target1/", "viking://resources/target2/"]
 
-        await client.link(
-            from_uri=uri,
-            uris=target_uris,
-            reason="Test multiple links"
-        )
+        await client.link(from_uri=uri, uris=target_uris, reason="Test multiple links")
 
         relations = await client.relations(uri)
         for target in target_uris:
@@ -49,11 +34,7 @@ class TestLink:
         target_uri = "viking://resources/reason_test/"
         reason = "This is a test reason for the link"
 
-        await client.link(
-            from_uri=uri,
-            uris=target_uri,
-            reason=reason
-        )
+        await client.link(from_uri=uri, uris=target_uri, reason=reason)
 
         relations = await client.relations(uri)
         link = next((r for r in relations if r.get("uri") == target_uri), None)
@@ -88,10 +69,7 @@ class TestUnlink:
         client, uri = client_with_resource
 
         # Should not raise exception
-        await client.unlink(
-            from_uri=uri,
-            uri="viking://nonexistent/"
-        )
+        await client.unlink(from_uri=uri, uri="viking://nonexistent/")
 
 
 class TestRelations:

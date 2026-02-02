@@ -2,12 +2,12 @@
 """
 Add Resource - CLI tool to add documents to OpenViking database
 """
-import boring_logging_config  # Configure logging (set OV_DEBUG=1 for debug mode)
+
 import argparse
 import json
 import sys
-import os
 from pathlib import Path
+
 import openviking as ov
 from openviking.utils.config.open_viking_config import OpenVikingConfig
 
@@ -23,7 +23,7 @@ def add_resource(resource_path: str, config_path: str = "./ov.conf", data_path: 
     """
     # Load config
     print(f"📋 Loading config from: {config_path}")
-    with open(config_path, 'r') as f:
+    with open(config_path, "r") as f:
         config_dict = json.load(f)
 
     config = OpenVikingConfig.from_dict(config_dict)
@@ -37,7 +37,7 @@ def add_resource(resource_path: str, config_path: str = "./ov.conf", data_path: 
         print(f"📂 Adding resource: {resource_path}")
 
         # Check if it's a file and exists
-        if not resource_path.startswith('http'):
+        if not resource_path.startswith("http"):
             path = Path(resource_path).expanduser()
             if not path.exists():
                 print(f"❌ Error: File not found: {path}")
@@ -46,8 +46,8 @@ def add_resource(resource_path: str, config_path: str = "./ov.conf", data_path: 
         result = client.add_resource(path=resource_path)
 
         # Check result
-        if result and 'root_uri' in result:
-            root_uri = result['root_uri']
+        if result and "root_uri" in result:
+            root_uri = result["root_uri"]
             print(f"✓ Resource added: {root_uri}\n")
 
             # Wait for processing
@@ -58,10 +58,10 @@ def add_resource(resource_path: str, config_path: str = "./ov.conf", data_path: 
             print("🎉 Resource is now searchable in the database!")
             return True
 
-        elif result and result.get('status') == 'error':
-            print(f"\n⚠️  Resource had parsing issues:")
-            if 'errors' in result:
-                for error in result['errors'][:3]:
+        elif result and result.get("status") == "error":
+            print("\n⚠️  Resource had parsing issues:")
+            if "errors" in result:
+                for error in result["errors"][:3]:
                     print(f"  - {error}")
             print("\n💡 Some content may still be searchable.")
             return False
@@ -73,6 +73,7 @@ def add_resource(resource_path: str, config_path: str = "./ov.conf", data_path: 
     except Exception as e:
         print(f"\n❌ Error: {e}")
         import traceback
+
         traceback.print_exc()
         return False
 
@@ -107,33 +108,29 @@ Notes:
   - URLs are automatically downloaded and processed
   - Large files may take several minutes to process
   - The resource becomes searchable after processing completes
-        """
+        """,
     )
 
     parser.add_argument(
-        'resource',
-        type=str,
-        help='Path to file/directory or URL to add to the database'
+        "resource", type=str, help="Path to file/directory or URL to add to the database"
     )
 
     parser.add_argument(
-        '--config',
-        type=str,
-        default='./ov.conf',
-        help='Path to config file (default: ./ov.conf)'
+        "--config", type=str, default="./ov.conf", help="Path to config file (default: ./ov.conf)"
     )
 
     parser.add_argument(
-        '--data',
-        type=str,
-        default='./data',
-        help='Path to data directory (default: ./data)'
+        "--data", type=str, default="./data", help="Path to data directory (default: ./data)"
     )
 
     args = parser.parse_args()
 
     # Expand user paths
-    resource_path = str(Path(args.resource).expanduser()) if not args.resource.startswith('http') else args.resource
+    resource_path = (
+        str(Path(args.resource).expanduser())
+        if not args.resource.startswith("http")
+        else args.resource
+    )
 
     # Add the resource
     success = add_resource(resource_path, args.config, args.data)

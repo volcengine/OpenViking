@@ -1,17 +1,17 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from pydantic import BaseModel, Field
 
 from .agfs_config import AGFSConfig
 from .vectordb_config import VectorDBBackendConfig
 
+
 class StorageConfig(BaseModel):
     """Configuration for storage backend."""
-    agfs: AGFSConfig = Field(
-        default_factory=lambda: AGFSConfig(), description="AGFS configuration"
-    )
+
+    agfs: AGFSConfig = Field(default_factory=lambda: AGFSConfig(), description="AGFS configuration")
 
     vectordb: VectorDBBackendConfig = Field(
         default_factory=lambda: VectorDBBackendConfig(),

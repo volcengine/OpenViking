@@ -2,10 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """OpenAI VLM backend implementation"""
 
-import base64
 import asyncio
+import base64
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Union
 
 from ..base import VLMBase
 
@@ -63,12 +63,14 @@ class OpenAIVLM(VLMBase):
 
         if self.provider == "volcengine":
             kwargs["thinking"] = {"type": "disabled" if not thinking else "enabled"}
-        
+
         response = client.chat.completions.create(**kwargs)
         self._update_token_usage_from_response(response)
         return response.choices[0].message.content or ""
 
-    async def get_completion_async(self, prompt: str, thinking: bool = False, max_retries: int = 0) -> str:
+    async def get_completion_async(
+        self, prompt: str, thinking: bool = False, max_retries: int = 0
+    ) -> str:
         """Get text completion asynchronously"""
         client = self.get_async_client()
         kwargs = {

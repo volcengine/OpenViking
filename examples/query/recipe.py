@@ -3,12 +3,14 @@
 RAG Pipeline - Retrieval-Augmented Generation using OpenViking + LLM
 Focused on querying and answer generation, not resource management
 """
-import boring_logging_config  # Configure logging (set OV_DEBUG=1 for debug mode)
-import openviking as ov
+
 import json
+from typing import Any, Dict, List, Optional
+
 import requests
+
+import openviking as ov
 from openviking.utils.config.open_viking_config import OpenVikingConfig
-from typing import Optional, List, Dict, Any
 
 
 class Recipe:
@@ -30,21 +32,27 @@ class Recipe:
             data_path: Path to OpenViking data directory
         """
         # Load configuration
-        with open(config_path, 'r') as f:
+        with open(config_path, "r") as f:
             self.config_dict = json.load(f)
 
         # Extract LLM config
-        self.vlm_config = self.config_dict.get('vlm', {})
-        self.api_base = self.vlm_config.get('api_base')
-        self.api_key = self.vlm_config.get('api_key')
-        self.model = self.vlm_config.get('model')
+        self.vlm_config = self.config_dict.get("vlm", {})
+        self.api_base = self.vlm_config.get("api_base")
+        self.api_key = self.vlm_config.get("api_key")
+        self.model = self.vlm_config.get("model")
 
         # Initialize OpenViking client
         config = OpenVikingConfig.from_dict(self.config_dict)
         self.client = ov.SyncOpenViking(path=data_path, config=config)
         self.client.initialize()
 
-    def search(self, query: str, top_k: int = 3, target_uri: Optional[str] = None, score_threshold: float = 0.2) -> List[Dict[str, Any]]:
+    def search(
+        self,
+        query: str,
+        top_k: int = 3,
+        target_uri: Optional[str] = None,
+        score_threshold: float = 0.2,
+    ) -> List[Dict[str, Any]]:
         """
         Search for relevant content using semantic search
 
@@ -69,24 +77,30 @@ class Recipe:
             try:
                 # Try to read the resource
                 content = self.client.read(resource.uri)
-                search_results.append({
-                    'uri': resource.uri,
-                    'score': resource.score,
-                    'content': content[:1000]  # Limit content length
-                })
-                print(f"  {i+1}. {resource.uri} (score: {resource.score:.4f})")
+                search_results.append(
+                    {
+                        "uri": resource.uri,
+                        "score": resource.score,
+                        "content": content[:1000],  # Limit content length
+                    }
+                )
+                print(f"  {i + 1}. {resource.uri} (score: {resource.score:.4f})")
 
             except Exception as e:
                 # Handle directories - read their abstract instead
                 if "is a directory" in str(e):
                     try:
                         abstract = self.client.abstract(resource.uri)
-                        search_results.append({
-                            'uri': resource.uri,
-                            'score': resource.score,
-                            'content': f"[Directory Abstract] {abstract[:1000]}"
-                        })
-                        print(f"  {i+1}. {resource.uri} (score: {resource.score:.4f}) [directory]")
+                        search_results.append(
+                            {
+                                "uri": resource.uri,
+                                "score": resource.score,
+                                "content": f"[Directory Abstract] {abstract[:1000]}",
+                            }
+                        )
+                        print(
+                            f"  {i + 1}. {resource.uri} (score: {resource.score:.4f}) [directory]"
+                        )
                     except:
                         # Skip if we can't get abstract
                         continue
@@ -110,21 +124,13 @@ class Recipe:
         """
         url = f"{self.api_base}/chat/completions"
 
-        headers = {
-            "Content-Type": "application/json",
-            "Authorization": f"Bearer {self.api_key}"
-        }
+        headers = {"Content-Type": "application/json", "Authorization": f"Bearer {self.api_key}"}
 
         payload = {
             "model": self.model,
-            "messages": [
-                {
-                    "role": "user",
-                    "content": prompt
-                }
-            ],
+            "messages": [{"role": "user", "content": prompt}],
             "temperature": temperature,
-            "max_tokens": max_tokens
+            "max_tokens": max_tokens,
         }
 
         print(f"🤖 Calling LLM: {self.model}")
@@ -132,17 +138,19 @@ class Recipe:
         response.raise_for_status()
 
         result = response.json()
-        answer = result['choices'][0]['message']['content']
+        answer = result["choices"][0]["message"]["content"]
 
         return answer
 
-    def query(self,
-              user_query: str,
-              search_top_k: int = 3,
-              temperature: float = 0.7,
-              max_tokens: int = 2048,
-              system_prompt: Optional[str] = None,
-              score_threshold: float = 0.2) -> Dict[str, Any]:
+    def query(
+        self,
+        user_query: str,
+        search_top_k: int = 3,
+        temperature: float = 0.7,
+        max_tokens: int = 2048,
+        system_prompt: Optional[str] = None,
+        score_threshold: float = 0.2,
+    ) -> Dict[str, Any]:
         """
         Full RAG pipeline: search → retrieve → generate
 
@@ -158,20 +166,24 @@ class Recipe:
             Dictionary with answer, context, and metadata
         """
         # Step 1: Search for relevant content
-        search_results = self.search(user_query, top_k=search_top_k, score_threshold=score_threshold)
+        search_results = self.search(
+            user_query, top_k=search_top_k, score_threshold=score_threshold
+        )
 
         if not search_results:
             return {
-                'answer': "I couldn't find any relevant information to answer your question.",
-                'context': [],
-                'query': user_query
+                "answer": "I couldn't find any relevant information to answer your question.",
+                "context": [],
+                "query": user_query,
             }
 
         # Step 2: Build context from search results
-        context_text = "\n\n".join([
-            f"[Source {i+1}] (relevance: {r['score']:.4f})\n{r['content']}"
-            for i, r in enumerate(search_results)
-        ])
+        context_text = "\n\n".join(
+            [
+                f"[Source {i + 1}] (relevance: {r['score']:.4f})\n{r['content']}"
+                for i, r in enumerate(search_results)
+            ]
+        )
 
         # Step 3: Build the prompt
         if system_prompt:
@@ -188,12 +200,7 @@ class Recipe:
         answer = self.call_llm(prompt, temperature=temperature, max_tokens=max_tokens)
 
         # Return full result
-        return {
-            'answer': answer,
-            'context': search_results,
-            'query': user_query,
-            'prompt': prompt
-        }
+        return {"answer": answer, "context": search_results, "query": user_query, "prompt": prompt}
 
     def close(self):
         """Clean up resources"""

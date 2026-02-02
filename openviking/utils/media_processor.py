@@ -31,6 +31,7 @@ class UnifiedResourceProcessor:
     def _get_vlm_processor(self) -> Optional["VLMProcessor"]:
         if self._vlm_processor is None:
             from openviking.parse.vlm import VLMProcessor
+
             self._vlm_processor = VLMProcessor()
         return self._vlm_processor
 

@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import logging
 
+
 def touch_file(file_path: str) -> None:
     try:
         with open(file_path, "a"):

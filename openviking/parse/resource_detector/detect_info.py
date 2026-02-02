@@ -7,6 +7,10 @@ We need to know:
 
 """
 
+from dataclasses import dataclass
+from enum import Enum
+
+
 class VisitType(Enum):
     # Direct content that can be used immediately, e.g., strings containing conversation content, JSON content, etc.
     DIRECT_CONTENT = "DIRECT_CONTENT"
@@ -17,6 +21,7 @@ class VisitType(Enum):
     # Pre-processed context pack conforming to OpenViking's structure, typically with .ovpack extension
     READY_CONTEXT_PACK = "READY_CONTEXT_PACK"
 
+
 class SizeType(Enum):
     # Content can be processed directly in memory, e.g., small text segments
     IN_MEM = "IN_MEM"
@@ -25,6 +30,7 @@ class SizeType(Enum):
     # Content too large to process, e.g., exceeds X GB, may cause system crash or performance issues
     TOO_LARGE_TO_PROCESS = "TOO_LARGE_TO_PROCESS"
 
+
 class RecursiveType(Enum):
     # Single file, no recursive processing required
     SINGLE = "SINGLE"
@@ -32,6 +38,7 @@ class RecursiveType(Enum):
     RECURSIVE = "RECURSIVE"
     # Files that need to be expanded for recursive processing, e.g., compressed files, READY_CONTEXT_PACK, etc.
     EXPAND_TO_RECURSIVE = "EXPAND_TO_RECURSIVE"
+
 
 @dataclass
 class DetectInfo:

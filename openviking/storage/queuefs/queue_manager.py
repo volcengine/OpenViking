@@ -5,15 +5,16 @@ QueueManager: Encapsulates AGFS QueueFS plugin operations.
 All queues are managed through NamedQueue.
 """
 
-import time
 import asyncio
 import atexit
 import threading
-from typing import Any, Dict, List, Optional, Union
+import time
+from typing import Any, Dict, Optional, Union
 
 from openviking.utils.logger import get_logger
-from .named_queue import NamedQueue, EnqueueHookBase, DequeueHandlerBase, QueueStatus
+
 from .embedding_queue import EmbeddingQueue
+from .named_queue import DequeueHandlerBase, EnqueueHookBase, NamedQueue, QueueStatus
 from .semantic_queue import SemanticQueue
 
 logger = get_logger(__name__)

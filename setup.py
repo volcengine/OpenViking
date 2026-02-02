@@ -1,8 +1,11 @@
 import os
-import sys
 import shutil
+import sys
+import sysconfig
 from pathlib import Path
-from setuptools import setup, find_packages, Extension
+
+import pybind11
+from setuptools import Extension, find_packages, setup
 from setuptools.command.build_ext import build_ext
 
 CMAKE_PATH = shutil.which("cmake") or "cmake"
@@ -34,7 +37,7 @@ class CMakeBuildExtension(build_ext):
         # Paths
         binary_name = "agfs-server.exe" if sys.platform == "win32" else "agfs-server"
         agfs_server_dir = Path("third_party/agfs/agfs-server").resolve()
-        
+
         # Target in source tree (for development/install)
         agfs_bin_dir = Path("openviking/bin").resolve()
         agfs_target_binary = agfs_bin_dir / binary_name
@@ -43,34 +46,47 @@ class CMakeBuildExtension(build_ext):
         if agfs_server_dir.exists() and shutil.which("go"):
             print("Building AGFS server from source...")
             import subprocess
+
             try:
-                build_args = ["go", "build", "-o", f"build/{binary_name}", "cmd/server/main.go"] if sys.platform == "win32" else ["make", "build"]
-                
+                build_args = (
+                    ["go", "build", "-o", f"build/{binary_name}", "cmd/server/main.go"]
+                    if sys.platform == "win32"
+                    else ["make", "build"]
+                )
+
                 subprocess.run(
                     build_args,
                     cwd=str(agfs_server_dir),
                     check=True,
                     stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE
+                    stderr=subprocess.PIPE,
                 )
 
                 agfs_built_binary = agfs_server_dir / "build" / binary_name
                 if agfs_built_binary.exists():
                     self._copy_binary(agfs_built_binary, agfs_target_binary)
-                    print(f"[OK] AGFS server built successfully from source")
+                    print("[OK] AGFS server built successfully from source")
                 else:
-                    raise FileNotFoundError(f"Build succeeded but binary not found at {agfs_built_binary}")
+                    raise FileNotFoundError(
+                        f"Build succeeded but binary not found at {agfs_built_binary}"
+                    )
             except (subprocess.CalledProcessError, Exception) as e:
                 error_msg = f"Failed to build AGFS from source: {e}"
                 if isinstance(e, subprocess.CalledProcessError):
-                    if e.stdout: error_msg += f"\nBuild stdout:\n{e.stdout.decode('utf-8', errors='replace')}"
-                    if e.stderr: error_msg += f"\nBuild stderr:\n{e.stderr.decode('utf-8', errors='replace')}"
+                    if e.stdout:
+                        error_msg += (
+                            f"\nBuild stdout:\n{e.stdout.decode('utf-8', errors='replace')}"
+                        )
+                    if e.stderr:
+                        error_msg += (
+                            f"\nBuild stderr:\n{e.stderr.decode('utf-8', errors='replace')}"
+                        )
                 raise RuntimeError(error_msg)
         else:
             if not agfs_server_dir.exists():
-                 raise FileNotFoundError(f"AGFS source directory not found at {agfs_server_dir}")
+                raise FileNotFoundError(f"AGFS source directory not found at {agfs_server_dir}")
             else:
-                 raise RuntimeError("Go compiler not found. Please install Go to build AGFS server.")
+                raise RuntimeError("Go compiler not found. Please install Go to build AGFS server.")
 
         # 2. Ensure AGFS binary is copied to the build directory (where wheel is packaged from)
         if self.build_lib:
@@ -89,7 +105,7 @@ class CMakeBuildExtension(build_ext):
         cmake_args = [
             f"-S{Path(ENGINE_SOURCE_DIR).resolve()}",
             f"-B{build_dir}",
-            f"-DCMAKE_BUILD_TYPE=Release",
+            "-DCMAKE_BUILD_TYPE=Release",
             f"-DPY_OUTPUT_DIR={ext_dir}",
             "-DCMAKE_VERBOSE_MAKEFILE=ON",
             "-DCMAKE_INSTALL_RPATH=$ORIGIN",
@@ -108,16 +124,9 @@ class CMakeBuildExtension(build_ext):
 
         self.spawn([self.cmake_executable] + cmake_args)
 
-        build_args = [
-            "--build", str(build_dir),
-            "--config", "Release",
-            f"-j{os.cpu_count() or 4}"
-        ]
+        build_args = ["--build", str(build_dir), "--config", "Release", f"-j{os.cpu_count() or 4}"]
         self.spawn([self.cmake_executable] + build_args)
 
-
-import sysconfig
-import pybind11
 
 setup(
     ext_modules=[

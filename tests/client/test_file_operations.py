@@ -24,15 +24,12 @@ class TestRm:
 
         uris = await client.tree(result["root_uri"])
         for data in uris:
-            if not data['isDir']:
-                await client.rm(data['uri'])
-                with pytest.raises(Exception):
-                    await client.read(data['uri'])
-            
+            if not data["isDir"]:
+                await client.rm(data["uri"])
+                with pytest.raises(Exception):  # noqa: B017
+                    await client.read(data["uri"])
 
-    async def test_rm_directory_recursive(
-        self, client: AsyncOpenViking, sample_directory: Path
-    ):
+    async def test_rm_directory_recursive(self, client: AsyncOpenViking, sample_directory: Path):
         """Test recursive directory deletion"""
         # Add files from directory first
         for f in sample_directory.glob("**/*.txt"):
@@ -41,10 +38,10 @@ class TestRm:
         # Get resource directory
         entries = await client.ls("viking://resources/")
         for data in entries:
-            if data['isDir']:
-                dir_uri = data['uri']
+            if data["isDir"]:
+                dir_uri = data["uri"]
                 await client.rm(dir_uri, recursive=True)
-                with pytest.raises(Exception):
+                with pytest.raises(Exception):  # noqa: B017
                     await client.stat(dir_uri)
 
 
@@ -62,7 +59,7 @@ class TestMv:
         new_uri = "viking://resources/moved/"
         await client.mv(uri, new_uri)
         # Verify original location does not exist
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017
             await client.stat(uri)
 
         await client.stat(new_uri)
@@ -85,11 +82,7 @@ class TestGrep:
         """Test case insensitive search"""
         client, uri = client_with_resource
 
-        result = await client.grep(
-            uri,
-            pattern="SAMPLE",
-            case_insensitive=True
-        )
+        result = await client.grep(uri, pattern="SAMPLE", case_insensitive=True)
         print(result)
         assert isinstance(result, dict)
         assert "matches" in result and result["count"] > 0
@@ -120,10 +113,7 @@ class TestGlob:
         client, uri = client_with_resource
         parent_uri = "/".join(uri.split("/")[:-1]) + "/"
 
-        result = await client.glob(
-            pattern="*.md",
-            uri=parent_uri
-        )
+        result = await client.glob(pattern="*.md", uri=parent_uri)
         assert isinstance(result, dict)
         assert "matches" in result and result["count"] > 0
 

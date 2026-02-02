@@ -1,29 +1,27 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 import json
-import logging
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional
 from threading import Lock
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field
 
 from .embedding_config import EmbeddingConfig
+from .parser_config import (
+    AudioConfig,
+    CodeConfig,
+    HTMLConfig,
+    ImageConfig,
+    MarkdownConfig,
+    PDFConfig,
+    TextConfig,
+    VideoConfig,
+)
 from .rerank_config import RerankConfig
 from .storage_config import StorageConfig
 from .vlm_config import VLMConfig
-from .parser_config import (
-    PDFConfig,
-    CodeConfig,
-    ImageConfig,
-    AudioConfig,
-    VideoConfig,
-    MarkdownConfig,
-    HTMLConfig,
-    TextConfig,
-    load_parser_configs_from_dict,
-)
 
 
 class OpenVikingConfig(BaseModel):
@@ -246,7 +244,9 @@ def is_valid_openviking_config(config: OpenVikingConfig) -> bool:
         )
 
     if errors:
-        error_message = "Invalid OpenViking configuration:\n" + "\n".join(f"  - {e}" for e in errors)
+        error_message = "Invalid OpenViking configuration:\n" + "\n".join(
+            f"  - {e}" for e in errors
+        )
         raise ValueError(error_message)
 
     return True

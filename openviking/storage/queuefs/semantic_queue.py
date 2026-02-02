@@ -5,6 +5,7 @@
 from typing import Optional
 
 from openviking.utils.logger import get_logger
+
 from .named_queue import NamedQueue
 from .semantic_msg import SemanticMsg
 

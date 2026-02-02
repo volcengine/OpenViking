@@ -4,9 +4,10 @@
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
-from openviking.utils.extractor import ImageInfo, TableInfo
+from typing import Any, Dict, List, Union
+
 from openviking.prompts import render_prompt
+from openviking.utils.extractor import ImageInfo, TableInfo
 from openviking.utils.llm import parse_json_from_response
 from openviking.utils.logger import get_logger
 
@@ -52,6 +53,7 @@ class VLMProcessor:
     def _get_vlm(self):
         """Get VLM singleton."""
         from openviking.utils.config import get_openviking_config
+
         return get_openviking_config().vlm
 
     async def understand_image(
@@ -125,7 +127,6 @@ class VLMProcessor:
 
         # Add sample data
         if len(raw_data) > 1:
-            sample_rows = min(3, len(raw_data) - 1)
             overview_parts.append(f"Contains {len(raw_data) - 1} data records.")
 
         overview = " ".join(overview_parts)
@@ -247,7 +248,9 @@ class VLMProcessor:
 
         async def process_batch(batch_start: int, batch: List) -> tuple:
             async with semaphore:
-                results = await self._batch_understand_pages_single_call(batch, instruction, batch_start)
+                results = await self._batch_understand_pages_single_call(
+                    batch, instruction, batch_start
+                )
                 return batch_start, results
 
         # Run all batches concurrently
@@ -282,7 +285,7 @@ class VLMProcessor:
 
         data = parse_json_from_response(response)
         if not data or "pages" not in data:
-            raise ValueError(f"Invalid VLM response: missing 'pages' field")
+            raise ValueError("Invalid VLM response: missing 'pages' field")
 
         results = []
         for page_info in data["pages"]:
@@ -350,7 +353,7 @@ class VLMProcessor:
         images_section = ""
         if images:
             images_section = "\n".join(
-                f"Image {i+1}: Located on page {img.page + 1}"
+                f"Image {i + 1}: Located on page {img.page + 1}"
                 for i, img in enumerate(images[: self.max_images_per_call])
             )
         else:
@@ -360,7 +363,7 @@ class VLMProcessor:
         tables_section = ""
         if tables:
             tables_section = "\n".join(
-                f"Table {i+1}: Located on page {tbl.page + 1}"
+                f"Table {i + 1}: Located on page {tbl.page + 1}"
                 for i, tbl in enumerate(tables[: self.max_images_per_call])
             )
         else:
@@ -370,7 +373,7 @@ class VLMProcessor:
         sections_list = ""
         if sections:
             sections_list = "\n".join(
-                f"Section {i+1}: {sec.get('title', 'Untitled')}"
+                f"Section {i + 1}: {sec.get('title', 'Untitled')}"
                 for i, sec in enumerate(sections[: self.max_sections_per_call])
             )
         else:
@@ -382,7 +385,9 @@ class VLMProcessor:
                 "title": title or "Unknown document",
                 "instruction": instruction or "Understand document content",
                 "reason": reason or "User added",
-                "content_preview": content_preview[:2000] if content_preview else "No content preview",
+                "content_preview": content_preview[:2000]
+                if content_preview
+                else "No content preview",
                 "image_count": len(images),
                 "images_section": images_section,
                 "table_count": len(tables),
@@ -442,7 +447,9 @@ class VLMProcessor:
             if table.has_structured_data():
                 result = self._understand_table_from_data(table, instruction)
             else:
-                result = VLMResult("[Table]", "Cannot parse table (VLM not available)", "[Table content]")
+                result = VLMResult(
+                    "[Table]", "Cannot parse table (VLM not available)", "[Table content]"
+                )
             table_results.append(result)
 
         # Simplified prompt for text-only analysis
@@ -456,7 +463,7 @@ Content preview:
 {content_preview[:3000]}
 
 Section list:
-{chr(10).join(f"- {s.get('title', 'Untitled')}" for s in sections[:self.max_sections_per_call])}
+{chr(10).join(f"- {s.get('title', 'Untitled')}" for s in sections[: self.max_sections_per_call])}
 
 Please output in JSON format:
 {{
@@ -525,7 +532,7 @@ Please output in JSON format:
         # Parse image results
         image_results = []
         image_data = data.get("images", [])
-        for i, img in enumerate(images):
+        for i, _ in enumerate(images):
             if i < len(image_data):
                 img_info = image_data[i]
                 result = VLMResult(
@@ -540,7 +547,7 @@ Please output in JSON format:
         # Parse table results
         table_results = []
         table_data = data.get("tables", [])
-        for i, tbl in enumerate(tables):
+        for i, _ in enumerate(tables):
             if i < len(table_data):
                 tbl_info = table_data[i]
                 result = VLMResult(
@@ -607,11 +614,11 @@ Please output in JSON format:
         images_info = []
         image_data_list = []
 
-        for i, (img_data, context) in enumerate(batch):
+        for i, (_img_data, context) in enumerate(batch):
             images_info.append(
                 f"Image {i + 1}: Surrounding text: {context[:100] if context else 'No context'}"
             )
-            image_data_list.append(img_data)
+            image_data_list.append(_img_data)
 
         prompt = render_prompt(
             "vision.batch_filtering",
@@ -631,7 +638,7 @@ Please output in JSON format:
             data = parse_json_from_response(response)
             if data and "results" in data:
                 batch_results = []
-                for i, (img_data, context) in enumerate(batch):
+                for i, (_img_data, _context) in enumerate(batch):
                     if i < len(data["results"]):
                         result = data["results"][i]
                         batch_results.append(
@@ -656,7 +663,10 @@ Please output in JSON format:
             logger.error(f"Error filtering image batch: {e}")
 
         # On error, keep all images by default
-        return [{"is_meaningful": True, "reason": "Filtering failed", "image_type": "Unknown"} for _ in batch]
+        return [
+            {"is_meaningful": True, "reason": "Filtering failed", "image_type": "Unknown"}
+            for _ in batch
+        ]
 
     async def _filter_single_image(
         self,

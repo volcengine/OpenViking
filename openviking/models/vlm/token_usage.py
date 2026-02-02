@@ -111,7 +111,10 @@ class ModelTokenUsage:
 
     def __str__(self) -> str:
         providers = ", ".join(
-            [f"{provider}: {usage.total_tokens}" for provider, usage in self.usage_by_provider.items()]
+            [
+                f"{provider}: {usage.total_tokens}"
+                for provider, usage in self.usage_by_provider.items()
+            ]
         )
         return f"ModelTokenUsage(model={self.model_name}, total={self.total_usage.total_tokens}, providers=[{providers}])"
 

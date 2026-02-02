@@ -211,7 +211,7 @@ class BytesRow:
         field_meta = self.schema.get_field_meta(field_name)
         if field_meta.id >= serialized_data[0]:
             return field_meta.default_value
-        
+
         # Use '<' for little-endian in all unpack operations
         if field_meta.data_type == FieldType.int64:
             return struct.unpack_from("<q", serialized_data, field_meta.offset)[0]

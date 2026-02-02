@@ -13,9 +13,9 @@ from datetime import datetime
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import uuid4
 
-from openviking.utils.config import get_openviking_config
 from openviking.message import Message, Part
 from openviking.utils import get_logger
+from openviking.utils.config import get_openviking_config
 
 if TYPE_CHECKING:
     from openviking.sync_client import OpenViking
@@ -29,6 +29,7 @@ def _run_async(coro):
         loop = asyncio.get_running_loop()
         # If already in event loop, use nest_asyncio or return directly
         import nest_asyncio
+
         nest_asyncio.apply()
         return loop.run_until_complete(coro)
     except RuntimeError:
@@ -102,9 +103,9 @@ class Session:
             return
 
         try:
-            content = _run_async(self.client.viking_fs.read_file(
-                f"{self._session_uri}/messages.jsonl"
-            ))
+            content = _run_async(
+                self.client.viking_fs.read_file(f"{self._session_uri}/messages.jsonl")
+            )
             self._messages = [
                 Message.from_dict(json.loads(line))
                 for line in content.strip().split("\n")
@@ -117,7 +118,9 @@ class Session:
         # Restore compression_index (scan history directory)
         try:
             history_items = _run_async(self.client.viking_fs.ls(f"{self._session_uri}/history"))
-            archives = [item["name"] for item in history_items if item["name"].startswith("archive_")]
+            archives = [
+                item["name"] for item in history_items if item["name"].startswith("archive_")
+            ]
             if archives:
                 max_index = max(int(a.split("_")[1]) for a in archives)
                 self._compression.compression_index = max_index
@@ -245,11 +248,13 @@ class Session:
             logger.info(
                 f"Starting memory extraction from {len(messages_to_archive)} archived messages"
             )
-            memories = _run_async(self.client._session_compressor.extract_long_term_memories(
-                messages=messages_to_archive,
-                user=self.user,
-                session_id=self.session_id,
-            ))
+            memories = _run_async(
+                self.client._session_compressor.extract_long_term_memories(
+                    messages=messages_to_archive,
+                    user=self.user,
+                    session_id=self.session_id,
+                )
+            )
             logger.info(f"Extracted {len(memories)} memories")
             result["memories_extracted"] = len(memories)
             self._stats.memories_extracted += len(memories)
@@ -287,11 +292,13 @@ class Session:
 
         for usage in self._usage_records:
             try:
-                _run_async(storage.update(
-                    collection="context",
-                    filter={"uri": usage.uri},
-                    update={"$inc": {"active_count": 1}},
-                ))
+                _run_async(
+                    storage.update(
+                        collection="context",
+                        filter={"uri": usage.uri},
+                        update={"$inc": {"active_count": 1}},
+                    )
+                )
                 updated += 1
             except Exception as e:
                 logger.debug(f"Could not update active_count for {usage.uri}: {e}")
@@ -321,9 +328,7 @@ class Session:
         summaries = []
         if self.compression.compression_index > 0:
             try:
-                history_items = _run_async(self.client.viking_fs.ls(
-                    f"{self._session_uri}/history"
-                ))
+                history_items = _run_async(self.client.viking_fs.ls(f"{self._session_uri}/history"))
                 query_lower = query.lower()
 
                 # Collect all archives with relevance scores
@@ -409,10 +414,12 @@ class Session:
 
         # Write messages.jsonl
         lines = [m.to_jsonl() for m in messages]
-        _run_async(viking_fs.write_file(
-            uri=f"{archive_uri}/messages.jsonl",
-            content="\n".join(lines) + "\n",
-        ))
+        _run_async(
+            viking_fs.write_file(
+                uri=f"{archive_uri}/messages.jsonl",
+                content="\n".join(lines) + "\n",
+            )
+        )
 
         _run_async(viking_fs.write_file(uri=f"{archive_uri}/.abstract.md", content=abstract))
         _run_async(viking_fs.write_file(uri=f"{archive_uri}/.overview.md", content=overview))
@@ -433,29 +440,37 @@ class Session:
         lines = [m.to_jsonl() for m in messages]
         content = "\n".join(lines) + "\n" if lines else ""
 
-        _run_async(viking_fs.write_file(
-            uri=f"{self._session_uri}/messages.jsonl",
-            content=content,
-        ))
+        _run_async(
+            viking_fs.write_file(
+                uri=f"{self._session_uri}/messages.jsonl",
+                content=content,
+            )
+        )
 
         # Update L0/L1
-        _run_async(viking_fs.write_file(
-            uri=f"{self._session_uri}/.abstract.md",
-            content=abstract,
-        ))
-        _run_async(viking_fs.write_file(
-            uri=f"{self._session_uri}/.overview.md",
-            content=overview,
-        ))
+        _run_async(
+            viking_fs.write_file(
+                uri=f"{self._session_uri}/.abstract.md",
+                content=abstract,
+            )
+        )
+        _run_async(
+            viking_fs.write_file(
+                uri=f"{self._session_uri}/.overview.md",
+                content=overview,
+            )
+        )
 
     def _append_to_jsonl(self, msg: Message) -> None:
         """Append to messages.jsonl."""
         if not self.client or not self.client.viking_fs:
             return
-        _run_async(self.client.viking_fs.append_file(
-            f"{self._session_uri}/messages.jsonl",
-            msg.to_jsonl() + "\n",
-        ))
+        _run_async(
+            self.client.viking_fs.append_file(
+                f"{self._session_uri}/messages.jsonl",
+                msg.to_jsonl() + "\n",
+            )
+        )
 
     def _update_message_in_jsonl(self) -> None:
         """Update message in messages.jsonl."""
@@ -464,10 +479,12 @@ class Session:
 
         lines = [m.to_jsonl() for m in self._messages]
         content = "\n".join(lines) + "\n"
-        _run_async(self.client.viking_fs.write_file(
-            f"{self._session_uri}/messages.jsonl",
-            content,
-        ))
+        _run_async(
+            self.client.viking_fs.write_file(
+                f"{self._session_uri}/messages.jsonl",
+                content,
+            )
+        )
 
     def _save_tool_result(
         self,
@@ -493,10 +510,12 @@ class Session:
             "status": status,
             "time": {"created": datetime.now().isoformat()},
         }
-        _run_async(self.client.viking_fs.write_file(
-            f"{self._session_uri}/tools/{tool_id}/tool.json",
-            json.dumps(tool_data, ensure_ascii=False),
-        ))
+        _run_async(
+            self.client.viking_fs.write_file(
+                f"{self._session_uri}/tools/{tool_id}/tool.json",
+                json.dumps(tool_data, ensure_ascii=False),
+            )
+        )
 
     def _generate_abstract(self) -> str:
         """Generate one-sentence summary for session."""
@@ -516,7 +535,9 @@ class Session:
             f"- `messages.jsonl` - Current messages ({turn_count} turns)",
         ]
         if self._compression.compression_index > 0:
-            parts.append(f"- `history/` - Historical archives ({self._compression.compression_index} total)")
+            parts.append(
+                f"- `history/` - Historical archives ({self._compression.compression_index} total)"
+            )
         parts.extend(
             [
                 "",

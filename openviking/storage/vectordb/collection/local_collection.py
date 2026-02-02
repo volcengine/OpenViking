@@ -26,24 +26,21 @@ from openviking.storage.vectordb.meta.collection_meta import CollectionMeta, cre
 from openviking.storage.vectordb.meta.index_meta import create_index_meta
 from openviking.storage.vectordb.store.data import CandidateData, DeltaRecord
 from openviking.storage.vectordb.store.store import OpType
-from openviking.storage.vectordb.store.store_manager import (
-    StoreManager,
-    create_store_manager,
-)
+from openviking.storage.vectordb.store.store_manager import StoreManager, create_store_manager
 from openviking.storage.vectordb.utils import validation
+from openviking.storage.vectordb.utils.config_utils import get_config_value
 from openviking.storage.vectordb.utils.constants import (
     DEFAULT_INDEX_MAINTENANCE_SECONDS,
     DEFAULT_TTL_CLEANUP_SECONDS,
     ENV_INDEX_MAINTENANCE_SECONDS,
     ENV_TTL_CLEANUP_SECONDS,
+    STORAGE_DIR_NAME,
     AggregateKeys,
     SpecialFields,
-    STORAGE_DIR_NAME,
 )
 from openviking.storage.vectordb.utils.dict_utils import ThreadSafeDictManager
 from openviking.storage.vectordb.utils.id_generator import generate_auto_id
 from openviking.storage.vectordb.utils.str_to_uint64 import str_to_uint64
-from openviking.storage.vectordb.utils.config_utils import get_config_value
 from openviking.storage.vectordb.vectorize.base import BaseVectorizer
 from openviking.storage.vectordb.vectorize.vectorizer import VectorizerAdapter
 from openviking.storage.vectordb.vectorize.vectorizer_factory import VectorizerFactory
@@ -902,7 +899,9 @@ class PersistCollection(LocalCollection):
         for index_name in index_names:
             meta_path = os.path.join(self.index_dir, index_name, "index_meta.json")
             if not os.path.exists(meta_path):
-                logger.warning(f"Index metadata file not found at {meta_path}, skipping recovery for index {index_name}")
+                logger.warning(
+                    f"Index metadata file not found at {meta_path}, skipping recovery for index {index_name}"
+                )
                 continue
             meta = create_index_meta(self.meta, meta_path)
             # When recovering an existing index, pass initial_timestamp=0.

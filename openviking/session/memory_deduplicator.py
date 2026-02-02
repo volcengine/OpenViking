@@ -8,16 +8,16 @@ LLM-assisted deduplication with CREATE/UPDATE/MERGE/SKIP decisions (Mem0 inspire
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
-from openviking.utils.config import get_openviking_config
-from openviking.core.context import Context, ContextType
+from openviking.core.context import Context
+from openviking.models.embedder.base import EmbedResult
 from openviking.prompts import render_prompt
 from openviking.storage import VikingDBManager
 from openviking.utils import get_logger
-from openviking.models.embedder.base import EmbedResult
+from openviking.utils.config import get_openviking_config
 
-from .memory_extractor import CandidateMemory, MemoryCategory
+from .memory_extractor import CandidateMemory
 
 logger = get_logger(__name__)
 

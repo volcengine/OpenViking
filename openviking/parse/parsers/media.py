@@ -10,17 +10,14 @@ They serve as a design reference for future media parsing capabilities.
 For current document parsing (PDF, Markdown, HTML, Text), see other parser modules.
 """
 
-from PIL import Image
 from pathlib import Path
 from typing import List, Optional, Union
-from openviking.parse.parsers.base_parser import BaseParser
-from openviking.parse.base import NodeType, ParseResult, ResourceNode
-from openviking.utils.config.parser_config import (
-    AudioConfig,
-    ImageConfig,
-    VideoConfig,
-)
 
+from PIL import Image
+
+from openviking.parse.base import NodeType, ParseResult, ResourceNode
+from openviking.parse.parsers.base_parser import BaseParser
+from openviking.utils.config.parser_config import AudioConfig, ImageConfig, VideoConfig
 
 # =============================================================================
 # Configuration Classes
@@ -117,7 +114,7 @@ class ImageParser(BaseParser):
             img = Image.open(file_path)
             width, height = img.size
             format_str = img.format or ext[1:].upper()
-        except Exception as e:
+        except Exception:
             width, height = 0, 0
             format_str = ext[1:].upper()
 
@@ -183,7 +180,7 @@ class ImageParser(BaseParser):
         TODO: Integrate with actual VLM API (OpenAI GPT-4V, Claude Vision, etc.)
         """
         # Fallback implementation - returns basic placeholder
-        return f"Image description (VLM integration pending)\n\nThis is an image. VLM description feature has not yet integrated external API."
+        return "Image description (VLM integration pending)\n\nThis is an image. VLM description feature has not yet integrated external API."
 
     async def _ocr_extract(self, image_bytes: bytes, lang: str) -> Optional[str]:
         """

@@ -5,10 +5,9 @@ Synchronous OpenViking client implementation.
 """
 
 import asyncio
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
-    from openviking.retrieve import QueryResult
     from openviking.session import Session
 
 from openviking.async_client import AsyncOpenViking
@@ -66,9 +65,17 @@ class SyncOpenViking:
         filter: Optional[Dict] = None,
     ):
         """Execute complex retrieval (intent analysis, hierarchical retrieval)."""
-        return asyncio.run(self._async_client.search(query, target_uri, session, limit, score_threshold, filter))
+        return asyncio.run(
+            self._async_client.search(query, target_uri, session, limit, score_threshold, filter)
+        )
 
-    def find(self, query: str, target_uri: str = "", limit: int = 10, score_threshold: Optional[float] = None):
+    def find(
+        self,
+        query: str,
+        target_uri: str = "",
+        limit: int = 10,
+        score_threshold: Optional[float] = None,
+    ):
         """Quick retrieval"""
         return asyncio.run(self._async_client.find(query, target_uri, limit, score_threshold))
 
@@ -140,7 +147,7 @@ class SyncOpenViking:
     def mv(self, from_uri: str, to_uri: str) -> None:
         """Move resource"""
         return asyncio.run(self._async_client.mv(from_uri, to_uri))
-    
+
     def tree(self, uri: str) -> Dict:
         """Get directory tree"""
         return asyncio.run(self._async_client.tree(uri))

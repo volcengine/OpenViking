@@ -5,7 +5,6 @@
 import sys
 import threading
 
-
 _cpp_logging_initialized = False
 _cpp_logging_lock = threading.Lock()
 

@@ -4,7 +4,7 @@
 
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Union
 
 from .token_usage import TokenUsageTracker
 
@@ -120,12 +120,14 @@ class VLMFactory:
             ImportError: If related dependencies are not installed
         """
         provider = config.get("provider") or config.get("backend") or "openai"
-        
+
         if provider == "openai":
             from .backends.openai_vlm import OpenAIVLM
+
             return OpenAIVLM(config)
         elif provider == "volcengine":
             from .backends.volcengine_vlm import VolcEngineVLM
+
             return VolcEngineVLM(config)
         else:
             raise ValueError(f"Unsupported VLM provider: {provider}")

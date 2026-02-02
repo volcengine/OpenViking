@@ -11,7 +11,6 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import openviking.storage.vectordb.engine as engine
 from openviking.storage.vectordb.index.index import IIndex
 from openviking.storage.vectordb.store.data import CandidateData, DeltaRecord
-from openviking.storage.vectordb.utils import file_utils
 from openviking.storage.vectordb.utils.constants import IndexFileMarkers
 from openviking.utils.logger import default_logger as logger
 
@@ -85,15 +84,15 @@ class IndexEngineProxy:
                 query_vector = normalize_vector(query_vector)
             req.query = query_vector
         req.topk = limit
-        
+
         if filters is None:
             filters = {}
         req.dsl = json.dumps(filters)
-        
+
         if sparse_raw_terms and sparse_values:
             req.sparse_raw_terms = sparse_raw_terms
             req.sparse_values = sparse_values
-            
+
         search_result = self.index_engine.search(req)
         labels = search_result.labels
         scores = search_result.scores
@@ -102,7 +101,7 @@ class IndexEngineProxy:
     def add_data(self, cands_list: List[CandidateData]):
         if not self.index_engine:
             raise RuntimeError("Index engine not initialized")
-            
+
         add_req_list = [engine.AddDataRequest() for _ in range(len(cands_list))]
         for i, data in enumerate(cands_list):
             add_req_list[i].label = data.label
@@ -255,7 +254,7 @@ class LocalIndex(IIndex):
                 sparse_raw_terms = []
             if sparse_values is None:
                 sparse_values = []
-                
+
             return self.engine_proxy.search(
                 query_vector, limit, filters, sparse_raw_terms, sparse_values
             )
@@ -267,7 +266,7 @@ class LocalIndex(IIndex):
     ) -> Dict[str, Any]:
         if not self.engine_proxy or not self.engine_proxy.index_engine:
             return {}
-        
+
         extra_json = ""
         try:
             req = engine.SearchRequest()
@@ -366,7 +365,7 @@ class VolatileIndex(LocalIndex):
         """
         if cands_list is None:
             cands_list = []
-            
+
         index_config_dict = meta.get_build_index_dict()
         version_int = int(time.time_ns())
         index_config_dict["VectorIndex"]["ElementCount"] = len(cands_list)
@@ -438,13 +437,13 @@ class PersistentIndex(LocalIndex):
     """
 
     def __init__(
-        self, 
-        name: str, 
-        meta: Any, 
-        path: str, 
-        cands_list: Optional[List[CandidateData]] = None, 
+        self,
+        name: str,
+        meta: Any,
+        path: str,
+        cands_list: Optional[List[CandidateData]] = None,
         force_rebuild: bool = False,
-        initial_timestamp: Optional[int] = None
+        initial_timestamp: Optional[int] = None,
     ):
         """Initialize a persistent index with versioning support.
 
@@ -473,12 +472,12 @@ class PersistentIndex(LocalIndex):
         """
         if cands_list is None:
             cands_list = []
-            
+
         self.index_dir = os.path.join(path, name)
         os.makedirs(self.index_dir, exist_ok=True)
         self.version_dir = os.path.join(self.index_dir, "versions")
         os.makedirs(self.version_dir, exist_ok=True)
-        
+
         newest_version = self.get_newest_version()
 
         # At this point, there is no index, need to create a new one
@@ -491,11 +490,17 @@ class PersistentIndex(LocalIndex):
         super().__init__(index_path, meta)
         # Remove scheduling logic, unified scheduling by collection layer
 
-    def _create_new_index(self, name: str, meta: Any, cands_list: List[CandidateData], initial_timestamp: Optional[int] = None):
+    def _create_new_index(
+        self,
+        name: str,
+        meta: Any,
+        cands_list: List[CandidateData],
+        initial_timestamp: Optional[int] = None,
+    ):
         """Create a new index from scratch."""
         # Get the vector normalization flag from meta
         normalize_vector_flag = meta.inner_meta.get("VectorIndex", {}).get("NormalizeVector", False)
-        
+
         version_int = initial_timestamp if initial_timestamp is not None else int(time.time_ns())
         version_str = str(version_int)
         index_config_dict = meta.get_build_index_dict()
@@ -503,11 +508,11 @@ class PersistentIndex(LocalIndex):
         index_config_dict["VectorIndex"]["MaxElementCount"] = len(cands_list)
         index_config_dict["UpdateTimeStamp"] = version_int
         index_config_json = json.dumps(index_config_dict)
-        
+
         builder = IndexEngineProxy(index_config_json, normalize_vector_flag)
         build_index_path = os.path.join(self.version_dir, version_str)
         builder.add_data(cands_list)
-        
+
         dump_version_int = builder.dump(build_index_path)
         if dump_version_int > 0:
             dump_version_str = str(dump_version_int)
@@ -645,21 +650,21 @@ class PersistentIndex(LocalIndex):
             # Must be a directory
             if not os.path.isdir(version_path):
                 continue
-                
+
             # Must be an integer (timestamp)
             if not name.isdigit():
                 continue
-                
+
             # Must have corresponding .write_done file
             marker_path = version_path + IndexFileMarkers.WRITE_DONE.value
             if not os.path.exists(marker_path):
                 continue
-                
+
             valid_versions.append(int(name))
-            
+
         if not valid_versions:
             return 0
-            
+
         return max(valid_versions)
 
     def drop(self):

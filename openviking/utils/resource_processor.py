@@ -7,16 +7,16 @@ Handles coordinated writes and self-iteration processes
 as described in the OpenViking design document.
 """
 
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, Optional
 
 from openviking.parse.tree_builder import TreeBuilder
-from openviking.utils.extractor import MediaStrategy
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import get_viking_fs
-from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.utils import get_logger
 from openviking.utils.storage import StoragePath
+
+if TYPE_CHECKING:
+    from openviking.parse.vlm import VLMProcessor
 
 logger = get_logger(__name__)
 
