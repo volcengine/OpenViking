@@ -88,3 +88,72 @@ class ChatREPL:
     def run(self):
         """Main REPL loop"""
         pass  # To be implemented in Task 6
+
+    def _show_welcome(self):
+        """Display welcome banner"""
+        console.clear()
+        welcome_text = Text()
+        welcome_text.append("🚀 OpenViking Chat\n\n", style="bold cyan")
+        welcome_text.append("Multi-turn conversation powered by by RAG\n", style="white")
+        welcome_text.append("Type ", style="dim")
+        welcome_text.append("/help", style="bold yellow")
+        welcome_text.append(" for commands or ", style="dim")
+        welcome_text.append("/exit", style="bold yellow")
+        welcome_text.append(" to quit", style="dim")
+
+        console.print(Panel(welcome_text, style="bold", padding=(1, 2), width=PANEL_WIDTH))
+        console.print()
+
+    def _show_help(self):
+        """Display help message"""
+        help_text = Text()
+        help_text.append("Available Commands:\n\n", style="bold cyan")
+        help_text.append("/help", style="bold yellow")
+        help_text.append("   - Show this help message\n", style="white")
+        help_text.append("/clear", style="bold yellow")
+        help_text.append("  - Clear screen (keeps history)\n", style="white")
+        help_text.append("/exit", style="bold yellow")
+        help_text.append("   - Exit chat\n", style="white")
+        help_text.append("/quit", style="bold yellow")
+        help_text.append("   - Exit chat\n", style="white")
+        help_text.append("\nKeyboard Shortcuts:\n\n", style="bold cyan")
+        help_text.append("Ctrl-C", style="bold yellow")
+        help_text.append("  - Exit gracefully\n", style="white")
+        help_text.append("Ctrl-D", style="bold yellow")
+        help_text.append("  - Exit\n", style="white")
+        help_text.append("↑/↓", style="bold yellow")
+        help_text.append("     - Navigate input history", style="white")
+
+        console.print(
+            Panel(help_text, title="Help", style="bold green", padding=(1, 2), width=PANEL_WIDTH)
+        )
+        console.print()
+
+    def handle_command(self, cmd: str) -> bool:
+        """
+        Handle slash commands
+
+        Args:
+            cmd: Command string (e.g., "/help")
+
+        Returns:
+            True if should exit, False otherwise
+        """
+        cmd = cmd.strip().lower()
+
+        if cmd in ["/exit", "/quit"]:
+            console.print(
+                Panel("👋 Goodbye!", style="bold yellow", padding=(0, 1), width=PANEL_WIDTH)
+            )
+            return True
+        elif cmd == "/help":
+            self._show_help()
+        elif cmd == "/clear":
+            console.clear()
+            self._show_welcome()
+        else:
+            console.print(f"Unknown command: {cmd}", style="red")
+            console.print("Type /help for available commands", style="dim")
+            console.print()
+
+        return False
