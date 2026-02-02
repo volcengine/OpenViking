@@ -18,6 +18,33 @@ console = Console()
 PANEL_WIDTH = 78
 
 
+def show_loading_with_spinner(message: str, target_func, *args, **kwargs):
+    """Show a loading spinner while a function executes"""
+    spinner = Spinner("dots", text=message)
+    result = None
+    exception = None
+
+    def run_target():
+        nonlocal result, exception
+        try:
+            result = target_func(*args, **kwargs)
+        except Exception as e:
+            exception = e
+
+    thread = threading.Thread(target=run_target)
+    thread.start()
+
+    with Live(spinner, console=console, refresh_per_second=10, transient=True):
+        thread.join()
+
+    console.print()
+
+    if exception:
+        raise exception
+
+    return result
+
+
 class ChatSession:
     """Manages in-memory conversation history"""
 
@@ -157,3 +184,63 @@ class ChatREPL:
             console.print()
 
         return False
+
+    def ask_question(self, question: str) -> bool:
+        """Ask a question and display the answer"""
+        try:
+            result = show_loading_with_spinner(
+                "Thinking...",
+                self.recipe.query,
+                user_query=question,
+                search_top_k=self.top_k,
+                temperature=self.temperature,
+                max_tokens=self.max_tokens,
+                score_threshold=self.score_threshold,
+            )
+
+            answer_text = Text(result["answer"], style="white")
+            console.print(
+                Panel(
+                    answer_text,
+                    title="💡 Answer",
+                    style="bold bright_cyan",
+                    padding=(1, 1),
+                    width=PANEL_WIDTH,
+                )
+            )
+            console.print()
+
+            if result["context"]:
+                from rich.table import Table
+                from rich import box
+
+                sources_table = Table(
+                    title=f"📚 Sources ({len(result['context'])} documents)",
+                    box=box.ROUNDED,
+                    show_header=True,
+                    header_style="bold magenta",
+                    title_style="bold magenta",
+                )
+                sources_table.add_column("#", style="cyan", width=4)
+                sources_table.add_column("File", style="bold white")
+                sources_table.add_column("Relevance", style="green", justify="right")
+
+                for i, ctx in enumerate(result["context"], 1):
+                    uri_parts = ctx["uri"].split("/")
+                    filename = uri_parts[-1] if uri_parts else ctx["uri"]
+                    score_text = Text(f"{ctx['score']:.4f}", style="bold green")
+                    sources_table.add_row(str(i), filename, score_text)
+
+                console.print(sources_table)
+            console.print()
+
+            self.session.add_turn(question, result["answer"], result["context"])
+
+            return True
+
+        except Exception as e:
+            console.print(
+                Panel(f"❌ Error: {e}", style="bold red", padding=(0, 1), width=PANEL_WIDTH)
+            )
+            console.print()
+            return False
