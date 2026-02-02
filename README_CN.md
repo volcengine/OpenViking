@@ -161,10 +161,24 @@ OpenViking 支持多种模型服务：
 
 #### 设置环境变量
 
-创建好配置文件后，设置环境变量指向配置文件：
+创建好配置文件后，设置环境变量指向配置文件（Linux/macOS）：
 
 ```bash
 export OPENVIKING_CONFIG_FILE=ov.conf
+```
+
+Windows 下可使用以下方式之一：
+
+PowerShell：
+
+```powershell
+$env:OPENVIKING_CONFIG_FILE = "ov.conf"
+```
+
+命令提示符（cmd.exe）：
+
+```bat
+set OPENVIKING_CONFIG_FILE=ov.conf
 ```
 
 > 💡 **提示**：你也可以将配置文件放在其他位置，只需在环境变量中指定正确的路径即可。

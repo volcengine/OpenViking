@@ -72,8 +72,6 @@ class VikingDBObserver(BaseObserver):
         return statuses
 
     def _format_status_as_table(self, statuses: Dict[str, Dict]) -> str:
-        import pandas as pd
-
         data = []
         total_indexes = 0
         total_vectors = 0
@@ -86,8 +84,8 @@ class VikingDBObserver(BaseObserver):
             data.append(
                 {
                     "Collection": name,
-                    "Index Count": index_count,
-                    "Vector Count": vector_count,
+                    "Index Count": str(index_count),
+                    "Vector Count": str(vector_count),
                     "Status": "ERROR" if error else "OK",
                 }
             )
@@ -97,17 +95,41 @@ class VikingDBObserver(BaseObserver):
         if not data:
             return "No collections found."
 
-        df = pd.DataFrame(data)
+        # Add total row
+        data.append(
+            {
+                "Collection": "TOTAL",
+                "Index Count": str(total_indexes),
+                "Vector Count": str(total_vectors),
+                "Status": "",
+            }
+        )
 
-        total_row = {
-            "Collection": "TOTAL",
-            "Index Count": total_indexes,
-            "Vector Count": total_vectors,
-            "Status": "",
-        }
-        df = pd.concat([df, pd.DataFrame([total_row])], ignore_index=True)
+        # Simple table formatter
+        headers = ["Collection", "Index Count", "Vector Count", "Status"]
+        col_widths = {h: len(h) for h in headers}
 
-        return df.to_string(index=False)
+        for row in data:
+            for h in headers:
+                col_widths[h] = max(col_widths[h], len(str(row.get(h, ""))))
+
+        # Add padding
+        for h in headers:
+            col_widths[h] += 2
+
+        # Build string
+        lines = []
+
+        # Header
+        header_line = "".join(h.ljust(col_widths[h]) for h in headers)
+        lines.append(header_line)
+
+        # Rows
+        for row in data:
+            line = "".join(str(row.get(h, "")).ljust(col_widths[h]) for h in headers)
+            lines.append(line)
+
+        return "\n".join(lines)
 
     def is_healthy(self) -> bool:
         """

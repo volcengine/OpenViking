@@ -81,6 +81,10 @@ def serializable(cls):
         # Get custom type from metadata, otherwise auto-infer
         if f.metadata and "field_type" in f.metadata:
             field_type = f.metadata["field_type"]
+            if not isinstance(field_type, FieldType):
+                raise ValueError(
+                    f"Field '{field_name}': field_type must be a FieldType, got {type(field_type).__name__}"
+                )
         else:
             field_type = _python_type_to_field_type(f.type, field_name)
 

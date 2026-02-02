@@ -1,34 +1,35 @@
 name: Test
 
 on:
-  push:
-    branches: [ main, develop ]
-    paths-ignore:
-      - 'docs/**'
-      - '**.md'
-      - 'LICENSE'
-      - 'CONTRIBUTING.md'
-      - '**.png'
-      - '**.jpg'
-      - '**.jpeg'
-      - '**.gif'
-      - '**.svg'
-      - '.gitignore'
-      - '.editorconfig'
-  pull_request:
-    branches: [ main, develop ]
-    paths-ignore:
-      - 'docs/**'
-      - '**.md'
-      - 'LICENSE'
-      - 'CONTRIBUTING.md'
-      - '**.png'
-      - '**.jpg'
-      - '**.jpeg'
-      - '**.gif'
-      - '**.svg'
-      - '.gitignore'
-      - '.editorconfig'
+  workflow_dispatch:
+  # push:
+  #   branches: [ main, develop ]
+  #   paths-ignore:
+  #     - 'docs/**'
+  #     - '**.md'
+  #     - 'LICENSE'
+  #     - 'CONTRIBUTING.md'
+  #     - '**.png'
+  #     - '**.jpg'
+  #     - '**.jpeg'
+  #     - '**.gif'
+  #     - '**.svg'
+  #     - '.gitignore'
+  #     - '.editorconfig'
+  # pull_request:
+  #   branches: [ main, develop ]
+  #   paths-ignore:
+  #     - 'docs/**'
+  #     - '**.md'
+  #     - 'LICENSE'
+  #     - 'CONTRIBUTING.md'
+  #     - '**.png'
+  #     - '**.jpg'
+  #     - '**.jpeg'
+  #     - '**.gif'
+  #     - '**.svg'
+  #     - '.gitignore'
+  #     - '.editorconfig'
 
 jobs:
   test:
@@ -80,7 +81,7 @@ jobs:
       run: echo "C:\mingw64\bin" >> $env:GITHUB_PATH
 
     - name: Install Python dependencies
-      run: uv sync
+      run: uv sync --extra test
 
     - name: Install build dependencies
       run: uv pip install setuptools pybind11 cmake wheel

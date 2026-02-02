@@ -36,7 +36,7 @@ class QueueObserver(BaseObserver):
 
     def _format_status_as_table(self, statuses: Dict[str, QueueStatus]) -> str:
         """
-        Format queue statuses as a pandas DataFrame table.
+        Format queue statuses as a string table.
 
         Args:
             statuses: Dict mapping queue names to QueueStatus
@@ -44,8 +44,6 @@ class QueueObserver(BaseObserver):
         Returns:
             Formatted table string
         """
-        import pandas as pd
-
         if not statuses:
             return "No queue status data available."
 
@@ -60,11 +58,11 @@ class QueueObserver(BaseObserver):
             data.append(
                 {
                     "Queue": queue_name,
-                    "Pending": status.pending,
-                    "In Progress": status.in_progress,
-                    "Processed": status.processed,
-                    "Errors": status.error_count,
-                    "Total": total,
+                    "Pending": str(status.pending),
+                    "In Progress": str(status.in_progress),
+                    "Processed": str(status.processed),
+                    "Errors": str(status.error_count),
+                    "Total": str(total),
                 }
             )
             total_pending += status.pending
@@ -72,31 +70,56 @@ class QueueObserver(BaseObserver):
             total_processed += status.processed
             total_errors += status.error_count
 
-        df = pd.DataFrame(data)
-
         # Add total row
         total_total = total_pending + total_in_progress + total_processed
-        total_row = {
-            "Queue": "TOTAL",
-            "Pending": total_pending,
-            "In Progress": total_in_progress,
-            "Processed": total_processed,
-            "Errors": total_errors,
-            "Total": total_total,
-        }
-        df = pd.concat([df, pd.DataFrame([total_row])], ignore_index=True)
-
-        return df.to_string(
-            index=False,
-            col_space={
-                "Queue": 20,
-                "Pending": 10,
-                "In Progress": 12,
-                "Processed": 10,
-                "Errors": 8,
-                "Total": 10,
-            },
+        data.append(
+            {
+                "Queue": "TOTAL",
+                "Pending": str(total_pending),
+                "In Progress": str(total_in_progress),
+                "Processed": str(total_processed),
+                "Errors": str(total_errors),
+                "Total": str(total_total),
+            }
         )
+
+        # Simple table formatter
+        headers = ["Queue", "Pending", "In Progress", "Processed", "Errors", "Total"]
+        # Default minimum widths similar to previous col_space
+        min_widths = {
+            "Queue": 20,
+            "Pending": 10,
+            "In Progress": 12,
+            "Processed": 10,
+            "Errors": 8,
+            "Total": 10,
+        }
+
+        col_widths = {h: len(h) for h in headers}
+
+        # Calculate max width based on content and min_widths
+        for row in data:
+            for h in headers:
+                content_len = len(str(row.get(h, "")))
+                col_widths[h] = max(col_widths[h], content_len, min_widths.get(h, 0))
+
+        # Add padding
+        for h in headers:
+            col_widths[h] += 2
+
+        # Build string
+        lines = []
+
+        # Header
+        header_line = "".join(h.ljust(col_widths[h]) for h in headers)
+        lines.append(header_line)
+
+        # Rows
+        for row in data:
+            line = "".join(str(row.get(h, "")).ljust(col_widths[h]) for h in headers)
+            lines.append(line)
+
+        return "\n".join(lines)
 
     def is_healthy(self) -> bool:
         return not self.has_errors()

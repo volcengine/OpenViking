@@ -48,7 +48,7 @@ jobs:
         enable-cache: true
 
     - name: Install dependencies
-      run: uv sync
+      run: uv sync --extra dev
 
     - name: Format with ruff
       run: uv run ruff format --check openviking/

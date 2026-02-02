@@ -34,7 +34,7 @@ We recommend using `uv` for Python environment management:
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # Sync dependencies and create virtual environment
-uv sync
+uv sync --all-extras
 source .venv/bin/activate  # Linux/macOS
 # or .venv\Scripts\activate  # Windows
 

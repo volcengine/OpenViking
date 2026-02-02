@@ -4,6 +4,7 @@ import unittest
 from dataclasses import dataclass, field
 from typing import List
 
+from openviking.storage.vectordb.store.bytes_row import FieldType
 from openviking.storage.vectordb.store.serializable import serializable
 
 
@@ -12,7 +13,7 @@ class TestBytesRow(unittest.TestCase):
         @serializable
         @dataclass
         class BasicData:
-            id: int = field(default=0, metadata={"field_type": "int64"})
+            id: int = field(default=0, metadata={"field_type": FieldType.int64})
             score: float = 0.0
             active: bool = False
             name: str = ""
@@ -62,7 +63,7 @@ class TestBytesRow(unittest.TestCase):
         @serializable
         @dataclass
         class DefaultData:
-            id: int = field(default=999, metadata={"field_type": "int64"})
+            id: int = field(default=999, metadata={"field_type": FieldType.int64})
             desc: str = "default"
 
         # Empty data, should use defaults

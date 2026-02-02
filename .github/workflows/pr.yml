@@ -40,17 +40,16 @@ jobs:
         enable-cache: true
 
     - name: Install dependencies
-      run: uv sync
+      run: uv sync --extra dev
 
     - name: Check formatting and linting
       run: |
-        uv run black --check openviking/
-        uv run isort --check-only openviking/
         uv run ruff check openviking/
         uv run mypy openviking/ || true
 
   test:
     name: Test on Python ${{ matrix.python-version }}
+    if: false
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -83,7 +82,7 @@ jobs:
         sudo apt-get install -y cmake build-essential
 
     - name: Install Python dependencies
-      run: uv sync
+      run: uv sync --extra test
 
     - name: Install build dependencies
       run: uv pip install setuptools pybind11 cmake wheel

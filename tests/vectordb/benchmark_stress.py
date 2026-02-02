@@ -5,8 +5,6 @@ import shutil
 import threading
 import time
 
-import numpy as np
-
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.local_collection import get_or_create_local_collection
 
@@ -15,6 +13,12 @@ DEFAULT_DIM = 128
 DEFAULT_DB_PATH = "./benchmark_stress_db"
 CATEGORIES = ["news", "sports", "finance", "tech", "entertainment"]
 TAGS = ["hot", "new", "archived", "premium", "public"]
+
+
+def calculate_mean(data):
+    if not data:
+        return 0.0
+    return sum(data) / len(data)
 
 
 class StressStats:
@@ -48,13 +52,13 @@ class StressStats:
             duration = time.time() - self.start_time
             print(f"\n--- Stress Test Report (Duration: {duration:.2f}s) ---")
             print(
-                f"Insert: {self.insert_count} ops, {self.insert_count / duration:.2f} OPS, Avg Latency: {np.mean(self.insert_latency) if self.insert_latency else 0:.4f}s"
+                f"Insert: {self.insert_count} ops, {self.insert_count / duration:.2f} OPS, Avg Latency: {calculate_mean(self.insert_latency):.4f}s"
             )
             print(
-                f"Search: {self.search_count} ops, {self.search_count / duration:.2f} OPS, Avg Latency: {np.mean(self.search_latency) if self.search_latency else 0:.4f}s"
+                f"Search: {self.search_count} ops, {self.search_count / duration:.2f} OPS, Avg Latency: {calculate_mean(self.search_latency):.4f}s"
             )
             print(
-                f"Delete: {self.delete_count} ops, {self.delete_count / duration:.2f} OPS, Avg Latency: {np.mean(self.delete_latency) if self.delete_latency else 0:.4f}s"
+                f"Delete: {self.delete_count} ops, {self.delete_count / duration:.2f} OPS, Avg Latency: {calculate_mean(self.delete_latency):.4f}s"
             )
             print(f"Total Ops: {self.insert_count + self.search_count + self.delete_count}")
             print("------------------------------------------------")

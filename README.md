@@ -162,10 +162,24 @@ Create a configuration file `ov.conf`:
 
 #### Set Environment Variable
 
-After creating the configuration file, set the environment variable to point to it:
+After creating the configuration file, set the environment variable to point to it (Linux/macOS):
 
 ```bash
 export OPENVIKING_CONFIG_FILE=ov.conf
+```
+
+On Windows, use one of the following:
+
+PowerShell:
+
+```powershell
+$env:OPENVIKING_CONFIG_FILE = "ov.conf"
+```
+
+Command Prompt (cmd.exe):
+
+```bat
+set OPENVIKING_CONFIG_FILE=ov.conf
 ```
 
 > 💡 **Tip**: You can also place the configuration file in other locations, just specify the correct path in the environment variable.

@@ -31,7 +31,7 @@ if(WIN32)
     add_compile_definitions(NOMINMAX)
 endif()
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -g -Wno-error -Wno-deprecated-declarations -Wno-format -Wno-inconsistent-missing-override")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-error -Wno-deprecated-declarations -Wno-format -Wno-inconsistent-missing-override")
 
 set(CMAKE_CXX_LINK_EXECUTABLE "${CMAKE_CXX_LINK_EXECUTABLE} -lpthread")
 
@@ -148,4 +148,3 @@ endif()
 if(NOT DEFINED PY_OUTPUT_DIR)
     set(PY_OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/${PY_PACKAGE_NAME})
 endif()
-
