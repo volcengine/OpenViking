@@ -1,0 +1,10 @@
+[project]
+name = "chat"
+version = "0.1.0"
+description = "Multi-turn chat interface for OpenViking"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "openviking>=0.1.6",
+    "rich>=13.0.0",
+]
