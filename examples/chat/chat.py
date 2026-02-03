@@ -135,7 +135,7 @@ class ChatREPL:
         console.clear()
         welcome_text = Text()
         welcome_text.append("🚀 OpenViking Chat\n\n", style="bold cyan")
-        welcome_text.append("Multi-turn conversation powered by by RAG\n", style="white")
+        welcome_text.append("Multi-round conversation\n", style="white")
         welcome_text.append("Type ", style="dim")
         welcome_text.append("/help", style="bold yellow")
         welcome_text.append(" for commands or ", style="dim")
@@ -289,7 +289,7 @@ class ChatREPL:
 
                     self.ask_question(user_input)
 
-                except EOFError:
+                except (EOFError, KeyboardInterrupt):
                     console.print("\n")
                     console.print(
                         Panel("👋 Goodbye!", style="bold yellow", padding=(0, 1), width=PANEL_WIDTH)
