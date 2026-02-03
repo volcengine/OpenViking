@@ -80,6 +80,7 @@ class ChatREPL:
         self.session = None
         self.recipe: Recipe = None
         self.should_exit = False
+        self._session_committed = False  # Track if session was already committed
 
         signal.signal(signal.SIGINT, self._signal_handler)
 
@@ -88,10 +89,11 @@ class ChatREPL:
         console.print("\n")
 
         # Commit session before exit
-        if self.session:
+        if self.session and not self._session_committed:
             console.print("[dim]💾 Saving session...[/dim]")
             try:
                 commit_result = self.session.commit()
+                self._session_committed = True  # Mark as committed
                 memories = commit_result.get("memories_extracted", 0)
                 if memories > 0:
                     console.print(f"[dim]✨ Extracted {memories} memories[/dim]")
@@ -252,11 +254,11 @@ class ChatREPL:
                 config_dict = json.load(f)
             config = OpenVikingConfig.from_dict(config_dict)
 
-            self.client = SyncOpenViking(path=self.data_path, config=config)
+            self.client = SyncOpenViking(path=self.data_path, config=config, user="default")
             self.client.initialize()
 
             # Create/load session
-            self.session = self.client.session(user="default", session_id=self.session_id)
+            self.session = self.client.session(session_id=self.session_id)
             self.session.load()
 
             # Initialize recipe (same as before)
@@ -301,11 +303,12 @@ class ChatREPL:
                     break
 
         finally:
-            # Commit session before cleanup
-            if self.session:
+            # Commit session before cleanup (only if not already committed by signal handler)
+            if self.session and not self._session_committed:
                 console.print("\n[dim]💾 Saving session...[/dim]")
                 try:
                     commit_result = self.session.commit()
+                    self._session_committed = True
                     memories = commit_result.get("memories_extracted", 0)
                     if memories > 0:
                         console.print(f"[dim]✨ Extracted {memories} memories[/dim]")
