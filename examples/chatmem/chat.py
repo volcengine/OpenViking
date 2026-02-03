@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
-Chat - Multi-turn conversation interface for OpenViking
+Chat with Memory - Multi-turn conversation with persistent memory using OpenViking Session API
 """
 
 import sys
 import signal
+import json
 from typing import List, Dict, Any
 from rich.console import Console
 from rich.panel import Panel
@@ -16,6 +17,10 @@ import threading
 from prompt_toolkit import prompt
 from prompt_toolkit.styles import Style
 from prompt_toolkit.formatted_text import HTML
+
+from openviking import SyncOpenViking
+from openviking.message import TextPart
+from openviking.utils.config.open_viking_config import OpenVikingConfig
 
 console = Console()
 PANEL_WIDTH = 78
@@ -48,62 +53,14 @@ def show_loading_with_spinner(message: str, target_func, *args, **kwargs):
     return result
 
 
-class ChatSession:
-    """Manages in-memory conversation history"""
-
-    def __init__(self):
-        """Initialize empty conversation history"""
-        self.history: List[Dict[str, Any]] = []
-
-    def add_turn(self, question: str, answer: str, sources: List[Dict[str, Any]]) -> None:
-        """
-        Add a Q&A turn to history
-
-        Args:
-            question: User's question
-            answer: Assistant's answer
-            sources: List of source documents used
-        """
-        self.history.append(
-            {
-                "question": question,
-                "answer": answer,
-                "sources": sources,
-                "turn": len(self.history) + 1,
-            }
-        )
-
-    def clear(self) -> None:
-        """Clear all conversation history"""
-        self.history.clear()
-
-    def get_turn_count(self) -> int:
-        """Get number of turns in conversation"""
-        return len(self.history)
-
-    def get_chat_history(self) -> List[Dict[str, str]]:
-        """
-        Get conversation history in OpenAI chat completion format
-
-        Returns:
-            List of message dicts with 'role' and 'content' keys
-            Format: [{"role": "user", "content": "..."},
-                      {"role": "assistant", "content": "..."}]
-        """
-        history = []
-        for turn in self.history:
-            history.append({"role": "user", "content": turn["question"]})
-            history.append({"role": "assistant", "content": turn["answer"]})
-        return history
-
-
 class ChatREPL:
-    """Interactive chat REPL"""
+    """Interactive chat REPL with OpenViking Session API for persistent memory"""
 
     def __init__(
         self,
         config_path: str = "./ov.conf",
         data_path: str = "./data",
+        session_id: str = "chat-interactive",
         temperature: float = 0.7,
         max_tokens: int = 2048,
         top_k: int = 5,
@@ -112,13 +69,16 @@ class ChatREPL:
         """Initialize chat REPL"""
         self.config_path = config_path
         self.data_path = data_path
+        self.session_id = session_id
         self.temperature = temperature
         self.max_tokens = max_tokens
         self.top_k = top_k
         self.score_threshold = score_threshold
 
-        self.recipe = None
-        self.session = ChatSession()
+        # OpenViking client and session (initialized in run())
+        self.client: SyncOpenViking = None
+        self.session = None
+        self.recipe: Recipe = None
         self.should_exit = False
 
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -134,8 +94,8 @@ class ChatREPL:
         """Display welcome banner"""
         console.clear()
         welcome_text = Text()
-        welcome_text.append("🚀 OpenViking Chat\n\n", style="bold cyan")
-        welcome_text.append("Multi-round conversation\n", style="white")
+        welcome_text.append("🚀 OpenViking Chat with Memory\n\n", style="bold cyan")
+        welcome_text.append("Multi-round conversation with persistent memory\n", style="white")
         welcome_text.append("Type ", style="dim")
         welcome_text.append("/help", style="bold yellow")
         welcome_text.append(" for commands or ", style="dim")
@@ -275,8 +235,7 @@ class ChatREPL:
             while not self.should_exit:
                 try:
                     user_input = prompt(
-                        HTML("<style fg='cyan'>You:</style> "),
-                        style=Style.from_dict({"": ""})
+                        HTML("<style fg='cyan'>You:</style> "), style=Style.from_dict({"": ""})
                     ).strip()
 
                     if not user_input:
