@@ -72,15 +72,14 @@ class Recipe:
 
         # Extract top results
         search_results = []
-        for i, resource in enumerate(results.resources[:top_k]):
+        for i, resource in enumerate(results.resources[:top_k] + results.memories[:top_k]): # ignore SKILLs for mvp
             try:
-                # Try to read the resource
                 content = self.client.read(resource.uri)
                 search_results.append(
                     {
                         "uri": resource.uri,
                         "score": resource.score,
-                        "content": content[:1000],  # Limit content length
+                        "content": content[:1000],  # Limit content length for MVP
                     }
                 )
                 # print(f"  {i + 1}. {resource.uri} (score: {resource.score:.4f})")
@@ -209,6 +208,7 @@ class Recipe:
         current_prompt += f"Question: {user_query}\n\n"
         # current_prompt += "Please provide a comprehensive answer based on the context above. "
         # current_prompt += "If the context doesn't contain enough information, say so.\n\nAnswer:"
+        # print(current_prompt)
 
         # Add current user message
         messages.append({"role": "user", "content": current_prompt})

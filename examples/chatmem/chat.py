@@ -311,7 +311,9 @@ class ChatREPL:
                     self._session_committed = True
                     memories = commit_result.get("memories_extracted", 0)
                     if memories > 0:
-                        console.print(f"[dim]✨ Extracted {memories} memories[/dim]")
+                        console.print(f"[dim]{memories} memories processing... [/dim]")
+                        self.client.wait_processed() # critical, waiting to process memory embedding, timeout=inf
+                        console.print(f"[dim green]✨ Extracted {memories} memories[/dim green]")
                 except Exception as e:
                     console.print(f"[dim red]⚠️  Error saving session: {e}[/dim red]")
 
