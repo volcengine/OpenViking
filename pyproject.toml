@@ -9,7 +9,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "openviking"
-version = "0.1.6"
+version = "0.1.7"
 description = "An Agent-native context database: Data in, Context out"
 readme = "README.md"
 authors = [
