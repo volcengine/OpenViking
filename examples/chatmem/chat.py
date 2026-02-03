@@ -223,11 +223,33 @@ class ChatREPL:
 
     def run(self):
         """Main REPL loop"""
+        # Initialize OpenViking client
         try:
+            with open(self.config_path, "r") as f:
+                config_dict = json.load(f)
+            config = OpenVikingConfig.from_dict(config_dict)
+
+            self.client = SyncOpenViking(path=self.data_path, config=config)
+            self.client.initialize()
+
+            # Create/load session
+            self.session = self.client.session(user="default", session_id=self.session_id)
+            self.session.load()
+
+            # Initialize recipe (same as before)
             self.recipe = Recipe(config_path=self.config_path, data_path=self.data_path)
+
         except Exception as e:
             console.print(Panel(f"❌ Error initializing: {e}", style="bold red", padding=(0, 1)))
             return
+
+        # Show session info if continuing
+        if self.session.messages:
+            msg_count = len(self.session.messages)
+            turn_count = len([m for m in self.session.messages if m.role == "user"])
+            console.print(
+                f"[dim]📝 Continuing from previous session: {turn_count} turns, {msg_count} messages[/dim]\n"
+            )
 
         self._show_welcome()
 
@@ -256,8 +278,11 @@ class ChatREPL:
                     break
 
         finally:
+            # Cleanup resources
             if self.recipe:
                 self.recipe.close()
+            if self.client:
+                self.client.close()
 
 
 def main():
