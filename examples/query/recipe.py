@@ -174,6 +174,7 @@ class Recipe:
         search_results = self.search(
             user_query, top_k=search_top_k, score_threshold=score_threshold
         )
+        # print(f"[DEBUG] Search returned {len(search_results)} results")
 
         # Step 2: Build context from search results
         context_text = "no relevant information found, try answer based on existing knowledge."
