@@ -111,14 +111,14 @@ class CMakeBuildExtension(build_ext):
             "-DCMAKE_INSTALL_RPATH=$ORIGIN",
             f"-DPython3_EXECUTABLE={sys.executable}",
             f"-DPython3_INCLUDE_DIRS={sysconfig.get_path('include')}",
-            f"-DPython3_LIBRARIES={sysconfig.get_config_vars().get('LIBRARY')}",
+            # f"-DPython3_LIBRARIES={sysconfig.get_config_vars().get('LIBRARY')}",
             f"-Dpybind11_DIR={pybind11.get_cmake_dir()}",
             f"-DCMAKE_C_COMPILER={C_COMPILER_PATH}",
             f"-DCMAKE_CXX_COMPILER={CXX_COMPILER_PATH}",
         ]
 
         if sys.platform == "darwin":
-            cmake_args.append("-DCMAKE_OSX_DEPLOYMENT_TARGET=10.15")
+            cmake_args.append("-DCMAKE_OSX_DEPLOYMENT_TARGET=12.1")
         elif sys.platform == "win32":
             cmake_args.extend(["-G", "MinGW Makefiles"])
 
