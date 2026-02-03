@@ -13,6 +13,9 @@ from recipe import Recipe
 from rich.live import Live
 from rich.spinner import Spinner
 import threading
+from prompt_toolkit import prompt
+from prompt_toolkit.styles import Style
+from prompt_toolkit.formatted_text import HTML
 
 console = Console()
 PANEL_WIDTH = 78
@@ -77,6 +80,21 @@ class ChatSession:
     def get_turn_count(self) -> int:
         """Get number of turns in conversation"""
         return len(self.history)
+
+    def get_chat_history(self) -> List[Dict[str, str]]:
+        """
+        Get conversation history in OpenAI chat completion format
+
+        Returns:
+            List of message dicts with 'role' and 'content' keys
+            Format: [{"role": "user", "content": "..."},
+                      {"role": "assistant", "content": "..."}]
+        """
+        history = []
+        for turn in self.history:
+            history.append({"role": "user", "content": turn["question"]})
+            history.append({"role": "assistant", "content": turn["answer"]})
+        return history
 
 
 class ChatREPL:
@@ -182,8 +200,9 @@ class ChatREPL:
         return False
 
     def ask_question(self, question: str) -> bool:
-        """Ask a question and display the answer"""
+        """Ask a question and display of answer"""
         try:
+            chat_history = self.session.get_chat_history()
             result = show_loading_with_spinner(
                 "Thinking...",
                 self.recipe.query,
@@ -192,6 +211,7 @@ class ChatREPL:
                 temperature=self.temperature,
                 max_tokens=self.max_tokens,
                 score_threshold=self.score_threshold,
+                chat_history=chat_history,
             )
 
             answer_text = Text(result["answer"], style="white")
@@ -252,14 +272,12 @@ class ChatREPL:
         self._show_welcome()
 
         try:
-            import readline
-        except ImportError:
-            pass
-
-        try:
             while not self.should_exit:
                 try:
-                    user_input = console.input("[bold cyan]You:[/bold cyan] ").strip()
+                    user_input = prompt(
+                        HTML("<style fg='cyan'>You:</style> "),
+                        style=Style.from_dict({"": ""})
+                    ).strip()
 
                     if not user_input:
                         continue
