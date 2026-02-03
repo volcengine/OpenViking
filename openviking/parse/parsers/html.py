@@ -37,6 +37,7 @@ class URLType(Enum):
     DOWNLOAD_MD = "download_md"  # Markdown file download link
     DOWNLOAD_TXT = "download_txt"  # Text file download link
     DOWNLOAD_HTML = "download_html"  # HTML file download link
+    CODE_REPOSITORY = "code_repository"  # Code repository (GitHub, GitLab, etc.)
     UNKNOWN = "unknown"  # Unknown or unsupported type
 
 
@@ -58,6 +59,7 @@ class URLTypeDetector:
         ".text": URLType.DOWNLOAD_TXT,
         ".html": URLType.DOWNLOAD_HTML,
         ".htm": URLType.DOWNLOAD_HTML,
+        ".git": URLType.CODE_REPOSITORY,
     }
 
     # Content-Type to URL type mapping
@@ -83,6 +85,11 @@ class URLTypeDetector:
         meta = {"url": url, "detected_by": "unknown"}
         parsed = urlparse(url)
         path_lower = parsed.path.lower()
+
+        # 0. Check for code repository URLs first
+        if self._is_code_repository_url(url):
+            meta["detected_by"] = "code_repository_pattern"
+            return URLType.CODE_REPOSITORY, meta
 
         # 1. Check extension first
         for ext, url_type in self.EXTENSION_MAP.items():
@@ -120,6 +127,40 @@ class URLTypeDetector:
 
         # 3. Default: assume webpage
         return URLType.WEBPAGE, meta
+
+    def _is_code_repository_url(self, url: str) -> bool:
+        """
+        Check if URL is a code repository URL.
+
+        Args:
+            url: URL to check
+
+        Returns:
+            True if URL matches code repository patterns
+        """
+        import re
+
+        # Repository URL patterns (from README)
+        repo_patterns = [
+            r"^https?://github\.com/[^/]+/[^/]+/?$",
+            r"^https?://gitlab\.com/[^/]+/[^/]+/?$",
+            r"^.*\.git$",
+            r"^git@",
+        ]
+
+        # Check for URL patterns
+        for pattern in repo_patterns:
+            if re.match(pattern, url):
+                return True
+
+        # Check if it's a GitHub/GitLab URL
+        parsed = urlparse(url)
+        if parsed.netloc in ["github.com", "gitlab.com"]:
+            path_parts = parsed.path.strip("/").split("/")
+            if len(path_parts) >= 2:
+                return True
+
+        return False
 
 
 class HTMLParser(BaseParser):

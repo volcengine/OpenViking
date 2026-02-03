@@ -12,7 +12,8 @@ from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 
 from openviking.parse.base import ParseResult
 from openviking.parse.parsers.base_parser import BaseParser
-from openviking.parse.parsers.code import CodeParser
+
+# Import will be handled dynamically to avoid dependency issues
 from openviking.parse.parsers.html import HTMLParser
 from openviking.parse.parsers.markdown import MarkdownParser
 from openviking.parse.parsers.pdf import PDFParser
@@ -47,7 +48,14 @@ class ParserRegistry:
         self.register("markdown", MarkdownParser())
         self.register("pdf", PDFParser())
         self.register("html", HTMLParser())
-        self.register("code", CodeParser())
+
+        # Register code parser dynamically
+        try:
+            from openviking.parse.parsers.code import CodeRepositoryParser
+
+            self.register("code", CodeRepositoryParser())
+        except ImportError as e:
+            logger.warning(f"CodeRepositoryParser not available: {e}")
 
         # Register optional media parsers
         if register_optional:
@@ -202,6 +210,20 @@ class ParserRegistry:
             ParseResult with document tree
         """
         source_str = str(source)
+
+        # First, check if it's a code repository URL
+        code_parser = self._parsers.get("code")
+        if code_parser:
+            # Check if the parser has the is_repository_url method
+            try:
+                if hasattr(code_parser, "is_repository_url") and code_parser.is_repository_url(
+                    source_str
+                ):
+                    logger.info(f"Detected code repository URL: {source_str}")
+                    return await code_parser.parse(source_str, **kwargs)
+            except Exception as e:
+                logger.warning(f"Error checking if source is repository URL: {e}")
+                # Continue with normal parsing flow
 
         # Check if source looks like a file path (short enough and no newlines)
         is_potential_path = len(source_str) <= 1024 and "\n" not in source_str

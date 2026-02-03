@@ -268,7 +268,7 @@ class AsyncOpenViking:
         timeout: float = None,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking (only supports resources scope).
-
+        like: viking://resources/github/volcengine/OpenViking
         Args:
             wait: Whether to wait for semantic extraction and vectorization to complete
             timeout: Wait timeout in seconds
