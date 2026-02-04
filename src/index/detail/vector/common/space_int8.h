@@ -153,7 +153,7 @@ static float l2_distance_int8(const void* v1, const void* v2,
   float real_ip = static_cast<float>(ip) * scale1 * scale2;
   float dist = norm_sq1 + norm_sq2 - 2.0f * real_ip;
 
-  return 1.0f - std::max(0.0f, dist);
+  return std::max(0.0f, dist);
 }
 
 class InnerProductSpaceInt8 : public VectorSpace<float> {

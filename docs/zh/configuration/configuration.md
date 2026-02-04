@@ -294,6 +294,9 @@ client = ov.AsyncOpenViking(config=config)
 }
 ```
 
+说明：
+- `storage.vectordb.sparse_weight` 用于混合（dense + sparse）索引/检索的权重，仅在使用 hybrid 索引时生效；设置为 > 0 才会启用 sparse 信号。
+
 ## 相关文档
 
 - [Embedding 配置](./embedding.md) - Embedding 设置

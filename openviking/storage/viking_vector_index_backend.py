@@ -77,8 +77,9 @@ class VikingVectorIndexBackend(VikingDBInterface):
         """
         init_cpp_logging()
 
-        self.vector_dim = config.vector_dim
+        self.vector_dim = config.dimension
         self.distance_metric = config.distance_metric
+        self.sparse_weight = config.sparse_weight
 
         if config.backend == "volcengine":
             if not (
@@ -242,15 +243,19 @@ class VikingVectorIndexBackend(VikingDBInterface):
                     scalar_index_fields.append(field_name)
 
             # Create default index for the collection
+            use_sparse = self.sparse_weight > 0.0
             index_meta = {
                 "IndexName": self.DEFAULT_INDEX_NAME,
                 "VectorIndex": {
-                    "IndexType": "flat_hybrid",
+                    "IndexType": "flat_hybrid" if use_sparse else "flat",
                     "Distance": distance,
                     "Quant": "int8",
                 },
                 "ScalarIndex": scalar_index_fields,
             }
+            if use_sparse:
+                index_meta["VectorIndex"]["EnableSparse"] = True
+                index_meta["VectorIndex"]["SearchWithSparseLogitAlpha"] = self.sparse_weight
 
             logger.info(f"Creating index with meta: {index_meta}")
             collection.create_index(self.DEFAULT_INDEX_NAME, index_meta)

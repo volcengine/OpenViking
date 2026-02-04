@@ -236,6 +236,189 @@ class TestRecall(unittest.TestCase):
         )
         print("✓ IP Recall verified")
 
+    def test_search_limit_zero(self):
+        """Test search with limit=0 returns empty result without error"""
+        print("\n=== Test: Search limit=0 ===")
+
+        dim = 8
+        meta_data = {
+            "CollectionName": "test_limit_zero",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "int64", "IsPrimaryKey": True},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": dim},
+            ],
+        }
+
+        collection = self.register_collection(
+            get_or_create_local_collection(meta_data=meta_data, path=TEST_DB_PATH)
+        )
+
+        data = [{"id": 0, "vector": [0.1] * dim}, {"id": 1, "vector": [0.2] * dim}]
+        collection.upsert_data(data)
+
+        collection.create_index(
+            "idx_limit_zero",
+            {
+                "IndexName": "idx_limit_zero",
+                "VectorIndex": {"IndexType": "flat", "Distance": "l2"},
+            },
+        )
+
+        result = collection.search_by_vector("idx_limit_zero", dense_vector=[0.1] * dim, limit=0)
+
+        self.assertEqual(len(result.data), 0, "limit=0 should return empty results")
+        print("✓ limit=0 returns empty results")
+
+    def test_sparse_vector_recall(self):
+        """Test sparse vector recall in hybrid index"""
+        print("\n=== Test: Sparse Vector Recall ===")
+
+        dim = 4
+        meta_data = {
+            "CollectionName": "test_sparse_recall",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "int64", "IsPrimaryKey": True},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": dim},
+                {"FieldName": "sparse_vector", "FieldType": "sparse_vector"},
+            ],
+        }
+
+        collection = self.register_collection(
+            get_or_create_local_collection(meta_data=meta_data, path=TEST_DB_PATH)
+        )
+
+        dense_vec = [0.1] * dim
+        data = [
+            {"id": 0, "vector": dense_vec, "sparse_vector": {"t1": 1.0}},
+            {"id": 1, "vector": dense_vec, "sparse_vector": {"t1": 0.5}},
+            {"id": 2, "vector": dense_vec, "sparse_vector": {"t2": 1.0}},
+        ]
+        collection.upsert_data(data)
+
+        collection.create_index(
+            "idx_sparse",
+            {
+                "IndexName": "idx_sparse",
+                "VectorIndex": {
+                    "IndexType": "flat_hybrid",
+                    "Distance": "ip",
+                    "SearchWithSparseLogitAlpha": 1.0,
+                },
+            },
+        )
+
+        result = collection.search_by_vector(
+            "idx_sparse",
+            dense_vector=dense_vec,
+            sparse_vector={"t1": 1.0},
+            limit=3,
+        )
+        result_ids = [item.id for item in result.data]
+
+        self.assertEqual(result_ids, [0, 1, 2], "Sparse ranking should match dot product order")
+        print("✓ Sparse vector recall verified", result)
+
+    def test_sparse_vector_recall_l2(self):
+        """Test sparse vector recall with L2 distance in hybrid index"""
+        print("\n=== Test: Sparse Vector Recall (L2) ===")
+
+        dim = 4
+        meta_data = {
+            "CollectionName": "test_sparse_recall_l2",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "int64", "IsPrimaryKey": True},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": dim},
+                {"FieldName": "sparse_vector", "FieldType": "sparse_vector"},
+            ],
+        }
+
+        collection = self.register_collection(
+            get_or_create_local_collection(meta_data=meta_data, path=TEST_DB_PATH)
+        )
+
+        dense_vec = [0.1] * dim
+        data = [
+            {"id": 0, "vector": dense_vec, "sparse_vector": {"t1": 1.0}},
+            {"id": 1, "vector": dense_vec, "sparse_vector": {"t1": 0.5}},
+            {"id": 2, "vector": dense_vec, "sparse_vector": {"t2": 1.0}},
+        ]
+        collection.upsert_data(data)
+
+        collection.create_index(
+            "idx_sparse_l2",
+            {
+                "IndexName": "idx_sparse_l2",
+                "VectorIndex": {
+                    "IndexType": "flat_hybrid",
+                    "Distance": "l2",
+                    "SearchWithSparseLogitAlpha": 1.0,
+                },
+            },
+        )
+
+        result = collection.search_by_vector(
+            "idx_sparse_l2",
+            dense_vector=dense_vec,
+            sparse_vector={"t1": 1.0},
+            limit=3,
+        )
+        result_ids = [item.id for item in result.data]
+
+        self.assertEqual(result_ids, [0, 1, 2], "Sparse L2 ranking should favor closest match")
+        print("✓ Sparse vector recall (L2) verified", result)
+
+    def test_hybrid_dense_sparse_mix(self):
+        """Test hybrid scoring combines dense and sparse signals"""
+        print("\n=== Test: Hybrid Dense+Sparse Mix ===")
+
+        dim = 4
+        meta_data = {
+            "CollectionName": "test_hybrid_mix",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "int64", "IsPrimaryKey": True},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": dim},
+                {"FieldName": "sparse_vector", "FieldType": "sparse_vector"},
+            ],
+        }
+
+        collection = self.register_collection(
+            get_or_create_local_collection(meta_data=meta_data, path=TEST_DB_PATH)
+        )
+
+        data = [
+            {"id": 0, "vector": [0.9, 0.0, 0.0, 0.0], "sparse_vector": {"t1": 0.1}},
+            {"id": 1, "vector": [0.2, 0.0, 0.0, 0.0], "sparse_vector": {"t1": 1.0}},
+            {"id": 2, "vector": [0.1, 0.0, 0.0, 0.0], "sparse_vector": {"t1": 0.8}},
+        ]
+        collection.upsert_data(data)
+
+        collection.create_index(
+            "idx_hybrid_mix",
+            {
+                "IndexName": "idx_hybrid_mix",
+                "VectorIndex": {
+                    "IndexType": "flat_hybrid",
+                    "Distance": "ip",
+                    "SearchWithSparseLogitAlpha": 0.5,
+                },
+            },
+        )
+
+        result = collection.search_by_vector(
+            "idx_hybrid_mix",
+            dense_vector=[1.0, 0.0, 0.0, 0.0],
+            sparse_vector={"t1": 1.0},
+            limit=3,
+        )
+        result_ids = [item.id for item in result.data]
+
+        self.assertEqual(
+            result_ids,
+            [1, 0, 2],
+            "Hybrid ranking should reflect combined dense and sparse scores",
+        )
+        print("✓ Hybrid dense+sparse mix verified")
+
 
 if __name__ == "__main__":
     unittest.main()

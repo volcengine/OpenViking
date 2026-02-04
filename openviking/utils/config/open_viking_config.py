@@ -301,6 +301,10 @@ def initialize_openviking_config(
         config.storage.vectordb.backend = "http"
         config.storage.vectordb.url = vectordb_url
 
+    # Ensure vector dimension is synced if not set in storage
+    if config.storage.vectordb.dimension == 0:
+        config.storage.vectordb.dimension = config.embedding.dimension
+
     # Validate configuration
     if not is_valid_openviking_config(config):
         raise ValueError("Invalid OpenViking configuration")

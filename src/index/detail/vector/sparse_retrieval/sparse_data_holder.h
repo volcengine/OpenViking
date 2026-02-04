@@ -142,7 +142,7 @@ class SparseDataHolder {
 
   float sparse_head_dot_product_logit(const SparseDatapointView& x,
                                       const DocID docid) {
-    return 1.0f - sparse_holder_.sparse_dot_product_reduce(x, docid);
+    return sparse_holder_.sparse_dot_product_reduce(x, docid);
   }
 
   size_t rows() {

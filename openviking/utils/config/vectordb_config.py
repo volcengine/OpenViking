@@ -43,9 +43,17 @@ class VectorDBBackendConfig(BaseModel):
         description="Distance metric for vector similarity search (e.g., 'cosine', 'l2', 'ip')",
     )
 
-    vector_dim: int = Field(
+    dimension: int = Field(
         default=0,
         description="Dimension of vector embeddings",
+    )
+
+    sparse_weight: float = Field(
+        default=0.0,
+        description=(
+            "Sparse weight for hybrid vector search. "
+            "When > 0, sparse vectors are used for index build and search."
+        ),
     )
 
     volcengine: Optional[VolcengineConfig] = Field(
