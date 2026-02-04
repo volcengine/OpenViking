@@ -13,6 +13,11 @@ OpenViking is a context database designed for AI Agents, unifying all context ty
 │                              │   Client    │                               │
 │                              │ (OpenViking)│                               │
 │                              └──────┬──────┘                               │
+│                                     │ delegates                            │
+│                              ┌──────▼──────┐                               │
+│                              │   Service   │                               │
+│                              │    Layer    │                               │
+│                              └──────┬──────┘                               │
 │                                     │                                      │
 │           ┌─────────────────────────┼─────────────────────────┐            │
 │           │                         │                         │            │
@@ -48,12 +53,26 @@ OpenViking is a context database designed for AI Agents, unifying all context ty
 
 | Module | Responsibility | Key Capabilities |
 |--------|----------------|------------------|
-| **Client** | Unified entry | Provides all operation interfaces, coordinates modules |
+| **Client** | Unified entry | Provides all operation interfaces, delegates to Service layer |
+| **Service** | Business logic | FSService, SearchService, SessionService, ResourceService, RelationService, PackService |
 | **Retrieve** | Context retrieval | Intent analysis (IntentAnalyzer), hierarchical retrieval (HierarchicalRetriever), Rerank |
 | **Session** | Session management | Message recording, usage tracking, session compression, memory commit |
 | **Parse** | Context extraction | Document parsing (PDF/MD/HTML), tree building (TreeBuilder), async semantic generation |
 | **Compressor** | Memory compression | 6-category memory extraction, LLM deduplication decisions |
 | **Storage** | Storage layer | VikingFS virtual filesystem, vector index, AGFS integration |
+
+## Service Layer
+
+The Service layer decouples business logic from the transport layer, enabling reuse across HTTP Server and CLI:
+
+| Service | Responsibility | Key Methods |
+|---------|----------------|-------------|
+| **FSService** | File system operations | ls, mkdir, rm, mv, tree, stat, read, abstract, overview, grep, glob |
+| **SearchService** | Semantic search | search, find |
+| **SessionService** | Session management | session, sessions, compress, extract, delete |
+| **ResourceService** | Resource import | add_resource, add_skill, wait_processed |
+| **RelationService** | Relation management | relations, link, unlink |
+| **PackService** | Import/export | export_ovpack, import_ovpack |
 
 ## Dual-Layer Storage
 
