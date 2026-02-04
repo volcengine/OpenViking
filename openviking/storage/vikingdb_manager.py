@@ -4,13 +4,13 @@
 VikingDB Manager class that extends VikingVectorIndexBackend with queue management functionality.
 """
 
-from typing import Any, Dict, List, Optional, Union
-from pathlib import Path
-from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
-from openviking.storage.queuefs.queue_manager import init_queue_manager
+from typing import Optional
+
 from openviking.storage.collection_schemas import TextEmbeddingHandler
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.queuefs.embedding_queue import EmbeddingQueue
+from openviking.storage.queuefs.queue_manager import init_queue_manager
+from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
 from openviking.utils import get_logger
 from openviking.utils.config.agfs_config import AGFSConfig
 from openviking.utils.config.vectordb_config import VectorDBBackendConfig
@@ -86,12 +86,12 @@ class VikingDBManager(VikingVectorIndexBackend):
         self._embedding_handler = TextEmbeddingHandler(self)
 
         # Get embedding queue with the handler, allow creation if not exists
-        embedding_queue = self._queue_manager.get_queue(
+        self._queue_manager.get_queue(
             self._queue_manager.EMBEDDING,
             dequeue_handler=self._embedding_handler,
             allow_create=True,
         )
-        logger.info(f"Embedding queue initialized with TextEmbeddingHandler")
+        logger.info("Embedding queue initialized with TextEmbeddingHandler")
 
     def _init_semantic_queue(self):
         """Initialize semantic queue with SemanticProcessor, semantic queue is used to get abstract and summary of context data."""
@@ -101,16 +101,15 @@ class VikingDBManager(VikingVectorIndexBackend):
 
         from openviking.storage.queuefs import SemanticProcessor
 
-        # Create SemanticProcessor instance
-        self._semantic_processor = SemanticProcessor()
+        self._semantic_processor = SemanticProcessor(max_concurrent_llm=20)
 
         # Get semantic queue with the handler, allow creation if not exists
-        semantic_queue = self._queue_manager.get_queue(
+        self._queue_manager.get_queue(
             self._queue_manager.SEMANTIC,
             dequeue_handler=self._semantic_processor,
             allow_create=True,
         )
-        logger.info(f"Semantic queue initialized with SemanticProcessor")
+        logger.info("Semantic queue initialized with SemanticProcessor")
 
     async def close(self) -> None:
         """Close storage connection and release resources, including queue manager."""
