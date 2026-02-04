@@ -3,7 +3,7 @@
 """SemanticProcessor: Processes messages from SemanticQueue, generates .abstract.md and .overview.md."""
 
 import asyncio
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from openviking.core.context import Context, ResourceContentType, Vectorize
 from openviking.prompts import render_prompt
@@ -36,6 +36,17 @@ class SemanticProcessor(DequeueHandlerBase):
             max_concurrent_llm: Maximum concurrent LLM calls
         """
         self.max_concurrent_llm = max_concurrent_llm
+
+    async def _enqueue_semantic_msg(self, msg: SemanticMsg) -> None:
+        """Enqueue a SemanticMsg to the semantic queue for processing."""
+        from openviking.storage.queuefs import get_queue_manager
+
+        queue_manager = get_queue_manager()
+        semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC)
+        # The queue manager returns SemanticQueue but method signature says NamedQueue
+        # We need to ignore the type error for the enqueue call
+        await semantic_queue.enqueue(msg)  # type: ignore
+        logger.debug(f"Enqueued semantic message for processing: {msg.uri}")
 
     async def _collect_directory_info(
         self,
@@ -73,33 +84,81 @@ class SemanticProcessor(DequeueHandlerBase):
         # Add current directory info
         result.append((uri, children_uris, file_paths))
 
-    async def on_dequeue(self, data: Dict[str, Any]) -> None:
+    async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """Process dequeued SemanticMsg, recursively process all subdirectories."""
         try:
             import json
 
+            if not data:
+                return None
+
             if "data" in data and isinstance(data["data"], str):
                 data = json.loads(data["data"])
 
+            # data is guaranteed to be not None at this point
+            assert data is not None
             msg = SemanticMsg.from_dict(data)
-            logger.info(f"Processing semantic generation for: {msg.uri}")
+            logger.info(
+                f"Processing semantic generation for: {msg.uri} (recursive={msg.recursive})"
+            )
 
-            # Collect all directory info (bottom-up order)
-            dir_info_list: List[Tuple[str, List[str], List[str]]] = []
-            await self._collect_directory_info(msg.uri, dir_info_list)
+            if msg.recursive:
+                # For recursive processing, collect all directory info
+                dir_info_list: List[Tuple[str, List[str], List[str]]] = []
+                await self._collect_directory_info(msg.uri, dir_info_list)
 
-            # Process each directory in order (leaves first)
-            for uri, children_uris, file_paths in dir_info_list:
+                # Enqueue each directory for processing (leaves first)
+                # For re-enqueued messages, set recursive=False to avoid repeated recursion
+                for uri, _, _ in dir_info_list:
+                    # Create a new message for this directory
+                    sub_msg = SemanticMsg(
+                        uri=uri,
+                        context_type=msg.context_type,
+                        recursive=False,  # Avoid repeated recursion
+                    )
+
+                    # Enqueue for processing
+                    await self._enqueue_semantic_msg(sub_msg)
+
+                logger.info(
+                    f"Enqueued {len(dir_info_list)} directories for processing from: {msg.uri}"
+                )
+                self.report_success()
+                return None
+            else:
+                # Non-recursive processing: directly process this directory
+                children_uris = []
+                file_paths = []
+
+                # Collect immediate children info only (no recursion)
+                viking_fs = get_viking_fs()
+                try:
+                    entries = await viking_fs.ls(msg.uri)
+                    for entry in entries:
+                        name = entry.get("name", "")
+                        if not name or name.startswith(".") or name in [".", ".."]:
+                            continue
+
+                        item_uri = VikingURI(msg.uri).join(name).uri
+
+                        if entry.get("isDir", False):
+                            children_uris.append(item_uri)
+                        else:
+                            file_paths.append(item_uri)
+                except Exception as e:
+                    logger.warning(f"Failed to list directory {msg.uri}: {e}")
+
+                # Process this directory
                 await self._process_single_directory(
-                    uri=uri,
+                    uri=msg.uri,
                     context_type=msg.context_type,
                     children_uris=children_uris,
                     file_paths=file_paths,
                 )
 
-            logger.info(f"Completed semantic generation for: {msg.uri}")
-            self.report_success()
-            return None
+                logger.info(f"Completed semantic generation for: {msg.uri}")
+                self.report_success()
+                return None
 
         except Exception as e:
             logger.error(f"Failed to process semantic message: {e}", exc_info=True)
@@ -322,7 +381,7 @@ class SemanticProcessor(DequeueHandlerBase):
         embedding_msg = EmbeddingMsgConverter.from_context(context)
         queue_manager = get_queue_manager()
         embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING)
-        await embedding_queue.enqueue(embedding_msg)
+        await embedding_queue.enqueue(embedding_msg)  # type: ignore
         logger.debug(f"Enqueued directory for vectorization: {uri}")
 
     async def _vectorize_files(
@@ -360,7 +419,7 @@ class SemanticProcessor(DequeueHandlerBase):
             else:
                 context.set_vectorize(Vectorize(text=summary))
             embedding_msg = EmbeddingMsgConverter.from_context(context)
-            await embedding_queue.enqueue(embedding_msg)
+            await embedding_queue.enqueue(embedding_msg)  # type: ignore
             logger.debug(f"Enqueued file for vectorization: {file_path}")
 
     def get_resource_content_type(self, file_name: str) -> ResourceContentType:

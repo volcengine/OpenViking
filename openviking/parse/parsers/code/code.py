@@ -15,7 +15,7 @@ import shutil
 import tempfile
 import time
 from pathlib import Path
-from typing import Any, List, Optional, Set, Union
+from typing import Any, List, Optional, Union
 
 from openviking.parse.base import (
     NodeType,
@@ -25,6 +25,16 @@ from openviking.parse.base import (
 )
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.utils.logger import get_logger
+
+from .constants import (
+    CODE_EXTENSIONS,
+    DOCUMENTATION_EXTENSIONS,
+    FILE_TYPE_CODE,
+    FILE_TYPE_DOCUMENTATION,
+    FILE_TYPE_OTHER,
+    IGNORE_DIRS,
+    IGNORE_EXTENSIONS,
+)
 
 logger = get_logger(__name__)
 
@@ -40,69 +50,34 @@ class CodeRepositoryParser(BaseParser):
     - Preserves directory structure without chunking
     """
 
-    # Directories to ignore
-    IGNORE_DIRS = {
-        ".git",
-        ".svn",
-        ".hg",
-        ".idea",
-        ".vscode",
-        "__pycache__",
-        "node_modules",
-        "venv",
-        ".venv",
-        "env",
-        ".env",
-        "dist",
-        "build",
-        "target",
-        "bin",
-        "obj",
-        ".DS_Store",
-    }
-
-    # Extensions to ignore (binary, huge files)
-    IGNORE_EXTENSIONS = {
-        ".pyc",
-        ".pyo",
-        ".pyd",
-        ".so",
-        ".dll",
-        ".dylib",
-        ".exe",
-        ".bin",
-        ".iso",
-        ".img",
-        ".db",
-        ".sqlite",
-        ".zip",
-        ".tar",
-        ".gz",
-        ".rar",
-        ".7z",
-        ".jpg",
-        ".jpeg",
-        ".png",
-        ".gif",
-        ".bmp",
-        ".ico",
-        ".pdf",
-        ".doc",
-        ".docx",
-        ".ppt",
-        ".pptx",
-        ".xls",
-        ".xlsx",
-        ".class",
-        ".jar",
-        ".war",
-        ".ear",
-    }
+    # Class constants imported from constants.py
+    IGNORE_DIRS = IGNORE_DIRS
+    IGNORE_EXTENSIONS = IGNORE_EXTENSIONS
 
     @property
     def supported_extensions(self) -> List[str]:
         # This parser is primarily invoked by URLTypeDetector, not by file extension
         return [".git", ".zip"]
+
+    def _detect_file_type(self, file_path: Path) -> str:
+        """
+        Detect file type based on extension for potential metadata tagging.
+
+        Returns:
+            "code" for programming language files
+            "documentation" for documentation files (md, txt, rst, etc.)
+            "other" for other text files
+            "binary" for binary files (already filtered by IGNORE_EXTENSIONS)
+        """
+        extension = file_path.suffix.lower()
+
+        if extension in CODE_EXTENSIONS:
+            return FILE_TYPE_CODE
+        elif extension in DOCUMENTATION_EXTENSIONS:
+            return FILE_TYPE_DOCUMENTATION
+        else:
+            # For other text files not in the lists
+            return FILE_TYPE_OTHER
 
     async def parse(self, source: Union[str, Path], instruction: str = "", **kwargs) -> ParseResult:
         """
@@ -294,7 +269,7 @@ class CodeRepositoryParser(BaseParser):
 
         for root, dirs, files in os.walk(local_dir):
             # Modify dirs in-place to skip ignored directories
-            dirs[:] = [d for d in dirs if d not in self.IGNORE_DIRS and not d.startswith(".")]
+            dirs[:] = [d for d in dirs if d not in IGNORE_DIRS and not d.startswith(".")]
 
             for file in files:
                 if file.startswith("."):
@@ -302,8 +277,20 @@ class CodeRepositoryParser(BaseParser):
 
                 file_path = Path(root) / file
 
+                file_path = Path(root) / file
+
+                # Calculate relative path for URI construction
+                rel_path = file_path.relative_to(local_dir)
+                rel_path_str = str(rel_path).replace(os.sep, "/")
+
+                # Check if it's a symbolic link (skip and log)
+                if os.path.islink(file_path):
+                    target = os.readlink(file_path)
+                    logger.info(f"Ignoring symbolic link {rel_path_str}: {file_path} -> {target}")
+                    continue
+
                 # Check extension
-                if file_path.suffix.lower() in self.IGNORE_EXTENSIONS:
+                if file_path.suffix.lower() in IGNORE_EXTENSIONS:
                     continue
 
                 # Check file size (skip > 10MB)
@@ -317,11 +304,7 @@ class CodeRepositoryParser(BaseParser):
                 except OSError:
                     continue
 
-                # Calculate relative path
-                rel_path = file_path.relative_to(local_dir)
                 # Construct Viking URI: base + rel_path
-                # Use forward slash for URI
-                rel_path_str = str(rel_path).replace(os.sep, "/")
                 target_uri = f"{viking_uri_base}/{rel_path_str}"
 
                 # Read and upload
@@ -329,6 +312,11 @@ class CodeRepositoryParser(BaseParser):
                     content = file_path.read_bytes()
                     # Use write_file_bytes for safety
                     await viking_fs.write_file_bytes(target_uri, content)
+
+                    # TODO: Add metadata tagging when VikingFS supports it
+                    # file_type = self._detect_file_type(file_path)
+                    # await viking_fs.set_metadata(target_uri, {"file_type": file_type})
+
                     count += 1
                 except Exception as e:
                     logger.warning(f"Failed to upload {file_path}: {e}")
