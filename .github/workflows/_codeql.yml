@@ -1,4 +1,4 @@
-name: _CodeQL
+name: 14. _CodeQL Scan
 
 on:
   workflow_call:

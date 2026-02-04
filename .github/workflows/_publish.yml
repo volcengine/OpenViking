@@ -1,4 +1,4 @@
-name: _Publish
+name: 16. _Publish Distribution
 
 on:
   workflow_call:
@@ -77,11 +77,19 @@ jobs:
       actions: read  # Required for downloading artifacts from other runs
 
     steps:
-    - name: Download all the dists
+    - name: Download all the dists (Same Run)
+      if: inputs.build_run_id == ''
       uses: actions/download-artifact@v4
       with:
-        # Use provided build_run_id, or fallback to current github.run_id (for same-workflow execution)
-        run-id: ${{ inputs.build_run_id || github.run_id }}
+        pattern: python-package-distributions-*
+        path: dist/
+        merge-multiple: true
+
+    - name: Download all the dists (Cross Run)
+      if: inputs.build_run_id != ''
+      uses: actions/download-artifact@v4
+      with:
+        run-id: ${{ inputs.build_run_id }}
         github-token: ${{ secrets.GITHUB_TOKEN }}
         pattern: python-package-distributions-*
         path: dist/
@@ -107,11 +115,19 @@ jobs:
       actions: read  # Required for downloading artifacts from other runs
 
     steps:
-    - name: Download all the dists
+    - name: Download all the dists (Same Run)
+      if: inputs.build_run_id == ''
       uses: actions/download-artifact@v4
       with:
-        # Use provided build_run_id, or fallback to current github.run_id (for same-workflow execution)
-        run-id: ${{ inputs.build_run_id || github.run_id }}
+        pattern: python-package-distributions-*
+        path: dist/
+        merge-multiple: true
+
+    - name: Download all the dists (Cross Run)
+      if: inputs.build_run_id != ''
+      uses: actions/download-artifact@v4
+      with:
+        run-id: ${{ inputs.build_run_id }}
         github-token: ${{ secrets.GITHUB_TOKEN }}
         pattern: python-package-distributions-*
         path: dist/

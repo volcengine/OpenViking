@@ -76,6 +76,9 @@ Issues = "https://github.com/volcengine/openviking/issues"
 openviking-viewer = "openviking.tools.viewer:main"
 openviking-server = "openviking.server.bootstrap:main"
 
+[tool.setuptools_scm]
+write_to = "openviking/_version.py"
+
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["openviking*"]

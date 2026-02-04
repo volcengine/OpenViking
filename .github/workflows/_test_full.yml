@@ -1,4 +1,4 @@
-name: _Test Full
+name: 13. _Test Suite (Full)
 
 on:
   workflow_call:

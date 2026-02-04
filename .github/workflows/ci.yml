@@ -1,4 +1,4 @@
-name: CI (Main Branch)
+name: 02. Main Branch Checks
 
 on:
   push:

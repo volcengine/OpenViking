@@ -1,4 +1,4 @@
-name: _Test Lite
+name: 12. _Test Suite (Lite)
 
 on:
   workflow_call:

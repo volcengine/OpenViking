@@ -1,4 +1,4 @@
-name: _Lint
+name: 11. _Lint Checks
 
 on:
   workflow_call:
