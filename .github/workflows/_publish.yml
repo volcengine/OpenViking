@@ -33,7 +33,8 @@ jobs:
   permission-check:
     name: Check write permission
     runs-on: ubuntu-latest
-    permissions: read-all
+    permissions:
+      contents: read
     outputs:
       allowed: ${{ steps.check.outputs.allowed }}
     steps:
@@ -99,6 +100,8 @@ jobs:
       uses: pypa/gh-action-pypi-publish@release/v1
       with:
         repository-url: https://test.pypi.org/legacy/
+        skip-existing: true
+        verbose: true
 
   publish-pypi:
     name: Publish to PyPI
@@ -135,3 +138,5 @@ jobs:
 
     - name: Publish distribution to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        verbose: true

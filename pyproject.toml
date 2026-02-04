@@ -1,6 +1,7 @@
 [build-system]
 requires = [
     "setuptools>=61.0",
+    "setuptools-scm>=8.0",
     "pybind11>=2.13.0",
     "cmake>=3.15",
     "wheel",
@@ -9,7 +10,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "openviking"
-version = "0.1.7"
+dynamic = ["version"]
 description = "An Agent-native context database: Data in, Context out"
 readme = "README.md"
 authors = [
@@ -78,6 +79,7 @@ openviking-server = "openviking.server.bootstrap:main"
 
 [tool.setuptools_scm]
 write_to = "openviking/_version.py"
+local_scheme = "no-local-version"
 
 [tool.setuptools.packages.find]
 where = ["."]

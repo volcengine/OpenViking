@@ -42,7 +42,10 @@ jobs:
     steps:
     - name: Install system dependencies (Linux)
       run: |
-        apt-get update
+        # Replace archive.ubuntu.com with azure.archive.ubuntu.com for better stability in GH Actions
+        sed -i 's/http:\/\/archive.ubuntu.com\/ubuntu\//http:\/\/azure.archive.ubuntu.com\/ubuntu\//g' /etc/apt/sources.list
+        # Retry apt-get update
+        for i in 1 2 3 4 5; do apt-get update && break || sleep 5; done
         apt-get install -y \
           git ca-certificates cmake build-essential tzdata curl \
           libssl-dev zlib1g-dev libbz2-dev libreadline-dev libsqlite3-dev \
@@ -59,19 +62,17 @@ jobs:
     - name: Build CPython (Dynamic Selection)
       run: |
         # Map short version to full version for our specific build environment
-        declare -A PYTHON_MAP
-        PYTHON_MAP["3.9"]="3.9.18"
-        PYTHON_MAP["3.10"]="3.10.13"
-        PYTHON_MAP["3.11"]="3.11.8"
-        PYTHON_MAP["3.12"]="3.12.2"
-        
         PYTHON_VERSION="${{ matrix.python-version }}"
-        PYTHON_FULL="${PYTHON_MAP[$PYTHON_VERSION]}"
-        
-        if [ -z "$PYTHON_FULL" ]; then
-          echo "Error: Unknown python version $PYTHON_VERSION"
-          exit 1
-        fi
+        case "$PYTHON_VERSION" in
+          "3.9") PYTHON_FULL="3.9.18" ;;
+          "3.10") PYTHON_FULL="3.10.13" ;;
+          "3.11") PYTHON_FULL="3.11.8" ;;
+          "3.12") PYTHON_FULL="3.12.2" ;;
+          *)
+            echo "Error: Unknown python version $PYTHON_VERSION"
+            exit 1
+            ;;
+        esac
         
         PYTHON_PREFIX="/opt/python/${PYTHON_FULL}"
         PYTHON_BIN="${PYTHON_PREFIX}/bin/python${{ matrix.python-version }}"
@@ -147,8 +148,7 @@ jobs:
   build-other:
     name: Build distribution on ${{ matrix.os }}
     # Filter out ubuntu-latest from this job since it's handled by build-linux
-    if: ${{ matrix.os != 'ubuntu-latest' }}
-    runs-on: ${{ matrix.os }}
+    runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
       matrix:
