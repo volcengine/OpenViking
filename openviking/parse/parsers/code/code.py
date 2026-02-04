@@ -15,7 +15,7 @@ import shutil
 import tempfile
 import time
 from pathlib import Path
-from typing import List, Optional, Set, Union
+from typing import Any, List, Optional, Set, Union
 
 from openviking.parse.base import (
     NodeType,
@@ -104,9 +104,7 @@ class CodeRepositoryParser(BaseParser):
         # This parser is primarily invoked by URLTypeDetector, not by file extension
         return [".git", ".zip"]
 
-    async def parse(
-        self, source: Union[str, Path], instruction: str = "", **kwargs
-    ) -> ParseResult:
+    async def parse(self, source: Union[str, Path], instruction: str = "", **kwargs) -> ParseResult:
         """
         Parse code repository.
 
@@ -211,7 +209,7 @@ class CodeRepositoryParser(BaseParser):
             name = clean_url.split("/")[-1][:-4]
         else:
             name = clean_url.split("/")[-1]
-        
+
         # Sanitize name
         name = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
         if not name:
@@ -224,12 +222,12 @@ class CodeRepositoryParser(BaseParser):
         # No, parse logic says:
         # temp_local_dir contains the files (e.g. .git, src, README)
         # We upload temp_local_dir content to viking://temp/{uuid}/{repo_name}/
-        
+
         # So we clone current content directly into temp_local_dir
         # git clone --depth 1 url target_dir
-        
+
         logger.info(f"Cloning {url} to {target_dir}...")
-        
+
         proc = await asyncio.create_subprocess_exec(
             "git",
             "clone",
@@ -247,7 +245,7 @@ class CodeRepositoryParser(BaseParser):
         if proc.returncode != 0:
             error_msg = stderr.decode()
             raise RuntimeError(f"Git clone failed: {error_msg}")
-            
+
         return name
 
     async def _extract_zip(self, zip_path: str, target_dir: str) -> str:
@@ -261,23 +259,23 @@ class CodeRepositoryParser(BaseParser):
         # If it's a URL, we need to download it first?
         # CodeRepositoryParser is designed to handle "source" which can be URL.
         # So I need to download zip if it is a URL.
-        
+
         if zip_path.startswith(("http://", "https://")):
             # TODO: implement download logic or rely on caller?
             # For now, assume it's implemented if needed, but raise error as strictly we only support git URL for now as per plan
-            raise NotImplementedError("Zip URL download not yet implemented in CodeRepositoryParser")
-        
+            raise NotImplementedError(
+                "Zip URL download not yet implemented in CodeRepositoryParser"
+            )
+
         path = Path(zip_path)
         name = path.stem
-        
-        with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+
+        with zipfile.ZipFile(zip_path, "r") as zip_ref:
             zip_ref.extractall(target_dir)
-            
+
         return name
 
-    async def _upload_directory(
-        self, local_dir: Path, viking_uri_base: str, viking_fs: Any
-    ) -> int:
+    async def _upload_directory(self, local_dir: Path, viking_uri_base: str, viking_fs: Any) -> int:
         """
         Recursively upload directory to VikingFS.
 
@@ -290,7 +288,7 @@ class CodeRepositoryParser(BaseParser):
             Number of uploaded files
         """
         count = 0
-        
+
         # Ensure target directory exists (although write_file handles parents, mkdir ensures root exists)
         await viking_fs.mkdir(viking_uri_base, exist_ok=True)
 
@@ -301,13 +299,13 @@ class CodeRepositoryParser(BaseParser):
             for file in files:
                 if file.startswith("."):
                     continue
-                    
+
                 file_path = Path(root) / file
-                
+
                 # Check extension
                 if file_path.suffix.lower() in self.IGNORE_EXTENSIONS:
                     continue
-                
+
                 # Check file size (skip > 10MB)
                 try:
                     size = file_path.stat().st_size

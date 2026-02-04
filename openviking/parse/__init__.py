@@ -6,7 +6,7 @@ from openviking.parse.base import NodeType, ParseResult, ResourceNode, create_pa
 from openviking.parse.converter import DocumentConverter
 from openviking.parse.custom import CallbackParserWrapper, CustomParserProtocol, CustomParserWrapper
 from openviking.parse.parsers.base_parser import BaseParser
-from openviking.parse.parsers.code import CodeParser
+from openviking.parse.parsers.code import CodeRepositoryParser
 from openviking.parse.parsers.html import HTMLParser
 from openviking.parse.parsers.markdown import MarkdownParser
 from openviking.parse.parsers.pdf import PDFParser
@@ -27,7 +27,7 @@ __all__ = [
     "MarkdownParser",
     "PDFParser",
     "HTMLParser",
-    "CodeParser",
+    "CodeRepositoryParser",
     "DocumentConverter",
     # Custom parser support
     "CustomParserProtocol",

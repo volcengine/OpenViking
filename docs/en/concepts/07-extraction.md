@@ -26,7 +26,7 @@ Parser handles document format conversion and structuring, creating file structu
 | Plain text | TextParser | .txt | Supported |
 | PDF | PDFParser | .pdf | Supported |
 | HTML | HTMLParser | .html, .htm | Supported |
-| Code | CodeParser | .py, .js, .go, etc. |  |
+| Code | CodeRepositoryParser | .py, .js, .go, etc. |  |
 | Image | ImageParser | .png, .jpg, etc. |  |
 | Video | VideoParser | .mp4, .avi, etc. |  |
 | Audio | AudioParser | .mp3, .wav, etc. |  |
