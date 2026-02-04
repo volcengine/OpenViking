@@ -1,0 +1,121 @@
+name: _Publish
+
+on:
+  workflow_call:
+    inputs:
+      target:
+        description: 'Publish Target'
+        required: false
+        type: string
+        default: 'pypi'  # Callers (like release.yml) typically want PyPI
+      build_run_id:
+        description: 'Build Workflow Run ID (Optional, defaults to current run)'
+        required: false
+        type: string
+        default: ''
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Select where to publish'
+        required: true
+        type: choice
+        default: 'testpypi'
+        options:
+        - testpypi
+        - pypi
+        - both
+      build_run_id:
+        description: 'Build Workflow Run ID (Required for manual dispatch, find it in the Build run URL)'
+        required: true
+        type: string
+
+jobs:
+  permission-check:
+    name: Check write permission
+    runs-on: ubuntu-latest
+    permissions: read-all
+    outputs:
+      allowed: ${{ steps.check.outputs.allowed }}
+    steps:
+    - name: Verify actor permission
+      id: check
+      uses: actions/github-script@v7
+      with:
+        script: |
+          // Only check permission for manual dispatch
+          if (context.eventName !== 'workflow_dispatch') {
+            core.setOutput('allowed', 'true');
+            return;
+          }
+          const { owner, repo } = context.repo;
+          const actor = context.actor;
+          const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+            owner,
+            repo,
+            username: actor,
+          });
+          const perm = data.permission;
+          core.info(`Actor ${actor} permission: ${perm}`);
+          const allowed = ['admin', 'maintain', 'write'].includes(perm);
+          core.setOutput('allowed', allowed ? 'true' : 'false');
+          if (!allowed) {
+            core.setFailed(`User ${actor} does not have write permission`);
+          }
+
+  publish-testpypi:
+    name: Publish to TestPyPI
+    needs: [permission-check]
+    if: >-
+      needs.permission-check.outputs.allowed == 'true' &&
+      (inputs.target == 'testpypi' || inputs.target == 'both')
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/openviking
+    permissions:
+      id-token: write
+      actions: read  # Required for downloading artifacts from other runs
+
+    steps:
+    - name: Download all the dists
+      uses: actions/download-artifact@v4
+      with:
+        # Use provided build_run_id, or fallback to current github.run_id (for same-workflow execution)
+        run-id: ${{ inputs.build_run_id || github.run_id }}
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        pattern: python-package-distributions-*
+        path: dist/
+        merge-multiple: true
+
+    - name: Publish distribution to TestPyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        repository-url: https://test.pypi.org/legacy/
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [permission-check]
+    if: >-
+      needs.permission-check.outputs.allowed == 'true' &&
+      (inputs.target == 'pypi' || inputs.target == 'both')
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/openviking
+    permissions:
+      id-token: write
+      actions: read  # Required for downloading artifacts from other runs
+
+    steps:
+    - name: Download all the dists
+      uses: actions/download-artifact@v4
+      with:
+        # Use provided build_run_id, or fallback to current github.run_id (for same-workflow execution)
+        run-id: ${{ inputs.build_run_id || github.run_id }}
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        pattern: python-package-distributions-*
+        path: dist/
+        merge-multiple: true
+
+    - name: Publish distribution to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1

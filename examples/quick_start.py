@@ -7,7 +7,7 @@ try:
 
     # Add resource (URL, file, or directory)
     res = client.add_resource(
-        path="https://raw.githubusercontent.com/volcengine/MineContext/refs/heads/main/README_zh.md"
+        path="https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md"
     )
     root_uri = res["root_uri"]
     res = client.ls(root_uri)  # Explore resource tree

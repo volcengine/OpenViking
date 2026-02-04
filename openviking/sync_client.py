@@ -160,9 +160,21 @@ class SyncOpenViking:
         """Create directory"""
         return asyncio.run(self._async_client.mkdir(uri))
 
-    @property
-    def observers(self):
-        return self._async_client.observers
+    def get_status(self):
+        """Get system status.
+
+        Returns:
+            SystemStatus containing health status of all components.
+        """
+        return self._async_client.get_status()
+
+    def is_healthy(self) -> bool:
+        """Quick health check.
+
+        Returns:
+            True if all components are healthy, False otherwise.
+        """
+        return self._async_client.is_healthy()
 
     @property
     def viking_fs(self):

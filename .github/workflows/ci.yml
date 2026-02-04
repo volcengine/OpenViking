@@ -1,0 +1,24 @@
+name: CI (Main Branch)
+
+on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - 'LICENSE'
+      - 'CONTRIBUTING.md'
+      - '**.png'
+      - '**.jpg'
+      - '**.jpeg'
+      - '**.gif'
+      - '**.svg'
+      - '.gitignore'
+      - '.editorconfig'
+
+jobs:
+  test-full:
+    uses: ./.github/workflows/_test_full.yml
+
+  security-scan:
+    uses: ./.github/workflows/_codeql.yml

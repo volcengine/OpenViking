@@ -239,6 +239,13 @@ class AGFSManager:
             except subprocess.TimeoutExpired:
                 logger.warning("[AGFSManager] AGFS not responding, killing")
                 self.process.kill()
+                self.process.wait()
+
+        # Close pipes to prevent ResourceWarning
+        if self.process.stdout:
+            self.process.stdout.close()
+        if self.process.stderr:
+            self.process.stderr.close()
 
         self.process = None
 
