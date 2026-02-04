@@ -70,6 +70,21 @@ else:
                     "handlers": ["null"],
                     "propagate": False,
                 },
+                "openviking.session.session": {
+                    "level": "ERROR",
+                    "handlers": ["null"],
+                    "propagate": False,
+                },
+                "openviking.session.memory_extractor": {
+                    "level": "ERROR",
+                    "handlers": ["null"],
+                    "propagate": False,
+                },
+                "openviking.session.compressor": {
+                    "level": "ERROR",
+                    "handlers": ["null"],
+                    "propagate": False,
+                },
                 "openviking.async_client": {
                     "level": "CRITICAL",
                     "handlers": ["null"],

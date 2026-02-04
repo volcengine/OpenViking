@@ -358,6 +358,46 @@ Describe how to test these changes:
 
 ---
 
+## CI/CD Workflows
+
+We use **GitHub Actions** for Continuous Integration and Continuous Deployment. Our workflows are designed to be modular and tiered.
+
+### 1. Automatic Workflows
+
+| Event | Workflow | Description |
+|-------|----------|-------------|
+| **Pull Request** | `pr.yml` | Runs **Lint** (Ruff, Mypy) and **Test Lite** (Integration tests on Linux + Python 3.10). Fast feedback for contributors. (Displayed as **01. Pull Request Checks**) |
+| **Push to Main** | `ci.yml` | Runs **Test Full** (All OS: Linux/Win/Mac, All Py: 3.9-3.12) and **CodeQL** (Security scan). Ensures main branch stability. (Displayed as **02. Main Branch Checks**) |
+| **Release Published** | `release.yml` | Triggered when you create a Release on GitHub. Automatically builds wheels, verifies the Git Tag matches `pyproject.toml`, and publishes to **PyPI**. (Displayed as **03. Release**) |
+| **Weekly Cron** | `schedule.yml` | Runs **CodeQL** security scan every Sunday. (Displayed as **04. Weekly Security Scan**) |
+
+### 2. Manual Trigger Workflows
+
+Maintainers can manually trigger workflows from the "Actions" tab to perform specific tasks or debug issues.
+
+#### A. Run Tests Manually (`12. _Test Suite (Lite)`)
+
+You can run tests with custom matrix configurations using `12. _Test Suite (Lite)`.
+
+*   **Inputs**:
+    *   `os_json`: JSON string array of OS to run on (e.g., `["ubuntu-latest", "windows-latest"]`).
+    *   `python_json`: JSON string array of Python versions (e.g., `["3.10", "3.12"]`).
+
+#### B. Manual Release / Publish (`03. Release`)
+
+You can manually trigger the `release.yml` workflow (listed as "03. Release") to build and publish without creating a GitHub Release.
+
+*   **Inputs**:
+    *   `target`: Select where to publish.
+        *   `none`: Build artifacts only (no publish). Good for verifying build capability.
+        *   `testpypi`: Publish to TestPyPI. Good for beta testing.
+        *   `pypi`: Publish to official PyPI.
+        *   `both`: Publish to both.
+
+> **Note**: For manual triggers, the strict "Git Tag matches pyproject.toml" check is relaxed to a warning, allowing you to test builds on non-tagged commits.
+
+---
+
 ## Issue Guidelines
 
 ### Bug Reports

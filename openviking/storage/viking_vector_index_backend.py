@@ -655,7 +655,6 @@ class VikingVectorIndexBackend(VikingDBInterface):
 
                     records.append(record)
 
-                logger.info(f"Vector search returned {len(records)} records: {records}")
                 return records
             else:
                 # Pure filtering without vector search

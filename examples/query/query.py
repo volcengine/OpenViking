@@ -5,9 +5,11 @@ Query - CLI tool to search and generate answers using OpenViking + LLM
 
 import argparse
 import sys
+import os
 import threading
 
-from recipe import Recipe
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from common.recipe import Recipe
 from rich import box
 from rich.console import Console
 from rich.live import Live

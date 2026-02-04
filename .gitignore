@@ -24,6 +24,7 @@ share/python-wheels/
 *.egg
 MANIFEST
 openviking.egg-info/
+data/
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
@@ -100,6 +101,9 @@ CLAUDE.md
 *.so
 AGENTS.md
 
+# Git worktrees
+.worktrees/
+
 # Logs
 *.log
 logs/
@@ -147,3 +151,4 @@ cython_debug/
 openviking/bin/
 test_scripts/
 test_large_scale_collection/
+openviking/_version.py

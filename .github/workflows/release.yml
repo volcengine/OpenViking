@@ -1,0 +1,43 @@
+name: 03. Release
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Select where to publish'
+        required: true
+        type: choice
+        default: 'testpypi'
+        options:
+        - none
+        - testpypi
+        - pypi
+        - both
+      os_json:
+        description: 'JSON string of OS to build on (Manual only)'
+        required: false
+        type: string
+        default: '["ubuntu-latest", "macos-latest", "macos-15-intel", "windows-latest"]'
+      python_json:
+        description: 'JSON string of Python versions (Manual only)'
+        required: false
+        type: string
+        default: '["3.9", "3.10", "3.11", "3.12"]'
+
+jobs:
+  build:
+    uses: ./.github/workflows/_build.yml
+    with:
+      os_json: ${{ inputs.os_json || '["ubuntu-latest", "macos-latest", "macos-15-intel", "windows-latest"]' }}
+      python_json: ${{ inputs.python_json || '["3.9", "3.10", "3.11", "3.12"]' }}
+
+  publish:
+    needs: [build]
+    # Run if triggered by release OR (manual trigger AND target is not 'none')
+    if: github.event_name == 'release' || (inputs.target != 'none')
+    uses: ./.github/workflows/_publish.yml
+    with:
+      # For release events, default to 'pypi'. For manual, use the input.
+      target: ${{ inputs.target || 'pypi' }}
