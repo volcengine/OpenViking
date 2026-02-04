@@ -1,7 +1,7 @@
 [build-system]
 requires = [
     "setuptools>=61.0",
-    "pybind11>=2.10.0",
+    "pybind11>=2.13.0",
     "cmake>=3.15",
     "wheel",
 ]
@@ -26,6 +26,7 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
     "pydantic>=2.0.0",
