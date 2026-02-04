@@ -1,36 +1,8 @@
-name: CodeQL Security Scan
+name: _CodeQL
 
 on:
-  push:
-    branches: [ main, develop ]
-    paths-ignore:
-      - 'docs/**'
-      - '**.md'
-      - 'LICENSE'
-      - 'CONTRIBUTING.md'
-      - '**.png'
-      - '**.jpg'
-      - '**.jpeg'
-      - '**.gif'
-      - '**.svg'
-      - '.gitignore'
-      - '.editorconfig'
-  pull_request:
-    branches: [ main, develop ]
-    paths-ignore:
-      - 'docs/**'
-      - '**.md'
-      - 'LICENSE'
-      - 'CONTRIBUTING.md'
-      - '**.png'
-      - '**.jpg'
-      - '**.jpeg'
-      - '**.gif'
-      - '**.svg'
-      - '.gitignore'
-      - '.editorconfig'
-  schedule:
-    - cron: '0 0 * * 0'  # 每周日运行一次
+  workflow_call:
+  workflow_dispatch:
 
 jobs:
   analyze:
@@ -57,8 +29,12 @@ jobs:
       with:
         python-version: '3.11'
 
+    - name: Set up Go
+      uses: actions/setup-go@v5
+      with:
+        go-version: 'stable'
+
     - name: Install uv
-      if: matrix.language == 'python'
       uses: astral-sh/setup-uv@v7
       with:
         enable-cache: true

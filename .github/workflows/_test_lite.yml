@@ -1,0 +1,91 @@
+name: _Test Lite
+
+on:
+  workflow_call:
+    inputs:
+      os_json:
+        description: 'JSON string of OS to run on'
+        required: false
+        type: string
+        default: '["ubuntu-latest"]'
+      python_json:
+        description: 'JSON string of Python versions'
+        required: false
+        type: string
+        default: '["3.10"]'
+  workflow_dispatch:
+    inputs:
+      os_json:
+        description: 'JSON string of OS to run on'
+        required: false
+        default: '["ubuntu-latest"]'
+      python_json:
+        description: 'JSON string of Python versions'
+        required: false
+        default: '["3.10"]'
+
+jobs:
+  test-lite:
+    name: Lite Test (${{ matrix.os }}, ${{ matrix.python-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJson(inputs.os_json) }}
+        python-version: ${{ fromJson(inputs.python_json) }}
+
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v6
+      with:
+        python-version: ${{ matrix.python-version }}
+
+    - name: Set up Go
+      uses: actions/setup-go@v6
+      with:
+        go-version: '1.25.1'
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+      with:
+        enable-cache: true
+
+    - name: Install system dependencies (Ubuntu)
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y cmake build-essential
+
+    - name: Install system dependencies (macOS)
+      if: runner.os == 'macOS'
+      run: brew install cmake
+
+    - name: Install system dependencies (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System'
+        choco install mingw
+
+    - name: Add MinGW to PATH (Windows)
+      if: runner.os == 'Windows'
+      run: echo "C:\mingw64\bin" >> $env:GITHUB_PATH
+
+    - name: Install Python dependencies
+      run: uv sync --extra test
+
+    - name: Install build dependencies
+      run: uv pip install setuptools pybind11 cmake wheel
+
+    - name: Build C++ extensions
+      run: uv run python setup.py build_ext --inplace
+
+    - name: Run Lite Integration Test (Quick Start)
+      shell: bash
+      run: |
+        export PYTHONPATH=$PYTHONPATH:$(pwd)
+        # Using bash shell ensures this works across platforms (including Windows via Git Bash)
+        uv run python tests/integration/test_quick_start_lite.py

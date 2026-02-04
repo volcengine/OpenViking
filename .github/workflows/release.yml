@@ -1,0 +1,79 @@
+name: Publish to PyPI
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Select where to publish'
+        required: true
+        type: choice
+        default: 'testpypi'
+        options:
+        - none
+        - testpypi
+        - pypi
+        - both
+
+jobs:
+  check-version:
+    name: Verify Version
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.11'
+
+    - name: Verify Tag matches pyproject.toml
+      run: |
+        python -c "
+        import tomllib
+        import os
+        import sys
+
+        with open('pyproject.toml', 'rb') as f:
+            data = tomllib.load(f)
+        
+        proj_version = data['project']['version']
+        ref = os.environ.get('GITHUB_REF', '')
+        event_name = os.environ.get('GITHUB_EVENT_NAME', '')
+        
+        print(f'Project version: {proj_version}')
+        print(f'GitHub Ref: {ref}')
+        print(f'Event Name: {event_name}')
+
+        # Strict check only for Release events or when a Tag is pushed
+        if event_name == 'release' or ref.startswith('refs/tags/'):
+            if ref.startswith('refs/tags/'):
+                tag = ref.split('/')[-1]
+                clean_tag = tag[1:] if tag.startswith('v') else tag
+                
+                if clean_tag != proj_version:
+                    print(f'::error::Git Tag ({tag}) does not match pyproject.toml version ({proj_version})')
+                    sys.exit(1)
+                
+                print(f'✅ Verification Successful: Tag {tag} matches project version {proj_version}')
+            else:
+                print('⚠️ Release event triggered but REF is not a tag? This is unexpected.')
+        else:
+            print(f'ℹ️ Manual trigger ({event_name}) on branch/commit. Skipping strict Tag vs Version check.')
+            print(f'   Current pyproject.toml version is: {proj_version}')
+            print('   Make sure this is the version you intend to build/publish.')
+        "
+
+  build:
+    needs: [check-version]
+    uses: ./.github/workflows/_build.yml
+
+  publish:
+    needs: [build]
+    # Run if triggered by release OR (manual trigger AND target is not 'none')
+    if: github.event_name == 'release' || (inputs.target != 'none')
+    uses: ./.github/workflows/_publish.yml
+    with:
+      # For release events, default to 'pypi'. For manual, use the input.
+      target: ${{ inputs.target || 'pypi' }}

@@ -154,7 +154,9 @@ class MemoryExtractor:
                 session_id=session_id,
                 user=user,
             )
-            logger.info(f"uri {memory_uri} abstract: {candidate.abstract} content: {candidate.content}")
+            logger.info(
+                f"uri {memory_uri} abstract: {candidate.abstract} content: {candidate.content}"
+            )
             memory.set_vectorize(Vectorize(text=candidate.content))
             return memory
 

@@ -1,0 +1,9 @@
+name: Weekly Security Scan
+
+on:
+  schedule:
+    - cron: '0 0 * * 0'  # Run at 00:00 on Sunday
+
+jobs:
+  security-scan:
+    uses: ./.github/workflows/_codeql.yml
