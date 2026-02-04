@@ -225,12 +225,13 @@ class HTMLParser(BaseParser):
         """List of supported file extensions."""
         return [".html", ".htm"]
 
-    async def parse(self, source: Union[str, Path], **kwargs) -> ParseResult:
+    async def parse(self, source: Union[str, Path], instruction: str = "", **kwargs) -> ParseResult:
         """
         Unified parse method for HTML files and URLs.
 
         Args:
             source: HTML file path or URL
+            instruction: Processing instruction, guides LLM how to understand the resource
             **kwargs: Additional options
 
         Returns:
@@ -278,6 +279,10 @@ class HTMLParser(BaseParser):
         elif url_type == URLType.DOWNLOAD_HTML:
             # Download HTML file and parse
             return await self._handle_download_link(url, "html", start_time, meta, **kwargs)
+
+        elif url_type == URLType.CODE_REPOSITORY:
+            # Delegate to CodeRepositoryParser
+            return await self._handle_code_repository(url, start_time, meta, **kwargs)
 
         else:
             # Unknown type - try as webpage
@@ -393,6 +398,33 @@ class HTMLParser(BaseParser):
                 parser_name="HTMLParser",
                 parse_time=time.time() - start_time,
                 warnings=[f"Failed to download/parse link: {e}"],
+            )
+
+    async def _handle_code_repository(
+        self, url: str, start_time: float, meta: Dict[str, Any], **kwargs
+    ) -> ParseResult:
+        """
+        Handle code repository URL by delegating to CodeRepositoryParser.
+        """
+        try:
+            from openviking.parse.parsers.code import CodeRepositoryParser
+
+            parser = CodeRepositoryParser()
+            result = await parser.parse(url, **kwargs)
+            result.meta.update(meta)
+            result.meta["downloaded_from"] = url
+            result.meta["url_type"] = "code_repository"
+
+            return result
+
+        except Exception as e:
+            return create_parse_result(
+                root=ResourceNode(type=NodeType.ROOT, content_path=None),
+                source_path=url,
+                source_format="code_repository",
+                parser_name="HTMLParser",
+                parse_time=time.time() - start_time,
+                warnings=[f"Failed to parse code repository: {e}"],
             )
 
     async def _parse_local_file(self, path: Path, start_time: float, **kwargs) -> ParseResult:
@@ -526,7 +558,7 @@ class HTMLParser(BaseParser):
         return html
 
     async def parse_content(
-        self, content: str, source_path: Optional[str] = None, **kwargs
+        self, content: str, source_path: Optional[str] = None, instruction: str = "", **kwargs
     ) -> ParseResult:
         """
         Parse HTML content.

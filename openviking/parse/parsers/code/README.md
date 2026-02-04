@@ -111,14 +111,14 @@ viking://resources/github/volcengine/OpenViking/
 
 ```python
 # 导入代码仓库
-await client.add_resource(
+client.add_resource(
     "https://github.com/volcengine/OpenViking",
     target="viking://resources/github/volcengine/OpenViking",
     reason="引入 OpenViking 源码作为参考"
 )
 
 # 搜索代码逻辑
-results = await client.find(
+results = client.find(
     "VikingFS 是如何实现文件挂载的？",
     target_uri="viking://resources/github/volcengine/OpenViking/"
 )
