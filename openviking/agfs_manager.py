@@ -77,6 +77,9 @@ class AGFSManager:
         self.s3_region = config.s3_region
         self.s3_access_key = config.s3_access_key
         self.s3_secret_key = config.s3_secret_key
+        self.s3_endpoint = config.s3_endpoint
+        self.s3_prefix = config.s3_prefix
+        self.s3_use_ssl = config.s3_use_ssl
 
         self.process: Optional[subprocess.Popen] = None
         self.config_file: Optional[Path] = None
@@ -145,14 +148,20 @@ class AGFSManager:
                 },
             }
         elif self.backend == "s3":
+            # AGFS S3 backend configuration (s3fs plugin)
+            # This enables AGFS to mount an S3 bucket as a local filesystem.
+            # Implementation details: third_party/agfs/agfs-server/pkg/plugins/s3fs/s3fs.go
             config["plugins"]["s3fs"] = {
                 "enabled": True,
                 "path": "/local",
                 "config": {
                     "bucket": self.s3_bucket,
                     "region": self.s3_region,
-                    "access_key": self.s3_access_key,
-                    "secret_key": self.s3_secret_key,
+                    "access_key_id": self.s3_access_key,
+                    "secret_access_key": self.s3_secret_key,
+                    "endpoint": self.s3_endpoint,
+                    "prefix": self.s3_prefix,
+                    "disable_ssl": not self.s3_use_ssl,
                 },
             }
         elif self.backend == "memory":

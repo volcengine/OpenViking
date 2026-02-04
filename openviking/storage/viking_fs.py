@@ -147,7 +147,8 @@ class VikingFS:
             except Exception:
                 pass
         path = self._uri_to_path(uri)
-        return await asyncio.to_thread(self.agfs.mkdir, path, mode)
+        # fix s3fs
+        return self._ensure_parent_dirs(path)
 
     async def rm(self, uri: str, recursive: bool = False) -> Dict[str, Any]:
         """Delete file/directory + recursively update vector index."""

@@ -290,7 +290,7 @@ def initialize_openviking_config(
     # Configure storage based on provided parameters
     if path:
         # Embedded mode: local storage
-        config.storage.agfs.backend = "local"
+        config.storage.agfs.backend = config.storage.agfs.backend or "local"
         config.storage.agfs.path = path
         config.storage.vectordb.backend = "local"
         config.storage.vectordb.path = path
