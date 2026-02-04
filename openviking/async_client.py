@@ -10,11 +10,10 @@ import threading
 from typing import Any, Dict, List, Optional
 
 from openviking.service.core import OpenVikingService
+from openviking.service.debug_service import SystemStatus
 from openviking.session import Session
-from openviking.storage.observers import QueueObserver, VikingDBObserver, VLMObserver
-from openviking.storage.queuefs import get_queue_manager
 from openviking.utils import get_logger
-from openviking.utils.config import OpenVikingConfig, get_openviking_config
+from openviking.utils.config import OpenVikingConfig
 
 logger = get_logger(__name__)
 
@@ -225,30 +224,6 @@ class AsyncOpenViking:
         """Wait for all queued processing to complete."""
         return await self._service.resources.wait_processed(timeout=timeout)
 
-    @property
-    def observers(self):
-        queue_manager = get_queue_manager()
-        queue_observer = QueueObserver(queue_manager)
-        vikingdb_observer = VikingDBObserver(self._vikingdb_manager)
-        config = get_openviking_config()
-        vlm_observer = VLMObserver(config.vlm.get_vlm_instance())
-
-        available_observers = {
-            "queue": queue_observer,
-            "vikingdb": vikingdb_observer,
-            "vlm": vlm_observer,
-        }
-        result = {}
-        for name in available_observers.keys():
-            observer_name = name.lower()
-            if observer_name not in available_observers:
-                raise ValueError(
-                    f"Unknown observer: {observer_name}. "
-                    f"Available observers: {list(available_observers.keys())}"
-                )
-            result[observer_name] = available_observers[observer_name]
-        return result
-
     async def add_skill(
         self,
         data: Any,
@@ -449,3 +424,21 @@ class AsyncOpenViking:
         """
         await self._ensure_initialized()
         return await self._service.pack.import_ovpack(file_path, parent, force=force, vectorize=vectorize)
+
+    # ============= Debug methods =============
+
+    def get_status(self) -> SystemStatus:
+        """Get system status.
+
+        Returns:
+            SystemStatus containing health status of all components.
+        """
+        return self._service.debug.get_system_status()
+
+    def is_healthy(self) -> bool:
+        """Quick health check.
+
+        Returns:
+            True if all components are healthy, False otherwise.
+        """
+        return self._service.debug.is_healthy()

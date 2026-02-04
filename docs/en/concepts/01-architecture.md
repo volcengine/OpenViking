@@ -54,7 +54,7 @@ OpenViking is a context database designed for AI Agents, unifying all context ty
 | Module | Responsibility | Key Capabilities |
 |--------|----------------|------------------|
 | **Client** | Unified entry | Provides all operation interfaces, delegates to Service layer |
-| **Service** | Business logic | FSService, SearchService, SessionService, ResourceService, RelationService, PackService |
+| **Service** | Business logic | FSService, SearchService, SessionService, ResourceService, RelationService, PackService, DebugService |
 | **Retrieve** | Context retrieval | Intent analysis (IntentAnalyzer), hierarchical retrieval (HierarchicalRetriever), Rerank |
 | **Session** | Session management | Message recording, usage tracking, session compression, memory commit |
 | **Parse** | Context extraction | Document parsing (PDF/MD/HTML), tree building (TreeBuilder), async semantic generation |
@@ -73,6 +73,7 @@ The Service layer decouples business logic from the transport layer, enabling re
 | **ResourceService** | Resource import | add_resource, add_skill, wait_processed |
 | **RelationService** | Relation management | relations, link, unlink |
 | **PackService** | Import/export | export_ovpack, import_ovpack |
+| **DebugService** | Debug service | get_system_status, get_queue_status, get_vikingdb_status, get_vlm_status, is_healthy |
 
 ## Dual-Layer Storage
 

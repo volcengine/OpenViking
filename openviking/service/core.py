@@ -11,6 +11,7 @@ from typing import Any, Optional
 from openviking.agfs_manager import AGFSManager
 from openviking.core.directories import DirectoryInitializer
 from openviking.exceptions import NotInitializedError
+from openviking.service.debug_service import DebugService
 from openviking.service.fs_service import FSService
 from openviking.service.pack_service import PackService
 from openviking.service.relation_service import RelationService
@@ -83,6 +84,7 @@ class OpenVikingService:
         self._search_service = SearchService()
         self._resource_service = ResourceService()
         self._session_service = SessionService()
+        self._debug_service = DebugService()
 
         # State
         self._initialized = False
@@ -154,6 +156,11 @@ class OpenVikingService:
         """Get SessionService instance."""
         return self._session_service
 
+    @property
+    def debug(self) -> DebugService:
+        """Get DebugService instance."""
+        return self._debug_service
+
     async def initialize(self) -> None:
         """Initialize OpenViking storage and indexes."""
         if self._initialized:
@@ -208,6 +215,10 @@ class OpenVikingService:
             viking_fs=self._viking_fs,
             session_compressor=self._session_compressor,
             user=self.user,
+        )
+        self._debug_service.set_dependencies(
+            vikingdb=self._vikingdb_manager,
+            config=self._config,
         )
 
         self._initialized = True
