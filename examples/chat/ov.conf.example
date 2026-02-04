@@ -1,0 +1,17 @@
+{
+  "embedding": {
+    "dense": {
+      "api_base" : "https://ark-cn-beijing.bytedance.net/api/v3",
+      "api_key"  : "not_gonna_give_u_this",
+      "backend"  : "volcengine",
+      "dimension": "1024",
+      "model"    : "doubao-embedding-vision-250615"
+    }
+  },
+  "vlm": {
+    "api_base" : "https://ark-cn-beijing.bytedance.net/api/v3",
+    "api_key"  : "not_gonna_give_u_this",
+    "backend"  : "volcengine",
+    "model"    : "doubao-seed-1-8-251228"
+  }
+}

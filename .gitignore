@@ -24,6 +24,7 @@ share/python-wheels/
 *.egg
 MANIFEST
 openviking.egg-info/
+data/
 
 # PyInstaller
 #  Usually these files are written by a python script from a template
@@ -99,6 +100,9 @@ Temporary Items
 CLAUDE.md
 *.so
 AGENTS.md
+
+# Git worktrees
+.worktrees/
 
 # Logs
 *.log
