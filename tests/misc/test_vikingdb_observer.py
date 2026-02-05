@@ -24,43 +24,44 @@ async def test_vikingdb_observer():
 
         # Test observer access
         print("\n1. Test observer access:")
-        print(f"Available observers: {list(client.observers.keys())}")
+        print(f"Observer service: {client.observer}")
 
         # Test QueueObserver
         print("\n2. Test QueueObserver:")
-        queue_observer = client.observers["queue"]
-        print(f"Type: {type(queue_observer)}")
-        print(f"Is healthy: {queue_observer.is_healthy()}")
-        print(f"Has errors: {queue_observer.has_errors()}")
+        queue_status = client.observer.queue
+        print(f"Type: {type(queue_status)}")
+        print(f"Is healthy: {queue_status.is_healthy}")
+        print(f"Has errors: {queue_status.has_errors}")
 
         # Test direct print
         print("\n3. Test direct print QueueObserver:")
-        print(queue_observer)
+        print(queue_status)
 
         # Test VikingDBObserver
         print("\n4. Test VikingDBObserver:")
-        vikingdb_observer = client.observers["vikingdb"]
-        print(f"Type: {type(vikingdb_observer)}")
-        print(f"Is healthy: {vikingdb_observer.is_healthy()}")
-        print(f"Has errors: {vikingdb_observer.has_errors()}")
+        vikingdb_status = client.observer.vikingdb
+        print(f"Type: {type(vikingdb_status)}")
+        print(f"Is healthy: {vikingdb_status.is_healthy}")
+        print(f"Has errors: {vikingdb_status.has_errors}")
 
         # Test direct print
         print("\n5. Test direct print VikingDBObserver:")
-        print(vikingdb_observer)
+        print(vikingdb_status)
 
-        # Test get status table
-        print("\n6. Test get status table:")
-        status_table = vikingdb_observer.get_status_table()
-        print(f"Status table type: {type(status_table)}")
-        print(f"Status table length: {len(status_table)}")
+        # Test status string
+        print("\n6. Test status string:")
+        print(f"Status type: {type(vikingdb_status.status)}")
+        print(f"Status length: {len(vikingdb_status.status)}")
 
-        # Test observer properties
-        print("\n7. Test observer properties:")
-        for name, observer in client.observers.items():
+        # Test system status
+        print("\n7. Test system status:")
+        system_status = client.observer.system
+        print(f"System is_healthy: {system_status.is_healthy}")
+        for name, component in system_status.components.items():
             print(f"\n{name}:")
-            print(f"  is_healthy: {observer.is_healthy()}")
-            print(f"  has_errors: {observer.has_errors()}")
-            print(f"  str(observer): {str(observer)[:100]}...")
+            print(f"  is_healthy: {component.is_healthy}")
+            print(f"  has_errors: {component.has_errors}")
+            print(f"  status: {component.status[:100]}...")
 
         print("\n=== All tests completed ===")
 
@@ -80,7 +81,7 @@ def test_sync_client():
     """Test sync client"""
     print("\n=== Test sync client ===")
 
-    client = ov.OpenViking(path="./test_data_sync")
+    client = ov.OpenViking(path="./test_data")
 
     try:
         # Initialize
@@ -88,15 +89,15 @@ def test_sync_client():
         print("Sync client initialized successfully")
 
         # Test observer access
-        print(f"Available observers: {list(client.observers.keys())}")
+        print(f"Observer service: {client.observer}")
 
         # Test QueueObserver
         print("\nQueueObserver status:")
-        print(client.observers["queue"])
+        print(client.observer.queue)
 
         # Test VikingDBObserver
         print("\nVikingDBObserver status:")
-        print(client.observers["vikingdb"])
+        print(client.observer.vikingdb)
 
         print("\n=== Sync client test completed ===")
 

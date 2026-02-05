@@ -8,10 +8,10 @@ Provides methods to observe and report queue status in various formats.
 
 from typing import Dict
 
-from openviking.storage.observers.async_utils import run_coroutine_sync
 from openviking.storage.observers.base_observer import BaseObserver
 from openviking.storage.queuefs.named_queue import QueueStatus
 from openviking.storage.queuefs.queue_manager import QueueManager
+from openviking.utils import run_async
 from openviking.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -32,7 +32,7 @@ class QueueObserver(BaseObserver):
         return self._format_status_as_table(statuses)
 
     def get_status_table(self) -> str:
-        return run_coroutine_sync(self.get_status_table_async)
+        return run_async(self.get_status_table_async())
 
     def __str__(self) -> str:
         return self.get_status_table()

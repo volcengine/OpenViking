@@ -38,7 +38,7 @@ Monitors queue system status (Embedding, Semantic, and custom queues).
 import openviking as ov
 
 client = ov.OpenViking(path="./data")
-print(client.observers["queue"])
+print(client.observer.queue)
 # Output:
 #     Queue  Pending  In Progress  Processed  Errors  Total
 # Embedding        5            2          100       0      107
@@ -58,7 +58,7 @@ Monitors VikingDB collection status (index count and vector count per collection
 import openviking as ov
 
 client = ov.OpenViking(path="./data")
-print(client.observers["vikingdb"])
+print(client.observer.vikingdb)
 # Output:
 #    Collection  Index Count  Vector Count Status
 #    context            1            69     OK
