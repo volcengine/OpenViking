@@ -10,5 +10,3 @@ dependencies = [
     "rich>=13.0.0",
 ]
 
-[tool.uv.sources]
-openviking = { git = "https://github.com/volcengine/OpenViking.git", rev = "main" }
