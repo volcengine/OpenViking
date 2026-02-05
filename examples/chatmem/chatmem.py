@@ -184,6 +184,46 @@ class ChatREPL:
                 console.print()
             else:
                 self.ask_question(question, show_timing=True)
+        elif cmd.strip().startswith("/add_resource"):
+            # Extract resource path from command
+            resource_path = cmd.strip()[13:].strip()  # Remove "/add_resource" prefix
+
+            if not resource_path:
+                console.print("Usage: /add_resource <path/to/file or URL>", style="yellow")
+                console.print("Examples:", style="dim")
+                console.print("  /add_resource ~/Downloads/paper.pdf", style="dim")
+                console.print("  /add_resource https://example.com/doc.md", style="dim")
+                console.print()
+            else:
+                # Import at usage time to avoid circular imports
+                import os
+                import sys
+                from pathlib import Path
+
+                sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                from common.resource_manager import add_resource
+
+                # Expand user path
+                if not resource_path.startswith("http"):
+                    resource_path = str(Path(resource_path).expanduser())
+
+                # Add resource with spinner
+                success = show_loading_with_spinner(
+                    "Adding resource...",
+                    add_resource,
+                    client=self.client,
+                    resource_path=resource_path,
+                    console=console,
+                    show_output=True,
+                )
+
+                if success:
+                    console.print()
+                    console.print(
+                        "💡 You can now ask questions about this resource!", style="dim green"
+                    )
+
+                console.print()
         else:
             console.print(f"Unknown command: {cmd}", style="red")
             console.print("Type /help for available commands", style="dim")
