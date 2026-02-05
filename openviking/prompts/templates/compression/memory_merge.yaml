@@ -1,0 +1,41 @@
+metadata:
+  id: "compression.memory_merge"
+  name: "Memory Merge"
+  description: "Merge existing memory with new information"
+  version: "1.0.0"
+  language: "en"
+  category: "compression"
+
+variables:
+  - name: "existing_content"
+    type: "string"
+    description: "Existing memory content"
+    required: true
+  - name: "new_content"
+    type: "string"
+    description: "New memory content to merge"
+    required: true
+  - name: "category"
+    type: "string"
+    description: "Memory category (profile, preferences, etc.)"
+    required: true
+
+template: |
+  Merge the following memory information into a single, coherent content.
+
+  **Category**: {{ category }}
+
+  **Existing Content:**
+  {{ existing_content }}
+
+  **New Information:**
+  {{ new_content }}
+
+  Requirements:
+  - Remove duplicate information
+  - Keep the most up-to-date details
+  - Maintain a coherent narrative
+  - Output ONLY the merged content, no explanation
+
+llm_config:
+  temperature: 0.0

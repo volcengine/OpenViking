@@ -433,7 +433,7 @@ class AsyncOpenViking:
         Returns:
             SystemStatus containing health status of all components.
         """
-        return self._service.debug.get_system_status()
+        return self._service.debug.observer.system
 
     def is_healthy(self) -> bool:
         """Quick health check.
@@ -441,4 +441,9 @@ class AsyncOpenViking:
         Returns:
             True if all components are healthy, False otherwise.
         """
-        return self._service.debug.is_healthy()
+        return self._service.debug.observer.is_healthy()
+
+    @property
+    def observer(self):
+        """Get observer service for component status."""
+        return self._service.debug.observer

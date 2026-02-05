@@ -1,8 +1,28 @@
-name: _Test Full
+name: 13. _Test Suite (Full)
 
 on:
   workflow_call:
+    inputs:
+      os_json:
+        description: 'JSON string of OS to run on'
+        required: false
+        type: string
+        default: '["ubuntu-latest", "macos-latest", "windows-latest"]'
+      python_json:
+        description: 'JSON string of Python versions'
+        required: false
+        type: string
+        default: '["3.9", "3.10", "3.11", "3.12"]'
   workflow_dispatch:
+    inputs:
+      os_json:
+        description: 'JSON string of OS to run on'
+        required: false
+        default: '["ubuntu-latest", "macos-latest", "windows-latest"]'
+      python_json:
+        description: 'JSON string of Python versions'
+        required: false
+        default: '["3.9", "3.10", "3.11", "3.12"]'
 
 jobs:
   test:
@@ -11,8 +31,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest, windows-latest]
-        python-version: ['3.9', '3.10', '3.11', '3.12']
+        os: ${{ fromJson(inputs.os_json || '["ubuntu-latest", "macos-latest", "windows-latest"]') }}
+        python-version: ${{ fromJson(inputs.python_json || '["3.9", "3.10", "3.11", "3.12"]') }}
 
     steps:
     - uses: actions/checkout@v4
@@ -55,7 +75,7 @@ jobs:
       run: echo "C:\mingw64\bin" >> $env:GITHUB_PATH
 
     - name: Install Python dependencies
-      run: uv sync --extra test
+      run: uv sync --frozen --extra test
 
     - name: Install build dependencies
       run: uv pip install setuptools pybind11 cmake wheel

@@ -35,7 +35,7 @@ openviking/service/
 - `SearchService`: find, search
 - `SessionService`: session, sessions, add_message, compress, extract
 - `RelationService`: link, unlink, relations
-- `DebugService`: get_queue_status, get_vikingdb_status, get_vlm_status, get_system_status, is_healthy
+- `DebugService`: observer (ObserverService)
 - `PackService`: export_ovpack, import_ovpack
 
 3. **创建 OpenVikingService 主类**：

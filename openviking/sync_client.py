@@ -177,6 +177,11 @@ class SyncOpenViking:
         return self._async_client.is_healthy()
 
     @property
+    def observer(self):
+        """Get observer service for component status."""
+        return self._async_client.observer
+
+    @property
     def viking_fs(self):
         return self._async_client.viking_fs
 

@@ -1,4 +1,4 @@
-name: _Test Lite
+name: 12. _Test Suite (Lite)
 
 on:
   workflow_call:
@@ -75,7 +75,7 @@ jobs:
       run: echo "C:\mingw64\bin" >> $env:GITHUB_PATH
 
     - name: Install Python dependencies
-      run: uv sync --extra test
+      run: uv sync --frozen --extra test
 
     - name: Install build dependencies
       run: uv pip install setuptools pybind11 cmake wheel

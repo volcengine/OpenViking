@@ -1,4 +1,4 @@
-name: Publish to PyPI
+name: 03. Release
 
 on:
   release:
@@ -15,65 +15,139 @@ on:
         - testpypi
         - pypi
         - both
+      build_sdist:
+        description: 'Whether to build source distribution'
+        required: false
+        type: boolean
+        default: true
+      build_wheels:
+        description: 'Whether to build wheel distribution'
+        required: false
+        type: boolean
+        default: true
+      os_json:
+        description: 'JSON string of OS to build on (Manual only)'
+        required: false
+        type: string
+        default: '["ubuntu-latest", "macos-latest", "macos-15-intel", "windows-latest"]'
+      python_json:
+        description: 'JSON string of Python versions (Manual only)'
+        required: false
+        type: string
+        default: '["3.9", "3.10", "3.11", "3.12"]'
+
+permissions:
+  contents: write
+  id-token: write
+  actions: read
 
 jobs:
-  check-version:
-    name: Verify Version
-    runs-on: ubuntu-latest
-    steps:
-    - uses: actions/checkout@v4
-    
-    - name: Set up Python
-      uses: actions/setup-python@v6
-      with:
-        python-version: '3.11'
-
-    - name: Verify Tag matches pyproject.toml
-      run: |
-        python -c "
-        import tomllib
-        import os
-        import sys
-
-        with open('pyproject.toml', 'rb') as f:
-            data = tomllib.load(f)
-        
-        proj_version = data['project']['version']
-        ref = os.environ.get('GITHUB_REF', '')
-        event_name = os.environ.get('GITHUB_EVENT_NAME', '')
-        
-        print(f'Project version: {proj_version}')
-        print(f'GitHub Ref: {ref}')
-        print(f'Event Name: {event_name}')
-
-        # Strict check only for Release events or when a Tag is pushed
-        if event_name == 'release' or ref.startswith('refs/tags/'):
-            if ref.startswith('refs/tags/'):
-                tag = ref.split('/')[-1]
-                clean_tag = tag[1:] if tag.startswith('v') else tag
-                
-                if clean_tag != proj_version:
-                    print(f'::error::Git Tag ({tag}) does not match pyproject.toml version ({proj_version})')
-                    sys.exit(1)
-                
-                print(f'✅ Verification Successful: Tag {tag} matches project version {proj_version}')
-            else:
-                print('⚠️ Release event triggered but REF is not a tag? This is unexpected.')
-        else:
-            print(f'ℹ️ Manual trigger ({event_name}) on branch/commit. Skipping strict Tag vs Version check.')
-            print(f'   Current pyproject.toml version is: {proj_version}')
-            print('   Make sure this is the version you intend to build/publish.')
-        "
-
   build:
-    needs: [check-version]
     uses: ./.github/workflows/_build.yml
-
-  publish:
-    needs: [build]
-    # Run if triggered by release OR (manual trigger AND target is not 'none')
-    if: github.event_name == 'release' || (inputs.target != 'none')
-    uses: ./.github/workflows/_publish.yml
     with:
-      # For release events, default to 'pypi'. For manual, use the input.
-      target: ${{ inputs.target || 'pypi' }}
+      os_json: ${{ inputs.os_json || '["ubuntu-latest", "macos-latest", "macos-15-intel", "windows-latest"]' }}
+      python_json: ${{ inputs.python_json || '["3.9", "3.10", "3.11", "3.12"]' }}
+      build_sdist: ${{ github.event_name == 'release' || inputs.build_sdist != false }}
+      build_wheels: ${{ github.event_name == 'release' || inputs.build_wheels != false }}
+
+  permission-check:
+    name: Check write permission
+    needs: [build]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      allowed: ${{ steps.check.outputs.allowed }}
+    steps:
+    - name: Verify actor permission
+      id: check
+      uses: actions/github-script@v7
+      with:
+        script: |
+          // Only check permission for manual dispatch
+          if (context.eventName !== 'workflow_dispatch') {
+            core.setOutput('allowed', 'true');
+            return;
+          }
+          const { owner, repo } = context.repo;
+          const actor = context.actor;
+          const { data } = await github.rest.repos.getCollaboratorPermissionLevel({
+            owner,
+            repo,
+            username: actor,
+          });
+          const perm = data.permission;
+          core.info(`Actor ${actor} permission: ${perm}`);
+          const allowed = ['admin', 'maintain', 'write'].includes(perm);
+          core.setOutput('allowed', allowed ? 'true' : 'false');
+          if (!allowed) {
+            core.setFailed(`User ${actor} does not have write permission`);
+          }
+
+  publish-testpypi:
+    name: Publish to TestPyPI
+    needs: [build, permission-check]
+    if: >-
+      needs.permission-check.outputs.allowed == 'true' &&
+      (inputs.target == 'testpypi' || inputs.target == 'both')
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/openviking
+    permissions:
+      id-token: write
+      actions: read
+    steps:
+    - name: Download all the dists (Same Run)
+      uses: actions/download-artifact@v4
+      with:
+        pattern: python-package-distributions-*
+        path: dist/
+        merge-multiple: true
+
+    - name: Publish distribution to TestPyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        repository-url: https://test.pypi.org/legacy/
+        skip-existing: true
+        verbose: true
+
+    - name: Display published version
+      run: |
+        # Get version from the first wheel file found
+        VERSION=$(ls dist/*.whl | head -n 1 | xargs basename | cut -d- -f2)
+        echo "Successfully published to TestPyPI with version: $VERSION"
+        echo "::notice::Successfully published to TestPyPI with version: $VERSION"
+
+  publish-pypi:
+    name: Publish to PyPI
+    needs: [build, permission-check]
+    if: >-
+      needs.permission-check.outputs.allowed == 'true' &&
+      (github.event_name == 'release' || inputs.target == 'pypi' || inputs.target == 'both')
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/openviking
+    permissions:
+      id-token: write
+      actions: read
+    steps:
+    - name: Download all the dists (Same Run)
+      uses: actions/download-artifact@v4
+      with:
+        pattern: python-package-distributions-*
+        path: dist/
+        merge-multiple: true
+
+    - name: Publish distribution to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        verbose: true
+
+    - name: Display published version
+      run: |
+        # Get version from the first wheel file found
+        VERSION=$(ls dist/*.whl | head -n 1 | xargs basename | cut -d- -f2)
+        echo "Successfully published to PyPI with version: $VERSION"
+        echo "::notice::Successfully published to PyPI with version: $VERSION"

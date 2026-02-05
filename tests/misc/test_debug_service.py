@@ -1,7 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 """
-Tests for DebugService.
+Tests for DebugService and ObserverService.
 """
 
 from unittest.mock import MagicMock, patch
@@ -11,6 +11,7 @@ import pytest
 from openviking.service.debug_service import (
     ComponentStatus,
     DebugService,
+    ObserverService,
     SystemStatus,
 )
 
@@ -24,12 +25,12 @@ class TestComponentStatus:
             name="test_component",
             is_healthy=True,
             has_errors=False,
-            details={"key": "value"},
+            status="Status Table",
         )
         assert status.name == "test_component"
         assert status.is_healthy is True
         assert status.has_errors is False
-        assert status.details == {"key": "value"}
+        assert status.status == "Status Table"
 
     def test_component_status_unhealthy(self):
         """Test ComponentStatus with unhealthy state."""
@@ -37,10 +38,33 @@ class TestComponentStatus:
             name="unhealthy_component",
             is_healthy=False,
             has_errors=True,
-            details={"error": "connection failed"},
+            status="Error Status",
         )
         assert status.is_healthy is False
         assert status.has_errors is True
+
+    def test_component_status_str_healthy(self):
+        """Test ComponentStatus __str__ for healthy component."""
+        status = ComponentStatus(
+            name="vikingdb",
+            is_healthy=True,
+            has_errors=False,
+            status="Collection  Count\ntest        10",
+        )
+        result = str(status)
+        assert "[vikingdb] (healthy)" in result
+        assert "Collection  Count" in result
+
+    def test_component_status_str_unhealthy(self):
+        """Test ComponentStatus __str__ for unhealthy component."""
+        status = ComponentStatus(
+            name="queue",
+            is_healthy=False,
+            has_errors=True,
+            status="Queue Error",
+        )
+        result = str(status)
+        assert "[queue] (unhealthy)" in result
 
 
 class TestSystemStatus:
@@ -49,8 +73,8 @@ class TestSystemStatus:
     def test_system_status_healthy(self):
         """Test SystemStatus with all healthy components."""
         components = {
-            "queue": ComponentStatus("queue", True, False, {}),
-            "vikingdb": ComponentStatus("vikingdb", True, False, {}),
+            "queue": ComponentStatus("queue", True, False, "OK"),
+            "vikingdb": ComponentStatus("vikingdb", True, False, "OK"),
         }
         status = SystemStatus(is_healthy=True, components=components, errors=[])
         assert status.is_healthy is True
@@ -60,8 +84,8 @@ class TestSystemStatus:
     def test_system_status_with_errors(self):
         """Test SystemStatus with errors."""
         components = {
-            "queue": ComponentStatus("queue", False, True, {}),
-            "vikingdb": ComponentStatus("vikingdb", True, False, {}),
+            "queue": ComponentStatus("queue", False, True, "Error"),
+            "vikingdb": ComponentStatus("vikingdb", True, False, "OK"),
         }
         status = SystemStatus(
             is_healthy=False,
@@ -71,27 +95,39 @@ class TestSystemStatus:
         assert status.is_healthy is False
         assert len(status.errors) == 1
 
+    def test_system_status_str(self):
+        """Test SystemStatus __str__ method."""
+        components = {
+            "queue": ComponentStatus("queue", True, False, "Queue OK"),
+            "vikingdb": ComponentStatus("vikingdb", True, False, "VikingDB OK"),
+        }
+        status = SystemStatus(is_healthy=True, components=components, errors=[])
+        result = str(status)
+        assert "[system] (healthy)" in result
+        assert "[queue] (healthy)" in result
+        assert "[vikingdb] (healthy)" in result
 
-class TestDebugService:
-    """Tests for DebugService class."""
+
+class TestObserverService:
+    """Tests for ObserverService class."""
 
     def test_init_without_dependencies(self):
-        """Test DebugService can be created without dependencies."""
-        service = DebugService()
+        """Test ObserverService can be created without dependencies."""
+        service = ObserverService()
         assert service._vikingdb is None
         assert service._config is None
 
     def test_init_with_dependencies(self):
-        """Test DebugService can be created with dependencies."""
+        """Test ObserverService can be created with dependencies."""
         mock_vikingdb = MagicMock()
         mock_config = MagicMock()
-        service = DebugService(vikingdb=mock_vikingdb, config=mock_config)
+        service = ObserverService(vikingdb=mock_vikingdb, config=mock_config)
         assert service._vikingdb is mock_vikingdb
         assert service._config is mock_config
 
     def test_set_dependencies(self):
         """Test set_dependencies method."""
-        service = DebugService()
+        service = ObserverService()
         mock_vikingdb = MagicMock()
         mock_config = MagicMock()
         service.set_dependencies(vikingdb=mock_vikingdb, config=mock_config)
@@ -100,8 +136,8 @@ class TestDebugService:
 
     @patch("openviking.service.debug_service.get_queue_manager")
     @patch("openviking.service.debug_service.QueueObserver")
-    def test_get_queue_status(self, mock_observer_cls, mock_get_queue_manager):
-        """Test get_queue_status returns ComponentStatus."""
+    def test_queue_property(self, mock_observer_cls, mock_get_queue_manager):
+        """Test queue property returns ComponentStatus."""
         mock_queue_manager = MagicMock()
         mock_get_queue_manager.return_value = mock_queue_manager
 
@@ -111,19 +147,19 @@ class TestDebugService:
         mock_observer.get_status_table.return_value = "Queue Status Table"
         mock_observer_cls.return_value = mock_observer
 
-        service = DebugService()
-        status = service.get_queue_status()
+        service = ObserverService()
+        status = service.queue
 
         assert isinstance(status, ComponentStatus)
         assert status.name == "queue"
         assert status.is_healthy is True
         assert status.has_errors is False
-        assert status.details["status_table"] == "Queue Status Table"
+        assert status.status == "Queue Status Table"
         mock_observer_cls.assert_called_once_with(mock_queue_manager)
 
     @patch("openviking.service.debug_service.VikingDBObserver")
-    def test_get_vikingdb_status(self, mock_observer_cls):
-        """Test get_vikingdb_status returns ComponentStatus."""
+    def test_vikingdb_property(self, mock_observer_cls):
+        """Test vikingdb property returns ComponentStatus."""
         mock_vikingdb = MagicMock()
         mock_observer = MagicMock()
         mock_observer.is_healthy.return_value = True
@@ -131,19 +167,19 @@ class TestDebugService:
         mock_observer.get_status_table.return_value = "VikingDB Status Table"
         mock_observer_cls.return_value = mock_observer
 
-        service = DebugService(vikingdb=mock_vikingdb)
-        status = service.get_vikingdb_status()
+        service = ObserverService(vikingdb=mock_vikingdb)
+        status = service.vikingdb
 
         assert isinstance(status, ComponentStatus)
         assert status.name == "vikingdb"
         assert status.is_healthy is True
         assert status.has_errors is False
-        assert status.details["status_table"] == "VikingDB Status Table"
+        assert status.status == "VikingDB Status Table"
         mock_observer_cls.assert_called_once_with(mock_vikingdb)
 
     @patch("openviking.service.debug_service.VLMObserver")
-    def test_get_vlm_status(self, mock_observer_cls):
-        """Test get_vlm_status returns ComponentStatus."""
+    def test_vlm_property(self, mock_observer_cls):
+        """Test vlm property returns ComponentStatus."""
         mock_config = MagicMock()
         mock_vlm_instance = MagicMock()
         mock_config.vlm.get_vlm_instance.return_value = mock_vlm_instance
@@ -154,48 +190,73 @@ class TestDebugService:
         mock_observer.get_status_table.return_value = "VLM Status Table"
         mock_observer_cls.return_value = mock_observer
 
-        service = DebugService(config=mock_config)
-        status = service.get_vlm_status()
+        service = ObserverService(config=mock_config)
+        status = service.vlm
 
         assert isinstance(status, ComponentStatus)
         assert status.name == "vlm"
         assert status.is_healthy is True
         assert status.has_errors is False
-        assert status.details["status_table"] == "VLM Status Table"
+        assert status.status == "VLM Status Table"
         mock_observer_cls.assert_called_once_with(mock_vlm_instance)
 
-    @patch.object(DebugService, "get_queue_status")
-    @patch.object(DebugService, "get_vikingdb_status")
-    @patch.object(DebugService, "get_vlm_status")
-    def test_get_system_status_all_healthy(
-        self, mock_vlm, mock_vikingdb, mock_queue
+    @patch("openviking.service.debug_service.get_queue_manager")
+    @patch("openviking.service.debug_service.QueueObserver")
+    @patch("openviking.service.debug_service.VikingDBObserver")
+    @patch("openviking.service.debug_service.VLMObserver")
+    def test_system_property_all_healthy(
+        self, mock_vlm_cls, mock_vikingdb_cls, mock_queue_cls, mock_get_queue_manager
     ):
-        """Test get_system_status when all components are healthy."""
-        mock_queue.return_value = ComponentStatus("queue", True, False, {})
-        mock_vikingdb.return_value = ComponentStatus("vikingdb", True, False, {})
-        mock_vlm.return_value = ComponentStatus("vlm", True, False, {})
+        """Test system property when all components are healthy."""
+        # Setup mocks
+        for mock_cls in [mock_queue_cls, mock_vikingdb_cls, mock_vlm_cls]:
+            mock_observer = MagicMock()
+            mock_observer.is_healthy.return_value = True
+            mock_observer.has_errors.return_value = False
+            mock_observer.get_status_table.return_value = "OK"
+            mock_cls.return_value = mock_observer
 
-        service = DebugService()
-        status = service.get_system_status()
+        mock_config = MagicMock()
+        service = ObserverService(vikingdb=MagicMock(), config=mock_config)
+        status = service.system
 
         assert isinstance(status, SystemStatus)
         assert status.is_healthy is True
         assert len(status.components) == 3
         assert status.errors == []
 
-    @patch.object(DebugService, "get_queue_status")
-    @patch.object(DebugService, "get_vikingdb_status")
-    @patch.object(DebugService, "get_vlm_status")
-    def test_get_system_status_with_errors(
-        self, mock_vlm, mock_vikingdb, mock_queue
+    @patch("openviking.service.debug_service.get_queue_manager")
+    @patch("openviking.service.debug_service.QueueObserver")
+    @patch("openviking.service.debug_service.VikingDBObserver")
+    @patch("openviking.service.debug_service.VLMObserver")
+    def test_system_property_with_errors(
+        self, mock_vlm_cls, mock_vikingdb_cls, mock_queue_cls, mock_get_queue_manager
     ):
-        """Test get_system_status when some components have errors."""
-        mock_queue.return_value = ComponentStatus("queue", False, True, {})
-        mock_vikingdb.return_value = ComponentStatus("vikingdb", True, False, {})
-        mock_vlm.return_value = ComponentStatus("vlm", False, True, {})
+        """Test system property when some components have errors."""
+        # Queue has errors
+        mock_queue = MagicMock()
+        mock_queue.is_healthy.return_value = False
+        mock_queue.has_errors.return_value = True
+        mock_queue.get_status_table.return_value = "Error"
+        mock_queue_cls.return_value = mock_queue
 
-        service = DebugService()
-        status = service.get_system_status()
+        # VikingDB is healthy
+        mock_vikingdb = MagicMock()
+        mock_vikingdb.is_healthy.return_value = True
+        mock_vikingdb.has_errors.return_value = False
+        mock_vikingdb.get_status_table.return_value = "OK"
+        mock_vikingdb_cls.return_value = mock_vikingdb
+
+        # VLM has errors
+        mock_vlm = MagicMock()
+        mock_vlm.is_healthy.return_value = False
+        mock_vlm.has_errors.return_value = True
+        mock_vlm.get_status_table.return_value = "Error"
+        mock_vlm_cls.return_value = mock_vlm
+
+        mock_config = MagicMock()
+        service = ObserverService(vikingdb=MagicMock(), config=mock_config)
+        status = service.system
 
         assert isinstance(status, SystemStatus)
         assert status.is_healthy is False
@@ -203,20 +264,80 @@ class TestDebugService:
         assert "queue has errors" in status.errors
         assert "vlm has errors" in status.errors
 
-    @patch.object(DebugService, "get_system_status")
-    def test_is_healthy_returns_true(self, mock_get_system_status):
+    @patch("openviking.service.debug_service.get_queue_manager")
+    @patch("openviking.service.debug_service.QueueObserver")
+    @patch("openviking.service.debug_service.VikingDBObserver")
+    @patch("openviking.service.debug_service.VLMObserver")
+    def test_is_healthy_returns_true(
+        self, mock_vlm_cls, mock_vikingdb_cls, mock_queue_cls, mock_get_queue_manager
+    ):
         """Test is_healthy returns True when system is healthy."""
-        mock_get_system_status.return_value = SystemStatus(
-            is_healthy=True, components={}, errors=[]
-        )
-        service = DebugService()
+        for mock_cls in [mock_queue_cls, mock_vikingdb_cls, mock_vlm_cls]:
+            mock_observer = MagicMock()
+            mock_observer.is_healthy.return_value = True
+            mock_observer.has_errors.return_value = False
+            mock_observer.get_status_table.return_value = "OK"
+            mock_cls.return_value = mock_observer
+
+        mock_config = MagicMock()
+        service = ObserverService(vikingdb=MagicMock(), config=mock_config)
         assert service.is_healthy() is True
 
-    @patch.object(DebugService, "get_system_status")
-    def test_is_healthy_returns_false(self, mock_get_system_status):
+    @patch("openviking.service.debug_service.get_queue_manager")
+    @patch("openviking.service.debug_service.QueueObserver")
+    @patch("openviking.service.debug_service.VikingDBObserver")
+    @patch("openviking.service.debug_service.VLMObserver")
+    def test_is_healthy_returns_false(
+        self, mock_vlm_cls, mock_vikingdb_cls, mock_queue_cls, mock_get_queue_manager
+    ):
         """Test is_healthy returns False when system is unhealthy."""
-        mock_get_system_status.return_value = SystemStatus(
-            is_healthy=False, components={}, errors=["error"]
-        )
-        service = DebugService()
+        # Queue has errors
+        mock_queue = MagicMock()
+        mock_queue.is_healthy.return_value = False
+        mock_queue.has_errors.return_value = True
+        mock_queue.get_status_table.return_value = "Error"
+        mock_queue_cls.return_value = mock_queue
+
+        # Others are healthy
+        for mock_cls in [mock_vikingdb_cls, mock_vlm_cls]:
+            mock_observer = MagicMock()
+            mock_observer.is_healthy.return_value = True
+            mock_observer.has_errors.return_value = False
+            mock_observer.get_status_table.return_value = "OK"
+            mock_cls.return_value = mock_observer
+
+        mock_config = MagicMock()
+        service = ObserverService(vikingdb=MagicMock(), config=mock_config)
         assert service.is_healthy() is False
+
+
+class TestDebugService:
+    """Tests for DebugService class."""
+
+    def test_init_creates_observer(self):
+        """Test DebugService creates ObserverService on init."""
+        service = DebugService()
+        assert isinstance(service._observer, ObserverService)
+
+    def test_init_with_dependencies(self):
+        """Test DebugService passes dependencies to ObserverService."""
+        mock_vikingdb = MagicMock()
+        mock_config = MagicMock()
+        service = DebugService(vikingdb=mock_vikingdb, config=mock_config)
+        assert service._observer._vikingdb is mock_vikingdb
+        assert service._observer._config is mock_config
+
+    def test_set_dependencies(self):
+        """Test set_dependencies passes to ObserverService."""
+        service = DebugService()
+        mock_vikingdb = MagicMock()
+        mock_config = MagicMock()
+        service.set_dependencies(vikingdb=mock_vikingdb, config=mock_config)
+        assert service._observer._vikingdb is mock_vikingdb
+        assert service._observer._config is mock_config
+
+    def test_observer_property(self):
+        """Test observer property returns ObserverService."""
+        service = DebugService()
+        assert service.observer is service._observer
+        assert isinstance(service.observer, ObserverService)
