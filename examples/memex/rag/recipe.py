@@ -110,35 +110,33 @@ class MemexRecipe:
     def llm_model(self) -> str:
         return self.vlm_config.get("model", "gpt-4o-mini")
 
-    def _should_use_deep_search(self, query: str) -> bool:
-        if self._session and hasattr(self._session, "messages") and len(self._session.messages) > 2:
-            return True
-        pronouns = ["它", "这个", "那个", "他", "她", "this", "that", "it", "they", "them"]
-        if any(p in query.lower() for p in pronouns):
-            return True
-        if len(self._chat_history) > 0:
-            return True
-        return False
+    def _expand_query(self, query: str) -> str:
+        has_chinese = any("\u4e00" <= c <= "\u9fff" for c in query)
+        if not has_chinese:
+            return query
 
-    def find(
-        self,
-        query: str,
-        top_k: Optional[int] = None,
-        target_uri: Optional[str] = None,
-        score_threshold: Optional[float] = None,
-    ) -> list[dict[str, Any]]:
-        top_k = top_k or self.config.search_top_k
-        target_uri = target_uri or self.config.default_resource_uri
-        score_threshold = score_threshold or self.config.search_score_threshold
+        expand_prompt = f"""Expand this Chinese query with English keywords for better search.
+Return format: original query + English keywords (no explanation)
 
-        results = self.client.find(
-            query=query,
-            target_uri=target_uri,
-            top_k=top_k,
-            score_threshold=score_threshold,
-        )
+Query: {query}
 
-        return self._process_search_results(results, top_k)
+Example:
+Input: OpenViking 怎么安装
+Output: OpenViking 怎么安装 installation setup install pip
+
+Expanded query:"""
+
+        try:
+            response = self.llm_client.chat.completions.create(
+                model=self.llm_model,
+                messages=[{"role": "user", "content": expand_prompt}],
+                temperature=0.1,
+                max_tokens=100,
+            )
+            expanded = response.choices[0].message.content or query
+            return expanded.strip()
+        except Exception:
+            return query
 
     def search(
         self,
@@ -147,19 +145,17 @@ class MemexRecipe:
         target_uri: Optional[str] = None,
         score_threshold: Optional[float] = None,
         use_session: bool = True,
-        auto_select: bool = True,
+        expand_query: bool = True,
     ) -> list[dict[str, Any]]:
         top_k = top_k or self.config.search_top_k
         target_uri = target_uri or self.config.default_resource_uri
         score_threshold = score_threshold or self.config.search_score_threshold
 
-        if auto_select and not self._should_use_deep_search(query):
-            return self.find(query, top_k, target_uri, score_threshold)
-
+        search_query = self._expand_query(query) if expand_query else query
         session_to_use = self._session if use_session else None
 
         results = self.client.search(
-            query=query,
+            query=search_query,
             target_uri=target_uri,
             top_k=top_k,
             score_threshold=score_threshold,
