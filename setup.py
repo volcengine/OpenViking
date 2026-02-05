@@ -5,7 +5,7 @@ import sysconfig
 from pathlib import Path
 
 import pybind11
-from setuptools import Extension, find_packages, setup
+from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
 
 CMAKE_PATH = shutil.which("cmake") or "cmake"
@@ -138,7 +138,6 @@ setup(
     cmdclass={
         "build_ext": CMakeBuildExtension,
     },
-    packages=find_packages(),
     package_data={
         "openviking": [
             "bin/agfs-server",

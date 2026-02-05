@@ -11,7 +11,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "openviking"
 dynamic = ["version"]
-description = "An Agent-native context database: Data in, Context out"
+description = "An Agent-native context database"
 readme = "README.md"
 authors = [
     {name = "ByteDance", email = "noreply@bytedance.com"}
