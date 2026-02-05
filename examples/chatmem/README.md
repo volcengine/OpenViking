@@ -1,16 +1,18 @@
-# OpenViking Chat with Persistent Memory
+# OpenViking Chat with Memory
 
 Interactive chat interface with memory that persists across sessions using OpenViking's Session API.
 
+<img height="888" alt="image" src="https://github.com/user-attachments/assets/c028f40a-3040-457d-a88c-8220e55973b5" />
+
+
 ## Features
 
-- 🔄 **Multi-turn conversations** - Natural follow-up questions
-- 💾 **Persistent memory** - Conversations saved and resumed
-- ✨ **Memory extraction** - Automatic long-term memory creation
-- 📚 **Source attribution** - See which documents informed answers
-- ⌨️ **Command history** - Use ↑/↓ arrows to navigate
-- 🎨 **Rich UI** - Beautiful terminal interface
-- 🛡️ **Graceful exit** - Ctrl-C or /exit saves session
+- 🔄 **Multi-turn conversations**
+- 💾 **Persistent memory**
+- ✨ **Memory extraction**
+- 📚 **Source attribution**
+- 🎨 **Rich UI**
+- 🛡️ **Graceful exit**
 
 ## Quick Start
 
@@ -104,8 +106,6 @@ You: Can you give me more examples?
 - `/exit` or `/quit` - Save and exit
 - `Ctrl-C` - Save and exit gracefully
 - `Ctrl-D` - Exit
-
-### New Commands
 
 #### /time - Performance Timing
 
@@ -215,33 +215,6 @@ On Exit: session.commit()
 Memories Extracted & Persisted
 ```
 
-## Comparison with examples/chat/
-
-| Feature | examples/chat/ | examples/chatmem/ |
-|---------|---------------|-------------------|
-| Multi-turn | ✅ | ✅ |
-| Persistent memory | ❌ | ✅ |
-| Memory extraction | {❌ | ✅ |
-| Session management | ❌ | ✅ |
-| Cross-run memory | ❌ | ✅ |
-
-Use `examples/chat/` for:
-- Quick one-off conversations
-- Testing without persistence
-- Simple prototyping
-
-Use `examples/chatmem/` for:
-- Long-term projects
-- Conversations spanning multiple sessions
-- Building up knowledge base over time
-
-## Tips
-
-- **Organize by project:** Use `--session-id project-name` for different contexts
-- **Date-based sessions:** `--session-id $(date +%Y-%m-%d)` for daily logs
-- **Clear screen, keep memory:** Use `/clear` to clean display without losing history
-- **Check session files:** Look in `data/session/` to see what's stored
-
 ## Troubleshooting
 
 **"Error initializing"**
@@ -249,7 +222,7 @@ Use `examples/chatmem/` for:
 - Ensure `data/` directory is writable
 
 **"No relevant sources found"**
-- Add documents using `../query/add.py`
+- Add documents using `/add_resource`
 - Lower `--score-threshold` value
 - Try rephrasing your question
 
@@ -290,9 +263,3 @@ ls data/memory/
 tar -czf sessions-backup-$(date +%Y%m%d).tar.gz data/session/
 ```
 
-## Next Steps
-
-- Build on this for domain-specific assistants
-- Add session search to find relevant past conversations
-- Implement session export/import for sharing
-- Create session analytics dashboards
