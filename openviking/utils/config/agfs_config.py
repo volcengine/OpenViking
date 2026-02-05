@@ -5,6 +5,62 @@ from typing import Optional
 from pydantic import BaseModel, Field, model_validator
 
 
+class S3Config(BaseModel):
+    """Configuration for S3 backend."""
+
+    bucket: Optional[str] = Field(default=None, description="S3 bucket name")
+
+    region: Optional[str] = Field(
+        default=None,
+        description="AWS region where the bucket is located (e.g., us-east-1, cn-beijing)",
+    )
+
+    access_key: Optional[str] = Field(
+        default=None,
+        description="S3 access key ID. If not provided, AGFS may attempt to use environment variables or IAM roles.",
+    )
+
+    secret_key: Optional[str] = Field(
+        default=None,
+        description="S3 secret access key corresponding to the access key ID.",
+    )
+
+    endpoint: Optional[str] = Field(
+        default=None,
+        description="Custom S3 endpoint URL. Required for S3-compatible services like MinIO or LocalStack. "
+        "Leave empty for standard AWS S3.",
+    )
+
+    prefix: Optional[str] = Field(
+        default="",
+        description="Optional key prefix for namespace isolation. All objects will be stored under this prefix.",
+    )
+
+    use_ssl: bool = Field(
+        default=True,
+        description="Enable/Disable SSL (HTTPS) for S3 connections. Set to False for local testing without HTTPS.",
+    )
+
+    def validate_config(self):
+        """Validate S3 configuration completeness"""
+        missing = []
+        if not self.bucket:
+            missing.append("bucket")
+        if not self.endpoint:
+            missing.append("endpoint")
+        if not self.region:
+            missing.append("region")
+        if not self.access_key:
+            missing.append("access_key")
+        if not self.secret_key:
+            missing.append("secret_key")
+
+        if missing:
+            raise ValueError(f"S3 backend requires the following fields: {', '.join(missing)}")
+
+        return self
+
+
 class AGFSConfig(BaseModel):
     """Configuration for AGFS (Agent Global File System)."""
 
@@ -29,38 +85,7 @@ class AGFSConfig(BaseModel):
     # S3 backend configuration
     # These settings are used when backend is set to 's3'.
     # AGFS will act as a gateway to the specified S3 bucket.
-    s3_bucket: Optional[str] = Field(default=None, description="S3 bucket name")
-
-    s3_region: Optional[str] = Field(
-        default=None,
-        description="AWS region where the bucket is located (e.g., us-east-1, cn-beijing)",
-    )
-
-    s3_access_key: Optional[str] = Field(
-        default=None,
-        description="S3 access key ID. If not provided, AGFS may attempt to use environment variables or IAM roles.",
-    )
-
-    s3_secret_key: Optional[str] = Field(
-        default=None,
-        description="S3 secret access key corresponding to the access key ID.",
-    )
-
-    s3_endpoint: Optional[str] = Field(
-        default=None,
-        description="Custom S3 endpoint URL. Required for S3-compatible services like MinIO or LocalStack. "
-        "Leave empty for standard AWS S3.",
-    )
-
-    s3_prefix: Optional[str] = Field(
-        default="",
-        description="Optional key prefix for namespace isolation. All objects will be stored under this prefix.",
-    )
-
-    s3_use_ssl: bool = Field(
-        default=True,
-        description="Enable/Disable SSL (HTTPS) for S3 connections. Set to False for local testing without HTTPS.",
-    )
+    s3: S3Config = Field(default_factory=lambda: S3Config(), description="S3 backend configuration")
 
     @model_validator(mode="after")
     def validate_config(self):
@@ -75,21 +100,7 @@ class AGFSConfig(BaseModel):
                 raise ValueError("AGFS local backend requires 'path' to be set")
 
         elif self.backend == "s3":
-            missing = []
-            if not self.s3_bucket:
-                missing.append("s3_bucket")
-            if not self.s3_endpoint:
-                missing.append("s3_endpoint")
-            if not self.s3_region:
-                missing.append("s3_region")
-            if not self.s3_access_key:
-                missing.append("s3_access_key")
-            if not self.s3_secret_key:
-                missing.append("s3_secret_key")
-
-            if missing:
-                raise ValueError(
-                    f"AGFS S3 backend requires the following fields: {', '.join(missing)}"
-                )
+            # Validate S3 configuration
+            self.s3.validate_config()
 
         return self
