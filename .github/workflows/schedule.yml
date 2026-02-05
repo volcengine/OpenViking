@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: '0 0 * * 0'  # Run at 00:00 on Sunday
 
+permissions:
+  actions: read
+  contents: read
+  security-events: write
+
 jobs:
   security-scan:
     uses: ./.github/workflows/_codeql.yml
