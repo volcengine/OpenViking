@@ -27,13 +27,40 @@ class AGFSConfig(BaseModel):
     retry_times: int = Field(default=3, description="AGFS retry times on failure")
 
     # S3 backend configuration
+    # These settings are used when backend is set to 's3'.
+    # AGFS will act as a gateway to the specified S3 bucket.
     s3_bucket: Optional[str] = Field(default=None, description="S3 bucket name")
 
-    s3_region: Optional[str] = Field(default=None, description="S3 region")
+    s3_region: Optional[str] = Field(
+        default=None,
+        description="AWS region where the bucket is located (e.g., us-east-1, cn-beijing)",
+    )
 
-    s3_access_key: Optional[str] = Field(default=None, description="S3 access key")
+    s3_access_key: Optional[str] = Field(
+        default=None,
+        description="S3 access key ID. If not provided, AGFS may attempt to use environment variables or IAM roles.",
+    )
 
-    s3_secret_key: Optional[str] = Field(default=None, description="S3 secret key")
+    s3_secret_key: Optional[str] = Field(
+        default=None,
+        description="S3 secret access key corresponding to the access key ID.",
+    )
+
+    s3_endpoint: Optional[str] = Field(
+        default=None,
+        description="Custom S3 endpoint URL. Required for S3-compatible services like MinIO or LocalStack. "
+        "Leave empty for standard AWS S3.",
+    )
+
+    s3_prefix: Optional[str] = Field(
+        default="",
+        description="Optional key prefix for namespace isolation. All objects will be stored under this prefix.",
+    )
+
+    s3_use_ssl: bool = Field(
+        default=True,
+        description="Enable/Disable SSL (HTTPS) for S3 connections. Set to False for local testing without HTTPS.",
+    )
 
     @model_validator(mode="after")
     def validate_config(self):
@@ -51,6 +78,8 @@ class AGFSConfig(BaseModel):
             missing = []
             if not self.s3_bucket:
                 missing.append("s3_bucket")
+            if not self.s3_endpoint:
+                missing.append("s3_endpoint")
             if not self.s3_region:
                 missing.append("s3_region")
             if not self.s3_access_key:

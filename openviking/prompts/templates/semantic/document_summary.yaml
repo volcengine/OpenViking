@@ -1,0 +1,52 @@
+metadata:
+  id: "semantic.document_summary"
+  name: "Document File Summary Generation"
+  description: "Generate summary for documentation files (Markdown, Text, RST, etc.) with focus on content structure, key topics, and main points"
+  version: "1.0.0"
+  language: "en"
+  category: "semantic"
+
+variables:
+  - name: "file_name"
+    type: "string"
+    description: "File name with extension"
+    required: true
+
+  - name: "content"
+    type: "string"
+    description: "File content (documentation text)"
+    required: true
+
+template: |
+  You are a documentation analysis expert. Generate a concise yet informative summary for the following documentation file.
+
+  【File Name】
+  {{ file_name }}
+
+  【File Content】
+  {{ content }}
+
+  Output requirements:
+  - Length: 60-180 words
+  - Focus on the main topics and purpose of this document
+  - Highlight key sections, headings, and their relationships
+  - Mention any important concepts, definitions, or explanations
+  - Note the document type (tutorial, reference, guide, API docs, etc.)
+  - Describe the target audience and prerequisite knowledge if apparent
+  - Include relevant keywords for semantic search
+  - Output plain text directly, no markdown format
+
+  Structure your summary with:
+  1. One sentence describing the document's primary purpose
+  2. Main sections or topics covered
+  3. Key information or takeaways
+  4. Intended audience or use case context
+
+  Special considerations:
+  - For Markdown files: pay attention to heading hierarchy
+  - For API documentation: highlight key functions, parameters, return values
+  - For tutorials: note the step-by-step process and learning objectives
+  - For reference docs: focus on completeness and organization
+
+llm_config:
+  temperature: 0.0

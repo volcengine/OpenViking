@@ -33,7 +33,8 @@ jobs:
   permission-check:
     name: Check write permission
     runs-on: ubuntu-latest
-    permissions: read-all
+    permissions:
+      contents: read
     outputs:
       allowed: ${{ steps.check.outputs.allowed }}
     steps:
@@ -99,6 +100,15 @@ jobs:
       uses: pypa/gh-action-pypi-publish@release/v1
       with:
         repository-url: https://test.pypi.org/legacy/
+        skip-existing: true
+        verbose: true
+
+    - name: Display published version
+      run: |
+        # Get version from the first wheel file found
+        VERSION=$(ls dist/*.whl | head -n 1 | xargs basename | cut -d- -f2)
+        echo "Successfully published to TestPyPI with version: $VERSION"
+        echo "::notice::Successfully published to TestPyPI with version: $VERSION"
 
   publish-pypi:
     name: Publish to PyPI
@@ -135,3 +145,12 @@ jobs:
 
     - name: Publish distribution to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        verbose: true
+
+    - name: Display published version
+      run: |
+        # Get version from the first wheel file found
+        VERSION=$(ls dist/*.whl | head -n 1 | xargs basename | cut -d- -f2)
+        echo "Successfully published to PyPI with version: $VERSION"
+        echo "::notice::Successfully published to PyPI with version: $VERSION"

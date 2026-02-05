@@ -72,7 +72,7 @@ Service 层将业务逻辑与传输层解耦，便于 HTTP Server 和 CLI 复用
 | **ResourceService** | 资源导入 | add_resource, add_skill, wait_processed |
 | **RelationService** | 关联管理 | relations, link, unlink |
 | **PackService** | 导入导出 | export_ovpack, import_ovpack |
-| **DebugService** | 调试服务 | get_system_status, get_queue_status, get_vikingdb_status, get_vlm_status, is_healthy |
+| **DebugService** | 调试服务 | observer (ObserverService) |
 
 ## 双层存储
 

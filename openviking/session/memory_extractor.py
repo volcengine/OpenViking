@@ -154,9 +154,7 @@ class MemoryExtractor:
                 session_id=session_id,
                 user=user,
             )
-            logger.info(
-                f"uri {memory_uri} abstract: {candidate.abstract} content: {candidate.content}"
-            )
+            logger.info(f"uri {memory_uri} abstract: {candidate.abstract} content: {candidate.content}")
             memory.set_vectorize(Vectorize(text=candidate.content))
             return memory
 
@@ -198,20 +196,37 @@ class MemoryExtractor:
         return memory
 
     async def _append_to_profile(self, candidate: CandidateMemory, viking_fs) -> None:
-        """Append user profile information to profile.md."""
+        """Update user profile - always merge with existing content."""
         uri = "viking://user/memories/profile.md"
+        existing = ""
         try:
-            existing_content = ""
-            try:
-                existing_content = await viking_fs.read_file(uri) or ""
-            except Exception:
-                pass
+            existing = await viking_fs.read_file(uri) or ""
+        except Exception:
+            pass
 
-            # Append new content
-            new_section = f"\n{candidate.content}\n"
-            updated_content = existing_content + new_section
+        if not existing.strip():
+            await viking_fs.write_file(uri=uri, content=candidate.content)
+            logger.info(f"Created profile at {uri}")
+        else:
+            merged = await self._merge_memory(existing, candidate.content, "profile")
+            content = merged if merged else candidate.content
+            await viking_fs.write_file(uri=uri, content=content)
+            logger.info(f"Merged profile info to {uri}")
 
-            await viking_fs.write_file(uri=uri, content=updated_content)
-            logger.info(f"Appended profile info to {uri}")
+    async def _merge_memory(self, existing: str, new: str, category: str) -> Optional[str]:
+        """Use LLM to merge existing and new memory content."""
+        vlm = get_openviking_config().vlm
+        if not vlm or not vlm.is_available():
+            return None
+
+        prompt = render_prompt(
+            "compression.memory_merge",
+            {"existing_content": existing, "new_content": new, "category": category},
+        )
+
+        try:
+            merged = await vlm.get_completion_async(prompt)
+            return merged.strip() if merged else None
         except Exception as e:
-            logger.error(f"Failed to append profile: {e}")
+            logger.error(f"Memory merge failed: {e}")
+            return None

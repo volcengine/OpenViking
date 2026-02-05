@@ -73,7 +73,7 @@ The Service layer decouples business logic from the transport layer, enabling re
 | **ResourceService** | Resource import | add_resource, add_skill, wait_processed |
 | **RelationService** | Relation management | relations, link, unlink |
 | **PackService** | Import/export | export_ovpack, import_ovpack |
-| **DebugService** | Debug service | get_system_status, get_queue_status, get_vikingdb_status, get_vlm_status, is_healthy |
+| **DebugService** | Debug service | observer (ObserverService) |
 
 ## Dual-Layer Storage
 

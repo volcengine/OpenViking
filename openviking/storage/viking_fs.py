@@ -140,14 +140,17 @@ class VikingFS:
 
     async def mkdir(self, uri: str, mode: str = "755", exist_ok: bool = False) -> None:
         """Create directory."""
+        path = self._uri_to_path(uri)
+        # Always ensure parent directories exist before creating this directory
+        await self._ensure_parent_dirs(path)
+
         if exist_ok:
             try:
                 await self.stat(uri)
                 return None
             except Exception:
                 pass
-        path = self._uri_to_path(uri)
-        return await asyncio.to_thread(self.agfs.mkdir, path, mode)
+        return
 
     async def rm(self, uri: str, recursive: bool = False) -> Dict[str, Any]:
         """Delete file/directory + recursively update vector index."""
@@ -652,13 +655,19 @@ class VikingFS:
 
     async def _ensure_parent_dirs(self, path: str) -> None:
         """Recursively create all parent directories."""
-        parts = path.strip("/").split("/")
+        # Remove leading slash if present, then split
+        parts = path.lstrip("/").split("/")
+        # If it's a file path (not just a directory), we need to create parent directories
+        # We create directories up to the last component (which might be a file)
         for i in range(1, len(parts)):
             parent = "/" + "/".join(parts[:i])
             try:
                 await asyncio.to_thread(self.agfs.mkdir, parent)
-            except Exception:
-                pass
+            except Exception as e:
+                # Log the error but continue, as parent might already exist
+                # or we might be creating it in the next iteration
+                if "exist" not in str(e).lower() and "already" not in str(e).lower():
+                    logger.debug(f"Failed to create parent directory {parent}: {e}")
 
     # ========== Relation Table Internal Methods ==========
 

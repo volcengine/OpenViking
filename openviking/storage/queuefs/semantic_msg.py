@@ -11,22 +11,37 @@ from uuid import uuid4
 
 @dataclass
 class SemanticMsg:
-    """Semantic extraction queue message."""
+    """Semantic extraction queue message.
+
+    Attributes:
+        id: Unique identifier (UUID)
+        uri: Directory URI to process
+        context_type: Type of context (resource, memory, skill)
+        status: Processing status (pending/processing/completed)
+        timestamp: Creation timestamp
+        recursive: Whether to recursively process subdirectories.
+                   When True, the processor will collect all subdirectory info and
+                   enqueue them for processing (bottom-up order).
+                   When False, only the specified directory will be processed.
+    """
 
     id: str  # UUID
     uri: str  # Directory URI
     context_type: str  # resource, memory, skill
     status: str = "pending"  # pending/processing/completed
     timestamp: int = int(datetime.now().timestamp())
+    recursive: bool = True  # Whether to recursively process subdirectories
 
     def __init__(
         self,
         uri: str,
         context_type: str,
+        recursive: bool = True,
     ):
         self.id = str(uuid4())
         self.uri = uri
         self.context_type = context_type
+        self.recursive = recursive
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert object to dictionary."""
@@ -56,6 +71,7 @@ class SemanticMsg:
         obj = cls(
             uri=uri,
             context_type=context_type,
+            recursive=data.get("recursive", True),
         )
         if "id" in data and data["id"]:
             obj.id = data["id"]

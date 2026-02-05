@@ -23,6 +23,8 @@ class EmbeddingMsgConverter:
         Convert a Context object to EmbeddingMsg.
         """
         vectorization_text = context.get_vectorization_text()
+        if not vectorization_text:
+            return None
 
         embedding_msg = EmbeddingMsg(
             message=vectorization_text,

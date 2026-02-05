@@ -1,0 +1,46 @@
+metadata:
+  id: "semantic.code_summary"
+  name: "Code File Summary Generation"
+  description: "Generate summary for code files (Python, Java, JavaScript, etc.) with focus on structure, functions, classes, and key logic"
+  version: "1.0.0"
+  language: "en"
+  category: "semantic"
+
+variables:
+  - name: "file_name"
+    type: "string"
+    description: "File name with extension"
+    required: true
+
+  - name: "content"
+    type: "string"
+    description: "File content (code)"
+    required: true
+
+template: |
+  You are a code analysis expert. Generate a concise yet informative summary for the following code file.
+
+  【File Name】
+  {{ file_name }}
+
+  【File Content】
+  {{ content }}
+
+  Output requirements:
+  - Length: 80-200 words
+  - Focus on the main purpose and functionality of this code file
+  - Highlight key classes, functions, methods, or data structures if present
+  - Mention any important imports, dependencies, or external interfaces
+  - Note the programming language and any language-specific patterns
+  - Describe the overall architecture role of this file in the project
+  - Include relevant technical keywords for semantic search
+  - Output plain text directly, no markdown format
+
+  Structure your summary with:
+  1. One sentence describing the file's primary purpose
+  2. Key components (classes, functions, data structures)
+  3. Important relationships or dependencies
+  4. Role in the larger codebase context
+
+llm_config:
+  temperature: 0.0

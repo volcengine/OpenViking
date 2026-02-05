@@ -138,8 +138,8 @@ L1: """
 
 纯文本解析器，支持多种文本格式。对于结构化格式（JSON、YAML、XML）会尝试提取结构化信息。
 
-### 5. CodeParser (`code.py`)
-**支持格式**: `.py`, `.js`, `.ts`, `.java`, `.cpp`, `.c`, `.go`, `.rs`, `.php`, `.rb`, `.cs`, `.swift`, `.kt`, `.scala`
+### 5. CodeRepositoryParser (`code/*`)
+**支持来源**: github 代码仓库等
 
 代码解析器，支持语法高亮和代码结构分析。能识别函数、类、方法等代码元素。
 
@@ -187,7 +187,7 @@ class ParserRegistry:
         self.register("markdown", MarkdownParser())
         self.register("pdf", PDFParser())
         self.register("html", HTMLParser())
-        self.register("code", CodeParser())
+        self.register("code", CodeRepositoryParser())
     
     def get_parser_for_file(self, path: Union[str, Path]) -> Optional[BaseParser]:
         """根据文件扩展名获取合适的解析器"""

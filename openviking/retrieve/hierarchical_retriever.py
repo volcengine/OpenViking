@@ -237,6 +237,8 @@ class HierarchicalRetriever:
 
         def passes_threshold(score: float) -> bool:
             """Check if score passes threshold."""
+            if not self._rerank_client or mode != RetrieverMode.THINKING:
+                return True
             if score_gte:
                 return score >= effective_threshold
             return score > effective_threshold
@@ -277,7 +279,7 @@ class HierarchicalRetriever:
             current_score = -temp_score
             if current_uri in visited:
                 continue
-
+            visited.add(current_uri)
             logger.info(f"[RecursiveSearch] Entering URI: {current_uri}")
 
             pre_filter_limit = max(limit * 2, 20)
@@ -318,11 +320,11 @@ class HierarchicalRetriever:
                 if passes_threshold(final_score) and uri not in visited:
                     r["_final_score"] = final_score
                     collected.append(r)
-                    visited.add(uri)
                     logger.info(
                         f"[RecursiveSearch] Added URI: {uri} to candidates with score: {final_score}"
                     )
-                    if not r.get("is_leaf"):
+                    if r.get("is_leaf"):
+                        visited.add(uri)
                         continue
                     heapq.heappush(dir_queue, (-final_score, uri))
                 else:

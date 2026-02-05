@@ -37,6 +37,7 @@ class URLType(Enum):
     DOWNLOAD_MD = "download_md"  # Markdown file download link
     DOWNLOAD_TXT = "download_txt"  # Text file download link
     DOWNLOAD_HTML = "download_html"  # HTML file download link
+    CODE_REPOSITORY = "code_repository"  # Code repository (GitHub, GitLab, etc.)
     UNKNOWN = "unknown"  # Unknown or unsupported type
 
 
@@ -58,6 +59,7 @@ class URLTypeDetector:
         ".text": URLType.DOWNLOAD_TXT,
         ".html": URLType.DOWNLOAD_HTML,
         ".htm": URLType.DOWNLOAD_HTML,
+        ".git": URLType.CODE_REPOSITORY,
     }
 
     # Content-Type to URL type mapping
@@ -83,6 +85,11 @@ class URLTypeDetector:
         meta = {"url": url, "detected_by": "unknown"}
         parsed = urlparse(url)
         path_lower = parsed.path.lower()
+
+        # 0. Check for code repository URLs first
+        if self._is_code_repository_url(url):
+            meta["detected_by"] = "code_repository_pattern"
+            return URLType.CODE_REPOSITORY, meta
 
         # 1. Check extension first
         for ext, url_type in self.EXTENSION_MAP.items():
@@ -120,6 +127,40 @@ class URLTypeDetector:
 
         # 3. Default: assume webpage
         return URLType.WEBPAGE, meta
+
+    def _is_code_repository_url(self, url: str) -> bool:
+        """
+        Check if URL is a code repository URL.
+
+        Args:
+            url: URL to check
+
+        Returns:
+            True if URL matches code repository patterns
+        """
+        import re
+
+        # Repository URL patterns (from README)
+        repo_patterns = [
+            r"^https?://github\.com/[^/]+/[^/]+/?$",
+            r"^https?://gitlab\.com/[^/]+/[^/]+/?$",
+            r"^.*\.git$",
+            r"^git@",
+        ]
+
+        # Check for URL patterns
+        for pattern in repo_patterns:
+            if re.match(pattern, url):
+                return True
+
+        # Check if it's a GitHub/GitLab URL
+        parsed = urlparse(url)
+        if parsed.netloc in ["github.com", "gitlab.com"]:
+            path_parts = parsed.path.strip("/").split("/")
+            if len(path_parts) >= 2:
+                return True
+
+        return False
 
 
 class HTMLParser(BaseParser):
@@ -184,12 +225,13 @@ class HTMLParser(BaseParser):
         """List of supported file extensions."""
         return [".html", ".htm"]
 
-    async def parse(self, source: Union[str, Path], **kwargs) -> ParseResult:
+    async def parse(self, source: Union[str, Path], instruction: str = "", **kwargs) -> ParseResult:
         """
         Unified parse method for HTML files and URLs.
 
         Args:
             source: HTML file path or URL
+            instruction: Processing instruction, guides LLM how to understand the resource
             **kwargs: Additional options
 
         Returns:
@@ -237,6 +279,10 @@ class HTMLParser(BaseParser):
         elif url_type == URLType.DOWNLOAD_HTML:
             # Download HTML file and parse
             return await self._handle_download_link(url, "html", start_time, meta, **kwargs)
+
+        elif url_type == URLType.CODE_REPOSITORY:
+            # Delegate to CodeRepositoryParser
+            return await self._handle_code_repository(url, start_time, meta, **kwargs)
 
         else:
             # Unknown type - try as webpage
@@ -352,6 +398,33 @@ class HTMLParser(BaseParser):
                 parser_name="HTMLParser",
                 parse_time=time.time() - start_time,
                 warnings=[f"Failed to download/parse link: {e}"],
+            )
+
+    async def _handle_code_repository(
+        self, url: str, start_time: float, meta: Dict[str, Any], **kwargs
+    ) -> ParseResult:
+        """
+        Handle code repository URL by delegating to CodeRepositoryParser.
+        """
+        try:
+            from openviking.parse.parsers.code import CodeRepositoryParser
+
+            parser = CodeRepositoryParser()
+            result = await parser.parse(url, **kwargs)
+            result.meta.update(meta)
+            result.meta["downloaded_from"] = url
+            result.meta["url_type"] = "code_repository"
+
+            return result
+
+        except Exception as e:
+            return create_parse_result(
+                root=ResourceNode(type=NodeType.ROOT, content_path=None),
+                source_path=url,
+                source_format="code_repository",
+                parser_name="HTMLParser",
+                parse_time=time.time() - start_time,
+                warnings=[f"Failed to parse code repository: {e}"],
             )
 
     async def _parse_local_file(self, path: Path, start_time: float, **kwargs) -> ParseResult:
@@ -485,7 +558,7 @@ class HTMLParser(BaseParser):
         return html
 
     async def parse_content(
-        self, content: str, source_path: Optional[str] = None, **kwargs
+        self, content: str, source_path: Optional[str] = None, instruction: str = "", **kwargs
     ) -> ParseResult:
         """
         Parse HTML content.

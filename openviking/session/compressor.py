@@ -10,16 +10,26 @@ Uses MemoryExtractor for 6-category extraction and MemoryDeduplicator for LLM-ba
 from dataclasses import dataclass
 from typing import Dict, List
 
-from openviking.core.context import Context
+from openviking.core.context import Context, Vectorize
 from openviking.message import Message
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.utils import get_logger
 
 from .memory_deduplicator import DedupDecision, MemoryDeduplicator
-from .memory_extractor import MemoryExtractor
+from .memory_extractor import MemoryCategory, MemoryExtractor
 
 logger = get_logger(__name__)
+
+# Categories that always merge (skip dedup)
+ALWAYS_MERGE_CATEGORIES = {MemoryCategory.PROFILE}
+
+# Categories that support MERGE decision
+MERGE_SUPPORTED_CATEGORIES = {
+    MemoryCategory.PREFERENCES,
+    MemoryCategory.ENTITIES,
+    MemoryCategory.PATTERNS,
+}
 
 
 @dataclass
@@ -27,7 +37,6 @@ class ExtractionStats:
     """Statistics for memory extraction."""
 
     created: int = 0
-    updated: int = 0
     merged: int = 0
     skipped: int = 0
 
@@ -71,8 +80,19 @@ class SessionCompressor:
 
         memories: List[Context] = []
         stats = ExtractionStats()
+        viking_fs = get_viking_fs()
 
         for candidate in candidates:
+            # Profile: skip dedup, always merge
+            if candidate.category in ALWAYS_MERGE_CATEGORIES:
+                memory = await self.extractor.create_memory(candidate, user, session_id)
+                if memory:
+                    memories.append(memory)
+                    stats.created += 1
+                    await self._index_memory(memory)
+                continue
+
+            # Dedup check for other categories
             result = await self.deduplicator.deduplicate(candidate)
 
             if result.decision == DedupDecision.SKIP:
@@ -86,23 +106,28 @@ class SessionCompressor:
                     stats.created += 1
                     await self._index_memory(memory)
 
-            elif result.decision == DedupDecision.UPDATE:
-                if result.similar_memories and result.merged_content:
-                    candidate.content = result.merged_content
-                    memory = await self.extractor.create_memory(candidate, user, session_id)
-                    if memory:
-                        memories.append(memory)
-                        stats.updated += 1
-                        await self._index_memory(memory)
-
             elif result.decision == DedupDecision.MERGE:
-                if result.merged_content:
-                    candidate.content = result.merged_content
-                    memory = await self.extractor.create_memory(candidate, user, session_id)
-                    if memory:
-                        memories.append(memory)
-                        stats.merged += 1
-                        await self._index_memory(memory)
+                # Only merge for supported categories
+                if candidate.category in MERGE_SUPPORTED_CATEGORIES and result.similar_memories and viking_fs:
+                    target_memory = result.similar_memories[0]
+                    try:
+                        existing_content = await viking_fs.read_file(target_memory.uri)
+                        merged = await self.extractor._merge_memory(
+                            existing_content, candidate.content, candidate.category.value
+                        )
+                        if merged:
+                            await viking_fs.write_file(target_memory.uri, merged)
+                            target_memory.set_vectorize(Vectorize(text=merged))
+                            await self._index_memory(target_memory)
+                            stats.merged += 1
+                        else:
+                            stats.skipped += 1
+                    except Exception as e:
+                        logger.error(f"Failed to merge memory: {e}")
+                        stats.skipped += 1
+                else:
+                    # events/cases don't support MERGE, treat as SKIP
+                    stats.skipped += 1
 
         # Extract URIs used in messages, create relations
         used_uris = self._extract_used_uris(messages)
@@ -110,7 +135,7 @@ class SessionCompressor:
             await self._create_relations(memories, used_uris)
 
         logger.info(
-            f"Memory extraction: created={stats.created}, updated={stats.updated}, "
+            f"Memory extraction: created={stats.created}, "
             f"merged={stats.merged}, skipped={stats.skipped}"
         )
         return memories

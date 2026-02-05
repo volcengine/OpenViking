@@ -366,35 +366,77 @@ We use **GitHub Actions** for Continuous Integration and Continuous Deployment. 
 
 | Event | Workflow | Description |
 |-------|----------|-------------|
-| **Pull Request** | `pr.yml` | Runs **Lint** (Ruff, Mypy) and **Test Lite** (Integration tests on Linux + Python 3.10). Fast feedback for contributors. (Displayed as **01. Pull Request Checks**) |
-| **Push to Main** | `ci.yml` | Runs **Test Full** (All OS: Linux/Win/Mac, All Py: 3.9-3.12) and **CodeQL** (Security scan). Ensures main branch stability. (Displayed as **02. Main Branch Checks**) |
-| **Release Published** | `release.yml` | Triggered when you create a Release on GitHub. Automatically builds wheels, verifies the Git Tag matches `pyproject.toml`, and publishes to **PyPI**. (Displayed as **03. Release**) |
+| **Pull Request** | `pr.yml` | Runs **Lint** (Ruff, Mypy) and **Test Lite** (Integration tests on Linux + Python 3.10). Provides fast feedback for contributors. (Displayed as **01. Pull Request Checks**) |
+| **Push to Main** | `ci.yml` | Runs **Test Full** (All OS: Linux/Win/Mac, All Py versions: 3.9-3.12) and **CodeQL** (Security scan). Ensures main branch stability. (Displayed as **02. Main Branch Checks**) |
+| **Release Published** | `release.yml` | Triggered when you create a Release on GitHub. Automatically builds source distribution and wheels, determines version from Git Tag, and publishes to **PyPI**. (Displayed as **03. Release**) |
 | **Weekly Cron** | `schedule.yml` | Runs **CodeQL** security scan every Sunday. (Displayed as **04. Weekly Security Scan**) |
 
 ### 2. Manual Trigger Workflows
 
-Maintainers can manually trigger workflows from the "Actions" tab to perform specific tasks or debug issues.
+Maintainers can manually trigger the following workflows from the "Actions" tab to perform specific tasks or debug issues.
 
-#### A. Run Tests Manually (`12. _Test Suite (Lite)`)
+#### A. Lint Checks (`11. _Lint Checks`)
+Runs code style checks (Ruff) and type checks (Mypy). No arguments required.
 
-You can run tests with custom matrix configurations using `12. _Test Suite (Lite)`.
+> **Tip**: It is recommended to install [pre-commit](https://pre-commit.com/) locally to run these checks automatically before committing (see [Automated Checks](#automated-checks-recommended) section above).
 
-*   **Inputs**:
-    *   `os_json`: JSON string array of OS to run on (e.g., `["ubuntu-latest", "windows-latest"]`).
-    *   `python_json`: JSON string array of Python versions (e.g., `["3.10", "3.12"]`).
-
-#### B. Manual Release / Publish (`03. Release`)
-
-You can manually trigger the `release.yml` workflow (listed as "03. Release") to build and publish without creating a GitHub Release.
+#### B. Test Suite (Lite) (`12. _Test Suite (Lite)`)
+Runs fast integration tests, supports custom matrix configuration.
 
 *   **Inputs**:
-    *   `target`: Select where to publish.
-        *   `none`: Build artifacts only (no publish). Good for verifying build capability.
-        *   `testpypi`: Publish to TestPyPI. Good for beta testing.
+    *   `os_json`: JSON string array of OS to run on (e.g., `["ubuntu-latest"]`).
+    *   `python_json`: JSON string array of Python versions (e.g., `["3.10"]`).
+
+#### C. Test Suite (Full) (`13. _Test Suite (Full)`)
+Runs the full test suite on all supported platforms (Linux/Mac/Win) and Python versions (3.9-3.12). Supports custom matrix configuration when triggered manually.
+
+*   **Inputs**:
+    *   `os_json`: List of OS to run on (Default: `["ubuntu-latest", "macos-latest", "windows-latest"]`).
+    *   `python_json`: List of Python versions (Default: `["3.9", "3.10", "3.11", "3.12"]`).
+
+#### D. Security Scan (`14. _CodeQL Scan`)
+Runs CodeQL security analysis. No arguments required.
+
+#### E. Build Distribution (`15. _Build Distribution`)
+Builds Python wheel packages only, does not publish.
+
+*   **Inputs**:
+    *   `os_json`: List of OS to build on (Default: `["ubuntu-latest", "macos-latest", "macos-15-intel", "windows-latest"]`).
+    *   `python_json`: List of Python versions (Default: `["3.9", "3.10", "3.11", "3.12"]`).
+    *   `build_sdist`: Whether to build source distribution (Default: `true`).
+    *   `build_wheels`: Whether to build wheel distribution (Default: `true`).
+
+#### F. Publish Distribution (`16. _Publish Distribution`)
+Publishes built packages (requires build Run ID) to PyPI.
+
+*   **Inputs**:
+    *   `target`: Select publish target (`testpypi`, `pypi`, `both`).
+    *   `build_run_id`: Build Workflow Run ID (Required, get it from the Build run URL).
+
+#### G. Manual Release (`03. Release`)
+One-stop build and publish (includes build and publish steps).
+
+> **Version Numbering & Tag Convention**:
+> This project uses `setuptools_scm` to automatically extract version numbers from Git Tags.
+> *   **Tag Naming Convention**: Must follow the `vX.Y.Z` format (e.g., `v0.1.0`, `v1.2.3`). Tags must be compliant with Semantic Versioning.
+> *   **Release Build**: When a Release event is triggered, the version number directly corresponds to the Git Tag (e.g., `v0.1.0` -> `0.1.0`).
+> *   **Manual/Non-Tag Build**: The version number will include the commit count since the last Tag (e.g., `0.1.1.dev3`).
+> *   **Confirm Version**: After the publish job completes, you can see the published version directly in the **Notifications** area at the top of the Workflow **Summary** page (e.g., `Successfully published to PyPI with version: 0.1.8`). You can also verify it in the logs or the **Artifacts** filenames.
+
+*   **Inputs**:
+    *   `target`: Select publish target.
+        *   `none`: Build artifacts only (no publish). Used for verifying build capability.
+        *   `testpypi`: Publish to TestPyPI. Used for Beta testing.
         *   `pypi`: Publish to official PyPI.
         *   `both`: Publish to both.
+    *   `os_json`: Build platforms (Default includes all).
+    *   `python_json`: Python versions (Default includes all).
+    *   `build_sdist`: Whether to build source distribution (Default: `true`).
+    *   `build_wheels`: Whether to build wheel distribution (Default: `true`).
 
-> **Note**: For manual triggers, the strict "Git Tag matches pyproject.toml" check is relaxed to a warning, allowing you to test builds on non-tagged commits.
+> **Publishing Notes**:
+> *   **Test First**: It is strongly recommended to publish to **TestPyPI** for verification before publishing to official PyPI. Note that PyPI and TestPyPI are completely independent environments, and accounts and package data are not shared.
+> *   **No Overwrites**: Neither PyPI nor TestPyPI allow overwriting existing packages with the same name and version. If you need to republish, you must upgrade the version number (e.g., tag a new version or generate a new dev version). If you try to publish an existing version, the workflow will fail.
 
 ---
 

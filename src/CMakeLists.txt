@@ -106,7 +106,7 @@ target_compile_options(engine_impl PRIVATE -fPIC)
 
 pybind11_add_module(
     engine
-    SHARED
+    MODULE
     pybind11_interface.cpp
 )
 

@@ -25,7 +25,7 @@ Parser 负责文档格式转换和结构化，在临时目录创建文件结构�
 | 纯文本 | TextParser | .txt | 已支持 |
 | PDF | PDFParser | .pdf | 已支持 |
 | HTML | HTMLParser | .html, .htm | 已支持 |
-| 代码 | CodeParser | .py, .js, .go 等 |  |
+| 代码 | CodeRepositoryParser | github 代码仓库等 | 已支持 |
 | 图片 | ImageParser | .png, .jpg 等 |  |
 | 视频 | AudioParser | .mp3, .wav 等 |  |
 | 音频 | VideoParser | .mp4, .avi 等 |  |
