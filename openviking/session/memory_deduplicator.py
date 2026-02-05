@@ -3,12 +3,12 @@
 """
 Memory Deduplicator for OpenViking.
 
-LLM-assisted deduplication with CREATE/UPDATE/MERGE/SKIP decisions (Mem0 inspired).
+LLM-assisted deduplication with CREATE/MERGE/SKIP decisions
 """
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import List, Optional
+from typing import List
 
 from openviking.core.context import Context
 from openviking.models.embedder.base import EmbedResult
@@ -26,7 +26,6 @@ class DedupDecision(str, Enum):
     """Deduplication decision types."""
 
     CREATE = "create"  # New memory, create directly
-    UPDATE = "update"  # Update existing memory
     MERGE = "merge"  # Merge with existing memories
     SKIP = "skip"  # Duplicate, skip
 
@@ -38,7 +37,6 @@ class DedupResult:
     decision: DedupDecision
     candidate: CandidateMemory
     similar_memories: List[Context]  # Similar existing memories
-    merged_content: Optional[str] = None  # For UPDATE/MERGE
     reason: str = ""
 
 
@@ -73,13 +71,12 @@ class MemoryDeduplicator:
             )
 
         # Step 2: LLM decision
-        decision, merged_content, reason = await self._llm_decision(candidate, similar_memories)
+        decision, reason = await self._llm_decision(candidate, similar_memories)
 
         return DedupResult(
             decision=decision,
             candidate=candidate,
             similar_memories=similar_memories,
-            merged_content=merged_content,
             reason=reason,
         )
 
@@ -108,7 +105,7 @@ class MemoryDeduplicator:
                 collection=collection,
                 query_vector=query_vector,
                 limit=5,
-                filter={"category": category_value},
+                filter= {"op": "and", "conds": [{"field": "category", "op": "must", "conds": [category_value]}, {"field": "is_leaf", "op": "must", "conds": [True]}]},
             )
 
             # Filter by similarity threshold
@@ -129,12 +126,12 @@ class MemoryDeduplicator:
         self,
         candidate: CandidateMemory,
         similar_memories: List[Context],
-    ) -> tuple[DedupDecision, Optional[str], str]:
+    ) -> tuple[DedupDecision, str]:
         """Use LLM to decide deduplication action."""
         vlm = get_openviking_config().vlm
         if not vlm or not vlm.is_available():
             # Without LLM, default to CREATE (conservative)
-            return DedupDecision.CREATE, None, "LLM not available, defaulting to CREATE"
+            return DedupDecision.CREATE, "LLM not available, defaulting to CREATE"
 
         # Format existing memories for prompt
         existing_formatted = []
@@ -160,22 +157,20 @@ class MemoryDeduplicator:
 
             decision_str = data.get("decision", "create").lower()
             reason = data.get("reason", "")
-            merged_content = data.get("merged_content")
 
             # Map to enum
             decision_map = {
                 "create": DedupDecision.CREATE,
-                "update": DedupDecision.UPDATE,
                 "merge": DedupDecision.MERGE,
                 "skip": DedupDecision.SKIP,
             }
             decision = decision_map.get(decision_str, DedupDecision.CREATE)
 
-            return decision, merged_content, reason
+            return decision, reason
 
         except Exception as e:
             logger.warning(f"LLM dedup decision failed: {e}")
-            return DedupDecision.CREATE, None, f"LLM failed: {e}"
+            return DedupDecision.CREATE, f"LLM failed: {e}"
 
     @staticmethod
     def _cosine_similarity(vec_a: List[float], vec_b: List[float]) -> float:

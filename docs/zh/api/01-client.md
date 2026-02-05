@@ -252,30 +252,78 @@ ov.OpenViking.reset()
 
 ---
 
-### observers
+### get_status()
 
-获取观察者对象，用于监控。
+获取系统状态，包含所有组件的健康状态。
 
 **签名**
 
 ```python
-@property
-def observers(self) -> Dict[str, Any]
+def get_status(self) -> SystemStatus
 ```
+
+**参数**
+
+无。
 
 **返回值**
 
 | 类型 | 说明 |
 |------|------|
-| Dict[str, Any] | 观察者对象 |
+| SystemStatus | 系统状态对象 |
 
 **返回结构**
 
 ```python
-{
-    "queue": QueueObserver,      # 队列处理观察者
-    "vikingdb": VikingDBObserver # 向量数据库观察者
-}
+SystemStatus(
+    is_healthy=True,                    # 系统整体是否健康
+    components={                        # 各组件状态
+        "queue": ComponentStatus(...),
+        "vikingdb": ComponentStatus(...),
+        "vlm": ComponentStatus(...)
+    },
+    errors=[]                           # 错误列表
+)
+```
+
+**示例**
+
+```python
+status = client.get_status()
+print(f"系统健康: {status.is_healthy}")
+print(f"队列状态: {status.components['queue'].is_healthy}")
+```
+
+---
+
+### is_healthy()
+
+快速健康检查。
+
+**签名**
+
+```python
+def is_healthy(self) -> bool
+```
+
+**参数**
+
+无。
+
+**返回值**
+
+| 类型 | 说明 |
+|------|------|
+| bool | 所有组件健康返回 True，否则返回 False |
+
+**示例**
+
+```python
+if client.is_healthy():
+    print("系统正常")
+else:
+    status = client.get_status()
+    print(f"错误: {status.errors}")
 ```
 
 ---

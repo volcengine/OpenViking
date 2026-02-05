@@ -1,29 +1,44 @@
-name: _Build
+name: 15. _Build Distribution
 
 on:
   workflow_call:
+    inputs:
+      os_json:
+        description: 'JSON string of OS to build on'
+        required: false
+        type: string
+        default: '["ubuntu-latest", "macos-latest", "macos-15-intel", "windows-latest"]'
+      python_json:
+        description: 'JSON string of Python versions'
+        required: false
+        type: string
+        default: '["3.9", "3.10", "3.11", "3.12"]'
   workflow_dispatch:
+    inputs:
+      os_json:
+        description: 'JSON string of OS to build on'
+        required: false
+        default: '["ubuntu-latest", "macos-latest", "macos-15-intel", "windows-latest"]'
+      python_json:
+        description: 'JSON string of Python versions'
+        required: false
+        default: '["3.9", "3.10", "3.11", "3.12"]'
 
 jobs:
   build-linux:
     name: Build distribution on Linux (glibc 2.31) py${{ matrix.python-version }}
+    # Only run if inputs.os_json contains 'ubuntu' or 'linux'
+    if: contains(inputs.os_json, 'ubuntu') || contains(inputs.os_json, 'linux')
     runs-on: ubuntu-latest
     container: ubuntu:20.04
     env:
       DEBIAN_FRONTEND: noninteractive
       TZ: Etc/UTC
     strategy:
+      fail-fast: false
       matrix:
-        include:
-          - python-version: '3.9'
-            python-full: '3.9.18'
-          - python-version: '3.10'
-            python-full: '3.10.13'
-          - python-version: '3.11'
-            python-full: '3.11.8'
-          - python-version: '3.12'
-            python-full: '3.12.2'
-
+        python-version: ${{ fromJson(inputs.python_json) }}
+    
     steps:
     - name: Install system dependencies (Linux)
       run: |
@@ -39,10 +54,25 @@ jobs:
     - uses: actions/checkout@v4
       with:
         submodules: recursive
+        fetch-depth: 0  # Required for setuptools_scm to detect version from git tags
 
-    - name: Build CPython ${{ matrix.python-full }} (Linux)
+    - name: Build CPython (Dynamic Selection)
       run: |
-        PYTHON_FULL="${{ matrix.python-full }}"
+        # Map short version to full version for our specific build environment
+        declare -A PYTHON_MAP
+        PYTHON_MAP["3.9"]="3.9.18"
+        PYTHON_MAP["3.10"]="3.10.13"
+        PYTHON_MAP["3.11"]="3.11.8"
+        PYTHON_MAP["3.12"]="3.12.2"
+        
+        PYTHON_VERSION="${{ matrix.python-version }}"
+        PYTHON_FULL="${PYTHON_MAP[$PYTHON_VERSION]}"
+        
+        if [ -z "$PYTHON_FULL" ]; then
+          echo "Error: Unknown python version $PYTHON_VERSION"
+          exit 1
+        fi
+        
         PYTHON_PREFIX="/opt/python/${PYTHON_FULL}"
         PYTHON_BIN="${PYTHON_PREFIX}/bin/python${{ matrix.python-version }}"
         if [ ! -x "$PYTHON_BIN" ]; then
@@ -80,7 +110,7 @@ jobs:
       run: uv sync
 
     - name: Install build dependencies
-      run: uv pip install setuptools pybind11 cmake wheel build
+      run: uv pip install setuptools setuptools_scm pybind11 cmake wheel build
 
     - name: Build package
       run: uv run python -m build
@@ -116,16 +146,23 @@ jobs:
 
   build-other:
     name: Build distribution on ${{ matrix.os }}
+    # Filter out ubuntu-latest from this job since it's handled by build-linux
+    if: ${{ matrix.os != 'ubuntu-latest' }}
     runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
-        os: [macos-latest, macos-15-intel, windows-latest]
-        python-version: ['3.9', '3.10', '3.11', '3.12']
+        os: ${{ fromJson(inputs.os_json) }}
+        python-version: ${{ fromJson(inputs.python_json) }}
+        # Exclude ubuntu-latest from this matrix if it was passed in inputs
+        exclude:
+          - os: ubuntu-latest
 
     steps:
     - uses: actions/checkout@v4
       with:
         submodules: recursive
+        fetch-depth: 0  # Required for setuptools_scm to detect version from git tags
 
     - name: Set up Python
       uses: actions/setup-python@v6
@@ -156,7 +193,7 @@ jobs:
       run: uv sync
 
     - name: Install build dependencies
-      run: uv pip install setuptools pybind11 cmake wheel build
+      run: uv pip install setuptools setuptools_scm pybind11 cmake wheel build
 
     - name: Build package
       run: uv run python -m build

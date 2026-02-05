@@ -55,11 +55,12 @@ class Context:
         meta: Optional[Dict[str, Any]] = None,
         session_id: Optional[str] = None,
         user: Optional[str] = None,
+        id: Optional[str] = None,
     ):
         """
         Initialize a Context object.
         """
-        self.id = str(uuid4())
+        self.id = id or str(uuid4())
         self.uri = uri
         self.parent_uri = parent_uri
         self.is_leaf = is_leaf

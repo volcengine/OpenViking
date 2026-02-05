@@ -152,3 +152,4 @@ openviking/bin/
 test_scripts/
 test_large_scale_collection/
 third_party/agfs/bin/
+openviking/_version.py

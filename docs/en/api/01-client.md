@@ -252,30 +252,78 @@ ov.OpenViking.reset()
 
 ---
 
-### observers
+### get_status()
 
-Get observer objects for monitoring.
+Get system status including health status of all components.
 
 **Signature**
 
 ```python
-@property
-def observers(self) -> Dict[str, Any]
+def get_status(self) -> SystemStatus
 ```
+
+**Parameters**
+
+None.
 
 **Returns**
 
 | Type | Description |
 |------|-------------|
-| Dict[str, Any] | Observer objects |
+| SystemStatus | System status object |
 
 **Return Structure**
 
 ```python
-{
-    "queue": QueueObserver,      # Queue processing observer
-    "vikingdb": VikingDBObserver # Vector database observer
-}
+SystemStatus(
+    is_healthy=True,                    # Overall system health
+    components={                        # Component statuses
+        "queue": ComponentStatus(...),
+        "vikingdb": ComponentStatus(...),
+        "vlm": ComponentStatus(...)
+    },
+    errors=[]                           # Error list
+)
+```
+
+**Example**
+
+```python
+status = client.get_status()
+print(f"System healthy: {status.is_healthy}")
+print(f"Queue status: {status.components['queue'].is_healthy}")
+```
+
+---
+
+### is_healthy()
+
+Quick health check.
+
+**Signature**
+
+```python
+def is_healthy(self) -> bool
+```
+
+**Parameters**
+
+None.
+
+**Returns**
+
+| Type | Description |
+|------|-------------|
+| bool | True if all components are healthy, False otherwise |
+
+**Example**
+
+```python
+if client.is_healthy():
+    print("System OK")
+else:
+    status = client.get_status()
+    print(f"Errors: {status.errors}")
 ```
 
 ---

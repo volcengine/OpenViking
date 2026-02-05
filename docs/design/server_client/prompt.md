@@ -24,7 +24,8 @@ openviking/service/
 ├── search_service.py        # 语义搜索
 ├── session_service.py       # 会话管理
 ├── relation_service.py      # 关联管理
-└── pack_service.py          # 导入导出
+├── pack_service.py          # 导入导出
+└── debug_service.py         # 调试服务
 ```
 
 2. **抽取业务逻辑**：
@@ -34,6 +35,7 @@ openviking/service/
 - `SearchService`: find, search
 - `SessionService`: session, sessions, add_message, compress, extract
 - `RelationService`: link, unlink, relations
+- `DebugService`: get_queue_status, get_vikingdb_status, get_vlm_status, get_system_status, is_healthy
 - `PackService`: export_ovpack, import_ovpack
 
 3. **创建 OpenVikingService 主类**：
@@ -86,7 +88,8 @@ openviking/server/
     ├── relations.py         # /api/v1/relations
     ├── sessions.py          # /api/v1/sessions
     ├── pack.py              # /api/v1/pack
-    └── system.py            # /api/v1/system, /health
+    ├── system.py            # /api/v1/system, /health
+    └── debug.py             # /api/v1/debug
 ```
 
 2. **实现统一响应格式**（参考设计文档 5.2 节）：
@@ -112,6 +115,7 @@ class Response(BaseModel):
 - 会话: POST/GET/DELETE /api/v1/sessions
 - 导入导出: POST /api/v1/pack/export, /import
 - 系统: GET /health, GET /api/v1/system/status
+- 调试: GET /api/v1/debug/status, GET /api/v1/debug/health
 
 5. **实现服务启动器** (bootstrap.py)：
 - 加载配置文件 `~/.openviking/server.yaml`
@@ -175,7 +179,10 @@ cli = [
 ```bash
 # 服务管理
 openviking serve --path <dir> [--port 8000] [--host 0.0.0.0]
-openviking status
+
+# 调试命令
+openviking status                         # 系统整体状态（包含 queue/vikingdb/vlm 组件状态）
+openviking health                         # 快速健康检查
 
 # 资源导入
 openviking add-resource <path> [--to <uri>] [--wait] [--timeout N]
@@ -252,6 +259,18 @@ class BaseClient(ABC):
 - 实现所有 API 端点的客户端方法
 - 处理认证（API Key）
 - 处理错误响应，转换为异常
+- 实现 debug 方法（get_status, is_healthy）：
+```python
+def get_status(self) -> SystemStatus:
+    """Get system status (same as LocalClient)."""
+    response = self._get("/api/v1/debug/status")
+    return SystemStatus(**response["result"])
+
+def is_healthy(self) -> bool:
+    """Quick health check (same as LocalClient)."""
+    response = self._get("/api/v1/debug/health")
+    return response["healthy"]
+```
 
 4. **实现 LocalClient** (local.py)：
 - 直接调用 OpenVikingService

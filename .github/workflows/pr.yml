@@ -1,4 +1,4 @@
-name: Pull Request Checks
+name: 01. Pull Request Checks
 
 on:
   pull_request:

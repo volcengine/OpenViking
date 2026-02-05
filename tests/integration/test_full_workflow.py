@@ -163,7 +163,7 @@ class TestImportExportWorkflow:
         assert export_path.exists()
 
         # 4. Delete original resource
-        await client.rm(original_uri)
+        await client.rm(original_uri, recursive=True)
 
         # 5. Import
         import_uri = await client.import_ovpack(

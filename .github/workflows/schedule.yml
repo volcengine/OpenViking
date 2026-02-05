@@ -1,4 +1,4 @@
-name: Weekly Security Scan
+name: 04. Weekly Security Scan
 
 on:
   schedule:

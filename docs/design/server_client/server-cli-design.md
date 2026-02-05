@@ -234,6 +234,7 @@ OpenViking 提供三种接口，面向不同使用场景：
 │  │ - SearchService (语义搜索)                               ││
 │  │ - SessionService (会话管理)                              ││
 │  │ - FSService (文件系统操作)                               ││
+│  │ - DebugService (调试服务)                                ││
 │  └─────────────────────────────────────────────────────────┘│
 └─────────────────────────────────────────────────────────────┘
                               │
@@ -386,7 +387,8 @@ openviking/
 │   ├── search_service.py        # 语义搜索
 │   ├── session_service.py       # 会话管理
 │   ├── relation_service.py      # 关联管理
-│   └── pack_service.py          # 导入导出
+│   ├── pack_service.py          # 导入导出
+│   └── debug_service.py         # 调试服务
 │
 ├── server/                      # HTTP Server
 │   ├── __init__.py
@@ -400,7 +402,8 @@ openviking/
 │       ├── content.py           # /api/v1/content
 │       ├── search.py            # /api/v1/search
 │       ├── relations.py         # /api/v1/relations
-│       └── sessions.py          # /api/v1/sessions
+│       ├── sessions.py          # /api/v1/sessions
+│       └── debug.py             # /api/v1/debug
 │
 ├── cli/                         # CLI 模块
 │   ├── __init__.py
@@ -464,6 +467,8 @@ dependencies = [
 | `session` | `user` | 创建/获取 Session 对象 |
 | `sessions` | - | 获取所有 Session 对象列表 |
 | `wait_processed` | `timeout` | 等待处理完成 |
+| `get_status` | - | 获取系统状态（包含 queue/vikingdb/vlm 组件状态） |
+| `is_healthy` | - | 快速健康检查 |
 
 **Session 对象方法：**
 
@@ -659,6 +664,30 @@ session.compressed  # False
     }
   },
   "time": 0.001
+}
+```
+
+**debug/status**
+```json
+{
+  "status": "ok",
+  "result": {
+    "is_healthy": true,
+    "components": {
+      "queue": {"name": "queue", "is_healthy": true, "has_errors": false, "details": {...}},
+      "vikingdb": {"name": "vikingdb", "is_healthy": true, "has_errors": false, "details": {...}},
+      "vlm": {"name": "vlm", "is_healthy": true, "has_errors": false, "details": {...}}
+    },
+    "errors": []
+  },
+  "time": 0.05
+}
+```
+
+**debug/health**
+```json
+{
+  "healthy": true
 }
 ```
 
@@ -876,6 +905,10 @@ openviking import <file.ovpack> <uri> [--force] [--no-vectorize]
 openviking wait [--timeout N]
 openviking config show
 openviking config init
+
+# 调试命令
+openviking status                         # 系统整体状态（包含 queue/vikingdb/vlm 组件状态）
+openviking health                         # 快速健康检查
 ```
 
 #### 命令分组说明
@@ -887,6 +920,7 @@ openviking config init
 | `read/abstract/overview` | 分层上下文 | L0/L1/L2 按需加载 |
 | `find/search` | 目录递归检索 | 语义搜索 + 目录定位 |
 | `session *` | 会话管理 | 自动压缩、记忆提取 |
+| `status/health` | 调试诊断 | 系统状态查询、健康检查 |
 
 #### 实现 (使用 Typer)
 
@@ -1182,13 +1216,19 @@ POST   /api/v1/system/wait                  # wait_processed
        Body: {"timeout": 60}
 ```
 
+#### 调试 `/api/v1/debug`
+```
+GET    /api/v1/debug/status                 # 系统整体状态（包含 queue/vikingdb/vlm 组件状态）
+GET    /api/v1/debug/health                 # 快速健康检查（返回 bool）
+```
+
 ### 7.4 Server 实现
 
 ```python
 # openviking/server/app.py
 from fastapi import FastAPI, Depends
 from openviking.server.auth import verify_api_key
-from openviking.server.routers import resources, filesystem, content, search, sessions
+from openviking.server.routers import resources, filesystem, content, search, sessions, debug
 
 app = FastAPI(
     title="OpenViking API",
@@ -1202,6 +1242,7 @@ app.include_router(filesystem.router, prefix="/api/v1/fs", dependencies=[Depends
 app.include_router(content.router, prefix="/api/v1/content", dependencies=[Depends(verify_api_key)])
 app.include_router(search.router, prefix="/api/v1/search", dependencies=[Depends(verify_api_key)])
 app.include_router(sessions.router, prefix="/api/v1/sessions", dependencies=[Depends(verify_api_key)])
+app.include_router(debug.router, prefix="/api/v1/debug", dependencies=[Depends(verify_api_key)])
 
 @app.get("/health")
 async def health():
