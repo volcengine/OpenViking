@@ -97,6 +97,11 @@ HELP_TEXT = """
 - `/clear`           Clear chat history
 - Or just type your question directly!
 
+## Session (Memory)
+- `/session`         Show current session info
+- `/commit`          End session and extract memories
+- `/memories`        Show extracted memories
+
 ## Feishu Integration
 - `/feishu`          Connect to Feishu
 - `/feishu-doc <id>` Import Feishu document
@@ -288,6 +293,14 @@ class MemexCLI:
             self.query.chat(query)
         elif command == "/clear":
             self.query.clear_history()
+
+        # Session commands
+        elif command == "/session":
+            self.query.show_session_info()
+        elif command == "/commit":
+            self.query.commit_session()
+        elif command == "/memories":
+            self.query.show_memories()
 
         # Stats commands
         elif command == "/stats":

@@ -1,7 +1,9 @@
 """
 Memex RAG Recipe - RAG flow implementation for Memex.
 
-Based on examples/common/recipe.py pattern with Tier 1 improvements:
+Based on examples/common/recipe.py pattern with Tier 2 improvements:
+- OpenViking Session integration for context-aware search
+- Automatic memory extraction via session.commit()
 - Conversation-aware query rewriting
 - Confidence-based uncertainty hints
 - Smart context management (L0/L2 based on score)
@@ -13,6 +15,12 @@ from openai import OpenAI
 
 from client import MemexClient
 from config import MemexConfig
+
+try:
+    from openviking.message import TextPart, ContextPart
+except ImportError:
+    TextPart = None
+    ContextPart = None
 
 
 DEFAULT_SYSTEM_PROMPT = """You are Memex, a personal knowledge assistant. 
@@ -50,9 +58,40 @@ class MemexRecipe:
         self._llm_client: Optional[OpenAI] = None
         self._chat_history: list[dict[str, str]] = []
         self._vlm_config: Optional[dict] = None
+        self._session = None
 
         self.high_confidence_threshold = 0.25
         self.low_confidence_threshold = 0.15
+
+    def start_session(self, session_id: Optional[str] = None):
+        """Start or resume an OpenViking session for context-aware search."""
+        self._session = self.client.get_session(session_id)
+        if session_id:
+            try:
+                self._session.load()
+            except Exception:
+                pass
+        return self._session
+
+    def end_session(self) -> dict[str, Any]:
+        """End session and extract long-term memories."""
+        if not self._session:
+            return {"status": "no_session"}
+        try:
+            result = self._session.commit()
+            return result
+        except Exception as e:
+            return {"status": "error", "error": str(e)}
+
+    @property
+    def session(self):
+        """Get current OpenViking session."""
+        return self._session
+
+    @property
+    def session_id(self) -> Optional[str]:
+        """Get current session ID."""
+        return self._session.session_id if self._session else None
 
     @property
     def vlm_config(self) -> dict:
@@ -84,39 +123,35 @@ class MemexRecipe:
     def llm_model(self) -> str:
         return self.vlm_config.get("model", "gpt-4o-mini")
 
-    def _rewrite_query_with_context(self, user_query: str) -> str:
-        """Rewrite query using chat history for better retrieval."""
-        if not self._chat_history:
-            return user_query
+    def _should_use_deep_search(self, query: str) -> bool:
+        if self._session and hasattr(self._session, "messages") and len(self._session.messages) > 2:
+            return True
+        pronouns = ["它", "这个", "那个", "他", "她", "this", "that", "it", "they", "them"]
+        if any(p in query.lower() for p in pronouns):
+            return True
+        if len(self._chat_history) > 0:
+            return True
+        return False
 
-        recent_history = self._chat_history[-4:]
+    def find(
+        self,
+        query: str,
+        top_k: Optional[int] = None,
+        target_uri: Optional[str] = None,
+        score_threshold: Optional[float] = None,
+    ) -> list[dict[str, Any]]:
+        top_k = top_k or self.config.search_top_k
+        target_uri = target_uri or self.config.default_resource_uri
+        score_threshold = score_threshold or self.config.search_score_threshold
 
-        context_summary = []
-        for msg in recent_history:
-            role = "User" if msg["role"] == "user" else "Assistant"
-            content = msg["content"][:200]
-            context_summary.append(f"{role}: {content}")
+        results = self.client.find(
+            query=query,
+            target_uri=target_uri,
+            top_k=top_k,
+            score_threshold=score_threshold,
+        )
 
-        rewrite_prompt = f"""Given the conversation context, rewrite the user's query to be more specific and self-contained for search.
-
-Conversation context:
-{chr(10).join(context_summary)}
-
-Current query: {user_query}
-
-Rewritten query (just the query, no explanation):"""
-
-        try:
-            response = self.llm_client.chat.completions.create(
-                model=self.llm_model,
-                messages=[{"role": "user", "content": rewrite_prompt}],
-                temperature=0.3,
-                max_tokens=100,
-            )
-            rewritten = response.choices[0].message.content or user_query
-            return rewritten.strip().strip('"').strip("'")
-        except Exception:
-            return user_query
+        return self._process_search_results(results, top_k)
 
     def search(
         self,
@@ -124,21 +159,29 @@ Rewritten query (just the query, no explanation):"""
         top_k: Optional[int] = None,
         target_uri: Optional[str] = None,
         score_threshold: Optional[float] = None,
-        use_query_rewrite: bool = False,
+        use_session: bool = True,
+        auto_select: bool = True,
     ) -> list[dict[str, Any]]:
         top_k = top_k or self.config.search_top_k
         target_uri = target_uri or self.config.default_resource_uri
         score_threshold = score_threshold or self.config.search_score_threshold
 
-        search_query = self._rewrite_query_with_context(query) if use_query_rewrite else query
+        if auto_select and not self._should_use_deep_search(query):
+            return self.find(query, top_k, target_uri, score_threshold)
+
+        session_to_use = self._session if use_session else None
 
         results = self.client.search(
-            query=search_query,
+            query=query,
             target_uri=target_uri,
             top_k=top_k,
             score_threshold=score_threshold,
+            session=session_to_use,
         )
 
+        return self._process_search_results(results, top_k)
+
+    def _process_search_results(self, results: Any, top_k: int) -> list[dict[str, Any]]:
         search_results = []
 
         all_items = []
@@ -184,6 +227,61 @@ Rewritten query (just the query, no explanation):"""
 
         search_results.sort(key=lambda x: x["score"], reverse=True)
         return search_results
+
+    def rerank(
+        self,
+        query: str,
+        results: list[dict[str, Any]],
+        top_k: int = 5,
+    ) -> list[dict[str, Any]]:
+        if len(results) <= 1:
+            return results
+
+        results_text = ""
+        for i, r in enumerate(results[:10]):
+            content = r.get("content", "")[:300]
+            results_text += f"[{i}] {content}\n\n"
+
+        rerank_prompt = f"""Rate each search result's relevance to the query (0-10).
+
+Query: {query}
+
+Results:
+{results_text}
+
+Return JSON array: [{{"index": 0, "score": 8}}, ...]
+Only return the JSON, no explanation."""
+
+        try:
+            response = self.llm_client.chat.completions.create(
+                model=self.llm_model,
+                messages=[{"role": "user", "content": rerank_prompt}],
+                temperature=0.1,
+                max_tokens=200,
+            )
+            content = response.choices[0].message.content or "[]"
+
+            import json
+            import re
+
+            json_match = re.search(r"\[.*\]", content, re.DOTALL)
+            if json_match:
+                scores = json.loads(json_match.group())
+                score_map = {
+                    s["index"]: s["score"] for s in scores if "index" in s and "score" in s
+                }
+
+                for i, r in enumerate(results):
+                    if i in score_map:
+                        r["rerank_score"] = score_map[i] / 10.0
+                    else:
+                        r["rerank_score"] = r.get("score", 0.0)
+
+                results.sort(key=lambda x: x.get("rerank_score", 0), reverse=True)
+        except Exception:
+            pass
+
+        return results[:top_k]
 
     def _get_confidence_level(self, search_results: list[dict[str, Any]]) -> str:
         if not search_results:
@@ -263,16 +361,37 @@ Rewritten query (just the query, no explanation):"""
         score_threshold: Optional[float] = None,
         target_uri: Optional[str] = None,
         use_chat_history: bool = False,
+        use_rerank: bool = True,
     ) -> str:
-        use_query_rewrite = use_chat_history and len(self._chat_history) > 0
+        if self._session and TextPart:
+            self._session.add_message("user", [TextPart(text=user_query)])
 
         search_results = self.search(
             query=user_query,
-            top_k=search_top_k,
+            top_k=(search_top_k or 5) * 2 if use_rerank else search_top_k,
             target_uri=target_uri,
             score_threshold=score_threshold,
-            use_query_rewrite=use_query_rewrite,
+            use_session=True,
         )
+
+        if use_rerank and len(search_results) > 1:
+            search_results = self.rerank(user_query, search_results, top_k=search_top_k or 5)
+
+        if self._session and ContextPart:
+            for result in search_results[:3]:
+                try:
+                    self._session.add_message(
+                        "assistant",
+                        [
+                            ContextPart(
+                                uri=result.get("uri", ""),
+                                context_type="resource",
+                                abstract=result.get("content", "")[:200],
+                            )
+                        ],
+                    )
+                except Exception:
+                    pass
 
         context, confidence_hint = self.build_context(search_results)
 
@@ -294,6 +413,9 @@ Rewritten query (just the query, no explanation):"""
             temperature=temperature,
             max_tokens=max_tokens,
         )
+
+        if self._session and TextPart:
+            self._session.add_message("assistant", [TextPart(text=response)])
 
         if use_chat_history:
             self._chat_history.append({"role": "user", "content": user_query})

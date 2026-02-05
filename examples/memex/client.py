@@ -221,6 +221,7 @@ class MemexClient:
         target_uri: Optional[str] = None,
         top_k: Optional[int] = None,
         score_threshold: Optional[float] = None,
+        session: Optional[Any] = None,
     ) -> Any:
         """Deep semantic search with intent analysis.
 
@@ -229,6 +230,7 @@ class MemexClient:
             target_uri: URI to search in.
             top_k: Number of results to return.
             score_threshold: Minimum score threshold.
+            session: OpenViking Session for context-aware search.
 
         Returns:
             Search results.
@@ -241,6 +243,7 @@ class MemexClient:
             target_uri=target_uri,
             limit=limit,
             score_threshold=score_threshold,
+            session=session,
         )
 
     # ==================== Session Management ====================
