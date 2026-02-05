@@ -292,7 +292,7 @@ def initialize_openviking_config(
         # Embedded mode: local storage
         config.storage.agfs.backend = config.storage.agfs.backend or "local"
         config.storage.agfs.path = path
-        config.storage.vectordb.backend = "local"
+        config.storage.vectordb.backend = config.storage.vectordb.backend or "local"
         config.storage.vectordb.path = path
     elif vectordb_url and agfs_url:
         # Service mode: remote services

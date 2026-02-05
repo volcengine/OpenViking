@@ -108,6 +108,24 @@ class VikingVectorIndexBackend(VikingDBInterface):
             logger.info(
                 f"VectorDB backend initialized in Volcengine mode: region={volc_config['Region']}"
             )
+        elif config.backend == "vikingdb":
+            if not config.vikingdb.host:
+                raise ValueError("VikingDB backend requires a valid host")
+            # VikingDB private deployment mode
+            self._mode = config.backend
+            viking_config = {
+                "Host": config.vikingdb.host,
+                "Headers": config.vikingdb.headers,
+            }
+
+            from openviking.storage.vectordb.project.vikingdb_project import (
+                get_or_create_vikingdb_project,
+            )
+
+            self.project = get_or_create_vikingdb_project(
+                project_name=self.DEFAULT_PROJECT_NAME, config=viking_config
+            )
+            logger.info(f"VikingDB backend initialized in private mode: {config.vikingdb.host}")
         elif config.backend == "http":
             if not config.url:
                 raise ValueError("HTTP backend requires a valid URL")
