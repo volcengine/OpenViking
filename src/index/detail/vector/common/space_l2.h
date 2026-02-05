@@ -18,7 +18,7 @@ static float l2_sqr_ref(const void* v1, const void* v2, const void* params) {
     float diff = pv1[i] - pv2[i];
     res += diff * diff;
   }
-  return 1.0f - res;
+  return res;
 }
 
 #if defined(OV_SIMD_AVX512)
@@ -46,7 +46,7 @@ static float l2_sqr_avx512(const void* v1, const void* v2, const void* params) {
     res += diff * diff;
   }
 
-  return 1.0f - res;
+  return res;
 }
 #endif
 
@@ -84,7 +84,7 @@ static float l2_sqr_avx(const void* v1, const void* v2, const void* params) {
     res += diff * diff;
   }
 
-  return 1.0f - res;
+  return res;
 }
 #endif
 
@@ -117,7 +117,7 @@ static float l2_sqr_sse(const void* v1, const void* v2, const void* params) {
     res += diff * diff;
   }
 
-  return 1.0f - res;
+  return res;
 }
 #endif
 

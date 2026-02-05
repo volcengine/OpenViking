@@ -178,6 +178,11 @@ class BruteforceSearch {
                   std::vector<float>& scores) const {
     if (!query_data)
       return;
+    if (k == 0) {
+      labels.clear();
+      scores.clear();
+      return;
+    }
     if (current_count_ == 0)
       return;
 
@@ -204,17 +209,8 @@ class BruteforceSearch {
         continue;
       }
 
-      float dist = dist_func(encoded_query.data(), ptr, dist_params);
-
-      if (sparse_index_) {
-        float sparse_dist = 0;
-        if (query_sparse_view) {
-          sparse_dist =
-              sparse_index_->sparse_head_output(*query_sparse_view, i);
-        }
-        dist = dist * (1 - meta_->search_with_sparse_logit_alpha) +
-               sparse_dist * meta_->search_with_sparse_logit_alpha;
-      }
+      float dist = compute_score(encoded_query.data(), ptr, query_sparse_view,
+                                 i, dist_func, dist_params);
 
       uint64_t label;
       std::memcpy(&label, ptr + vector_byte_size_, sizeof(uint64_t));
@@ -307,6 +303,7 @@ class BruteforceSearch {
 
  private:
   void setup_metric() {
+    reverse_query_score_ = (meta_->distance_type == "l2");
     if (meta_->quantization_type == "int8") {
       if (meta_->distance_type == "l2")
         space_ = std::make_unique<L2SpaceInt8>(meta_->dimension);
@@ -357,6 +354,26 @@ class BruteforceSearch {
     return view;
   }
 
+  float compute_score(
+      const void* encoded_query, const char* data_ptr,
+      const std::shared_ptr<SparseDatapointView>& query_sparse_view,
+      size_t idx, MetricFunc<float> dist_func,
+      void* dist_params) const {
+    float dense_raw = dist_func(encoded_query, data_ptr, dist_params);
+    float dense_score =
+        reverse_query_score_ ? (1.0f - dense_raw) : dense_raw;
+    if (!sparse_index_ || !query_sparse_view ||
+        meta_->search_with_sparse_logit_alpha <= 0.0f) {
+      return dense_score;
+    }
+    float sparse_raw =
+        sparse_index_->sparse_head_output(*query_sparse_view, idx);
+    float sparse_score =
+        reverse_query_score_ ? (1.0f - sparse_raw) : sparse_raw;
+    float alpha = meta_->search_with_sparse_logit_alpha;
+    return dense_score * (1.0f - alpha) + sparse_score * alpha;
+  }
+
   std::shared_ptr<BruteForceMeta> meta_;
   char* data_buffer_ = nullptr;
   size_t capacity_ = 0;
@@ -370,6 +387,7 @@ class BruteforceSearch {
   std::unique_ptr<VectorSpace<float>> space_;
   std::unique_ptr<VectorQuantizer> quantizer_;
   std::unique_ptr<SparseDataHolder> sparse_index_;
+  bool reverse_query_score_ = false;
 };
 
 }  // namespace vectordb

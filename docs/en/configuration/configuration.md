@@ -207,6 +207,9 @@ client = ov.AsyncOpenViking(config=config)
 }
 ```
 
+Notes:
+- `storage.vectordb.sparse_weight` controls hybrid (dense + sparse) indexing/search. It only takes effect when you use a hybrid index; set it > 0 to enable sparse signals.
+
 ## Related Documentation
 
 - [Embedding Configuration](./embedding.md) - Embedding setup

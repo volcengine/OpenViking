@@ -112,9 +112,6 @@ class IndexMeta:
                 vector_index["SearchWithSparseLogitAlpha"] = inner_meta["VectorIndex"].get(
                     "SearchWithSparseLogitAlpha", 0.5
                 )
-                vector_index["IndexWithSparseLogitAlpha"] = inner_meta["VectorIndex"].get(
-                    "IndexWithSparseLogitAlpha", 0.5
-                )
             if "flat" in inner_meta["VectorIndex"]["IndexType"]:
                 vector_index["IndexType"] = "flat"
                 if "EnableSparse" in inner_meta["VectorIndex"]:
@@ -122,10 +119,6 @@ class IndexMeta:
                 if "SearchWithSparseLogitAlpha" in inner_meta["VectorIndex"]:
                     vector_index["SearchWithSparseLogitAlpha"] = inner_meta["VectorIndex"][
                         "SearchWithSparseLogitAlpha"
-                    ]
-                if "IndexWithSparseLogitAlpha" in inner_meta["VectorIndex"]:
-                    vector_index["IndexWithSparseLogitAlpha"] = inner_meta["VectorIndex"][
-                        "IndexWithSparseLogitAlpha"
                     ]
 
             inner_meta["VectorIndex"] = vector_index
