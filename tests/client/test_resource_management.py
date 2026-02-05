@@ -41,9 +41,9 @@ class TestAddResource:
         )
 
         assert "root_uri" in result
-        # In async mode, status can be monitored via observers
-        observers = client.observers
-        assert "queue" in observers
+        # In async mode, status can be monitored via observer
+        observer = client.observer
+        assert observer.queue is not None
 
     async def test_add_resource_with_target(
         self, client: AsyncOpenViking, sample_markdown_file: Path
