@@ -41,7 +41,6 @@ class S3Config(BaseModel):
         description="Enable/Disable SSL (HTTPS) for S3 connections. Set to False for local testing without HTTPS.",
     )
 
-    @model_validator(mode="after")
     def validate_config(self):
         """Validate S3 configuration completeness"""
         missing = []
