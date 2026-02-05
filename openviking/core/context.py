@@ -15,6 +15,7 @@ class ResourceContentType(str, Enum):
     IMAGE = "image"
     VIDEO = "video"
     AUDIO = "audio"
+    BINARY = "binary"
 
 
 class ContextType(str, Enum):

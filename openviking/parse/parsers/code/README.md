@@ -126,6 +126,8 @@ results = client.find(
 )
 ```
 
+> 考虑到当前性能不佳，可以用小一点的仓库测试：https://github.com/msgpack/msgpack-python
+
 ## 实现细节
 
 ### 文件过滤规则

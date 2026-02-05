@@ -458,8 +458,10 @@ class SemanticProcessor(DequeueHandlerBase):
             if self.get_resource_content_type(file_name) == ResourceContentType.TEXT:
                 content = await get_viking_fs().read_file(file_path)
                 context.set_vectorize(Vectorize(text=content))
-            else:
+            elif summary:
                 context.set_vectorize(Vectorize(text=summary))
+            else:
+                continue
             embedding_msg = EmbeddingMsgConverter.from_context(context)
             await embedding_queue.enqueue(embedding_msg)  # type: ignore
             logger.debug(f"Enqueued file for vectorization: {file_path}")
@@ -490,4 +492,4 @@ class SemanticProcessor(DequeueHandlerBase):
         elif _is_audio_file(file_name):
             return ResourceContentType.AUDIO
 
-        return ResourceContentType.TEXT
+        return ResourceContentType.BINARY

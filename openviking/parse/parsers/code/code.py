@@ -34,6 +34,9 @@ from openviking.parse.parsers.constants import (
     FILE_TYPE_OTHER,
     IGNORE_DIRS,
     IGNORE_EXTENSIONS,
+    ADDITIONAL_TEXT_EXTENSIONS,
+    TEXT_ENCODINGS,
+    UTF8_VARIANTS,
 )
 
 logger = get_logger(__name__)
@@ -310,6 +313,42 @@ class CodeRepositoryParser(BaseParser):
                 # Read and upload
                 try:
                     content = file_path.read_bytes()
+
+                    # Check if this is a text file that might need encoding conversion
+                    extension = file_path.suffix.lower()
+                    is_text_file = (
+                        extension in CODE_EXTENSIONS
+                        or extension in DOCUMENTATION_EXTENSIONS
+                        or extension in ADDITIONAL_TEXT_EXTENSIONS
+                    )
+
+                    if is_text_file:
+                        # Try to detect encoding and convert to UTF-8
+                        try:
+                            detected_encoding = None
+                            for encoding in TEXT_ENCODINGS:
+                                try:
+                                    # Try to decode with this encoding
+                                    decoded = content.decode(encoding)
+                                    detected_encoding = encoding
+                                    break
+                                except UnicodeDecodeError:
+                                    continue
+
+                            if detected_encoding and detected_encoding not in UTF8_VARIANTS:
+                                # Convert to UTF-8
+                                decoded = content.decode(detected_encoding, errors="replace")
+                                content = decoded.encode("utf-8")
+                                logger.debug(
+                                    f"Converted {rel_path_str} from {detected_encoding} to UTF-8"
+                                )
+
+                        except Exception as encode_error:
+                            # If encoding detection/conversion fails, use original bytes
+                            logger.warning(
+                                f"Encoding detection failed for {file_path}: {encode_error}"
+                            )
+
                     # Use write_file_bytes for safety
                     await viking_fs.write_file_bytes(target_uri, content)
 

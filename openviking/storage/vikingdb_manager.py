@@ -164,6 +164,10 @@ class VikingDBManager(VikingVectorIndexBackend):
         Returns:
             True if enqueued successfully, False otherwise
         """
+        if not embedding_msg:
+            logger.warning("Embedding message is None, skipping enqueuing")
+            return False
+
         if not self._queue_manager:
             raise RuntimeError("Queue manager not initialized, cannot enqueue embedding")
 
