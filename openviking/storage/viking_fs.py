@@ -150,8 +150,7 @@ class VikingFS:
                 return None
             except Exception:
                 pass
-        # fix s3fs
-        return self._ensure_parent_dirs(path)
+        return
 
     async def rm(self, uri: str, recursive: bool = False) -> Dict[str, Any]:
         """Delete file/directory + recursively update vector index."""
