@@ -252,78 +252,21 @@ ov.OpenViking.reset()
 
 ---
 
-### get_status()
+## 调试方法
 
-获取系统状态，包含所有组件的健康状态。
+系统健康监控和组件状态相关内容，请参阅 [调试 API](./07-debug.md)。
 
-**签名**
-
-```python
-def get_status(self) -> SystemStatus
-```
-
-**参数**
-
-无。
-
-**返回值**
-
-| 类型 | 说明 |
-|------|------|
-| SystemStatus | 系统状态对象 |
-
-**返回结构**
+**快速参考**
 
 ```python
-SystemStatus(
-    is_healthy=True,                    # 系统整体是否健康
-    components={                        # 各组件状态
-        "queue": ComponentStatus(...),
-        "vikingdb": ComponentStatus(...),
-        "vlm": ComponentStatus(...)
-    },
-    errors=[]                           # 错误列表
-)
-```
-
-**示例**
-
-```python
-status = client.get_status()
-print(f"系统健康: {status.is_healthy}")
-print(f"队列状态: {status.components['queue'].is_healthy}")
-```
-
----
-
-### is_healthy()
-
-快速健康检查。
-
-**签名**
-
-```python
-def is_healthy(self) -> bool
-```
-
-**参数**
-
-无。
-
-**返回值**
-
-| 类型 | 说明 |
-|------|------|
-| bool | 所有组件健康返回 True，否则返回 False |
-
-**示例**
-
-```python
+# 快速健康检查
 if client.is_healthy():
     print("系统正常")
-else:
-    status = client.get_status()
-    print(f"错误: {status.errors}")
+
+# 通过 observer 访问组件状态
+print(client.observer.vikingdb)
+print(client.observer.queue)
+print(client.observer.system)
 ```
 
 ---

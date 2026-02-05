@@ -252,78 +252,21 @@ ov.OpenViking.reset()
 
 ---
 
-### get_status()
+## Debug Methods
 
-Get system status including health status of all components.
+For system health monitoring and component status, see [Debug API](./07-debug.md).
 
-**Signature**
-
-```python
-def get_status(self) -> SystemStatus
-```
-
-**Parameters**
-
-None.
-
-**Returns**
-
-| Type | Description |
-|------|-------------|
-| SystemStatus | System status object |
-
-**Return Structure**
+**Quick Reference**
 
 ```python
-SystemStatus(
-    is_healthy=True,                    # Overall system health
-    components={                        # Component statuses
-        "queue": ComponentStatus(...),
-        "vikingdb": ComponentStatus(...),
-        "vlm": ComponentStatus(...)
-    },
-    errors=[]                           # Error list
-)
-```
-
-**Example**
-
-```python
-status = client.get_status()
-print(f"System healthy: {status.is_healthy}")
-print(f"Queue status: {status.components['queue'].is_healthy}")
-```
-
----
-
-### is_healthy()
-
-Quick health check.
-
-**Signature**
-
-```python
-def is_healthy(self) -> bool
-```
-
-**Parameters**
-
-None.
-
-**Returns**
-
-| Type | Description |
-|------|-------------|
-| bool | True if all components are healthy, False otherwise |
-
-**Example**
-
-```python
+# Quick health check
 if client.is_healthy():
     print("System OK")
-else:
-    status = client.get_status()
-    print(f"Errors: {status.errors}")
+
+# Access component status via observer
+print(client.observer.vikingdb)
+print(client.observer.queue)
+print(client.observer.system)
 ```
 
 ---
