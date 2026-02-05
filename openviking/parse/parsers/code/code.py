@@ -26,7 +26,7 @@ from openviking.parse.base import (
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.utils.logger import get_logger
 
-from .constants import (
+from openviking.parse.parsers.constants import (
     CODE_EXTENSIONS,
     DOCUMENTATION_EXTENSIONS,
     FILE_TYPE_CODE,

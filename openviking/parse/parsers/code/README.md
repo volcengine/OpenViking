@@ -121,8 +121,8 @@ client.add_resource(
 
 # 搜索代码逻辑
 results = client.find(
-    "VikingFS 是如何实现文件挂载的？",
-    target_uri="viking://resources/github/volcengine/OpenViking/"
+    "OpenViking 和 VikingDB 的关系是什么？",
+    target_uri="viking://resources/github/volcengine/OpenViking/OpenViking/docs/zh/"
 )
 ```
 
@@ -154,6 +154,12 @@ results = client.find(
 - `IGNORE_EXTENSIONS` 包含所有必需的格式
 - 符号链接处理正确实现
 - 文件类型检测逻辑准确
+
+### 优化 TODO
+- 支持采用更轻量的模型进行文件摘要，加快处理速度
+- 设计长任务的追踪机制，帮助观测任务队列中的任务归属，提供处理任务的统计信息
+- 支持增量解析，只解析新增或变动的文件，避免重复解析已处理文件
+- 大幅提升端到端的处理性能！
 
 ## 相关文档
 

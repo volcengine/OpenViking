@@ -13,6 +13,13 @@ from openviking.storage.viking_fs import get_viking_fs
 from openviking.utils import VikingURI
 from openviking.utils.config import get_openviking_config
 from openviking.utils.logger import get_logger
+from openviking.parse.parsers.constants import (
+    CODE_EXTENSIONS,
+    DOCUMENTATION_EXTENSIONS,
+    FILE_TYPE_CODE,
+    FILE_TYPE_DOCUMENTATION,
+    FILE_TYPE_OTHER,
+)
 
 logger = get_logger(__name__)
 
@@ -36,6 +43,31 @@ class SemanticProcessor(DequeueHandlerBase):
             max_concurrent_llm: Maximum concurrent LLM calls
         """
         self.max_concurrent_llm = max_concurrent_llm
+
+    def _detect_file_type(self, file_name: str) -> str:
+        """
+        Detect file type based on extension using constants from code parser.
+
+        Args:
+            file_name: File name with extension
+
+        Returns:
+            FILE_TYPE_CODE, FILE_TYPE_DOCUMENTATION, or FILE_TYPE_OTHER
+        """
+        file_name_lower = file_name.lower()
+
+        # Check if file is a code file
+        for ext in CODE_EXTENSIONS:
+            if file_name_lower.endswith(ext):
+                return FILE_TYPE_CODE
+
+        # Check if file is a documentation file
+        for ext in DOCUMENTATION_EXTENSIONS:
+            if file_name_lower.endswith(ext):
+                return FILE_TYPE_DOCUMENTATION
+
+        # Default to other
+        return FILE_TYPE_OTHER
 
     async def _enqueue_semantic_msg(self, msg: SemanticMsg) -> None:
         """Enqueue a SemanticMsg to the semantic queue for processing."""
@@ -260,8 +292,18 @@ class SemanticProcessor(DequeueHandlerBase):
                 logger.warning("VLM not available, using empty summary")
                 return {"name": file_name, "summary": ""}
 
+            # Detect file type and select appropriate prompt
+            file_type = self._detect_file_type(file_name)
+
+            if file_type == FILE_TYPE_CODE:
+                prompt_id = "semantic.code_summary"
+            elif file_type == FILE_TYPE_DOCUMENTATION:
+                prompt_id = "semantic.document_summary"
+            else:
+                prompt_id = "semantic.file_summary"
+
             prompt = render_prompt(
-                "semantic.file_summary",
+                prompt_id,
                 {"file_name": file_name, "content": content},
             )
 
