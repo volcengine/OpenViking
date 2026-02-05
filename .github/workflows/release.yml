@@ -15,6 +15,16 @@ on:
         - testpypi
         - pypi
         - both
+      build_sdist:
+        description: 'Whether to build source distribution'
+        required: false
+        type: boolean
+        default: true
+      build_wheels:
+        description: 'Whether to build wheel distribution'
+        required: false
+        type: boolean
+        default: true
       os_json:
         description: 'JSON string of OS to build on (Manual only)'
         required: false
@@ -37,6 +47,8 @@ jobs:
     with:
       os_json: ${{ inputs.os_json || '["ubuntu-latest", "macos-latest", "macos-15-intel", "windows-latest"]' }}
       python_json: ${{ inputs.python_json || '["3.9", "3.10", "3.11", "3.12"]' }}
+      build_sdist: ${{ github.event_name == 'release' || inputs.build_sdist != false }}
+      build_wheels: ${{ github.event_name == 'release' || inputs.build_wheels != false }}
 
   permission-check:
     name: Check write permission
@@ -100,6 +112,13 @@ jobs:
         skip-existing: true
         verbose: true
 
+    - name: Display published version
+      run: |
+        # Get version from the first wheel file found
+        VERSION=$(ls dist/*.whl | head -n 1 | xargs basename | cut -d- -f2)
+        echo "Successfully published to TestPyPI with version: $VERSION"
+        echo "::notice::Successfully published to TestPyPI with version: $VERSION"
+
   publish-pypi:
     name: Publish to PyPI
     needs: [build, permission-check]
@@ -125,3 +144,10 @@ jobs:
       uses: pypa/gh-action-pypi-publish@release/v1
       with:
         verbose: true
+
+    - name: Display published version
+      run: |
+        # Get version from the first wheel file found
+        VERSION=$(ls dist/*.whl | head -n 1 | xargs basename | cut -d- -f2)
+        echo "Successfully published to PyPI with version: $VERSION"
+        echo "::notice::Successfully published to PyPI with version: $VERSION"

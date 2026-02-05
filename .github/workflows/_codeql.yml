@@ -46,7 +46,7 @@ jobs:
 
     - name: Install dependencies
       run: |
-        uv sync
+        uv sync --frozen
         uv pip install setuptools pybind11 cmake wheel
 
     - name: Initialize CodeQL

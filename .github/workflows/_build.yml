@@ -13,8 +13,28 @@ on:
         required: false
         type: string
         default: '["3.9", "3.10", "3.11", "3.12"]'
+      build_sdist:
+        description: 'Whether to build source distribution'
+        required: false
+        type: boolean
+        default: true
+      build_wheels:
+        description: 'Whether to build wheel distribution'
+        required: false
+        type: boolean
+        default: true
   workflow_dispatch:
     inputs:
+      build_sdist:
+        description: 'Whether to build source distribution'
+        required: false
+        type: boolean
+        default: true
+      build_wheels:
+        description: 'Whether to build wheel distribution'
+        required: false
+        type: boolean
+        default: true
       os_json:
         description: 'JSON string of OS to build on'
         required: false
@@ -25,10 +45,54 @@ on:
         default: '["3.9", "3.10", "3.11", "3.12"]'
 
 jobs:
+  build-sdist:
+    name: Build source distribution
+    if: inputs.build_sdist
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        fetch-depth: 0  # Required for setuptools_scm to detect version from git tags
+
+    - name: Fetch all tags
+      run: git fetch --force --tags
+
+    - name: Set up Python
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v7
+      with:
+        enable-cache: true
+
+    - name: Create venv
+      run: uv venv
+
+    - name: Install build dependencies
+      run: uv pip install build setuptools_scm
+
+    - name: Build sdist
+      run: uv run python -m build --sdist
+
+    - name: Store the distribution packages
+      uses: actions/upload-artifact@v4
+      with:
+        name: python-package-distributions-sdist
+        path: dist/*.tar.gz
+
+    - name: Display built sdist version
+      run: |
+        VERSION=$(ls dist/*.tar.gz | head -n 1 | xargs basename | sed -E 's/^[^-]+-(.+)\.tar\.gz$/\1/')
+        echo "Build Version: $VERSION"
+        echo "::notice::Build sdist Version: $VERSION"
+
   build-linux:
     name: Build distribution on Linux (glibc 2.31) py${{ matrix.python-version }}
     # Only run if inputs.os_json contains 'ubuntu' or 'linux'
-    if: contains(inputs.os_json, 'ubuntu') || contains(inputs.os_json, 'linux')
+    if: inputs.build_wheels && (contains(inputs.os_json, 'ubuntu') || contains(inputs.os_json, 'linux'))
     runs-on: ubuntu-latest
     container: ubuntu:20.04
     env:
@@ -58,6 +122,9 @@ jobs:
       with:
         submodules: recursive
         fetch-depth: 0  # Required for setuptools_scm to detect version from git tags
+
+    - name: Fetch all tags
+      run: git fetch --force --tags
 
     - name: Build CPython (Dynamic Selection)
       run: |
@@ -108,13 +175,13 @@ jobs:
       run: uv run python -m ensurepip --upgrade
 
     - name: Install dependencies
-      run: uv sync
+      run: uv sync --frozen
 
     - name: Install build dependencies
       run: uv pip install setuptools setuptools_scm pybind11 cmake wheel build
 
-    - name: Build package
-      run: uv run python -m build
+    - name: Build package (Wheel Only)
+      run: uv run python -m build --wheel
 
     - name: Install patchelf (Linux)
       run: |
@@ -145,9 +212,16 @@ jobs:
         name: python-package-distributions-linux-${{ matrix.python-version }}
         path: dist/
 
+    - name: Display built wheel version
+      run: |
+        VERSION=$(ls dist/*.whl | head -n 1 | xargs basename | cut -d- -f2)
+        echo "Build Version: $VERSION"
+        echo "::notice::Build Wheel Version (Linux py${{ matrix.python-version }}): $VERSION"
+
   build-other:
     name: Build distribution on ${{ matrix.os }}
     # Filter out ubuntu-latest from this job since it's handled by build-linux
+    if: inputs.build_wheels
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
@@ -163,6 +237,9 @@ jobs:
       with:
         submodules: recursive
         fetch-depth: 0  # Required for setuptools_scm to detect version from git tags
+
+    - name: Fetch all tags
+      run: git fetch --force --tags
 
     - name: Set up Python
       uses: actions/setup-python@v6
@@ -190,16 +267,22 @@ jobs:
         choco install mingw
 
     - name: Install dependencies
-      run: uv sync
+      run: uv sync --frozen
 
     - name: Install build dependencies
       run: uv pip install setuptools setuptools_scm pybind11 cmake wheel build
 
-    - name: Build package
-      run: uv run python -m build
+    - name: Build package (Wheel Only)
+      run: uv run python -m build --wheel
 
     - name: Store the distribution packages
       uses: actions/upload-artifact@v4
       with:
         name: python-package-distributions-${{ matrix.os }}-${{ matrix.python-version }}
         path: dist/
+
+    - name: Display built wheel version
+      run: |
+        VERSION=$(ls dist/*.whl | head -n 1 | xargs basename | cut -d- -f2)
+        echo "Build Version: $VERSION"
+        echo "::notice::Build Wheel Version (${{ matrix.os }} py${{ matrix.python-version }}): $VERSION"

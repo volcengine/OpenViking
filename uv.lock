@@ -1506,7 +1506,6 @@ wheels = [
 
 [[package]]
 name = "openviking"
-version = "0.1.7"
 source = { editable = "." }
 dependencies = [
     { name = "apscheduler" },
