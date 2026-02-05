@@ -35,7 +35,7 @@ jobs:
       id: files
       run: |
         # Compare the PR head to the base branch
-        echo "changed_files=$(git diff --name-only origin/${{ github.base_ref }} HEAD | grep '\.py$' | xargs)" >> $GITHUB_OUTPUT
+        echo "changed_files=$(git diff --name-only --diff-filter=d origin/${{ github.base_ref }} HEAD | grep '\.py$' | xargs)" >> $GITHUB_OUTPUT
 
     # --- UPDATED STEPS: Use the file list ---
     - name: List files
