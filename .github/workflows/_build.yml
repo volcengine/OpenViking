@@ -124,7 +124,9 @@ jobs:
         fetch-depth: 0  # Required for setuptools_scm to detect version from git tags
 
     - name: Fetch all tags
-      run: git fetch --force --tags
+      run: |
+        git config --global --add safe.directory "$GITHUB_WORKSPACE"
+        git fetch --force --tags
 
     - name: Build CPython (Dynamic Selection)
       run: |
