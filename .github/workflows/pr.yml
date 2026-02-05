@@ -1,6 +1,7 @@
 name: 01. Pull Request Checks
 
 on:
+  workflow_dispatch:
   pull_request:
     branches: [ main, develop ]
     paths-ignore:

@@ -1,6 +1,7 @@
 name: 02. Main Branch Checks
 
 on:
+  workflow_dispatch:
   push:
     branches: [ main ]
     paths-ignore:
@@ -15,6 +16,11 @@ on:
       - '**.svg'
       - '.gitignore'
       - '.editorconfig'
+
+permissions:
+  actions: read
+  contents: read
+  security-events: write
 
 jobs:
   test-full:
