@@ -84,6 +84,7 @@ jobs:
         path: dist/*.tar.gz
 
     - name: Display built sdist version
+      continue-on-error: true
       run: |
         VERSION=$(ls dist/*.tar.gz | head -n 1 | xargs basename | sed -E 's/^[^-]+-(.+)\.tar\.gz$/\1/')
         echo "Build Version: $VERSION"
@@ -215,6 +216,7 @@ jobs:
         path: dist/
 
     - name: Display built wheel version
+      continue-on-error: true
       run: |
         VERSION=$(ls dist/*.whl | head -n 1 | xargs basename | cut -d- -f2)
         echo "Build Version: $VERSION"
@@ -284,6 +286,8 @@ jobs:
         path: dist/
 
     - name: Display built wheel version
+      shell: bash
+      continue-on-error: true
       run: |
         VERSION=$(ls dist/*.whl | head -n 1 | xargs basename | cut -d- -f2)
         echo "Build Version: $VERSION"
