@@ -50,7 +50,7 @@ jobs:
     if: inputs.build_sdist
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
       with:
         submodules: recursive
         fetch-depth: 0  # Required for setuptools_scm to detect version from git tags
@@ -119,7 +119,7 @@ jobs:
         ln -fs /usr/share/zoneinfo/Etc/UTC /etc/localtime
         dpkg-reconfigure -f noninteractive tzdata
 
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
       with:
         submodules: recursive
         fetch-depth: 0  # Required for setuptools_scm to detect version from git tags
@@ -237,7 +237,7 @@ jobs:
           - os: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
       with:
         submodules: recursive
         fetch-depth: 0  # Required for setuptools_scm to detect version from git tags
