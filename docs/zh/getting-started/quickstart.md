@@ -195,8 +195,12 @@ Search results:
 
 恭喜！你已成功运行 OpenViking。
 
+## 服务端模式
+
+想要将 OpenViking 作为共享服务运行？请参见 [快速开始：服务端模式](quickstart-server.md)。
+
 ## 下一步
 
 - [配置详解](../configuration/configuration.md) - 详细配置选项
-- [客户端 API](../api/01-client.md) - 客户端使用指南
-- [资源管理](../api/02-resources.md) - 资源管理 API
+- [API 概览](../api/overview.md) - API 参考
+- [资源管理](../api/resources.md) - 资源管理 API

@@ -195,8 +195,12 @@ Search results:
 
 Congratulations! You have successfully run OpenViking.
 
+## Server Mode
+
+Want to run OpenViking as a shared service? See [Quick Start: Server Mode](quickstart-server.md).
+
 ## Next Steps
 
 - [Configuration Guide](../configuration/configuration.md) - Detailed configuration options
-- [Client API](../api/01-client.md) - Client usage guide
-- [Resource Management](../api/02-resources.md) - Resource management API
+- [API Overview](../api/overview.md) - API reference
+- [Resource Management](../api/resources.md) - Resource management API

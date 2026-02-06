@@ -110,6 +110,6 @@ OpenViking 内置了记忆自迭代闭环。在每次会话结束时，开发者
 ## 下一步
 
 - [快速开始](./quickstart.md) - 5 分钟上手
-- [架构详解](../concepts/01-architecture.md) - 理解系统设计
-- [上下文类型](../concepts/02-context-types.md) - 深入了解三种上下文
-- [检索机制](../concepts/06-retrieval.md) - 了解检索流程
+- [架构详解](../concepts/architecture.md) - 理解系统设计
+- [上下文类型](../concepts/context-types.md) - 深入了解三种上下文
+- [检索机制](../concepts/retrieval.md) - 了解检索流程

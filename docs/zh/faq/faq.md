@@ -378,6 +378,6 @@ client = ov.AsyncOpenViking(
 
 - [简介](../getting-started/introduction.md) - 了解 OpenViking 的设计理念
 - [快速开始](../getting-started/quickstart.md) - 5 分钟上手教程
-- [架构概述](../concepts/01-architecture.md) - 深入理解系统设计
-- [检索机制](../concepts/06-retrieval.md) - 检索流程详解
+- [架构概述](../concepts/architecture.md) - 深入理解系统设计
+- [检索机制](../concepts/retrieval.md) - 检索流程详解
 - [配置指南](../configuration/configuration.md) - 完整配置参考

@@ -210,8 +210,38 @@ client = ov.AsyncOpenViking(config=config)
 Notes:
 - `storage.vectordb.sparse_weight` controls hybrid (dense + sparse) indexing/search. It only takes effect when you use a hybrid index; set it > 0 to enable sparse signals.
 
+## Server Configuration
+
+When running OpenViking as an HTTP server, use a separate YAML config file (`~/.openviking/server.yaml`):
+
+```yaml
+server:
+  host: 0.0.0.0
+  port: 1933
+  api_key: your-secret-key    # omit to disable authentication
+  cors_origins:
+    - "*"
+
+storage:
+  path: /data/openviking       # local storage path
+  # vectordb_url: http://...   # remote VectorDB (service mode)
+  # agfs_url: http://...       # remote AGFS (service mode)
+```
+
+Server configuration can also be set via environment variables:
+
+| Variable | Description |
+|----------|-------------|
+| `OPENVIKING_HOST` | Server host |
+| `OPENVIKING_PORT` | Server port |
+| `OPENVIKING_API_KEY` | API key for authentication |
+| `OPENVIKING_PATH` | Storage path |
+
+See [Server Deployment](../guides/deployment.md) for full details.
+
 ## Related Documentation
 
 - [Embedding Configuration](./embedding.md) - Embedding setup
 - [LLM Configuration](./llm.md) - LLM setup
-- [Client](../api/client.md) - Client initialization
+- [API Overview](../api/overview.md) - Client initialization
+- [Server Deployment](../guides/deployment.md) - Server configuration

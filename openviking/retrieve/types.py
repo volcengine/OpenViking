@@ -384,3 +384,29 @@ class FindResult:
             "intent": q.intent,
             "priority": q.priority,
         }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "FindResult":
+        """Construct FindResult from a dictionary (e.g. HTTP JSON response)."""
+
+        def _parse_context(d: Dict[str, Any]) -> MatchedContext:
+            return MatchedContext(
+                uri=d.get("uri", ""),
+                context_type=ContextType(d.get("context_type", "resource")),
+                is_leaf=d.get("is_leaf", False),
+                abstract=d.get("abstract", ""),
+                overview=d.get("overview"),
+                category=d.get("category", ""),
+                score=d.get("score", 0.0),
+                match_reason=d.get("match_reason", ""),
+                relations=[
+                    RelatedContext(uri=r.get("uri", ""), abstract=r.get("abstract", ""))
+                    for r in d.get("relations", [])
+                ],
+            )
+
+        return cls(
+            memories=[_parse_context(m) for m in data.get("memories", [])],
+            resources=[_parse_context(r) for r in data.get("resources", [])],
+            skills=[_parse_context(s) for s in data.get("skills", [])],
+        )

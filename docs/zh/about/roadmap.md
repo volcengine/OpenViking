@@ -39,12 +39,18 @@
 - 可插拔的 LLM 提供者
 - 基于 YAML 的配置
 
+### Server & Client 架构
+- HTTP Server (FastAPI)
+- Python HTTP Client
+- API Key 认证
+- 客户端抽象层（LocalClient / HTTPClient）
+
 ---
 
 ## 未来计划
 
-### 服务部署
-- 服务模式部署
+### CLI
+- 完整的命令行界面，支持所有操作
 - 分布式存储后端
 
 ### 多模态支持

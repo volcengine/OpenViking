@@ -297,8 +297,38 @@ client = ov.AsyncOpenViking(config=config)
 说明：
 - `storage.vectordb.sparse_weight` 用于混合（dense + sparse）索引/检索的权重，仅在使用 hybrid 索引时生效；设置为 > 0 才会启用 sparse 信号。
 
+## Server 配置
+
+将 OpenViking 作为 HTTP 服务运行时，使用单独的 YAML 配置文件（`~/.openviking/server.yaml`）：
+
+```yaml
+server:
+  host: 0.0.0.0
+  port: 1933
+  api_key: your-secret-key    # omit to disable authentication
+  cors_origins:
+    - "*"
+
+storage:
+  path: /data/openviking       # local storage path
+  # vectordb_url: http://...   # remote VectorDB (service mode)
+  # agfs_url: http://...       # remote AGFS (service mode)
+```
+
+Server 配置也可以通过环境变量设置：
+
+| 变量 | 说明 |
+|------|------|
+| `OPENVIKING_HOST` | 服务主机地址 |
+| `OPENVIKING_PORT` | 服务端口 |
+| `OPENVIKING_API_KEY` | 用于认证的 API Key |
+| `OPENVIKING_PATH` | 存储路径 |
+
+详见 [服务部署](../guides/deployment.md)。
+
 ## 相关文档
 
 - [Embedding 配置](./embedding.md) - Embedding 设置
 - [LLM 配置](./llm.md) - LLM 设置
-- [客户端](../api/client.md) - 客户端初始化
+- [API 概览](../api/overview.md) - 客户端初始化
+- [服务部署](../guides/deployment.md) - Server 配置

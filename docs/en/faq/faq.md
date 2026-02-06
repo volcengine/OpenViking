@@ -378,6 +378,6 @@ Yes, OpenViking is fully open source under the Apache 2.0 license.
 
 - [Introduction](../getting-started/introduction.md) - Understand OpenViking's design philosophy
 - [Quick Start](../getting-started/quickstart.md) - 5-minute tutorial
-- [Architecture Overview](../concepts/01-architecture.md) - Deep dive into system design
-- [Retrieval Mechanism](../concepts/06-retrieval.md) - Detailed retrieval process
+- [Architecture Overview](../concepts/architecture.md) - Deep dive into system design
+- [Retrieval Mechanism](../concepts/retrieval.md) - Detailed retrieval process
 - [Configuration Guide](../configuration/configuration.md) - Complete configuration reference

@@ -30,7 +30,7 @@ class AGFSManager:
 
         config = AGFSConfig(
             path="./data",
-            port=8080,
+            port=1833,
             backend="local",
             log_level="info"
         )
@@ -42,7 +42,7 @@ class AGFSManager:
 
         config = AGFSConfig(
             path="./data",
-            port=8080,
+            port=1833,
             backend="s3",
             s3=S3Config(
                 bucket="my-bucket",
@@ -114,13 +114,15 @@ class AGFSManager:
         """Check if the port is available."""
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            sock.bind(("localhost", self.port))
-            sock.close()
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(("127.0.0.1", self.port))
         except OSError as e:
             raise RuntimeError(
                 f"AGFS port {self.port} is already in use, cannot start service. "
                 f"Please check if another AGFS process is running, or use a different port."
             ) from e
+        finally:
+            sock.close()
 
     def _generate_config(self) -> Path:
         """Dynamically generate AGFS configuration file based on backend type."""

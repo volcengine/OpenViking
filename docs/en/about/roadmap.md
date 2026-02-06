@@ -39,12 +39,18 @@ This document outlines the development roadmap for OpenViking.
 - Pluggable LLM providers
 - YAML-based configuration
 
+### Server & Client Architecture
+- HTTP Server (FastAPI)
+- Python HTTP Client
+- API Key authentication
+- Client abstraction layer (LocalClient / HTTPClient)
+
 ---
 
 ## Future Plans
 
-### Service Deployment
-- Service mode deployment
+### CLI
+- Complete command-line interface for all operations
 - Distributed storage backend
 
 ### Multi-modal Support
