@@ -68,6 +68,10 @@ class MemexRecipe:
             return {"status": "no_session"}
         try:
             result = self._session.commit()
+            # Wait for memory embedding to complete
+            memories_extracted = result.get("memories_extracted", 0)
+            if memories_extracted > 0:
+                self.client.wait_processed()
             return result
         except Exception as e:
             return {"status": "error", "error": str(e)}
@@ -95,7 +99,7 @@ class MemexRecipe:
             if backend == "openai":
                 self._llm_client = OpenAI(
                     api_key=vlm.get("api_key"),
-                    base_url=vlm.get("api_base"),
+                    base_url=vlm.get("api_base") or "https://api.openai.com/v1",
                 )
             elif backend == "volcengine":
                 self._llm_client = OpenAI(
@@ -150,7 +154,7 @@ class MemexRecipe:
 
                 try:
                     content = self.client.read(uri)
-                    content = content[:2000] if content else ""
+                    content = content if content else ""
                 except Exception as e:
                     if "is a directory" in str(e):
                         try:
