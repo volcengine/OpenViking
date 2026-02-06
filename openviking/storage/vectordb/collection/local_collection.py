@@ -38,6 +38,7 @@ from openviking.storage.vectordb.utils.constants import (
     AggregateKeys,
     SpecialFields,
 )
+from openviking.storage.vectordb.utils.data_processor import DataProcessor
 from openviking.storage.vectordb.utils.dict_utils import ThreadSafeDictManager
 from openviking.storage.vectordb.utils.id_generator import generate_auto_id
 from openviking.storage.vectordb.utils.str_to_uint64 import str_to_uint64
@@ -145,6 +146,9 @@ class LocalCollection(ICollection):
         )
 
         self.store_mgr: Optional[StoreManager] = store_mgr
+        self.data_processor = DataProcessor(
+            self.meta.fields_dict, collection_name=self.meta.collection_name
+        )
         self.vectorizer_adapter = None
         if meta.vectorize and vectorizer:
             self.vectorizer_adapter = VectorizerAdapter(vectorizer, meta.vectorize)
@@ -166,6 +170,9 @@ class LocalCollection(ICollection):
         if not meta_data:
             return
         self.meta.update(meta_data)
+        self.data_processor = DataProcessor(
+            self.meta.fields_dict, collection_name=self.meta.collection_name
+        )
 
     def get_meta_data(self):
         return self.meta.get_meta_data()
@@ -263,7 +270,7 @@ class LocalCollection(ICollection):
         # Request more results to handle offset
         actual_limit = limit + offset
         label_list, scores_list = index.search(
-            dense_vector or [], actual_limit, filters or {}, sparse_raw_terms, sparse_values
+            dense_vector or [], actual_limit, filters, sparse_raw_terms, sparse_values
         )
 
         # Apply offset by slicing the results
@@ -476,12 +483,19 @@ class LocalCollection(ICollection):
     # data interface
     def upsert_data(self, raw_data_list: List[Dict[str, Any]], ttl=0):
         result = UpsertDataResult()
-        for data in raw_data_list:
-            if not validation.is_valid_fields_data(data, self.meta.fields_dict):
-                return result
-        data_list = [data.copy() for data in raw_data_list]
-        for data in data_list:
-            validation.fix_fields_data(data, self.meta.fields_dict)
+        data_list = []
+
+        for raw_data in raw_data_list:
+            if self.data_processor:
+                try:
+                    data = self.data_processor.validate_and_process(raw_data)
+                except ValueError:
+                    return result
+            else:
+                # Should not happen given init logic, but for safety
+                data = raw_data
+            data_list.append(data)
+
         dense_emb, sparse_emb = (
             self.vectorizer_adapter.vectorize_raw_data(data_list)
             if self.vectorizer_adapter

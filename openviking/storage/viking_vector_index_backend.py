@@ -229,17 +229,16 @@ class VikingVectorIndexBackend(VikingDBInterface):
 
             # Build scalar index fields list from Fields
             scalar_index_fields = []
+            exclude_types = {"vector", "sparse_vector"}
+            if self._mode == "volcengine":
+                # Volcengine VikingDB doesn't support indexing date_time/geo_point fields
+                exclude_types.update({"date_time", "geo_point"})
             for field in collection_meta.get("Fields", []):
                 field_name = field.get("FieldName")
                 field_type = field.get("FieldType")
                 is_primary_key = field.get("IsPrimaryKey", False)
-                # Index all non-vector, non-primary-key, and non-date_time fields by default
-                # Volcengine VikingDB doesn't support indexing date_time fields
-                if (
-                    field_name
-                    and field_type not in ("vector", "sparse_vector", "date_time")
-                    and not is_primary_key
-                ):
+                # Index all non-vector and non-primary-key fields by default
+                if field_name and field_type not in exclude_types and not is_primary_key:
                     scalar_index_fields.append(field_name)
 
             # Create default index for the collection
