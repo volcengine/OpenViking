@@ -3,9 +3,9 @@ contact_links:
   - name: Documentation
     url: https://www.openviking.ai/docs
     about: Check the documentation for guides and API reference
-  - name: Discord Community
-    url: https://discord.com/invite/eHvx8E9XF3
-    about: Join our Discord server for discussions and support
+  - name: Lark Community
+    url: https://applink.larkoffice.com/client/chat/chatter/add_by_link?link_token=dd9l9590-7e6e-49f5-bf41-18aef1ma06v3
+    about: Join our Lark group for discussions and support
   - name: Questions & Discussions
     url: https://github.com/volcengine/OpenViking/discussions
     about: Ask questions and share ideas in GitHub Discussions
