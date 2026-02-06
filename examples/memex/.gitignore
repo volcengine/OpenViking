@@ -5,3 +5,5 @@ __pycache__/
 data/
 uv.lock
 ov.conf
+.memex_history
+memex_data/
