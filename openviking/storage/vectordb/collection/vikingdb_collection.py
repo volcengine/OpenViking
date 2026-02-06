@@ -1,10 +1,9 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
-import copy
 import json
 from typing import Any, Dict, List, Optional
 
-from openviking.storage.vectordb.collection.collection import Collection, ICollection
+from openviking.storage.vectordb.collection.collection import ICollection
 from openviking.storage.vectordb.collection.result import (
     AggregateResult,
     DataItem,
@@ -17,49 +16,6 @@ from openviking.storage.vectordb.collection.vikingdb_clients import (
     VikingDBClient,
 )
 from openviking.utils.logger import default_logger as logger
-
-
-def get_or_create_vikingdb_collection(config: Dict[str, Any], meta_data: Dict[str, Any]):
-    """
-    Get or create a VikingDB Collection for private deployment.
-
-    Args:
-        config: Configuration dictionary containing Host and Headers.
-        meta_data: Collection metadata.
-
-    Returns:
-        Collection: The collection instance.
-    """
-    host = config.get("Host")
-    headers = config.get("Headers")
-
-    collection_name = meta_data.get("CollectionName")
-    if not collection_name:
-        raise ValueError("CollectionName is required in meta_data")
-
-    # Initialize client
-    client = VikingDBClient(host, headers)
-
-    # Try to create Collection
-    try:
-        path, method = VIKINGDB_APIS["CreateVikingdbCollection"]
-        response = client.do_req(method, path=path, req_body=meta_data)
-        if response.status_code != 200:
-            result = response.json()
-            if "AlreadyExists" in result.get("ResponseMetadata", {}).get("Error", {}).get(
-                "Code", ""
-            ):
-                pass
-            else:
-                raise Exception(
-                    f"Failed to create collection: {response.status_code} {response.text}"
-                )
-    except Exception as e:
-        logger.error(f"Failed to create collection: {e}")
-        raise e
-
-    vikingdb_collection = VikingDBCollection(host=host, headers=headers, meta_data=meta_data)
-    return Collection(vikingdb_collection)
 
 
 class VikingDBCollection(ICollection):
@@ -154,27 +110,10 @@ class VikingDBCollection(ICollection):
         pass
 
     def drop(self):
-        data = {
-            "ProjectName": self.project_name,
-            "CollectionName": self.collection_name,
-        }
-        return self._console_post(data, action="DeleteVikingdbCollection")
+        raise NotImplementedError("collection should be managed manually")
 
     def create_index(self, index_name: str, meta_data: Dict[str, Any]):
-        data = copy.deepcopy(meta_data)
-        data["IndexName"] = index_name
-        data["ProjectName"] = self.project_name
-        data["CollectionName"] = self.collection_name
-        path, method = VIKINGDB_APIS["CreateVikingdbIndex"]
-        response = self.client.do_req(method, path=path, req_body=data)
-        if response.status_code != 200:
-            result = response.json()
-            if "AlreadyExists" in result.get("ResponseMetadata", {}).get("Error", {}).get(
-                "Code", ""
-            ):
-                pass
-            else:
-                raise Exception(f"Failed to create index: {response.status_code} {response.text}")
+        raise NotImplementedError("index should be pre-created")
 
     def has_index(self, index_name: str):
         indexes = self.list_indexes()
@@ -196,17 +135,7 @@ class VikingDBCollection(ICollection):
         scalar_index: Optional[Dict[str, Any]] = None,
         description: Optional[str] = None,
     ):
-        data = {
-            "ProjectName": self.project_name,
-            "CollectionName": self.collection_name,
-            "IndexName": index_name,
-        }
-        if scalar_index:
-            data["ScalarIndex"] = scalar_index
-        if description is not None:
-            data["Description"] = description
-
-        return self._console_post(data, action="UpdateVikingdbIndex")
+        raise NotImplementedError("index should be managed manually")
 
     def get_index_meta_data(self, index_name: str):
         params = {
@@ -217,12 +146,7 @@ class VikingDBCollection(ICollection):
         return self._console_get(params, action="GetVikingdbIndex")
 
     def drop_index(self, index_name: str):
-        data = {
-            "ProjectName": self.project_name,
-            "CollectionName": self.collection_name,
-            "IndexName": index_name,
-        }
-        return self._console_post(data, action="DeleteVikingdbIndex")
+        raise NotImplementedError("index should be managed manually")
 
     def upsert_data(self, data_list: List[Dict[str, Any]], ttl: int = 0):
         path = "/api/vikingdb/data/upsert"

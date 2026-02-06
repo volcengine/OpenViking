@@ -7,10 +7,7 @@ from openviking.storage.vectordb.collection.vikingdb_clients import (
     VIKINGDB_APIS,
     VikingDBClient,
 )
-from openviking.storage.vectordb.collection.vikingdb_collection import (
-    VikingDBCollection,
-    get_or_create_vikingdb_collection,
-)
+from openviking.storage.vectordb.collection.vikingdb_collection import VikingDBCollection
 from openviking.utils.logger import default_logger as logger
 
 
@@ -129,31 +126,8 @@ class VikingDBProject:
         }
 
     def create_collection(self, collection_name: str, meta_data: Dict[str, Any]) -> Collection:
-        """
-        Create a new collection.
-
-        Args:
-            collection_name: Collection name
-            meta_data: Collection metadata
-
-        Returns:
-            Collection instance
-        """
-        config = {
-            "Host": self.host,
-            "Headers": self.headers,
-        }
-
-        # Update meta_data with CollectionName and ProjectName
-        updated_meta = {
-            **meta_data,
-            "CollectionName": collection_name,
-            "ProjectName": self.project_name,
-        }
-
-        logger.info(f"Creating VikingDB collection: {collection_name}")
-        collection = get_or_create_vikingdb_collection(config=config, meta_data=updated_meta)
-        return collection
+        """collection should be pre-created"""
+        raise NotImplementedError("collection should be pre-created")
 
     def get_or_create_collection(
         self, collection_name: str, meta_data: Optional[Dict[str, Any]] = None
