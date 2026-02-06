@@ -135,25 +135,27 @@ class FieldBitmapGroup : public BitmapGroupBase {
       std::vector<std::string> keys;
       split(keys, field_str, ";");
       for (auto& key_i : keys) {
-        if (!exist_bitmap(key_i)) {
+        const std::string norm_key = dir_index_ ? normalize_path_key(key_i) : key_i;
+        if (!exist_bitmap(norm_key)) {
           if (dir_index_) {
-            dir_index_->add_key(key_i);
+            dir_index_->add_key(norm_key);
           }
         }
 
-        Bitmap* temp_p = get_editable_bitmap(key_i);
+        Bitmap* temp_p = get_editable_bitmap(norm_key);
         if (temp_p) {
           temp_p->Set(offset);
         }
       }
 
     } else {
-      if (!exist_bitmap(field_str)) {
+      const std::string norm_key = dir_index_ ? normalize_path_key(field_str) : field_str;
+      if (!exist_bitmap(norm_key)) {
         if (dir_index_) {
-          dir_index_->add_key(field_str);
+          dir_index_->add_key(norm_key);
         }
       }
-      Bitmap* temp_p = get_editable_bitmap(field_str);
+      Bitmap* temp_p = get_editable_bitmap(norm_key);
       if (temp_p) {
         temp_p->Set(offset);
       }
@@ -207,13 +209,15 @@ class FieldBitmapGroup : public BitmapGroupBase {
       std::vector<std::string> keys;
       split(keys, field_str, ";");
       for (auto& key_i : keys) {
-        Bitmap* temp_p = get_editable_bitmap(key_i);
+        const std::string norm_key = dir_index_ ? normalize_path_key(key_i) : key_i;
+        Bitmap* temp_p = get_editable_bitmap(norm_key);
         if (temp_p) {
           temp_p->Unset(offset);
         }
       }
     } else {
-      Bitmap* temp_p = get_editable_bitmap(field_str);
+      const std::string norm_key = dir_index_ ? normalize_path_key(field_str) : field_str;
+      Bitmap* temp_p = get_editable_bitmap(norm_key);
       if (temp_p) {
         temp_p->Unset(offset);
       }
@@ -269,6 +273,13 @@ class FieldBitmapGroup : public BitmapGroupBase {
   }
 
  private:
+  static std::string normalize_path_key(const std::string& key) {
+    if (key.empty() || key[0] == '/') {
+      return key;
+    }
+    return "/" + key;
+  }
+
   size_t element_size_;
 };
 

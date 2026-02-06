@@ -1119,6 +1119,45 @@ filters = {"op": "range", "field": "price", "gt": 100}
 filters = {"op": "range", "field": "discount", "lt": 0.5}
 ```
 
+#### 3. `time_range` - 时间范围查询（date_time）
+
+`date_time` 字段使用 `datetime.isoformat()` 格式，例如 `2026-02-06T12:34:56.123456`。
+不带时区的时间会按**本地时区**解析。
+
+```python
+# 大于等于（ISO 时间字符串）
+filters = {
+    "op": "time_range",
+    "field": "created_at",
+    "gte": "2026-02-01T00:00:00"
+}
+
+# 时间范围（闭区间）
+filters = {
+    "op": "time_range",
+    "field": "created_at",
+    "gte": "2026-02-01T00:00:00",
+    "lte": "2026-02-07T23:59:59"
+}
+```
+
+#### 4. `geo_range` - 地理范围查询（geo_point）
+
+`geo_point` 字段写入格式为 `"longitude,latitude"`，其中：
+- `longitude` ∈ (-180, 180)
+- `latitude` ∈ (-90, 90)
+
+`radius` 支持 `m` 和 `km` 单位。
+
+```python
+filters = {
+    "op": "geo_range",
+    "field": "f_geo_point",
+    "center": "116.412138,39.914912",
+    "radius": "10km"
+}
+```
+
 ### 复杂过滤示例
 
 ```python

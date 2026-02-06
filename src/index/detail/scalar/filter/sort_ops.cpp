@@ -586,7 +586,7 @@ RecallResultPtr SorterOp::_calc_topk_result_with_small_bitmap(
     return nullptr;
   }
 
-  SPDLOG_INFO("SorterOp::_calc_topk_result_with_small_bitmap topk {} in {}",
+  SPDLOG_DEBUG("SorterOp::_calc_topk_result_with_small_bitmap topk {} in {}",
               search_k, all_valid_size);
   return res_ptr;
 }

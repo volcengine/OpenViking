@@ -59,6 +59,7 @@ get_filter_op_registry() {
       {"must", []() { return std::make_shared<MustOp>(); }},
       {"must_not", []() { return std::make_shared<MustNotOp>(); }},
       {"range", []() { return std::make_shared<RangeOp>(false); }},
+      {"geo_range", []() { return std::make_shared<RangeOp>(false); }},
       {"range_out", []() { return std::make_shared<RangeOp>(true); }},
       {"label_in", []() { return std::make_shared<LabelInOp>(); }},
       {"prefix", []() { return std::make_shared<PrefixOp>(); }},
@@ -72,6 +73,7 @@ const std::unordered_map<std::string, FieldOpCreator>& get_field_op_registry() {
       {"must", []() { return std::make_shared<MustOp>(); }},
       {"must_not", []() { return std::make_shared<MustNotOp>(); }},
       {"range", []() { return std::make_shared<RangeOp>(false); }},
+      {"geo_range", []() { return std::make_shared<RangeOp>(false); }},
       {"range_out", []() { return std::make_shared<RangeOp>(true); }},
       {"prefix", []() { return std::make_shared<PrefixOp>(); }},
       {"contains", []() { return std::make_shared<ContainsOp>(); }},
@@ -94,7 +96,7 @@ FilterOpBasePtr make_filter_op_by_opname(const std::string& opname) {
     return it->second();
   }
   SPDLOG_WARN(
-      "Unsupported filter op '{}'. Supported ops: and, or, must, must_not, range, range_out, georange, label_in, prefix, contains, regex",
+      "Unsupported filter op '{}'. Supported ops: and, or, must, must_not, range, geo_range, range_out, label_in, prefix, contains, regex",
       opname);
   return nullptr;
 }
@@ -106,7 +108,7 @@ FieldOpBasePtr make_field_op_by_opname(const std::string& opname) {
     return it->second();
   }
   SPDLOG_WARN(
-      "Unsupported field op '{}'. Supported ops: must, must_not, range, range_out, georange, prefix, contains, regex",
+      "Unsupported field op '{}'. Supported ops: must, must_not, range, geo_range, range_out, prefix, contains, regex",
       opname);
   return nullptr;
 }
