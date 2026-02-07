@@ -19,13 +19,13 @@ class FieldMeta:
     """Field metadata: records field encoding rules and position."""
 
     name: str
-    data_type: "FieldType"
+    data_type: "_PyFieldType"
     offset: int  # Start offset (calculated from the beginning of row data)
     id: int
     default_value: Any = None
 
 
-class FieldType(Enum):
+class _PyFieldType(Enum):
     int64 = 0
     uint64 = 1
     float32 = 2
@@ -37,7 +37,7 @@ class FieldType(Enum):
     list_float32 = 8
 
 
-class Schema:
+class _PySchema:
     """Row data schema: manages metadata for all fields and calculates offsets."""
 
     def __init__(self, fields):
@@ -45,10 +45,10 @@ class Schema:
         Initialize schema.
         fields example:
         [
-            {"name": "id", "data_type": FieldType.int64, "id": 0},
-            {"name": "score", "data_type": FieldType.float32, "id": 1},
-            {"name": "name", "data_type": FieldType.string, "id": 2},
-            {"name": "is_pass", "data_type": FieldType.boolean, "id": 3}
+            {"name": "id", "data_type": _PyFieldType.int64, "id": 0},
+            {"name": "score", "data_type": _PyFieldType.float32, "id": 1},
+            {"name": "name", "data_type": _PyFieldType.string, "id": 2},
+            {"name": "is_pass", "data_type": _PyFieldType.boolean, "id": 3}
         ]
         """
         self.field_metas: Dict[str, FieldMeta] = {}
@@ -57,15 +57,15 @@ class Schema:
 
         # Type to size and default value mapping
         TYPE_INFO = {
-            FieldType.int64: (INT64_SIZE, 0),
-            FieldType.uint64: (UINT64_SIZE, 0),
-            FieldType.float32: (FLOAT32_SIZE, 0.0),
-            FieldType.string: (UINT32_SIZE, "default"),
-            FieldType.binary: (UINT32_SIZE, b""),
-            FieldType.boolean: (BOOL_SIZE, False),
-            FieldType.list_int64: (UINT32_SIZE, [0]),
-            FieldType.list_string: (UINT32_SIZE, ["default"]),
-            FieldType.list_float32: (UINT32_SIZE, [0.0]),
+            _PyFieldType.int64: (INT64_SIZE, 0),
+            _PyFieldType.uint64: (UINT64_SIZE, 0),
+            _PyFieldType.float32: (FLOAT32_SIZE, 0.0),
+            _PyFieldType.string: (UINT32_SIZE, "default"),
+            _PyFieldType.binary: (UINT32_SIZE, b""),
+            _PyFieldType.boolean: (BOOL_SIZE, False),
+            _PyFieldType.list_int64: (UINT32_SIZE, [0]),
+            _PyFieldType.list_string: (UINT32_SIZE, ["default"]),
+            _PyFieldType.list_float32: (UINT32_SIZE, [0.0]),
         }
 
         for field in fields:
@@ -107,8 +107,8 @@ class Schema:
         return self.field_orders
 
 
-class BytesRow:
-    def __init__(self, schema: Schema):
+class _PyBytesRow:
+    def __init__(self, schema: _PySchema):
         self.schema = schema
         self.field_order = schema.get_field_order()
 
@@ -124,23 +124,23 @@ class BytesRow:
             field_name = field_meta.name
 
             value = row_data[field_name] if field_name in row_data else field_meta.default_value
-            if field_meta.data_type == FieldType.int64:
+            if field_meta.data_type == _PyFieldType.int64:
                 fix_fmt_list.append("q")
                 fix_val_list.append(value)
                 fix_region_offset += INT64_SIZE
-            elif field_meta.data_type == FieldType.uint64:
+            elif field_meta.data_type == _PyFieldType.uint64:
                 fix_fmt_list.append("Q")
                 fix_val_list.append(value)
                 fix_region_offset += UINT64_SIZE
-            elif field_meta.data_type == FieldType.float32:
+            elif field_meta.data_type == _PyFieldType.float32:
                 fix_fmt_list.append("f")
                 fix_val_list.append(value)
                 fix_region_offset += FLOAT32_SIZE
-            elif field_meta.data_type == FieldType.boolean:
+            elif field_meta.data_type == _PyFieldType.boolean:
                 fix_fmt_list.append("B")
                 fix_val_list.append(int(value))
                 fix_region_offset += BOOL_SIZE
-            elif field_meta.data_type == FieldType.string:
+            elif field_meta.data_type == _PyFieldType.string:
                 fix_fmt_list.append("I")
                 fix_val_list.append(variable_region_offset)
                 fix_region_offset += UINT32_SIZE
@@ -152,7 +152,7 @@ class BytesRow:
                 var_fmt_list.append(f"{bytes_item_len}s")
                 var_val_list.append(bytes_item)
                 variable_region_offset += bytes_item_len
-            elif field_meta.data_type == FieldType.binary:
+            elif field_meta.data_type == _PyFieldType.binary:
                 fix_fmt_list.append("I")
                 fix_val_list.append(variable_region_offset)
                 fix_region_offset += UINT32_SIZE
@@ -162,7 +162,7 @@ class BytesRow:
                 var_fmt_list.append(f"{len(value)}s")
                 var_val_list.append(value)
                 variable_region_offset += len(value)
-            elif field_meta.data_type == FieldType.list_int64:
+            elif field_meta.data_type == _PyFieldType.list_int64:
                 fix_fmt_list.append("I")
                 fix_val_list.append(variable_region_offset)
                 fix_region_offset += UINT32_SIZE
@@ -172,7 +172,7 @@ class BytesRow:
                 var_fmt_list.append(f"{value_len}q")
                 var_val_list.extend(value)
                 variable_region_offset += UINT16_SIZE + len(value) * INT64_SIZE
-            elif field_meta.data_type == FieldType.list_float32:
+            elif field_meta.data_type == _PyFieldType.list_float32:
                 fix_fmt_list.append("I")
                 fix_val_list.append(variable_region_offset)
                 fix_region_offset += UINT32_SIZE
@@ -183,7 +183,7 @@ class BytesRow:
                 var_val_list.extend(value)
                 variable_region_offset += UINT16_SIZE + len(value) * FLOAT32_SIZE
 
-            elif field_meta.data_type == FieldType.list_string:
+            elif field_meta.data_type == _PyFieldType.list_string:
                 fix_fmt_list.append("I")
                 fix_val_list.append(variable_region_offset)
                 fix_region_offset += UINT32_SIZE
@@ -207,32 +207,35 @@ class BytesRow:
         struct.pack_into(fmt, buffer, 1, *(fix_val_list + var_val_list))
         return bytes(buffer)
 
+    def serialize_batch(self, rows_data) -> List[bytes]:
+        return [self.serialize(row_data) for row_data in rows_data]
+
     def deserialize_field(self, serialized_data, field_name):
         field_meta = self.schema.get_field_meta(field_name)
         if field_meta.id >= serialized_data[0]:
             return field_meta.default_value
 
         # Use '<' for little-endian in all unpack operations
-        if field_meta.data_type == FieldType.int64:
+        if field_meta.data_type == _PyFieldType.int64:
             return struct.unpack_from("<q", serialized_data, field_meta.offset)[0]
-        elif field_meta.data_type == FieldType.uint64:
+        elif field_meta.data_type == _PyFieldType.uint64:
             return struct.unpack_from("<Q", serialized_data, field_meta.offset)[0]
-        elif field_meta.data_type == FieldType.float32:
+        elif field_meta.data_type == _PyFieldType.float32:
             return struct.unpack_from("<f", serialized_data, field_meta.offset)[0]
-        elif field_meta.data_type == FieldType.boolean:
+        elif field_meta.data_type == _PyFieldType.boolean:
             # B is 1 byte, endianness doesn't matter, but consistent style
             return bool(serialized_data[field_meta.offset])
-        elif field_meta.data_type == FieldType.string:
+        elif field_meta.data_type == _PyFieldType.string:
             str_offset = struct.unpack_from("<I", serialized_data, field_meta.offset)[0]
             str_len = struct.unpack_from("<H", serialized_data, str_offset)[0]
             str_offset += UINT16_SIZE
             return serialized_data[str_offset : str_offset + str_len].decode("utf-8")
-        elif field_meta.data_type == FieldType.binary:
+        elif field_meta.data_type == _PyFieldType.binary:
             binary_offset = struct.unpack_from("<I", serialized_data, field_meta.offset)[0]
             binary_len = struct.unpack_from("<I", serialized_data, binary_offset)[0]
             binary_offset += UINT32_SIZE
             return serialized_data[binary_offset : binary_offset + binary_len]
-        elif field_meta.data_type == FieldType.list_string:
+        elif field_meta.data_type == _PyFieldType.list_string:
             list_offset = struct.unpack_from("<I", serialized_data, field_meta.offset)[0]
             list_len = struct.unpack_from("<H", serialized_data, list_offset)[0]
             list_offset += UINT16_SIZE
@@ -243,13 +246,13 @@ class BytesRow:
                 str_list[i] = serialized_data[list_offset : list_offset + str_len].decode("utf-8")
                 list_offset += str_len
             return str_list
-        elif field_meta.data_type == FieldType.list_int64:
+        elif field_meta.data_type == _PyFieldType.list_int64:
             list_offset = struct.unpack_from("<I", serialized_data, field_meta.offset)[0]
             list_len = struct.unpack_from("<H", serialized_data, list_offset)[0]
             list_offset += UINT16_SIZE
             return list(struct.unpack_from(f"<{list_len}q", serialized_data, list_offset))
 
-        elif field_meta.data_type == FieldType.list_float32:
+        elif field_meta.data_type == _PyFieldType.list_float32:
             list_offset = struct.unpack_from("<I", serialized_data, field_meta.offset)[0]
             list_len = struct.unpack_from("<H", serialized_data, list_offset)[0]
             list_offset += UINT16_SIZE
@@ -266,3 +269,17 @@ class BytesRow:
                 data_dict[field_name] = value
 
         return data_dict
+
+
+try:
+    import openviking.storage.vectordb.engine as engine
+
+    # Use C++ implementation if available
+    BytesRow = engine.BytesRow
+    Schema = engine.Schema
+    FieldType = engine.FieldType
+except ImportError:
+    # Fallback to Python implementation
+    BytesRow = _PyBytesRow
+    Schema = _PySchema
+    FieldType = _PyFieldType

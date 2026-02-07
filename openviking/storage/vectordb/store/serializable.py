@@ -81,10 +81,12 @@ def serializable(cls):
         # Get custom type from metadata, otherwise auto-infer
         if f.metadata and "field_type" in f.metadata:
             field_type = f.metadata["field_type"]
-            if not isinstance(field_type, FieldType):
-                raise ValueError(
-                    f"Field '{field_name}': field_type must be a FieldType, got {type(field_type).__name__}"
-                )
+            # Check if it's the correct C++ enum type
+            if hasattr(field_type, "value") and isinstance(field_type.value, int):
+                # Try to find corresponding FieldType
+                # Assuming enum names match
+                if hasattr(FieldType, field_type.name):
+                    field_type = getattr(FieldType, field_type.name)
         else:
             field_type = _python_type_to_field_type(f.type, field_name)
 
@@ -101,6 +103,7 @@ def serializable(cls):
         field_list.append(field_def)
 
     # Create schema and bytes_row
+    # Pass field_list (list of dicts) to C++ Schema constructor
     cls.schema = Schema(field_list)
     cls.bytes_row = BytesRow(cls.schema)
 
@@ -112,7 +115,9 @@ def serializable(cls):
     def deserialize(self, data: bytes):
         data_dict = self.__class__.bytes_row.deserialize(data)
         for key, value in data_dict.items():
-            setattr(self, key, value)
+            # Handle potential None values if C++ returns std::monostate
+            if value is not None:
+                setattr(self, key, value)
 
     # Automatically generate from_bytes class method
     @classmethod
@@ -123,9 +128,18 @@ def serializable(cls):
         inst.deserialize(data)
         return inst
 
+    # Automatically generate serialize_list class method
+    @classmethod
+    def serialize_list(cls_method, objects: list) -> list[bytes]:
+        """Batch serialization for a list of objects"""
+        if not objects:
+            return []
+        return cls_method.bytes_row.serialize_batch(objects)
+
     # Inject methods into class
     cls.serialize = serialize
     cls.deserialize = deserialize
     cls.from_bytes = from_bytes
+    cls.serialize_list = serialize_list
 
     return cls
