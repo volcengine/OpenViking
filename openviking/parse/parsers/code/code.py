@@ -12,9 +12,10 @@ Implements V5.0 asynchronous architecture:
 import asyncio
 import os
 import shutil
+import stat
 import tempfile
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, List, Optional, Union
 
 from openviking.parse.base import (
@@ -246,7 +247,52 @@ class CodeRepositoryParser(BaseParser):
         name = path.stem
 
         with zipfile.ZipFile(zip_path, "r") as zip_ref:
-            zip_ref.extractall(target_dir)
+            target = Path(target_dir).resolve()
+            for info in zip_ref.infolist():
+                mode = info.external_attr >> 16
+                # Skip directory entries (check both name convention and external attrs)
+                if info.is_dir() or stat.S_ISDIR(mode):
+                    continue
+                # Skip symlink entries to prevent symlink-based escapes
+                if stat.S_ISLNK(mode):
+                    logger.warning(f"Skipping symlink entry in zip: {info.filename}")
+                    continue
+                # Reject entries with suspicious raw path components before extraction
+                raw = info.filename.replace("\\", "/")
+                raw_parts = [p for p in raw.split("/") if p]
+                if ".." in raw_parts:
+                    raise ValueError(f"Zip Slip detected: entry {info.filename!r} contains '..'")
+                if PurePosixPath(raw).is_absolute() or (len(raw) >= 2 and raw[1] == ":"):
+                    raise ValueError(
+                        f"Zip Slip detected: entry {info.filename!r} is an absolute path"
+                    )
+                # Normalize the member name the same way zipfile does
+                # (strip drive/UNC, remove empty/"."/ ".." components) then verify
+                arcname = info.filename.replace("/", os.sep)
+                if os.path.altsep:
+                    arcname = arcname.replace(os.path.altsep, os.sep)
+                arcname = os.path.splitdrive(arcname)[1]
+                arcname = os.sep.join(p for p in arcname.split(os.sep) if p not in ("", ".", ".."))
+                if not arcname:
+                    continue  # entry normalizes to empty path, skip
+                member_path = (Path(target_dir) / arcname).resolve()
+                if not member_path.is_relative_to(target):
+                    raise ValueError(
+                        f"Zip Slip detected: entry {info.filename!r} escapes target directory"
+                    )
+                # Extract single member and verify the actual path on disk
+                extracted = Path(zip_ref.extract(info, target_dir)).resolve()
+                if not extracted.is_relative_to(target):
+                    # Best-effort cleanup of the escaped file
+                    try:
+                        extracted.unlink(missing_ok=True)
+                    except OSError as cleanup_err:
+                        logger.warning(
+                            f"Failed to clean up escaped file {extracted}: {cleanup_err}"
+                        )
+                    raise ValueError(
+                        f"Zip Slip detected: entry {info.filename!r} escapes target directory"
+                    )
 
         return name
 
