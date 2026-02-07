@@ -157,6 +157,7 @@ Miscellaneous tests.
 | `test_config_validation.py` | Configuration validation | Config schema validation, required fields, type checking |
 | `test_debug_service.py` | Debug service | Debug endpoint tests, service diagnostics |
 | `test_extract_zip.py` | Zip extraction security (Zip Slip) | Path traversal prevention (`../`), absolute path rejection, symlink entry filtering, backslash traversal, UNC path rejection, directory entry skipping, normal extraction |
+| `test_mkdir.py` | VikingFS.mkdir() fix verification | mkdir calls agfs.mkdir, exist_ok=True skips existing, exist_ok=True creates missing, default creation, parent-before-target ordering |
 
 ### engine/
 
