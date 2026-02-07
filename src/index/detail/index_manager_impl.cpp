@@ -180,14 +180,13 @@ int IndexManagerImpl::search(const SearchRequest& req, SearchResult& result) {
           "IndexManagerImpl::search calculate_filter_bitmap returned null");
       return -1;
     }
-    ctx.filter_out = [bitmap](uint64_t id) { return bitmap->Isset(id); };
   }
 
   int ret = 0;
   if (ctx.sorter_op) {
     ret = handle_sorter_query(ctx, bitmap, result, dsl_filter_query_str);
   } else if (!req.query.empty()) {
-    ret = perform_vector_recall(req, ctx, result);
+    ret = perform_vector_recall(req, ctx, bitmap, result);
   }
 
   if (ret == 0) {
@@ -257,11 +256,12 @@ int IndexManagerImpl::handle_sorter_query(const SearchContext& ctx,
 
 int IndexManagerImpl::perform_vector_recall(const SearchRequest& req,
                                             SearchContext& ctx,
+                                            const BitmapPtr& bitmap,
                                             SearchResult& result) {
   VectorRecallRequest recall_request{
       .dense_vector = req.query.data(),
       .topk = req.topk,
-      .filter = ctx.filter_out,
+      .bitmap = bitmap.get(),
       .sparse_terms =
           req.sparse_raw_terms.empty() ? nullptr : &req.sparse_raw_terms,
       .sparse_values =

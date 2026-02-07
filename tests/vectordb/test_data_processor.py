@@ -70,7 +70,8 @@ class TestDataProcessor(unittest.TestCase):
         }
         converted = self.processor.convert_filter_for_index(filters)
         self.assertEqual(converted["field"], ["geo_lon", "geo_lat"])
-        self.assertEqual(converted["radius"], 10000.0)
+        # Radius is converted to degrees: 10000m / 111320.0
+        self.assertAlmostEqual(converted["radius"], 10000.0 / 111320.0, places=6)
         self.assertAlmostEqual(converted["center"][0], 116.412138, places=6)
         self.assertAlmostEqual(converted["center"][1], 39.914912, places=6)
 

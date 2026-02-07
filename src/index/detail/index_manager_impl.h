@@ -50,7 +50,7 @@ class IndexManagerImpl : public IndexManager {
                           SearchResult& result, const std::string& dsl);
 
   int perform_vector_recall(const SearchRequest& req, SearchContext& ctx,
-                            SearchResult& result);
+                            const BitmapPtr& bitmap, SearchResult& result);
 
   void register_label_offset_converter_();
 

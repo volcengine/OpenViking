@@ -62,7 +62,7 @@ class BruteForceIndex : public VectorIndexAdapter {
     FloatValSparseDatapointLowLevel* sparse_ptr =
         (request.sparse_terms && request.sparse_values) ? &sparse_datapoint
                                                         : nullptr;
-    index_->search_knn(request.dense_vector, request.topk, request.filter,
+    index_->search_knn(request.dense_vector, request.topk, request.bitmap,
                        sparse_ptr, result.labels, result.scores);
     return 0;
   }

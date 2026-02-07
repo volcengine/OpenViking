@@ -361,6 +361,176 @@ class TestOpenVikingVectorDB(unittest.TestCase):
         )
         self.assertEqual([item.id for item in recall.data], ["res_1"])
 
+    def test_offset_collision_after_delete(self):
+        """Test for regression of logical offset collision.
+
+        Scenario:
+        1. Insert A, B. (A=0, B=1)
+        2. Delete A. (Count=1)
+        3. Insert C. (Count=2, New Offset should not be 1 if B is still at 1)
+        4. Search for B and C with filters to ensure no collision.
+        """
+        collection = self._create_collection()
+        dim = 1024
+
+        # 1. Insert A and B
+        data_init = [
+            {
+                "id": "A",
+                "vector": make_vector(1, dim),
+                "sparse_vector": {},
+                "type": "file",
+                "context_type": "text",
+                "tags": "tag_A",
+                "created_at": "2026-01-01T00:00:00.000000",
+                "updated_at": "2026-01-01T00:00:00.000000",
+                "active_count": 10,
+                "is_leaf": True,
+                "name": "A.txt",
+                "description": "desc A",
+                "abstract": "abs A",
+            },
+            {
+                "id": "B",
+                "vector": make_vector(2, dim),
+                "sparse_vector": {},
+                "type": "file",
+                "context_type": "text",
+                "tags": "tag_B",
+                "created_at": "2026-01-02T00:00:00.000000",
+                "updated_at": "2026-01-02T00:00:00.000000",
+                "active_count": 20,
+                "is_leaf": True,
+                "name": "B.txt",
+                "description": "desc B",
+                "abstract": "abs B",
+            },
+        ]
+        collection.upsert_data(data_init)
+        self._create_index(collection)
+
+        # Verify initial state
+        res_a = collection.search_by_vector(
+            "idx_filters",
+            make_vector(1, dim),
+            limit=1,
+            filters={"op": "must", "field": "tags", "conds": ["tag_A"]},
+        )
+        self.assertEqual(res_a.data[0].id, "A")
+
+        res_b = collection.search_by_vector(
+            "idx_filters",
+            make_vector(2, dim),
+            limit=1,
+            filters={"op": "must", "field": "tags", "conds": ["tag_B"]},
+        )
+        self.assertEqual(res_b.data[0].id, "B")
+
+        # 2. Delete A
+        collection.delete_data(["A"])
+
+        # 3. Insert C
+        data_c = [
+            {
+                "id": "C",
+                "vector": make_vector(3, dim),
+                "sparse_vector": {},
+                "type": "file",
+                "context_type": "text",
+                "tags": "tag_C",
+                "created_at": "2026-01-03T00:00:00.000000",
+                "updated_at": "2026-01-03T00:00:00.000000",
+                "active_count": 30,
+                "is_leaf": True,
+                "name": "C.txt",
+                "description": "desc C",
+                "abstract": "abs C",
+            }
+        ]
+        collection.upsert_data(data_c)
+
+        # 4. Search for B (should still be found correctly)
+        # If collision happens, searching for tag_B (offset 1) might point to C's vector or vice versa
+        res_b_final = collection.search_by_vector(
+            "idx_filters",
+            make_vector(2, dim),
+            limit=1,
+            filters={"op": "must", "field": "tags", "conds": ["tag_B"]},
+        )
+        self.assertEqual(len(res_b_final.data), 1, "Should find B")
+        self.assertEqual(res_b_final.data[0].id, "B", "Should match ID B")
+
+        # 5. Search for C
+        res_c_final = collection.search_by_vector(
+            "idx_filters",
+            make_vector(3, dim),
+            limit=1,
+            filters={"op": "must", "field": "tags", "conds": ["tag_C"]},
+        )
+        self.assertEqual(len(res_c_final.data), 1, "Should find C")
+        self.assertEqual(res_c_final.data[0].id, "C", "Should match ID C")
+
+
+class TestOpenVikingVectorDBIP(TestOpenVikingVectorDB):
+    def setUp(self):
+        super().setUp()
+        global TEST_DB_PATH
+        TEST_DB_PATH = "./db_test_openviking_vectordb_ip/"
+        clean_dir(TEST_DB_PATH)
+
+    def tearDown(self):
+        super().tearDown()
+        global TEST_DB_PATH
+        clean_dir(TEST_DB_PATH)
+        TEST_DB_PATH = "./db_test_openviking_vectordb/"  # Reset
+
+    def _create_collection(self):
+        vector_dim = 1024
+        meta_data = {
+            "CollectionName": "test_openviking_vectordb_ip",
+            "Description": "Unified context collection IP",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+                {"FieldName": "uri", "FieldType": "path"},
+                {"FieldName": "type", "FieldType": "string"},
+                {"FieldName": "context_type", "FieldType": "string"},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": vector_dim},
+                {"FieldName": "sparse_vector", "FieldType": "sparse_vector"},
+                {"FieldName": "created_at", "FieldType": "date_time"},
+                {"FieldName": "updated_at", "FieldType": "date_time"},
+                {"FieldName": "active_count", "FieldType": "int64"},
+                {"FieldName": "parent_uri", "FieldType": "path"},
+                {"FieldName": "is_leaf", "FieldType": "bool"},
+                {"FieldName": "name", "FieldType": "string"},
+                {"FieldName": "description", "FieldType": "string"},
+                {"FieldName": "tags", "FieldType": "string"},
+                {"FieldName": "abstract", "FieldType": "string"},
+            ],
+        }
+        collection = get_or_create_local_collection(meta_data=meta_data, path=TEST_DB_PATH)
+        return self._register(collection)
+
+    def _create_index(self, collection):
+        index_meta = {
+            "IndexName": "idx_filters",
+            "VectorIndex": {"IndexType": "flat", "Distance": "ip"},
+            "ScalarIndex": [
+                "uri",
+                "type",
+                "context_type",
+                "created_at",
+                "updated_at",
+                "active_count",
+                "parent_uri",
+                "is_leaf",
+                "name",
+                "description",
+                "tags",
+                "abstract",
+            ],
+        }
+        collection.create_index("idx_filters", index_meta)
+
 
 if __name__ == "__main__":
     unittest.main()
