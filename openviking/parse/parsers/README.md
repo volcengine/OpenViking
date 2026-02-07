@@ -491,7 +491,7 @@ result = await parser.parse("test.md", debug=True)
 
 ## 相关文档
 
-- [OpenViking 整体架构](../docs/openviking-architecture.md)
-- [上下文提取流程](../docs/openviking-context-extraction.md)
-- [存储系统设计](../docs/openviking-storage.md)
-- [配置指南](../docs/openviking-configuration.md)
+- [OpenViking 整体架构](../../../docs/zh/concepts/01-architecture.md)
+- [上下文提取流程](../../../docs//zh/concepts/07-extraction.md)
+- [存储系统设计](../../../docs/zh/concepts/05-storage.md)
+- [配置指南](../../../docs/zh/configuration/configuration.md)
