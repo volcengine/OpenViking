@@ -229,10 +229,8 @@ class VikingVectorIndexBackend(VikingDBInterface):
 
             # Build scalar index fields list from Fields
             scalar_index_fields = []
-            exclude_types = {"vector", "sparse_vector"}
-            if self._mode == "volcengine":
-                # Volcengine VikingDB doesn't support indexing date_time/geo_point fields
-                exclude_types.update({"date_time", "geo_point"})
+            exclude_types = {"vector", "sparse_vector", "abstract"}
+
             for field in collection_meta.get("Fields", []):
                 field_name = field.get("FieldName")
                 field_type = field.get("FieldType")
@@ -243,10 +241,11 @@ class VikingVectorIndexBackend(VikingDBInterface):
 
             # Create default index for the collection
             use_sparse = self.sparse_weight > 0.0
+            index_type = "flat_hybrid" if use_sparse else "flat"
             index_meta = {
                 "IndexName": self.DEFAULT_INDEX_NAME,
                 "VectorIndex": {
-                    "IndexType": "flat_hybrid" if use_sparse else "flat",
+                    "IndexType": index_type,
                     "Distance": distance,
                     "Quant": "int8",
                 },

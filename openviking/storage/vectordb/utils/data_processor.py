@@ -83,6 +83,21 @@ class DataProcessor:
         """Dynamically build a Pydantic model based on fields_dict."""
         field_definitions = {}
 
+        # Define sensible defaults for scalar types to handle missing fields
+        # This prevents validation errors when upstream doesn't provide all fields
+        TYPE_DEFAULTS = {
+            "int64": 0,
+            "float32": 0.0,
+            "string": "",
+            "bool": False,
+            "list<string>": [],
+            "list<int64>": [],
+            "text": "",
+            "path": "",
+            "date_time": "",
+            "geo_point": "",
+        }
+
         # Define validators capturing self for configuration
         def validate_dt(v: Optional[str]) -> Optional[str]:
             if not v:
@@ -115,11 +130,15 @@ class DataProcessor:
             elif name == "AUTO_ID":
                 field_args["default_factory"] = generate_auto_id
             else:
-                field_args["default"] = ...  # Required
+                # Use type-based default if available, otherwise mark as required
+                if field_type_str in TYPE_DEFAULTS:
+                    field_args["default"] = TYPE_DEFAULTS[field_type_str]
+                else:
+                    field_args["default"] = ...  # Required
 
             # Add constraints
-            if field_type_str == "string":
-                field_args["max_length"] = 1024
+            # if field_type_str == "string":
+            #    field_args["max_length"] = 1024
 
             field_definitions[name] = (py_type, Field(**field_args))
 
@@ -139,11 +158,6 @@ class DataProcessor:
         # model_validate will raise ValidationError on failure
         validated_obj = self._validator_model.model_validate(data)
         processed_data = validated_obj.model_dump()
-
-        # Note: processed_data still contains strings for date_time/geo_point
-        # as Pydantic validators here only check validity but return original type.
-        # This matches storage requirement (storing user raw input).
-        # Conversion to engine types happens in convert_fields_dict_for_index.
 
         return processed_data
 

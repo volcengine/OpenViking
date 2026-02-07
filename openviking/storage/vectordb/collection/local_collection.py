@@ -489,7 +489,8 @@ class LocalCollection(ICollection):
             if self.data_processor:
                 try:
                     data = self.data_processor.validate_and_process(raw_data)
-                except ValueError:
+                except ValueError as e:
+                    logger.error(f"Data validation failed: {e}, raw_data: {raw_data}")
                     return result
             else:
                 # Should not happen given init logic, but for safety
