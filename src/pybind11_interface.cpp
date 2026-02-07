@@ -3,16 +3,125 @@
 #include <pybind11/pybind11.h>
 #include <pybind11/stl.h>
 #include <pybind11/complex.h>
+#include <chrono>
+#include <iostream>
 #include "index/index_engine.h"
 #include "store/persist_store.h"
 #include "store/volatile_store.h"
 #include "common/log_utils.h"
+#include "store/bytes_row.h"
+#include "py_accessors.h"
 
 namespace py = pybind11;
 namespace vdb = vectordb;
 
 PYBIND11_MODULE(engine, m) {
   m.def("init_logging", &vdb::init_logging, "Initialize logging");
+
+  py::enum_<vdb::FieldType>(m, "FieldType")
+      .value("int64", vdb::FieldType::INT64)
+      .value("uint64", vdb::FieldType::UINT64)
+      .value("float32", vdb::FieldType::FLOAT32)
+      .value("string", vdb::FieldType::STRING)
+      .value("binary", vdb::FieldType::BINARY)
+      .value("boolean", vdb::FieldType::BOOLEAN)
+      .value("list_int64", vdb::FieldType::LIST_INT64)
+      .value("list_string", vdb::FieldType::LIST_STRING)
+      .value("list_float32", vdb::FieldType::LIST_FLOAT32);
+
+  py::class_<vdb::Schema, std::shared_ptr<vdb::Schema>>(m, "Schema")
+      .def(py::init([](const py::list& fields_py) {
+          std::vector<vdb::FieldDef> fields;
+          for (const auto& item : fields_py) {
+              py::dict d = item.cast<py::dict>();
+              vdb::FieldDef fd;
+              fd.name = d["name"].cast<std::string>();
+              fd.data_type = d["data_type"].cast<vdb::FieldType>();
+              fd.id = d["id"].cast<int>();
+              if (d.contains("default_value")) {
+                   try {
+                        switch(fd.data_type) {
+                            case vdb::FieldType::INT64: fd.default_value = d["default_value"].cast<int64_t>(); break;
+                            case vdb::FieldType::UINT64: fd.default_value = d["default_value"].cast<uint64_t>(); break;
+                            case vdb::FieldType::FLOAT32: fd.default_value = d["default_value"].cast<float>(); break;
+                            case vdb::FieldType::BOOLEAN: fd.default_value = d["default_value"].cast<bool>(); break;
+                            case vdb::FieldType::STRING: fd.default_value = d["default_value"].cast<std::string>(); break;
+                            case vdb::FieldType::BINARY: fd.default_value = d["default_value"].cast<std::string>(); break;
+                            case vdb::FieldType::LIST_INT64: fd.default_value = d["default_value"].cast<std::vector<int64_t>>(); break;
+                            case vdb::FieldType::LIST_FLOAT32: fd.default_value = d["default_value"].cast<std::vector<float>>(); break;
+                            case vdb::FieldType::LIST_STRING: fd.default_value = d["default_value"].cast<std::vector<std::string>>(); break;
+                        }
+                   } catch (...) {
+                       fd.default_value = std::monostate{};
+                   }
+              } else {
+                  fd.default_value = std::monostate{};
+              }
+              fields.push_back(fd);
+          }
+          return std::make_shared<vdb::Schema>(fields);
+      }))
+      .def("get_total_byte_length", &vdb::Schema::get_total_byte_length);
+
+  py::class_<vdb::BytesRow>(m, "BytesRow")
+      .def(py::init<std::shared_ptr<vdb::Schema>>())
+      .def("serialize", [](vdb::BytesRow& self, const py::dict& row_data) {
+          PyDictAccessor accessor(self.get_schema());
+          std::string serialized = self.serialize_template(row_data, accessor);
+          return py::bytes(serialized);
+      })
+      .def("serialize_batch", [](vdb::BytesRow& self, const py::list& objects) {
+          py::list results;
+          const auto& schema = self.get_schema();
+          
+          // Instantiate accessors (they are lightweight stateless wrappers around schema)
+          PyDictAccessor dict_accessor(schema);
+          PyObjectAccessor obj_accessor(schema);
+          
+          for (const auto& obj : objects) {
+              std::string serialized;
+              if (py::isinstance<py::dict>(obj)) {
+                  serialized = self.serialize_template(obj.cast<py::dict>(), dict_accessor);
+              } else {
+                  serialized = self.serialize_template(obj, obj_accessor);
+              }
+              results.append(py::bytes(serialized));
+          }
+          return results;
+      })
+      .def("deserialize", [](vdb::BytesRow& self, const std::string& data) {
+           auto res_map = self.deserialize(data);
+           py::dict res_dict;
+           const auto& schema = self.get_schema();
+           for (const auto& kv : res_map) {
+               const auto& field_name = kv.first;
+               const auto& val = kv.second;
+               
+               // Check if it is BINARY type which needs to be returned as bytes, not string
+               const auto* meta = schema.get_field_meta(field_name);
+               if (meta && meta->data_type == vdb::FieldType::BINARY) {
+                   if (std::holds_alternative<std::string>(val)) {
+                       res_dict[field_name.c_str()] = py::bytes(std::get<std::string>(val));
+                       continue;
+                   }
+               }
+               res_dict[field_name.c_str()] = value_to_py(kv.second);
+           }
+           return res_dict;
+      })
+      .def("deserialize_field", [](vdb::BytesRow& self, const std::string& data, const std::string& field_name) -> py::object {
+           vdb::Value val = self.deserialize_field(data, field_name);
+           const auto& schema = self.get_schema();
+           const auto* meta = schema.get_field_meta(field_name);
+           
+           if (meta && meta->data_type == vdb::FieldType::BINARY) {
+               if (std::holds_alternative<std::string>(val)) {
+                   const auto& s = std::get<std::string>(val);
+                   return py::bytes(s);
+               }
+           }
+           return value_to_py(val);
+      });
 
   py::class_<vdb::AddDataRequest>(m, "AddDataRequest")
       .def(py::init<>())
