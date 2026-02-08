@@ -102,6 +102,7 @@ class NamedQueue:
         name: str,
         enqueue_hook: Optional[EnqueueHookBase] = None,
         dequeue_handler: Optional[DequeueHandlerBase] = None,
+        max_concurrency: int = 5,
     ):
         self.name = name
         self.path = f"{mount_point}/{name}"
@@ -116,6 +117,10 @@ class NamedQueue:
         self._processed = 0
         self._error_count = 0
         self._errors: List[QueueError] = []
+
+        # Concurrency control
+        self._concurrency_sem = asyncio.Semaphore(max_concurrency)
+        self._active_tasks = set()
 
         # Inject callbacks to handler
         if self._dequeue_handler:
@@ -203,26 +208,57 @@ class NamedQueue:
         )
         return msg_id if isinstance(msg_id, str) else str(msg_id)
 
+    async def _process_task(self, data: Dict[str, Any]):
+        """Internal task wrapper for processing dequeued data."""
+        try:
+            logger.info(f"[NamedQueue] Processing dequeue handler for {self.name}")
+            await self._dequeue_handler.on_dequeue(data)
+            logger.info(f"[NamedQueue] Completed dequeue handler for {self.name}")
+        except Exception as e:
+            logger.error(f"[NamedQueue] Async task failed for {self.name}: {e}", exc_info=True)
+            self._on_process_error(str(e), data)
+        finally:
+            self._concurrency_sem.release()
+
     async def dequeue(self) -> Optional[Dict[str, Any]]:
         """Get and remove message from queue (dequeue)."""
+        # If concurrency limit reached, do not dequeue
+        if self._concurrency_sem.locked():
+            return None
+
         await self._ensure_initialized()
         dequeue_file = f"{self.path}/dequeue"
 
         loop = asyncio.get_event_loop()
         try:
+            # Acquire semaphore before dequeue
+            await self._concurrency_sem.acquire()
+
             content = await loop.run_in_executor(None, self._agfs.read, dequeue_file)
             if not content or content == b"{}":
+                self._concurrency_sem.release()
                 return None
             data = json.loads(content)
 
             # Dequeue success, mark in_progress
             if self._dequeue_handler:
                 self._on_dequeue_start()
-                data = await self._dequeue_handler.on_dequeue(data)
+                # Create background task for processing
+                task = asyncio.create_task(self._process_task(data))
+                self._active_tasks.add(task)
+                task.add_done_callback(self._active_tasks.discard)
+            else:
+                # If no handler, release immediately
+                self._concurrency_sem.release()
 
             return data
         except Exception as e:
             logger.debug(f"[NamedQueue] Dequeue failed for {self.name}: {e}")
+            # Ensure semaphore is released on error (if acquired)
+            try:
+                self._concurrency_sem.release()
+            except ValueError:
+                pass  # Already released or not acquired
             return None
 
     async def peek(self) -> Optional[Dict[str, Any]]:

@@ -16,6 +16,9 @@ class EmbeddingQueue(NamedQueue):
     Supports direct enqueue and dequeue of EmbeddingMsg objects.
     """
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
     async def enqueue(self, msg: Optional[EmbeddingMsg]) -> str:
         """Serialize EmbeddingMsg object and store in queue."""
         if msg is None:

@@ -105,10 +105,12 @@ class VikingDBManager(VikingVectorIndexBackend):
         self._semantic_processor = SemanticProcessor()
 
         # Get semantic queue with the handler, allow creation if not exists
+        # Pass max_concurrency to QueueManager to control queue-level parallelism
         self._queue_manager.get_queue(
             self._queue_manager.SEMANTIC,
             dequeue_handler=self._semantic_processor,
             allow_create=True,
+            max_concurrency=10,  # Match SemanticProcessor's max_concurrent_llm or higher
         )
         logger.info("Semantic queue initialized with SemanticProcessor")
 

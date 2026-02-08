@@ -153,6 +153,7 @@ class QueueManager:
         enqueue_hook: Optional[EnqueueHookBase] = None,
         dequeue_handler: Optional[DequeueHandlerBase] = None,
         allow_create: bool = False,
+        max_concurrency: int = 5,
     ) -> NamedQueue:
         """Get or create a named queue object."""
         if not self._started:
@@ -168,6 +169,7 @@ class QueueManager:
                     name,
                     enqueue_hook=enqueue_hook,
                     dequeue_handler=dequeue_handler,
+                    max_concurrency=max_concurrency,
                 )
             elif name == self.SEMANTIC:
                 self._queues[name] = SemanticQueue(
@@ -176,6 +178,7 @@ class QueueManager:
                     name,
                     enqueue_hook=enqueue_hook,
                     dequeue_handler=dequeue_handler,
+                    max_concurrency=max_concurrency,
                 )
             else:
                 self._queues[name] = NamedQueue(
@@ -184,6 +187,7 @@ class QueueManager:
                     name,
                     enqueue_hook=enqueue_hook,
                     dequeue_handler=dequeue_handler,
+                    max_concurrency=max_concurrency,
                 )
         return self._queues[name]
 

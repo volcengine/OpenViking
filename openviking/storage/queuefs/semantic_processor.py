@@ -6,13 +6,6 @@ import asyncio
 from typing import Any, Dict, List, Optional, Tuple
 
 from openviking.core.context import Context, ResourceContentType, Vectorize
-from openviking.prompts import render_prompt
-from openviking.storage.queuefs.named_queue import DequeueHandlerBase
-from openviking.storage.queuefs.semantic_msg import SemanticMsg
-from openviking.storage.viking_fs import get_viking_fs
-from openviking.utils import VikingURI
-from openviking.utils.config import get_openviking_config
-from openviking.utils.logger import get_logger
 from openviking.parse.parsers.constants import (
     CODE_EXTENSIONS,
     DOCUMENTATION_EXTENSIONS,
@@ -20,8 +13,22 @@ from openviking.parse.parsers.constants import (
     FILE_TYPE_DOCUMENTATION,
     FILE_TYPE_OTHER,
 )
+from openviking.prompts import render_prompt
+from openviking.storage.queuefs.dag_coordinator import DAGCoordinator
+from openviking.storage.queuefs.named_queue import DequeueHandlerBase
+from openviking.storage.queuefs.semantic_msg import SemanticMsg
+from openviking.storage.viking_fs import get_viking_fs
+from openviking.utils import VikingURI
+from openviking.utils.config import get_openviking_config
+from openviking.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+class DependencyNotReadyError(Exception):
+    """Raised when a dependency (e.g. child abstract) is not ready yet."""
+
+    pass
 
 
 class SemanticProcessor(DequeueHandlerBase):
@@ -43,6 +50,7 @@ class SemanticProcessor(DequeueHandlerBase):
             max_concurrent_llm: Maximum concurrent LLM calls
         """
         self.max_concurrent_llm = max_concurrent_llm
+        self.dag_coordinator = DAGCoordinator()
 
     def _detect_file_type(self, file_name: str) -> str:
         """
@@ -244,9 +252,16 @@ class SemanticProcessor(DequeueHandlerBase):
         results = []
 
         for child_uri in children_uris:
-            abstract = await viking_fs.abstract(child_uri)
-            dir_name = child_uri.split("/")[-1]
-            results.append({"name": dir_name, "abstract": abstract})
+            try:
+                abstract = await viking_fs.abstract(child_uri)
+                dir_name = child_uri.split("/")[-1]
+                results.append({"name": dir_name, "abstract": abstract})
+            except Exception as e:
+                # Check if it's a file not found error
+                if "no such file" in str(e).lower() or "404" in str(e):
+                    raise DependencyNotReadyError(f"Abstract not ready for {child_uri}") from e
+                # For other errors, re-raise
+                raise e
         return results
 
     async def _generate_file_summaries(self, file_paths: List[str]) -> List[Dict[str, str]]:

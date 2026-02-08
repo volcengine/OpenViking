@@ -15,6 +15,9 @@ logger = get_logger(__name__)
 class SemanticQueue(NamedQueue):
     """Semantic extraction queue for async generation of .abstract.md and .overview.md."""
 
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
     async def enqueue(self, msg: SemanticMsg) -> str:
         """Serialize SemanticMsg object and store in queue."""
         return await super().enqueue(msg.to_dict())
