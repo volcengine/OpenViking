@@ -266,6 +266,10 @@ class BruteforceSearch {
   }
 
   void save(const std::filesystem::path& dir) {
+    if (meta_) {
+      meta_->element_count = current_count_;
+      meta_->max_element_count = capacity_;
+    }
     std::string path = (dir / kFlatIndexFileName).string();
     std::ofstream out(path, std::ios::binary);
 
@@ -303,7 +307,7 @@ class BruteforceSearch {
     if (in.peek() != EOF) {
         read_binary(in, next_logical_offset_);
     } else {
-        next_logical_offset_ = 0; // Will be corrected in rebuild_maps
+        next_logical_offset_ = 0;
     }
 
     rebuild_maps();
@@ -368,6 +372,9 @@ class BruteforceSearch {
       throw std::runtime_error("Realloc failed");
     data_buffer_ = new_buf;
     capacity_ = new_cap;
+    if (sparse_index_) {
+      sparse_index_->reserve(new_cap);
+    }
   }
 
   void rebuild_maps() {

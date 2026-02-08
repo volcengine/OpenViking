@@ -84,6 +84,8 @@ class StoreManager:
             for i, old_fields in enumerate(old_cands_fields_list):
                 delta_list[i].label = cands_list[i].label
                 delta_list[i].vector = cands_list[i].vector
+                delta_list[i].sparse_raw_terms = cands_list[i].sparse_raw_terms
+                delta_list[i].sparse_values = cands_list[i].sparse_values
                 delta_list[i].fields = cands_list[i].fields
                 delta_list[i].old_fields = old_fields
 
