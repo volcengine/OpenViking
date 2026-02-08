@@ -157,6 +157,7 @@ Miscellaneous tests.
 | `test_config_validation.py` | Configuration validation | Config schema validation, required fields, type checking |
 | `test_debug_service.py` | Debug service | Debug endpoint tests, service diagnostics |
 | `test_extract_zip.py` | Zip extraction security (Zip Slip) | Path traversal prevention (`../`), absolute path rejection, symlink entry filtering, backslash traversal, UNC path rejection, directory entry skipping, normal extraction |
+| `test_port_check.py` | AGFS port check socket leak fix | Available port no leak, occupied port raises RuntimeError, occupied port no ResourceWarning |
 
 ### engine/
 
