@@ -1,0 +1,10 @@
+[project]
+name = "openviking-mcp"
+version = "0.1.0"
+description = "OpenViking MCP Server - RAG query capabilities via Model Context Protocol"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "openviking>=0.1.6",
+    "mcp>=1.8.0",
+]
