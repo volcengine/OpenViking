@@ -95,7 +95,7 @@ class StoreManager:
                     StoreManager.DeltaTable,
                     [OpType.PUT] * len(delta_list),
                     [str(base_ts + i) for i in range(len(delta_list))],
-                    [data.serialize() for data in delta_list],
+                    DeltaRecord.serialize_list(delta_list),
                 )
             )
 
@@ -109,7 +109,7 @@ class StoreManager:
                 StoreManager.CandsTable,
                 [OpType.PUT] * len(cands_list),
                 [str(data.label) for data in cands_list],
-                [data.serialize() for data in cands_list],
+                CandidateData.serialize_list(cands_list),
             )
         )
 
@@ -164,7 +164,7 @@ class StoreManager:
                     StoreManager.DeltaTable,
                     [OpType.PUT] * len(delta_list),
                     [str(base_ts + i) for i in range(len(delta_list))],
-                    [data.serialize() for data in delta_list],
+                    DeltaRecord.serialize_list(delta_list),
                 )
             )
 
@@ -307,7 +307,7 @@ class StoreManager:
                     StoreManager.DeltaTable,
                     [OpType.PUT] * len(delta_list),
                     [str(base_ts + i) for i in range(len(delta_list))],
-                    [data.serialize() for data in delta_list],
+                    DeltaRecord.serialize_list(delta_list),
                 )
             )
 

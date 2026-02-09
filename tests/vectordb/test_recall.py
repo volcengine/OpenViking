@@ -419,6 +419,182 @@ class TestRecall(unittest.TestCase):
         )
         print("✓ Hybrid dense+sparse mix verified")
 
+    def test_complex_schema_missing_fields(self):
+        """Test adding data with missing optional fields using complex schema"""
+        print("\n=== Test: Complex Schema Missing Fields ===")
+        dim = 1024
+        name = "test_complex_missing_fields"
+        meta_data = {
+            "CollectionName": name,
+            "Description": "Unified context collection",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+                {
+                    "FieldName": "uri",
+                    "FieldType": "string",
+                },  # Changed path to string for simplicity as 'path' might not be standard FieldType
+                {"FieldName": "type", "FieldType": "string"},
+                {"FieldName": "context_type", "FieldType": "string"},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": dim},
+                {"FieldName": "sparse_vector", "FieldType": "sparse_vector"},
+                {
+                    "FieldName": "created_at",
+                    "FieldType": "string",
+                },  # Simulating date_time as string
+                {"FieldName": "updated_at", "FieldType": "string"},
+                {"FieldName": "active_count", "FieldType": "int64"},
+                {"FieldName": "parent_uri", "FieldType": "string"},
+                {"FieldName": "is_leaf", "FieldType": "bool"},
+                {"FieldName": "name", "FieldType": "string"},
+                {"FieldName": "description", "FieldType": "string"},
+                {"FieldName": "tags", "FieldType": "string"},
+                {"FieldName": "abstract", "FieldType": "string"},
+            ],
+        }
+
+        collection = self.register_collection(
+            get_or_create_local_collection(meta_data=meta_data, path=TEST_DB_PATH)
+        )
+
+        # 1. Full record
+        full_record = {
+            "id": "1",
+            "uri": "/path/to/1",
+            "type": "doc",
+            "context_type": "text",
+            "vector": [0.1] * dim,
+            "sparse_vector": {"t1": 1.0},
+            "created_at": "2023-01-01",
+            "updated_at": "2023-01-02",
+            "active_count": 10,
+            "parent_uri": "/path/to/0",
+            "is_leaf": True,
+            "name": "Doc 1",
+            "description": "A description",
+            "tags": "tag1,tag2",
+            "abstract": "An abstract",
+        }
+
+        # 2. Minimal record (Only ID and Vector are strictly required by engine for indexing usually, but let's see schema validation)
+        # Assuming only PK and Vector are strictly mandatory for vector search index, others should be optional/default.
+        minimal_record = {
+            "id": "2",
+            "vector": [0.2] * dim,
+        }
+
+        # 3. Partial record
+        partial_record = {
+            "id": "3",
+            "vector": [0.3] * dim,
+            "name": "Doc 3",
+            "active_count": 5,
+        }
+
+        collection.upsert_data([full_record, minimal_record, partial_record])
+
+        # Verify data via Fetch
+        res_full = collection.fetch_data(["1"])
+        self.assertEqual(len(res_full.items), 1)
+        self.assertEqual(res_full.items[0].id, "1")
+        # Check fields exist in extra_json or attributes depending on implementation
+        # The result object structure depends on how LocalCollection returns data.
+        # Typically it returns an object where fields are accessible or in 'fields' dict.
+        # Let's assume standard behavior where defined fields are attributes or in a dictionary.
+        # For LocalCollection, non-vector fields are often serialized into a 'fields' JSON string or accessible directly if mapped.
+        # We need to check if the data came back.
+
+        # NOTE: FetchDataResult structure: result_num, labels, scores, extra_json?
+        # Actually fetch_data returns a list of results.
+
+        print(f"Full Record Fetch: {res_full.items[0]}")
+
+        res_min = collection.fetch_data(["2"])
+        self.assertEqual(len(res_min.items), 1)
+        self.assertEqual(res_min.items[0].id, "2")
+        print(f"Minimal Record Fetch: {res_min.items[0]}")
+
+        res_part = collection.fetch_data(["3"])
+        self.assertEqual(len(res_part.items), 1)
+        self.assertEqual(res_part.items[0].id, "3")
+        print(f"Partial Record Fetch: {res_part.items[0]}")
+
+        print("✓ Missing fields handled correctly")
+
+    def test_persistence_crud(self):
+        """Test CRUD operations persist after collection close and reopen"""
+        print("\n=== Test: Persistence CRUD ===")
+        dim = 1024
+        name = "test_persistence"
+        meta_data = {
+            "CollectionName": name,
+            "Description": "Persistence test",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+                {"FieldName": "vector", "FieldType": "vector", "Dim": dim},
+                {"FieldName": "name", "FieldType": "string"},
+            ],
+        }
+
+        # 1. Open and Add Data
+        collection = get_or_create_local_collection(meta_data=meta_data, path=TEST_DB_PATH)
+        self.register_collection(collection)
+
+        data = [
+            {"id": "1", "vector": [0.1] * dim, "name": "Item 1"},
+            {"id": "2", "vector": [0.2] * dim, "name": "Item 2"},
+        ]
+        collection.upsert_data(data)
+
+        # Verify Add
+        res = collection.fetch_data(["1", "2"])
+        self.assertEqual(len(res.items), 2)
+
+        # 2. Close Collection (Simulate restart)
+        # Note: LocalCollection might not have an explicit close() that unloads everything from memory
+        # if it's purely object based, but we can delete the object and re-instantiate.
+        # The important part is that data is on disk (RocksDB/LevelDB).
+        collection.close()
+        del collection
+
+        # 3. Reopen
+        collection_new = get_or_create_local_collection(meta_data=meta_data, path=TEST_DB_PATH)
+        self.register_collection(collection_new)
+
+        # Verify Data Exists
+        res_reopen = collection_new.fetch_data(["1", "2"])
+        self.assertEqual(len(res_reopen.items), 2)
+        # Order is not guaranteed, so check by ID or sort
+        ids = sorted([item.id for item in res_reopen.items])
+        self.assertEqual(ids, ["1", "2"])
+
+        # 4. Update Data
+        update_data = [{"id": "1", "vector": [0.9] * dim, "name": "Item 1 Updated"}]
+        collection_new.upsert_data(update_data)
+
+        res_update = collection_new.fetch_data(["1"])
+        self.assertEqual(len(res_update.items), 1)
+        self.assertEqual(res_update.items[0].fields["name"], "Item 1 Updated")
+
+        # 5. Delete Data
+        collection_new.delete_data(["2"])
+
+        res_del = collection_new.fetch_data(["2"])
+        self.assertEqual(len(res_del.items), 0, "Deleted item should not be found")
+        self.assertEqual(len(res_del.ids_not_exist), 1)
+
+        # 6. Search on persisted data
+        collection_new.create_index(
+            "idx_persist",
+            {"IndexName": "idx_persist", "VectorIndex": {"IndexType": "flat", "Distance": "l2"}},
+        )
+        search_res = collection_new.search_by_vector(
+            "idx_persist", dense_vector=[0.9] * dim, limit=1
+        )
+        self.assertEqual(len(search_res.data), 1)
+        self.assertEqual(search_res.data[0].id, "1")
+
+        print("✓ Persistence verified")
+
 
 if __name__ == "__main__":
     unittest.main()

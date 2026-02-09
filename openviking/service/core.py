@@ -104,6 +104,7 @@ class OpenVikingService:
             self._agfs_manager = AGFSManager(config=config.agfs)
             self._agfs_manager.start()
             self._agfs_url = self._agfs_manager.url
+            config.agfs.url = self._agfs_url
         else:
             self._agfs_url = config.agfs.url
 
