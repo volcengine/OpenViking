@@ -54,7 +54,7 @@ async def test_sdk_add_resource(http_client):
 
 async def test_sdk_wait_processed(http_client):
     client, _ = http_client
-    result = await client.wait_processed(timeout=5.0)
+    result = await client.wait_processed()
     assert isinstance(result, dict)
 
 

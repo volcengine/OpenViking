@@ -115,6 +115,21 @@ def create_app(
             ).model_dump(),
         )
 
+    # Catch-all for unhandled exceptions so clients always get JSON
+    @app.exception_handler(Exception)
+    async def general_error_handler(request: Request, exc: Exception):
+        logger.exception("Unhandled exception in request handler")
+        return JSONResponse(
+            status_code=500,
+            content=Response(
+                status="error",
+                error=ErrorInfo(
+                    code="INTERNAL",
+                    message=str(exc),
+                ),
+            ).model_dump(),
+        )
+
     # Register routers
     app.include_router(system_router)
     app.include_router(resources_router)

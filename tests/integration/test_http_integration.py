@@ -2,9 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Integration tests for HTTP mode.
 
-These tests require a running OpenViking Server.
-Start the server before running:
-    python3 -m openviking serve --path ./test_data --port 1933
+The server is automatically started via the ``server_url`` session fixture
+defined in ``conftest.py``.
 """
 
 import pytest
@@ -15,17 +14,13 @@ from openviking.client import HTTPClient
 from openviking.exceptions import NotFoundError
 
 
-# Server configuration
-SERVER_URL = "http://localhost:1933"
-
-
 class TestHTTPClientIntegration:
     """Integration tests for HTTPClient."""
 
     @pytest_asyncio.fixture
-    async def client(self):
+    async def client(self, server_url):
         """Create and initialize HTTPClient."""
-        client = HTTPClient(url=SERVER_URL, user="test_user")
+        client = HTTPClient(url=server_url, user="test_user")
         await client.initialize()
         yield client
         await client.close()
@@ -47,8 +42,8 @@ class TestHTTPClientIntegration:
         """Test find operation."""
         result = await client.find(query="test", limit=5)
         assert result is not None
-        # find returns {'memories': [], 'resources': [], 'skills': [], 'total': N}
-        assert "resources" in result or "total" in result
+        assert hasattr(result, "resources")
+        assert hasattr(result, "total")
 
     @pytest.mark.asyncio
     async def test_search(self, client):
@@ -86,9 +81,9 @@ class TestSessionIntegration:
     """Integration tests for Session operations."""
 
     @pytest_asyncio.fixture
-    async def client(self):
+    async def client(self, server_url):
         """Create and initialize HTTPClient."""
-        client = HTTPClient(url=SERVER_URL, user="test_user")
+        client = HTTPClient(url=server_url, user="test_user")
         await client.initialize()
         yield client
         await client.close()
@@ -127,9 +122,9 @@ class TestAsyncOpenVikingHTTPMode:
     """Integration tests for AsyncOpenViking in HTTP mode."""
 
     @pytest_asyncio.fixture
-    async def ov(self):
+    async def ov(self, server_url):
         """Create AsyncOpenViking in HTTP mode."""
-        client = AsyncOpenViking(url=SERVER_URL, user="test_user")
+        client = AsyncOpenViking(url=server_url, user="test_user")
         await client.initialize()
         yield client
         await client.close()

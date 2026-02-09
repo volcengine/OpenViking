@@ -259,7 +259,7 @@ class AsyncOpenViking:
             FindResult
         """
         await self._ensure_initialized()
-        session_id = session.id if session else None
+        session_id = session.session_id if session else None
         return await self._client.search(
             query=query,
             target_uri=target_uri,

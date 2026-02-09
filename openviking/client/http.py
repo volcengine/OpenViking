@@ -151,7 +151,15 @@ class HTTPClient(BaseClient):
 
     def _handle_response(self, response: httpx.Response) -> Any:
         """Handle HTTP response and extract result or raise exception."""
-        data = response.json()
+        try:
+            data = response.json()
+        except Exception:
+            if not response.is_success:
+                raise OpenVikingError(
+                    f"HTTP {response.status_code}: {response.text or 'empty response'}",
+                    code="INTERNAL",
+                )
+            return None
         if data.get("status") == "error":
             self._raise_exception(data.get("error", {}))
         if not response.is_success:
