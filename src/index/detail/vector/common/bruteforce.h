@@ -20,6 +20,7 @@
 #include "index/detail/vector/common/space_int8.h"
 #include "index/detail/vector/common/space_l2.h"
 #include "index/detail/vector/common/space_ip.h"
+#include "index/detail/scalar/bitmap_holder/bitmap.h"
 #include "spdlog/spdlog.h"
 
 namespace vectordb {
@@ -109,8 +110,8 @@ class BruteforceSearch {
 
       index = current_count_;
       label_map_[label] = index;
-      uint32_t logical_offset = static_cast<uint32_t>(current_count_);
-      offset_map_[logical_offset] = label;
+      uint32_t logical_offset = static_cast<uint32_t>(next_logical_offset_++);
+      offset_map_[logical_offset] = index;
 
       std::memcpy(data_buffer_ + (index * element_byte_size_) +
                       vector_byte_size_ + sizeof(uint64_t),
@@ -153,6 +154,11 @@ class BruteforceSearch {
       std::memcpy(&label_moved, dest + vector_byte_size_, sizeof(uint64_t));
       label_map_[label_moved] = idx_to_remove;
 
+      uint32_t offset_moved;
+      std::memcpy(&offset_moved, dest + vector_byte_size_ + sizeof(uint64_t),
+                  sizeof(uint32_t));
+      offset_map_[offset_moved] = idx_to_remove;
+
       if (sparse_index_) {
         // SPDLOG_INFO("remove_point: swapping sparse row {} with {}", idx_to_remove, idx_last);
         auto last_row = sparse_index_->get_row(idx_last);
@@ -172,12 +178,17 @@ class BruteforceSearch {
     current_count_--;
   }
 
-  void search_knn(const void* query_data, size_t k, Filter filter,
+  void search_knn(const void* query_data, size_t k, const Bitmap* filter_bitmap,
                   FloatValSparseDatapointLowLevel* sparse,
                   std::vector<uint64_t>& labels,
                   std::vector<float>& scores) const {
     if (!query_data)
       return;
+    if (k == 0) {
+      labels.clear();
+      scores.clear();
+      return;
+    }
     if (current_count_ == 0)
       return;
 
@@ -193,37 +204,52 @@ class BruteforceSearch {
     auto dist_func = space_->get_metric_function();
     void* dist_params = space_->get_metric_params();
 
-    for (size_t i = 0; i < current_count_; ++i) {
-      char* ptr = data_buffer_ + (i * element_byte_size_);
+    if (!filter_bitmap) {
+      for (size_t i = 0; i < current_count_; ++i) {
+        char* ptr = data_buffer_ + (i * element_byte_size_);
 
-      uint32_t logical_offset;
-      std::memcpy(&logical_offset, ptr + vector_byte_size_ + sizeof(uint64_t),
-                  sizeof(uint32_t));
+        float dist = compute_score(encoded_query.data(), ptr, query_sparse_view,
+                                   i, dist_func, dist_params);
 
-      if (filter && !filter(logical_offset)) {
-        continue;
-      }
+        uint64_t label;
+        std::memcpy(&label, ptr + vector_byte_size_, sizeof(uint64_t));
 
-      float dist = dist_func(encoded_query.data(), ptr, dist_params);
-
-      if (sparse_index_) {
-        float sparse_dist = 0;
-        if (query_sparse_view) {
-          sparse_dist =
-              sparse_index_->sparse_head_output(*query_sparse_view, i);
+        if (pq.size() < k) {
+          pq.emplace(dist, label);
+        } else if (dist > pq.top().first) {
+          pq.pop();
+          pq.emplace(dist, label);
         }
-        dist = dist * (1 - meta_->search_with_sparse_logit_alpha) +
-               sparse_dist * meta_->search_with_sparse_logit_alpha;
       }
+    } else {
+      if (filter_bitmap->empty()) {
+         labels.clear();
+         scores.clear();
+         return;
+      }
+      std::vector<uint32_t> offsets;
+      filter_bitmap->get_set_list(offsets);
+      for (uint32_t offset : offsets) {
+        auto it = offset_map_.find(offset);
+        if (it == offset_map_.end()) {
+          continue;
+        }
 
-      uint64_t label;
-      std::memcpy(&label, ptr + vector_byte_size_, sizeof(uint64_t));
+        int idx = it->second;
+        char* ptr = data_buffer_ + (idx * element_byte_size_);
 
-      if (pq.size() < k) {
-        pq.emplace(dist, label);
-      } else if (dist > pq.top().first) {
-        pq.pop();
-        pq.emplace(dist, label);
+        float dist = compute_score(encoded_query.data(), ptr, query_sparse_view,
+                                   idx, dist_func, dist_params);
+
+        uint64_t label;
+        std::memcpy(&label, ptr + vector_byte_size_, sizeof(uint64_t));
+
+        if (pq.size() < k) {
+          pq.emplace(dist, label);
+        } else if (dist > pq.top().first) {
+          pq.pop();
+          pq.emplace(dist, label);
+        }
       }
     }
 
@@ -248,6 +274,7 @@ class BruteforceSearch {
     write_binary(out, current_count_);
 
     out.write(data_buffer_, capacity_ * element_byte_size_);
+    write_binary(out, next_logical_offset_);
 
     if (sparse_index_) {
       size_t dummy;
@@ -272,6 +299,12 @@ class BruteforceSearch {
 
     resize_buffer(loaded_cap);
     in.read(data_buffer_, loaded_cap * loaded_elem_size);
+    
+    if (in.peek() != EOF) {
+        read_binary(in, next_logical_offset_);
+    } else {
+        next_logical_offset_ = 0; // Will be corrected in rebuild_maps
+    }
 
     rebuild_maps();
 
@@ -300,13 +333,19 @@ class BruteforceSearch {
 
   uint64_t get_label_by_offset(int offset) {
     auto it = offset_map_.find(offset);
-    if (it != offset_map_.end())
-      return it->second;
+    if (it != offset_map_.end()) {
+      int idx = it->second;
+      char* ptr = data_buffer_ + (idx * element_byte_size_);
+      uint64_t label;
+      std::memcpy(&label, ptr + vector_byte_size_, sizeof(uint64_t));
+      return label;
+    }
     return -1;
   }
 
  private:
   void setup_metric() {
+    reverse_query_score_ = (meta_->distance_type == "l2");
     if (meta_->quantization_type == "int8") {
       if (meta_->distance_type == "l2")
         space_ = std::make_unique<L2SpaceInt8>(meta_->dimension);
@@ -334,6 +373,7 @@ class BruteforceSearch {
   void rebuild_maps() {
     label_map_.clear();
     offset_map_.clear();
+    uint32_t max_offset = 0;
     for (size_t i = 0; i < current_count_; ++i) {
       char* ptr = data_buffer_ + (i * element_byte_size_);
       uint64_t lbl;
@@ -343,7 +383,13 @@ class BruteforceSearch {
                   sizeof(uint32_t));
 
       label_map_[lbl] = i;
-      offset_map_[off] = lbl;
+      offset_map_[off] = i;
+      if (off > max_offset) {
+        max_offset = off;
+      }
+    }
+    if (current_count_ > 0 && next_logical_offset_ <= max_offset) {
+        next_logical_offset_ = max_offset + 1;
     }
   }
 
@@ -357,6 +403,26 @@ class BruteforceSearch {
     return view;
   }
 
+  float compute_score(
+      const void* encoded_query, const char* data_ptr,
+      const std::shared_ptr<SparseDatapointView>& query_sparse_view,
+      size_t idx, MetricFunc<float> dist_func,
+      void* dist_params) const {
+    float dense_raw = dist_func(encoded_query, data_ptr, dist_params);
+    float dense_score =
+        reverse_query_score_ ? (1.0f - dense_raw) : dense_raw;
+    if (!sparse_index_ || !query_sparse_view ||
+        meta_->search_with_sparse_logit_alpha <= 0.0f) {
+      return dense_score;
+    }
+    float sparse_raw =
+        sparse_index_->sparse_head_output(*query_sparse_view, idx);
+    float sparse_score =
+        reverse_query_score_ ? (1.0f - sparse_raw) : sparse_raw;
+    float alpha = meta_->search_with_sparse_logit_alpha;
+    return dense_score * (1.0f - alpha) + sparse_score * alpha;
+  }
+
   std::shared_ptr<BruteForceMeta> meta_;
   char* data_buffer_ = nullptr;
   size_t capacity_ = 0;
@@ -365,11 +431,13 @@ class BruteforceSearch {
   size_t element_byte_size_ = 0;
 
   std::unordered_map<uint64_t, int> label_map_;
-  std::unordered_map<int, uint64_t> offset_map_;
+  std::unordered_map<uint32_t, int> offset_map_;
 
   std::unique_ptr<VectorSpace<float>> space_;
   std::unique_ptr<VectorQuantizer> quantizer_;
   std::unique_ptr<SparseDataHolder> sparse_index_;
+  bool reverse_query_score_ = false;
+  uint64_t next_logical_offset_ = 0;
 };
 
 }  // namespace vectordb

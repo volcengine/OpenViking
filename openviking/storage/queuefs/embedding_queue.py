@@ -16,7 +16,7 @@ class EmbeddingQueue(NamedQueue):
     Supports direct enqueue and dequeue of EmbeddingMsg objects.
     """
 
-    async def enqueue(self, msg: EmbeddingMsg | None) -> str:
+    async def enqueue(self, msg: Optional[EmbeddingMsg]) -> str:
         """Serialize EmbeddingMsg object and store in queue."""
         if msg is None:
             logger.warning("Embedding message is None, skipping enqueuing")
@@ -28,17 +28,26 @@ class EmbeddingQueue(NamedQueue):
         data_dict = await super().dequeue()
         if not data_dict:
             return None
-        if "data" in data_dict and isinstance(data_dict["data"], str):
-            try:
-                return EmbeddingMsg.from_json(data_dict["data"])
-            except Exception as e:
-                logger.debug(f"[EmbeddingQueue] Failed to parse message data: {e}")
-                return None
+        if "data" in data_dict:
+            if isinstance(data_dict["data"], str):
+                try:
+                    return EmbeddingMsg.from_json(data_dict["data"])
+                except Exception as e:
+                    logger.debug(f"[EmbeddingQueue] Failed to parse message data: {e}")
+                    return None
+            elif isinstance(data_dict["data"], dict):
+                try:
+                    return EmbeddingMsg.from_dict(data_dict["data"])
+                except Exception as e:
+                    logger.debug(
+                        f"[EmbeddingQueue] Failed to create EmbeddingMsg from data dict: {e}"
+                    )
+                    return None
+
         # Otherwise try to convert directly from dict
         try:
             return EmbeddingMsg.from_dict(data_dict)
-        except Exception as e:
-            logger.debug(f"[EmbeddingQueue] Failed to create EmbeddingMsg from dict: {e}")
+        except Exception:
             return None
 
     async def peek(self) -> Optional[EmbeddingMsg]:
@@ -47,11 +56,17 @@ class EmbeddingQueue(NamedQueue):
         if not data_dict:
             return None
 
-        if "data" in data_dict and isinstance(data_dict["data"], str):
-            try:
-                return EmbeddingMsg.from_json(data_dict["data"])
-            except Exception:
-                return None
+        if "data" in data_dict:
+            if isinstance(data_dict["data"], str):
+                try:
+                    return EmbeddingMsg.from_json(data_dict["data"])
+                except Exception:
+                    return None
+            elif isinstance(data_dict["data"], dict):
+                try:
+                    return EmbeddingMsg.from_dict(data_dict["data"])
+                except Exception:
+                    return None
 
         try:
             return EmbeddingMsg.from_dict(data_dict)

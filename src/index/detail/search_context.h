@@ -11,9 +11,6 @@ namespace vectordb {
 struct SearchContext {
   FilterOpBasePtr filter_op;
   SorterOpBasePtr sorter_op;
-  std::function<bool(uint64_t)> filter_out;
 };
-
-using Filter = std::function<bool(uint64_t)>;
 
 }  // namespace vectordb

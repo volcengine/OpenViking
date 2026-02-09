@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
-from typing import Optional
+from typing import Dict, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -14,6 +14,15 @@ class VolcengineConfig(BaseModel):
         default=None, description="Volcengine region (e.g., 'cn-beijing')"
     )
     host: Optional[str] = Field(default=None, description="Volcengine VikingDB host (optional)")
+
+
+class VikingDBConfig(BaseModel):
+    """Configuration for VikingDB private deployment."""
+
+    host: Optional[str] = Field(default=None, description="VikingDB service host")
+    headers: Optional[Dict[str, str]] = Field(
+        default_factory=dict, description="Custom headers for requests"
+    )
 
 
 class VectorDBBackendConfig(BaseModel):
@@ -43,9 +52,17 @@ class VectorDBBackendConfig(BaseModel):
         description="Distance metric for vector similarity search (e.g., 'cosine', 'l2', 'ip')",
     )
 
-    vector_dim: int = Field(
+    dimension: int = Field(
         default=0,
         description="Dimension of vector embeddings",
+    )
+
+    sparse_weight: float = Field(
+        default=0.0,
+        description=(
+            "Sparse weight for hybrid vector search. "
+            "When > 0, sparse vectors are used for index build and search."
+        ),
     )
 
     volcengine: Optional[VolcengineConfig] = Field(
@@ -53,12 +70,18 @@ class VectorDBBackendConfig(BaseModel):
         description="Volcengine VikingDB configuration for 'volcengine' type",
     )
 
+    # VikingDB private deployment mode
+    vikingdb: Optional[VikingDBConfig] = Field(
+        default_factory=lambda: VikingDBConfig(),
+        description="VikingDB private deployment configuration for 'vikingdb' type",
+    )
+
     @model_validator(mode="after")
     def validate_config(self):
         """Validate configuration completeness and consistency"""
-        if self.backend not in ["local", "http", "volcengine"]:
+        if self.backend not in ["local", "http", "volcengine", "vikingdb"]:
             raise ValueError(
-                f"Invalid VectorDB backend: '{self.backend}'. Must be one of: 'local', 'http', 'volcengine'"
+                f"Invalid VectorDB backend: '{self.backend}'. Must be one of: 'local', 'http', 'volcengine', 'vikingdb'"
             )
 
         if self.backend == "local":
@@ -74,5 +97,9 @@ class VectorDBBackendConfig(BaseModel):
                 raise ValueError("VectorDB volcengine backend requires 'ak' and 'sk' to be set")
             if not self.volcengine.region:
                 raise ValueError("VectorDB volcengine backend requires 'region' to be set")
+
+        elif self.backend == "vikingdb":
+            if not self.vikingdb or not self.vikingdb.host:
+                raise ValueError("VectorDB vikingdb backend requires 'host' to be set")
 
         return self

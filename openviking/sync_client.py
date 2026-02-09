@@ -4,13 +4,13 @@
 Synchronous OpenViking client implementation.
 """
 
-import asyncio
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
     from openviking.session import Session
 
 from openviking.async_client import AsyncOpenViking
+from openviking.utils import run_async
 
 
 class SyncOpenViking:
@@ -25,7 +25,7 @@ class SyncOpenViking:
 
     def initialize(self) -> None:
         """Initialize OpenViking storage and indexes."""
-        asyncio.run(self._async_client.initialize())
+        run_async(self._async_client.initialize())
         self._initialized = True
 
     def session(self, session_id: Optional[str] = None) -> "Session":
@@ -42,7 +42,7 @@ class SyncOpenViking:
         timeout: float = None,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking (resources scope only)"""
-        return asyncio.run(
+        return run_async(
             self._async_client.add_resource(path, target, reason, instruction, wait, timeout)
         )
 
@@ -53,7 +53,7 @@ class SyncOpenViking:
         timeout: float = None,
     ) -> Dict[str, Any]:
         """Add skill to OpenViking."""
-        return asyncio.run(self._async_client.add_skill(data, wait=wait, timeout=timeout))
+        return run_async(self._async_client.add_skill(data, wait=wait, timeout=timeout))
 
     def search(
         self,
@@ -65,7 +65,7 @@ class SyncOpenViking:
         filter: Optional[Dict] = None,
     ):
         """Execute complex retrieval (intent analysis, hierarchical retrieval)."""
-        return asyncio.run(
+        return run_async(
             self._async_client.search(query, target_uri, session, limit, score_threshold, filter)
         )
 
@@ -77,19 +77,19 @@ class SyncOpenViking:
         score_threshold: Optional[float] = None,
     ):
         """Quick retrieval"""
-        return asyncio.run(self._async_client.find(query, target_uri, limit, score_threshold))
+        return run_async(self._async_client.find(query, target_uri, limit, score_threshold))
 
     def abstract(self, uri: str) -> str:
         """Read L0 abstract"""
-        return asyncio.run(self._async_client.abstract(uri))
+        return run_async(self._async_client.abstract(uri))
 
     def overview(self, uri: str) -> str:
         """Read L1 overview"""
-        return asyncio.run(self._async_client.overview(uri))
+        return run_async(self._async_client.overview(uri))
 
     def read(self, uri: str) -> str:
         """Read file"""
-        return asyncio.run(self._async_client.read(uri))
+        return run_async(self._async_client.read(uri))
 
     def ls(self, uri: str, **kwargs) -> List[Any]:
         """
@@ -100,65 +100,65 @@ class SyncOpenViking:
             simple: Return only relative path list (bool, default: False)
             recursive: List all subdirectories recursively (bool, default: False)
         """
-        return asyncio.run(self._async_client.ls(uri, **kwargs))
+        return run_async(self._async_client.ls(uri, **kwargs))
 
     def link(self, from_uri: str, uris: Any, reason: str = "") -> None:
         """Create relation"""
-        return asyncio.run(self._async_client.link(from_uri, uris, reason))
+        return run_async(self._async_client.link(from_uri, uris, reason))
 
     def unlink(self, from_uri: str, uri: str) -> None:
         """Delete relation"""
-        return asyncio.run(self._async_client.unlink(from_uri, uri))
+        return run_async(self._async_client.unlink(from_uri, uri))
 
     def export_ovpack(self, uri: str, to: str) -> str:
         """Export .ovpack file"""
-        return asyncio.run(self._async_client.export_ovpack(uri, to))
+        return run_async(self._async_client.export_ovpack(uri, to))
 
     def import_ovpack(
         self, file_path: str, target: str, force: bool = False, vectorize: bool = True
     ) -> str:
         """Import .ovpack file (triggers vectorization by default)"""
-        return asyncio.run(self._async_client.import_ovpack(file_path, target, force, vectorize))
+        return run_async(self._async_client.import_ovpack(file_path, target, force, vectorize))
 
     def close(self) -> None:
         """Close OpenViking and release resources."""
-        return asyncio.run(self._async_client.close())
+        return run_async(self._async_client.close())
 
     def relations(self, uri: str) -> List[Dict[str, Any]]:
         """Get relations"""
-        return asyncio.run(self._async_client.relations(uri))
+        return run_async(self._async_client.relations(uri))
 
     def rm(self, uri: str, recursive: bool = False) -> None:
         """Delete resource"""
-        return asyncio.run(self._async_client.rm(uri, recursive))
+        return run_async(self._async_client.rm(uri, recursive))
 
     def wait_processed(self, timeout: float = None) -> None:
         """Wait for all async operations to complete"""
-        return asyncio.run(self._async_client.wait_processed(timeout))
+        return run_async(self._async_client.wait_processed(timeout))
 
     def grep(self, uri: str, pattern: str, case_insensitive: bool = False) -> Dict:
         """Content search"""
-        return asyncio.run(self._async_client.grep(uri, pattern, case_insensitive))
+        return run_async(self._async_client.grep(uri, pattern, case_insensitive))
 
     def glob(self, pattern: str, uri: str = "viking://") -> Dict:
         """File pattern matching"""
-        return asyncio.run(self._async_client.glob(pattern, uri))
+        return run_async(self._async_client.glob(pattern, uri))
 
     def mv(self, from_uri: str, to_uri: str) -> None:
         """Move resource"""
-        return asyncio.run(self._async_client.mv(from_uri, to_uri))
+        return run_async(self._async_client.mv(from_uri, to_uri))
 
     def tree(self, uri: str) -> Dict:
         """Get directory tree"""
-        return asyncio.run(self._async_client.tree(uri))
+        return run_async(self._async_client.tree(uri))
 
     def stat(self, uri: str) -> Dict:
         """Get resource status"""
-        return asyncio.run(self._async_client.stat(uri))
+        return run_async(self._async_client.stat(uri))
 
     def mkdir(self, uri: str) -> None:
         """Create directory"""
-        return asyncio.run(self._async_client.mkdir(uri))
+        return run_async(self._async_client.mkdir(uri))
 
     def get_status(self):
         """Get system status.
@@ -196,4 +196,4 @@ class SyncOpenViking:
     @classmethod
     def reset(cls) -> None:
         """Reset singleton (for testing)."""
-        return asyncio.run(AsyncOpenViking.reset())
+        return run_async(AsyncOpenViking.reset())

@@ -38,14 +38,19 @@ class AGFSManager:
         manager.start()
 
         # 2. S3 backend
+        from openviking.utils.config.agfs_config import AGFSConfig, S3Config
+
         config = AGFSConfig(
             path="./data",
             port=8080,
             backend="s3",
-            s3_bucket="my-bucket",
-            s3_region="us-east-1",
-            s3_access_key="your-access-key",
-            s3_secret_key="your-secret-key",
+            s3=S3Config(
+                bucket="my-bucket",
+                region="us-east-1",
+                access_key="your-access-key",
+                secret_key="your-secret-key",
+                endpoint="https://s3.amazonaws.com"
+            ),
             log_level="debug"
         )
         manager = AGFSManager(config=config)
@@ -73,13 +78,13 @@ class AGFSManager:
         self.port = config.port
         self.log_level = config.log_level
         self.backend = config.backend
-        self.s3_bucket = config.s3_bucket
-        self.s3_region = config.s3_region
-        self.s3_access_key = config.s3_access_key
-        self.s3_secret_key = config.s3_secret_key
-        self.s3_endpoint = config.s3_endpoint
-        self.s3_prefix = config.s3_prefix
-        self.s3_use_ssl = config.s3_use_ssl
+        self.s3_bucket = config.s3.bucket
+        self.s3_region = config.s3.region
+        self.s3_access_key = config.s3.access_key
+        self.s3_secret_key = config.s3.secret_key
+        self.s3_endpoint = config.s3.endpoint
+        self.s3_prefix = config.s3.prefix
+        self.s3_use_ssl = config.s3.use_ssl
 
         self.process: Optional[subprocess.Popen] = None
         self.config_file: Optional[Path] = None

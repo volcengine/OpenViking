@@ -4,12 +4,14 @@ RAG Pipeline - Retrieval-Augmented Generation using OpenViking + LLM
 Focused on querying and answer generation, not resource management
 """
 
-from . import boring_logging_config  # Configure logging (set OV_DEBUG=1 for debug mode)
-import openviking as ov
 import json
+import time
+from typing import Any, Dict, List, Optional
+
 import requests
+
+import openviking as ov
 from openviking.utils.config.open_viking_config import OpenVikingConfig
-from typing import Optional, List, Dict, Any
 
 
 class Recipe:
@@ -72,7 +74,7 @@ class Recipe:
 
         # Extract top results
         search_results = []
-        for i, resource in enumerate(
+        for _i, resource in enumerate(
             results.resources[:top_k] + results.memories[:top_k]
         ):  # ignore SKILLs for mvp
             try:
@@ -81,7 +83,7 @@ class Recipe:
                     {
                         "uri": resource.uri,
                         "score": resource.score,
-                        "content": content[:1000],  # Limit content length for MVP
+                        "content": content,
                     }
                 )
                 # print(f"  {i + 1}. {resource.uri} (score: {resource.score:.4f})")
@@ -95,7 +97,7 @@ class Recipe:
                             {
                                 "uri": resource.uri,
                                 "score": resource.score,
-                                "content": f"[Directory Abstract] {abstract[:1000]}",
+                                "content": f"[Directory Abstract] {abstract}",
                             }
                         )
                         # print(f"  {i + 1}. {resource.uri} (score: {resource.score:.4f}) [directory]")
@@ -169,13 +171,17 @@ class Recipe:
                                   {"role": "assistant", "content": "previous answer"}]
 
         Returns:
-            Dictionary with answer, context, and metadata
+            Dictionary with answer, context, metadata, and timings
         """
-        # Step 1: Search for relevant content
+        # Track total time
+        start_total = time.perf_counter()
+
+        # Step 1: Search for relevant content (timed)
+        start_search = time.perf_counter()
         search_results = self.search(
             user_query, top_k=search_top_k, score_threshold=score_threshold
         )
-        # print(f"[DEBUG] Search returned {len(search_results)} results")
+        search_time = time.perf_counter() - start_search
 
         # Step 2: Build context from search results
         context_text = "no relevant information found, try answer based on existing knowledge."
@@ -212,24 +218,29 @@ class Recipe:
         # Build current turn prompt with context and question
         current_prompt = f"{context_text}\n"
         current_prompt += f"Question: {user_query}\n\n"
-        # current_prompt += "Please provide a comprehensive answer based on the context above. "
-        # current_prompt += "If the context doesn't contain enough information, say so.\n\nAnswer:"
-        # print(current_prompt)
 
         # Add current user message
         messages.append({"role": "user", "content": current_prompt})
 
-        # print("[DEBUG]:", messages)
-
-        # Step 4: Call LLM with messages array
+        # Step 4: Call LLM with messages array (timed)
+        start_llm = time.perf_counter()
         answer = self.call_llm(messages, temperature=temperature, max_tokens=max_tokens)
+        llm_time = time.perf_counter() - start_llm
 
-        # Return full result
+        # Calculate total time
+        total_time = time.perf_counter() - start_total
+
+        # Return full result with timing data
         return {
             "answer": answer,
             "context": search_results,
             "query": user_query,
             "prompt": current_prompt,
+            "timings": {
+                "search_time": search_time,
+                "llm_time": llm_time,
+                "total_time": total_time,
+            },
         }
 
     def close(self):

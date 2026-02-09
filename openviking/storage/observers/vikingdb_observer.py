@@ -8,9 +8,9 @@ Provides methods to observe and report VikingDB collection status.
 
 from typing import Dict
 
-from openviking.storage.observers.async_utils import run_coroutine_sync
 from openviking.storage.observers.base_observer import BaseObserver
 from openviking.storage.vikingdb_manager import VikingDBManager
+from openviking.utils import run_async
 from openviking.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -39,7 +39,7 @@ class VikingDBObserver(BaseObserver):
         return self._format_status_as_table(statuses)
 
     def get_status_table(self) -> str:
-        return run_coroutine_sync(self.get_status_table_async)
+        return run_async(self.get_status_table_async())
 
     def __str__(self) -> str:
         return self.get_status_table()
@@ -78,6 +78,8 @@ class VikingDBObserver(BaseObserver):
         return statuses
 
     def _format_status_as_table(self, statuses: Dict[str, Dict]) -> str:
+        from tabulate import tabulate
+
         data = []
         total_indexes = 0
         total_vectors = 0
@@ -90,8 +92,8 @@ class VikingDBObserver(BaseObserver):
             data.append(
                 {
                     "Collection": name,
-                    "Index Count": str(index_count),
-                    "Vector Count": str(vector_count),
+                    "Index Count": index_count,
+                    "Vector Count": vector_count,
                     "Status": "ERROR" if error else "OK",
                 }
             )
@@ -105,37 +107,13 @@ class VikingDBObserver(BaseObserver):
         data.append(
             {
                 "Collection": "TOTAL",
-                "Index Count": str(total_indexes),
-                "Vector Count": str(total_vectors),
+                "Index Count": total_indexes,
+                "Vector Count": total_vectors,
                 "Status": "",
             }
         )
 
-        # Simple table formatter
-        headers = ["Collection", "Index Count", "Vector Count", "Status"]
-        col_widths = {h: len(h) for h in headers}
-
-        for row in data:
-            for h in headers:
-                col_widths[h] = max(col_widths[h], len(str(row.get(h, ""))))
-
-        # Add padding
-        for h in headers:
-            col_widths[h] += 2
-
-        # Build string
-        lines = []
-
-        # Header
-        header_line = "".join(h.ljust(col_widths[h]) for h in headers)
-        lines.append(header_line)
-
-        # Rows
-        for row in data:
-            line = "".join(str(row.get(h, "")).ljust(col_widths[h]) for h in headers)
-            lines.append(line)
-
-        return "\n".join(lines)
+        return tabulate(data, headers="keys", tablefmt="pretty")
 
     def is_healthy(self) -> bool:
         """
@@ -156,7 +134,7 @@ class VikingDBObserver(BaseObserver):
         try:
             if not self._vikingdb_manager:
                 return True
-            run_coroutine_sync(self._vikingdb_manager.health_check)
+            run_async(self._vikingdb_manager.health_check())
             return False
         except Exception as e:
             logger.error(f"VikingDB health check failed: {e}")

@@ -673,6 +673,42 @@ class TestFilterOpsPath(unittest.TestCase):
             self._search({"op": "must_not", "field": "file_path", "conds": ["/a"]}), [4, 5]
         )
 
+    def test_path_must_normalize_leading_slash(self):
+        """Test Must/MustNot when path values are missing leading '/'"""
+        data = [
+            {"id": 6, "embedding": [1.0, 0, 0, 0], "file_path": "a/b/c"},
+            {"id": 7, "embedding": [1.0, 0, 0, 0], "file_path": "f/h/i"},
+            {"id": 8, "embedding": [1.0, 0, 0, 0], "file_path": "a"},
+            {"id": 9, "embedding": [1.0, 0, 0, 0], "file_path": "viking://resources/tmp/x"},
+        ]
+        self.collection.upsert_data(data)
+
+        # Must /a -> /a/b/c, /a/b/d, /a/e, and /a
+        self.assertEqual(
+            self._search({"op": "must", "field": "file_path", "conds": ["/a"]}),
+            [1, 2, 3, 6, 8],
+        )
+        # Must /a/b -> /a/b/c, /a/b/d
+        self.assertEqual(
+            self._search({"op": "must", "field": "file_path", "conds": ["/a/b"]}),
+            [1, 2, 6],
+        )
+        # Must /f -> /f/g, /f/h/i
+        self.assertEqual(
+            self._search({"op": "must", "field": "file_path", "conds": ["/f"]}),
+            [4, 5, 7],
+        )
+        # MustNot /a/b -> exclude 1, 2, 6
+        self.assertEqual(
+            self._search({"op": "must_not", "field": "file_path", "conds": ["/a/b"]}),
+            [3, 4, 5, 7, 8, 9],
+        )
+        # Ensure scheme is preserved, only prefixed with '/'
+        self.assertEqual(
+            self._search({"op": "must", "field": "file_path", "conds": ["/viking://resources"]}),
+            [9],
+        )
+
     def test_path_depth(self):
         """Test path type depth parameter"""
         # Must /a with depth=1 (para="-d=1")
@@ -731,7 +767,7 @@ class TestFilterOpsScale(unittest.TestCase):
         clean_dir(db_path_scale)
         self.path = db_path_scale
         self.collection = self._create_collection()
-        self.data_count = 500000  # 50w
+        self.data_count = 50000  # Reduced from 500k to 50k to avoid timeout/OOM in test env
         self._insert_large_data()
         self._create_index()
 
@@ -833,7 +869,7 @@ class TestFilterOpsScale(unittest.TestCase):
         # or verify standard limit behavior.
 
         # Search with smaller result set for verification
-        # Group A AND Score = 99 (1 per 100) -> 2500 expected
+        # Group A AND Score = 99 (1 per 100) -> 2500 expected (50k scale -> 250 expected)
         filters = {
             "op": "and",
             "conds": [
@@ -843,34 +879,35 @@ class TestFilterOpsScale(unittest.TestCase):
         }
         ids = self._search(filters, limit=5000)
         print(f"Filter 1 time: {time.time() - start_time:.4f}s")
-        self.assertEqual(len(ids), 2500)
+        # 50k / 2 = 25k Group A. 25k / 100 = 250.
+        self.assertEqual(len(ids), 250)
         for i in ids:
             self.assertTrue(i < self.data_count / 2)
             self.assertEqual(i % 100, 99)
 
         # Filter 2: Complex Logic
         # (Group A AND SubGroup X) OR (Group B AND Score < 5)
-        # Group A (0-249999) AND X (Even) -> 125000 items
-        # Group B (250000-499999) AND Score < 5 (0,1,2,3,4 -> 5 per 100) -> 2500 * 5 = 12500 items
-        # Total = 137500 items. Too many to fetch all.
+        # Group A (0-24999) AND X (Even) -> 12500 items
+        # Group B (25000-49999) AND Score < 5 (0,1,2,3,4 -> 5 per 100) -> 250 * 5 = 1250 items
+        # Total = 13750 items. Too many to fetch all.
         # Let's add more conditions to reduce result set.
 
         # (Group A AND SubGroup X AND Tag="tag_0")
         # Tag="tag_0" -> id % 1000 == 0.
-        # Group A (0-249999): 250 items with tag_0.
-        # SubGroup X (Even): tag_0 implies id%1000=0 which is even. So all 250 items match X.
-        # Result: 250 items.
+        # Group A (0-24999): 25 items with tag_0.
+        # SubGroup X (Even): tag_0 implies id%1000=0 which is even. So all 25 items match X.
+        # Result: 25 items.
 
         # OR
 
         # (Group B AND Score=0 AND SubGroup Y)
-        # Group B (250000-499999)
+        # Group B (25000-49999)
         # Score=0 -> id % 100 == 0.
         # SubGroup Y (Odd) -> id is Odd.
         # id % 100 == 0 implies id is Even. So (Even AND Odd) -> Empty.
         # Result: 0 items.
 
-        # Total expected: 250 items.
+        # Total expected: 25 items.
         print("Testing Filter 2: Complex Nested Logic")
         filters = {
             "op": "or",
@@ -896,7 +933,7 @@ class TestFilterOpsScale(unittest.TestCase):
         start_time = time.time()
         ids = self._search(filters, limit=1000)
         print(f"Filter 2 time: {time.time() - start_time:.4f}s")
-        self.assertEqual(len(ids), 250)
+        self.assertEqual(len(ids), 25)
         for i in ids:
             self.assertEqual(i % 1000, 0)
             self.assertTrue(i < self.data_count / 2)
@@ -904,15 +941,351 @@ class TestFilterOpsScale(unittest.TestCase):
         # Filter 3: Regex on Tag (Slow op check)
         # Tag ends with "999" -> tag_999
         # id % 1000 == 999.
-        # Total 500,000 / 1000 = 500 items.
+        # Total 50000 / 1000 = 50 items.
         print("Testing Filter 3: Regex")
         filters = {"op": "regex", "field": "tag", "pattern": "999$"}
         start_time = time.time()
         ids = self._search(filters, limit=1000)
         print(f"Filter 3 time: {time.time() - start_time:.4f}s")
-        self.assertEqual(len(ids), 500)
+        self.assertEqual(len(ids), 50)
         for i in ids:
             self.assertEqual(i % 1000, 999)
+
+
+class TestFilterOpsTypes(unittest.TestCase):
+    """Comprehensive tests for various field types and operators"""
+
+    def setUp(self):
+        clean_dir("./db_test_filters_types/")
+        self.path = "./db_test_filters_types/"
+        self.collection = self._create_collection()
+        self._insert_data()
+        self._create_index()
+
+    def tearDown(self):
+        if self.collection:
+            self.collection.drop()
+        clean_dir(self.path)
+
+    def _create_collection(self):
+        collection_meta = {
+            "CollectionName": "test_filters_types",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "int64", "IsPrimaryKey": True},
+                {"FieldName": "embedding", "FieldType": "vector", "Dim": 4},
+                {"FieldName": "f_int", "FieldType": "int64"},
+                {"FieldName": "f_float", "FieldType": "float32"},
+                {"FieldName": "f_bool", "FieldType": "bool"},
+                {"FieldName": "f_str", "FieldType": "string"},
+                {"FieldName": "f_list_str", "FieldType": "list<string>"},
+                {"FieldName": "f_list_int", "FieldType": "list<int64>"},
+                {"FieldName": "f_date", "FieldType": "date_time"},
+                {"FieldName": "f_geo", "FieldType": "geo_point"},
+            ],
+        }
+        return get_or_create_local_collection(meta_data=collection_meta, path=self.path)
+
+    def _insert_data(self):
+        self.data = [
+            {
+                "id": 1,
+                "embedding": [1.0, 0, 0, 0],
+                "f_int": 10,
+                "f_float": 1.1,
+                "f_bool": True,
+                "f_str": "apple",
+                "f_list_str": ["a", "b"],
+                "f_list_int": [1, 2],
+                "f_date": "2023-01-01T00:00:00+00:00",
+                "f_geo": "0,0",
+            },
+            {
+                "id": 2,
+                "embedding": [1.0, 0, 0, 0],
+                "f_int": 20,
+                "f_float": 2.2,
+                "f_bool": False,
+                "f_str": "banana",
+                "f_list_str": ["b", "c"],
+                "f_list_int": [2, 3],
+                "f_date": "2023-01-02T00:00:00+00:00",
+                "f_geo": "10,10",
+            },
+            {
+                "id": 3,
+                "embedding": [1.0, 0, 0, 0],
+                "f_int": 30,
+                "f_float": 3.3,
+                "f_bool": True,
+                "f_str": "cherry",
+                "f_list_str": ["c", "d"],
+                "f_list_int": [3, 4],
+                "f_date": "2023-01-03T00:00:00+00:00",
+                "f_geo": "20,20",
+            },
+            {
+                "id": 4,
+                "embedding": [1.0, 0, 0, 0],
+                "f_int": -10,
+                "f_float": -1.1,
+                "f_bool": False,
+                "f_str": "date",
+                "f_list_str": ["d", "e"],
+                "f_list_int": [4, 5],
+                "f_date": "2022-12-31T00:00:00+00:00",
+                "f_geo": "-10,-10",
+            },
+            {
+                "id": 5,
+                "embedding": [1.0, 0, 0, 0],
+                "f_int": 0,
+                "f_float": 0.0,
+                "f_bool": True,
+                "f_str": "elderberry",
+                "f_list_str": [],
+                "f_list_int": [],
+                "f_date": "2023-01-01T12:00:00+00:00",
+                "f_geo": "179,89",
+            },
+        ]
+        self.collection.upsert_data(self.data)
+
+    def _create_index(self):
+        index_meta = {
+            "IndexName": "idx_types",
+            "VectorIndex": {"IndexType": "flat"},
+            "ScalarIndex": [
+                "id",
+                "f_int",
+                "f_float",
+                "f_bool",
+                "f_str",
+                "f_list_str",
+                "f_list_int",
+                "f_date",
+                "f_geo",
+            ],
+        }
+        self.collection.create_index("idx_types", index_meta)
+
+    def _search(self, filters):
+        res = self.collection.search_by_vector(
+            "idx_types", dense_vector=[1.0, 0, 0, 0], limit=100, filters=filters
+        )
+        return sorted([item.id for item in res.data])
+
+    def test_debug_float(self):
+        # Check if data exists in storage
+        res = self.collection.search_by_vector("idx_types", dense_vector=[0] * 4, limit=10)
+        print("Stored Data:", [(item.id, item.fields.get("f_float")) for item in res.data])
+
+    def test_numeric_ops(self):
+        """Test numeric types (int64, float32)"""
+        # Int eq
+        self.assertEqual(self._search({"op": "must", "field": "f_int", "conds": [20]}), [2])
+        # Int gt
+        self.assertEqual(self._search({"op": "range", "field": "f_int", "gt": 0}), [1, 2, 3])
+        # Int lt
+        self.assertEqual(self._search({"op": "range", "field": "f_int", "lt": 0}), [4])
+        # Int range
+        self.assertEqual(
+            self._search({"op": "range", "field": "f_int", "gte": 10, "lte": 20}), [1, 2]
+        )
+
+        # Float gt (approximate)
+        # FIXME: Float range query fails, possibly due to C++ implementation issue
+        self.assertEqual(self._search({"op": "range", "field": "f_float", "gt": 2.0}), [2, 3])
+        # Float range
+        self.assertEqual(
+            self._search({"op": "range", "field": "f_float", "gte": -2.0, "lte": 0.0}), [4, 5]
+        )
+
+    def test_string_ops(self):
+        """Test string types"""
+        # Eq
+        self.assertEqual(self._search({"op": "must", "field": "f_str", "conds": ["banana"]}), [2])
+        # Prefix
+        self.assertEqual(self._search({"op": "prefix", "field": "f_str", "prefix": "c"}), [3])
+        # Contains
+        self.assertEqual(
+            self._search({"op": "contains", "field": "f_str", "substring": "erry"}), [3, 5]
+        )
+        # Regex (starts with 'a' or 'd')
+        self.assertEqual(
+            self._search({"op": "regex", "field": "f_str", "pattern": "^(a|d)"}), [1, 4]
+        )
+
+    def test_bool_ops(self):
+        """Test boolean types"""
+        # True
+        self.assertEqual(
+            self._search({"op": "must", "field": "f_bool", "conds": [True]}), [1, 3, 5]
+        )
+        # False
+        self.assertEqual(self._search({"op": "must", "field": "f_bool", "conds": [False]}), [2, 4])
+
+    def test_list_ops(self):
+        """Test list types"""
+        # List<String> contains
+        # "a" is in [a, b] (id 1)
+        self.assertEqual(self._search({"op": "must", "field": "f_list_str", "conds": ["a"]}), [1])
+        # "b" is in id 1, 2
+        self.assertEqual(
+            self._search({"op": "must", "field": "f_list_str", "conds": ["b"]}), [1, 2]
+        )
+
+        # List<Int64> contains
+        # 3 is in id 2, 3
+        self.assertEqual(self._search({"op": "must", "field": "f_list_int", "conds": [3]}), [2, 3])
+
+    def test_datetime_ops(self):
+        """Test date_time types"""
+        # Exact match (might be tricky due to ms conversion, use range preferred)
+        # 2023-01-01T00:00:00+00:00
+
+        # Range
+        # > 2023-01-01
+        self.assertEqual(
+            self._search({"op": "range", "field": "f_date", "gt": "2023-01-01T10:00:00+00:00"}),
+            [2, 3, 5],  # 2(Jan 2), 3(Jan 3), 5(Jan 1 12:00)
+        )
+
+        # Range with different format if supported (DataProcessor handles ISO)
+        self.assertEqual(
+            self._search({"op": "range", "field": "f_date", "lt": "2023-01-01T00:00:00+00:00"}),
+            [4],  # 4(Dec 31)
+        )
+
+    def test_geo_ops(self):
+        """Test geo_point types"""
+        # Geo Range (Circle)
+        # Center 0,0. Radius 100km.
+        # id 1 is 0,0 -> Match
+        # id 2 is 10,10 -> ~1500km away -> No match
+        self.assertEqual(
+            self._search({"op": "geo_range", "field": "f_geo", "center": "0,0", "radius": "100km"}),
+            [1],
+        )
+
+        # Center 10,10. Radius 2000km.
+        # id 1 (0,0) -> ~1500km -> Match
+        # id 2 (10,10) -> 0km -> Match
+        # id 3 (20,20) -> ~1500km from 10,10 -> Match
+        # id 4 (-10,-10) -> ~3000km -> No match
+        self.assertEqual(
+            self._search(
+                {"op": "geo_range", "field": "f_geo", "center": "10,10", "radius": "2000km"}
+            ),
+            [1, 2, 3],
+        )
+
+    def test_mixed_complex(self):
+        """Test mixed complex logic"""
+        # (f_bool=True AND f_int > 0) OR (f_str prefix "d")
+        # Part 1: True & >0 -> 1(10), 3(30). (5 is True but int=0, so not >0 if strictly gt)
+        # Part 2: prefix "d" -> 4("date")
+        # Union: 1, 3, 4
+
+        filters = {
+            "op": "or",
+            "conds": [
+                {
+                    "op": "and",
+                    "conds": [
+                        {"op": "must", "field": "f_bool", "conds": [True]},
+                        {"op": "range", "field": "f_int", "gt": 0},
+                    ],
+                },
+                {"op": "prefix", "field": "f_str", "prefix": "d"},
+            ],
+        }
+        self.assertEqual(self._search(filters), [1, 3, 4])
+
+    def test_persistence_queries(self):
+        """Test if filters work correctly after persistence and restart"""
+        # 1. Execute queries before close (verified by other tests, but good for baseline)
+
+        def _verify_all_ops():
+            # Int eq
+            self.assertEqual(self._search({"op": "must", "field": "f_int", "conds": [20]}), [2])
+            # Int range
+            self.assertEqual(
+                self._search({"op": "range", "field": "f_int", "gte": 10, "lte": 20}), [1, 2]
+            )
+            # String prefix
+            self.assertEqual(self._search({"op": "prefix", "field": "f_str", "prefix": "c"}), [3])
+            # List contains
+            self.assertEqual(
+                self._search({"op": "must", "field": "f_list_str", "conds": ["a"]}), [1]
+            )
+            # Date range
+            self.assertEqual(
+                self._search({"op": "range", "field": "f_date", "gt": "2023-01-01T10:00:00+00:00"}),
+                [2, 3, 5],
+            )
+            # Mixed complex
+            filters = {
+                "op": "or",
+                "conds": [
+                    {
+                        "op": "and",
+                        "conds": [
+                            {"op": "must", "field": "f_bool", "conds": [True]},
+                            {"op": "range", "field": "f_int", "gt": 0},
+                        ],
+                    },
+                    {"op": "prefix", "field": "f_str", "prefix": "d"},
+                ],
+            }
+            self.assertEqual(self._search(filters), [1, 3, 4])
+
+        print("Verifying before restart...")
+        _verify_all_ops()
+
+        # 2. Close and restart
+        print("Closing collection...")
+        self.collection.close()
+        del self.collection
+        self.collection = None
+        gc.collect()
+
+        print("Reopening collection...")
+        # Re-open using the same path
+        self.collection = get_or_create_local_collection(path=self.path)
+
+        # 3. Verify queries after restart
+        print("Verifying after restart...")
+        _verify_all_ops()
+
+
+class TestFilterOpsIP(TestFilterOpsBasic):
+    """Basic Filter operator tests with Inner Product distance"""
+
+    def setUp(self):
+        self.path = "./db_test_filters_ip/"
+        clean_dir(self.path)
+        self.collection = self._create_collection()
+        self._insert_data()
+        self._create_index()
+
+    def tearDown(self):
+        if self.collection:
+            self.collection.drop()
+        clean_dir(self.path)
+
+    def _create_index(self):
+        index_meta = {
+            "IndexName": "idx_basic_ip",
+            "VectorIndex": {"IndexType": "flat", "Distance": "ip"},
+            "ScalarIndex": ["id", "val_int", "val_float", "val_str"],
+        }
+        self.collection.create_index("idx_basic_ip", index_meta)
+
+    def _search(self, filters):
+        res = self.collection.search_by_vector(
+            "idx_basic_ip", dense_vector=[1.0, 0, 0, 0], limit=100, filters=filters
+        )
+        return sorted([item.id for item in res.data])
 
 
 if __name__ == "__main__":

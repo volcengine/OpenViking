@@ -48,10 +48,6 @@ int VectorIndexMeta::init_from_json(const JsonValue& json) {
     search_with_sparse_logit_alpha =
         json["SearchWithSparseLogitAlpha"].GetFloat();
   }
-  if (json.HasMember("IndexWithSparseLogitAlpha")) {
-    index_with_sparse_logit_alpha =
-        json["IndexWithSparseLogitAlpha"].GetFloat();
-  }
   return 0;
 }
 
@@ -102,8 +98,6 @@ int VectorIndexMeta::save_to_json(JsonPrettyWriter& writer) {
   writer.Bool(enable_sparse);
   writer.Key("SearchWithSparseLogitAlpha");
   writer.Double(search_with_sparse_logit_alpha);
-  writer.Key("IndexWithSparseLogitAlpha");
-  writer.Double(index_with_sparse_logit_alpha);
   return 0;
 }
 

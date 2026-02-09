@@ -723,293 +723,9 @@ for group in agg_result.groups:
     print(f"{group['value']}: {group['count']}")
 ```
 
-### 7. 实际应用场景示例
+### 7. 高级特性
 
-#### 7.1 文档检索系统
-
-```python
-import random
-import hashlib
-
-# 创建文档集合
-doc_meta = {
-    "CollectionName": "document_search",
-    "Fields": [
-        {"FieldName": "doc_id", "FieldType": "int64", "IsPrimaryKey": True},
-        {"FieldName": "title", "FieldType": "text"},
-        {"FieldName": "content", "FieldType": "text"},
-        {"FieldName": "author", "FieldType": "text"},
-        {"FieldName": "category", "FieldType": "text"},
-        {"FieldName": "publish_date", "FieldType": "int64"},
-        {"FieldName": "view_count", "FieldType": "int64"},
-        {"FieldName": "embedding", "FieldType": "vector", "Dim": 256},
-    ]
-}
-
-doc_collection = get_or_create_local_collection(meta_data=doc_meta)
-
-# 插入文档数据
-documents = [
-    {
-        "doc_id": 1,
-        "title": "Introduction to Machine Learning",
-        "content": "Machine learning is a subset of artificial intelligence...",
-        "author": "John Doe",
-        "category": "AI",
-        "publish_date": 20240101,
-        "view_count": 1250,
-        "embedding": [random.random() for _ in range(256)]
-    },
-    {
-        "doc_id": 2,
-        "title": "Deep Learning Fundamentals",
-        "content": "Deep learning uses neural networks with multiple layers...",
-        "author": "Jane Smith",
-        "category": "AI",
-        "publish_date": 20240115,
-        "view_count": 2340,
-        "embedding": [random.random() for _ in range(256)]
-    },
-    {
-        "doc_id": 3,
-        "title": "Natural Language Processing",
-        "content": "NLP enables computers to understand human language...",
-        "author": "Bob Johnson",
-        "category": "NLP",
-        "publish_date": 20240120,
-        "view_count": 890,
-        "embedding": [random.random() for _ in range(256)]
-    }
-]
-
-doc_collection.upsert_data(documents)
-
-# 创建索引
-doc_collection.create_index("doc_index", {
-    "IndexName": "doc_index",
-    "VectorIndex": {"IndexType": "flat", "Distance": "ip"},
-    "ScalarIndex": ["category", "author", "view_count", "publish_date"]
-})
-
-# 场景1: 查找相似文档
-query_vec = [random.random() for _ in range(256)]
-similar_docs = doc_collection.search_by_vector(
-    index_name="doc_index",
-    dense_vector=query_vec,
-    limit=3,
-    output_fields=["title", "author", "category"]
-)
-
-print("=== Similar Documents ===")
-for doc in similar_docs.data:
-    print(f"- {doc.fields['title']} by {doc.fields['author']} ({doc.fields['category']})")
-
-# 场景2: 查找特定作者的热门文档
-popular_docs = doc_collection.search_by_scalar(
-    index_name="doc_index",
-    field="view_count",
-    order="desc",
-    filters={"op": "must", "field": "category", "conds": ["AI"]},
-    limit=5,
-    output_fields=["title", "view_count"]
-)
-
-print("\n=== Popular AI Documents ===")
-for doc in popular_docs.data:
-    print(f"- {doc.fields['title']}: {doc.fields['view_count']} views")
-
-# 场景3: 统计各类别的文档数量
-category_stats = doc_collection.aggregate_data(
-    index_name="doc_index",
-    op="count",
-    field="category"
-)
-
-print("\n=== Documents by Category ===")
-for group in category_stats.groups:
-    print(f"- {group['value']}: {group['count']} documents")
-
-# 清理
-doc_collection.close()
-```
-
-#### 7.2 推荐系统
-
-```python
-import random
-import time
-
-# 创建用户行为集合
-user_behavior_meta = {
-    "CollectionName": "user_behaviors",
-    "Fields": [
-        {"FieldName": "behavior_id", "FieldType": "int64", "IsPrimaryKey": True},
-        {"FieldName": "user_id", "FieldType": "int64"},
-        {"FieldName": "item_id", "FieldType": "int64"},
-        {"FieldName": "behavior_type", "FieldType": "text"},  # view, click, purchase
-        {"FieldName": "timestamp", "FieldType": "int64"},
-        {"FieldName": "user_embedding", "FieldType": "vector", "Dim": 64},
-    ]
-}
-
-behavior_collection = get_or_create_local_collection(meta_data=user_behavior_meta)
-
-# 模拟用户行为数据
-behaviors = []
-behavior_types = ["view", "click", "purchase"]
-for i in range(1, 101):
-    behaviors.append({
-        "behavior_id": i,
-        "user_id": (i % 10) + 1,
-        "item_id": (i % 20) + 1,
-        "behavior_type": behavior_types[i % 3],
-        "timestamp": int(time.time()) - random.randint(0, 86400 * 30),  # Last 30 days
-        "user_embedding": [random.random() for _ in range(64)]
-    })
-
-behavior_collection.upsert_data(behaviors)
-
-# 创建索引
-behavior_collection.create_index("behavior_index", {
-    "IndexName": "behavior_index",
-    "VectorIndex": {"IndexType": "flat", "Distance": "ip"},
-    "ScalarIndex": ["user_id", "item_id", "behavior_type", "timestamp"]
-})
-
-# 场景1: 为用户推荐相似用户购买的商品
-user_vec = [random.random() for _ in range(64)]
-recommendations = behavior_collection.search_by_vector(
-    index_name="behavior_index",
-    dense_vector=user_vec,
-    limit=10,
-    filters={"op": "must", "field": "behavior_type", "conds": ["purchase"]},
-    output_fields=["user_id", "item_id", "behavior_type"]
-)
-
-print("=== Recommended Items (from similar users' purchases) ===")
-recommended_items = set()
-for rec in recommendations.data:
-    item_id = rec.fields['item_id']
-    if item_id not in recommended_items:
-        recommended_items.add(item_id)
-        print(f"- Item {item_id} (purchased by user {rec.fields['user_id']})")
-
-# 场景2: 分析不同行为类型的分布
-behavior_stats = behavior_collection.aggregate_data(
-    index_name="behavior_index",
-    op="count",
-    field="behavior_type"
-)
-
-print("\n=== Behavior Type Distribution ===")
-for group in behavior_stats.groups:
-    print(f"- {group['value']}: {group['count']} actions")
-
-# 场景3: 查找某个用户的最近行为
-recent_timestamp = int(time.time()) - 86400 * 7  # Last 7 days
-user_recent = behavior_collection.search_by_scalar(
-    index_name="behavior_index",
-    field="timestamp",
-    order="desc",
-    filters={
-        "op": "range",
-        "field": "timestamp",
-        "gte": recent_timestamp
-    },
-    limit=20,
-    output_fields=["user_id", "item_id", "behavior_type", "timestamp"]
-)
-
-print("\n=== Recent User Behaviors (Last 7 Days) ===")
-for behavior in user_recent.data[:5]:  # Show top 5
-    print(f"- User {behavior.fields['user_id']}: {behavior.fields['behavior_type']} "
-          f"item {behavior.fields['item_id']}")
-
-# 清理
-behavior_collection.close()
-```
-
-#### 7.3 语义搜索缓存系统
-
-```python
-import hashlib
-import random
-
-# 创建查询缓存集合
-cache_meta = {
-    "CollectionName": "query_cache",
-    "Fields": [
-        {"FieldName": "query_hash", "FieldType": "text", "IsPrimaryKey": True},
-        {"FieldName": "query_text", "FieldType": "text"},
-        {"FieldName": "query_embedding", "FieldType": "vector", "Dim": 128},
-        {"FieldName": "result_count", "FieldType": "int64"},
-        {"FieldName": "cache_time", "FieldType": "int64"},
-    ]
-}
-
-cache_collection = get_or_create_local_collection(meta_data=cache_meta)
-
-# 创建索引
-cache_collection.create_index("cache_index", {
-    "IndexName": "cache_index",
-    "VectorIndex": {"IndexType": "flat", "Distance": "ip"}
-})
-
-# 缓存查询函数
-def cache_query(query_text, query_embedding, result_count):
-    query_hash = hashlib.md5(query_text.encode()).hexdigest()
-    cache_data = [{
-        "query_hash": query_hash,
-        "query_text": query_text,
-        "query_embedding": query_embedding,
-        "result_count": result_count,
-        "cache_time": int(time.time())
-    }]
-    cache_collection.upsert_data(cache_data, ttl=3600)  # Cache for 1 hour
-    return query_hash
-
-# 查找相似查询
-def find_similar_cached_queries(query_embedding, limit=5):
-    result = cache_collection.search_by_vector(
-        index_name="cache_index",
-        dense_vector=query_embedding,
-        limit=limit,
-        output_fields=["query_text", "result_count", "cache_time"]
-    )
-    return result.data
-
-# 模拟使用
-queries = [
-    "machine learning tutorial",
-    "deep learning basics",
-    "neural network introduction",
-    "artificial intelligence overview",
-    "ML algorithms explained"
-]
-
-print("=== Caching Queries ===")
-for query in queries:
-    emb = [random.random() for _ in range(128)]
-    count = random.randint(10, 100)
-    query_hash = cache_query(query, emb, count)
-    print(f"Cached: '{query}' (hash: {query_hash[:8]}...)")
-
-# 搜索相似的缓存查询
-print("\n=== Finding Similar Cached Queries ===")
-test_embedding = [random.random() for _ in range(128)]
-similar = find_similar_cached_queries(test_embedding, limit=3)
-
-for item in similar:
-    print(f"- '{item.fields['query_text']}': {item.fields['result_count']} results "
-          f"(similarity: {1-item.score:.4f})")
-
-# 清理
-cache_collection.close()
-```
-
-### 8. 高级特性
-
-#### 8.1 自动 ID 生成
+#### 7.1 自动 ID 生成
 
 ```python
 # 不指定主键的集合（使用自动生成的 AUTO_ID）
@@ -1043,7 +759,7 @@ for item in fetch_result.items:
 auto_collection.close()
 ```
 
-#### 8.2 向量归一化
+#### 7.2 向量归一化
 
 ```python
 import math
@@ -1117,6 +833,45 @@ filters = {"op": "range", "field": "price", "gt": 100}
 
 # 小于
 filters = {"op": "range", "field": "discount", "lt": 0.5}
+```
+
+#### 3. `time_range` - 时间范围查询（date_time）
+
+`date_time` 字段使用 `datetime.isoformat()` 格式，例如 `2026-02-06T12:34:56.123456`。
+不带时区的时间会按**本地时区**解析。
+
+```python
+# 大于等于（ISO 时间字符串）
+filters = {
+    "op": "time_range",
+    "field": "created_at",
+    "gte": "2026-02-01T00:00:00"
+}
+
+# 时间范围（闭区间）
+filters = {
+    "op": "time_range",
+    "field": "created_at",
+    "gte": "2026-02-01T00:00:00",
+    "lte": "2026-02-07T23:59:59"
+}
+```
+
+#### 4. `geo_range` - 地理范围查询（geo_point）
+
+`geo_point` 字段写入格式为 `"longitude,latitude"`，其中：
+- `longitude` ∈ (-180, 180)
+- `latitude` ∈ (-90, 90)
+
+`radius` 支持 `m` 和 `km` 单位。
+
+```python
+filters = {
+    "op": "geo_range",
+    "field": "f_geo_point",
+    "center": "116.412138,39.914912",
+    "radius": "10km"
+}
 ```
 
 ### 复杂过滤示例

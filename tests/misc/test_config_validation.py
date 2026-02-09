@@ -5,7 +5,7 @@
 
 import sys
 
-from openviking.utils.config.agfs_config import AGFSConfig
+from openviking.utils.config.agfs_config import AGFSConfig, S3Config
 from openviking.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
 from openviking.utils.config.vectordb_config import VectorDBBackendConfig
 from openviking.utils.config.vlm_config import VLMConfig
@@ -46,10 +46,13 @@ def test_agfs_validation():
     try:
         config = AGFSConfig(
             backend="s3",
-            s3_bucket="my-bucket",
-            s3_region="us-west-1",
-            s3_access_key="fake-access-key-for-testing",
-            s3_secret_key="fake-secret-key-for-testing-12345",
+            s3=S3Config(
+                bucket="my-bucket",
+                region="us-west-1",
+                access_key="fake-access-key-for-testing",
+                secret_key="fake-secret-key-for-testing-12345",
+                endpoint="https://s3.amazonaws.com"
+            ),
         )
         print("   Pass")
     except ValueError as e:
