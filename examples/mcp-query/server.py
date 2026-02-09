@@ -9,7 +9,7 @@ Provides MCP tools for:
 
 Usage:
   uv run server.py
-  uv run server.py --config ./ov.conf --data ./data --port 8000
+  uv run server.py --config ./ov.conf --data ./data --port 2033
 """
 
 import argparse
@@ -46,7 +46,7 @@ def _get_recipe() -> Recipe:
     return _recipe
 
 
-def create_server(host: str = "127.0.0.1", port: int = 8000) -> FastMCP:
+def create_server(host: str = "127.0.0.1", port: int = 2033) -> FastMCP:
     """Create and configure the MCP server."""
     mcp = FastMCP(
         name="openviking-mcp",
@@ -240,12 +240,12 @@ Examples:
   uv run server.py --transport stdio
 
   # Connect from Claude CLI
-  claude mcp add --transport http openviking http://localhost:8000/mcp
+  claude mcp add --transport http openviking http://localhost:2033/mcp
 
 Environment variables:
   OV_CONFIG    Path to config file (default: ./ov.conf)
   OV_DATA      Path to data directory (default: ./data)
-  OV_PORT      Server port (default: 8000)
+  OV_PORT      Server port (default: 2033)
   OV_DEBUG     Enable debug logging (set to 1)
         """,
     )
@@ -270,8 +270,8 @@ Environment variables:
     parser.add_argument(
         "--port",
         type=int,
-        default=int(os.getenv("OV_PORT", "8000")),
-        help="Port to listen on (default: 8000)",
+        default=int(os.getenv("OV_PORT", "2033")),
+        help="Port to listen on (default: 2033)",
     )
     parser.add_argument(
         "--transport",
