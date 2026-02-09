@@ -153,6 +153,11 @@ Miscellaneous tests.
 | File | Description | Key Test Cases |
 |------|-------------|----------------|
 | `test_vikingdb_observer.py` | Database observer | State change notifications, observer registration/unregistration, event filtering |
+| `test_code_parser.py` | Code repository parser | `ignore_dirs` compliance, `ignore_extensions` compliance, file type detection, symbolic link handling |
+| `test_config_validation.py` | Configuration validation | Config schema validation, required fields, type checking |
+| `test_debug_service.py` | Debug service | Debug endpoint tests, service diagnostics |
+| `test_extract_zip.py` | Zip extraction security (Zip Slip) | Path traversal prevention (`../`), absolute path rejection, symlink entry filtering, backslash traversal, UNC path rejection, directory entry skipping, normal extraction |
+| `test_port_check.py` | AGFS port check socket leak fix | Available port no leak, occupied port raises RuntimeError, occupied port no ResourceWarning |
 
 ### engine/
 

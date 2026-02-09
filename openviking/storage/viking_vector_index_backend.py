@@ -109,6 +109,24 @@ class VikingVectorIndexBackend(VikingDBInterface):
             logger.info(
                 f"VectorDB backend initialized in Volcengine mode: region={volc_config['Region']}"
             )
+        elif config.backend == "vikingdb":
+            if not config.vikingdb.host:
+                raise ValueError("VikingDB backend requires a valid host")
+            # VikingDB private deployment mode
+            self._mode = config.backend
+            viking_config = {
+                "Host": config.vikingdb.host,
+                "Headers": config.vikingdb.headers,
+            }
+
+            from openviking.storage.vectordb.project.vikingdb_project import (
+                get_or_create_vikingdb_project,
+            )
+
+            self.project = get_or_create_vikingdb_project(
+                project_name=self.DEFAULT_PROJECT_NAME, config=viking_config
+            )
+            logger.info(f"VikingDB backend initialized in private mode: {config.vikingdb.host}")
         elif config.backend == "http":
             if not config.url:
                 raise ValueError("HTTP backend requires a valid URL")
@@ -229,25 +247,23 @@ class VikingVectorIndexBackend(VikingDBInterface):
 
             # Build scalar index fields list from Fields
             scalar_index_fields = []
+            exclude_types = {"vector", "sparse_vector", "abstract"}
+
             for field in collection_meta.get("Fields", []):
                 field_name = field.get("FieldName")
                 field_type = field.get("FieldType")
                 is_primary_key = field.get("IsPrimaryKey", False)
-                # Index all non-vector, non-primary-key, and non-date_time fields by default
-                # Volcengine VikingDB doesn't support indexing date_time fields
-                if (
-                    field_name
-                    and field_type not in ("vector", "sparse_vector", "date_time")
-                    and not is_primary_key
-                ):
+                # Index all non-vector and non-primary-key fields by default
+                if field_name and field_type not in exclude_types and not is_primary_key:
                     scalar_index_fields.append(field_name)
 
             # Create default index for the collection
             use_sparse = self.sparse_weight > 0.0
+            index_type = "flat_hybrid" if use_sparse else "flat"
             index_meta = {
                 "IndexName": self.DEFAULT_INDEX_NAME,
                 "VectorIndex": {
-                    "IndexType": "flat_hybrid" if use_sparse else "flat",
+                    "IndexType": index_type,
                     "Distance": distance,
                     "Quant": "int8",
                 },

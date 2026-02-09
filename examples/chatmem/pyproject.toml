@@ -9,3 +9,4 @@ dependencies = [
     "prompt-toolkit>=3.0.52",
     "rich>=13.0.0",
 ]
+

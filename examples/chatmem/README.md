@@ -1,16 +1,18 @@
-# OpenViking Chat with Persistent Memory
+# OpenViking Chat with Memory
 
 Interactive chat interface with memory that persists across sessions using OpenViking's Session API.
 
+<img height="888" alt="image" src="https://github.com/user-attachments/assets/c028f40a-3040-457d-a88c-8220e55973b5" />
+
+
 ## Features
 
-- 🔄 **Multi-turn conversations** - Natural follow-up questions
-- 💾 **Persistent memory** - Conversations saved and resumed
-- ✨ **Memory extraction** - Automatic long-term memory creation
-- 📚 **Source attribution** - See which documents informed answers
-- ⌨️ **Command history** - Use ↑/↓ arrows to navigate
-- 🎨 **Rich UI** - Beautiful terminal interface
-- 🛡️ **Graceful exit** - Ctrl-C or /exit saves session
+- 🔄 **Multi-turn conversations**
+- 💾 **Persistent memory**
+- ✨ **Memory extraction**
+- 📚 **Source attribution**
+- 🎨 **Rich UI**
+- 🛡️ **Graceful exit**
 
 ## Quick Start
 
@@ -20,11 +22,11 @@ cd examples/chatmem
 uv sync
 
 # 1. Configure (copy from query example or create new)
-cp ../query/ov.conf ./ov.conf
+vi ./ov.conf
 # Edit ov.conf with your API keys
 
 # 2. Start chatting
-uv run chat.py
+uv run chatmem.py
 ```
 
 ## How Memory Works
@@ -59,7 +61,7 @@ When you exit (Ctrl-C or /exit), the session:
 
 Next time you run with the same session ID:
 ```bash
-uv run chat.py --session-id my-project
+uv run chatmem.py --session-id my-project
 ```
 
 You'll see:
@@ -74,7 +76,7 @@ The AI remembers your previous conversation context!
 ### Basic Chat
 
 ```bash
-uv run chat.py
+uv run chatmem.py
 ```
 
 **First run:**
@@ -105,39 +107,65 @@ You: Can you give me more examples?
 - `Ctrl-C` - Save and exit gracefully
 - `Ctrl-D` - Exit
 
+#### /time - Performance Timing
+
+Display performance metrics for your queries:
+
+```bash
+You: /time what is retrieval augmented generation?
+
+✅ Roger That
+...answer...
+
+📚 Sources (3 documents)
+...sources...
+
+⏱️  Performance
+┌─────────────────┬─────────┐
+│ Search          │  0.234s │
+│ LLM Generation  │  1.567s │
+│ Total           │  1.801s │
+└─────────────────┴─────────┘
+```
+
+#### /add_resource - Add Documents During Chat
+
+Add documents or URLs to your database without exiting:
+
+```bash
+You: /add_resource ~/Downloads/paper.pdf
+
+📂 Adding resource: /Users/you/Downloads/paper.pdf
+✓ Resource added
+⏳ Processing and indexing...
+✓ Processing complete!
+🎉 Resource is now searchable!
+
+You: what does the paper say about transformers?
+```
+
+Supports:
+- Local files: `/add_resource ~/docs/file.pdf`
+- URLs: `/add_resource https://example.com/doc.md`
+- Directories: `/add_resource ~/research/`
+
 ### Session Management
 
 ```bash
 # Use default session
-uv run chat.py
+uv run chatmem.py
 
 # Use project-specific session
-uv run chat.py --session-id my-project
+uv run chatmem.py --session-id my-project
 
 # Use date-based session
-uv run chat.py --session-id $(date +%Y-%m-%d)
-```
-
-### Options
-
-```bash
-# Adjust creativity
-uv run chat.py --temperature 0.9
-
-# Use more context
-uv run chat.py --top-k 10
-
-# Stricter relevance
-uv run chat.py --score-threshold 0.3
-
-# All options
-uv run chat.py --help
+uv run chatmem.py --session-id $(date +%Y-%m-%d)
 ```
 
 ### Debug Mode
 
 ```bash
-OV_DEBUG=1 uv run chat.py
+OV_DEBUG=1 uv run chatmem.py
 ```
 
 ## Configuration
@@ -187,33 +215,6 @@ On Exit: session.commit()
 Memories Extracted & Persisted
 ```
 
-## Comparison with examples/chat/
-
-| Feature | examples/chat/ | examples/chatmem/ |
-|---------|---------------|-------------------|
-| Multi-turn | ✅ | ✅ |
-| Persistent memory | ❌ | ✅ |
-| Memory extraction | {❌ | ✅ |
-| Session management | ❌ | ✅ |
-| Cross-run memory | ❌ | ✅ |
-
-Use `examples/chat/` for:
-- Quick one-off conversations
-- Testing without persistence
-- Simple prototyping
-
-Use `examples/chatmem/` for:
-- Long-term projects
-- Conversations spanning multiple sessions
-- Building up knowledge base over time
-
-## Tips
-
-- **Organize by project:** Use `--session-id project-name` for different contexts
-- **Date-based sessions:** `--session-id $(date +%Y-%m-%d)` for daily logs
-- **Clear screen, keep memory:** Use `/clear` to clean display without losing history
-- **Check session files:** Look in `data/session/` to see what's stored
-
 ## Troubleshooting
 
 **"Error initializing"**
@@ -221,7 +222,7 @@ Use `examples/chatmem/` for:
 - Ensure `data/` directory is writable
 
 **"No relevant sources found"**
-- Add documents using `../query/add.py`
+- Add documents using `/add_resource`
 - Lower `--score-threshold` value
 - Try rephrasing your question
 
@@ -262,9 +263,3 @@ ls data/memory/
 tar -czf sessions-backup-$(date +%Y%m%d).tar.gz data/session/
 ```
 
-## Next Steps
-
-- Build on this for domain-specific assistants
-- Add session search to find relevant past conversations
-- Implement session export/import for sharing
-- Create session analytics dashboards

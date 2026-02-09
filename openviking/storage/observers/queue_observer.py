@@ -39,7 +39,7 @@ class QueueObserver(BaseObserver):
 
     def _format_status_as_table(self, statuses: Dict[str, QueueStatus]) -> str:
         """
-        Format queue statuses as a string table.
+        Format queue statuses as a table using tabulate.
 
         Args:
             statuses: Dict mapping queue names to QueueStatus
@@ -47,6 +47,8 @@ class QueueObserver(BaseObserver):
         Returns:
             Formatted table string
         """
+        from tabulate import tabulate
+
         if not statuses:
             return "No queue status data available."
 
@@ -61,11 +63,11 @@ class QueueObserver(BaseObserver):
             data.append(
                 {
                     "Queue": queue_name,
-                    "Pending": str(status.pending),
-                    "In Progress": str(status.in_progress),
-                    "Processed": str(status.processed),
-                    "Errors": str(status.error_count),
-                    "Total": str(total),
+                    "Pending": status.pending,
+                    "In Progress": status.in_progress,
+                    "Processed": status.processed,
+                    "Errors": status.error_count,
+                    "Total": total,
                 }
             )
             total_pending += status.pending
@@ -78,51 +80,15 @@ class QueueObserver(BaseObserver):
         data.append(
             {
                 "Queue": "TOTAL",
-                "Pending": str(total_pending),
-                "In Progress": str(total_in_progress),
-                "Processed": str(total_processed),
-                "Errors": str(total_errors),
-                "Total": str(total_total),
+                "Pending": total_pending,
+                "In Progress": total_in_progress,
+                "Processed": total_processed,
+                "Errors": total_errors,
+                "Total": total_total,
             }
         )
 
-        # Simple table formatter
-        headers = ["Queue", "Pending", "In Progress", "Processed", "Errors", "Total"]
-        # Default minimum widths similar to previous col_space
-        min_widths = {
-            "Queue": 20,
-            "Pending": 10,
-            "In Progress": 12,
-            "Processed": 10,
-            "Errors": 8,
-            "Total": 10,
-        }
-
-        col_widths = {h: len(h) for h in headers}
-
-        # Calculate max width based on content and min_widths
-        for row in data:
-            for h in headers:
-                content_len = len(str(row.get(h, "")))
-                col_widths[h] = max(col_widths[h], content_len, min_widths.get(h, 0))
-
-        # Add padding
-        for h in headers:
-            col_widths[h] += 2
-
-        # Build string
-        lines = []
-
-        # Header
-        header_line = "".join(h.ljust(col_widths[h]) for h in headers)
-        lines.append(header_line)
-
-        # Rows
-        for row in data:
-            line = "".join(str(row.get(h, "")).ljust(col_widths[h]) for h in headers)
-            lines.append(line)
-
-        return "\n".join(lines)
+        return tabulate(data, headers="keys", tablefmt="pretty")
 
     def is_healthy(self) -> bool:
         return not self.has_errors()

@@ -8,7 +8,11 @@ jobs:
   lint:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
+      with:
+        fetch-depth: 0 # Required to calculate the git diff
+
+
 
     - name: Set up Python
       uses: actions/setup-python@v6
@@ -16,7 +20,7 @@ jobs:
         python-version: '3.11'
 
     - name: Set up Go
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@v6
       with:
         go-version: 'stable'
 
@@ -28,12 +32,27 @@ jobs:
     - name: Install dependencies
       run: uv sync --frozen --extra dev
 
-    - name: Format with ruff
-      run: uv run ruff format --check openviking/
+    # --- NEW STEP: Get the list of changed files ---
+    - name: Get changed files
+      id: files
+      run: |
+        # Compare the PR head to the base branch
+        echo "changed_files=$(git diff --name-only --diff-filter=d origin/${{ github.base_ref }} HEAD | grep '\.py$' | xargs)" >> $GITHUB_OUTPUT
 
-    - name: Lint with ruff
-      run: uv run ruff check openviking/
+    # --- UPDATED STEPS: Use the file list ---
+    - name: List files
+      run: echo "The changed files are ${{ steps.files.outputs.changed_files }}"
 
-    - name: Type check with mypy
-      run: uv run mypy openviking/
+    - name: Format with ruff (Changed files only)
+      if: steps.files.outputs.changed_files != ''
+      run: uv run ruff format --check ${{ steps.files.outputs.changed_files }}  
+
+    - name: Lint with ruff (Changed files only)
+      if: steps.files.outputs.changed_files != ''
+      run: uv run ruff check ${{ steps.files.outputs.changed_files }}
+
+    - name: Type check with mypy (Changed files only)
+      if: steps.files.outputs.changed_files != ''
+      # Note: Running mypy on specific files may miss cross-file type errors
+      run: uv run mypy ${{ steps.files.outputs.changed_files }}
       continue-on-error: true

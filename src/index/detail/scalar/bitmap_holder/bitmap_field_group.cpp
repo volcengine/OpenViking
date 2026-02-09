@@ -220,7 +220,9 @@ int FieldBitmapGroup::serialize_to_stream(std::ofstream& output) {
     }
 
   } else if (bitmap_type_id == kBitmapGroupRangedMap) {
-    rangedmap_ptr_ = std::make_shared<RangedMap>();
+    if (!rangedmap_ptr_) {
+      rangedmap_ptr_ = std::make_shared<RangedMap>();
+    }
     rangedmap_ptr_->SerializeToStream(output);
   } else if (bitmap_type_id == kBitmapGroupBothBitmapsAndRange) {
     for (auto& itr : bitmap_group_) {
@@ -519,7 +521,15 @@ BitmapPtr FieldBitmapGroupSet::make_field_prefix_copy(
   if (itr == field_bitmap_groups_map_.end()) {
     return nullptr;
   }
-  return itr->second->get_bitmap_by_prefix(prefix);
+
+  std::string search_prefix = prefix;
+  if (is_path_field_name(field)) {
+    if (!search_prefix.empty() && search_prefix[0] != '/') {
+      search_prefix = "/" + search_prefix;
+    }
+  }
+
+  return itr->second->get_bitmap_by_prefix(search_prefix);
 }
 
 BitmapPtr FieldBitmapGroupSet::make_field_contains_copy(

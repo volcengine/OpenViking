@@ -15,6 +15,7 @@ from rich.text import Text
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import threading
 
+import common.boring_logging_config  # noqa: F401
 from common.recipe import Recipe
 from prompt_toolkit import prompt
 from prompt_toolkit.formatted_text import HTML
@@ -128,13 +129,15 @@ class ChatREPL:
         help_text = Text()
         help_text.append("Available Commands:\n\n", style="bold cyan")
         help_text.append("/help", style="bold yellow")
-        help_text.append("   - Show this help message\n", style="white")
+        help_text.append("                - Show this help message\n", style="white")
         help_text.append("/clear", style="bold yellow")
-        help_text.append("  - Clear screen (keeps history)\n", style="white")
-        help_text.append("/exit", style="bold yellow")
-        help_text.append("   - Exit chat\n", style="white")
-        help_text.append("/quit", style="bold yellow")
-        help_text.append("   - Exit chat\n", style="white")
+        help_text.append("               - Clear screen (keeps history)\n", style="white")
+        help_text.append("/time <question>", style="bold yellow")
+        help_text.append("     - Ask question and show performance timing\n", style="white")
+        help_text.append("/add_resource <path>", style="bold yellow")
+        help_text.append(" - Add file/URL to database\n", style="white")
+        help_text.append("/exit or /quit", style="bold yellow")
+        help_text.append("       - Exit chat\n", style="white")
         help_text.append("\nKeyboard Shortcuts:\n\n", style="bold cyan")
         help_text.append("Ctrl-C", style="bold yellow")
         help_text.append("  - Exit gracefully\n", style="white")
@@ -158,18 +161,68 @@ class ChatREPL:
         Returns:
             True if should exit, False otherwise
         """
-        cmd = cmd.strip().lower()
+        cmd_lower = cmd.strip().lower()
 
-        if cmd in ["/exit", "/quit"]:
+        if cmd_lower in ["/exit", "/quit"]:
             console.print(
                 Panel("👋 Goodbye!", style="bold yellow", padding=(0, 1), width=PANEL_WIDTH)
             )
             return True
-        elif cmd == "/help":
+        elif cmd_lower == "/help":
             self._show_help()
-        elif cmd == "/clear":
+        elif cmd_lower == "/clear":
             console.clear()
             self._show_welcome()
+        elif cmd.strip().startswith("/time"):
+            # Extract question from command
+            question = cmd.strip()[5:].strip()  # Remove "/time" prefix
+
+            if not question:
+                console.print("Usage: /time <your question>", style="yellow")
+                console.print("Example: /time what is prompt engineering?", style="dim")
+                console.print()
+            else:
+                self.ask_question(question, show_timing=True)
+        elif cmd.strip().startswith("/add_resource"):
+            # Extract resource path from command
+            resource_path = cmd.strip()[13:].strip()  # Remove "/add_resource" prefix
+
+            if not resource_path:
+                console.print("Usage: /add_resource <path/to/file or URL>", style="yellow")
+                console.print("Examples:", style="dim")
+                console.print("  /add_resource ~/Downloads/paper.pdf", style="dim")
+                console.print("  /add_resource https://example.com/doc.md", style="dim")
+                console.print()
+            else:
+                # Import at usage time to avoid circular imports
+                import os
+                import sys
+                from pathlib import Path
+
+                sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+                from common.resource_manager import add_resource
+
+                # Expand user path
+                if not resource_path.startswith("http"):
+                    resource_path = str(Path(resource_path).expanduser())
+
+                # Add resource with spinner
+                success = show_loading_with_spinner(
+                    "Adding resource...",
+                    add_resource,
+                    client=self.client,
+                    resource_path=resource_path,
+                    console=console,
+                    show_output=True,
+                )
+
+                if success:
+                    console.print()
+                    console.print(
+                        "💡 You can now ask questions about this resource!", style="dim green"
+                    )
+
+                console.print()
         else:
             console.print(f"Unknown command: {cmd}", style="red")
             console.print("Type /help for available commands", style="dim")
@@ -177,7 +230,7 @@ class ChatREPL:
 
         return False
 
-    def ask_question(self, question: str) -> bool:
+    def ask_question(self, question: str, show_timing: bool = False) -> bool:
         """Ask a question and display of answer"""
 
         # Record user message to session
@@ -239,7 +292,32 @@ class ChatREPL:
                     sources_table.add_row(str(i), filename, score_text)
 
                 console.print(sources_table)
-            console.print()
+                console.print()
+
+            # Display timing panel if requested
+            if show_timing and "timings" in result:
+                from rich.table import Table
+
+                timings = result["timings"]
+
+                timing_table = Table(show_header=False, box=None, padding=(0, 2))
+                timing_table.add_column("Metric", style="cyan")
+                timing_table.add_column("Time", style="bold green", justify="right")
+
+                timing_table.add_row("Search", f"{timings['search_time']:.3f}s")
+                timing_table.add_row("LLM Generation", f"{timings['llm_time']:.3f}s")
+                timing_table.add_row("Total", f"{timings['total_time']:.3f}s")
+
+                console.print(
+                    Panel(
+                        timing_table,
+                        title="⏱️  Performance",
+                        style="bold blue",
+                        padding=(0, 1),
+                        width=PANEL_WIDTH,
+                    )
+                )
+                console.print()
 
             return True
 
@@ -338,16 +416,13 @@ def main():
         epilog="""
 Examples:
   # Start chat with default session
-  uv run chat.py
+  uv run chatmem.py
 
   # Use custom session ID
-  uv run chat.py --session-id my-project
-
-  # Adjust creativity
-  uv run chat.py --temperature 0.9
+  uv run chatmem.py --session-id my-project
 
   # Enable debug logging
-  OV_DEBUG=1 uv run chat.py
+  OV_DEBUG=1 uv run chatmem.py
         """,
     )
 

@@ -7,6 +7,7 @@ from openviking.storage.vectordb.meta.collection_meta import CollectionMeta
 from openviking.storage.vectordb.meta.dict import IDict
 from openviking.storage.vectordb.meta.local_dict import PersistentDict, VolatileDict
 from openviking.storage.vectordb.utils import validation
+from openviking.storage.vectordb.utils.data_processor import DataProcessor
 
 
 def create_index_meta(
@@ -76,22 +77,8 @@ class IndexMeta:
         fields_dict = collection_meta.fields_dict
         scalar_index: List[Dict[str, str]] = []
         if "ScalarIndex" in inner_meta:
-            scalar_index = [
-                {
-                    "FieldName": item,
-                    "FieldType": fields_dict[item]["FieldType"],
-                }
-                for item in inner_meta["ScalarIndex"]
-                if item in fields_dict
-                and fields_dict[item]["FieldType"]
-                in [
-                    "int64",
-                    "float32",
-                    "string",
-                    "bool",
-                    "path",
-                ]
-            ]
+            converter = DataProcessor(fields_dict)
+            scalar_index = converter.build_scalar_index_meta(inner_meta["ScalarIndex"])
         inner_meta["ScalarIndex"] = scalar_index
         if "VectorIndex" in inner_meta:
             vector_index = {
@@ -126,7 +113,9 @@ class IndexMeta:
         return inner_meta
 
     @staticmethod
-    def _get_user_meta(inner_meta: Dict[str, Any]) -> Dict[str, Any]:
+    def _get_user_meta(
+        inner_meta: Dict[str, Any], collection_meta: CollectionMeta
+    ) -> Dict[str, Any]:
         """Convert internal metadata back to user facing metadata structure.
 
         Args:
@@ -141,8 +130,10 @@ class IndexMeta:
         if user_meta["VectorIndex"].pop("NormalizeVector", False):
             user_meta["VectorIndex"]["Distance"] = "cosine"
         if "ScalarIndex" in user_meta:
-            scalar_index = [item["FieldName"] for item in user_meta["ScalarIndex"]]
-            user_meta["ScalarIndex"] = scalar_index
+            converter = DataProcessor(collection_meta.fields_dict)
+            user_meta["ScalarIndex"] = converter.user_scalar_fields_from_engine(
+                user_meta["ScalarIndex"]
+            )
         return user_meta
 
     def update(self, additional_user_meta: Dict[str, Any]) -> bool:
@@ -158,7 +149,7 @@ class IndexMeta:
             additional_user_meta, self.collection_meta.fields_dict
         ):
             return False
-        user_meta = IndexMeta._get_user_meta(self.inner_meta)
+        user_meta = IndexMeta._get_user_meta(self.inner_meta, self.collection_meta)
 
         # Only update fields that are present in additional_user_meta
         if "ScalarIndex" in additional_user_meta:
@@ -186,7 +177,7 @@ class IndexMeta:
         Returns:
             Dict[str, Any]: The user facing metadata.
         """
-        return IndexMeta._get_user_meta(self.inner_meta)
+        return IndexMeta._get_user_meta(self.inner_meta, self.collection_meta)
 
     def has_sparse(self) -> bool:
         """Check if sparse vector is enabled in the index.

@@ -50,7 +50,7 @@ jobs:
     if: inputs.build_sdist
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
       with:
         submodules: recursive
         fetch-depth: 0  # Required for setuptools_scm to detect version from git tags
@@ -78,7 +78,7 @@ jobs:
       run: uv run python -m build --sdist
 
     - name: Store the distribution packages
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: python-package-distributions-sdist
         path: dist/*.tar.gz
@@ -119,7 +119,7 @@ jobs:
         ln -fs /usr/share/zoneinfo/Etc/UTC /etc/localtime
         dpkg-reconfigure -f noninteractive tzdata
 
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
       with:
         submodules: recursive
         fetch-depth: 0  # Required for setuptools_scm to detect version from git tags
@@ -210,7 +210,7 @@ jobs:
         rmdir dist_fixed
 
     - name: Store the distribution packages
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: python-package-distributions-linux-${{ matrix.python-version }}
         path: dist/
@@ -237,7 +237,7 @@ jobs:
           - os: ubuntu-latest
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
       with:
         submodules: recursive
         fetch-depth: 0  # Required for setuptools_scm to detect version from git tags
@@ -280,7 +280,7 @@ jobs:
       run: uv run python -m build --wheel
 
     - name: Store the distribution packages
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: python-package-distributions-${{ matrix.os }}-${{ matrix.python-version }}
         path: dist/

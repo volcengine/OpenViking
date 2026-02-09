@@ -107,6 +107,16 @@ else:
                     "propagate": False,
                 },
                 "apscheduler": {"level": "CRITICAL", "handlers": ["null"], "propagate": False},
+                "openviking.parse.tree_builder": {
+                    "level": "CRITICAL",
+                    "handlers": ["null"],
+                    "propagate": False,
+                },
+                "openviking.service.core": {
+                    "level": "CRITICAL",
+                    "handlers": ["null"],
+                    "propagate": False,
+                },
             },
         }
     )

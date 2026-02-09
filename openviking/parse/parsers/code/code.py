@@ -12,9 +12,10 @@ Implements V5.0 asynchronous architecture:
 import asyncio
 import os
 import shutil
+import stat
 import tempfile
 import time
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, List, Optional, Union
 
 from openviking.parse.base import (
@@ -24,8 +25,6 @@ from openviking.parse.base import (
     create_parse_result,
 )
 from openviking.parse.parsers.base_parser import BaseParser
-from openviking.utils.logger import get_logger
-
 from openviking.parse.parsers.constants import (
     CODE_EXTENSIONS,
     DOCUMENTATION_EXTENSIONS,
@@ -34,10 +33,9 @@ from openviking.parse.parsers.constants import (
     FILE_TYPE_OTHER,
     IGNORE_DIRS,
     IGNORE_EXTENSIONS,
-    ADDITIONAL_TEXT_EXTENSIONS,
-    TEXT_ENCODINGS,
-    UTF8_VARIANTS,
 )
+from openviking.parse.parsers.upload_utils import upload_directory
+from openviking.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -249,115 +247,56 @@ class CodeRepositoryParser(BaseParser):
         name = path.stem
 
         with zipfile.ZipFile(zip_path, "r") as zip_ref:
-            zip_ref.extractall(target_dir)
+            target = Path(target_dir).resolve()
+            for info in zip_ref.infolist():
+                mode = info.external_attr >> 16
+                # Skip directory entries (check both name convention and external attrs)
+                if info.is_dir() or stat.S_ISDIR(mode):
+                    continue
+                # Skip symlink entries to prevent symlink-based escapes
+                if stat.S_ISLNK(mode):
+                    logger.warning(f"Skipping symlink entry in zip: {info.filename}")
+                    continue
+                # Reject entries with suspicious raw path components before extraction
+                raw = info.filename.replace("\\", "/")
+                raw_parts = [p for p in raw.split("/") if p]
+                if ".." in raw_parts:
+                    raise ValueError(f"Zip Slip detected: entry {info.filename!r} contains '..'")
+                if PurePosixPath(raw).is_absolute() or (len(raw) >= 2 and raw[1] == ":"):
+                    raise ValueError(
+                        f"Zip Slip detected: entry {info.filename!r} is an absolute path"
+                    )
+                # Normalize the member name the same way zipfile does
+                # (strip drive/UNC, remove empty/"."/ ".." components) then verify
+                arcname = info.filename.replace("/", os.sep)
+                if os.path.altsep:
+                    arcname = arcname.replace(os.path.altsep, os.sep)
+                arcname = os.path.splitdrive(arcname)[1]
+                arcname = os.sep.join(p for p in arcname.split(os.sep) if p not in ("", ".", ".."))
+                if not arcname:
+                    continue  # entry normalizes to empty path, skip
+                member_path = (Path(target_dir) / arcname).resolve()
+                if not member_path.is_relative_to(target):
+                    raise ValueError(
+                        f"Zip Slip detected: entry {info.filename!r} escapes target directory"
+                    )
+                # Extract single member and verify the actual path on disk
+                extracted = Path(zip_ref.extract(info, target_dir)).resolve()
+                if not extracted.is_relative_to(target):
+                    # Best-effort cleanup of the escaped file
+                    try:
+                        extracted.unlink(missing_ok=True)
+                    except OSError as cleanup_err:
+                        logger.warning(
+                            f"Failed to clean up escaped file {extracted}: {cleanup_err}"
+                        )
+                    raise ValueError(
+                        f"Zip Slip detected: entry {info.filename!r} escapes target directory"
+                    )
 
         return name
 
     async def _upload_directory(self, local_dir: Path, viking_uri_base: str, viking_fs: Any) -> int:
-        """
-        Recursively upload directory to VikingFS.
-
-        Args:
-            local_dir: Local source directory
-            viking_uri_base: Target Viking URI
-            viking_fs: VikingFS instance
-
-        Returns:
-            Number of uploaded files
-        """
-        count = 0
-
-        # Ensure target directory exists (although write_file handles parents, mkdir ensures root exists)
-        await viking_fs.mkdir(viking_uri_base, exist_ok=True)
-
-        for root, dirs, files in os.walk(local_dir):
-            # Modify dirs in-place to skip ignored directories
-            dirs[:] = [d for d in dirs if d not in IGNORE_DIRS and not d.startswith(".")]
-
-            for file in files:
-                if file.startswith("."):
-                    continue
-
-                file_path = Path(root) / file
-
-                file_path = Path(root) / file
-
-                # Calculate relative path for URI construction
-                rel_path = file_path.relative_to(local_dir)
-                rel_path_str = str(rel_path).replace(os.sep, "/")
-
-                # Check if it's a symbolic link (skip and log)
-                if os.path.islink(file_path):
-                    target = os.readlink(file_path)
-                    logger.info(f"Ignoring symbolic link {rel_path_str}: {file_path} -> {target}")
-                    continue
-
-                # Check extension
-                if file_path.suffix.lower() in IGNORE_EXTENSIONS:
-                    continue
-
-                # Check file size (skip > 10MB)
-                try:
-                    size = file_path.stat().st_size
-                    if size > 10 * 1024 * 1024:
-                        logger.warning(f"Skipping large file {file}: {size} bytes")
-                        continue
-                    if size == 0:
-                        continue
-                except OSError:
-                    continue
-
-                # Construct Viking URI: base + rel_path
-                target_uri = f"{viking_uri_base}/{rel_path_str}"
-
-                # Read and upload
-                try:
-                    content = file_path.read_bytes()
-
-                    # Check if this is a text file that might need encoding conversion
-                    extension = file_path.suffix.lower()
-                    is_text_file = (
-                        extension in CODE_EXTENSIONS
-                        or extension in DOCUMENTATION_EXTENSIONS
-                        or extension in ADDITIONAL_TEXT_EXTENSIONS
-                    )
-
-                    if is_text_file:
-                        # Try to detect encoding and convert to UTF-8
-                        try:
-                            detected_encoding = None
-                            for encoding in TEXT_ENCODINGS:
-                                try:
-                                    # Try to decode with this encoding
-                                    decoded = content.decode(encoding)
-                                    detected_encoding = encoding
-                                    break
-                                except UnicodeDecodeError:
-                                    continue
-
-                            if detected_encoding and detected_encoding not in UTF8_VARIANTS:
-                                # Convert to UTF-8
-                                decoded = content.decode(detected_encoding, errors="replace")
-                                content = decoded.encode("utf-8")
-                                logger.debug(
-                                    f"Converted {rel_path_str} from {detected_encoding} to UTF-8"
-                                )
-
-                        except Exception as encode_error:
-                            # If encoding detection/conversion fails, use original bytes
-                            logger.warning(
-                                f"Encoding detection failed for {file_path}: {encode_error}"
-                            )
-
-                    # Use write_file_bytes for safety
-                    await viking_fs.write_file_bytes(target_uri, content)
-
-                    # TODO: Add metadata tagging when VikingFS supports it
-                    # file_type = self._detect_file_type(file_path)
-                    # await viking_fs.set_metadata(target_uri, {"file_type": file_type})
-
-                    count += 1
-                except Exception as e:
-                    logger.warning(f"Failed to upload {file_path}: {e}")
-
+        """Recursively upload directory to VikingFS using shared upload utilities."""
+        count, _ = await upload_directory(local_dir, viking_uri_base, viking_fs)
         return count
