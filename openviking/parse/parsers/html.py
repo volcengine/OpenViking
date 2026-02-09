@@ -351,6 +351,7 @@ class HTMLParser(BaseParser):
         Returns:
             ParseResult from delegated parser
         """
+        temp_path = None
         try:
             # Download to temporary file
             temp_path = await self._download_file(url)
@@ -358,36 +359,25 @@ class HTMLParser(BaseParser):
             # Get appropriate parser
             if file_type == "pdf":
                 from openviking.parse.parsers.pdf import PDFParser
-
                 parser = PDFParser()
+                result = await parser.parse(temp_path)
             elif file_type == "markdown":
                 from openviking.parse.parsers.markdown import MarkdownParser
-
                 parser = MarkdownParser()
+                result = await parser.parse(temp_path)
             elif file_type == "text":
                 from openviking.parse.parsers.text import TextParser
-
                 parser = TextParser()
+                result = await parser.parse(temp_path)
             elif file_type == "html":
                 # Parse downloaded HTML locally
                 return await self._parse_local_file(Path(temp_path), start_time, **kwargs)
             else:
                 raise ValueError(f"Unsupported file type: {file_type}")
 
-            # Parse downloaded file
-            result = await parser.parse(temp_path)
-
-            # Update metadata
             result.meta.update(meta)
             result.meta["downloaded_from"] = url
             result.meta["url_type"] = f"download_{file_type}"
-
-            # Clean up temp file
-            try:
-                Path(temp_path).unlink()
-            except Exception:
-                pass
-
             return result
 
         except Exception as e:
@@ -399,6 +389,14 @@ class HTMLParser(BaseParser):
                 parse_time=time.time() - start_time,
                 warnings=[f"Failed to download/parse link: {e}"],
             )
+        finally:
+            if temp_path:
+                try:
+                    p = Path(temp_path)
+                    if p.exists():
+                        p.unlink()
+                except Exception:
+                    pass
 
     async def _handle_code_repository(
         self, url: str, start_time: float, meta: Dict[str, Any], **kwargs
