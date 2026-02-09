@@ -8,6 +8,7 @@ Unit tests and integration tests for OpenViking.
 tests/
 ├── conftest.py                      # Global fixtures
 ├── client/                          # Client API tests
+├── server/                          # Server HTTP API & SDK tests
 ├── session/                         # Session API tests
 ├── vectordb/                        # VectorDB tests
 ├── misc/                            # Miscellaneous tests
@@ -17,18 +18,15 @@ tests/
 
 ## Prerequisites
 
-### Environment Variables
+### Configuration
+
+Set the `OPENVIKING_CONFIG_FILE` environment variable to point to your `ov.conf` file, which manages VLM, Embedding, and other model settings in one place:
 
 ```bash
-# VLM Configuration (required)
-export OPENVIKING_VLM_API_KEY="your-api-key"
-export OPENVIKING_VLM_API_BASE="https://api.openai.com/v1"
-export OPENVIKING_VLM_MODEL="gpt-4o-mini"
-
-# Embedding Configuration (required)
-export OPENVIKING_EMBEDDING_API_KEY="your-embedding-key"
-export OPENVIKING_EMBEDDING_API_BASE="https://api.openai.com/v1"
+export OPENVIKING_CONFIG_FILE="/path/to/ov.conf"
 ```
+
+See [docs/en/guides/configuration.md](../docs/en/guides/configuration.md) for the config file format.
 
 ### Dependencies
 
@@ -42,10 +40,10 @@ pip install pytest pytest-asyncio
 
 ```bash
 # Run all tests
-pytest tests/client tests/session tests/vectordb tests/misc tests/integration -v
+pytest tests/client tests/server tests/session tests/vectordb tests/misc tests/integration -v
 
 # Run with coverage
-pytest tests/client tests/session tests/vectordb tests/misc tests/integration --cov=openviking --cov-report=html
+pytest tests/client tests/server tests/session tests/vectordb tests/misc tests/integration --cov=openviking --cov-report=html
 ```
 
 ### Running Specific Tests
@@ -83,6 +81,12 @@ pytest tests/client/test_skill_management.py -v
 # Test semantic search
 pytest tests/client/test_search.py -v
 
+# Test server HTTP API
+pytest tests/server/ -v
+
+# Test server SDK end-to-end
+pytest tests/server/test_http_client_sdk.py -v
+
 # Test session management
 pytest tests/session/ -v
 
@@ -119,6 +123,24 @@ Tests for the OpenViking client API (`AsyncOpenViking` / `SyncOpenViking`).
 | `test_relations.py` | Resource linking | `link()` single/multiple URIs with reason; `unlink()` existing/nonexistent; `relations()` query |
 | `test_file_operations.py` | File manipulation | `rm()` file/directory with recursive; `mv()` rename/move; `grep()` content search with case sensitivity; `glob()` pattern matching |
 | `test_import_export.py` | Import/Export | `export_ovpack()` file/directory; `import_ovpack()` with force/vectorize options; roundtrip verification |
+
+### server/
+
+Tests for the OpenViking HTTP server API and HTTPClient SDK.
+
+| File | Description | Key Test Cases |
+|------|-------------|----------------|
+| `test_server_health.py` | Server infrastructure | `/health` endpoint, `/api/v1/system/status`, `x-process-time` header, structured error responses, 404 for unknown routes |
+| `test_auth.py` | API key authentication | Valid X-API-Key header, valid Bearer token, missing/wrong key returns 401, no auth when API key not configured, protected endpoints |
+| `test_api_resources.py` | Resource management | `add_resource()` with/without wait, file not found, custom target URI, `wait_processed()` |
+| `test_api_filesystem.py` | Filesystem endpoints | `ls` root/simple/recursive, `mkdir`, `tree`, `stat`, `rm`, `mv` |
+| `test_api_content.py` | Content endpoints | `read`, `abstract`, `overview` |
+| `test_api_search.py` | Search endpoints | `find` with target_uri/score_threshold, `search` with session, `grep` case-insensitive, `glob` |
+| `test_api_sessions.py` | Session endpoints | Create, list, get, delete session; add messages; compress; extract |
+| `test_api_relations.py` | Relations endpoints | Get relations, link single/multiple targets, unlink |
+| `test_api_observer.py` | Observer endpoints | Queue, VikingDB, VLM, system observer status |
+| `test_error_scenarios.py` | Error handling | Invalid JSON, missing fields, not found, wrong content type, invalid URI format |
+| `test_http_client_sdk.py` | HTTPClient SDK E2E | Health, add resource, wait, ls, mkdir, tree, session lifecycle, find, full workflow (real HTTP server) |
 
 ### session/
 

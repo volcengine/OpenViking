@@ -534,7 +534,10 @@ class HTTPClient(BaseClient):
             Session object
         """
         from openviking.client.session import Session
-        return Session(self, session_id or "", self._user)
+        if not session_id:
+            result = run_async(self.create_session())
+            session_id = result.get("session_id", "")
+        return Session(self, session_id, self._user)
 
     def get_status(self) -> Dict[str, Any]:
         """Get system status.

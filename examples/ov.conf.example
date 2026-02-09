@@ -1,10 +1,4 @@
 {
-  "server": {
-    "host": "0.0.0.0",
-    "port": 1933,
-    "api_key": null,
-    "cors_origins": ["*"]
-  },
   "storage": {
     "vectordb": {
       "name": "context",
