@@ -75,13 +75,13 @@ class TestWaitProcessed:
         """Test waiting for processing to complete"""
         await client.add_resource(path=str(sample_markdown_file), reason="Test")
 
-        status = await client.wait_processed(timeout=60.0)
+        status = await client.wait_processed()
 
         assert isinstance(status, dict)
 
     async def test_wait_processed_empty_queue(self, client: AsyncOpenViking):
         """Test waiting on empty queue"""
-        status = await client.wait_processed(timeout=5.0)
+        status = await client.wait_processed()
 
         assert isinstance(status, dict)
 
@@ -92,6 +92,6 @@ class TestWaitProcessed:
         for f in sample_files:
             await client.add_resource(path=str(f), reason="Batch test")
 
-        status = await client.wait_processed(timeout=120.0)
+        status = await client.wait_processed()
 
         assert isinstance(status, dict)
