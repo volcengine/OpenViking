@@ -82,6 +82,11 @@ class AGFSConfig(BaseModel):
 
     retry_times: int = Field(default=3, description="AGFS retry times on failure")
 
+    use_ssl: bool = Field(
+        default=True,
+        description="Enable/Disable SSL (HTTPS) for AGFS service. Set to False for local testing without HTTPS.",
+    )
+
     # S3 backend configuration
     # These settings are used when backend is set to 's3'.
     # AGFS will act as a gateway to the specified S3 bucket.

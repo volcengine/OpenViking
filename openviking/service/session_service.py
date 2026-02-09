@@ -9,7 +9,6 @@ Provides session management operations: session, sessions, add_message, compress
 from typing import Any, Dict, List, Optional
 
 from openviking.exceptions import NotFoundError, NotInitializedError
-from openviking.message import Part
 from openviking.session import Session
 from openviking.session.compressor import SessionCompressor
 from openviking.storage import VikingDBManager
