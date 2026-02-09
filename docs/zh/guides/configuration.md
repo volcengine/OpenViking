@@ -70,6 +70,26 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 }
 ```
 
+**参数**
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `provider` | str | `"volcengine"`、`"openai"` 或 `"vikingdb"` |
+| `api_key` | str | API Key |
+| `model` | str | 模型名称 |
+| `dimension` | int | 向量维度 |
+| `input` | str | 输入类型：`"text"` 或 `"multimodal"` |
+| `batch_size` | int | 批量请求大小 |
+
+**可用模型**
+
+| 模型 | 维度 | 输入类型 | 说明 |
+|------|------|----------|------|
+| `doubao-embedding-vision-250615` | 1024 | multimodal | 推荐 |
+| `doubao-embedding-250615` | 1024 | text | 仅文本 |
+
+使用 `input: "multimodal"` 时，OpenViking 可以嵌入文本、图片（PNG、JPG 等）和混合内容。
+
 **支持的 provider:**
 - `openai`: OpenAI Embedding API
 - `volcengine`: 火山引擎 Embedding API
@@ -145,11 +165,9 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 }
 ```
 
-详见 [Embedding 配置](./embedding.md)。
-
 ### vlm
 
-用于语义提取的视觉语言模型。
+用于语义提取（L0/L1 生成）的视觉语言模型。
 
 ```json
 {
@@ -162,11 +180,31 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 }
 ```
 
-详见 [LLM 配置](./llm.md)。
+**参数**
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `api_key` | str | API Key |
+| `model` | str | 模型名称 |
+| `base_url` | str | API 端点（可选） |
+
+**可用模型**
+
+| 模型 | 说明 |
+|------|------|
+| `doubao-seed-1-8-251228` | 推荐用于语义提取 |
+| `doubao-pro-32k` | 用于更长上下文 |
+
+添加资源时，VLM 生成：
+
+1. **L0（摘要）**：~100 token 摘要
+2. **L1（概览）**：~2k token 概览，包含导航信息
+
+如果未配置 VLM，L0/L1 将直接从内容生成（语义性较弱），多模态资源的描述可能有限。
 
 ### rerank
 
-用于搜索精排的 Rerank 模型。
+用于搜索结果精排的 Rerank 模型。
 
 ```json
 {
@@ -177,6 +215,14 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
   }
 }
 ```
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `provider` | str | `"volcengine"` |
+| `api_key` | str | API Key |
+| `model` | str | 模型名称 |
+
+如果未配置 Rerank，搜索仅使用向量相似度。
 
 ### storage
 
@@ -199,8 +245,6 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 ```
 
 ## 环境变量
-
-配置值可以通过环境变量设置：
 
 ```bash
 export VOLCENGINE_API_KEY="your-api-key"
@@ -251,9 +295,7 @@ config = OpenVikingConfig(
 client = ov.AsyncOpenViking(config=config)
 ```
 
-## 配置参考
-
-### 完整 Schema
+## 完整 Schema
 
 ```json
 {
@@ -299,20 +341,20 @@ client = ov.AsyncOpenViking(config=config)
 
 ## Server 配置
 
-将 OpenViking 作为 HTTP 服务运行时，使用单独的 YAML 配置文件（`~/.openviking/server.yaml`）：
+将 OpenViking 作为 HTTP 服务运行时，服务端从同一个 JSON 配置文件中读取配置（通过 `--config` 或 `OPENVIKING_CONFIG_FILE`）：
 
-```yaml
-server:
-  host: 0.0.0.0
-  port: 1933
-  api_key: your-secret-key    # omit to disable authentication
-  cors_origins:
-    - "*"
-
-storage:
-  path: /data/openviking       # local storage path
-  # vectordb_url: http://...   # remote VectorDB (service mode)
-  # agfs_url: http://...       # remote AGFS (service mode)
+```json
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 1933,
+    "api_key": "your-secret-key",
+    "cors_origins": ["*"]
+  },
+  "storage": {
+    "path": "/data/openviking"
+  }
+}
 ```
 
 Server 配置也可以通过环境变量设置：
@@ -324,11 +366,47 @@ Server 配置也可以通过环境变量设置：
 | `OPENVIKING_API_KEY` | 用于认证的 API Key |
 | `OPENVIKING_PATH` | 存储路径 |
 
-详见 [服务部署](../guides/deployment.md)。
+详见 [服务部署](./deployment.md)。
+
+## 故障排除
+
+### API Key 错误
+
+```
+Error: Invalid API key
+```
+
+检查 API Key 是否正确且有相应权限。
+
+### 维度不匹配
+
+```
+Error: Vector dimension mismatch
+```
+
+确保配置中的 `dimension` 与模型输出维度匹配。
+
+### VLM 超时
+
+```
+Error: VLM request timeout
+```
+
+- 检查网络连接
+- 增加配置中的超时时间
+- 尝试更小的模型
+
+### 速率限制
+
+```
+Error: Rate limit exceeded
+```
+
+火山引擎有速率限制。考虑批量处理时添加延迟或升级套餐。
 
 ## 相关文档
 
-- [Embedding 配置](./embedding.md) - Embedding 设置
-- [LLM 配置](./llm.md) - LLM 设置
+- [火山引擎购买指南](./volcengine-purchase-guide.md) - API Key 获取
 - [API 概览](../api/overview.md) - 客户端初始化
-- [服务部署](../guides/deployment.md) - Server 配置
+- [服务部署](./deployment.md) - Server 配置
+- [上下文层级](../concepts/context-layers.md) - L0/L1/L2

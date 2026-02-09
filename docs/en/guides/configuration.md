@@ -59,11 +59,29 @@ Embedding model configuration for vector search.
 }
 ```
 
-See [Embedding Configuration](./embedding.md) for details.
+**Parameters**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `provider` | str | `"volcengine"`, `"openai"`, or `"vikingdb"` |
+| `api_key` | str | API key |
+| `model` | str | Model name |
+| `dimension` | int | Vector dimension |
+| `input` | str | Input type: `"text"` or `"multimodal"` |
+| `batch_size` | int | Batch size for embedding requests |
+
+**Available Models**
+
+| Model | Dimension | Input Type | Notes |
+|-------|-----------|------------|-------|
+| `doubao-embedding-vision-250615` | 1024 | multimodal | Recommended |
+| `doubao-embedding-250615` | 1024 | text | Text only |
+
+With `input: "multimodal"`, OpenViking can embed text, images (PNG, JPG, etc.), and mixed content.
 
 ### vlm
 
-Vision Language Model for semantic extraction.
+Vision Language Model for semantic extraction (L0/L1 generation).
 
 ```json
 {
@@ -75,11 +93,31 @@ Vision Language Model for semantic extraction.
 }
 ```
 
-See [LLM Configuration](./llm.md) for details.
+**Parameters**
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `api_key` | str | API key |
+| `model` | str | Model name |
+| `base_url` | str | API endpoint (optional) |
+
+**Available Models**
+
+| Model | Notes |
+|-------|-------|
+| `doubao-seed-1-8-251228` | Recommended for semantic extraction |
+| `doubao-pro-32k` | For longer context |
+
+When resources are added, VLM generates:
+
+1. **L0 (Abstract)**: ~100 token summary
+2. **L1 (Overview)**: ~2k token overview with navigation
+
+If VLM is not configured, L0/L1 will be generated from content directly (less semantic), and multimodal resources may have limited descriptions.
 
 ### rerank
 
-Reranking model for search refinement.
+Reranking model for search result refinement.
 
 ```json
 {
@@ -90,6 +128,14 @@ Reranking model for search refinement.
   }
 }
 ```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `provider` | str | `"volcengine"` |
+| `api_key` | str | API key |
+| `model` | str | Model name |
+
+If rerank is not configured, search uses vector similarity only.
 
 ### storage
 
@@ -112,8 +158,6 @@ Storage backend configuration.
 ```
 
 ## Environment Variables
-
-Configuration values can be set via environment variables:
 
 ```bash
 export VOLCENGINE_API_KEY="your-api-key"
@@ -164,9 +208,7 @@ config = OpenVikingConfig(
 client = ov.AsyncOpenViking(config=config)
 ```
 
-## Configuration Reference
-
-### Full Schema
+## Full Configuration Schema
 
 ```json
 {
@@ -212,20 +254,20 @@ Notes:
 
 ## Server Configuration
 
-When running OpenViking as an HTTP server, use a separate YAML config file (`~/.openviking/server.yaml`):
+When running OpenViking as an HTTP server, the server reads its configuration from the same JSON config file (via `--config` or `OPENVIKING_CONFIG_FILE`):
 
-```yaml
-server:
-  host: 0.0.0.0
-  port: 1933
-  api_key: your-secret-key    # omit to disable authentication
-  cors_origins:
-    - "*"
-
-storage:
-  path: /data/openviking       # local storage path
-  # vectordb_url: http://...   # remote VectorDB (service mode)
-  # agfs_url: http://...       # remote AGFS (service mode)
+```json
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 1933,
+    "api_key": "your-secret-key",
+    "cors_origins": ["*"]
+  },
+  "storage": {
+    "path": "/data/openviking"
+  }
+}
 ```
 
 Server configuration can also be set via environment variables:
@@ -237,11 +279,47 @@ Server configuration can also be set via environment variables:
 | `OPENVIKING_API_KEY` | API key for authentication |
 | `OPENVIKING_PATH` | Storage path |
 
-See [Server Deployment](../guides/deployment.md) for full details.
+See [Server Deployment](./deployment.md) for full details.
+
+## Troubleshooting
+
+### API Key Error
+
+```
+Error: Invalid API key
+```
+
+Check your API key is correct and has the required permissions.
+
+### Vector Dimension Mismatch
+
+```
+Error: Vector dimension mismatch
+```
+
+Ensure the `dimension` in config matches the model's output dimension.
+
+### VLM Timeout
+
+```
+Error: VLM request timeout
+```
+
+- Check network connectivity
+- Increase timeout in config
+- Try a smaller model
+
+### Rate Limiting
+
+```
+Error: Rate limit exceeded
+```
+
+Volcengine has rate limits. Consider batch processing with delays or upgrading your plan.
 
 ## Related Documentation
 
-- [Embedding Configuration](./embedding.md) - Embedding setup
-- [LLM Configuration](./llm.md) - LLM setup
+- [Volcengine Purchase Guide](./volcengine-purchase-guide.md) - API key setup
 - [API Overview](../api/overview.md) - Client initialization
-- [Server Deployment](../guides/deployment.md) - Server configuration
+- [Server Deployment](./deployment.md) - Server configuration
+- [Context Layers](../concepts/context-layers.md) - L0/L1/L2

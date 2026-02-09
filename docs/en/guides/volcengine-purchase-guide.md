@@ -261,10 +261,8 @@ Error: Connection timeout
 
 ## Related Documentation
 
-- [LLM Configuration](../configuration/llm.md) - Detailed LLM configuration
-- [Embedding Configuration](../configuration/embedding.md) - Detailed Embedding configuration
+- [Configuration Guide](./configuration.md) - Complete configuration reference
 - [Quick Start](../getting-started/quickstart.md) - Start using OpenViking
-- [Configuration Guide](../configuration/configuration.md) - Complete configuration options
 
 ## Appendix
 

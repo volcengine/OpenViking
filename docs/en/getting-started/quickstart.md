@@ -23,7 +23,7 @@ OpenViking requires the following model capabilities:
 - **Embedding Model**: For vectorization and semantic retrieval
 
 OpenViking supports multiple model services:
-- **Volcengine (Doubao Models)**: Recommended, cost-effective with good performance, free quota for new users. For purchase and activation, see: [Volcengine Purchase Guide](../configuration/volcengine-purchase-guide.md)
+- **Volcengine (Doubao Models)**: Recommended, cost-effective with good performance, free quota for new users. For purchase and activation, see: [Volcengine Purchase Guide](../guides/volcengine-purchase-guide.md)
 - **OpenAI Models**: Supports GPT-4V and other VLM models, plus OpenAI Embedding models
 - **Other Custom Model Services**: Supports model services compatible with OpenAI API format
 
@@ -201,6 +201,6 @@ Want to run OpenViking as a shared service? See [Quick Start: Server Mode](quick
 
 ## Next Steps
 
-- [Configuration Guide](../configuration/configuration.md) - Detailed configuration options
+- [Configuration Guide](../guides/configuration.md) - Detailed configuration options
 - [API Overview](../api/overview.md) - API reference
 - [Resource Management](../api/resources.md) - Resource management API

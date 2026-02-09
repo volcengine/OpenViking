@@ -23,7 +23,7 @@ curl http://localhost:1933/health
 | `--vectordb-url` | Remote VectorDB URL (service mode) | None |
 | `--agfs-url` | Remote AGFS URL (service mode) | None |
 | `--api-key` | API key for authentication | None (auth disabled) |
-| `--config` | Path to config file | `~/.openviking/server.yaml` |
+| `--config` | Path to config file | `OPENVIKING_CONFIG_FILE` env var |
 
 **Examples**
 
@@ -44,18 +44,29 @@ python -m openviking serve \
 
 ### Config File
 
-Create `~/.openviking/server.yaml`:
+Server configuration is read from the JSON config file specified by `--config` or the `OPENVIKING_CONFIG_FILE` environment variable (the same file used for `OpenVikingConfig`):
 
-```yaml
-server:
-  host: 0.0.0.0
-  port: 1933
-  api_key: your-secret-key
-  cors_origins:
-    - "*"
+```bash
+python -m openviking serve --config ./ov.conf
+# or
+export OPENVIKING_CONFIG_FILE=./ov.conf
+python -m openviking serve
+```
 
-storage:
-  path: /data/openviking
+The `server` section in the config file:
+
+```json
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 1933,
+    "api_key": "your-secret-key",
+    "cors_origins": ["*"]
+  },
+  "storage": {
+    "path": "/data/openviking"
+  }
+}
 ```
 
 ### Environment Variables
@@ -75,7 +86,7 @@ From highest to lowest:
 
 1. **Command line arguments** (`--port 8000`)
 2. **Environment variables** (`OPENVIKING_PORT=8000`)
-3. **Config file** (`~/.openviking/server.yaml`)
+3. **Config file** (`OPENVIKING_CONFIG_FILE`)
 
 ## Deployment Modes
 
@@ -109,6 +120,21 @@ client.initialize()
 
 results = client.find("how to use openviking")
 client.close()
+```
+
+Or use environment variables:
+
+```bash
+export OPENVIKING_URL="http://localhost:1933"
+export OPENVIKING_API_KEY="your-key"
+```
+
+```python
+import openviking as ov
+
+# url and api_key are read from environment variables automatically
+client = ov.OpenViking()
+client.initialize()
 ```
 
 ### curl

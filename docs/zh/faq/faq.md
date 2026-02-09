@@ -380,4 +380,4 @@ client = ov.AsyncOpenViking(
 - [快速开始](../getting-started/quickstart.md) - 5 分钟上手教程
 - [架构概述](../concepts/architecture.md) - 深入理解系统设计
 - [检索机制](../concepts/retrieval.md) - 检索流程详解
-- [配置指南](../configuration/configuration.md) - 完整配置参考
+- [配置指南](../guides/configuration.md) - 完整配置参考

@@ -2,12 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """Server configuration for OpenViking HTTP Server."""
 
+import json
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional
-
-import yaml
 
 
 @dataclass
@@ -28,8 +27,12 @@ def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
 
     Priority: command line args > environment variables > config file
 
+    Config file lookup:
+        1. Explicit config_path (from --config)
+        2. OPENVIKING_CONFIG_FILE environment variable
+
     Args:
-        config_path: Path to config file. If None, uses ~/.openviking/server.yaml
+        config_path: Path to config file.
 
     Returns:
         ServerConfig instance
@@ -38,11 +41,11 @@ def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
 
     # Load from config file
     if config_path is None:
-        config_path = os.path.expanduser("~/.openviking/server.yaml")
+        config_path = os.environ.get("OPENVIKING_CONFIG_FILE")
 
-    if Path(config_path).exists():
+    if config_path and Path(config_path).exists():
         with open(config_path) as f:
-            data = yaml.safe_load(f) or {}
+            data = json.load(f) or {}
 
         server_data = data.get("server", {})
         config.host = server_data.get("host", config.host)

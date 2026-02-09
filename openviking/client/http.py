@@ -5,6 +5,7 @@
 Implements BaseClient interface using HTTP calls to OpenViking Server.
 """
 
+import os
 from typing import Any, Dict, List, Optional, Union
 
 import httpx
@@ -121,7 +122,7 @@ class HTTPClient(BaseClient):
             user: User name for session management
         """
         self._url = url.rstrip("/")
-        self._api_key = api_key
+        self._api_key = api_key or os.environ.get("OPENVIKING_API_KEY")
         self._user = user or "default"
         self._http: Optional[httpx.AsyncClient] = None
         self._observer: Optional[_HTTPObserver] = None
@@ -153,6 +154,11 @@ class HTTPClient(BaseClient):
         data = response.json()
         if data.get("status") == "error":
             self._raise_exception(data.get("error", {}))
+        if not response.is_success:
+            raise OpenVikingError(
+                data.get("detail", f"HTTP {response.status_code}"),
+                code="UNKNOWN",
+            )
         return data.get("result")
 
     def _raise_exception(self, error: Dict[str, Any]) -> None:

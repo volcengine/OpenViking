@@ -23,7 +23,7 @@ OpenViking 需要以下模型能力：
 - **Embedding 模型**：用于向量化和语义检索
 
 OpenViking 支持多种模型服务：
-- **火山引擎（豆包模型）**：推荐使用，成本低、性能好，新用户有免费额度。如需购买和开通，请参考：[火山引擎购买指南](../configuration/volcengine-purchase-guide.md)
+- **火山引擎（豆包模型）**：推荐使用，成本低、性能好，新用户有免费额度。如需购买和开通，请参考：[火山引擎购买指南](../guides/volcengine-purchase-guide.md)
 - **OpenAI 模型**：支持 GPT-4V 等 VLM 模型和 OpenAI Embedding 模型
 - **其他自定义模型服务**：支持兼容 OpenAI API 格式的模型服务
 
@@ -201,6 +201,6 @@ Search results:
 
 ## 下一步
 
-- [配置详解](../configuration/configuration.md) - 详细配置选项
+- [配置详解](../guides/configuration.md) - 详细配置选项
 - [API 概览](../api/overview.md) - API 参考
 - [资源管理](../api/resources.md) - 资源管理 API

@@ -23,7 +23,7 @@ curl http://localhost:1933/health
 | `--vectordb-url` | 远程 VectorDB URL（服务模式） | 无 |
 | `--agfs-url` | 远程 AGFS URL（服务模式） | 无 |
 | `--api-key` | 用于认证的 API Key | 无（禁用认证） |
-| `--config` | 配置文件路径 | `~/.openviking/server.yaml` |
+| `--config` | 配置文件路径 | `OPENVIKING_CONFIG_FILE` 环境变量 |
 
 **示例**
 
@@ -44,18 +44,29 @@ python -m openviking serve \
 
 ### 配置文件
 
-创建 `~/.openviking/server.yaml`：
+服务端配置从 `--config` 或 `OPENVIKING_CONFIG_FILE` 环境变量指定的 JSON 配置文件中读取（与 `OpenVikingConfig` 共用同一个文件）：
 
-```yaml
-server:
-  host: 0.0.0.0
-  port: 1933
-  api_key: your-secret-key
-  cors_origins:
-    - "*"
+```bash
+python -m openviking serve --config ./ov.conf
+# 或
+export OPENVIKING_CONFIG_FILE=./ov.conf
+python -m openviking serve
+```
 
-storage:
-  path: /data/openviking
+配置文件中的 `server` 段：
+
+```json
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 1933,
+    "api_key": "your-secret-key",
+    "cors_origins": ["*"]
+  },
+  "storage": {
+    "path": "/data/openviking"
+  }
+}
 ```
 
 ### 环境变量
@@ -75,7 +86,7 @@ storage:
 
 1. **命令行参数** (`--port 8000`)
 2. **环境变量** (`OPENVIKING_PORT=8000`)
-3. **配置文件** (`~/.openviking/server.yaml`)
+3. **配置文件** (`OPENVIKING_CONFIG_FILE`)
 
 ## 部署模式
 
@@ -109,6 +120,21 @@ client.initialize()
 
 results = client.find("how to use openviking")
 client.close()
+```
+
+或使用环境变量：
+
+```bash
+export OPENVIKING_URL="http://localhost:1933"
+export OPENVIKING_API_KEY="your-key"
+```
+
+```python
+import openviking as ov
+
+# url 和 api_key 自动从环境变量读取
+client = ov.OpenViking()
+client.initialize()
 ```
 
 ### curl

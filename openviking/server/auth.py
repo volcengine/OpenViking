@@ -5,7 +5,9 @@
 import hmac
 from typing import Optional
 
-from fastapi import Header, HTTPException, Request
+from fastapi import Header, Request
+
+from openviking.exceptions import UnauthenticatedError
 
 
 async def verify_api_key(
@@ -48,7 +50,7 @@ async def verify_api_key(
 
     # Verify key
     if not request_api_key or not hmac.compare_digest(request_api_key, config_api_key):
-        raise HTTPException(status_code=401, detail="Invalid API Key")
+        raise UnauthenticatedError("Invalid API Key")
 
     return True
 

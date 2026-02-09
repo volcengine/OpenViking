@@ -19,11 +19,14 @@ export OPENVIKING_API_KEY="your-secret-key"
 python -m openviking serve --path ./data
 ```
 
-**方式三：配置文件** (`~/.openviking/server.yaml`)
+**方式三：配置文件**（通过 `OPENVIKING_CONFIG_FILE`）
 
-```yaml
-server:
-  api_key: your-secret-key
+```json
+{
+  "server": {
+    "api_key": "your-secret-key"
+  }
+}
 ```
 
 ### 使用 API Key（客户端）
@@ -53,6 +56,20 @@ client = ov.OpenViking(
     url="http://localhost:1933",
     api_key="your-secret-key"
 )
+```
+
+或使用 `OPENVIKING_API_KEY` 环境变量：
+
+```bash
+export OPENVIKING_URL="http://localhost:1933"
+export OPENVIKING_API_KEY="your-secret-key"
+```
+
+```python
+import openviking as ov
+
+# api_key 自动从 OPENVIKING_API_KEY 环境变量读取
+client = ov.OpenViking()
 ```
 
 ## 开发模式

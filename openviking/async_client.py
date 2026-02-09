@@ -6,6 +6,7 @@ Async OpenViking client implementation.
 Supports both embedded mode (LocalClient) and HTTP mode (HTTPClient).
 """
 
+import os
 import threading
 from typing import Any, Dict, List, Optional, Union
 
@@ -74,7 +75,7 @@ class AsyncOpenViking:
 
     def __new__(cls, *args, **kwargs):
         # HTTP mode: no singleton
-        url = kwargs.get("url")
+        url = kwargs.get("url") or os.environ.get("OPENVIKING_URL")
         if url:
             return object.__new__(cls)
 
@@ -122,6 +123,10 @@ class AsyncOpenViking:
         self.user = user or "default"
         self._initialized = False
         self._singleton_initialized = True
+
+        # Environment variable fallback for HTTP mode
+        url = url or os.environ.get("OPENVIKING_URL")
+        api_key = api_key or os.environ.get("OPENVIKING_API_KEY")
 
         # Create the appropriate client - only _client, no _service
         if url:

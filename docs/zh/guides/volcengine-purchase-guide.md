@@ -263,10 +263,8 @@ Error: Connection timeout
 
 ## 相关文档
 
-- [LLM 配置](../configuration/llm.md) - LLM 详细配置
-- [Embedding 配置](../configuration/embedding.md) - Embedding 详细配置
+- [配置指南](./configuration.md) - 完整配置参考
 - [快速开始](../getting-started/quickstart.md) - 开始使用 OpenViking
-- [配置指南](../configuration/configuration.md) - 完整配置选项
 
 ## 附录
 

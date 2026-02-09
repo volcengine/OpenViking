@@ -19,11 +19,14 @@ export OPENVIKING_API_KEY="your-secret-key"
 python -m openviking serve --path ./data
 ```
 
-**Option 3: Config file** (`~/.openviking/server.yaml`)
+**Option 3: Config file** (via `OPENVIKING_CONFIG_FILE`)
 
-```yaml
-server:
-  api_key: your-secret-key
+```json
+{
+  "server": {
+    "api_key": "your-secret-key"
+  }
+}
 ```
 
 ### Using API Key (Client Side)
@@ -53,6 +56,20 @@ client = ov.OpenViking(
     url="http://localhost:1933",
     api_key="your-secret-key"
 )
+```
+
+Or use the `OPENVIKING_API_KEY` environment variable:
+
+```bash
+export OPENVIKING_URL="http://localhost:1933"
+export OPENVIKING_API_KEY="your-secret-key"
+```
+
+```python
+import openviking as ov
+
+# api_key is read from OPENVIKING_API_KEY automatically
+client = ov.OpenViking()
 ```
 
 ## Development Mode

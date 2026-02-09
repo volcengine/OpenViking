@@ -77,7 +77,7 @@ OpenViking requires the following model capabilities:
 
 OpenViking supports various model services:
 - **OpenAI Models**: Supports GPT-4V and other VLM models, and OpenAI Embedding models.
-- **Volcengine (Doubao Models)**: Recommended for low cost and high performance, with free quotas for new users. For purchase and activation, please refer to: [Volcengine Purchase Guide](./docs/en/configuration/volcengine-purchase-guide.md).
+- **Volcengine (Doubao Models)**: Recommended for low cost and high performance, with free quotas for new users. For purchase and activation, please refer to: [Volcengine Purchase Guide](./docs/en/guides/volcengine-purchase-guide.md).
 - **Other Custom Model Services**: Supports model services compatible with the OpenAI API format.
 
 ### 3. Environment Configuration

@@ -76,7 +76,7 @@ OpenViking 需要以下模型能力：
 
 OpenViking 支持多种模型服务：
 - **OpenAI 模型**：支持 GPT-4V 等 VLM 模型和 OpenAI Embedding 模型
-- **火山引擎（豆包模型）**：推荐使用，成本低、性能好，新用户有免费额度。如需购买和开通，请参考：[火山引擎购买指南](./docs/zh/configuration/volcengine-purchase-guide.md)
+- **火山引擎（豆包模型）**：推荐使用，成本低、性能好，新用户有免费额度。如需购买和开通，请参考：[火山引擎购买指南](./docs/zh/guides/volcengine-purchase-guide.md)
 - **其他自定义模型服务**：支持兼容 OpenAI API 格式的模型服务
 
 ### 3. 配置环境

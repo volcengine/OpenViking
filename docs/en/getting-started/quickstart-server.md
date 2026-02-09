@@ -32,6 +32,28 @@ curl http://localhost:1933/health
 import openviking as ov
 
 client = ov.OpenViking(url="http://localhost:1933")
+```
+
+Or use environment variables:
+
+```bash
+export OPENVIKING_URL="http://localhost:1933"
+export OPENVIKING_API_KEY="your-key"  # if authentication is enabled
+```
+
+```python
+import openviking as ov
+
+# url and api_key are read from environment variables automatically
+client = ov.OpenViking()
+```
+
+**Full example:**
+
+```python
+import openviking as ov
+
+client = ov.OpenViking(url="http://localhost:1933")
 
 try:
     client.initialize()

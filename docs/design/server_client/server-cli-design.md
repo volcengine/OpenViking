@@ -305,34 +305,43 @@ OpenViking 提供三种接口，面向不同使用场景：
 
 ### 3.4 配置管理
 
-#### Server 配置 (`~/.openviking/server.yaml`)
+#### Server 配置
 
-```yaml
-storage:
-  path: ~/.openviking/data
+服务端配置统一使用 JSON 配置文件，通过 `--config` 或 `OPENVIKING_CONFIG_FILE` 环境变量指定（与 `OpenVikingConfig` 共用同一个文件）：
 
-server:
-  host: 0.0.0.0
-  port: 1933
-  api_key: your-api-key
-
-embedding:
-  provider: openai
-  model: text-embedding-3-small
-  api_key: ${OPENAI_API_KEY}
-
-vlm:
-  provider: openai
-  model: gpt-4o
-  api_key: ${OPENAI_API_KEY}
+```json
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 1933,
+    "api_key": "your-api-key"
+  },
+  "storage": {
+    "path": "~/.openviking/data"
+  },
+  "embedding": {
+    "dense": {
+      "provider": "openai",
+      "model": "text-embedding-3-small"
+    }
+  },
+  "vlm": {
+    "provider": "openai",
+    "model": "gpt-4o"
+  }
+}
 ```
 
-#### Client 配置 (`~/.openviking/client.yaml`)
+#### Client 配置
 
-```yaml
-url: http://localhost:1933
-api_key: your-api-key
-# 注意：user 和 agent 通过环境变量管理，不存配置文件
+客户端 SDK 通过构造函数参数或环境变量配置，不使用配置文件（参考 Weaviate/ChromaDB/Qdrant 等主流产品的设计）：
+
+```python
+# 方式一：构造函数参数
+client = OpenViking(url="http://localhost:1933", api_key="your-api-key")
+
+# 方式二：环境变量（OPENVIKING_URL / OPENVIKING_API_KEY）
+client = OpenViking()
 ```
 
 #### 环境变量
@@ -353,9 +362,9 @@ api_key: your-api-key
 #### 配置优先级
 
 从高到低：
-1. 命令行参数（`--url`, `--user` 等）
-2. 环境变量（`OPENVIKING_URL`, `OPENVIKING_USER` 等）
-3. 配置文件（`~/.openviking/client.yaml`）
+1. 命令行参数 / 构造函数参数（`--url`, `--user` 等）
+2. 环境变量（`OPENVIKING_URL`, `OPENVIKING_API_KEY` 等）
+3. 配置文件（`OPENVIKING_CONFIG_FILE`，仅服务端）
 
 ---
 
