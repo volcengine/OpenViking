@@ -508,5 +508,5 @@ Use kebab-case for skill names:
 ## Related Documentation
 
 - [Context Types](../concepts/02-context-types.md) - Skill concept
-- [Retrieval](retrieval.md) - Finding skills
-- [Sessions](sessions.md) - Tracking skill usage
+- [Retrieval](06-retrieval.md) - Finding skills
+- [Sessions](05-sessions.md) - Tracking skill usage

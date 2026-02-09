@@ -197,7 +197,7 @@ Search results:
 
 ## 服务端模式
 
-想要将 OpenViking 作为共享服务运行？请参见 [快速开始：服务端模式](quickstart-server.md)。
+想要将 OpenViking 作为共享服务运行？请参见 [快速开始：服务端模式](03-quickstart-server.md)。
 
 ## 下一步
 

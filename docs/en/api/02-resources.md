@@ -632,6 +632,6 @@ viking://resources/
 
 ## Related Documentation
 
-- [Retrieval](retrieval.md) - Search resources
-- [File System](filesystem.md) - File operations
+- [Retrieval](06-retrieval.md) - Search resources
+- [File System](03-filesystem.md) - File operations
 - [Context Types](../concepts/02-context-types.md) - Resource concept

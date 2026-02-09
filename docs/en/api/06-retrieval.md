@@ -542,6 +542,6 @@ results = client.search("best practices", session=session)
 
 ### Related Documentation
 
-- [Resources](resources.md) - Resource management
-- [Sessions](sessions.md) - Session context
+- [Resources](02-resources.md) - Resource management
+- [Sessions](05-sessions.md) - Session context
 - [Context Layers](../concepts/03-context-layers.md) - L0/L1/L2

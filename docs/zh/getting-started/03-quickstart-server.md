@@ -5,7 +5,7 @@
 ## 前置要求
 
 - 已安装 OpenViking（`pip install openviking`）
-- 模型配置已就绪（参见 [快速开始](quickstart.md) 了解配置方法）
+- 模型配置已就绪（参见 [快速开始](02-quickstart.md) 了解配置方法）
 
 ## 启动服务
 

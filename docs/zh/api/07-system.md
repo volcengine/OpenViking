@@ -430,6 +430,6 @@ curl -X GET http://localhost:1933/api/v1/debug/health \
 
 ## 相关文档
 
-- [Resources](resources.md) - 资源管理
-- [Retrieval](retrieval.md) - 搜索与检索
-- [Sessions](sessions.md) - 会话管理
+- [Resources](02-resources.md) - 资源管理
+- [Retrieval](06-retrieval.md) - 搜索与检索
+- [Sessions](05-sessions.md) - 会话管理

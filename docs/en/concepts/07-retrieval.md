@@ -188,7 +188,7 @@ class FindResult:
 
 ## Related Documents
 
-- [Architecture Overview](./architecture.md) - System architecture
-- [Storage Architecture](./storage.md) - Vector index
-- [Context Layers](./context-layers.md) - L0/L1/L2 model
-- [Context Types](./context-types.md) - Three context types
+- [Architecture Overview](./01-architecture.md) - System architecture
+- [Storage Architecture](./05-storage.md) - Vector index
+- [Context Layers](./03-context-layers.md) - L0/L1/L2 model
+- [Context Types](./02-context-types.md) - Three context types

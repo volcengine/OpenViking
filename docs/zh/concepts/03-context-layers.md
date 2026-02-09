@@ -181,8 +181,8 @@ if needs_more_detail(overview):
 
 ## 相关文档
 
-- [架构概述](./architecture.md) - 系统整体架构
-- [上下文类型](./context-types.md) - 三种上下文类型
-- [Viking URI](./viking-uri.md) - URI 规范
-- [检索机制](./retrieval.md) - 检索流程详解
-- [上下文提取](./extraction.md) - L0/L1 生成详解
+- [架构概述](./01-architecture.md) - 系统整体架构
+- [上下文类型](./02-context-types.md) - 三种上下文类型
+- [Viking URI](./04-viking-uri.md) - URI 规范
+- [检索机制](./07-retrieval.md) - 检索流程详解
+- [上下文提取](./06-extraction.md) - L0/L1 生成详解

@@ -92,5 +92,5 @@ curl http://localhost:1933/health
 
 ## 相关文档
 
-- [部署](deployment.md) - 服务器设置
+- [部署](03-deployment.md) - 服务器设置
 - [API 概览](../api/01-overview.md) - API 参考

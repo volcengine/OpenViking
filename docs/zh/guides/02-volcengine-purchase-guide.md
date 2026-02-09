@@ -263,7 +263,7 @@ Error: Connection timeout
 
 ## 相关文档
 
-- [配置指南](./configuration.md) - 完整配置参考
+- [配置指南](./01-configuration.md) - 完整配置参考
 - [快速开始](../getting-started/02-quickstart.md) - 开始使用 OpenViking
 
 ## 附录

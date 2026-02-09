@@ -362,7 +362,7 @@ Server 配置也可以通过环境变量设置：
 | `OPENVIKING_API_KEY` | 用于认证的 API Key |
 | `OPENVIKING_PATH` | 存储路径 |
 
-详见 [服务部署](./deployment.md)。
+详见 [服务部署](./03-deployment.md)。
 
 ## 故障排除
 
@@ -404,5 +404,5 @@ Error: Rate limit exceeded
 
 - [火山引擎购买指南](./volcengine-purchase-guide.md) - API Key 获取
 - [API 概览](../api/01-overview.md) - 客户端初始化
-- [服务部署](./deployment.md) - Server 配置
+- [服务部署](./03-deployment.md) - Server 配置
 - [上下文层级](../concepts/03-context-layers.md) - L0/L1/L2

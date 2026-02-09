@@ -109,7 +109,7 @@ Enabling Agents to become "smarter with use" through world interaction, achievin
 
 ## Next Steps
 
-- [Quick Start](./quickstart.md) - Get started in 5 minutes
+- [Quick Start](./02-quickstart.md) - Get started in 5 minutes
 - [Architecture Overview](../concepts/01-architecture.md) - Understand system design
 - [Context Types](../concepts/02-context-types.md) - Deep dive into three context types
 - [Retrieval Mechanism](../concepts/07-retrieval.md) - Learn about retrieval flow

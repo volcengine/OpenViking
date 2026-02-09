@@ -92,5 +92,5 @@ curl http://localhost:1933/health
 
 ## Related Documentation
 
-- [Deployment](deployment.md) - Server setup
+- [Deployment](03-deployment.md) - Server setup
 - [API Overview](../api/01-overview.md) - API reference

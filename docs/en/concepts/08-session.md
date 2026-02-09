@@ -179,7 +179,7 @@ viking://agent/memories/
 
 ## Related Documents
 
-- [Architecture Overview](./architecture.md) - System architecture
-- [Context Types](./context-types.md) - Three context types
-- [Context Extraction](./extraction.md) - Extraction flow
-- [Context Layers](./context-layers.md) - L0/L1/L2 model
+- [Architecture Overview](./01-architecture.md) - System architecture
+- [Context Types](./02-context-types.md) - Three context types
+- [Context Extraction](./06-extraction.md) - Extraction flow
+- [Context Layers](./03-context-layers.md) - L0/L1/L2 model

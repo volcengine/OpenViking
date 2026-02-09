@@ -583,5 +583,5 @@ session.load()
 ## Related Documentation
 
 - [Context Types](../concepts/02-context-types.md) - Memory types
-- [Retrieval](retrieval.md) - Search with session
-- [Resources](resources.md) - Resource management
+- [Retrieval](06-retrieval.md) - Search with session
+- [Resources](02-resources.md) - Resource management

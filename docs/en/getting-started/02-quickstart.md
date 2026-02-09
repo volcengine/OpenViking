@@ -197,7 +197,7 @@ Congratulations! You have successfully run OpenViking.
 
 ## Server Mode
 
-Want to run OpenViking as a shared service? See [Quick Start: Server Mode](quickstart-server.md).
+Want to run OpenViking as a shared service? See [Quick Start: Server Mode](03-quickstart-server.md).
 
 ## Next Steps
 

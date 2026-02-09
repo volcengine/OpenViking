@@ -5,7 +5,7 @@ Run OpenViking as a standalone HTTP server and connect from any client.
 ## Prerequisites
 
 - OpenViking installed (`pip install openviking`)
-- Model configuration ready (see [Quick Start](quickstart.md) for setup)
+- Model configuration ready (see [Quick Start](02-quickstart.md) for setup)
 
 ## Start the Server
 

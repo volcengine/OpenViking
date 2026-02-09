@@ -77,7 +77,7 @@ The Service layer decouples business logic from the transport layer, enabling re
 
 ## Dual-Layer Storage
 
-OpenViking uses a dual-layer storage architecture separating content from index (see [Storage Architecture](./storage.md)):
+OpenViking uses a dual-layer storage architecture separating content from index (see [Storage Architecture](./05-storage.md)):
 
 | Layer | Responsibility | Content |
 |-------|----------------|---------|
@@ -181,10 +181,10 @@ curl http://localhost:1933/api/v1/search/find \
 
 ## Related Documents
 
-- [Context Types](./context-types.md) - Resource/Memory/Skill types
-- [Context Layers](./context-layers.md) - L0/L1/L2 model
-- [Viking URI](./viking-uri.md) - Unified resource identifier
-- [Storage Architecture](./storage.md) - Dual-layer storage details
-- [Retrieval Mechanism](./retrieval.md) - Retrieval process details
-- [Context Extraction](./extraction.md) - Parsing and extraction process
-- [Session Management](./session.md) - Session and memory management
+- [Context Types](./02-context-types.md) - Resource/Memory/Skill types
+- [Context Layers](./03-context-layers.md) - L0/L1/L2 model
+- [Viking URI](./04-viking-uri.md) - Unified resource identifier
+- [Storage Architecture](./05-storage.md) - Dual-layer storage details
+- [Retrieval Mechanism](./07-retrieval.md) - Retrieval process details
+- [Context Extraction](./06-extraction.md) - Parsing and extraction process
+- [Session Management](./08-session.md) - Session and memory management

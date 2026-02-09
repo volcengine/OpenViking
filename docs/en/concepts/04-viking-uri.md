@@ -232,8 +232,8 @@ await client.add_skill(skill)  # Automatically to viking://agent/skills/
 
 ## Related Documents
 
-- [Architecture Overview](./architecture.md) - System architecture
-- [Context Types](./context-types.md) - Three types of context
-- [Context Layers](./context-layers.md) - L0/L1/L2 model
-- [Storage Architecture](./storage.md) - VikingFS and AGFS
-- [Session Management](./session.md) - Session storage structure
+- [Architecture Overview](./01-architecture.md) - System architecture
+- [Context Types](./02-context-types.md) - Three types of context
+- [Context Layers](./03-context-layers.md) - L0/L1/L2 model
+- [Storage Architecture](./05-storage.md) - VikingFS and AGFS
+- [Session Management](./08-session.md) - Session storage structure

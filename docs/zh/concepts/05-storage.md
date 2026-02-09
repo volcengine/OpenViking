@@ -159,7 +159,7 @@ viking_fs.mv(
 
 ## 相关文档
 
-- [架构概述](./architecture.md) - 系统整体架构
-- [上下文层级](./context-layers.md) - L0/L1/L2 模型
-- [Viking URI](./viking-uri.md) - URI 规范
-- [检索机制](./retrieval.md) - 检索流程详解
+- [架构概述](./01-architecture.md) - 系统整体架构
+- [上下文层级](./03-context-layers.md) - L0/L1/L2 模型
+- [Viking URI](./04-viking-uri.md) - URI 规范
+- [检索机制](./07-retrieval.md) - 检索流程详解

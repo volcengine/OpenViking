@@ -851,4 +851,4 @@ curl -X DELETE http://localhost:1933/api/v1/relations/link \
 
 - [Viking URI](../concepts/04-viking-uri.md) - URI 规范
 - [Context Layers](../concepts/03-context-layers.md) - L0/L1/L2
-- [Resources](resources.md) - 资源管理
+- [Resources](02-resources.md) - 资源管理

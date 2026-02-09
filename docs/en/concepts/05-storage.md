@@ -161,7 +161,7 @@ viking_fs.mv(
 
 ## Related Documents
 
-- [Architecture Overview](./architecture.md) - System architecture
-- [Context Layers](./context-layers.md) - L0/L1/L2 model
-- [Viking URI](./viking-uri.md) - URI specification
-- [Retrieval Mechanism](./retrieval.md) - Retrieval process details
+- [Architecture Overview](./01-architecture.md) - System architecture
+- [Context Layers](./03-context-layers.md) - L0/L1/L2 model
+- [Viking URI](./04-viking-uri.md) - URI specification
+- [Retrieval Mechanism](./07-retrieval.md) - Retrieval process details

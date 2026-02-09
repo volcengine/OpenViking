@@ -542,6 +542,6 @@ results = client.search("best practices", session=session)
 
 ### 相关文档
 
-- [资源](resources.md) - 资源管理
-- [会话](sessions.md) - 会话上下文
+- [资源](02-resources.md) - 资源管理
+- [会话](05-sessions.md) - 会话上下文
 - [上下文层级](../concepts/03-context-layers.md) - L0/L1/L2

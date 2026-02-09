@@ -90,5 +90,5 @@ curl -v http://localhost:1933/api/v1/fs/ls?uri=viking:// \
 
 ## 相关文档
 
-- [部署](deployment.md) - 服务器设置
+- [部署](03-deployment.md) - 服务器设置
 - [系统 API](../api/07-system.md) - 系统 API 参考

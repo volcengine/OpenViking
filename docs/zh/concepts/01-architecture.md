@@ -76,7 +76,7 @@ Service 层将业务逻辑与传输层解耦，便于 HTTP Server 和 CLI 复用
 
 ## 双层存储
 
-OpenViking 采用双层存储架构，实现内容与索引分离（详见 [存储架构](./storage.md)）：
+OpenViking 采用双层存储架构，实现内容与索引分离（详见 [存储架构](./05-storage.md)）：
 
 | 存储层 | 职责 | 内容 |
 |--------|------|------|
@@ -180,10 +180,10 @@ curl http://localhost:1933/api/v1/search/find \
 
 ## 相关文档
 
-- [上下文类型](./context-types.md) - Resource/Memory/Skill 三种类型
-- [上下文层级](./context-layers.md) - L0/L1/L2 模型
-- [Viking URI](./viking-uri.md) - 统一资源标识符
-- [存储架构](./storage.md) - 双层存储详解
-- [检索机制](./retrieval.md) - 检索流程详解
-- [上下文提取](./extraction.md) - 解析和提取流程
-- [会话管理](./session.md) - 会话和记忆管理
+- [上下文类型](./02-context-types.md) - Resource/Memory/Skill 三种类型
+- [上下文层级](./03-context-layers.md) - L0/L1/L2 模型
+- [Viking URI](./04-viking-uri.md) - 统一资源标识符
+- [存储架构](./05-storage.md) - 双层存储详解
+- [检索机制](./07-retrieval.md) - 检索流程详解
+- [上下文提取](./06-extraction.md) - 解析和提取流程
+- [会话管理](./08-session.md) - 会话和记忆管理

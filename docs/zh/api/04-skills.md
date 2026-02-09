@@ -508,5 +508,5 @@ skill = {
 ## 相关文档
 
 - [上下文类型](../concepts/02-context-types.md) - 技能概念
-- [检索](retrieval.md) - 查找技能
-- [会话](sessions.md) - 跟踪技能使用情况
+- [检索](06-retrieval.md) - 查找技能
+- [会话](05-sessions.md) - 跟踪技能使用情况

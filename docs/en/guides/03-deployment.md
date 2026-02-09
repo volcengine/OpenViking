@@ -146,6 +146,6 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
 
 ## Related Documentation
 
-- [Authentication](authentication.md) - API key setup
-- [Monitoring](monitoring.md) - Health checks and observability
+- [Authentication](04-authentication.md) - API key setup
+- [Monitoring](05-monitoring.md) - Health checks and observability
 - [API Overview](../api/01-overview.md) - Complete API reference

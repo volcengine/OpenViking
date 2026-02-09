@@ -146,6 +146,6 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
 
 ## 相关文档
 
-- [认证](authentication.md) - API Key 设置
-- [监控](monitoring.md) - 健康检查与可观测性
+- [认证](04-authentication.md) - API Key 设置
+- [监控](05-monitoring.md) - 健康检查与可观测性
 - [API 概览](../api/01-overview.md) - 完整 API 参考

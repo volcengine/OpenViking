@@ -430,6 +430,6 @@ Overall system status including all components.
 
 ## Related Documentation
 
-- [Resources](resources.md) - Resource management
-- [Retrieval](retrieval.md) - Search and retrieval
-- [Sessions](sessions.md) - Session management
+- [Resources](02-resources.md) - Resource management
+- [Retrieval](06-retrieval.md) - Search and retrieval
+- [Sessions](05-sessions.md) - Session management

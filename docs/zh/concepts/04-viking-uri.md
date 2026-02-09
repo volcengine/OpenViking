@@ -232,8 +232,8 @@ await client.add_skill(skill)  # 自动到 viking://agent/skills/
 
 ## 相关文档
 
-- [架构概述](./architecture.md) - 系统整体架构
-- [上下文类型](./context-types.md) - 三种上下文类型
-- [上下文层级](./context-layers.md) - L0/L1/L2 模型
-- [存储架构](./storage.md) - VikingFS 和 AGFS
-- [会话管理](./session.md) - 会话存储结构
+- [架构概述](./01-architecture.md) - 系统整体架构
+- [上下文类型](./02-context-types.md) - 三种上下文类型
+- [上下文层级](./03-context-layers.md) - L0/L1/L2 模型
+- [存储架构](./05-storage.md) - VikingFS 和 AGFS
+- [会话管理](./08-session.md) - 会话存储结构

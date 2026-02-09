@@ -583,5 +583,5 @@ session.load()
 ## 相关文档
 
 - [上下文类型](../concepts/02-context-types.md) - 记忆类型
-- [检索](retrieval.md) - 结合会话进行搜索
-- [资源管理](resources.md) - 资源管理
+- [检索](06-retrieval.md) - 结合会话进行搜索
+- [资源管理](02-resources.md) - 资源管理

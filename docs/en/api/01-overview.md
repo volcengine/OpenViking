@@ -195,9 +195,9 @@ All HTTP API responses follow a unified format:
 
 ## Related Documentation
 
-- [Resources](resources.md) - Resource management API
-- [Retrieval](retrieval.md) - Search API
-- [File System](filesystem.md) - File system operations
-- [Sessions](sessions.md) - Session management
-- [Skills](skills.md) - Skill management
-- [System](system.md) - System and monitoring API
+- [Resources](02-resources.md) - Resource management API
+- [Retrieval](06-retrieval.md) - Search API
+- [File System](03-filesystem.md) - File system operations
+- [Sessions](05-sessions.md) - Session management
+- [Skills](04-skills.md) - Skill management
+- [System](07-system.md) - System and monitoring API

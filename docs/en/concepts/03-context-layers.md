@@ -181,8 +181,8 @@ if needs_more_detail(overview):
 
 ## Related Documents
 
-- [Architecture Overview](./architecture.md) - System architecture
-- [Context Types](./context-types.md) - Three context types
-- [Viking URI](./viking-uri.md) - URI specification
-- [Retrieval Mechanism](./retrieval.md) - Retrieval process details
-- [Context Extraction](./extraction.md) - L0/L1 generation details
+- [Architecture Overview](./01-architecture.md) - System architecture
+- [Context Types](./02-context-types.md) - Three context types
+- [Viking URI](./04-viking-uri.md) - URI specification
+- [Retrieval Mechanism](./07-retrieval.md) - Retrieval process details
+- [Context Extraction](./06-extraction.md) - L0/L1 generation details

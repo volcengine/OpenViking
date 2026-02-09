@@ -195,9 +195,9 @@ client.close()  # Release resources
 
 ## 相关文档
 
-- [资源管理](resources.md) - 资源管理 API
-- [检索](retrieval.md) - 搜索 API
-- [文件系统](filesystem.md) - 文件系统操作
-- [会话管理](sessions.md) - 会话管理
-- [技能](skills.md) - 技能管理
-- [系统](system.md) - 系统和监控 API
+- [资源管理](02-resources.md) - 资源管理 API
+- [检索](06-retrieval.md) - 搜索 API
+- [文件系统](03-filesystem.md) - 文件系统操作
+- [会话管理](05-sessions.md) - 会话管理
+- [技能](04-skills.md) - 技能管理
+- [系统](07-system.md) - 系统和监控 API

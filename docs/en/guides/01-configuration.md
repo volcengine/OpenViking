@@ -279,7 +279,7 @@ Server configuration can also be set via environment variables:
 | `OPENVIKING_API_KEY` | API key for authentication |
 | `OPENVIKING_PATH` | Storage path |
 
-See [Server Deployment](./deployment.md) for full details.
+See [Server Deployment](./03-deployment.md) for full details.
 
 ## Troubleshooting
 
@@ -321,5 +321,5 @@ Volcengine has rate limits. Consider batch processing with delays or upgrading y
 
 - [Volcengine Purchase Guide](./volcengine-purchase-guide.md) - API key setup
 - [API Overview](../api/01-overview.md) - Client initialization
-- [Server Deployment](./deployment.md) - Server configuration
+- [Server Deployment](./03-deployment.md) - Server configuration
 - [Context Layers](../concepts/03-context-layers.md) - L0/L1/L2

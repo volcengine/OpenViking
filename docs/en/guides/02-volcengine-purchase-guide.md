@@ -261,7 +261,7 @@ Error: Connection timeout
 
 ## Related Documentation
 
-- [Configuration Guide](./configuration.md) - Complete configuration reference
+- [Configuration Guide](./01-configuration.md) - Complete configuration reference
 - [Quick Start](../getting-started/02-quickstart.md) - Start using OpenViking
 
 ## Appendix
