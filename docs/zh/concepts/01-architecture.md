@@ -148,6 +148,27 @@ client = OpenViking(
 - 支持多实例并发
 - 可独立扩展
 
+### HTTP 模式
+
+用于团队共享和跨语言集成：
+
+```python
+# Python SDK 连接 OpenViking Server
+client = OpenViking(url="http://localhost:1933", api_key="xxx")
+```
+
+```bash
+# 或使用 curl / 任意 HTTP 客户端
+curl http://localhost:1933/api/v1/search/find \
+  -H "X-API-Key: xxx" \
+  -d '{"query": "how to use openviking"}'
+```
+
+- Server 作为独立进程运行（`python -m openviking serve`）
+- 客户端通过 HTTP API 连接
+- 支持任何能发起 HTTP 请求的语言
+- 参见 [服务部署](../guides/03-deployment.md) 了解配置方法
+
 ## 设计原则
 
 | 原则 | 说明 |
@@ -160,9 +181,9 @@ client = OpenViking(
 ## 相关文档
 
 - [上下文类型](./02-context-types.md) - Resource/Memory/Skill 三种类型
-- [上下文层级](./04-context-layers.md) - L0/L1/L2 模型
-- [Viking URI](./03-viking-uri.md) - 统一资源标识符
+- [上下文层级](./03-context-layers.md) - L0/L1/L2 模型
+- [Viking URI](./04-viking-uri.md) - 统一资源标识符
 - [存储架构](./05-storage.md) - 双层存储详解
-- [检索机制](./06-retrieval.md) - 检索流程详解
-- [上下文提取](./07-extraction.md) - 解析和提取流程
+- [检索机制](./07-retrieval.md) - 检索流程详解
+- [上下文提取](./06-extraction.md) - 解析和提取流程
 - [会话管理](./08-session.md) - 会话和记忆管理

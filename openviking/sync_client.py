@@ -181,18 +181,6 @@ class SyncOpenViking:
         """Get observer service for component status."""
         return self._async_client.observer
 
-    @property
-    def viking_fs(self):
-        return self._async_client.viking_fs
-
-    @property
-    def _vikingdb_manager(self):
-        return self._async_client._vikingdb_manager
-
-    @property
-    def _session_compressor(self):
-        return self._async_client._session_compressor
-
     @classmethod
     def reset(cls) -> None:
         """Reset singleton (for testing)."""

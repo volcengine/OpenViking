@@ -15,7 +15,6 @@ class TestClientInitialization:
         """Test normal initialization"""
         await uninitialized_client.initialize()
         assert uninitialized_client._initialized is True
-        assert uninitialized_client._viking_fs is not None
 
     async def test_initialize_idempotent(self, client: AsyncOpenViking):
         """Test repeated initialization is idempotent"""
@@ -23,10 +22,10 @@ class TestClientInitialization:
         await client.initialize()
         assert client._initialized is True
 
-    async def test_initialize_creates_viking_fs(self, uninitialized_client: AsyncOpenViking):
-        """Test initialization creates VikingFS"""
+    async def test_initialize_creates_client(self, uninitialized_client: AsyncOpenViking):
+        """Test initialization creates client"""
         await uninitialized_client.initialize()
-        assert uninitialized_client._viking_fs is not None
+        assert uninitialized_client._client is not None
 
 
 class TestClientClose:
@@ -39,7 +38,7 @@ class TestClientClose:
         await client.initialize()
 
         await client.close()
-        assert client._vikingdb_manager is None
+        assert client._initialized is False
 
         await AsyncOpenViking.reset()
 

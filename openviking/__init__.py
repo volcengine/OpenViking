@@ -6,8 +6,9 @@ OpenViking - An Agent-native context database
 Data in, Context out.
 """
 
-from openviking.client import AsyncOpenViking, SyncOpenViking
+from openviking.async_client import AsyncOpenViking
 from openviking.session import Session
+from openviking.sync_client import SyncOpenViking
 
 OpenViking = SyncOpenViking
 

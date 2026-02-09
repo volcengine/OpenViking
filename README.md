@@ -77,7 +77,7 @@ OpenViking requires the following model capabilities:
 
 OpenViking supports various model services:
 - **OpenAI Models**: Supports GPT-4V and other VLM models, and OpenAI Embedding models.
-- **Volcengine (Doubao Models)**: Recommended for low cost and high performance, with free quotas for new users. For purchase and activation, please refer to: [Volcengine Purchase Guide](./docs/en/configuration/volcengine-purchase-guide.md).
+- **Volcengine (Doubao Models)**: Recommended for low cost and high performance, with free quotas for new users. For purchase and activation, please refer to: [Volcengine Purchase Guide](./docs/en/guides/volcengine-purchase-guide.md).
 - **Other Custom Model Services**: Supports model services compatible with the OpenAI API format.
 
 ### 3. Environment Configuration
@@ -280,7 +280,7 @@ After running the first example, let's dive into the design philosophy of OpenVi
 
 We no longer view context as flat text slices but unify them into an abstract virtual filesystem. Whether it's memories, resources, or capabilities, they are mapped to virtual directories under the `viking://` protocol, each with a unique URI.
 
-This paradigm gives Agents unprecedented context manipulation capabilities, enabling them to locate, browse, and manipulate information precisely and deterministically through standard commands like `ls` and `find`, just like a developer. This transforms context management from vague semantic matching into intuitive, traceable "file operations". Learn more: [Viking URI](./docs/en/concepts/03-viking-uri.md) | [Context Types](./docs/en/concepts/02-context-types.md)
+This paradigm gives Agents unprecedented context manipulation capabilities, enabling them to locate, browse, and manipulate information precisely and deterministically through standard commands like `ls` and `find`, just like a developer. This transforms context management from vague semantic matching into intuitive, traceable "file operations". Learn more: [Viking URI](./docs/en/concepts/viking-uri.md) | [Context Types](./docs/en/concepts/context-types.md)
 
 ```
 viking://
@@ -313,7 +313,7 @@ Stuffing massive amounts of context into a prompt all at once is not only expens
 - **L1 (Overview)**: Contains core information and usage scenarios for Agent decision-making during the planning phase.
 - **L2 (Details)**: The full original data, for deep reading by the Agent when absolutely necessary.
 
-Learn more: [Context Layers](./docs/en/concepts/04-context-layers.md)
+Learn more: [Context Layers](./docs/en/concepts/context-layers.md)
 
 ```
 viking://resources/my_project/
@@ -342,13 +342,13 @@ Single vector retrieval struggles with complex query intents. OpenViking has des
 4. **Recursive Drill-down**: If subdirectories exist, recursively repeat the secondary retrieval steps layer by layer.
 5. **Result Aggregation**: Finally, obtain the most relevant context to return.
 
-This "lock high-score directory first, then refine content exploration" strategy not only finds the semantically best-matching fragments but also understands the full context where the information resides, thereby improving the globality and accuracy of retrieval. Learn more: [Retrieval Mechanism](./docs/en/concepts/06-retrieval.md)
+This "lock high-score directory first, then refine content exploration" strategy not only finds the semantically best-matching fragments but also understands the full context where the information resides, thereby improving the globality and accuracy of retrieval. Learn more: [Retrieval Mechanism](./docs/en/concepts/retrieval.md)
 
 ### 4. Visualized Retrieval Trajectory → Observable Context
 
 OpenViking's organization uses a hierarchical virtual filesystem structure. All context is integrated in a unified format, and each entry corresponds to a unique URI (like a `viking://` path), breaking the traditional flat black-box management mode with a clear hierarchy that is easy to understand.
 
-The retrieval process adopts a directory recursive strategy. The trajectory of directory browsing and file positioning for each retrieval is fully preserved, allowing users to clearly observe the root cause of problems and guide the optimization of retrieval logic. Learn more: [Retrieval Mechanism](./docs/en/concepts/06-retrieval.md)
+The retrieval process adopts a directory recursive strategy. The trajectory of directory browsing and file positioning for each retrieval is fully preserved, allowing users to clearly observe the root cause of problems and guide the optimization of retrieval logic. Learn more: [Retrieval Mechanism](./docs/en/concepts/retrieval.md)
 
 ### 5. Automatic Session Management → Context Self-Iteration
 
@@ -357,7 +357,7 @@ OpenViking has a built-in memory self-iteration loop. At the end of each session
 - **User Memory Update**: Update memories related to user preferences, making Agent responses better fit user needs.
 - **Agent Experience Accumulation**: Extract core content such as operational tips and tool usage experience from task execution experience, aiding efficient decision-making in subsequent tasks.
 
-This allows the Agent to get "smarter with use" through interactions with the world, achieving self-evolution. Learn more: [Session Management](./docs/en/concepts/08-session.md)
+This allows the Agent to get "smarter with use" through interactions with the world, achieving self-evolution. Learn more: [Session Management](./docs/en/concepts/session.md)
 
 ---
 

@@ -6,13 +6,6 @@ import asyncio
 from typing import Any, Dict, List, Optional, Tuple
 
 from openviking.core.context import Context, ResourceContentType, Vectorize
-from openviking.prompts import render_prompt
-from openviking.storage.queuefs.named_queue import DequeueHandlerBase
-from openviking.storage.queuefs.semantic_msg import SemanticMsg
-from openviking.storage.viking_fs import get_viking_fs
-from openviking.utils import VikingURI
-from openviking.utils.config import get_openviking_config
-from openviking.utils.logger import get_logger
 from openviking.parse.parsers.constants import (
     CODE_EXTENSIONS,
     DOCUMENTATION_EXTENSIONS,
@@ -20,6 +13,13 @@ from openviking.parse.parsers.constants import (
     FILE_TYPE_DOCUMENTATION,
     FILE_TYPE_OTHER,
 )
+from openviking.prompts import render_prompt
+from openviking.storage.queuefs.named_queue import DequeueHandlerBase
+from openviking.storage.queuefs.semantic_msg import SemanticMsg
+from openviking.storage.viking_fs import get_viking_fs
+from openviking.utils import VikingURI
+from openviking.utils.config import get_openviking_config
+from openviking.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

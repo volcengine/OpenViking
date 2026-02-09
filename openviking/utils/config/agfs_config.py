@@ -66,12 +66,12 @@ class AGFSConfig(BaseModel):
 
     path: str = Field(default="./data", description="AGFS data storage path")
 
-    port: int = Field(default=8080, description="AGFS service port")
+    port: int = Field(default=1833, description="AGFS service port")
 
     log_level: str = Field(default="warn", description="AGFS log level")
 
     url: Optional[str] = Field(
-        default="http://localhost:8080", description="AGFS service URL for service mode"
+        default="http://localhost:1833", description="AGFS service URL for service mode"
     )
 
     backend: str = Field(
@@ -81,6 +81,11 @@ class AGFSConfig(BaseModel):
     timeout: int = Field(default=10, description="AGFS request timeout (seconds)")
 
     retry_times: int = Field(default=3, description="AGFS retry times on failure")
+
+    use_ssl: bool = Field(
+        default=True,
+        description="Enable/Disable SSL (HTTPS) for AGFS service. Set to False for local testing without HTTPS.",
+    )
 
     # S3 backend configuration
     # These settings are used when backend is set to 's3'.

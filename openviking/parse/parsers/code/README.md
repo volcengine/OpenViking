@@ -165,6 +165,6 @@ results = client.find(
 
 ## 相关文档
 
-*   [上下文类型](docs/zh/concepts/02-context-types.md)
-*   [Viking URI](docs/zh/concepts/03-viking-uri.md)
-*   [上下文层级](docs/zh/concepts/04-context-layers.md)
+*   [上下文类型](docs/zh/concepts/context-types.md)
+*   [Viking URI](docs/zh/concepts/viking-uri.md)
+*   [上下文层级](docs/zh/concepts/context-layers.md)

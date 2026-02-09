@@ -28,7 +28,7 @@ class TestQuickStartLite(unittest.TestCase):
         config_data = {
             "storage": {
                 "agfs": {
-                    "port": 8080
+                    "port": 1833
                 }
             },
             "embedding": {

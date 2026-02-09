@@ -181,5 +181,5 @@ viking://agent/memories/
 
 - [架构概述](./01-architecture.md) - 系统整体架构
 - [上下文类型](./02-context-types.md) - 三种上下文类型
-- [上下文提取](./07-extraction.md) - 提取流程
-- [上下文层级](./04-context-layers.md) - L0/L1/L2 模型
+- [上下文提取](./06-extraction.md) - 提取流程
+- [上下文层级](./03-context-layers.md) - L0/L1/L2 模型

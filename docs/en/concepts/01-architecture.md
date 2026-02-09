@@ -149,6 +149,27 @@ client = OpenViking(
 - Supports multiple concurrent instances
 - Independently scalable
 
+### HTTP Mode
+
+For team sharing and cross-language integration:
+
+```python
+# Python SDK connects to OpenViking Server
+client = OpenViking(url="http://localhost:1933", api_key="xxx")
+```
+
+```bash
+# Or use curl / any HTTP client
+curl http://localhost:1933/api/v1/search/find \
+  -H "X-API-Key: xxx" \
+  -d '{"query": "how to use openviking"}'
+```
+
+- Server runs as standalone process (`python -m openviking serve`)
+- Clients connect via HTTP API
+- Supports any language that can make HTTP requests
+- See [Server Deployment](../guides/03-deployment.md) for setup
+
 ## Design Principles
 
 | Principle | Description |
@@ -161,9 +182,9 @@ client = OpenViking(
 ## Related Documents
 
 - [Context Types](./02-context-types.md) - Resource/Memory/Skill types
-- [Context Layers](./04-context-layers.md) - L0/L1/L2 model
-- [Viking URI](./03-viking-uri.md) - Unified resource identifier
+- [Context Layers](./03-context-layers.md) - L0/L1/L2 model
+- [Viking URI](./04-viking-uri.md) - Unified resource identifier
 - [Storage Architecture](./05-storage.md) - Dual-layer storage details
-- [Retrieval Mechanism](./06-retrieval.md) - Retrieval process details
-- [Context Extraction](./07-extraction.md) - Parsing and extraction process
+- [Retrieval Mechanism](./07-retrieval.md) - Retrieval process details
+- [Context Extraction](./06-extraction.md) - Parsing and extraction process
 - [Session Management](./08-session.md) - Session and memory management

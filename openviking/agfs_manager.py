@@ -30,7 +30,7 @@ class AGFSManager:
 
         config = AGFSConfig(
             path="./data",
-            port=8080,
+            port=1833,
             backend="local",
             log_level="info"
         )
@@ -42,7 +42,7 @@ class AGFSManager:
 
         config = AGFSConfig(
             path="./data",
-            port=8080,
+            port=1833,
             backend="s3",
             s3=S3Config(
                 bucket="my-bucket",
@@ -78,13 +78,7 @@ class AGFSManager:
         self.port = config.port
         self.log_level = config.log_level
         self.backend = config.backend
-        self.s3_bucket = config.s3.bucket
-        self.s3_region = config.s3.region
-        self.s3_access_key = config.s3.access_key
-        self.s3_secret_key = config.s3.secret_key
-        self.s3_endpoint = config.s3.endpoint
-        self.s3_prefix = config.s3.prefix
-        self.s3_use_ssl = config.s3.use_ssl
+        self.s3_config = config.s3
 
         self.process: Optional[subprocess.Popen] = None
         self.config_file: Optional[Path] = None
@@ -114,7 +108,8 @@ class AGFSManager:
         """Check if the port is available."""
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
-            sock.bind(("localhost", self.port))
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(("127.0.0.1", self.port))
         except OSError as e:
             raise RuntimeError(
                 f"AGFS port {self.port} is already in use, cannot start service. "
@@ -161,13 +156,13 @@ class AGFSManager:
                 "enabled": True,
                 "path": "/local",
                 "config": {
-                    "bucket": self.s3_bucket,
-                    "region": self.s3_region,
-                    "access_key_id": self.s3_access_key,
-                    "secret_access_key": self.s3_secret_key,
-                    "endpoint": self.s3_endpoint,
-                    "prefix": self.s3_prefix,
-                    "disable_ssl": not self.s3_use_ssl,
+                    "bucket": self.s3_config.bucket,
+                    "region": self.s3_config.region,
+                    "access_key_id": self.s3_config.access_key,
+                    "secret_access_key": self.s3_config.secret_key,
+                    "endpoint": self.s3_config.endpoint,
+                    "prefix": self.s3_config.prefix,
+                    "disable_ssl": not self.s3_config.use_ssl,
                 },
             }
         elif self.backend == "memory":

@@ -58,7 +58,7 @@ class HierarchicalRetriever:
         self.rerank_config = rerank_config
 
         # Use rerank threshold if available, otherwise use a default
-        self.threshold = rerank_config.threshold if rerank_config else 0.1
+        self.threshold = rerank_config.threshold if rerank_config else 0
 
         # Initialize rerank client only if config is available
         if rerank_config and rerank_config.is_available():
@@ -253,8 +253,6 @@ class HierarchicalRetriever:
 
         def passes_threshold(score: float) -> bool:
             """Check if score passes threshold."""
-            if not self._rerank_client or mode != RetrieverMode.THINKING:
-                return True
             if score_gte:
                 return score >= effective_threshold
             return score > effective_threshold

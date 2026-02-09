@@ -73,8 +73,7 @@ pip install openviking
 
 ```json
 {
-  "user": "default_user",
-    "embedding": {
+  "embedding": {
     "dense": {
       "provider": "volcengine",
       "api_key": "your-api-key",
@@ -376,8 +375,8 @@ client = ov.AsyncOpenViking(
 
 ## 相关文档
 
-- [简介](../getting-started/introduction.md) - 了解 OpenViking 的设计理念
-- [快速开始](../getting-started/quickstart.md) - 5 分钟上手教程
+- [简介](../getting-started/01-introduction.md) - 了解 OpenViking 的设计理念
+- [快速开始](../getting-started/02-quickstart.md) - 5 分钟上手教程
 - [架构概述](../concepts/01-architecture.md) - 深入理解系统设计
-- [检索机制](../concepts/06-retrieval.md) - 检索流程详解
-- [配置指南](../configuration/configuration.md) - 完整配置参考
+- [检索机制](../concepts/07-retrieval.md) - 检索流程详解
+- [配置指南](../guides/01-configuration.md) - 完整配置参考

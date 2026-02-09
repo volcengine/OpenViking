@@ -3,15 +3,16 @@
 """
 Async OpenViking client implementation.
 
-This is a compatibility layer that delegates to OpenVikingService.
+Supports both embedded mode (LocalClient) and HTTP mode (HTTPClient).
 """
 
+import os
 import threading
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
-from openviking.service.core import OpenVikingService
+from openviking.client import HTTPClient, LocalClient, Session
+from openviking.client.base import BaseClient
 from openviking.service.debug_service import SystemStatus
-from openviking.session import Session
 from openviking.utils import get_logger
 from openviking.utils.config import OpenVikingConfig
 
@@ -22,9 +23,10 @@ class AsyncOpenViking:
     """
     OpenViking main client class (Asynchronous).
 
-    Supports two deployment modes:
+    Supports three deployment modes:
     - Embedded mode: Uses local VikingVectorIndex storage and auto-starts AGFS subprocess (singleton)
     - Service mode: Connects to remote VikingVectorIndex and AGFS services (not singleton)
+    - HTTP mode: Connects to remote OpenViking Server via HTTP API (not singleton)
 
     Examples:
         # 1. Embedded mode (auto-starts local services)
@@ -39,7 +41,15 @@ class AsyncOpenViking:
         )
         await client.initialize()
 
-        # 3. Using Config Object for advanced configuration
+        # 3. HTTP mode (connects to OpenViking Server)
+        client = AsyncOpenViking(
+            url="http://localhost:8000",
+            api_key="your-api-key",
+            user="alice"
+        )
+        await client.initialize()
+
+        # 4. Using Config Object for advanced configuration
         from openviking.utils.config import OpenVikingConfig
         from openviking.utils.config import StorageConfig, AGFSConfig, VectorDBBackendConfig
 
@@ -64,6 +74,11 @@ class AsyncOpenViking:
     _lock = threading.Lock()
 
     def __new__(cls, *args, **kwargs):
+        # HTTP mode: no singleton
+        url = kwargs.get("url") or os.environ.get("OPENVIKING_URL")
+        if url:
+            return object.__new__(cls)
+
         # Service mode: no singleton
         vectordb_url = kwargs.get("vectordb_url")
         agfs_url = kwargs.get("agfs_url")
@@ -80,6 +95,8 @@ class AsyncOpenViking:
     def __init__(
         self,
         path: Optional[str] = None,
+        url: Optional[str] = None,
+        api_key: Optional[str] = None,
         vectordb_url: Optional[str] = None,
         agfs_url: Optional[str] = None,
         user: Optional[str] = None,
@@ -91,6 +108,8 @@ class AsyncOpenViking:
 
         Args:
             path: Local storage path for embedded mode.
+            url: OpenViking Server URL for HTTP mode.
+            api_key: API key for HTTP mode authentication.
             vectordb_url: Remote VectorDB service URL for service mode.
             agfs_url: Remote AGFS service URL for service mode.
             user: Username for session management.
@@ -101,58 +120,35 @@ class AsyncOpenViking:
         if hasattr(self, "_singleton_initialized") and self._singleton_initialized:
             return
 
-        # Create the service layer
-        self._service = OpenVikingService(
-            path=path,
-            vectordb_url=vectordb_url,
-            agfs_url=agfs_url,
-            user=user,
-            config=config,
-        )
-
-        self.user = self._service.user
+        self.user = user or "default"
         self._initialized = False
         self._singleton_initialized = True
 
-    # ============= Properties for backward compatibility =============
+        # Environment variable fallback for HTTP mode
+        url = url or os.environ.get("OPENVIKING_URL")
+        api_key = api_key or os.environ.get("OPENVIKING_API_KEY")
 
-    @property
-    def viking_fs(self):
-        return self._service.viking_fs
-
-    @property
-    def _viking_fs(self):
-        return self._service.viking_fs
-
-    @property
-    def _vikingdb_manager(self):
-        return self._service.vikingdb_manager
-
-    @property
-    def _session_compressor(self):
-        return self._service.session_compressor
-
-    @property
-    def _config(self):
-        return self._service._config
-
-    @property
-    def _agfs_manager(self):
-        return self._service._agfs_manager
-
-    @property
-    def _resource_processor(self):
-        return self._service._resource_processor
-
-    @property
-    def _skill_processor(self):
-        return self._service._skill_processor
+        # Create the appropriate client - only _client, no _service
+        if url:
+            # HTTP mode
+            self._client: BaseClient = HTTPClient(url=url, api_key=api_key, user=user)
+        else:
+            # Local/Service mode - LocalClient creates and owns the OpenVikingService
+            self._client: BaseClient = LocalClient(
+                path=path,
+                vectordb_url=vectordb_url,
+                agfs_url=agfs_url,
+                user=user,
+                config=config,
+            )
+            # Get user from the client's service
+            self.user = self._client._user
 
     # ============= Lifecycle methods =============
 
     async def initialize(self) -> None:
         """Initialize OpenViking storage and indexes."""
-        await self._service.initialize()
+        await self._client.initialize()
         self._initialized = True
 
     async def _ensure_initialized(self):
@@ -162,7 +158,7 @@ class AsyncOpenViking:
 
     async def close(self) -> None:
         """Close OpenViking and release resources."""
-        await self._service.close()
+        await self._client.close()
         self._initialized = False
         self._singleton_initialized = False
 
@@ -185,13 +181,7 @@ class AsyncOpenViking:
         Args:
             session_id: Session ID, creates a new session (auto-generated ID) if None
         """
-        return Session(
-            viking_fs=self._service.viking_fs,
-            vikingdb_manager=self._service.vikingdb_manager,
-            session_compressor=self._service.session_compressor,
-            user=self.user,
-            session_id=session_id,
-        )
+        return self._client.session(session_id)
 
     # ============= Resource methods =============
 
@@ -205,13 +195,13 @@ class AsyncOpenViking:
         timeout: float = None,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking (only supports resources scope).
-        like: viking://resources/github/volcengine/OpenViking
+
         Args:
             wait: Whether to wait for semantic extraction and vectorization to complete
             timeout: Wait timeout in seconds
         """
         await self._ensure_initialized()
-        return await self._service.resources.add_resource(
+        return await self._client.add_resource(
             path=path,
             target=target,
             reason=reason,
@@ -222,7 +212,8 @@ class AsyncOpenViking:
 
     async def wait_processed(self, timeout: float = None) -> Dict[str, Any]:
         """Wait for all queued processing to complete."""
-        return await self._service.resources.wait_processed(timeout=timeout)
+        await self._ensure_initialized()
+        return await self._client.wait_processed(timeout=timeout)
 
     async def add_skill(
         self,
@@ -237,7 +228,7 @@ class AsyncOpenViking:
             timeout: Wait timeout in seconds
         """
         await self._ensure_initialized()
-        return await self._service.resources.add_skill(
+        return await self._client.add_skill(
             data=data,
             wait=wait,
             timeout=timeout,
@@ -249,7 +240,7 @@ class AsyncOpenViking:
         self,
         query: str,
         target_uri: str = "",
-        session: Optional["Session"] = None,
+        session: Optional[Union["Session", Any]] = None,
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
@@ -268,10 +259,11 @@ class AsyncOpenViking:
             FindResult
         """
         await self._ensure_initialized()
-        return await self._service.search.search(
+        session_id = session.session_id if session else None
+        return await self._client.search(
             query=query,
             target_uri=target_uri,
-            session=session,
+            session_id=session_id,
             limit=limit,
             score_threshold=score_threshold,
             filter=filter,
@@ -287,7 +279,7 @@ class AsyncOpenViking:
     ):
         """Semantic search"""
         await self._ensure_initialized()
-        return await self._service.search.find(
+        return await self._client.find(
             query=query,
             target_uri=target_uri,
             limit=limit,
@@ -300,17 +292,17 @@ class AsyncOpenViking:
     async def abstract(self, uri: str) -> str:
         """Read L0 abstract (.abstract.md)"""
         await self._ensure_initialized()
-        return await self._service.fs.abstract(uri)
+        return await self._client.abstract(uri)
 
     async def overview(self, uri: str) -> str:
         """Read L1 overview (.overview.md)"""
         await self._ensure_initialized()
-        return await self._service.fs.overview(uri)
+        return await self._client.overview(uri)
 
     async def read(self, uri: str) -> str:
         """Read file content"""
         await self._ensure_initialized()
-        return await self._service.fs.read(uri)
+        return await self._client.read(uri)
 
     async def ls(self, uri: str, **kwargs) -> List[Any]:
         """
@@ -324,49 +316,49 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         recursive = kwargs.get("recursive", False)
         simple = kwargs.get("simple", False)
-        return await self._service.fs.ls(uri, recursive=recursive, simple=simple)
+        return await self._client.ls(uri, recursive=recursive, simple=simple)
 
     async def rm(self, uri: str, recursive: bool = False) -> None:
         """Remove resource"""
         await self._ensure_initialized()
-        await self._service.fs.rm(uri, recursive=recursive)
+        await self._client.rm(uri, recursive=recursive)
 
     async def grep(self, uri: str, pattern: str, case_insensitive: bool = False) -> Dict:
         """Content search"""
         await self._ensure_initialized()
-        return await self._service.fs.grep(uri, pattern, case_insensitive=case_insensitive)
+        return await self._client.grep(uri, pattern, case_insensitive=case_insensitive)
 
     async def glob(self, pattern: str, uri: str = "viking://") -> Dict:
         """File pattern matching"""
         await self._ensure_initialized()
-        return await self._service.fs.glob(pattern, uri=uri)
+        return await self._client.glob(pattern, uri=uri)
 
     async def mv(self, from_uri: str, to_uri: str) -> None:
         """Move resource"""
         await self._ensure_initialized()
-        await self._service.fs.mv(from_uri, to_uri)
+        await self._client.mv(from_uri, to_uri)
 
     async def tree(self, uri: str) -> Dict:
         """Get directory tree"""
         await self._ensure_initialized()
-        return await self._service.fs.tree(uri)
+        return await self._client.tree(uri)
 
     async def mkdir(self, uri: str) -> None:
         """Create directory"""
         await self._ensure_initialized()
-        await self._service.fs.mkdir(uri)
+        await self._client.mkdir(uri)
 
     async def stat(self, uri: str) -> Dict:
         """Get resource status"""
         await self._ensure_initialized()
-        return await self._service.fs.stat(uri)
+        return await self._client.stat(uri)
 
     # ============= Relation methods =============
 
     async def relations(self, uri: str) -> List[Dict[str, Any]]:
         """Get relations (returns [{"uri": "...", "reason": "..."}, ...])"""
         await self._ensure_initialized()
-        return await self._service.relations.relations(uri)
+        return await self._client.relations(uri)
 
     async def link(self, from_uri: str, uris: Any, reason: str = "") -> None:
         """
@@ -378,7 +370,7 @@ class AsyncOpenViking:
             reason: Reason for linking
         """
         await self._ensure_initialized()
-        await self._service.relations.link(from_uri, uris, reason)
+        await self._client.link(from_uri, uris, reason)
 
     async def unlink(self, from_uri: str, uri: str) -> None:
         """
@@ -389,7 +381,7 @@ class AsyncOpenViking:
             uri: Target URI to remove
         """
         await self._ensure_initialized()
-        await self._service.relations.unlink(from_uri, uri)
+        await self._client.unlink(from_uri, uri)
 
     # ============= Pack methods =============
 
@@ -405,7 +397,7 @@ class AsyncOpenViking:
             Exported file path
         """
         await self._ensure_initialized()
-        return await self._service.pack.export_ovpack(uri, to)
+        return await self._client.export_ovpack(uri, to)
 
     async def import_ovpack(
         self, file_path: str, parent: str, force: bool = False, vectorize: bool = True
@@ -423,17 +415,17 @@ class AsyncOpenViking:
             Imported root resource URI
         """
         await self._ensure_initialized()
-        return await self._service.pack.import_ovpack(file_path, parent, force=force, vectorize=vectorize)
+        return await self._client.import_ovpack(file_path, parent, force=force, vectorize=vectorize)
 
     # ============= Debug methods =============
 
-    def get_status(self) -> SystemStatus:
+    def get_status(self) -> Union[SystemStatus, Dict[str, Any]]:
         """Get system status.
 
         Returns:
             SystemStatus containing health status of all components.
         """
-        return self._service.debug.observer.system
+        return self._client.get_status()
 
     def is_healthy(self) -> bool:
         """Quick health check.
@@ -441,9 +433,9 @@ class AsyncOpenViking:
         Returns:
             True if all components are healthy, False otherwise.
         """
-        return self._service.debug.observer.is_healthy()
+        return self._client.is_healthy()
 
     @property
     def observer(self):
         """Get observer service for component status."""
-        return self._service.debug.observer
+        return self._client.observer

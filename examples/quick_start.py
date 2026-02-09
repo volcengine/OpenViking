@@ -1,6 +1,7 @@
 import openviking as ov
 
 client = ov.OpenViking(path="./data")
+# client = ov.OpenViking(url="http://localhost:1933")  # HTTP mode: connect to OpenViking Server
 
 try:
     client.initialize()

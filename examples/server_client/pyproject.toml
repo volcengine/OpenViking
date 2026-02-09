@@ -1,0 +1,13 @@
+[project]
+name = "server-client-example"
+version = "0.1.0"
+description = "OpenViking Server-Client example"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "openviking>=0.1.6",
+    "rich>=13.0.0",
+]
+
+[tool.uv.sources]
+openviking = { path = "../../", editable = true }
