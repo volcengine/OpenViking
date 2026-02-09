@@ -55,7 +55,9 @@ int PersistStore::put_data(const std::vector<std::string>& keys,
   for (size_t i = 0; i < keys.size(); ++i) {
     batch.Put(keys[i], values[i]);
   }
-  auto status = db_->Write(leveldb::WriteOptions(), &batch);
+  leveldb::WriteOptions write_options;
+  write_options.sync = true;
+  auto status = db_->Write(write_options, &batch);
   if (!status.ok()) {
     SPDLOG_WARN("Failed to put data db: {}", status.ToString());
     return -1;
@@ -68,7 +70,9 @@ int PersistStore::delete_data(const std::vector<std::string>& keys) {
   for (const auto& key : keys) {
     batch.Delete(key);
   }
-  auto status = db_->Write(leveldb::WriteOptions(), &batch);
+  leveldb::WriteOptions write_options;
+  write_options.sync = true;
+  auto status = db_->Write(write_options, &batch);
   if (!status.ok()) {
     SPDLOG_WARN("Failed to delete data db: {}", status.ToString());
     return -1;
@@ -82,7 +86,9 @@ int PersistStore::clear_data() {
   for (it->SeekToFirst(); it->Valid(); it->Next()) {
     batch.Delete(it->key().ToString());
   }
-  auto status = db_->Write(leveldb::WriteOptions(), &batch);
+  leveldb::WriteOptions write_options;
+  write_options.sync = true;
+  auto status = db_->Write(write_options, &batch);
   if (!status.ok()) {
     SPDLOG_WARN("Failed to clear data db: {}", status.ToString());
     return -1;
@@ -118,7 +124,9 @@ int PersistStore::exec_op(const std::vector<StorageOp>& ops) {
       continue;
     }
   }
-  auto status = db_->Write(leveldb::WriteOptions(), &batch);
+  leveldb::WriteOptions write_options;
+  write_options.sync = true;
+  auto status = db_->Write(write_options, &batch);
   if (!status.ok()) {
     SPDLOG_WARN("Failed to exec op data db: {}", status.ToString());
     return -1;

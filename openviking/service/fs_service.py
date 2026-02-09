@@ -8,7 +8,7 @@ Provides file system operations: ls, mkdir, rm, mv, tree, stat, read, abstract, 
 
 from typing import Any, Dict, List, Optional
 
-from openviking.exceptions import NotFoundError, NotInitializedError
+from openviking.exceptions import NotInitializedError
 from openviking.storage.viking_fs import VikingFS
 from openviking.utils import get_logger
 
