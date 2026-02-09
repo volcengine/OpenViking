@@ -120,6 +120,60 @@ class TestBytesRow(unittest.TestCase):
         val = BinaryData.bytes_row.deserialize_field(serialized, "raw")
         self.assertEqual(val, blob)
 
+    def test_schema_id_validation(self):
+        with self.assertRaises(ValueError):
+            engine.Schema(
+                [
+                    {"name": "id", "data_type": engine.FieldType.int64, "id": 0},
+                    {"name": "name", "data_type": engine.FieldType.string, "id": 2},
+                ]
+            )
+
+        with self.assertRaises(ValueError):
+            engine.Schema(
+                [
+                    {"name": "id", "data_type": engine.FieldType.int64, "id": 0},
+                    {"name": "dup", "data_type": engine.FieldType.string, "id": 0},
+                ]
+            )
+
+    def test_missing_fields_use_defaults(self):
+        schema = engine.Schema(
+            [
+                {
+                    "name": "id",
+                    "data_type": engine.FieldType.int64,
+                    "id": 0,
+                    "default_value": 7,
+                },
+                {
+                    "name": "name",
+                    "data_type": engine.FieldType.string,
+                    "id": 1,
+                    "default_value": "fallback",
+                },
+                {
+                    "name": "tags",
+                    "data_type": engine.FieldType.list_string,
+                    "id": 2,
+                    "default_value": ["a", "b"],
+                },
+                {
+                    "name": "score",
+                    "data_type": engine.FieldType.float32,
+                    "id": 3,
+                },
+            ]
+        )
+        row = engine.BytesRow(schema)
+
+        serialized = row.serialize({"id": 5})
+
+        self.assertEqual(row.deserialize_field(serialized, "id"), 5)
+        self.assertEqual(row.deserialize_field(serialized, "name"), "fallback")
+        self.assertEqual(row.deserialize_field(serialized, "tags"), ["a", "b"])
+        self.assertAlmostEqual(row.deserialize_field(serialized, "score"), 0.0, places=5)
+
 
 class TestBytesRowConsistency(unittest.TestCase):
     def setUp(self):

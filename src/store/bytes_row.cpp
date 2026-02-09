@@ -15,15 +15,35 @@ constexpr int BOOL_SIZE = 1;
 
 Schema::Schema(const std::vector<FieldDef>& fields) {
   int current_offset = 1;  // Start after 1 byte header
-  int max_id = 0;
 
-  // Find max ID to size the vector
+  if (fields.empty()) {
+    total_byte_length_ = current_offset;
+    return;
+  }
+
+  int max_id = -1;
   for (const auto& field : fields) {
+    if (field.id < 0) {
+      throw std::invalid_argument("Field id must be non-negative");
+    }
     if (field.id > max_id)
       max_id = field.id;
   }
 
-  field_orders_.resize(max_id + 1);
+  if (max_id != static_cast<int>(fields.size()) - 1) {
+    throw std::invalid_argument(
+        "Field ids must be contiguous from 0 to N-1");
+  }
+
+  std::vector<bool> seen(fields.size(), false);
+  for (const auto& field : fields) {
+    if (seen[field.id]) {
+      throw std::invalid_argument("Duplicate field id found");
+    }
+    seen[field.id] = true;
+  }
+
+  field_orders_.resize(fields.size());
 
   for (const auto& field : fields) {
     int byte_len = 0;
