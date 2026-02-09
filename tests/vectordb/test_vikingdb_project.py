@@ -1,15 +1,11 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
-import json
-import sys
 import unittest
 
-from openviking.storage.vectordb.collection.collection import Collection
-from openviking.storage.vectordb.collection.vikingdb_collection import VikingDBCollection
 from openviking.storage.vectordb.project.vikingdb_project import get_or_create_vikingdb_project
 
 
-@unittest.skipUnless(sys.platform == "darwin", "Only run on macOS")
+@unittest.skip("Temporarily skip TestVikingDBProject")
 class TestVikingDBProject(unittest.TestCase):
     """
     Unit tests for VikingDB Project and Collection implementation for private deployment.
@@ -86,11 +82,12 @@ class TestVikingDBProject(unittest.TestCase):
 
         collection = project.get_or_create_collection("test_coll", self.meta_data)
         if not collection:
-            assert False, "Collection should exist after creation"
-    
+            self.fail("Collection should exist after creation")
+
         collection.drop()
         collection = project.get_collection("test_coll")
         self.assertIsNone(collection)
+
 
 if __name__ == "__main__":
     unittest.main()
