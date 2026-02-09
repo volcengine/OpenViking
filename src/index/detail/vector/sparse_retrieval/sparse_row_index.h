@@ -40,6 +40,13 @@ class SparseRowIndex {
 
   int init_empty_data(size_t max_elements);
 
+  void reserve(size_t max_elements) {
+    max_elements_ = max_elements;
+    if (sparse_dataset_) {
+      sparse_dataset_->reserve(max_elements_);
+    }
+  }
+
   int populate_terms(const std::vector<TermKey>& terms,
                      bool check_finish = true);
 

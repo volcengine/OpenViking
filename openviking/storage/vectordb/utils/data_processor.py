@@ -96,6 +96,7 @@ class DataProcessor:
             "path": "",
             "date_time": "",
             "geo_point": "",
+            "sparse_vector": {},
         }
 
         # Define validators capturing self for configuration
