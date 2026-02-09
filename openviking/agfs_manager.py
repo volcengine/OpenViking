@@ -115,12 +115,13 @@ class AGFSManager:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         try:
             sock.bind(("localhost", self.port))
-            sock.close()
         except OSError as e:
             raise RuntimeError(
                 f"AGFS port {self.port} is already in use, cannot start service. "
                 f"Please check if another AGFS process is running, or use a different port."
             ) from e
+        finally:
+            sock.close()
 
     def _generate_config(self) -> Path:
         """Dynamically generate AGFS configuration file based on backend type."""
