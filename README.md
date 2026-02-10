@@ -19,7 +19,7 @@ English / [中文](README_CN.md)
 
 👋 Join our Community
 
-📱 <a href="./docs/en/about/about-us.md#lark-group">Lark Group</a> · <a href="./docs/en/about/about-us.md#wechat-group">WeChat</a> · <a href="https://discord.com/invite/eHvx8E9XF3">Discord</a> · <a href="https://x.com/openvikingai">X</a>
+📱 <a href="./docs/en/about/01-about-us.md#lark-group">Lark Group</a> · <a href="./docs/en/about/01-about-us.md#wechat-group">WeChat</a> · <a href="https://discord.com/invite/eHvx8E9XF3">Discord</a> · <a href="https://x.com/openvikingai">X</a>
 
 </div>
 
@@ -77,7 +77,7 @@ OpenViking requires the following model capabilities:
 
 OpenViking supports various model services:
 - **OpenAI Models**: Supports GPT-4V and other VLM models, and OpenAI Embedding models.
-- **Volcengine (Doubao Models)**: Recommended for low cost and high performance, with free quotas for new users. For purchase and activation, please refer to: [Volcengine Purchase Guide](./docs/en/guides/volcengine-purchase-guide.md).
+- **Volcengine (Doubao Models)**: Recommended for low cost and high performance, with free quotas for new users. For purchase and activation, please refer to: [Volcengine Purchase Guide](./docs/en/guides/02-volcengine-purchase-guide.md).
 - **Other Custom Model Services**: Supports model services compatible with the OpenAI API format.
 
 ### 3. Environment Configuration
@@ -280,7 +280,7 @@ After running the first example, let's dive into the design philosophy of OpenVi
 
 We no longer view context as flat text slices but unify them into an abstract virtual filesystem. Whether it's memories, resources, or capabilities, they are mapped to virtual directories under the `viking://` protocol, each with a unique URI.
 
-This paradigm gives Agents unprecedented context manipulation capabilities, enabling them to locate, browse, and manipulate information precisely and deterministically through standard commands like `ls` and `find`, just like a developer. This transforms context management from vague semantic matching into intuitive, traceable "file operations". Learn more: [Viking URI](./docs/en/concepts/viking-uri.md) | [Context Types](./docs/en/concepts/context-types.md)
+This paradigm gives Agents unprecedented context manipulation capabilities, enabling them to locate, browse, and manipulate information precisely and deterministically through standard commands like `ls` and `find`, just like a developer. This transforms context management from vague semantic matching into intuitive, traceable "file operations". Learn more: [Viking URI](./docs/en/concepts/04-viking-uri.md) | [Context Types](./docs/en/concepts/02-context-types.md)
 
 ```
 viking://
@@ -313,7 +313,7 @@ Stuffing massive amounts of context into a prompt all at once is not only expens
 - **L1 (Overview)**: Contains core information and usage scenarios for Agent decision-making during the planning phase.
 - **L2 (Details)**: The full original data, for deep reading by the Agent when absolutely necessary.
 
-Learn more: [Context Layers](./docs/en/concepts/context-layers.md)
+Learn more: [Context Layers](./docs/en/concepts/03-context-layers.md)
 
 ```
 viking://resources/my_project/
@@ -342,13 +342,13 @@ Single vector retrieval struggles with complex query intents. OpenViking has des
 4. **Recursive Drill-down**: If subdirectories exist, recursively repeat the secondary retrieval steps layer by layer.
 5. **Result Aggregation**: Finally, obtain the most relevant context to return.
 
-This "lock high-score directory first, then refine content exploration" strategy not only finds the semantically best-matching fragments but also understands the full context where the information resides, thereby improving the globality and accuracy of retrieval. Learn more: [Retrieval Mechanism](./docs/en/concepts/retrieval.md)
+This "lock high-score directory first, then refine content exploration" strategy not only finds the semantically best-matching fragments but also understands the full context where the information resides, thereby improving the globality and accuracy of retrieval. Learn more: [Retrieval Mechanism](./docs/en/concepts/07-retrieval.md)
 
 ### 4. Visualized Retrieval Trajectory → Observable Context
 
 OpenViking's organization uses a hierarchical virtual filesystem structure. All context is integrated in a unified format, and each entry corresponds to a unique URI (like a `viking://` path), breaking the traditional flat black-box management mode with a clear hierarchy that is easy to understand.
 
-The retrieval process adopts a directory recursive strategy. The trajectory of directory browsing and file positioning for each retrieval is fully preserved, allowing users to clearly observe the root cause of problems and guide the optimization of retrieval logic. Learn more: [Retrieval Mechanism](./docs/en/concepts/retrieval.md)
+The retrieval process adopts a directory recursive strategy. The trajectory of directory browsing and file positioning for each retrieval is fully preserved, allowing users to clearly observe the root cause of problems and guide the optimization of retrieval logic. Learn more: [Retrieval Mechanism](./docs/en/concepts/07-retrieval.md)
 
 ### 5. Automatic Session Management → Context Self-Iteration
 
@@ -357,7 +357,7 @@ OpenViking has a built-in memory self-iteration loop. At the end of each session
 - **User Memory Update**: Update memories related to user preferences, making Agent responses better fit user needs.
 - **Agent Experience Accumulation**: Extract core content such as operational tips and tool usage experience from task execution experience, aiding efficient decision-making in subsequent tasks.
 
-This allows the Agent to get "smarter with use" through interactions with the world, achieving self-evolution. Learn more: [Session Management](./docs/en/concepts/session.md)
+This allows the Agent to get "smarter with use" through interactions with the world, achieving self-evolution. Learn more: [Session Management](./docs/en/concepts/08-session.md)
 
 ---
 
@@ -426,7 +426,7 @@ The Viking team focuses on unstructured information processing and intelligent r
 - **Oct 2025**: Open-sourced [MineContext](https://github.com/volcengine/MineContext), exploring proactive AI applications.
 - **Jan 2026**: Open-sourced OpenViking, providing underlying context database support for AI Agents.
 
-For more details, please see: **[About Us](./docs/en/about/about-us.md)**
+For more details, please see: **[About Us](./docs/en/about/01-about-us.md)**
 
 ---
 
@@ -437,8 +437,8 @@ OpenViking is still in its early stages, and there are many areas for improvemen
 - Light up a precious **Star** for us to give us the motivation to move forward.
 - Visit our [**Website**](https://www.openviking.ai) to understand the philosophy we convey, and use it in your projects via the [**Documentation**](https://www.openviking.ai/docs). Feel the change it brings and give us feedback on your truest experience.
 - Join our community to share your insights, help answer others' questions, and jointly create an open and mutually helpful technical atmosphere:
-  - 📱 **Lark Group**: Scan the QR code to join → [View QR Code](./docs/en/about/about-us.md#lark-group)
-  - 💬 **WeChat Group**: Scan the QR code to add assistant → [View QR Code](./docs/en/about/about-us.md#wechat-group)
+  - 📱 **Lark Group**: Scan the QR code to join → [View QR Code](./docs/en/about/01-about-us.md#lark-group)
+  - 💬 **WeChat Group**: Scan the QR code to add assistant → [View QR Code](./docs/en/about/01-about-us.md#wechat-group)
   - 🎮 **Discord**: [Join Discord Server](https://discord.com/invite/eHvx8E9XF3)
   - 🐦 **X (Twitter)**：[Follow us](https://x.com/openvikingai)
 - Become a **Contributor**, whether submitting a bug fix or contributing a new feature, every line of your code will be an important cornerstone of OpenViking's growth.
