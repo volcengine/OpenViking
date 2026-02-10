@@ -172,13 +172,13 @@ Windows 下可使用以下方式之一：
 PowerShell：
 
 ```powershell
-$env:OPENVIKING_CONFIG_FILE = "~/.openviking/ov.conf"
+$env:OPENVIKING_CONFIG_FILE = "$HOME/.openviking/ov.conf"
 ```
 
 命令提示符（cmd.exe）：
 
 ```bat
-set OPENVIKING_CONFIG_FILE=~/.openviking/ov.conf
+set "OPENVIKING_CONFIG_FILE=%USERPROFILE%\.openviking\ov.conf"
 ```
 
 > 💡 **提示**：你也可以将配置文件放在其他位置，只需在环境变量中指定正确的路径即可。
