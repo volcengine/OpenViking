@@ -15,7 +15,7 @@ from openviking.parse.parsers.constants import (
 )
 from openviking.prompts import render_prompt
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
-from openviking.storage.queuefs.semantic_dag import SemanticDagExecutor
+from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecutor
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.utils import VikingURI
@@ -44,6 +44,7 @@ class SemanticProcessor(DequeueHandlerBase):
             max_concurrent_llm: Maximum concurrent LLM calls
         """
         self.max_concurrent_llm = max_concurrent_llm
+        self._dag_executor: Optional[SemanticDagExecutor] = None
 
     def _detect_file_type(self, file_name: str) -> str:
         """
@@ -141,6 +142,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     context_type=msg.context_type,
                     max_concurrent_llm=self.max_concurrent_llm,
                 )
+                self._dag_executor = executor
                 await executor.run(msg.uri)
                 logger.info(f"Completed semantic generation for: {msg.uri}")
                 self.report_success()
@@ -184,6 +186,11 @@ class SemanticProcessor(DequeueHandlerBase):
             logger.error(f"Failed to process semantic message: {e}", exc_info=True)
             self.report_error(str(e), data)
             return None
+
+    def get_dag_stats(self) -> Optional["DagStats"]:
+        if not self._dag_executor:
+            return None
+        return self._dag_executor.get_stats()
 
     async def _process_single_directory(
         self,

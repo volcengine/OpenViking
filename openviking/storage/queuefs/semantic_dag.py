@@ -30,6 +30,14 @@ class DirNode:
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
+@dataclass
+class DagStats:
+    total_nodes: int = 0
+    pending_nodes: int = 0
+    overview_scheduled_nodes: int = 0
+    done_nodes: int = 0
+
+
 class SemanticDagExecutor:
     """Execute semantic generation with DAG-style, event-driven lazy dispatch."""
 
@@ -43,6 +51,7 @@ class SemanticDagExecutor:
         self._parent: Dict[str, Optional[str]] = {}
         self._root_uri: Optional[str] = None
         self._root_done: Optional[asyncio.Event] = None
+        self._stats = DagStats()
 
     async def run(self, root_uri: str) -> None:
         """Run DAG execution starting from root_uri."""
@@ -76,12 +85,16 @@ class SemanticDagExecutor:
                 dispatched=True,
             )
             self._nodes[dir_uri] = node
+            self._stats.total_nodes += 1
+            self._stats.pending_nodes += 1
 
             if pending == 0:
                 self._schedule_overview(dir_uri)
                 return
 
             for file_path in file_paths:
+                self._stats.total_nodes += 1
+                self._stats.pending_nodes += 1
                 asyncio.create_task(self._file_summary_task(dir_uri, file_path))
 
             for child_uri in children_dirs:
@@ -127,6 +140,9 @@ class SemanticDagExecutor:
         except Exception as e:
             logger.warning(f"Failed to generate summary for {file_path}: {e}")
             summary_dict = {"name": file_name, "summary": ""}
+        finally:
+            self._stats.done_nodes += 1
+            self._stats.pending_nodes = max(0, self._stats.pending_nodes - 1)
 
         await self._on_file_done(parent_uri, file_path, summary_dict)
 
@@ -144,6 +160,7 @@ class SemanticDagExecutor:
             node.pending -= 1
             if node.pending == 0 and not node.overview_scheduled:
                 node.overview_scheduled = True
+                self._stats.overview_scheduled_nodes += 1
                 asyncio.create_task(self._overview_task(parent_uri))
 
     async def _on_child_done(self, parent_uri: str, child_uri: str, abstract: str) -> None:
@@ -159,6 +176,7 @@ class SemanticDagExecutor:
             node.pending -= 1
             if node.pending == 0 and not node.overview_scheduled:
                 node.overview_scheduled = True
+                self._stats.overview_scheduled_nodes += 1
                 asyncio.create_task(self._overview_task(parent_uri))
 
     def _schedule_overview(self, dir_uri: str) -> None:
@@ -168,6 +186,7 @@ class SemanticDagExecutor:
         if node.overview_scheduled:
             return
         node.overview_scheduled = True
+        self._stats.overview_scheduled_nodes += 1
         asyncio.create_task(self._overview_task(dir_uri))
 
     def _finalize_file_summaries(self, node: DirNode) -> List[Dict[str, str]]:
@@ -229,6 +248,9 @@ class SemanticDagExecutor:
         except Exception as e:
             logger.error(f"Failed to generate overview for {dir_uri}: {e}", exc_info=True)
             abstract = ""
+        finally:
+            self._stats.done_nodes += 1
+            self._stats.pending_nodes = max(0, self._stats.pending_nodes - 1)
 
         parent_uri = self._parent.get(dir_uri)
         if parent_uri is None:
@@ -237,6 +259,14 @@ class SemanticDagExecutor:
             return
 
         await self._on_child_done(parent_uri, dir_uri, abstract)
+
+    def get_stats(self) -> DagStats:
+        return DagStats(
+            total_nodes=self._stats.total_nodes,
+            pending_nodes=self._stats.pending_nodes,
+            overview_scheduled_nodes=self._stats.overview_scheduled_nodes,
+            done_nodes=self._stats.done_nodes,
+        )
 
 
 if False:  # pragma: no cover - for type checkers only
