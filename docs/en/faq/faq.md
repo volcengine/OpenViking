@@ -73,8 +73,7 @@ Create an `ov.conf` configuration file in your project directory:
 
 ```json
 {
-  "user": "default_user",
-    "embedding": {
+  "embedding": {
     "dense": {
       "provider": "volcengine",
       "api_key": "your-api-key",
@@ -376,8 +375,8 @@ Yes, OpenViking is fully open source under the Apache 2.0 license.
 
 ## Related Documentation
 
-- [Introduction](../getting-started/introduction.md) - Understand OpenViking's design philosophy
-- [Quick Start](../getting-started/quickstart.md) - 5-minute tutorial
+- [Introduction](../getting-started/01-introduction.md) - Understand OpenViking's design philosophy
+- [Quick Start](../getting-started/02-quickstart.md) - 5-minute tutorial
 - [Architecture Overview](../concepts/01-architecture.md) - Deep dive into system design
-- [Retrieval Mechanism](../concepts/06-retrieval.md) - Detailed retrieval process
-- [Configuration Guide](../configuration/configuration.md) - Complete configuration reference
+- [Retrieval Mechanism](../concepts/07-retrieval.md) - Detailed retrieval process
+- [Configuration Guide](../guides/01-configuration.md) - Complete configuration reference

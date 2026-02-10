@@ -1,0 +1,203 @@
+# API 概览
+
+本页介绍如何连接 OpenViking 以及所有 API 端点共享的约定。
+
+## 连接 OpenViking
+
+OpenViking 支持三种连接模式：
+
+| 模式 | 使用场景 | 单例 |
+|------|----------|------|
+| **嵌入式** | 本地开发，单进程 | 是 |
+| **服务模式** | 远程 VectorDB + AGFS 基础设施 | 否 |
+| **HTTP** | 连接 OpenViking Server | 否 |
+
+### 嵌入式模式
+
+```python
+import openviking as ov
+
+client = ov.OpenViking(path="./data")
+client.initialize()
+```
+
+### 服务模式
+
+```python
+client = ov.OpenViking(
+    vectordb_url="http://vectordb.example.com:8000",
+    agfs_url="http://agfs.example.com:1833",
+)
+client.initialize()
+```
+
+### HTTP 模式
+
+```python
+client = ov.OpenViking(
+    url="http://localhost:1933",
+    api_key="your-key",
+)
+client.initialize()
+```
+
+### 直接 HTTP（curl）
+
+```bash
+curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
+  -H "X-API-Key: your-key"
+```
+
+## 客户端生命周期
+
+```python
+client = ov.OpenViking(path="./data")  # or url="http://..."
+client.initialize()  # Required before any operations
+
+# ... use client ...
+
+client.close()  # Release resources
+```
+
+## 认证
+
+详见 [认证指南](../guides/04-authentication.md)。
+
+- **X-API-Key** 请求头：`X-API-Key: your-key`
+- **Bearer** 请求头：`Authorization: Bearer your-key`
+- 如果服务端未配置 API Key，则跳过认证。
+- `/health` 端点始终不需要认证。
+
+## 响应格式
+
+所有 HTTP API 响应遵循统一格式：
+
+**成功**
+
+```json
+{
+  "status": "ok",
+  "result": { ... },
+  "time": 0.123
+}
+```
+
+**错误**
+
+```json
+{
+  "status": "error",
+  "error": {
+    "code": "NOT_FOUND",
+    "message": "Resource not found: viking://resources/nonexistent/"
+  },
+  "time": 0.01
+}
+```
+
+## 错误码
+
+| 错误码 | HTTP 状态码 | 说明 |
+|--------|-------------|------|
+| `OK` | 200 | 成功 |
+| `INVALID_ARGUMENT` | 400 | 无效参数 |
+| `INVALID_URI` | 400 | 无效的 Viking URI 格式 |
+| `NOT_FOUND` | 404 | 资源未找到 |
+| `ALREADY_EXISTS` | 409 | 资源已存在 |
+| `UNAUTHENTICATED` | 401 | 缺少或无效的 API Key |
+| `PERMISSION_DENIED` | 403 | 权限不足 |
+| `RESOURCE_EXHAUSTED` | 429 | 超出速率限制 |
+| `FAILED_PRECONDITION` | 412 | 前置条件不满足 |
+| `DEADLINE_EXCEEDED` | 504 | 操作超时 |
+| `UNAVAILABLE` | 503 | 服务不可用 |
+| `INTERNAL` | 500 | 内部服务器错误 |
+| `UNIMPLEMENTED` | 501 | 功能未实现 |
+| `EMBEDDING_FAILED` | 500 | Embedding 生成失败 |
+| `VLM_FAILED` | 500 | VLM 调用失败 |
+| `SESSION_EXPIRED` | 410 | 会话已过期 |
+
+## API 端点
+
+### 系统
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/health` | 健康检查（无需认证） |
+| GET | `/api/v1/system/status` | 系统状态 |
+| POST | `/api/v1/system/wait` | 等待处理完成 |
+
+### 资源
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/v1/resources` | 添加资源 |
+| POST | `/api/v1/skills` | 添加技能 |
+| POST | `/api/v1/pack/export` | 导出 .ovpack |
+| POST | `/api/v1/pack/import` | 导入 .ovpack |
+
+### 文件系统
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/fs/ls` | 列出目录 |
+| GET | `/api/v1/fs/tree` | 目录树 |
+| GET | `/api/v1/fs/stat` | 资源状态 |
+| POST | `/api/v1/fs/mkdir` | 创建目录 |
+| DELETE | `/api/v1/fs` | 删除资源 |
+| POST | `/api/v1/fs/mv` | 移动资源 |
+
+### 内容
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/content/read` | 读取完整内容（L2） |
+| GET | `/api/v1/content/abstract` | 读取摘要（L0） |
+| GET | `/api/v1/content/overview` | 读取概览（L1） |
+
+### 搜索
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/v1/search/find` | 语义搜索 |
+| POST | `/api/v1/search/search` | 上下文感知搜索 |
+| POST | `/api/v1/search/grep` | 模式搜索 |
+| POST | `/api/v1/search/glob` | 文件模式匹配 |
+
+### 关联
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/relations` | 获取关联 |
+| POST | `/api/v1/relations/link` | 创建链接 |
+| DELETE | `/api/v1/relations/link` | 删除链接 |
+
+### 会话
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/v1/sessions` | 创建会话 |
+| GET | `/api/v1/sessions` | 列出会话 |
+| GET | `/api/v1/sessions/{id}` | 获取会话 |
+| DELETE | `/api/v1/sessions/{id}` | 删除会话 |
+| POST | `/api/v1/sessions/{id}/compress` | 压缩会话 |
+| POST | `/api/v1/sessions/{id}/extract` | 提取记忆 |
+| POST | `/api/v1/sessions/{id}/messages` | 添加消息 |
+
+### Observer
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/api/v1/observer/queue` | 队列状态 |
+| GET | `/api/v1/observer/vikingdb` | VikingDB 状态 |
+| GET | `/api/v1/observer/vlm` | VLM 状态 |
+| GET | `/api/v1/observer/system` | 系统状态 |
+| GET | `/api/v1/debug/health` | 快速健康检查 |
+
+## 相关文档
+
+- [资源管理](02-resources.md) - 资源管理 API
+- [检索](06-retrieval.md) - 搜索 API
+- [文件系统](03-filesystem.md) - 文件系统操作
+- [会话管理](05-sessions.md) - 会话管理
+- [技能](04-skills.md) - 技能管理
+- [系统](07-system.md) - 系统和监控 API
