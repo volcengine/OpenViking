@@ -6,7 +6,7 @@ Get started with OpenViking in 5 minutes.
 
 Before using OpenViking, ensure your environment meets the following requirements:
 
-- **Python Version**: 3.9 or higher
+- **Python Version**: 3.10 or higher
 - **Operating System**: Linux, macOS, Windows
 - **Network Connection**: Stable network connection required (for downloading dependencies and accessing model services)
 

@@ -59,7 +59,7 @@ With OpenViking, developers can build an Agent's brain just like managing local 
 
 Before starting with OpenViking, please ensure your environment meets the following requirements:
 
-- **Python Version**: 3.9 or higher
+- **Python Version**: 3.10 or higher
 - **Operating System**: Linux, macOS, Windows
 - **Network Connection**: A stable network connection is required (for downloading dependencies and accessing model services)
 

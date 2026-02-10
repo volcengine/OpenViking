@@ -13,7 +13,7 @@
 
 ### 前置要求
 
-- **Python**: 3.9+
+- **Python**: 3.10+
 - **Go**: 1.25.1+ (构建 AGFS 组件需要)
 - **C++ 编译器**: GCC 9+ 或 Clang 11+ (构建核心扩展需要，必须支持 C++17)
 - **CMake**: 3.12+
@@ -366,7 +366,7 @@ git commit -m "refactor(storage): simplify interface methods"
 | 事件 | 工作流 | 描述 |
 |-------|----------|-------------|
 | **Pull Request** | `pr.yml` | 运行 **Lint** (Ruff, Mypy) 和 **Test Lite** (Linux + Python 3.10 上的集成测试)。为贡献者提供快速反馈。(显示为 **01. Pull Request Checks**) |
-| **Push to Main** | `ci.yml` | 运行 **Test Full** (所有操作系统：Linux/Win/Mac，所有 Py版本：3.9-3.12) 和 **CodeQL** (安全扫描)。确保主分支稳定性。(显示为 **02. Main Branch Checks**) |
+| **Push to Main** | `ci.yml` | 运行 **Test Full** (所有操作系统：Linux/Win/Mac，所有 Py版本：3.10-3.13) 和 **CodeQL** (安全扫描)。确保主分支稳定性。(显示为 **02. Main Branch Checks**) |
 | **Release Published** | `release.yml` | 当您在 GitHub 上创建 Release 时触发。自动构建源码包和 wheel 包，基于 Git Tag 确定版本号，并发布到 **PyPI**。(显示为 **03. Release**) |
 | **Weekly Cron** | `schedule.yml` | 每周日运行 **CodeQL** 安全扫描。(显示为 **04. Weekly Security Scan**) |
 
@@ -375,7 +375,7 @@ git commit -m "refactor(storage): simplify interface methods"
 维护者可以从 "Actions" 选项卡手动触发以下工作流，以执行特定任务或调试问题。
 
 #### A. 代码检查 (`11. _Lint Checks`)
-运行代码风格检查 (Ruff) 和类型检查 (Mypy)。无需参数。
+运行代码风格检查 (Ruff) 和类型检查 (Mypy) 。无需参数。
 
 > **提示**：建议在本地安装 [pre-commit](https://pre-commit.com/) 以在提交前自动运行这些检查（详见上文[自动检查](#自动检查推荐)章节）。
 
@@ -387,11 +387,11 @@ git commit -m "refactor(storage): simplify interface methods"
     *   `python_json`: Python 版本列表的 JSON 字符串数组 (例如 `["3.10"]`)。
 
 #### C. 完整测试 (`13. _Test Suite (Full)`)
-在所有支持的平台 (Linux/Mac/Win) 和 Python 版本 (3.9-3.12) 上运行完整的测试套件。手动触发时支持自定义矩阵配置。
+在所有支持的平台 (Linux/Mac/Win) 和 Python 版本 (3.10-3.13) 上运行完整的测试套件。手动触发时支持自定义矩阵配置。
 
 *   **Inputs**:
     *   `os_json`: 操作系统列表 (默认: `["ubuntu-latest", "macos-latest", "windows-latest"]`)。
-    *   `python_json`: Python 版本列表 (默认: `["3.9", "3.10", "3.11", "3.12"]`)。
+    *   `python_json`: Python 版本列表 (默认: `["3.10", "3.11", "3.12", "3.13"]`)。
 
 #### D. 安全扫描 (`14. _CodeQL Scan`)
 运行 CodeQL 安全分析。无需参数。
@@ -401,7 +401,7 @@ git commit -m "refactor(storage): simplify interface methods"
 
 *   **Inputs**:
     *   `os_json`: 操作系统列表 (默认: `["ubuntu-latest", "macos-latest", "macos-15-intel", "windows-latest"]`)。
-    *   `python_json`: Python 版本列表 (默认: `["3.9", "3.10", "3.11", "3.12"]`)。
+    *   `python_json`: Python 版本列表 (默认: `["3.10", "3.11", "3.12", "3.13"]`)。
     *   `build_sdist`: 是否构建源码包 (默认: `true`)。
     *   `build_wheels`: 是否构建 Wheel 包 (默认: `true`)。
 
