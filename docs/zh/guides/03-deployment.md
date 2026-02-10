@@ -47,9 +47,9 @@ python -m openviking serve \
 服务端配置从 `--config` 或 `OPENVIKING_CONFIG_FILE` 环境变量指定的 JSON 配置文件中读取（与 `OpenVikingConfig` 共用同一个文件）：
 
 ```bash
-python -m openviking serve --config ./ov.conf
+python -m openviking serve --config ~/.openviking/ov.conf
 # 或
-export OPENVIKING_CONFIG_FILE=./ov.conf
+export OPENVIKING_CONFIG_FILE=~/.openviking/ov.conf
 python -m openviking serve
 ```
 

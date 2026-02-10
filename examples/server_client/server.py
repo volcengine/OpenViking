@@ -12,7 +12,6 @@ import argparse
 import os
 import sys
 
-from rich import box
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
@@ -44,6 +43,8 @@ Examples:
         os.environ["OPENVIKING_CONFIG_FILE"] = args.config
     elif os.path.exists("./ov.conf"):
         os.environ.setdefault("OPENVIKING_CONFIG_FILE", "./ov.conf")
+    elif os.path.exists("~/.openviking/ov.conf"):
+        os.environ.setdefault("OPENVIKING_CONFIG_FILE", "~/.openviking/ov.conf")
 
     # Display server info
     info = Table(show_header=False, box=None, padding=(0, 2))

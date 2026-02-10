@@ -90,7 +90,7 @@ OpenViking 需要以下模型服务：
 
 ### 配置模板
 
-创建 `ov.conf` 文件，使用以下模板：
+创建 `~/.openviking/ov.conf` 文件，使用以下模板：
 
 ```json
 {
@@ -141,7 +141,7 @@ OpenViking 需要以下模型服务：
 
 ### 配置示例
 
-将以下内容保存为 `ov.conf`：
+将以下内容保存为 `~/.openviking/ov.conf`：
 
 ```json
 {

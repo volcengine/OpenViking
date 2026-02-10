@@ -69,7 +69,7 @@ pip install openviking
 
 ### 如何配置 OpenViking？
 
-在项目目录创建 `ov.conf` 配置文件：
+在项目目录创建 `~/.openviking/ov.conf` 配置文件：
 
 ```json
 {
@@ -281,7 +281,7 @@ OpenViking 使用分数传播机制：
    ```
 
 2. **Embedding 模型配置错误**
-   - 检查 `ov.conf` 中的 `api_key` 是否正确
+   - 检查 `~/.openviking/ov.conf` 中的 `api_key` 是否正确
    - 确认模型名称和 endpoint 配置正确
 
 3. **文件格式不支持**

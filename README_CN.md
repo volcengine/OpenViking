@@ -83,7 +83,7 @@ OpenViking 支持多种模型服务：
 
 #### 配置文件模版
 
-创建配置文件 `ov.conf`：
+创建配置文件 `~/.openviking/ov.conf`：
 
 ```json
 {
@@ -164,7 +164,7 @@ OpenViking 支持多种模型服务：
 创建好配置文件后，设置环境变量指向配置文件（Linux/macOS）：
 
 ```bash
-export OPENVIKING_CONFIG_FILE=ov.conf
+export OPENVIKING_CONFIG_FILE=~/.openviking/ov.conf
 ```
 
 Windows 下可使用以下方式之一：
@@ -172,13 +172,13 @@ Windows 下可使用以下方式之一：
 PowerShell：
 
 ```powershell
-$env:OPENVIKING_CONFIG_FILE = "ov.conf"
+$env:OPENVIKING_CONFIG_FILE = "~/.openviking/ov.conf"
 ```
 
 命令提示符（cmd.exe）：
 
 ```bat
-set OPENVIKING_CONFIG_FILE=ov.conf
+set OPENVIKING_CONFIG_FILE=~/.openviking/ov.conf
 ```
 
 > 💡 **提示**：你也可以将配置文件放在其他位置，只需在环境变量中指定正确的路径即可。

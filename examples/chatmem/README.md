@@ -170,7 +170,7 @@ OV_DEBUG=1 uv run chatmem.py
 
 ## Configuration
 
-Edit `ov.conf`:
+Edit `./ov.conf`:
 
 ```json
 {
@@ -218,7 +218,7 @@ Memories Extracted & Persisted
 ## Troubleshooting
 
 **"Error initializing"**
-- Check `ov.conf` has valid API keys
+- Check `./ov.conf` has valid API keys
 - Ensure `data/` directory is writable
 
 **"No relevant sources found"**

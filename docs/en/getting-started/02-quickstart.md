@@ -31,7 +31,7 @@ OpenViking supports multiple model services:
 
 ### Configuration File Template
 
-Create a configuration file `ov.conf`:
+Create a configuration file `~/.openviking/ov.conf`:
 
 ```json
 {
@@ -110,7 +110,7 @@ Create a configuration file `ov.conf`:
 After creating the configuration file, set the environment variable to point to it:
 
 ```bash
-export OPENVIKING_CONFIG_FILE=ov.conf
+export OPENVIKING_CONFIG_FILE=~/.openviking/ov.conf
 ```
 
 ## Run Your First Example

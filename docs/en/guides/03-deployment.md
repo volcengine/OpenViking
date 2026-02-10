@@ -47,9 +47,9 @@ python -m openviking serve \
 Server configuration is read from the JSON config file specified by `--config` or the `OPENVIKING_CONFIG_FILE` environment variable (the same file used for `OpenVikingConfig`):
 
 ```bash
-python -m openviking serve --config ./ov.conf
+python -m openviking serve --config ~/.openviking/ov.conf
 # or
-export OPENVIKING_CONFIG_FILE=./ov.conf
+export OPENVIKING_CONFIG_FILE=~/.openviking/ov.conf
 python -m openviking serve
 ```
 

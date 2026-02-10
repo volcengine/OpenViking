@@ -423,7 +423,7 @@ from openviking.utils.config.open_viking_config import OpenVikingConfig
 import json
 
 # Load config
-with open('ov.conf', 'r') as f:
+with open('./ov.conf', 'r') as f:
     config_dict = json.load(f)
 config = OpenVikingConfig.from_dict(config_dict)
 
@@ -834,7 +834,7 @@ OV_DEBUG=1 uv run chat.py
 
 ## Configuration
 
-Edit `ov.conf`:
+Edit `./ov.conf`:
 
 ```json
 {

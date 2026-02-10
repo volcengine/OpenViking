@@ -41,7 +41,7 @@ source .venv/bin/activate  # Linux/macOS
 
 ### 3. 配置环境
 
-创建配置文件 `ov.conf`：
+创建配置文件 `~/.openviking/ov.conf`：
 
 ```json
 {
@@ -66,7 +66,7 @@ source .venv/bin/activate  # Linux/macOS
 设置环境变量：
 
 ```bash
-export OPENVIKING_CONFIG_FILE=ov.conf
+export OPENVIKING_CONFIG_FILE=~/.openviking/ov.conf
 ```
 
 ### 4. 验证安装

@@ -69,7 +69,7 @@ pip install openviking
 
 ### How do I configure OpenViking?
 
-Create an `ov.conf` configuration file in your project directory:
+Create an `~/.openviking/ov.conf` configuration file in your project directory:
 
 ```json
 {
@@ -281,7 +281,7 @@ This strategy finds semantically matching fragments while understanding the comp
    ```
 
 2. **Embedding model configuration error**
-   - Check if `api_key` in `ov.conf` is correct
+   - Check if `api_key` in `~/.openviking/ov.conf` is correct
    - Confirm model name and endpoint are configured correctly
 
 3. **Unsupported file format**

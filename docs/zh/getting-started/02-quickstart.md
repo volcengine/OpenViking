@@ -31,7 +31,7 @@ OpenViking 支持多种模型服务：
 
 ### 配置文件模版
 
-创建配置文件 `ov.conf`：
+创建配置文件 `~/.openviking/ov.conf`：
 
 ```json
 {
@@ -110,7 +110,7 @@ OpenViking 支持多种模型服务：
 创建好配置文件后，设置环境变量指向配置文件：
 
 ```bash
-export OPENVIKING_CONFIG_FILE=ov.conf
+export OPENVIKING_CONFIG_FILE=~/.openviking/ov.conf
 ```
 
 ## 运行第一个示例

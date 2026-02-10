@@ -1,10 +1,10 @@
 # Configuration
 
-OpenViking uses a JSON configuration file (`ov.conf`) for settings.
+OpenViking uses a JSON configuration file (`~/.openviking/ov.conf`) for settings.
 
 ## Configuration File
 
-Create `ov.conf` in your project directory:
+Create `~/.openviking/ov.conf` in your project directory:
 
 ```json
 {
@@ -168,7 +168,7 @@ export OPENVIKING_DATA_PATH="./data"
 
 1. Constructor parameters (highest)
 2. Config object
-3. Configuration file (`ov.conf`)
+3. Configuration file (`~/.openviking/ov.conf`)
 4. Environment variables
 5. Default values (lowest)
 

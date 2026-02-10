@@ -60,7 +60,7 @@ main()
 ### 方式三：环境变量
 
 ```bash
-export OPENVIKING_CONFIG_FILE=./ov.conf
+export OPENVIKING_CONFIG_FILE=./ov.conf # or ~/.openviking/ov.conf
 export OPENVIKING_PATH=./data
 export OPENVIKING_PORT=1933
 export OPENVIKING_API_KEY=your-secret-key

@@ -88,7 +88,7 @@ After activation, use the model ID: `doubao-embedding-vision-250615`
 
 ### Configuration Template
 
-Create an `ov.conf` file using the following template:
+Create an `~/.openviking/ov.conf` file using the following template:
 
 ```json
 {
@@ -139,7 +139,7 @@ Create an `ov.conf` file using the following template:
 
 ### Configuration Example
 
-Save the following content as `ov.conf`:
+Save the following content as `~/.openviking/ov.conf`:
 
 ```json
 {

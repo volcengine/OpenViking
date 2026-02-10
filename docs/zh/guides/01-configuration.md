@@ -4,7 +4,7 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 
 ## 快速开始
 
-在项目目录创建 `ov.conf`：
+在项目目录创建 `~/.openviking/ov.conf`：
 
 ```json
 {
@@ -251,7 +251,7 @@ export OPENVIKING_DATA_PATH="./data"
 
 1. 构造函数参数（最高）
 2. Config 对象
-3. 配置文件（`ov.conf`）
+3. 配置文件（`~/.openviking/ov.conf`）
 4. 环境变量
 5. 默认值（最低）
 

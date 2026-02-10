@@ -42,7 +42,7 @@ source .venv/bin/activate  # Linux/macOS
 
 ### 3. Configure Environment
 
-Create a configuration file `ov.conf`:
+Create a configuration file `~/.openviking/ov.conf`:
 
 ```json
 {
@@ -67,7 +67,7 @@ Create a configuration file `ov.conf`:
 Set the environment variable:
 
 ```bash
-export OPENVIKING_CONFIG_FILE=ov.conf
+export OPENVIKING_CONFIG_FILE=~/.openviking/ov.conf
 ```
 
 ### 4. Verify Installation
