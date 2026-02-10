@@ -151,6 +151,11 @@ class OpenVikingService:
         return self._search_service
 
     @property
+    def user(self) -> UserIdentifier:
+        """Get current user identifier."""
+        return self._user
+
+    @property
     def resources(self) -> ResourceService:
         """Get ResourceService instance."""
         return self._resource_service

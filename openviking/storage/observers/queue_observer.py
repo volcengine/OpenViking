@@ -82,9 +82,7 @@ class QueueObserver(BaseObserver):
             {
                 "Queue": "Semantic-Nodes",
                 "Pending": getattr(dag_stats, "pending_nodes", 0) if dag_stats else 0,
-                "In Progress": getattr(dag_stats, "overview_scheduled_nodes", 0)
-                if dag_stats
-                else 0,
+                "In Progress": getattr(dag_stats, "in_progress_nodes", 0) if dag_stats else 0,
                 "Processed": getattr(dag_stats, "done_nodes", 0) if dag_stats else 0,
                 "Errors": 0,
                 "Total": getattr(dag_stats, "total_nodes", 0) if dag_stats else 0,

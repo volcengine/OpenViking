@@ -34,7 +34,7 @@ class DirNode:
 class DagStats:
     total_nodes: int = 0
     pending_nodes: int = 0
-    overview_scheduled_nodes: int = 0
+    in_progress_nodes: int = 0
     done_nodes: int = 0
 
 
@@ -94,7 +94,10 @@ class SemanticDagExecutor:
 
             for file_path in file_paths:
                 self._stats.total_nodes += 1
+                # File nodes are scheduled immediately: pending -> in_progress.
                 self._stats.pending_nodes += 1
+                self._stats.pending_nodes = max(0, self._stats.pending_nodes - 1)
+                self._stats.in_progress_nodes += 1
                 asyncio.create_task(self._file_summary_task(dir_uri, file_path))
 
             for child_uri in children_dirs:
@@ -142,9 +145,22 @@ class SemanticDagExecutor:
             summary_dict = {"name": file_name, "summary": ""}
         finally:
             self._stats.done_nodes += 1
-            self._stats.pending_nodes = max(0, self._stats.pending_nodes - 1)
+            self._stats.in_progress_nodes = max(0, self._stats.in_progress_nodes - 1)
 
         await self._on_file_done(parent_uri, file_path, summary_dict)
+
+        # Vectorize file as soon as summary is ready to avoid waiting for overview.
+        try:
+            asyncio.create_task(
+                self._processor._vectorize_single_file(
+                    parent_uri=parent_uri,
+                    context_type=self._context_type,
+                    file_path=file_path,
+                    summary_dict=summary_dict,
+                )
+            )
+        except Exception as e:
+            logger.error(f"Failed to schedule vectorization for {file_path}: {e}", exc_info=True)
 
     async def _on_file_done(
         self, parent_uri: str, file_path: str, summary_dict: Dict[str, str]
@@ -160,7 +176,8 @@ class SemanticDagExecutor:
             node.pending -= 1
             if node.pending == 0 and not node.overview_scheduled:
                 node.overview_scheduled = True
-                self._stats.overview_scheduled_nodes += 1
+                self._stats.pending_nodes = max(0, self._stats.pending_nodes - 1)
+                self._stats.in_progress_nodes += 1
                 asyncio.create_task(self._overview_task(parent_uri))
 
     async def _on_child_done(self, parent_uri: str, child_uri: str, abstract: str) -> None:
@@ -176,7 +193,8 @@ class SemanticDagExecutor:
             node.pending -= 1
             if node.pending == 0 and not node.overview_scheduled:
                 node.overview_scheduled = True
-                self._stats.overview_scheduled_nodes += 1
+                self._stats.pending_nodes = max(0, self._stats.pending_nodes - 1)
+                self._stats.in_progress_nodes += 1
                 asyncio.create_task(self._overview_task(parent_uri))
 
     def _schedule_overview(self, dir_uri: str) -> None:
@@ -186,7 +204,8 @@ class SemanticDagExecutor:
         if node.overview_scheduled:
             return
         node.overview_scheduled = True
-        self._stats.overview_scheduled_nodes += 1
+        self._stats.pending_nodes = max(0, self._stats.pending_nodes - 1)
+        self._stats.in_progress_nodes += 1
         asyncio.create_task(self._overview_task(dir_uri))
 
     def _finalize_file_summaries(self, node: DirNode) -> List[Dict[str, str]]:
@@ -238,19 +257,12 @@ class SemanticDagExecutor:
             except Exception as e:
                 logger.error(f"Failed to vectorize directory {dir_uri}: {e}", exc_info=True)
 
-            try:
-                await self._processor._vectorize_files(
-                    dir_uri, self._context_type, node.file_paths, file_summaries
-                )
-            except Exception as e:
-                logger.error(f"Failed to vectorize files in {dir_uri}: {e}", exc_info=True)
-
         except Exception as e:
             logger.error(f"Failed to generate overview for {dir_uri}: {e}", exc_info=True)
             abstract = ""
         finally:
             self._stats.done_nodes += 1
-            self._stats.pending_nodes = max(0, self._stats.pending_nodes - 1)
+            self._stats.in_progress_nodes = max(0, self._stats.in_progress_nodes - 1)
 
         parent_uri = self._parent.get(dir_uri)
         if parent_uri is None:
@@ -264,7 +276,7 @@ class SemanticDagExecutor:
         return DagStats(
             total_nodes=self._stats.total_nodes,
             pending_nodes=self._stats.pending_nodes,
-            overview_scheduled_nodes=self._stats.overview_scheduled_nodes,
+            in_progress_nodes=self._stats.in_progress_nodes,
             done_nodes=self._stats.done_nodes,
         )
 
