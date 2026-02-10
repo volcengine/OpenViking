@@ -8,6 +8,7 @@ Data in, Context out.
 
 from openviking.async_client import AsyncOpenViking
 from openviking.session import Session
+from openviking.session.user_id import UserIdentifier
 from openviking.sync_client import SyncOpenViking
 
 OpenViking = SyncOpenViking
@@ -21,9 +22,11 @@ except ImportError:
         __version__ = version("openviking")
     except ImportError:
         __version__ = "0.0.0+unknown"
+
 __all__ = [
     "OpenViking",
     "SyncOpenViking",
     "AsyncOpenViking",
     "Session",
+    "UserIdentifier",
 ]

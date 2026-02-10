@@ -7,6 +7,8 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
+from openviking.session.user_id import UserIdentifier
+
 
 class ResourceContentType(str, Enum):
     """Resource content type"""
@@ -55,7 +57,7 @@ class Context:
         related_uri: Optional[List[str]] = None,
         meta: Optional[Dict[str, Any]] = None,
         session_id: Optional[str] = None,
-        user: Optional[str] = None,
+        user: Optional[UserIdentifier] = None,
         id: Optional[str] = None,
     ):
         """
@@ -139,8 +141,10 @@ class Context:
             "meta": self.meta,
             "related_uri": self.related_uri,
             "session_id": self.session_id,
-            "user": self.user,
         }
+
+        if self.user:
+            data["user"] = self.user.to_dict()
 
         # Add skill-specific fields from meta
         if self.context_type == "skill":

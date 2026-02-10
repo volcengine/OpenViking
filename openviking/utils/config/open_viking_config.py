@@ -8,6 +8,8 @@ from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field
 
+from openviking.session.user_id import UserIdentifier
+
 from .embedding_config import EmbeddingConfig
 from .parser_config import (
     AudioConfig,
@@ -27,7 +29,11 @@ from .vlm_config import VLMConfig
 class OpenVikingConfig(BaseModel):
     """Main configuration for OpenViking."""
 
-    user: Optional[str] = Field(default="default_user", description="Default user identifier")
+    default_account: Optional[str] = Field(
+        default="default", description="Default account identifier"
+    )
+    default_user: Optional[str] = Field(default="default", description="Default user identifier")
+    default_agent: Optional[str] = Field(default="default", description="Default agent identifier")
 
     storage: StorageConfig = Field(
         default_factory=lambda: StorageConfig(), description="Storage configuration"
@@ -229,9 +235,9 @@ def is_valid_openviking_config(config: OpenVikingConfig) -> bool:
     """
     errors = []
 
-    # Validate user identifier
-    if not config.user or not config.user.strip():
-        errors.append("User identifier cannot be empty")
+    # Validate account identifier
+    if not config.default_account or not config.default_account.strip():
+        errors.append("Default account identifier cannot be empty")
 
     # Validate service mode vs embedded mode consistency
     is_service_mode = config.storage.vectordb.backend == "http"
@@ -254,7 +260,7 @@ def is_valid_openviking_config(config: OpenVikingConfig) -> bool:
 
 def initialize_openviking_config(
     config: Optional[OpenVikingConfig] = None,
-    user: Optional[str] = None,
+    user: Optional[UserIdentifier] = None,
     path: Optional[str] = None,
     vectordb_url: Optional[str] = None,
     agfs_url: Optional[str] = None,
@@ -264,7 +270,7 @@ def initialize_openviking_config(
 
     Args:
         config: Optional OpenVikingConfig object to use as base configuration
-        user: Username for session management
+        user: UserIdentifier for session management
         path: Local storage path for embedded mode
         vectordb_url: Remote VectorDB service URL for service mode
         agfs_url: Remote AGFS service URL for service mode
@@ -284,8 +290,9 @@ def initialize_openviking_config(
 
     if user:
         # Set user if provided, like a email address or a account_id
-        user = user.strip().replace(" ", "_")
-        config.user = user
+        config.default_account = user._account_id
+        config.default_user = user._user_id
+        config.default_agent = user._agent_id
 
     # Configure storage based on provided parameters
     if path:

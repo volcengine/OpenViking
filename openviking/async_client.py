@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Union
 from openviking.client import HTTPClient, LocalClient, Session
 from openviking.client.base import BaseClient
 from openviking.service.debug_service import SystemStatus
+from openviking.session.user_id import UserIdentifier
 from openviking.utils import get_logger
 from openviking.utils.config import OpenVikingConfig
 
@@ -99,7 +100,7 @@ class AsyncOpenViking:
         api_key: Optional[str] = None,
         vectordb_url: Optional[str] = None,
         agfs_url: Optional[str] = None,
-        user: Optional[str] = None,
+        user: Optional[UserIdentifier] = None,
         config: Optional[OpenVikingConfig] = None,
         **kwargs,
     ):
@@ -112,7 +113,7 @@ class AsyncOpenViking:
             api_key: API key for HTTP mode authentication.
             vectordb_url: Remote VectorDB service URL for service mode.
             agfs_url: Remote AGFS service URL for service mode.
-            user: Username for session management.
+            user: UserIdentifier object for session management.
             config: OpenVikingConfig object for advanced configuration.
             **kwargs: Additional configuration parameters.
         """
@@ -120,7 +121,9 @@ class AsyncOpenViking:
         if hasattr(self, "_singleton_initialized") and self._singleton_initialized:
             return
 
-        self.user = user or "default"
+        if isinstance(user, str):
+            user = UserIdentifier.the_default_user(user)
+        self.user = user or UserIdentifier.the_default_user()
         self._initialized = False
         self._singleton_initialized = True
 
@@ -131,18 +134,16 @@ class AsyncOpenViking:
         # Create the appropriate client - only _client, no _service
         if url:
             # HTTP mode
-            self._client: BaseClient = HTTPClient(url=url, api_key=api_key, user=user)
+            self._client: BaseClient = HTTPClient(url=url, api_key=api_key, user=self.user)
         else:
             # Local/Service mode - LocalClient creates and owns the OpenVikingService
             self._client: BaseClient = LocalClient(
                 path=path,
                 vectordb_url=vectordb_url,
                 agfs_url=agfs_url,
-                user=user,
+                user=self.user,
                 config=config,
             )
-            # Get user from the client's service
-            self.user = self._client._user
 
     # ============= Lifecycle methods =============
 

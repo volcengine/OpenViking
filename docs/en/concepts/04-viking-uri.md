@@ -107,27 +107,28 @@ viking://session/{session_id}/history/        # Archived history
 
 ```
 viking://
-├── resources/                    # Independent resources
+├── resources/       # Independent resources
 │   └── {project}/
 │       ├── .abstract.md
 │       ├── .overview.md
 │       └── {files...}
 │
-├── user/
-│   ├── profile.md              # User basic info
+├── user/{user_id}/
+│   ├── profile.md                # User basic info
 │   └── memories/
 │       ├── preferences/          # By topic
 │       ├── entities/             # Each independent
 │       └── events/               # Each independent
 │
-├── agent/
+├── agent/{unique_space_name}/
 │   ├── skills/                   # Skill definitions
 │   ├── memories/
 │   │   ├── cases/
 │   │   └── patterns/
+│   ├── workspaces/
 │   └── instructions/
 │
-└── session/{session_id}/
+└── session/{unique_space_name}/{session_id}/
     ├── messages/
     ├── tools/
     └── history/

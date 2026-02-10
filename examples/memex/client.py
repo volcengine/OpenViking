@@ -4,9 +4,10 @@ Memex Client - OpenViking client wrapper for Memex.
 
 from typing import Any, Optional
 
-import openviking as ov
-
 from config import MemexConfig
+
+import openviking as ov
+from openviking.session.user_id import UserIdentifier
 
 
 class MemexClient:
@@ -32,10 +33,13 @@ class MemexClient:
     def initialize(self) -> None:
         """Initialize the OpenViking client."""
         ov_config = self.config.get_openviking_config()
+        user = UserIdentifier(
+            ov_config.default_account, ov_config.default_user, ov_config.default_agent
+        )
         self._client = ov.SyncOpenViking(
             path=self.config.data_path,
             config=ov_config,
-            user=self.config.user,
+            user=user,
         )
         self._client.initialize()
 
