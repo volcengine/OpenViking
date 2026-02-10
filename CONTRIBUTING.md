@@ -13,7 +13,7 @@ Thank you for your interest in OpenViking! We welcome contributions of all kinds
 
 ### Prerequisites
 
-- **Python**: 3.9+
+- **Python**: 3.10+
 - **Go**: 1.25.1+ (Required for building AGFS components)
 - **C++ Compiler**: GCC 9+ or Clang 11+ (Required for building core extensions, must support C++17)
 - **CMake**: 3.12+
@@ -367,7 +367,7 @@ We use **GitHub Actions** for Continuous Integration and Continuous Deployment. 
 | Event | Workflow | Description |
 |-------|----------|-------------|
 | **Pull Request** | `pr.yml` | Runs **Lint** (Ruff, Mypy) and **Test Lite** (Integration tests on Linux + Python 3.10). Provides fast feedback for contributors. (Displayed as **01. Pull Request Checks**) |
-| **Push to Main** | `ci.yml` | Runs **Test Full** (All OS: Linux/Win/Mac, All Py versions: 3.9-3.12) and **CodeQL** (Security scan). Ensures main branch stability. (Displayed as **02. Main Branch Checks**) |
+| **Push to Main** | `ci.yml` | Runs **Test Full** (All OS: Linux/Win/Mac, All Py versions: 3.10-3.13) and **CodeQL** (Security scan). Ensures main branch stability. (Displayed as **02. Main Branch Checks**) |
 | **Release Published** | `release.yml` | Triggered when you create a Release on GitHub. Automatically builds source distribution and wheels, determines version from Git Tag, and publishes to **PyPI**. (Displayed as **03. Release**) |
 | **Weekly Cron** | `schedule.yml` | Runs **CodeQL** security scan every Sunday. (Displayed as **04. Weekly Security Scan**) |
 
@@ -388,11 +388,11 @@ Runs fast integration tests, supports custom matrix configuration.
     *   `python_json`: JSON string array of Python versions (e.g., `["3.10"]`).
 
 #### C. Test Suite (Full) (`13. _Test Suite (Full)`)
-Runs the full test suite on all supported platforms (Linux/Mac/Win) and Python versions (3.9-3.12). Supports custom matrix configuration when triggered manually.
+Runs the full test suite on all supported platforms (Linux/Mac/Win) and Python versions (3.10-3.13). Supports custom matrix configuration when triggered manually.
 
 *   **Inputs**:
     *   `os_json`: List of OS to run on (Default: `["ubuntu-latest", "macos-latest", "windows-latest"]`).
-    *   `python_json`: List of Python versions (Default: `["3.9", "3.10", "3.11", "3.12"]`).
+    *   `python_json`: List of Python versions (Default: `["3.10", "3.11", "3.12", "3.13"]`).
 
 #### D. Security Scan (`14. _CodeQL Scan`)
 Runs CodeQL security analysis. No arguments required.
@@ -402,7 +402,7 @@ Builds Python wheel packages only, does not publish.
 
 *   **Inputs**:
     *   `os_json`: List of OS to build on (Default: `["ubuntu-latest", "macos-latest", "macos-15-intel", "windows-latest"]`).
-    *   `python_json`: List of Python versions (Default: `["3.9", "3.10", "3.11", "3.12"]`).
+    *   `python_json`: List of Python versions (Default: `["3.10", "3.11", "3.12", "3.13"]`).
     *   `build_sdist`: Whether to build source distribution (Default: `true`).
     *   `build_wheels`: Whether to build wheel distribution (Default: `true`).
 

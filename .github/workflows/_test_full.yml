@@ -12,7 +12,7 @@ on:
         description: 'JSON string of Python versions'
         required: false
         type: string
-        default: '["3.9", "3.10", "3.11", "3.12"]'
+        default: '["3.10", "3.11", "3.12", "3.13"]'
   workflow_dispatch:
     inputs:
       os_json:
@@ -22,7 +22,7 @@ on:
       python_json:
         description: 'JSON string of Python versions'
         required: false
-        default: '["3.9", "3.10", "3.11", "3.12"]'
+        default: '["3.10", "3.11", "3.12", "3.13"]'
 
 jobs:
   test:
@@ -32,7 +32,7 @@ jobs:
       fail-fast: false
       matrix:
         os: ${{ fromJson(inputs.os_json || '["ubuntu-latest", "macos-latest", "windows-latest"]') }}
-        python-version: ${{ fromJson(inputs.python_json || '["3.9", "3.10", "3.11", "3.12"]') }}
+        python-version: ${{ fromJson(inputs.python_json || '["3.10", "3.11", "3.12", "3.13"]') }}
 
     steps:
     - uses: actions/checkout@v6

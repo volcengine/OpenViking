@@ -12,7 +12,7 @@ on:
         description: 'JSON string of Python versions'
         required: false
         type: string
-        default: '["3.9", "3.10", "3.11", "3.12"]'
+        default: '["3.10", "3.11", "3.12", "3.13"]'
       build_sdist:
         description: 'Whether to build source distribution'
         required: false
@@ -42,7 +42,7 @@ on:
       python_json:
         description: 'JSON string of Python versions'
         required: false
-        default: '["3.9", "3.10", "3.11", "3.12"]'
+        default: '["3.10", "3.11", "3.12", "3.13"]'
 
 jobs:
   build-sdist:
