@@ -296,12 +296,19 @@ OpenViking 提供三种接口，面向不同使用场景：
 
 ### 3.3 身份与隔离
 
-支持多租户场景，通过 `user` 和 `agent` 实现数据隔离：
+支持多租户场景，首先通过 account_id 区分不同的应用租户，然后允许通过 `user` 和 `agent` 实现租户内的身份隔离：
 
-| 参数 | 说明 | 作用域 |
-|------|------|--------|
-| `user` | 用户标识 | `viking://user/{user}/memories/` |
-| `agent` | Agent 标识 | `viking://agent/{agent}/memories/` |
+用户或智能体身份标识详见 `from openviking.session.user_id import UserIdentifier`
+
+| 参数 | 说明 | 默认值 |
+|------|------|------|
+| `account_id` | 租户账号标识，区分不同的租户，租户内 user 和 agent id 空间隔离，也就是保证租户之间数据隔离 | `default` |
+| `user_id` | 用户身份标识，用户在租户内的唯一标识符 | `default` |
+| `agent_id` | 智能体身份标识，智能体或应用在租户内的唯一标识符 | `default` |
+
+> 举例说明，如果一个团队部署一个 OpenViking 上下文数据库，让团队成员共享一部分上下文资料，但各自保留独立的记忆数据，团队使用统一的 account_id，每个成员使用不同的 user_id 来区分，成员使用不同的应用（如 OpenCode, OpenClaw 等）则使用不同的 agent_id 来区分。
+> 一般情况下，`account_id` 不会出现在 viking:// uri 中，因为每个租户的用户数据都是隔离的，不需要在 uri 中指定租户。
+
 
 ### 3.4 配置管理
 
@@ -1021,7 +1028,7 @@ all_sessions = client.sessions()
 ```python
 class Session:
     """Session 对象，封装会话操作"""
-    def __init__(self, client, session_id: str, user: str):
+    def __init__(self, client, session_id: str, user: UserIdentifier):
         self._client = client
         self.id = session_id
         self.user = user
@@ -1044,17 +1051,16 @@ class OpenViking:
         path: Optional[str] = None,
         url: Optional[str] = None,
         api_key: Optional[str] = None,
-        user: Optional[str] = None,
-        agent: Optional[str] = None,
+        user: Optional[UserIdentifier] = None
     ):
         if url:
             self._backend = HTTPBackend(url, api_key)
         else:
             self._backend = LocalBackend(path)
         self._user = user
-        self._agent_id = agent
 
-    def session(self, user: str = None) -> Session:
+
+    def session(self, user: UserIdentifier = None) -> Session:
         """创建或获取 Session 对象"""
         ...
 

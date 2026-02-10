@@ -19,6 +19,7 @@ from openviking.service.resource_service import ResourceService
 from openviking.service.search_service import SearchService
 from openviking.service.session_service import SessionService
 from openviking.session.compressor import SessionCompressor
+from openviking.session.user_id import UserIdentifier
 from openviking.storage import VikingDBManager
 from openviking.storage.collection_schemas import init_context_collection
 from openviking.storage.viking_fs import VikingFS, init_viking_fs
@@ -44,7 +45,7 @@ class OpenVikingService:
         path: Optional[str] = None,
         vectordb_url: Optional[str] = None,
         agfs_url: Optional[str] = None,
-        user: Optional[str] = None,
+        user: Optional[UserIdentifier] = None,
         config: Optional[OpenVikingConfig] = None,
     ):
         """Initialize OpenViking service.
@@ -65,7 +66,9 @@ class OpenVikingService:
             agfs_url=agfs_url,
         )
         self._config = config
-        self.user = config.user
+        self._user = user or UserIdentifier(
+            config.default_account, config.default_user, config.default_agent
+        )
 
         # Infrastructure
         self._agfs_manager: Optional[AGFSManager] = None

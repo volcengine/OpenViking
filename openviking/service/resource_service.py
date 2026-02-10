@@ -9,6 +9,7 @@ Provides resource management operations: add_resource, add_skill, wait_processed
 from typing import Any, Dict, Optional
 
 from openviking.exceptions import InvalidArgumentError, NotInitializedError
+from openviking.session.user_id import UserIdentifier
 from openviking.storage import VikingDBManager
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.viking_fs import VikingFS
@@ -29,7 +30,7 @@ class ResourceService:
         viking_fs: Optional[VikingFS] = None,
         resource_processor: Optional[ResourceProcessor] = None,
         skill_processor: Optional[SkillProcessor] = None,
-        user: str = "default",
+        user: Optional[UserIdentifier] = None,
     ):
         self._vikingdb = vikingdb
         self._viking_fs = viking_fs
@@ -43,7 +44,7 @@ class ResourceService:
         viking_fs: VikingFS,
         resource_processor: ResourceProcessor,
         skill_processor: SkillProcessor,
-        user: str,
+        user: Optional[UserIdentifier] = None,
     ) -> None:
         """Set dependencies (for deferred initialization)."""
         self._vikingdb = vikingdb

@@ -8,10 +8,11 @@ Uses MemoryExtractor for 6-category extraction and MemoryDeduplicator for LLM-ba
 """
 
 from dataclasses import dataclass
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from openviking.core.context import Context, Vectorize
 from openviking.message import Message
+from openviking.session.user_id import UserIdentifier
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.utils import get_logger
@@ -65,8 +66,8 @@ class SessionCompressor:
     async def extract_long_term_memories(
         self,
         messages: List[Message],
-        user: str,
-        session_id: str,
+        user: Optional["UserIdentifier"] = None,
+        session_id: Optional[str] = None,
     ) -> List[Context]:
         """Extract long-term memories from messages."""
         if not messages:
@@ -108,7 +109,11 @@ class SessionCompressor:
 
             elif result.decision == DedupDecision.MERGE:
                 # Only merge for supported categories
-                if candidate.category in MERGE_SUPPORTED_CATEGORIES and result.similar_memories and viking_fs:
+                if (
+                    candidate.category in MERGE_SUPPORTED_CATEGORIES
+                    and result.similar_memories
+                    and viking_fs
+                ):
                     target_memory = result.similar_memories[0]
                     try:
                         existing_content = await viking_fs.read_file(target_memory.uri)
