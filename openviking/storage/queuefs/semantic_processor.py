@@ -15,6 +15,7 @@ from openviking.parse.parsers.constants import (
 )
 from openviking.prompts import render_prompt
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
+from openviking.storage.queuefs.semantic_dag import SemanticDagExecutor
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.utils import VikingURI
@@ -35,7 +36,7 @@ class SemanticProcessor(DequeueHandlerBase):
     4. Enqueue to EmbeddingQueue for vectorization
     """
 
-    def __init__(self, max_concurrent_llm: int = 10):
+    def __init__(self, max_concurrent_llm: int = 100):
         """
         Initialize SemanticProcessor.
 
@@ -135,26 +136,13 @@ class SemanticProcessor(DequeueHandlerBase):
             )
 
             if msg.recursive:
-                # For recursive processing, collect all directory info
-                dir_info_list: List[Tuple[str, List[str], List[str]]] = []
-                await self._collect_directory_info(msg.uri, dir_info_list)
-
-                # Enqueue each directory for processing (leaves first)
-                # For re-enqueued messages, set recursive=False to avoid repeated recursion
-                for uri, _, _ in dir_info_list:
-                    # Create a new message for this directory
-                    sub_msg = SemanticMsg(
-                        uri=uri,
-                        context_type=msg.context_type,
-                        recursive=False,  # Avoid repeated recursion
-                    )
-
-                    # Enqueue for processing
-                    await self._enqueue_semantic_msg(sub_msg)
-
-                logger.info(
-                    f"Enqueued {len(dir_info_list)} directories for processing from: {msg.uri}"
+                executor = SemanticDagExecutor(
+                    processor=self,
+                    context_type=msg.context_type,
+                    max_concurrent_llm=self.max_concurrent_llm,
                 )
+                await executor.run(msg.uri)
+                logger.info(f"Completed semantic generation for: {msg.uri}")
                 self.report_success()
                 return None
             else:
@@ -263,7 +251,9 @@ class SemanticProcessor(DequeueHandlerBase):
         tasks = [generate_one_summary(fp) for fp in file_paths]
         return await asyncio.gather(*tasks)
 
-    async def _generate_single_file_summary(self, file_path: str) -> Dict[str, str]:
+    async def _generate_single_file_summary(
+        self, file_path: str, llm_sem: Optional[asyncio.Semaphore] = None
+    ) -> Dict[str, str]:
         """Generate summary for a single file.
 
         Args:
@@ -307,7 +297,11 @@ class SemanticProcessor(DequeueHandlerBase):
                 {"file_name": file_name, "content": content},
             )
 
-            summary = await vlm.get_completion_async(prompt)
+            if llm_sem:
+                async with llm_sem:
+                    summary = await vlm.get_completion_async(prompt)
+            else:
+                summary = await vlm.get_completion_async(prompt)
             return {"name": file_name, "summary": summary.strip()}
 
         except Exception as e:
