@@ -178,6 +178,9 @@ class OpenVikingService:
         # Create context collection
         await init_context_collection(self._vikingdb_manager)
 
+        # Start queues after collections are ready
+        self._vikingdb_manager.start_queues()
+
         # Initialize VikingFS
         self._viking_fs = init_viking_fs(
             agfs_url=self._agfs_url or "http://localhost:8080",
