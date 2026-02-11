@@ -105,12 +105,14 @@ Create a configuration file `~/.openviking/ov.conf`:
 
 </details>
 
-### Set Environment Variable
+### Environment Variables
 
-After creating the configuration file, set the environment variable to point to it:
+When the config file is at the default path `~/.openviking/ov.conf`, no additional setup is needed — OpenViking loads it automatically.
+
+If the config file is at a different location, specify it via environment variable:
 
 ```bash
-export OPENVIKING_CONFIG_FILE=~/.openviking/ov.conf
+export OPENVIKING_CONFIG_FILE=/path/to/your/ov.conf
 ```
 
 ## Run Your First Example

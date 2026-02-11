@@ -43,7 +43,9 @@ Create `~/.openviking/ov.conf` in your project directory:
 
 ### embedding
 
-Embedding model configuration for vector search.
+Embedding model configuration for vector search, supporting dense, sparse, and hybrid modes.
+
+#### Dense Embedding
 
 ```json
 {
@@ -78,6 +80,81 @@ Embedding model configuration for vector search.
 | `doubao-embedding-250615` | 1024 | text | Text only |
 
 With `input: "multimodal"`, OpenViking can embed text, images (PNG, JPG, etc.), and mixed content.
+
+**Supported providers:**
+- `openai`: OpenAI Embedding API
+- `volcengine`: Volcengine Embedding API
+- `vikingdb`: VikingDB Embedding API
+
+**vikingdb provider example:**
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "vikingdb",
+      "model": "bge_large_zh",
+      "ak": "your-access-key",
+      "sk": "your-secret-key",
+      "region": "cn-beijing",
+      "dimension": 1024
+    }
+  }
+}
+```
+
+#### Sparse Embedding
+
+```json
+{
+  "embedding": {
+    "sparse": {
+      "provider": "volcengine",
+      "api_key": "your-api-key",
+      "model": "bm25-sparse-v1"
+    }
+  }
+}
+```
+
+#### Hybrid Embedding
+
+Two approaches are supported:
+
+**Option 1: Single hybrid model**
+
+```json
+{
+  "embedding": {
+    "hybrid": {
+      "provider": "volcengine",
+      "api_key": "your-api-key",
+      "model": "doubao-embedding-hybrid",
+      "dimension": 1024
+    }
+  }
+}
+```
+
+**Option 2: Combine dense + sparse**
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "volcengine",
+      "api_key": "your-api-key",
+      "model": "doubao-embedding-vision-250615",
+      "dimension": 1024
+    },
+    "sparse": {
+      "provider": "volcengine",
+      "api_key": "your-api-key",
+      "model": "bm25-sparse-v1"
+    }
+  }
+}
+```
 
 ### vlm
 
@@ -157,58 +234,77 @@ Storage backend configuration.
 }
 ```
 
-## Environment Variables
+## Config Files
+
+OpenViking uses two config files:
+
+| File | Purpose | Default Path |
+|------|---------|-------------|
+| `ov.conf` | SDK embedded mode + server config | `~/.openviking/ov.conf` |
+| `ovcli.conf` | CLI connection to remote server | `~/.openviking/ovcli.conf` |
+
+When config files are at the default path, OpenViking loads them automatically — no additional setup needed.
+
+If config files are at a different location, there are two ways to specify:
 
 ```bash
-export VOLCENGINE_API_KEY="your-api-key"
-export OPENVIKING_DATA_PATH="./data"
+# Option 1: Environment variable
+export OPENVIKING_CONFIG_FILE=/path/to/ov.conf
+export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
+
+# Option 2: Command-line argument (serve command only)
+python -m openviking serve --config /path/to/ov.conf
 ```
 
-## Configuration Priority
+### ov.conf
 
-1. Constructor parameters (highest)
-2. Config object
-3. Configuration file (`~/.openviking/ov.conf`)
-4. Environment variables
-5. Default values (lowest)
+The config sections documented above (embedding, vlm, rerank, storage) all belong to `ov.conf`. SDK embedded mode and server share this file.
 
-## Programmatic Configuration
+### ovcli.conf
 
-```python
-from openviking.utils.config import (
-    OpenVikingConfig,
-    StorageConfig,
-    AGFSConfig,
-    VectorDBBackendConfig,
-    EmbeddingConfig,
-    DenseEmbeddingConfig
-)
+Config file for CLI to connect to a remote server:
 
-config = OpenVikingConfig(
-    storage=StorageConfig(
-        agfs=AGFSConfig(
-            backend="local",
-            path="./custom_data",
-        ),
-        vectordb=VectorDBBackendConfig(
-            backend="local",
-            path="./custom_data",
-        )
-    ),
-    embedding=EmbeddingConfig(
-        dense=DenseEmbeddingConfig(
-            provider="volcengine",
-            api_key="your-api-key",
-            model="doubao-embedding-vision-250615",
-            dimension=1024
-        )
-    )
-)
-
-client = ov.AsyncOpenViking(config=config)
+```json
+{
+  "url": "http://localhost:1933",
+  "api_key": "your-secret-key",
+  "output": "table"
+}
 ```
 
-## Full Configuration Schema
+| Field | Description | Default |
+|-------|-------------|---------|
+| `url` | Server address | (required) |
+| `api_key` | API key for authentication | `null` (no auth) |
+| `output` | Default output format: `"table"` or `"json"` | `"table"` |
+
+See [Deployment](./03-deployment.md) for details.
+
+## server Section
+
+When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
+
+```json
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 1933,
+    "api_key": "your-secret-key",
+    "cors_origins": ["*"]
+  }
+}
+```
+
+| Field | Type | Description | Default |
+|-------|------|-------------|---------|
+| `host` | str | Bind address | `0.0.0.0` |
+| `port` | int | Bind port | `1933` |
+| `api_key` | str | API Key auth, disabled if not set | `null` |
+| `cors_origins` | list | Allowed CORS origins | `["*"]` |
+
+For startup and deployment details see [Deployment](./03-deployment.md), for authentication see [Authentication](./04-authentication.md).
+
+## Full Schema
 
 ```json
 {
@@ -245,41 +341,18 @@ client = ov.AsyncOpenViking(config=config)
       "url": "string"
     }
   },
+  "server": {
+    "host": "0.0.0.0",
+    "port": 1933,
+    "api_key": "string",
+    "cors_origins": ["*"]
+  },
   "user": "string"
 }
 ```
 
 Notes:
 - `storage.vectordb.sparse_weight` controls hybrid (dense + sparse) indexing/search. It only takes effect when you use a hybrid index; set it > 0 to enable sparse signals.
-
-## Server Configuration
-
-When running OpenViking as an HTTP server, the server reads its configuration from the same JSON config file (via `--config` or `OPENVIKING_CONFIG_FILE`):
-
-```json
-{
-  "server": {
-    "host": "0.0.0.0",
-    "port": 1933,
-    "api_key": "your-secret-key",
-    "cors_origins": ["*"]
-  },
-  "storage": {
-    "path": "/data/openviking"
-  }
-}
-```
-
-Server configuration can also be set via environment variables:
-
-| Variable | Description |
-|----------|-------------|
-| `OPENVIKING_HOST` | Server host |
-| `OPENVIKING_PORT` | Server port |
-| `OPENVIKING_API_KEY` | API key for authentication |
-| `OPENVIKING_PATH` | Storage path |
-
-See [Server Deployment](./03-deployment.md) for full details.
 
 ## Troubleshooting
 

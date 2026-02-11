@@ -42,27 +42,18 @@ class OpenVikingService:
     def __init__(
         self,
         path: Optional[str] = None,
-        vectordb_url: Optional[str] = None,
-        agfs_url: Optional[str] = None,
         user: Optional[str] = None,
-        config: Optional[OpenVikingConfig] = None,
     ):
         """Initialize OpenViking service.
 
         Args:
-            path: Local storage path for embedded mode.
-            vectordb_url: Remote VectorDB service URL for service mode.
-            agfs_url: Remote AGFS service URL for service mode.
+            path: Local storage path (overrides ov.conf storage path).
             user: Username for session management.
-            config: OpenVikingConfig object for advanced configuration.
         """
-        # Initialize config
+        # Initialize config from ov.conf
         config = initialize_openviking_config(
-            config=config,
             user=user,
             path=path,
-            vectordb_url=vectordb_url,
-            agfs_url=agfs_url,
         )
         self._config = config
         self.user = config.user

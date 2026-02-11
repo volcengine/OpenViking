@@ -100,7 +100,7 @@ pip install openviking
 }
 ```
 
-配置优先级：构造函数参数 > Config 对象 > 配置文件 > 环境变量 > 默认值
+配置文件放在默认路径 `~/.openviking/ov.conf` 时自动加载；也可通过环境变量 `OPENVIKING_CONFIG_FILE` 或命令行 `--config` 指定其他路径。详见 [配置指南](../guides/01-configuration.md)。
 
 ### 支持哪些 Embedding Provider？
 
@@ -119,16 +119,16 @@ pip install openviking
 ```python
 import openviking as ov
 
-# 异步客户端（推荐）
+# 异步客户端（推荐）- 嵌入模式
 client = ov.AsyncOpenViking(path="./my_data")
 await client.initialize()
 
-# 或使用配置对象
-from openviking.utils.config import OpenVikingConfig
-config = OpenVikingConfig(...)
-client = ov.AsyncOpenViking(config=config)
+# 异步客户端 - 服务模式
+client = ov.AsyncOpenViking(url="http://localhost:1933", api_key="your-key")
 await client.initialize()
 ```
+
+SDK 构造函数仅接受 `url`、`api_key`、`path`、`user` 参数。其他配置（embedding、vlm 等）通过 `ov.conf` 配置文件管理。
 
 ### 支持哪些文件格式？
 
@@ -363,10 +363,7 @@ OpenViking 使用分数传播机制：
 client = ov.AsyncOpenViking(path="./data")
 
 # 服务模式
-client = ov.AsyncOpenViking(
-    vectordb_url="http://vectordb:5000",
-    agfs_url="http://agfs:8080"
-)
+client = ov.AsyncOpenViking(url="http://localhost:1933", api_key="your-key")
 ```
 
 ### OpenViking 是开源的吗？

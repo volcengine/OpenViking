@@ -80,6 +80,12 @@ curl -X POST http://localhost:1933/api/v1/resources \
   }'
 ```
 
+**CLI**
+
+```bash
+openviking add-resource ./documents/guide.md --reason "User guide documentation"
+```
+
 **Response**
 
 ```json
@@ -122,6 +128,12 @@ curl -X POST http://localhost:1933/api/v1/resources \
   }'
 ```
 
+**CLI**
+
+```bash
+openviking add-resource https://example.com/api-docs.md --to viking://resources/external/ --reason "External API documentation"
+```
+
 **Example: Wait for Processing**
 
 **Python SDK**
@@ -154,6 +166,12 @@ curl -X POST http://localhost:1933/api/v1/system/wait \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
   -d '{}'
+```
+
+**CLI**
+
+```bash
+openviking add-resource ./documents/guide.md --wait
 ```
 
 ---
@@ -200,6 +218,12 @@ curl -X POST http://localhost:1933/api/v1/pack/export \
     "uri": "viking://resources/my-project/",
     "to": "./exports/my-project.ovpack"
   }'
+```
+
+**CLI**
+
+```bash
+openviking export viking://resources/my-project/ ./exports/my-project.ovpack
 ```
 
 **Response**
@@ -267,6 +291,12 @@ curl -X POST http://localhost:1933/api/v1/pack/import \
   }'
 ```
 
+**CLI**
+
+```bash
+openviking import ./exports/my-project.ovpack viking://resources/imported/ --force
+```
+
 **Response**
 
 ```json
@@ -324,6 +354,19 @@ curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&recursiv
   -H "X-API-Key: your-key"
 ```
 
+**CLI**
+
+```bash
+# List all resources
+openviking ls viking://resources/
+
+# Simple path list
+openviking ls viking://resources/ --simple
+
+# Recursive listing
+openviking ls viking://resources/ --recursive
+```
+
 **Response**
 
 ```json
@@ -374,6 +417,19 @@ curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://resources/do
   -H "X-API-Key: your-key"
 ```
 
+**CLI**
+
+```bash
+# L0: Abstract
+openviking abstract viking://resources/docs/
+
+# L1: Overview
+openviking overview viking://resources/docs/
+
+# L2: Full content
+openviking read viking://resources/docs/api.md
+```
+
 **Response**
 
 ```json
@@ -411,6 +467,12 @@ curl -X POST http://localhost:1933/api/v1/fs/mv \
     "from_uri": "viking://resources/old-project/",
     "to_uri": "viking://resources/new-project/"
   }'
+```
+
+**CLI**
+
+```bash
+openviking mv viking://resources/old-project/ viking://resources/new-project/
 ```
 
 **Response**
@@ -454,6 +516,16 @@ curl -X DELETE "http://localhost:1933/api/v1/fs?uri=viking://resources/docs/old.
 # Delete directory recursively
 curl -X DELETE "http://localhost:1933/api/v1/fs?uri=viking://resources/old-project/&recursive=true" \
   -H "X-API-Key: your-key"
+```
+
+**CLI**
+
+```bash
+# Delete single file
+openviking rm viking://resources/docs/old.md
+
+# Delete directory recursively
+openviking rm viking://resources/old-project/ --recursive
 ```
 
 **Response**
@@ -521,6 +593,12 @@ curl -X POST http://localhost:1933/api/v1/relations/link \
   }'
 ```
 
+**CLI**
+
+```bash
+openviking link viking://resources/docs/auth/ viking://resources/docs/security/ --reason "Security best practices"
+```
+
 **Response**
 
 ```json
@@ -555,6 +633,12 @@ GET /api/v1/relations?uri={uri}
 ```bash
 curl -X GET "http://localhost:1933/api/v1/relations?uri=viking://resources/docs/auth/" \
   -H "X-API-Key: your-key"
+```
+
+**CLI**
+
+```bash
+openviking relations viking://resources/docs/auth/
 ```
 
 **Response**
@@ -597,6 +681,12 @@ curl -X DELETE http://localhost:1933/api/v1/relations/link \
     "from_uri": "viking://resources/docs/auth/",
     "to_uri": "viking://resources/docs/security/"
   }'
+```
+
+**CLI**
+
+```bash
+openviking unlink viking://resources/docs/auth/ viking://resources/docs/security/
 ```
 
 **Response**

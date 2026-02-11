@@ -189,13 +189,8 @@ class BaseClient(ABC):
         ...
 
     @abstractmethod
-    async def compress_session(self, session_id: str) -> Dict[str, Any]:
-        """Compress a session (commit and archive)."""
-        ...
-
-    @abstractmethod
-    async def extract_session(self, session_id: str) -> List[Any]:
-        """Extract memories from a session."""
+    async def commit_session(self, session_id: str) -> Dict[str, Any]:
+        """Commit a session (archive and extract memories)."""
         ...
 
     @abstractmethod

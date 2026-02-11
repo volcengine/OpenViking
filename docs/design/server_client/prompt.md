@@ -33,7 +33,7 @@ openviking/service/
 - `FSService`: ls, tree, stat, mkdir, rm, mv, read, abstract, overview, grep, glob
 - `ResourceService`: add_resource, add_skill, wait_processed
 - `SearchService`: find, search
-- `SessionService`: session, sessions, add_message, compress, extract
+- `SessionService`: session, sessions, add_message, commit
 - `RelationService`: link, unlink, relations
 - `DebugService`: observer (ObserverService)
 - `PackService`: export_ovpack, import_ovpack
@@ -118,14 +118,14 @@ class Response(BaseModel):
 - 调试: GET /api/v1/debug/status, GET /api/v1/debug/health
 
 5. **实现服务启动器** (bootstrap.py)：
-- 加载配置文件 `~/.openviking/server.yaml`
+- 加载配置文件 `ov.conf`（通过 `--config` 参数或 `OPENVIKING_CONFIG_FILE` 环境变量指定）
 - 初始化 OpenVikingService
 - 启动 uvicorn 服务器
 
 ### 验收标准
 ```bash
 # 启动服务
-openviking serve --path ./data --port 8000
+openviking serve --config ./ov.conf --port 8000
 
 # 验证 API
 curl http://localhost:8000/health
@@ -178,7 +178,7 @@ cli = [
 3. **实现核心命令**：
 ```bash
 # 服务管理
-openviking serve --path <dir> [--port 8000] [--host 0.0.0.0]
+openviking serve [--config <file>] [--port 1933] [--host 0.0.0.0]
 
 # 调试命令
 openviking status                         # 系统整体状态（包含 queue/vikingdb/vlm 组件状态）
@@ -199,9 +199,11 @@ openviking overview <uri>
 openviking find <query> [<uri>] [--limit N] [--threshold F]
 ```
 
-4. **实现配置优先级**：
-- 命令行参数 > 环境变量 > 配置文件
-- 环境变量: OPENVIKING_URL, OPENVIKING_API_KEY, OPENVIKING_USER, OPENVIKING_AGENT
+4. **实现配置管理**：
+- CLI 连接信息通过 `ovcli.conf` 配置文件管理（url/api_key/user）
+- 配置文件路径通过 `OPENVIKING_CLI_CONFIG_FILE` 环境变量指定
+- 命令行参数（`--config`、`--host`、`--port`）优先于配置文件
+- 不使用 `--url`、`--api-key` 等全局命令行选项
 
 5. **实现输出格式化**：
 - 支持 `--output json` 输出 JSON
@@ -210,7 +212,7 @@ openviking find <query> [<uri>] [--limit N] [--threshold F]
 ### 验收标准
 ```bash
 openviking --help
-openviking serve --path ./data --port 8000
+openviking serve --config ./ov.conf --port 1933
 openviking add-resource ./docs/ --wait
 openviking ls viking://resources/
 openviking find "how to use"
@@ -285,7 +287,6 @@ class OpenViking:
         url: Optional[str] = None,        # HTTP 模式
         api_key: Optional[str] = None,
         user: Optional[str] = None,
-        agent: Optional[str] = None,
     ):
         if url:
             self._client = HTTPClient(url, api_key)
@@ -328,8 +329,7 @@ results = client.find("how to use")
 openviking session new [--user <name>]
 openviking session list
 openviking session get <id>
-openviking session compress <id>
-openviking session extract <id>
+openviking session commit <id>
 openviking session delete <id>
 ```
 
@@ -531,7 +531,7 @@ async def test_full_workflow():
 
 ### 启动服务
 \`\`\`bash
-openviking serve --path ./data --port 8000
+openviking serve --config ./ov.conf --port 8000
 \`\`\`
 
 ### 添加资源
@@ -624,9 +624,9 @@ services:
       - "8000:8000"
     volumes:
       - openviking-data:/data
+      - ./ov.conf:/etc/openviking/ov.conf
     environment:
-      - OPENVIKING_PATH=/data
-      - OPENVIKING_API_KEY=${OPENVIKING_API_KEY}
+      - OPENVIKING_CONFIG_FILE=/etc/openviking/ov.conf
       - OPENAI_API_KEY=${OPENAI_API_KEY}
     restart: unless-stopped
 

@@ -45,6 +45,12 @@ curl -X POST http://localhost:1933/api/v1/sessions \
   }'
 ```
 
+**CLI**
+
+```bash
+openviking session new [--user alice]
+```
+
 **Response**
 
 ```json
@@ -88,6 +94,12 @@ GET /api/v1/sessions
 ```bash
 curl -X GET http://localhost:1933/api/v1/sessions \
   -H "X-API-Key: your-key"
+```
+
+**CLI**
+
+```bash
+openviking session list
 ```
 
 **Response**
@@ -142,6 +154,12 @@ curl -X GET http://localhost:1933/api/v1/sessions/a1b2c3d4 \
   -H "X-API-Key: your-key"
 ```
 
+**CLI**
+
+```bash
+openviking session get a1b2c3d4
+```
+
 **Response**
 
 ```json
@@ -190,6 +208,12 @@ DELETE /api/v1/sessions/{session_id}
 ```bash
 curl -X DELETE http://localhost:1933/api/v1/sessions/a1b2c3d4 \
   -H "X-API-Key: your-key"
+```
+
+**CLI**
+
+```bash
+openviking session delete a1b2c3d4
 ```
 
 **Response**
@@ -294,6 +318,12 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages \
   }'
 ```
 
+**CLI**
+
+```bash
+openviking session add-message a1b2c3d4 --role user --content "How do I authenticate users?"
+```
+
 **Response**
 
 ```json
@@ -309,15 +339,15 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages \
 
 ---
 
-### compress()
+### commit()
 
-Compress a session by archiving messages and generating summaries.
+Commit a session by archiving messages and extracting memories.
 
 **Parameters**
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| session_id | str | Yes | - | Session ID to compress |
+| session_id | str | Yes | - | Session ID to commit |
 
 **Python SDK**
 
@@ -341,13 +371,19 @@ client.close()
 **HTTP API**
 
 ```
-POST /api/v1/sessions/{session_id}/compress
+POST /api/v1/sessions/{session_id}/commit
 ```
 
 ```bash
-curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/compress \
+curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/commit \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key"
+```
+
+**CLI**
+
+```bash
+openviking session commit a1b2c3d4
 ```
 
 **Response**
@@ -357,63 +393,8 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/compress \
   "status": "ok",
   "result": {
     "session_id": "a1b2c3d4",
-    "status": "compressed",
+    "status": "committed",
     "archived": true
-  },
-  "time": 0.1
-}
-```
-
----
-
-### extract()
-
-Extract memories from a session.
-
-**Parameters**
-
-| Parameter | Type | Required | Default | Description |
-|-----------|------|----------|---------|-------------|
-| session_id | str | Yes | - | Session ID to extract memories from |
-
-**Python SDK**
-
-```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
-session = client.session(session_id="a1b2c3d4")
-session.load()
-
-# Commit includes memory extraction
-result = session.commit()
-print(f"Memories extracted: {result['memories_extracted']}")
-
-client.close()
-```
-
-**HTTP API**
-
-```
-POST /api/v1/sessions/{session_id}/extract
-```
-
-```bash
-curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/extract \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key"
-```
-
-**Response**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "session_id": "a1b2c3d4",
-    "memories_extracted": 3
   },
   "time": 0.1
 }
@@ -539,8 +520,8 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages \
   -H "X-API-Key: your-key" \
   -d '{"role": "assistant", "content": "Based on the documentation, you can configure embedding..."}'
 
-# Step 5: Extract memories
-curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/extract \
+# Step 5: Commit session
+curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/commit \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key"
 ```

@@ -5,7 +5,6 @@
 Implements BaseClient interface using HTTP calls to OpenViking Server.
 """
 
-import os
 from typing import Any, Dict, List, Optional, Union
 
 import httpx
@@ -122,7 +121,7 @@ class HTTPClient(BaseClient):
             user: User name for session management
         """
         self._url = url.rstrip("/")
-        self._api_key = api_key or os.environ.get("OPENVIKING_API_KEY")
+        self._api_key = api_key
         self._user = user or "default"
         self._http: Optional[httpx.AsyncClient] = None
         self._observer: Optional[_HTTPObserver] = None
@@ -446,14 +445,9 @@ class HTTPClient(BaseClient):
         response = await self._http.delete(f"/api/v1/sessions/{session_id}")
         self._handle_response(response)
 
-    async def compress_session(self, session_id: str) -> Dict[str, Any]:
-        """Compress a session (commit)."""
-        response = await self._http.post(f"/api/v1/sessions/{session_id}/compress")
-        return self._handle_response(response)
-
-    async def extract_session(self, session_id: str) -> List[Any]:
-        """Extract memories from a session."""
-        response = await self._http.post(f"/api/v1/sessions/{session_id}/extract")
+    async def commit_session(self, session_id: str) -> Dict[str, Any]:
+        """Commit a session (archive and extract memories)."""
+        response = await self._http.post(f"/api/v1/sessions/{session_id}/commit")
         return self._handle_response(response)
 
     async def add_message(

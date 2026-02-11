@@ -6,11 +6,11 @@
 
 OpenViking 支持三种连接模式：
 
-| 模式 | 使用场景 | 单例 |
+| 模式 | 使用场景 | 说明 |
 |------|----------|------|
-| **嵌入式** | 本地开发，单进程 | 是 |
-| **服务模式** | 远程 VectorDB + AGFS 基础设施 | 否 |
-| **HTTP** | 连接 OpenViking Server | 否 |
+| **嵌入式** | 本地开发，单进程 | 本地运行，数据存储在本地 |
+| **HTTP** | 连接 OpenViking Server | 通过 HTTP API 连接远程服务 |
+| **CLI** | Shell 脚本、Agent 工具调用 | 通过 CLI 命令连接服务端 |
 
 ### 嵌入式模式
 
@@ -18,16 +18,6 @@ OpenViking 支持三种连接模式：
 import openviking as ov
 
 client = ov.OpenViking(path="./data")
-client.initialize()
-```
-
-### 服务模式
-
-```python
-client = ov.OpenViking(
-    vectordb_url="http://vectordb.example.com:8000",
-    agfs_url="http://agfs.example.com:1833",
-)
 client.initialize()
 ```
 
@@ -46,6 +36,42 @@ client.initialize()
 ```bash
 curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
   -H "X-API-Key: your-key"
+```
+
+### CLI 模式
+
+CLI 连接到 OpenViking 服务端，将所有操作暴露为 Shell 命令。
+
+**配置**
+
+创建 `~/.openviking/ovcli.conf`（或设置 `OPENVIKING_CLI_CONFIG_FILE` 环境变量）：
+
+```json
+{
+  "url": "http://localhost:1933",
+  "api_key": "your-key"
+}
+```
+
+**基本用法**
+
+```bash
+openviking [全局选项] <command> [参数] [命令选项]
+```
+
+**全局选项**（必须放在命令名之前）
+
+| 选项 | 说明 |
+|------|------|
+| `--output`, `-o` | 输出格式：`table`（默认）、`json` |
+| `--json` | 紧凑 JSON + `{ok, result}` 包装（用于脚本） |
+| `--version` | 显示 CLI 版本 |
+
+示例：
+
+```bash
+openviking --json ls viking://resources/
+openviking -o json ls viking://resources/
 ```
 
 ## 客户端生命周期
@@ -94,6 +120,66 @@ client.close()  # Release resources
   "time": 0.01
 }
 ```
+
+## CLI 输出格式
+
+### Table 模式（默认）
+
+列表数据渲染为表格，非列表数据 fallback 到格式化 JSON：
+
+```bash
+openviking ls viking://resources/
+# name          size  mode  isDir  uri
+# .abstract.md  100   420   False  viking://resources/.abstract.md
+```
+
+### JSON 模式（`--output json`）
+
+所有命令输出格式化 JSON，与 API 响应的 `result` 结构一致：
+
+```bash
+openviking -o json ls viking://resources/
+# [{ "name": "...", "size": 100, ... }, ...]
+```
+
+可在 `ovcli.conf` 中设置默认输出格式：
+
+```json
+{
+  "url": "http://localhost:1933",
+  "output": "json"
+}
+```
+
+### 脚本模式（`--json`）
+
+紧凑 JSON + 状态包装，适用于脚本。覆盖 `--output`：
+
+**成功**
+
+```json
+{"ok": true, "result": ...}
+```
+
+**错误**
+
+```json
+{"ok": false, "error": {"code": "NOT_FOUND", "message": "Resource not found", "details": {}}}
+```
+
+### 特殊情况
+
+- **字符串结果**（`read`、`abstract`、`overview`）：直接打印原文
+- **None 结果**（`mkdir`、`rm`、`mv`）：无输出
+
+### 退出码
+
+| 退出码 | 含义 |
+|--------|------|
+| 0 | 成功 |
+| 1 | 一般错误 |
+| 2 | 配置错误 |
+| 3 | 连接错误 |
 
 ## 错误码
 
@@ -179,8 +265,7 @@ client.close()  # Release resources
 | GET | `/api/v1/sessions` | 列出会话 |
 | GET | `/api/v1/sessions/{id}` | 获取会话 |
 | DELETE | `/api/v1/sessions/{id}` | 删除会话 |
-| POST | `/api/v1/sessions/{id}/compress` | 压缩会话 |
-| POST | `/api/v1/sessions/{id}/extract` | 提取记忆 |
+| POST | `/api/v1/sessions/{id}/commit` | 提交会话 |
 | POST | `/api/v1/sessions/{id}/messages` | 添加消息 |
 
 ### Observer

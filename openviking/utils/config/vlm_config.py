@@ -1,6 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
-import os
 from typing import Any, Literal, Optional
 
 from pydantic import BaseModel, Field, model_validator
@@ -37,25 +36,6 @@ class VLMConfig(BaseModel):
 
             if backend is not None and provider is None:
                 data["provider"] = backend
-        return data
-
-    @model_validator(mode="before")
-    @classmethod
-    def apply_env_defaults(cls, data):
-        """Read default values from environment variables."""
-        if isinstance(data, dict):
-            env_mapping = {
-                "api_key": "OPENVIKING_VLM_API_KEY",
-                "model": "OPENVIKING_VLM_MODEL",
-                "api_base": "OPENVIKING_VLM_API_BASE",
-                "provider": "OPENVIKING_VLM_PROVIDER",
-                "backend": "OPENVIKING_VLM_BACKEND",
-            }
-            for field, env_var in env_mapping.items():
-                if data.get(field) is None:
-                    env_val = os.getenv(env_var)
-                    if env_val is not None:
-                        data[field] = env_val
         return data
 
     @model_validator(mode="after")

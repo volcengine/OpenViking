@@ -27,7 +27,7 @@ OpenViking 是为 AI Agent 设计的上下文数据库，将所有上下文（Me
 │    │ (上下文检索) │          │  (会话管理)  │          │ (上下文提取) │      │
 │    │             │          │             │          │             │      │
 │    │ search/find │          │ add/used    │          │ 文档解析    │      │
-│    │ 意图分析    │          │ compress    │          │ L0/L1/L2    │      │
+│    │ 意图分析    │          │ commit      │          │ L0/L1/L2    │      │
 │    │ Rerank     │          │ commit      │          │ 树构建      │      │
 │    └──────┬──────┘          └──────┬──────┘          └──────┬──────┘      │
 │           │                        │                        │             │
@@ -68,7 +68,7 @@ Service 层将业务逻辑与传输层解耦，便于 HTTP Server 和 CLI 复用
 |---------|------|----------|
 | **FSService** | 文件系统操作 | ls, mkdir, rm, mv, tree, stat, read, abstract, overview, grep, glob |
 | **SearchService** | 语义搜索 | search, find |
-| **SessionService** | 会话管理 | session, sessions, compress, extract, delete |
+| **SessionService** | 会话管理 | session, sessions, commit, delete |
 | **ResourceService** | 资源导入 | add_resource, add_skill, wait_processed |
 | **RelationService** | 关联管理 | relations, link, unlink |
 | **PackService** | 导入导出 | export_ovpack, import_ovpack |
@@ -133,24 +133,9 @@ client = OpenViking(path="./data")
 - 使用本地向量索引
 - 单例模式
 
-### 服务模式
-
-用于生产环境的分布式部署：
-
-```python
-client = OpenViking(
-    vectordb_url="http://vectordb:5000",
-    agfs_url="http://agfs:8080"
-)
-```
-
-- 连接远程服务
-- 支持多实例并发
-- 可独立扩展
-
 ### HTTP 模式
 
-用于团队共享和跨语言集成：
+用于团队共享、生产环境和跨语言集成：
 
 ```python
 # Python SDK 连接 OpenViking Server

@@ -46,7 +46,7 @@ class OpenAIVLM(VLMBase):
             completion_tokens = response.usage.completion_tokens
             self.update_token_usage(
                 model_name=self.model or "gpt-4o-mini",
-                provider="openai",
+                provider=self.provider,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
             )

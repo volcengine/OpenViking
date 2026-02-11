@@ -45,6 +45,12 @@ curl -X POST http://localhost:1933/api/v1/sessions \
   }'
 ```
 
+**CLI**
+
+```bash
+openviking session new [--user alice]
+```
+
 **响应**
 
 ```json
@@ -88,6 +94,12 @@ GET /api/v1/sessions
 ```bash
 curl -X GET http://localhost:1933/api/v1/sessions \
   -H "X-API-Key: your-key"
+```
+
+**CLI**
+
+```bash
+openviking session list
 ```
 
 **响应**
@@ -142,6 +154,12 @@ curl -X GET http://localhost:1933/api/v1/sessions/a1b2c3d4 \
   -H "X-API-Key: your-key"
 ```
 
+**CLI**
+
+```bash
+openviking session get a1b2c3d4
+```
+
 **响应**
 
 ```json
@@ -190,6 +208,12 @@ DELETE /api/v1/sessions/{session_id}
 ```bash
 curl -X DELETE http://localhost:1933/api/v1/sessions/a1b2c3d4 \
   -H "X-API-Key: your-key"
+```
+
+**CLI**
+
+```bash
+openviking session delete a1b2c3d4
 ```
 
 **响应**
@@ -294,6 +318,12 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages \
   }'
 ```
 
+**CLI**
+
+```bash
+openviking session add-message a1b2c3d4 --role user --content "How do I authenticate users?"
+```
+
 **响应**
 
 ```json
@@ -309,15 +339,15 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages \
 
 ---
 
-### compress()
+### commit()
 
-压缩会话，归档消息并生成摘要。
+提交会话，归档消息并提取记忆。
 
 **参数**
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| session_id | str | 是 | - | 要压缩的会话 ID |
+| session_id | str | 是 | - | 要提交的会话 ID |
 
 **Python SDK**
 
@@ -341,13 +371,19 @@ client.close()
 **HTTP API**
 
 ```
-POST /api/v1/sessions/{session_id}/compress
+POST /api/v1/sessions/{session_id}/commit
 ```
 
 ```bash
-curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/compress \
+curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/commit \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key"
+```
+
+**CLI**
+
+```bash
+openviking session commit a1b2c3d4
 ```
 
 **响应**
@@ -357,63 +393,8 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/compress \
   "status": "ok",
   "result": {
     "session_id": "a1b2c3d4",
-    "status": "compressed",
+    "status": "committed",
     "archived": true
-  },
-  "time": 0.1
-}
-```
-
----
-
-### extract()
-
-从会话中提取记忆。
-
-**参数**
-
-| 参数 | 类型 | 必填 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| session_id | str | 是 | - | 要提取记忆的会话 ID |
-
-**Python SDK**
-
-```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
-session = client.session(session_id="a1b2c3d4")
-session.load()
-
-# commit 包含记忆提取
-result = session.commit()
-print(f"Memories extracted: {result['memories_extracted']}")
-
-client.close()
-```
-
-**HTTP API**
-
-```
-POST /api/v1/sessions/{session_id}/extract
-```
-
-```bash
-curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/extract \
-  -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key"
-```
-
-**响应**
-
-```json
-{
-  "status": "ok",
-  "result": {
-    "session_id": "a1b2c3d4",
-    "memories_extracted": 3
   },
   "time": 0.1
 }
@@ -539,8 +520,8 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages \
   -H "X-API-Key: your-key" \
   -d '{"role": "assistant", "content": "Based on the documentation, you can configure embedding..."}'
 
-# 步骤 5：提取记忆
-curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/extract \
+# 步骤 5：提交会话
+curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/commit \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key"
 ```

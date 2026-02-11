@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """VikingDB Embedder Implementation via HTTP API"""
 
-import os
 from typing import Any, Dict, List, Optional
 
 from openviking.models.embedder.base import (
@@ -25,9 +24,9 @@ class VikingDBClientMixin:
         region: Optional[str] = None,
         host: Optional[str] = None,
     ):
-        self.ak = ak or os.getenv("OPENVIKING_EMBEDDING_API_KEY") or os.getenv("VOLC_ACCESSKEY")
-        self.sk = sk or os.getenv("OPENVIKING_EMBEDDING_API_SECRET") or os.getenv("VOLC_SECRETKEY")
-        self.region = region or os.getenv("VOLC_REGION", "cn-beijing")
+        self.ak = ak
+        self.sk = sk
+        self.region = region or "cn-beijing"
         self.host = host
 
         if not self.ak or not self.sk:

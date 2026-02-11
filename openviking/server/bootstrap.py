@@ -8,7 +8,7 @@ import os
 import uvicorn
 
 from openviking.server.app import create_app
-from openviking.server.config import ServerConfig, load_server_config
+from openviking.server.config import load_server_config
 
 
 def main():
@@ -30,44 +30,20 @@ def main():
         help="Port to bind to",
     )
     parser.add_argument(
-        "--path",
-        type=str,
-        default=None,
-        help="Storage path for embedded mode",
-    )
-    parser.add_argument(
-        "--vectordb-url",
-        type=str,
-        default=None,
-        help="VectorDB service URL for service mode",
-    )
-    parser.add_argument(
-        "--agfs-url",
-        type=str,
-        default=None,
-        help="AGFS service URL for service mode",
-    )
-    parser.add_argument(
-        "--api-key",
-        type=str,
-        default=None,
-        help="API key for authentication (if not set, authentication is disabled)",
-    )
-    parser.add_argument(
         "--config",
         type=str,
         default=None,
-        help="Path to config file",
+        help="Path to ov.conf config file",
     )
 
     args = parser.parse_args()
 
     # Set OPENVIKING_CONFIG_FILE environment variable if --config is provided
-    # This allows OpenVikingConfig to load from the specified config file
+    # This allows OpenVikingConfigSingleton to load from the specified config file
     if args.config is not None:
         os.environ["OPENVIKING_CONFIG_FILE"] = args.config
 
-    # Load config from file and environment
+    # Load server config from ov.conf
     config = load_server_config(args.config)
 
     # Override with command line arguments
@@ -75,14 +51,6 @@ def main():
         config.host = args.host
     if args.port is not None:
         config.port = args.port
-    if args.path is not None:
-        config.storage_path = args.path
-    if args.vectordb_url is not None:
-        config.vectordb_url = args.vectordb_url
-    if args.agfs_url is not None:
-        config.agfs_url = args.agfs_url
-    if args.api_key is not None:
-        config.api_key = args.api_key
 
     # Create and run app
     app = create_app(config)

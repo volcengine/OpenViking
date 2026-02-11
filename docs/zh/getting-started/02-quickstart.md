@@ -107,10 +107,12 @@ OpenViking 支持多种模型服务：
 
 ### 设置环境变量
 
-创建好配置文件后，设置环境变量指向配置文件：
+配置文件放在默认路径 `~/.openviking/ov.conf` 时，无需额外设置，OpenViking 会自动加载。
+
+如果配置文件放在其他位置，需要通过环境变量指定：
 
 ```bash
-export OPENVIKING_CONFIG_FILE=~/.openviking/ov.conf
+export OPENVIKING_CONFIG_FILE=/path/to/your/ov.conf
 ```
 
 ## 运行第一个示例

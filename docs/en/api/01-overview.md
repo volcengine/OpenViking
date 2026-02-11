@@ -6,11 +6,11 @@ This page covers how to connect to OpenViking and the conventions shared across 
 
 OpenViking supports three connection modes:
 
-| Mode | Use Case | Singleton |
-|------|----------|-----------|
-| **Embedded** | Local development, single process | Yes |
-| **Service** | Remote VectorDB + AGFS infrastructure | No |
-| **HTTP** | Connect to OpenViking Server | No |
+| Mode | Use Case | Description |
+|------|----------|-------------|
+| **Embedded** | Local development, single process | Runs locally with local data storage |
+| **HTTP** | Connect to OpenViking Server | Connects to a remote server via HTTP API |
+| **CLI** | Shell scripting, agent tool-use | Connects to server via CLI commands |
 
 ### Embedded Mode
 
@@ -18,16 +18,6 @@ OpenViking supports three connection modes:
 import openviking as ov
 
 client = ov.OpenViking(path="./data")
-client.initialize()
-```
-
-### Service Mode
-
-```python
-client = ov.OpenViking(
-    vectordb_url="http://vectordb.example.com:8000",
-    agfs_url="http://agfs.example.com:1833",
-)
 client.initialize()
 ```
 
@@ -46,6 +36,42 @@ client.initialize()
 ```bash
 curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
   -H "X-API-Key: your-key"
+```
+
+### CLI Mode
+
+The CLI connects to an OpenViking server and exposes all operations as shell commands.
+
+**Configuration**
+
+Create `~/.openviking/ovcli.conf` (or set `OPENVIKING_CLI_CONFIG_FILE` environment variable):
+
+```json
+{
+  "url": "http://localhost:1933",
+  "api_key": "your-key"
+}
+```
+
+**Basic Usage**
+
+```bash
+openviking [global options] <command> [arguments] [command options]
+```
+
+**Global Options** (must be placed before the command name)
+
+| Option | Description |
+|--------|-------------|
+| `--output`, `-o` | Output format: `table` (default), `json` |
+| `--json` | Compact JSON with `{ok, result}` wrapper (for scripts) |
+| `--version` | Show CLI version |
+
+Example:
+
+```bash
+openviking --json ls viking://resources/
+openviking -o json ls viking://resources/
 ```
 
 ## Client Lifecycle
@@ -94,6 +120,66 @@ All HTTP API responses follow a unified format:
   "time": 0.01
 }
 ```
+
+## CLI Output Format
+
+### Table Mode (default)
+
+List data is rendered as tables; non-list data falls back to formatted JSON:
+
+```bash
+openviking ls viking://resources/
+# name          size  mode  isDir  uri
+# .abstract.md  100   420   False  viking://resources/.abstract.md
+```
+
+### JSON Mode (`--output json`)
+
+All commands output formatted JSON matching the API response `result` structure:
+
+```bash
+openviking -o json ls viking://resources/
+# [{ "name": "...", "size": 100, ... }, ...]
+```
+
+The default output format can be set in `ovcli.conf`:
+
+```json
+{
+  "url": "http://localhost:1933",
+  "output": "json"
+}
+```
+
+### Script Mode (`--json`)
+
+Compact JSON with status wrapper, suitable for scripting. Overrides `--output`:
+
+**Success**
+
+```json
+{"ok": true, "result": ...}
+```
+
+**Error**
+
+```json
+{"ok": false, "error": {"code": "NOT_FOUND", "message": "Resource not found", "details": {}}}
+```
+
+### Special Cases
+
+- **String results** (`read`, `abstract`, `overview`): printed directly as plain text
+- **None results** (`mkdir`, `rm`, `mv`): no output
+
+### Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| 0 | Success |
+| 1 | General error |
+| 2 | Configuration error |
+| 3 | Connection error |
 
 ## Error Codes
 
@@ -179,8 +265,7 @@ All HTTP API responses follow a unified format:
 | GET | `/api/v1/sessions` | List sessions |
 | GET | `/api/v1/sessions/{id}` | Get session |
 | DELETE | `/api/v1/sessions/{id}` | Delete session |
-| POST | `/api/v1/sessions/{id}/compress` | Compress session |
-| POST | `/api/v1/sessions/{id}/extract` | Extract memories |
+| POST | `/api/v1/sessions/{id}/commit` | Commit session |
 | POST | `/api/v1/sessions/{id}/messages` | Add message |
 
 ### Observer

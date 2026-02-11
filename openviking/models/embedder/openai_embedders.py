@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """OpenAI Embedder Implementation"""
 
-import os
 from typing import Any, Dict, List, Optional
 
 import openai
@@ -53,17 +52,12 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         """
         super().__init__(model_name, config)
 
-        self.api_key = (
-            api_key or os.getenv("OPENVIKING_EMBEDDING_API_KEY") or os.getenv("OPENAI_API_KEY")
-        )
-        self.api_base = api_base or os.getenv("OPENVIKING_EMBEDDING_API_BASE")
+        self.api_key = api_key
+        self.api_base = api_base
         self.dimension = dimension
 
         if not self.api_key:
-            raise ValueError(
-                "api_key is required. Set via parameter or "
-                "OPENVIKING_EMBEDDING_API_KEY/OPENAI_API_KEY env var"
-            )
+            raise ValueError("api_key is required")
 
         # Initialize OpenAI client
         client_kwargs = {"api_key": self.api_key}

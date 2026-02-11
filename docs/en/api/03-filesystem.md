@@ -40,6 +40,12 @@ curl -X GET "http://localhost:1933/api/v1/content/abstract?uri=viking://resource
   -H "X-API-Key: your-key"
 ```
 
+**CLI**
+
+```bash
+openviking abstract viking://resources/docs/
+```
+
 **Response**
 
 ```json
@@ -87,6 +93,12 @@ curl -X GET "http://localhost:1933/api/v1/content/overview?uri=viking://resource
   -H "X-API-Key: your-key"
 ```
 
+**CLI**
+
+```bash
+openviking overview viking://resources/docs/
+```
+
 **Response**
 
 ```json
@@ -132,6 +144,12 @@ GET /api/v1/content/read?uri={uri}
 ```bash
 curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://resources/docs/api.md" \
   -H "X-API-Key: your-key"
+```
+
+**CLI**
+
+```bash
+openviking read viking://resources/docs/api.md
 ```
 
 **Response**
@@ -208,6 +226,12 @@ curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://resources/&recursiv
   -H "X-API-Key: your-key"
 ```
 
+**CLI**
+
+```bash
+openviking ls viking://resources/ [--simple] [--recursive]
+```
+
 **Response**
 
 ```json
@@ -264,6 +288,12 @@ GET /api/v1/fs/tree?uri={uri}
 ```bash
 curl -X GET "http://localhost:1933/api/v1/fs/tree?uri=viking://resources/" \
   -H "X-API-Key: your-key"
+```
+
+**CLI**
+
+```bash
+openviking tree viking://resources/my-project/
 ```
 
 **Response**
@@ -329,6 +359,12 @@ curl -X GET "http://localhost:1933/api/v1/fs/stat?uri=viking://resources/docs/ap
   -H "X-API-Key: your-key"
 ```
 
+**CLI**
+
+```bash
+openviking stat viking://resources/my-project/docs/api.md
+```
+
 **Response**
 
 ```json
@@ -384,6 +420,12 @@ curl -X POST http://localhost:1933/api/v1/fs/mkdir \
   -d '{
     "uri": "viking://resources/new-project/"
   }'
+```
+
+**CLI**
+
+```bash
+openviking mkdir viking://resources/new-project/
 ```
 
 **Response**
@@ -444,6 +486,12 @@ curl -X DELETE "http://localhost:1933/api/v1/fs?uri=viking://resources/old-proje
   -H "X-API-Key: your-key"
 ```
 
+**CLI**
+
+```bash
+openviking rm viking://resources/old.md [--recursive]
+```
+
 **Response**
 
 ```json
@@ -499,6 +547,12 @@ curl -X POST http://localhost:1933/api/v1/fs/mv \
     "from_uri": "viking://resources/old-name/",
     "to_uri": "viking://resources/new-name/"
   }'
+```
+
+**CLI**
+
+```bash
+openviking mv viking://resources/old-name/ viking://resources/new-name/
 ```
 
 **Response**
@@ -565,6 +619,12 @@ curl -X POST http://localhost:1933/api/v1/search/grep \
     "pattern": "authentication",
     "case_insensitive": true
   }'
+```
+
+**CLI**
+
+```bash
+openviking grep viking://resources/ "authentication" [--ignore-case]
 ```
 
 **Response**
@@ -634,6 +694,12 @@ curl -X POST http://localhost:1933/api/v1/search/glob \
     "pattern": "**/*.md",
     "uri": "viking://resources/"
   }'
+```
+
+**CLI**
+
+```bash
+openviking glob "**/*.md" [--uri viking://resources/]
 ```
 
 **Response**
@@ -722,6 +788,12 @@ curl -X POST http://localhost:1933/api/v1/relations/link \
   }'
 ```
 
+**CLI**
+
+```bash
+openviking link viking://resources/docs/auth/ viking://resources/docs/security/ --reason "Security best practices"
+```
+
 **Response**
 
 ```json
@@ -772,6 +844,12 @@ GET /api/v1/relations?uri={uri}
 ```bash
 curl -X GET "http://localhost:1933/api/v1/relations?uri=viking://resources/docs/auth/" \
   -H "X-API-Key: your-key"
+```
+
+**CLI**
+
+```bash
+openviking relations viking://resources/docs/auth/
 ```
 
 **Response**
@@ -830,6 +908,12 @@ curl -X DELETE http://localhost:1933/api/v1/relations/link \
     "from_uri": "viking://resources/docs/auth/",
     "to_uri": "viking://resources/docs/security/"
   }'
+```
+
+**CLI**
+
+```bash
+openviking unlink viking://resources/docs/auth/ viking://resources/docs/security/
 ```
 
 **Response**

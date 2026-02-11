@@ -8,7 +8,7 @@ Provides resource management operations: add_resource, add_skill, wait_processed
 
 from typing import Any, Dict, Optional
 
-from openviking.exceptions import InvalidArgumentError, NotInitializedError
+from openviking.exceptions import DeadlineExceededError, InvalidArgumentError, NotInitializedError
 from openviking.storage import VikingDBManager
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.viking_fs import VikingFS
@@ -103,7 +103,10 @@ class ResourceService:
 
         if wait:
             qm = get_queue_manager()
-            status = await qm.wait_complete(timeout=timeout)
+            try:
+                status = await qm.wait_complete(timeout=timeout)
+            except TimeoutError as exc:
+                raise DeadlineExceededError("queue processing", timeout) from exc
             result["queue_status"] = {
                 name: {
                     "processed": s.processed,
@@ -141,7 +144,10 @@ class ResourceService:
 
         if wait:
             qm = get_queue_manager()
-            status = await qm.wait_complete(timeout=timeout)
+            try:
+                status = await qm.wait_complete(timeout=timeout)
+            except TimeoutError as exc:
+                raise DeadlineExceededError("queue processing", timeout) from exc
             result["queue_status"] = {
                 name: {
                     "processed": s.processed,
@@ -163,7 +169,10 @@ class ResourceService:
             Queue status
         """
         qm = get_queue_manager()
-        status = await qm.wait_complete(timeout=timeout)
+        try:
+            status = await qm.wait_complete(timeout=timeout)
+        except TimeoutError as exc:
+            raise DeadlineExceededError("queue processing", timeout) from exc
         return {
             name: {
                 "processed": s.processed,

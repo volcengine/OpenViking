@@ -5,7 +5,7 @@ OpenViking 同步客户端示例 (HTTP mode)
 使用 SyncOpenViking 通过 HTTP 连接远程 Server，演示完整 API。
 
 前置条件:
-    先启动 Server: uv run server.py
+    先启动 Server: openviking serve
 
 运行:
     uv run client_sync.py
@@ -169,7 +169,7 @@ def main():
         # ── Session + Context Search ──
         console.print(Panel("Session & Context Search", style="bold magenta", width=PANEL_WIDTH))
         session = client.session()
-        console.print(f"  Created session: [bold]{session.id}[/bold]")
+        console.print(f"  Created session: [bold]{session.session_id}[/bold]")
 
         run_async(session.add_message(
             role="user", content="Tell me about OpenViking",
@@ -194,7 +194,7 @@ def main():
             console.print("  [dim]No context search results[/dim]")
 
         run_async(session.delete())
-        console.print(f"  Deleted session: [dim]{session.id}[/dim]")
+        console.print(f"  Deleted session: [dim]{session.session_id}[/dim]")
         console.print()
 
         # ── Relations ──

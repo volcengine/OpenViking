@@ -84,25 +84,14 @@ async def delete_session(
     return Response(status="ok", result={"session_id": session_id})
 
 
-@router.post("/{session_id}/compress")
-async def compress_session(
+@router.post("/{session_id}/commit")
+async def commit_session(
     session_id: str = Path(..., description="Session ID"),
     _: bool = Depends(verify_api_key),
 ):
-    """Compress a session."""
+    """Commit a session (archive and extract memories)."""
     service = get_service()
-    result = await service.sessions.compress(session_id)
-    return Response(status="ok", result=result)
-
-
-@router.post("/{session_id}/extract")
-async def extract_session(
-    session_id: str = Path(..., description="Session ID"),
-    _: bool = Depends(verify_api_key),
-):
-    """Extract memories from a session."""
-    service = get_service()
-    result = await service.sessions.extract(session_id)
+    result = await service.sessions.commit(session_id)
     return Response(status="ok", result=result)
 
 

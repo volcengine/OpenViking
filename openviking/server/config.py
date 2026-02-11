@@ -2,74 +2,66 @@
 # SPDX-License-Identifier: Apache-2.0
 """Server configuration for OpenViking HTTP Server."""
 
-import json
-import os
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import List, Optional
+
+from openviking.utils.config.config_loader import (
+    DEFAULT_OV_CONF,
+    OPENVIKING_CONFIG_ENV,
+    load_json_config,
+    resolve_config_path,
+)
 
 
 @dataclass
 class ServerConfig:
-    """Server configuration."""
+    """Server configuration (from the ``server`` section of ov.conf)."""
 
     host: str = "0.0.0.0"
     port: int = 1933
     api_key: Optional[str] = None
-    storage_path: Optional[str] = None
-    vectordb_url: Optional[str] = None
-    agfs_url: Optional[str] = None
     cors_origins: List[str] = field(default_factory=lambda: ["*"])
 
 
 def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
-    """Load server configuration from file and environment variables.
+    """Load server configuration from ov.conf.
 
-    Priority: command line args > environment variables > config file
+    Reads the ``server`` section of ov.conf and also ensures the full
+    ov.conf is loaded into the OpenVikingConfigSingleton so that model
+    and storage settings are available.
 
-    Config file lookup:
-        1. Explicit config_path (from --config)
-        2. OPENVIKING_CONFIG_FILE environment variable
+    Resolution chain:
+      1. Explicit ``config_path`` (from --config)
+      2. OPENVIKING_CONFIG_FILE environment variable
+      3. ~/.openviking/ov.conf
 
     Args:
-        config_path: Path to config file.
+        config_path: Explicit path to ov.conf.
 
     Returns:
-        ServerConfig instance
+        ServerConfig instance with defaults for missing fields.
+
+    Raises:
+        FileNotFoundError: If no config file is found.
     """
-    config = ServerConfig()
+    path = resolve_config_path(config_path, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
+    if path is None:
+        from openviking.utils.config.config_loader import DEFAULT_CONFIG_DIR
+        default_path = DEFAULT_CONFIG_DIR / DEFAULT_OV_CONF
+        raise FileNotFoundError(
+            f"OpenViking configuration file not found.\n"
+            f"Please create {default_path} or set {OPENVIKING_CONFIG_ENV}.\n"
+            f"See: https://openviking.dev/docs/guides/configuration"
+        )
 
-    # Load from config file
-    if config_path is None:
-        config_path = os.environ.get("OPENVIKING_CONFIG_FILE")
+    data = load_json_config(path)
+    server_data = data.get("server", {})
 
-    if config_path and Path(config_path).exists():
-        with open(config_path) as f:
-            data = json.load(f) or {}
-
-        server_data = data.get("server", {})
-        config.host = server_data.get("host", config.host)
-        config.port = server_data.get("port", config.port)
-        config.api_key = server_data.get("api_key", config.api_key)
-        config.cors_origins = server_data.get("cors_origins", config.cors_origins)
-
-        storage_data = data.get("storage", {})
-        config.storage_path = storage_data.get("path", config.storage_path)
-        config.vectordb_url = storage_data.get("vectordb_url", config.vectordb_url)
-        config.agfs_url = storage_data.get("agfs_url", config.agfs_url)
-
-    # Override with environment variables
-    if os.environ.get("OPENVIKING_HOST"):
-        config.host = os.environ["OPENVIKING_HOST"]
-    if os.environ.get("OPENVIKING_PORT"):
-        config.port = int(os.environ["OPENVIKING_PORT"])
-    if os.environ.get("OPENVIKING_API_KEY"):
-        config.api_key = os.environ["OPENVIKING_API_KEY"]
-    if os.environ.get("OPENVIKING_PATH"):
-        config.storage_path = os.environ["OPENVIKING_PATH"]
-    if os.environ.get("OPENVIKING_VECTORDB_URL"):
-        config.vectordb_url = os.environ["OPENVIKING_VECTORDB_URL"]
-    if os.environ.get("OPENVIKING_AGFS_URL"):
-        config.agfs_url = os.environ["OPENVIKING_AGFS_URL"]
+    config = ServerConfig(
+        host=server_data.get("host", "0.0.0.0"),
+        port=server_data.get("port", 1933),
+        api_key=server_data.get("api_key"),
+        cors_origins=server_data.get("cors_origins", ["*"]),
+    )
 
     return config
