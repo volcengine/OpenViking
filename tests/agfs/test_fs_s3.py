@@ -9,6 +9,7 @@ import uuid
 from pathlib import Path
 
 import botocore
+import boto3
 import pytest
 
 from openviking.agfs_manager import AGFSManager
@@ -53,7 +54,6 @@ pytestmark = pytest.mark.skipif(
 @pytest.fixture(scope="module")
 def s3_client():
     """Boto3 client for S3 verification."""
-    import boto3
 
     s3_conf = AGFS_CONF.s3
     return boto3.client(
