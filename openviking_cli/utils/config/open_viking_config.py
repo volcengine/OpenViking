@@ -107,6 +107,14 @@ class OpenVikingConfig(BaseModel):
         default=3600, description="Interval (seconds) to check for expired memories"
     )
 
+    language_fallback: str = Field(
+        default="en",
+        description=(
+            "Fallback language used by memory extraction when dominant user language "
+            "cannot be confidently detected"
+        ),
+    )
+
     log_level: str = Field(
         default="WARNING", description="Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL"
     )

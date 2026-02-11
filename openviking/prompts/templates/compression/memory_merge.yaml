@@ -19,11 +19,17 @@ variables:
     type: "string"
     description: "Memory category (profile, preferences, etc.)"
     required: true
+  - name: "output_language"
+    type: "string"
+    description: "Target language for merged output (keep consistent with user language)"
+    required: false
+    default: "auto"
 
 template: |
   Merge the following memory information into a single, coherent content.
 
   **Category**: {{ category }}
+  **Target Output Language**: {{ output_language }} ("auto" means infer from existing/new memory language)
 
   **Existing Content:**
   {{ existing_content }}
@@ -36,6 +42,8 @@ template: |
   - Keep the most up-to-date details
   - Maintain a coherent narrative
   - Output ONLY the merged content, no explanation
+  - Output MUST be written in **{{ output_language }}** (if output_language is "auto", infer dominant language from inputs)
+  - Keep code identifiers / URIs / model names unchanged when they are proper nouns
 
 llm_config:
   temperature: 0.0

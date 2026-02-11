@@ -8,6 +8,7 @@ Extracts 6 categories of memories from session:
 - AgentMemory: cases, patterns
 """
 
+import re
 from dataclasses import dataclass
 from enum import Enum
 from typing import List, Optional
@@ -47,6 +48,7 @@ class CandidateMemory:
     content: str  # L2: Full narrative, free Markdown
     source_session: str
     user: str
+    language: str = "auto"
 
 
 class MemoryExtractor:
@@ -64,6 +66,49 @@ class MemoryExtractor:
 
     def __init__(self):
         """Initialize memory extractor."""
+
+    @staticmethod
+    def _detect_output_language(messages: List, fallback_language: str = "en") -> str:
+        """Detect dominant language from user messages only.
+
+        We intentionally scope detection to user role content so assistant/system
+        text does not bias the target output language for stored memories.
+        """
+        fallback = (fallback_language or "en").strip() or "en"
+
+        user_text = "\n".join(
+            str(getattr(m, "content", "") or "")
+            for m in messages
+            if getattr(m, "role", "") == "user" and getattr(m, "content", None)
+        )
+
+        if not user_text:
+            return fallback
+
+        # Detect scripts that are largely language-unique first.
+        counts = {
+            "ko": len(re.findall(r"[\uac00-\ud7af]", user_text)),
+            "ru": len(re.findall(r"[\u0400-\u04ff]", user_text)),
+            "ar": len(re.findall(r"[\u0600-\u06ff]", user_text)),
+        }
+
+        detected, score = max(counts.items(), key=lambda item: item[1])
+        if score > 0:
+            return detected
+
+        # CJK disambiguation:
+        # - Japanese often includes Han characters too, so Han-count alone can
+        #   misclassify Japanese as Chinese.
+        # - If any Kana is present, prioritize Japanese.
+        kana_count = len(re.findall(r"[\u3040-\u30ff\u31f0-\u31ff\uff66-\uff9f]", user_text))
+        han_count = len(re.findall(r"[\u4e00-\u9fff]", user_text))
+
+        if kana_count > 0:
+            return "ja"
+        if han_count > 0:
+            return "zh-CN"
+
+        return fallback
 
     async def extract(
         self,
@@ -86,6 +131,12 @@ class MemoryExtractor:
         if not formatted_messages:
             return []
 
+        config = get_openviking_config()
+        fallback_language = (config.language_fallback or "en").strip() or "en"
+        output_language = self._detect_output_language(
+            messages, fallback_language=fallback_language
+        )
+
         # Call LLM to extract memories
         prompt = render_prompt(
             "compression.memory_extraction",
@@ -94,6 +145,7 @@ class MemoryExtractor:
                 "recent_messages": formatted_messages,
                 "user": user._user_id,
                 "feedback": "",
+                "output_language": output_language,
             },
         )
 
@@ -119,10 +171,13 @@ class MemoryExtractor:
                         content=mem.get("content", ""),
                         source_session=session_id,
                         user=user,
+                        language=output_language,
                     )
                 )
 
-            logger.info(f"Extracted {len(candidates)} candidate memories")
+            logger.info(
+                f"Extracted {len(candidates)} candidate memories (language={output_language})"
+            )
             return candidates
 
         except Exception as e:
@@ -211,12 +266,23 @@ class MemoryExtractor:
             await viking_fs.write_file(uri=uri, content=candidate.content)
             logger.info(f"Created profile at {uri}")
         else:
-            merged = await self._merge_memory(existing, candidate.content, "profile")
+            merged = await self._merge_memory(
+                existing,
+                candidate.content,
+                "profile",
+                output_language=candidate.language,
+            )
             content = merged if merged else candidate.content
             await viking_fs.write_file(uri=uri, content=content)
             logger.info(f"Merged profile info to {uri}")
 
-    async def _merge_memory(self, existing: str, new: str, category: str) -> Optional[str]:
+    async def _merge_memory(
+        self,
+        existing: str,
+        new: str,
+        category: str,
+        output_language: str = "auto",
+    ) -> Optional[str]:
         """Use LLM to merge existing and new memory content."""
         vlm = get_openviking_config().vlm
         if not vlm or not vlm.is_available():
@@ -224,7 +290,12 @@ class MemoryExtractor:
 
         prompt = render_prompt(
             "compression.memory_merge",
-            {"existing_content": existing, "new_content": new, "category": category},
+            {
+                "existing_content": existing,
+                "new_content": new,
+                "category": category,
+                "output_language": output_language,
+            },
         )
 
         try:

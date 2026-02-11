@@ -118,7 +118,10 @@ class SessionCompressor:
                     try:
                         existing_content = await viking_fs.read_file(target_memory.uri)
                         merged = await self.extractor._merge_memory(
-                            existing_content, candidate.content, candidate.category.value
+                            existing_content,
+                            candidate.content,
+                            candidate.category.value,
+                            output_language=candidate.language,
                         )
                         if merged:
                             await viking_fs.write_file(target_memory.uri, merged)
