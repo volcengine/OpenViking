@@ -138,6 +138,7 @@ jobs:
           "3.10") PYTHON_FULL="3.10.13" ;;
           "3.11") PYTHON_FULL="3.11.8" ;;
           "3.12") PYTHON_FULL="3.12.2" ;;
+          "3.13") PYTHON_FULL="3.13.2" ;;
           *)
             echo "Error: Unknown python version $PYTHON_VERSION"
             exit 1
