@@ -26,3 +26,37 @@ jobs:
     with:
       os_json: '["ubuntu-latest"]'
       python_json: '["3.10"]'
+
+  check-deps:
+    runs-on: ubuntu-latest
+    outputs:
+      deps_changed: ${{ steps.check.outputs.deps_changed }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Check for dependency changes
+        id: check
+        run: |
+          git fetch origin ${{ github.base_ref }}
+          
+          # Define grep pattern for dependency files
+          PATTERN="pyproject\.toml|setup\.py|uv\.lock|src/CMakeLists\.txt|third_party/|\.github/workflows/_build\.yml"
+          
+          # Check for changes
+          CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }} HEAD | grep -E "$PATTERN" || true)
+          
+          if [ -n "$CHANGED_FILES" ]; then
+            echo "Dependency changes detected:"
+            echo "$CHANGED_FILES"
+            echo "deps_changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "No dependency changes detected."
+            echo "deps_changed=false" >> $GITHUB_OUTPUT
+          fi
+
+  build:
+    needs: check-deps
+    if: ${{ needs.check-deps.outputs.deps_changed == 'true' }}
+    uses: ./.github/workflows/_build.yml
