@@ -68,9 +68,11 @@ class PowerPointParser(BaseParser):
             )
 
         markdown_content = self._convert_to_markdown(path, pptx)
-        return await self._get_markdown_parser().parse_content(
+        result = await self._get_markdown_parser().parse_content(
             markdown_content, str(path), instruction, **kwargs
         )
+        result.source_format = "pptx"
+        return result
 
     async def parse_content(
         self,

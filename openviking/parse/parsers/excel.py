@@ -67,9 +67,11 @@ class ExcelParser(BaseParser):
             )
 
         markdown_content = self._convert_to_markdown(path, openpyxl)
-        return await self._get_markdown_parser().parse_content(
+        result = await self._get_markdown_parser().parse_content(
             markdown_content, str(path), instruction, **kwargs
         )
+        result.source_format = "xlsx"
+        return result
 
     async def parse_content(
         self,

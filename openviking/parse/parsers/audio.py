@@ -96,9 +96,11 @@ class AudioParser(BaseParser):
         markdown_content = self._convert_to_markdown(path)
 
         # Delegate to MarkdownParser
-        return await self._get_markdown_parser().parse_content(
+        result = await self._get_markdown_parser().parse_content(
             markdown_content, str(path), instruction, **kwargs
         )
+        result.source_format = "audio"
+        return result
 
     async def parse_content(
         self,

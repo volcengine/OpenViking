@@ -57,9 +57,11 @@ class EPubParser(BaseParser):
             raise FileNotFoundError(f"EPub file not found: {path}")
 
         markdown_content = self._convert_to_markdown(path)
-        return await self._get_markdown_parser().parse_content(
+        result = await self._get_markdown_parser().parse_content(
             markdown_content, str(path), instruction, **kwargs
         )
+        result.source_format = "epub"
+        return result
 
     async def parse_content(
         self,

@@ -62,9 +62,11 @@ class WordParser(BaseParser):
             )
 
         markdown_content = self._convert_to_markdown(path, docx)
-        return await self._get_markdown_parser().parse_content(
+        result = await self._get_markdown_parser().parse_content(
             markdown_content, str(path), instruction, **kwargs
         )
+        result.source_format = "docx"
+        return result
 
     async def parse_content(
         self,
