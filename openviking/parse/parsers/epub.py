@@ -9,6 +9,7 @@ Inspired by microsoft/markitdown approach.
 
 import html
 import logging
+import re
 import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING, List, Optional, Union
@@ -30,18 +31,11 @@ class EPubParser(BaseParser):
 
     Converts EPub e-books to Markdown using ebooklib (if available)
     or falls back to manual extraction, then delegates to MarkdownParser.
-
-    Features:
-    - Chapter/toc extraction
-    - Metadata extraction (title, author, etc.)
-    - HTML to markdown conversion
-    - Image reference preservation
     """
 
     def __init__(self):
         """Initialize EPub parser."""
         self._markdown_parser = None
-        self._ebooklib_module = None
 
     def _get_markdown_parser(self):
         """Lazy import MarkdownParser."""
@@ -51,43 +45,18 @@ class EPubParser(BaseParser):
             self._markdown_parser = MarkdownParser()
         return self._markdown_parser
 
-    def _get_ebooklib(self):
-        """Lazy import ebooklib."""
-        if self._ebooklib_module is None:
-            try:
-                import ebooklib
-                from ebooklib import epub
-
-                self._ebooklib_module = (ebooklib, epub)
-            except ImportError:
-                self._ebooklib_module = None
-        return self._ebooklib_module
-
     @property
     def supported_extensions(self) -> List[str]:
         """Return list of supported file extensions."""
         return [".epub"]
 
     async def parse(self, source: Union[str, Path], instruction: str = "", **kwargs) -> ParseResult:
-        """
-        Parse EPub e-book from file path.
-
-        Args:
-            source: File path to .epub file
-            instruction: Processing instruction
-            **kwargs: Additional arguments
-
-        Returns:
-            ParseResult with document tree
-        """
+        """Parse EPub e-book from file path."""
         path = Path(source)
         if not path.exists():
             raise FileNotFoundError(f"EPub file not found: {path}")
 
-        # Convert to markdown
         markdown_content = self._convert_to_markdown(path)
-
-        # Delegate to MarkdownParser
         return await self._get_markdown_parser().parse_content(
             markdown_content, str(path), instruction, **kwargs
         )
@@ -99,21 +68,7 @@ class EPubParser(BaseParser):
         instruction: str = "",
         **kwargs,
     ) -> ParseResult:
-        """
-        Parse EPub content.
-
-        Note: This expects the actual epub binary content, which isn't directly
-        usable. Use parse() with a file path instead.
-
-        Args:
-            content: Not directly supported for binary epub content
-            source_path: Optional source path for reference
-            instruction: Processing instruction
-            **kwargs: Additional arguments
-
-        Returns:
-            ParseResult with document tree
-        """
+        """Parse EPub content."""
         if source_path and Path(source_path).exists():
             return await self.parse(source_path, instruction, **kwargs)
         raise ValueError(
@@ -121,30 +76,24 @@ class EPubParser(BaseParser):
         )
 
     def _convert_to_markdown(self, path: Path) -> str:
-        """
-        Convert EPub e-book to Markdown string.
+        """Convert EPub e-book to Markdown string."""
+        # Try using ebooklib first
+        try:
+            import ebooklib
+            from ebooklib import epub
 
-        Args:
-            path: Path to .epub file
+            return self._convert_with_ebooklib(path, ebooklib, epub)
+        except ImportError:
+            pass
 
-        Returns:
-            Markdown formatted string
-        """
-        ebooklib = self._get_ebooklib()
+        # Fall back to manual extraction
+        return self._convert_manual(path)
 
-        if ebooklib:
-            return self._convert_with_ebooklib(path, ebooklib)
-        else:
-            return self._convert_manual(path)
-
-    def _convert_with_ebooklib(self, path: Path, ebooklib) -> str:
+    def _convert_with_ebooklib(self, path: Path, ebooklib, epub) -> str:
         """Convert EPub using ebooklib."""
-        _, epub = ebooklib
         book = epub.read_epub(path)
-
         markdown_parts = []
 
-        # Extract metadata
         title = self._get_metadata(book, "title")
         author = self._get_metadata(book, "creator")
 
@@ -153,7 +102,6 @@ class EPubParser(BaseParser):
         if author:
             markdown_parts.append(f"**Author:** {author}")
 
-        # Extract content items
         for item in book.get_items():
             if item.get_type() == ebooklib.ITEM_DOCUMENT:
                 content = item.get_content().decode("utf-8", errors="ignore")
@@ -178,10 +126,8 @@ class EPubParser(BaseParser):
         markdown_parts = []
 
         with zipfile.ZipFile(path, "r") as zf:
-            # List all HTML/XHTML files
             html_files = [f for f in zf.namelist() if f.endswith((".html", ".xhtml", ".htm"))]
 
-            # Try to read content in order
             for html_file in sorted(html_files):
                 try:
                     content = zf.read(html_file).decode("utf-8", errors="ignore")
@@ -199,8 +145,6 @@ class EPubParser(BaseParser):
 
     def _html_to_markdown(self, html_content: str) -> str:
         """Simple HTML to markdown conversion."""
-        import re
-
         # Remove script and style tags
         html_content = re.sub(r"<script[^>]*>.*?</script>", "", html_content, flags=re.DOTALL)
         html_content = re.sub(r"<style[^>]*>.*?</style>", "", html_content, flags=re.DOTALL)

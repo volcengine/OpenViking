@@ -28,12 +28,6 @@ class ExcelParser(BaseParser):
 
     Converts Excel spreadsheets to Markdown using openpyxl,
     then delegates to MarkdownParser for tree structure creation.
-
-    Features:
-    - Multi-sheet support
-    - Table formatting in markdown
-    - Sheet metadata extraction
-    - Formula value extraction (calculated values)
     """
 
     def __init__(self, max_rows_per_sheet: int = 1000):
@@ -45,7 +39,6 @@ class ExcelParser(BaseParser):
         """
         self.max_rows_per_sheet = max_rows_per_sheet
         self._markdown_parser = None
-        self._openpyxl_module = None
 
     def _get_markdown_parser(self):
         """Lazy import MarkdownParser."""
@@ -55,44 +48,25 @@ class ExcelParser(BaseParser):
             self._markdown_parser = MarkdownParser()
         return self._markdown_parser
 
-    def _get_openpyxl(self):
-        """Lazy import openpyxl."""
-        if self._openpyxl_module is None:
-            try:
-                import openpyxl
-
-                self._openpyxl_module = openpyxl
-            except ImportError:
-                raise ImportError(
-                    "openpyxl is required for Excel parsing. Install with: pip install openpyxl"
-                )
-        return self._openpyxl_module
-
     @property
     def supported_extensions(self) -> List[str]:
         """Return list of supported file extensions."""
         return [".xlsx", ".xls"]
 
     async def parse(self, source: Union[str, Path], instruction: str = "", **kwargs) -> ParseResult:
-        """
-        Parse Excel spreadsheet from file path.
-
-        Args:
-            source: File path to .xlsx/.xls file
-            instruction: Processing instruction
-            **kwargs: Additional arguments
-
-        Returns:
-            ParseResult with document tree
-        """
+        """Parse Excel spreadsheet from file path."""
         path = Path(source)
         if not path.exists():
             raise FileNotFoundError(f"Excel file not found: {path}")
 
-        # Convert to markdown
-        markdown_content = self._convert_to_markdown(path)
+        try:
+            import openpyxl
+        except ImportError:
+            raise ImportError(
+                "openpyxl is required for Excel parsing. Install with: pip install openpyxl"
+            )
 
-        # Delegate to MarkdownParser
+        markdown_content = self._convert_to_markdown(path, openpyxl)
         return await self._get_markdown_parser().parse_content(
             markdown_content, str(path), instruction, **kwargs
         )
@@ -104,40 +78,15 @@ class ExcelParser(BaseParser):
         instruction: str = "",
         **kwargs,
     ) -> ParseResult:
-        """
-        Parse Excel content.
-
-        Note: This expects the actual xlsx binary content, which isn't directly
-        usable. Use parse() with a file path instead.
-
-        Args:
-            content: Not directly supported for binary xlsx content
-            source_path: Optional source path for reference
-            instruction: Processing instruction
-            **kwargs: Additional arguments
-
-        Returns:
-            ParseResult with document tree
-        """
+        """Parse Excel content."""
         if source_path and Path(source_path).exists():
             return await self.parse(source_path, instruction, **kwargs)
         raise ValueError(
             "ExcelParser.parse_content() requires a valid source_path to the .xlsx file"
         )
 
-    def _convert_to_markdown(self, path: Path) -> str:
-        """
-        Convert Excel spreadsheet to Markdown string.
-
-        Args:
-            path: Path to .xlsx/.xls file
-
-        Returns:
-            Markdown formatted string
-        """
-        openpyxl = self._get_openpyxl()
-
-        # Load workbook with data_only=True to get calculated values
+    def _convert_to_markdown(self, path: Path, openpyxl) -> str:
+        """Convert Excel spreadsheet to Markdown string."""
         wb = openpyxl.load_workbook(path, data_only=True)
 
         markdown_parts = []
@@ -156,7 +105,6 @@ class ExcelParser(BaseParser):
         parts = []
         parts.append(f"## Sheet: {sheet_name}")
 
-        # Get sheet metadata
         max_row = sheet.max_row
         max_col = sheet.max_column
 
@@ -166,12 +114,10 @@ class ExcelParser(BaseParser):
 
         parts.append(f"**Dimensions:** {max_row} rows × {max_col} columns")
 
-        # Limit rows if configured
         rows_to_process = max_row
         if self.max_rows_per_sheet > 0:
             rows_to_process = min(max_row, self.max_rows_per_sheet)
 
-        # Extract data rows
         rows = []
         for _row_idx, row in enumerate(
             sheet.iter_rows(min_row=1, max_row=rows_to_process, values_only=True), 1
@@ -190,7 +136,6 @@ class ExcelParser(BaseParser):
             table_md = format_table_to_markdown(rows, has_header=True)
             parts.append(table_md)
 
-        # Add truncation notice if needed
         if self.max_rows_per_sheet > 0 and max_row > self.max_rows_per_sheet:
             parts.append(f"\n*... {max_row - self.max_rows_per_sheet} more rows truncated ...*")
 
