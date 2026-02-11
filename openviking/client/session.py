@@ -7,6 +7,8 @@ Session delegates all operations to the underlying Client (LocalClient or HTTPCl
 
 from typing import TYPE_CHECKING, Any, Dict
 
+from openviking.session.user_id import UserIdentifier
+
 if TYPE_CHECKING:
     from openviking.client.base import BaseClient
 
@@ -18,7 +20,7 @@ class Session:
     All actual work is delegated to the underlying client.
     """
 
-    def __init__(self, client: "BaseClient", session_id: str, user: str):
+    def __init__(self, client: "BaseClient", session_id: str, user: UserIdentifier):
         """Initialize Session.
 
         Args:
@@ -63,4 +65,4 @@ class Session:
         return await self._client.get_session(self.session_id)
 
     def __repr__(self) -> str:
-        return f"Session(id={self.session_id}, user={self.user})"
+        return f"Session(id={self.session_id}, user={self.user.__str__()})"

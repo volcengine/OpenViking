@@ -29,7 +29,7 @@ ScalarIndex::ScalarIndex(std::shared_ptr<ScalarIndexMeta> meta,
     : field_sets_(std::make_shared<FieldBitmapGroupSet>("default")) {
   if (!dir.empty()) {
     auto pt = dir / kIndexDataFile;
-    std::ifstream input(pt);
+    std::ifstream input(pt, std::ios::binary);
     if (!input) {
       throw std::runtime_error("ScalarIndex::ScalarIndex open file failed");
     }
@@ -51,7 +51,7 @@ ScalarIndex::ScalarIndex(std::shared_ptr<ScalarIndexMeta> meta,
 
 int ScalarIndex::load(const std::filesystem::path& dir) {
   auto pt = dir / kIndexDataFile;
-  std::ifstream input(pt);
+  std::ifstream input(pt, std::ios::binary);
   if (!input) {
     return -1;
   }
@@ -99,7 +99,7 @@ int ScalarIndex::delete_row_data(int offset, const FieldsDict& old_fields) {
 int ScalarIndex::dump(const std::filesystem::path& dir) {
   auto pt = dir / kIndexDataFile;
 
-  std::ofstream output(pt);
+  std::ofstream output(pt, std::ios::binary);
   field_sets_->serialize_set_to_stream(output);
   output.close();
   return 0;

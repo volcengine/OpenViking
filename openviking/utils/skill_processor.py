@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 from openviking.core.context import Context, ContextType, Vectorize
 from openviking.core.mcp_converter import is_mcp_format, mcp_to_skill
 from openviking.core.skill_loader import SkillLoader
+from openviking.session.user_id import UserIdentifier
 from openviking.storage import VikingDBManager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.viking_fs import VikingFS
@@ -41,7 +42,7 @@ class SkillProcessor:
         self,
         data: Any,
         viking_fs: VikingFS,
-        user: Optional[str] = None,
+        user: Optional[UserIdentifier] = None,
     ) -> Dict[str, Any]:
         """
         Process and store a skill.

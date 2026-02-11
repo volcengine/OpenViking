@@ -10,8 +10,6 @@ from typing import Any, Dict, List, Optional, Union
 import httpx
 
 from openviking.client.base import BaseClient
-from openviking.retrieve.types import FindResult
-from openviking.utils import run_async
 from openviking.exceptions import (
     AlreadyExistsError,
     DeadlineExceededError,
@@ -29,6 +27,9 @@ from openviking.exceptions import (
     UnavailableError,
     VLMFailedError,
 )
+from openviking.retrieve.types import FindResult
+from openviking.session.user_id import UserIdentifier
+from openviking.utils import run_async
 
 # Error code to exception class mapping
 ERROR_CODE_TO_EXCEPTION = {
@@ -111,7 +112,7 @@ class HTTPClient(BaseClient):
         self,
         url: str,
         api_key: Optional[str] = None,
-        user: Optional[str] = None,
+        user: Optional[UserIdentifier] = None,
     ):
         """Initialize HTTPClient.
 
@@ -122,7 +123,7 @@ class HTTPClient(BaseClient):
         """
         self._url = url.rstrip("/")
         self._api_key = api_key
-        self._user = user or "default"
+        self._user = user or UserIdentifier.the_default_user()
         self._http: Optional[httpx.AsyncClient] = None
         self._observer: Optional[_HTTPObserver] = None
 
@@ -246,9 +247,7 @@ class HTTPClient(BaseClient):
 
     # ============= File System =============
 
-    async def ls(
-        self, uri: str, simple: bool = False, recursive: bool = False
-    ) -> List[Any]:
+    async def ls(self, uri: str, simple: bool = False, recursive: bool = False) -> List[Any]:
         """List directory contents."""
         response = await self._http.get(
             "/api/v1/fs/ls",
@@ -369,9 +368,7 @@ class HTTPClient(BaseClient):
         )
         return FindResult.from_dict(self._handle_response(response))
 
-    async def grep(
-        self, uri: str, pattern: str, case_insensitive: bool = False
-    ) -> Dict[str, Any]:
+    async def grep(self, uri: str, pattern: str, case_insensitive: bool = False) -> Dict[str, Any]:
         """Content search with pattern."""
         response = await self._http.post(
             "/api/v1/search/grep",
@@ -401,9 +398,7 @@ class HTTPClient(BaseClient):
         )
         return self._handle_response(response)
 
-    async def link(
-        self, from_uri: str, to_uris: Union[str, List[str]], reason: str = ""
-    ) -> None:
+    async def link(self, from_uri: str, to_uris: Union[str, List[str]], reason: str = "") -> None:
         """Create link between resources."""
         response = await self._http.post(
             "/api/v1/relations/link",
@@ -426,7 +421,7 @@ class HTTPClient(BaseClient):
         """Create a new session."""
         response = await self._http.post(
             "/api/v1/sessions",
-            json={"user": user or self._user},
+            json={"user": user or self._user.to_dict()},
         )
         return self._handle_response(response)
 
@@ -450,9 +445,7 @@ class HTTPClient(BaseClient):
         response = await self._http.post(f"/api/v1/sessions/{session_id}/commit")
         return self._handle_response(response)
 
-    async def add_message(
-        self, session_id: str, role: str, content: str
-    ) -> Dict[str, Any]:
+    async def add_message(self, session_id: str, role: str, content: str) -> Dict[str, Any]:
         """Add a message to a session."""
         response = await self._http.post(
             f"/api/v1/sessions/{session_id}/messages",
@@ -536,6 +529,7 @@ class HTTPClient(BaseClient):
             Session object
         """
         from openviking.client.session import Session
+
         if not session_id:
             result = run_async(self.create_session())
             session_id = result.get("session_id", "")

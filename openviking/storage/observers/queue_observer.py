@@ -6,7 +6,7 @@ QueueObserver: Queue system observability tool.
 Provides methods to observe and report queue status in various formats.
 """
 
-from typing import Dict
+from typing import Dict, Optional
 
 from openviking.storage.observers.base_observer import BaseObserver
 from openviking.storage.queuefs.named_queue import QueueStatus
@@ -29,7 +29,8 @@ class QueueObserver(BaseObserver):
 
     async def get_status_table_async(self) -> str:
         statuses = await self._queue_manager.check_status()
-        return self._format_status_as_table(statuses)
+        dag_stats = self._get_semantic_dag_stats()
+        return self._format_status_as_table(statuses, dag_stats)
 
     def get_status_table(self) -> str:
         return run_async(self.get_status_table_async())
@@ -37,7 +38,9 @@ class QueueObserver(BaseObserver):
     def __str__(self) -> str:
         return self.get_status_table()
 
-    def _format_status_as_table(self, statuses: Dict[str, QueueStatus]) -> str:
+    def _format_status_as_table(
+        self, statuses: Dict[str, QueueStatus], dag_stats: Optional[object]
+    ) -> str:
         """
         Format queue statuses as a table using tabulate.
 
@@ -75,6 +78,17 @@ class QueueObserver(BaseObserver):
             total_processed += status.processed
             total_errors += status.error_count
 
+        data.append(
+            {
+                "Queue": "Semantic-Nodes",
+                "Pending": getattr(dag_stats, "pending_nodes", 0) if dag_stats else 0,
+                "In Progress": getattr(dag_stats, "in_progress_nodes", 0) if dag_stats else 0,
+                "Processed": getattr(dag_stats, "done_nodes", 0) if dag_stats else 0,
+                "Errors": 0,
+                "Total": getattr(dag_stats, "total_nodes", 0) if dag_stats else 0,
+            }
+        )
+
         # Add total row
         total_total = total_pending + total_in_progress + total_processed
         data.append(
@@ -89,6 +103,15 @@ class QueueObserver(BaseObserver):
         )
 
         return tabulate(data, headers="keys", tablefmt="pretty")
+
+    def _get_semantic_dag_stats(self) -> Optional[object]:
+        semantic_queue = self._queue_manager._queues.get(self._queue_manager.SEMANTIC)
+        if not semantic_queue:
+            return None
+        handler = getattr(semantic_queue, "_dequeue_handler", None)
+        if handler and hasattr(handler, "get_dag_stats"):
+            return handler.get_dag_stats()
+        return None
 
     def is_healthy(self) -> bool:
         return not self.has_errors()

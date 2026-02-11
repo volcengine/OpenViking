@@ -9,6 +9,8 @@ from typing import Any, Dict, List, Optional, Union
 
 from openviking.client.base import BaseClient
 from openviking.service import OpenVikingService
+from openviking.session.user_id import UserIdentifier
+from openviking.utils.config import OpenVikingConfig
 
 
 class LocalClient(BaseClient):
@@ -20,7 +22,7 @@ class LocalClient(BaseClient):
     def __init__(
         self,
         path: Optional[str] = None,
-        user: Optional[str] = None,
+        user: Optional[UserIdentifier] = None,
     ):
         """Initialize LocalClient.
 
@@ -30,7 +32,7 @@ class LocalClient(BaseClient):
         """
         self._service = OpenVikingService(
             path=path,
-            user=user,
+            user=user or UserIdentifier.the_default_user(),
         )
         self._user = self._service.user
 
@@ -89,9 +91,7 @@ class LocalClient(BaseClient):
 
     # ============= File System =============
 
-    async def ls(
-        self, uri: str, simple: bool = False, recursive: bool = False
-    ) -> List[Any]:
+    async def ls(self, uri: str, simple: bool = False, recursive: bool = False) -> List[Any]:
         """List directory contents."""
         return await self._service.fs.ls(uri, simple=simple, recursive=recursive)
 
@@ -171,9 +171,7 @@ class LocalClient(BaseClient):
             filter=filter,
         )
 
-    async def grep(
-        self, uri: str, pattern: str, case_insensitive: bool = False
-    ) -> Dict[str, Any]:
+    async def grep(self, uri: str, pattern: str, case_insensitive: bool = False) -> Dict[str, Any]:
         """Content search with pattern."""
         return await self._service.fs.grep(uri, pattern, case_insensitive=case_insensitive)
 
@@ -187,9 +185,7 @@ class LocalClient(BaseClient):
         """Get relations for a resource."""
         return await self._service.relations.relations(uri)
 
-    async def link(
-        self, from_uri: str, to_uris: Union[str, List[str]], reason: str = ""
-    ) -> None:
+    async def link(self, from_uri: str, to_uris: Union[str, List[str]], reason: str = "") -> None:
         """Create link between resources."""
         await self._service.relations.link(from_uri, to_uris, reason)
 
@@ -204,7 +200,7 @@ class LocalClient(BaseClient):
         session = self._service.sessions.session()
         return {
             "session_id": session.session_id,
-            "user": session.user,
+            "user": session.user.to_dict(),
         }
 
     async def list_sessions(self) -> List[Any]:
@@ -217,7 +213,7 @@ class LocalClient(BaseClient):
         session.load()
         return {
             "session_id": session.session_id,
-            "user": session.user,
+            "user": session.user.to_dict(),
             "message_count": len(session.messages),
         }
 
@@ -229,9 +225,7 @@ class LocalClient(BaseClient):
         """Commit a session (archive and extract memories)."""
         return await self._service.sessions.commit(session_id)
 
-    async def add_message(
-        self, session_id: str, role: str, content: str
-    ) -> Dict[str, Any]:
+    async def add_message(self, session_id: str, role: str, content: str) -> Dict[str, Any]:
         """Add a message to a session."""
         session = self._service.sessions.session(session_id)
         session.load()
@@ -275,6 +269,7 @@ class LocalClient(BaseClient):
             Session object
         """
         from openviking.session import Session
+
         return Session(
             viking_fs=self._service.viking_fs,
             vikingdb_manager=self._service.vikingdb_manager,

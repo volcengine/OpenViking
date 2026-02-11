@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 from openviking.exceptions import NotFoundError, NotInitializedError
 from openviking.session import Session
 from openviking.session.compressor import SessionCompressor
+from openviking.session.user_id import UserIdentifier
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import VikingFS
 from openviking.utils import get_logger
@@ -26,25 +27,25 @@ class SessionService:
         vikingdb: Optional[VikingDBManager] = None,
         viking_fs: Optional[VikingFS] = None,
         session_compressor: Optional[SessionCompressor] = None,
-        user: str = "default",
+        user: Optional[UserIdentifier] = None,
     ):
         self._vikingdb = vikingdb
         self._viking_fs = viking_fs
         self._session_compressor = session_compressor
-        self._user = user
+        self._user = user or UserIdentifier.the_default_user()
 
     def set_dependencies(
         self,
         vikingdb: VikingDBManager,
         viking_fs: VikingFS,
         session_compressor: SessionCompressor,
-        user: str,
+        user: Optional[UserIdentifier] = None,
     ) -> None:
         """Set dependencies (for deferred initialization)."""
         self._vikingdb = vikingdb
         self._viking_fs = viking_fs
         self._session_compressor = session_compressor
-        self._user = user
+        self._user = user or UserIdentifier.the_default_user()
 
     def _ensure_initialized(self) -> None:
         """Ensure all dependencies are initialized."""
@@ -85,11 +86,13 @@ class SessionService:
                 name = entry.get("name", "")
                 if name in [".", ".."]:
                     continue
-                sessions.append({
-                    "session_id": name,
-                    "uri": f"{session_base_uri}/{name}",
-                    "is_dir": entry.get("isDir", False),
-                })
+                sessions.append(
+                    {
+                        "session_id": name,
+                        "uri": f"{session_base_uri}/{name}",
+                        "is_dir": entry.get("isDir", False),
+                    }
+                )
             return sessions
         except Exception:
             return []

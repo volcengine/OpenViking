@@ -39,6 +39,14 @@ class InvalidURIError(InvalidArgumentError):
         super().__init__(message, details={"uri": uri, "reason": reason})
 
 
+class UnsupportedDirectoryFilesError(InvalidArgumentError):
+    """Directory contains unsupported file types (used when strict=True)."""
+
+    def __init__(self, message: str, unsupported_files: list):
+        super().__init__(message, details={"unsupported_files": unsupported_files})
+        self.unsupported_files = unsupported_files
+
+
 # ============= Resource Errors =============
 
 
@@ -47,7 +55,9 @@ class NotFoundError(OpenVikingError):
 
     def __init__(self, resource: str, resource_type: str = "resource"):
         message = f"{resource_type.capitalize()} not found: {resource}"
-        super().__init__(message, code="NOT_FOUND", details={"resource": resource, "type": resource_type})
+        super().__init__(
+            message, code="NOT_FOUND", details={"resource": resource, "type": resource_type}
+        )
 
 
 class AlreadyExistsError(OpenVikingError):
@@ -55,7 +65,9 @@ class AlreadyExistsError(OpenVikingError):
 
     def __init__(self, resource: str, resource_type: str = "resource"):
         message = f"{resource_type.capitalize()} already exists: {resource}"
-        super().__init__(message, code="ALREADY_EXISTS", details={"resource": resource, "type": resource_type})
+        super().__init__(
+            message, code="ALREADY_EXISTS", details={"resource": resource, "type": resource_type}
+        )
 
 
 # ============= Authentication Errors =============
@@ -86,7 +98,9 @@ class UnavailableError(OpenVikingError):
         message = f"{service.capitalize()} unavailable"
         if reason:
             message += f": {reason}"
-        super().__init__(message, code="UNAVAILABLE", details={"service": service, "reason": reason})
+        super().__init__(
+            message, code="UNAVAILABLE", details={"service": service, "reason": reason}
+        )
 
 
 class InternalError(OpenVikingError):
@@ -104,7 +118,9 @@ class DeadlineExceededError(OpenVikingError):
         message = f"{operation.capitalize()} timed out"
         if timeout:
             message += f" after {timeout}s"
-        super().__init__(message, code="DEADLINE_EXCEEDED", details={"operation": operation, "timeout": timeout})
+        super().__init__(
+            message, code="DEADLINE_EXCEEDED", details={"operation": operation, "timeout": timeout}
+        )
 
 
 # ============= Business Errors =============

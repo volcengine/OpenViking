@@ -19,6 +19,7 @@ from openviking.service.resource_service import ResourceService
 from openviking.service.search_service import SearchService
 from openviking.service.session_service import SessionService
 from openviking.session.compressor import SessionCompressor
+from openviking.session.user_id import UserIdentifier
 from openviking.storage import VikingDBManager
 from openviking.storage.collection_schemas import init_context_collection
 from openviking.storage.viking_fs import VikingFS, init_viking_fs
@@ -42,7 +43,7 @@ class OpenVikingService:
     def __init__(
         self,
         path: Optional[str] = None,
-        user: Optional[str] = None,
+        user: Optional[UserIdentifier] = None,
     ):
         """Initialize OpenViking service.
 
@@ -56,7 +57,9 @@ class OpenVikingService:
             path=path,
         )
         self._config = config
-        self.user = config.user
+        self._user = user or UserIdentifier(
+            config.default_account, config.default_user, config.default_agent
+        )
 
         # Infrastructure
         self._agfs_manager: Optional[AGFSManager] = None
@@ -137,6 +140,11 @@ class OpenVikingService:
     def search(self) -> SearchService:
         """Get SearchService instance."""
         return self._search_service
+
+    @property
+    def user(self) -> UserIdentifier:
+        """Get current user identifier."""
+        return self._user
 
     @property
     def resources(self) -> ResourceService:

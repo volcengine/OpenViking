@@ -2,11 +2,10 @@
 Stats commands for Memex - knowledge base statistics.
 """
 
-from rich.console import Console
-from rich.table import Table
-from rich.panel import Panel
-
 from client import MemexClient
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
 
 
 class StatsCommands:
@@ -65,7 +64,7 @@ class StatsCommands:
 
         info_text = f"""[cyan]Data Path:[/cyan] {config.data_path}
 [cyan]Config Path:[/cyan] {config.config_path}
-[cyan]User:[/cyan] {config.user}
+[cyan]User:[/cyan] {config.default_user}
 [cyan]LLM Backend:[/cyan] {llm_backend}
 [cyan]LLM Model:[/cyan] {llm_model}
 [cyan]Search Top-K:[/cyan] {config.search_top_k}
