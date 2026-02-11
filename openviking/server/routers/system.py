@@ -30,7 +30,7 @@ async def system_status(
         status="ok",
         result={
             "initialized": service._initialized,
-            "user": service.user,
+            "user": service.user._user_id,
         },
     )
 

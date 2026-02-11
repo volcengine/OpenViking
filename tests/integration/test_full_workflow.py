@@ -149,6 +149,7 @@ class TestImportExportWorkflow:
             path=str(sample_markdown_file),
             reason="Export test",
         )
+        print(result)
         original_uri = result["root_uri"]
 
         # 2. Read original content
