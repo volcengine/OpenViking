@@ -6,7 +6,6 @@ Async OpenViking client implementation.
 Supports both embedded mode (LocalClient) and HTTP mode (HTTPClient).
 """
 
-import os
 import threading
 from typing import Any, Dict, List, Optional, Union
 
@@ -15,7 +14,6 @@ from openviking.client.base import BaseClient
 from openviking.service.debug_service import SystemStatus
 from openviking.session.user_id import UserIdentifier
 from openviking.utils import get_logger
-from openviking.utils.config import OpenVikingConfig
 
 logger = get_logger(__name__)
 
@@ -24,50 +22,21 @@ class AsyncOpenViking:
     """
     OpenViking main client class (Asynchronous).
 
-    Supports three deployment modes:
-    - Embedded mode: Uses local VikingVectorIndex storage and auto-starts AGFS subprocess (singleton)
-    - Service mode: Connects to remote VikingVectorIndex and AGFS services (not singleton)
+    Supports two deployment modes:
+    - Embedded mode: Uses local storage and auto-starts services (singleton)
     - HTTP mode: Connects to remote OpenViking Server via HTTP API (not singleton)
 
     Examples:
-        # 1. Embedded mode (auto-starts local services)
+        # 1. Embedded mode (loads config from ov.conf)
         client = AsyncOpenViking(path="./data")
         await client.initialize()
 
-        # 2. Service mode (connects to remote services)
-        client = AsyncOpenViking(
-            vectordb_url="http://localhost:5000",
-            agfs_url="http://localhost:8080",
-            user="alice"
-        )
-        await client.initialize()
-
-        # 3. HTTP mode (connects to OpenViking Server)
+        # 2. HTTP mode (connects to OpenViking Server)
         client = AsyncOpenViking(
             url="http://localhost:8000",
             api_key="your-api-key",
             user="alice"
         )
-        await client.initialize()
-
-        # 4. Using Config Object for advanced configuration
-        from openviking.utils.config import OpenVikingConfig
-        from openviking.utils.config import StorageConfig, AGFSConfig, VectorDBBackendConfig
-
-        config = OpenVikingConfig(
-            storage=StorageConfig(
-                agfs=AGFSConfig(
-                    backend="local",
-                    path="./custom_data",
-                ),
-                vectordb=VectorDBBackendConfig(
-                    backend="local",
-                    path="./custom_data",
-                )
-            )
-        )
-
-        client = AsyncOpenViking(config=config)
         await client.initialize()
     """
 
@@ -76,14 +45,8 @@ class AsyncOpenViking:
 
     def __new__(cls, *args, **kwargs):
         # HTTP mode: no singleton
-        url = kwargs.get("url") or os.environ.get("OPENVIKING_URL")
+        url = kwargs.get("url")
         if url:
-            return object.__new__(cls)
-
-        # Service mode: no singleton
-        vectordb_url = kwargs.get("vectordb_url")
-        agfs_url = kwargs.get("agfs_url")
-        if vectordb_url and agfs_url:
             return object.__new__(cls)
 
         # Embedded mode: use singleton
@@ -98,23 +61,17 @@ class AsyncOpenViking:
         path: Optional[str] = None,
         url: Optional[str] = None,
         api_key: Optional[str] = None,
-        vectordb_url: Optional[str] = None,
-        agfs_url: Optional[str] = None,
         user: Optional[UserIdentifier] = None,
-        config: Optional[OpenVikingConfig] = None,
         **kwargs,
     ):
         """
         Initialize OpenViking client.
 
         Args:
-            path: Local storage path for embedded mode.
+            path: Local storage path for embedded mode (overrides ov.conf storage path).
             url: OpenViking Server URL for HTTP mode.
             api_key: API key for HTTP mode authentication.
-            vectordb_url: Remote VectorDB service URL for service mode.
-            agfs_url: Remote AGFS service URL for service mode.
             user: UserIdentifier object for session management.
-            config: OpenVikingConfig object for advanced configuration.
             **kwargs: Additional configuration parameters.
         """
         # Singleton guard for repeated initialization
@@ -127,22 +84,15 @@ class AsyncOpenViking:
         self._initialized = False
         self._singleton_initialized = True
 
-        # Environment variable fallback for HTTP mode
-        url = url or os.environ.get("OPENVIKING_URL")
-        api_key = api_key or os.environ.get("OPENVIKING_API_KEY")
-
-        # Create the appropriate client - only _client, no _service
+        # Create the appropriate client
         if url:
             # HTTP mode
             self._client: BaseClient = HTTPClient(url=url, api_key=api_key, user=self.user)
         else:
-            # Local/Service mode - LocalClient creates and owns the OpenVikingService
+            # Embedded mode - LocalClient loads config from ov.conf singleton
             self._client: BaseClient = LocalClient(
                 path=path,
-                vectordb_url=vectordb_url,
-                agfs_url=agfs_url,
                 user=self.user,
-                config=config,
             )
 
     # ============= Lifecycle methods =============
@@ -183,6 +133,36 @@ class AsyncOpenViking:
             session_id: Session ID, creates a new session (auto-generated ID) if None
         """
         return self._client.session(session_id)
+
+    async def create_session(self) -> Dict[str, Any]:
+        """Create a new session."""
+        await self._ensure_initialized()
+        return await self._client.create_session()
+
+    async def list_sessions(self) -> List[Any]:
+        """List all sessions."""
+        await self._ensure_initialized()
+        return await self._client.list_sessions()
+
+    async def get_session(self, session_id: str) -> Dict[str, Any]:
+        """Get session details."""
+        await self._ensure_initialized()
+        return await self._client.get_session(session_id)
+
+    async def delete_session(self, session_id: str) -> None:
+        """Delete a session."""
+        await self._ensure_initialized()
+        await self._client.delete_session(session_id)
+
+    async def add_message(self, session_id: str, role: str, content: str) -> Dict[str, Any]:
+        """Add a message to a session."""
+        await self._ensure_initialized()
+        return await self._client.add_message(session_id=session_id, role=role, content=content)
+
+    async def commit_session(self, session_id: str) -> Dict[str, Any]:
+        """Commit a session (archive and extract memories)."""
+        await self._ensure_initialized()
+        return await self._client.commit_session(session_id)
 
     # ============= Resource methods =============
 
@@ -242,6 +222,7 @@ class AsyncOpenViking:
         query: str,
         target_uri: str = "",
         session: Optional[Union["Session", Any]] = None,
+        session_id: Optional[str] = None,
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
@@ -253,6 +234,7 @@ class AsyncOpenViking:
             query: Query string
             target_uri: Target directory URI
             session: Session object for context
+            session_id: Session ID string (alternative to session object)
             limit: Max results
             filter: Metadata filters
 
@@ -260,11 +242,11 @@ class AsyncOpenViking:
             FindResult
         """
         await self._ensure_initialized()
-        session_id = session.session_id if session else None
+        sid = session_id or (session.session_id if session else None)
         return await self._client.search(
             query=query,
             target_uri=target_uri,
-            session_id=session_id,
+            session_id=sid,
             limit=limit,
             score_threshold=score_threshold,
             filter=filter,

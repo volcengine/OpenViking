@@ -22,26 +22,17 @@ class LocalClient(BaseClient):
     def __init__(
         self,
         path: Optional[str] = None,
-        vectordb_url: Optional[str] = None,
-        agfs_url: Optional[str] = None,
         user: Optional[UserIdentifier] = None,
-        config: Optional[OpenVikingConfig] = None,
     ):
         """Initialize LocalClient.
 
         Args:
-            path: Local storage path
-            vectordb_url: Remote VectorDB service URL for service mode
-            agfs_url: Remote AGFS service URL for service mode
+            path: Local storage path (overrides ov.conf storage path)
             user: User name for session management
-            config: OpenVikingConfig object for advanced configuration
         """
         self._service = OpenVikingService(
             path=path,
-            vectordb_url=vectordb_url,
-            agfs_url=agfs_url,
             user=user or UserIdentifier.the_default_user(),
-            config=config,
         )
         self._user = self._service.user
 
@@ -204,7 +195,7 @@ class LocalClient(BaseClient):
 
     # ============= Sessions =============
 
-    async def create_session(self, user: Optional[str] = None) -> Dict[str, Any]:
+    async def create_session(self) -> Dict[str, Any]:
         """Create a new session."""
         session = self._service.sessions.session()
         return {
@@ -230,13 +221,9 @@ class LocalClient(BaseClient):
         """Delete a session."""
         await self._service.sessions.delete(session_id)
 
-    async def compress_session(self, session_id: str) -> Dict[str, Any]:
-        """Compress a session (commit)."""
-        return await self._service.sessions.compress(session_id)
-
-    async def extract_session(self, session_id: str) -> List[Any]:
-        """Extract memories from a session."""
-        return await self._service.sessions.extract(session_id)
+    async def commit_session(self, session_id: str) -> Dict[str, Any]:
+        """Commit a session (archive and extract memories)."""
+        return await self._service.sessions.commit(session_id)
 
     async def add_message(self, session_id: str, role: str, content: str) -> Dict[str, Any]:
         """Add a message to a session."""

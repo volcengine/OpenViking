@@ -104,6 +104,12 @@ curl -X POST http://localhost:1933/api/v1/skills \
   }'
 ```
 
+**CLI**
+
+```bash
+openviking add-skill ./my-skill/ [--wait]
+```
+
 **Response**
 
 ```json

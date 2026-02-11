@@ -9,6 +9,7 @@ import pytest_asyncio
 
 from openviking import AsyncOpenViking
 from openviking.message import TextPart
+from openviking.session.user_id import UserIdentifier
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -16,7 +17,7 @@ async def integration_client(test_data_dir: Path):
     """Integration test client"""
     await AsyncOpenViking.reset()
 
-    client = AsyncOpenViking(path=str(test_data_dir), user="integration_test_user")
+    client = AsyncOpenViking(path=str(test_data_dir), user=UserIdentifier.the_default_user("integration_test_user"))
     await client.initialize()
 
     yield client

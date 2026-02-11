@@ -5,8 +5,11 @@ OpenViking can run as a standalone HTTP server, allowing multiple clients to con
 ## Quick Start
 
 ```bash
-# Start server with local storage
-python -m openviking serve --path ./data
+# Start server (reads ~/.openviking/ov.conf by default)
+python -m openviking serve
+
+# Or specify a custom config path
+python -m openviking serve --config /path/to/ov.conf
 
 # Verify it's running
 curl http://localhost:1933/health
@@ -17,43 +20,28 @@ curl http://localhost:1933/health
 
 | Option | Description | Default |
 |--------|-------------|---------|
+| `--config` | Path to ov.conf file | `~/.openviking/ov.conf` |
 | `--host` | Host to bind to | `0.0.0.0` |
 | `--port` | Port to bind to | `1933` |
-| `--path` | Local storage path (embedded mode) | None |
-| `--vectordb-url` | Remote VectorDB URL (service mode) | None |
-| `--agfs-url` | Remote AGFS URL (service mode) | None |
-| `--api-key` | API key for authentication | None (auth disabled) |
-| `--config` | Path to config file | `OPENVIKING_CONFIG_FILE` env var |
 
 **Examples**
 
 ```bash
-# Embedded mode with custom port
-python -m openviking serve --path ./data --port 8000
+# With default config
+python -m openviking serve
 
-# With authentication
-python -m openviking serve --path ./data --api-key "your-secret-key"
+# With custom port
+python -m openviking serve --port 8000
 
-# Service mode (remote storage)
-python -m openviking serve \
-  --vectordb-url http://vectordb:8000 \
-  --agfs-url http://agfs:1833
+# With custom config, host, and port
+python -m openviking serve --config /path/to/ov.conf --host 127.0.0.1 --port 8000
 ```
 
 ## Configuration
 
-### Config File
+The server reads all configuration from `ov.conf`. See [Configuration Guide](./01-configuration.md) for full details on config file format.
 
-Server configuration is read from the JSON config file specified by `--config` or the `OPENVIKING_CONFIG_FILE` environment variable (the same file used for `OpenVikingConfig`):
-
-```bash
-python -m openviking serve --config ~/.openviking/ov.conf
-# or
-export OPENVIKING_CONFIG_FILE=~/.openviking/ov.conf
-python -m openviking serve
-```
-
-The `server` section in the config file:
+The `server` section in `ov.conf` controls server behavior:
 
 ```json
 {
@@ -64,48 +52,46 @@ The `server` section in the config file:
     "cors_origins": ["*"]
   },
   "storage": {
-    "path": "/data/openviking"
+    "agfs": { "backend": "local", "path": "/data/openviking" },
+    "vectordb": { "backend": "local", "path": "/data/openviking" }
   }
 }
 ```
-
-### Environment Variables
-
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `OPENVIKING_HOST` | Server host | `0.0.0.0` |
-| `OPENVIKING_PORT` | Server port | `1933` |
-| `OPENVIKING_API_KEY` | API key | `sk-xxx` |
-| `OPENVIKING_PATH` | Storage path | `./data` |
-| `OPENVIKING_VECTORDB_URL` | Remote VectorDB URL | `http://vectordb:8000` |
-| `OPENVIKING_AGFS_URL` | Remote AGFS URL | `http://agfs:1833` |
-
-### Configuration Priority
-
-From highest to lowest:
-
-1. **Command line arguments** (`--port 8000`)
-2. **Environment variables** (`OPENVIKING_PORT=8000`)
-3. **Config file** (`OPENVIKING_CONFIG_FILE`)
 
 ## Deployment Modes
 
 ### Standalone (Embedded Storage)
 
-Server manages local AGFS and VectorDB:
+Server manages local AGFS and VectorDB. Configure the storage path in `ov.conf`:
+
+```json
+{
+  "storage": {
+    "agfs": { "backend": "local", "path": "/data/openviking" },
+    "vectordb": { "backend": "local", "path": "/data/openviking" }
+  }
+}
+```
 
 ```bash
-python -m openviking serve --path ./data
+python -m openviking serve
 ```
 
 ### Hybrid (Remote Storage)
 
-Server connects to remote AGFS and VectorDB services:
+Server connects to remote AGFS and VectorDB services. Configure remote URLs in `ov.conf`:
+
+```json
+{
+  "storage": {
+    "agfs": { "backend": "remote", "url": "http://agfs:1833" },
+    "vectordb": { "backend": "remote", "url": "http://vectordb:8000" }
+  }
+}
+```
 
 ```bash
-python -m openviking serve \
-  --vectordb-url http://vectordb:8000 \
-  --agfs-url http://agfs:1833
+python -m openviking serve
 ```
 
 ## Connecting Clients
@@ -122,19 +108,27 @@ results = client.find("how to use openviking")
 client.close()
 ```
 
-Or use environment variables:
+### CLI
 
-```bash
-export OPENVIKING_URL="http://localhost:1933"
-export OPENVIKING_API_KEY="your-key"
+The CLI reads connection settings from `ovcli.conf`. Create `~/.openviking/ovcli.conf`:
+
+```json
+{
+  "url": "http://localhost:1933",
+  "api_key": "your-key"
+}
 ```
 
-```python
-import openviking as ov
+Or set the config path via environment variable:
 
-# url and api_key are read from environment variables automatically
-client = ov.OpenViking()
-client.initialize()
+```bash
+export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
+```
+
+Then use the CLI:
+
+```bash
+python -m openviking ls viking://resources/
 ```
 
 ### curl

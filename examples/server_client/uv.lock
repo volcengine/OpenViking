@@ -666,14 +666,18 @@ dependencies = [
     { name = "markdownify" },
     { name = "nest-asyncio" },
     { name = "openai" },
+    { name = "pdfminer-six" },
     { name = "pdfplumber" },
+    { name = "protobuf" },
     { name = "pyagfs" },
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "readabilipy" },
     { name = "requests" },
     { name = "tabulate" },
+    { name = "typer" },
     { name = "typing-extensions" },
+    { name = "urllib3" },
     { name = "uvicorn" },
     { name = "volcengine" },
     { name = "volcengine-python-sdk", extra = ["ark"] },
@@ -692,7 +696,9 @@ requires-dist = [
     { name = "myst-parser", marker = "extra == 'doc'", specifier = ">=2.0.0" },
     { name = "nest-asyncio", specifier = ">=1.5.0" },
     { name = "openai", specifier = ">=1.0.0" },
+    { name = "pdfminer-six", specifier = ">=20251230" },
     { name = "pdfplumber", specifier = ">=0.10.0" },
+    { name = "protobuf", specifier = ">=6.33.5" },
     { name = "pyagfs", specifier = ">=1.4.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pytest", marker = "extra == 'test'", specifier = ">=7.0.0" },
@@ -705,9 +711,11 @@ requires-dist = [
     { name = "sphinx", marker = "extra == 'doc'", specifier = ">=7.0.0" },
     { name = "sphinx-rtd-theme", marker = "extra == 'doc'", specifier = ">=1.3.0" },
     { name = "tabulate", specifier = ">=0.9.0" },
+    { name = "typer", specifier = ">=0.12.0" },
     { name = "typing-extensions", specifier = ">=4.5.0" },
+    { name = "urllib3", specifier = ">=2.6.3" },
     { name = "uvicorn", specifier = ">=0.39.0" },
-    { name = "volcengine", specifier = ">=1.0.212" },
+    { name = "volcengine", specifier = ">=1.0.216" },
     { name = "volcengine-python-sdk", extras = ["ark"], specifier = ">=5.0.3" },
     { name = "xxhash", specifier = ">=3.0.0" },
 ]
@@ -1235,6 +1243,15 @@ requires-dist = [
 ]
 
 [[package]]
+name = "shellingham"
+version = "1.5.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/58/15/8b3609fd3830ef7b27b655beb4b4e9c62313a4e8da8c676e142cc210d58e/shellingham-1.5.4.tar.gz", hash = "sha256:8dbca0739d487e5bd35ab3ca4b36e11c4078f3a234bfce294b0a0291363404de", size = 10310, upload-time = "2023-10-24T04:13:40.426Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e0/f9/0595336914c5619e5f28a1fb793285925a8cd4b432c9da0a987836c7f822/shellingham-1.5.4-py2.py3-none-any.whl", hash = "sha256:7ecfff8f2fd72616f7481040475a65b2bf8af90a56c89140852d1120324e8686", size = 9755, upload-time = "2023-10-24T04:13:38.866Z" },
+]
+
+[[package]]
 name = "six"
 version = "1.17.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1293,6 +1310,21 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/09/a9/6ba95a270c6f1fbcd8dac228323f2777d886cb206987444e4bce66338dd4/tqdm-4.67.3.tar.gz", hash = "sha256:7d825f03f89244ef73f1d4ce193cb1774a8179fd96f31d7e1dcde62092b960bb", size = 169598, upload-time = "2026-02-03T17:35:53.048Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/16/e1/3079a9ff9b8e11b846c6ac5c8b5bfb7ff225eee721825310c91b3b50304f/tqdm-4.67.3-py3-none-any.whl", hash = "sha256:ee1e4c0e59148062281c49d80b25b67771a127c85fc9676d3be5f243206826bf", size = 78374, upload-time = "2026-02-03T17:35:50.982Z" },
+]
+
+[[package]]
+name = "typer"
+version = "0.21.1"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "click" },
+    { name = "rich" },
+    { name = "shellingham" },
+    { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/36/bf/8825b5929afd84d0dabd606c67cd57b8388cb3ec385f7ef19c5cc2202069/typer-0.21.1.tar.gz", hash = "sha256:ea835607cd752343b6b2b7ce676893e5a0324082268b48f27aa058bdb7d2145d", size = 110371, upload-time = "2026-01-06T11:21:10.989Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/a0/1d/d9257dd49ff2ca23ea5f132edf1281a0c4f9de8a762b9ae399b670a59235/typer-0.21.1-py3-none-any.whl", hash = "sha256:7985e89081c636b88d172c2ee0cfe33c253160994d47bdfdc302defd7d1f1d01", size = 47381, upload-time = "2026-01-06T11:21:09.824Z" },
 ]
 
 [[package]]

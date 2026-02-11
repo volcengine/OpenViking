@@ -5,8 +5,11 @@ OpenViking 可以作为独立的 HTTP 服务器运行，允许多个客户端通
 ## 快速开始
 
 ```bash
-# 使用本地存储启动服务器
-python -m openviking serve --path ./data
+# 配置文件在默认路径 ~/.openviking/ov.conf 时，直接启动
+python -m openviking serve
+
+# 配置文件在其他位置时，通过 --config 指定
+python -m openviking serve --config /path/to/ov.conf
 
 # 验证服务器是否运行
 curl http://localhost:1933/health
@@ -17,43 +20,28 @@ curl http://localhost:1933/health
 
 | 选项 | 描述 | 默认值 |
 |------|------|--------|
+| `--config` | 配置文件路径 | `~/.openviking/ov.conf` |
 | `--host` | 绑定的主机地址 | `0.0.0.0` |
 | `--port` | 绑定的端口 | `1933` |
-| `--path` | 本地存储路径（嵌入模式） | 无 |
-| `--vectordb-url` | 远程 VectorDB URL（服务模式） | 无 |
-| `--agfs-url` | 远程 AGFS URL（服务模式） | 无 |
-| `--api-key` | 用于认证的 API Key | 无（禁用认证） |
-| `--config` | 配置文件路径 | `OPENVIKING_CONFIG_FILE` 环境变量 |
 
 **示例**
 
 ```bash
-# 嵌入模式，使用自定义端口
-python -m openviking serve --path ./data --port 8000
+# 使用默认配置
+python -m openviking serve
 
-# 启用认证
-python -m openviking serve --path ./data --api-key "your-secret-key"
+# 使用自定义端口
+python -m openviking serve --port 8000
 
-# 服务模式（远程存储）
-python -m openviking serve \
-  --vectordb-url http://vectordb:8000 \
-  --agfs-url http://agfs:1833
+# 指定配置文件、主机地址和端口
+python -m openviking serve --config /path/to/ov.conf --host 127.0.0.1 --port 8000
 ```
 
 ## 配置
 
-### 配置文件
+服务端从 `ov.conf` 读取所有配置。配置文件各段详情见 [配置指南](01-configuration.md)。
 
-服务端配置从 `--config` 或 `OPENVIKING_CONFIG_FILE` 环境变量指定的 JSON 配置文件中读取（与 `OpenVikingConfig` 共用同一个文件）：
-
-```bash
-python -m openviking serve --config ~/.openviking/ov.conf
-# 或
-export OPENVIKING_CONFIG_FILE=~/.openviking/ov.conf
-python -m openviking serve
-```
-
-配置文件中的 `server` 段：
+`ov.conf` 中的 `server` 段控制服务端行为：
 
 ```json
 {
@@ -64,48 +52,46 @@ python -m openviking serve
     "cors_origins": ["*"]
   },
   "storage": {
-    "path": "/data/openviking"
+    "agfs": { "backend": "local", "path": "/data/openviking" },
+    "vectordb": { "backend": "local", "path": "/data/openviking" }
   }
 }
 ```
-
-### 环境变量
-
-| 变量 | 描述 | 示例 |
-|------|------|------|
-| `OPENVIKING_HOST` | 服务器主机地址 | `0.0.0.0` |
-| `OPENVIKING_PORT` | 服务器端口 | `1933` |
-| `OPENVIKING_API_KEY` | API Key | `sk-xxx` |
-| `OPENVIKING_PATH` | 存储路径 | `./data` |
-| `OPENVIKING_VECTORDB_URL` | 远程 VectorDB URL | `http://vectordb:8000` |
-| `OPENVIKING_AGFS_URL` | 远程 AGFS URL | `http://agfs:1833` |
-
-### 配置优先级
-
-从高到低：
-
-1. **命令行参数** (`--port 8000`)
-2. **环境变量** (`OPENVIKING_PORT=8000`)
-3. **配置文件** (`OPENVIKING_CONFIG_FILE`)
 
 ## 部署模式
 
 ### 独立模式（嵌入存储）
 
-服务器管理本地 AGFS 和 VectorDB：
+服务器管理本地 AGFS 和 VectorDB。在 `ov.conf` 中配置本地存储路径：
+
+```json
+{
+  "storage": {
+    "agfs": { "backend": "local", "path": "./data" },
+    "vectordb": { "backend": "local", "path": "./data" }
+  }
+}
+```
 
 ```bash
-python -m openviking serve --path ./data
+python -m openviking serve
 ```
 
 ### 混合模式（远程存储）
 
-服务器连接到远程 AGFS 和 VectorDB 服务：
+服务器连接到远程 AGFS 和 VectorDB 服务。在 `ov.conf` 中配置远程地址：
+
+```json
+{
+  "storage": {
+    "agfs": { "backend": "remote", "url": "http://agfs:1833" },
+    "vectordb": { "backend": "remote", "url": "http://vectordb:8000" }
+  }
+}
+```
 
 ```bash
-python -m openviking serve \
-  --vectordb-url http://vectordb:8000 \
-  --agfs-url http://agfs:1833
+python -m openviking serve
 ```
 
 ## 连接客户端
@@ -122,19 +108,21 @@ results = client.find("how to use openviking")
 client.close()
 ```
 
-或使用环境变量：
+### CLI
 
-```bash
-export OPENVIKING_URL="http://localhost:1933"
-export OPENVIKING_API_KEY="your-key"
+CLI 从 `ovcli.conf` 读取连接配置。在 `~/.openviking/ovcli.conf` 中配置：
+
+```json
+{
+  "url": "http://localhost:1933",
+  "api_key": "your-key"
+}
 ```
 
-```python
-import openviking as ov
+也可通过 `OPENVIKING_CLI_CONFIG_FILE` 环境变量指定配置文件路径：
 
-# url 和 api_key 自动从环境变量读取
-client = ov.OpenViking()
-client.initialize()
+```bash
+export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 ```
 
 ### curl

@@ -59,12 +59,11 @@ class VikingDBManager(VikingVectorIndexBackend):
         self._embedding_handler = None
         self._semantic_processor = None
 
-        # Initialize queue manager if AGFS URL is provided
+        # Initialize queue manager (but don't start yet — collections must be created first)
         self._init_queue_manager()
         if self._queue_manager:
             self._init_embedding_queue()
             self._init_semantic_queue()
-            self._queue_manager.start()
 
     def _init_queue_manager(self):
         """Initialize queue manager for background processing."""
@@ -111,6 +110,12 @@ class VikingDBManager(VikingVectorIndexBackend):
             allow_create=True,
         )
         logger.info("Semantic queue initialized with SemanticProcessor")
+
+    def start_queues(self):
+        """Start the queue manager. Call after collections are created."""
+        if self._queue_manager:
+            self._queue_manager.start()
+            logger.info("Queue manager started")
 
     async def close(self) -> None:
         """Close storage connection and release resources, including queue manager."""

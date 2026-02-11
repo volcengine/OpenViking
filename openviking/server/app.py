@@ -53,12 +53,8 @@ def create_app(
         """Application lifespan handler."""
         nonlocal service
         if service is None:
-            # Create and initialize service
-            service = OpenVikingService(
-                path=config.storage_path,
-                vectordb_url=config.vectordb_url,
-                agfs_url=config.agfs_url,
-            )
+            # Create and initialize service (reads config from ov.conf singleton)
+            service = OpenVikingService()
             await service.initialize()
             logger.info("OpenVikingService initialized")
 

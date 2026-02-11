@@ -6,20 +6,7 @@ OpenViking Server 支持 API Key 认证以保护访问安全。
 
 ### 设置（服务端）
 
-**方式一：命令行**
-
-```bash
-python -m openviking serve --path ./data --api-key "your-secret-key"
-```
-
-**方式二：环境变量**
-
-```bash
-export OPENVIKING_API_KEY="your-secret-key"
-python -m openviking serve --path ./data
-```
-
-**方式三：配置文件**（通过 `OPENVIKING_CONFIG_FILE`）
+在 `ov.conf` 配置文件中设置 `server.api_key`：
 
 ```json
 {
@@ -27,6 +14,12 @@ python -m openviking serve --path ./data
     "api_key": "your-secret-key"
   }
 }
+```
+
+启动服务时通过 `--config` 指定配置文件：
+
+```bash
+python -m openviking serve
 ```
 
 ### 使用 API Key（客户端）
@@ -58,27 +51,33 @@ client = ov.OpenViking(
 )
 ```
 
-或使用 `OPENVIKING_API_KEY` 环境变量：
+**CLI**
 
-```bash
-export OPENVIKING_URL="http://localhost:1933"
-export OPENVIKING_API_KEY="your-secret-key"
-```
+CLI 从 `ovcli.conf` 配置文件读取连接信息。在 `~/.openviking/ovcli.conf` 中配置 `api_key`：
 
-```python
-import openviking as ov
-
-# api_key 自动从 OPENVIKING_API_KEY 环境变量读取
-client = ov.OpenViking()
+```json
+{
+  "url": "http://localhost:1933",
+  "api_key": "your-secret-key"
+}
 ```
 
 ## 开发模式
 
-当未配置 API Key 时，认证功能将被禁用。所有请求无需凭证即可被接受。
+当 `ov.conf` 中未配置 `server.api_key` 时，认证功能将被禁用。所有请求无需凭证即可被接受。
+
+```json
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 1933
+  }
+}
+```
 
 ```bash
-# 不指定 --api-key 参数 = 禁用认证
-python -m openviking serve --path ./data
+# 未配置 api_key = 禁用认证
+python -m openviking serve
 ```
 
 ## 无需认证的端点

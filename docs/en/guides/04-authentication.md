@@ -6,20 +6,7 @@ OpenViking Server supports API key authentication to secure access.
 
 ### Setting Up (Server Side)
 
-**Option 1: Command line**
-
-```bash
-python -m openviking serve --path ./data --api-key "your-secret-key"
-```
-
-**Option 2: Environment variable**
-
-```bash
-export OPENVIKING_API_KEY="your-secret-key"
-python -m openviking serve --path ./data
-```
-
-**Option 3: Config file** (via `OPENVIKING_CONFIG_FILE`)
+Configure the API key in the `server` section of `ov.conf` (`~/.openviking/ov.conf`):
 
 ```json
 {
@@ -27,6 +14,12 @@ python -m openviking serve --path ./data
     "api_key": "your-secret-key"
   }
 }
+```
+
+Then start the server:
+
+```bash
+python -m openviking serve
 ```
 
 ### Using API Key (Client Side)
@@ -58,27 +51,33 @@ client = ov.OpenViking(
 )
 ```
 
-Or use the `OPENVIKING_API_KEY` environment variable:
+**CLI (via ovcli.conf)**
 
-```bash
-export OPENVIKING_URL="http://localhost:1933"
-export OPENVIKING_API_KEY="your-secret-key"
-```
+Configure the API key in `~/.openviking/ovcli.conf`:
 
-```python
-import openviking as ov
-
-# api_key is read from OPENVIKING_API_KEY automatically
-client = ov.OpenViking()
+```json
+{
+  "url": "http://localhost:1933",
+  "api_key": "your-secret-key"
+}
 ```
 
 ## Development Mode
 
-When no API key is configured, authentication is disabled. All requests are accepted without credentials.
+When no API key is configured in `ov.conf`, authentication is disabled. All requests are accepted without credentials.
+
+```json
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 1933
+  }
+}
+```
 
 ```bash
-# No --api-key flag = auth disabled
-python -m openviking serve --path ./data
+# No api_key in ov.conf = auth disabled
+python -m openviking serve
 ```
 
 ## Unauthenticated Endpoints

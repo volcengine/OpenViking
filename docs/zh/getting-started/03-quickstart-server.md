@@ -9,8 +9,17 @@
 
 ## 启动服务
 
+确保 `ov.conf` 已配置好存储路径和模型信息（参见 [快速开始](02-quickstart.md)），然后启动服务：
+
 ```bash
-python -m openviking serve --path ./data
+# 配置文件在默认路径 ~/.openviking/ov.conf 时，直接启动
+python -m openviking serve
+
+# 配置文件在其他位置时，通过 --config 指定
+python -m openviking serve --config /path/to/ov.conf
+
+# 覆盖 host/port
+python -m openviking serve --port 8000
 ```
 
 你应该看到：
@@ -34,18 +43,12 @@ import openviking as ov
 client = ov.OpenViking(url="http://localhost:1933")
 ```
 
-或使用环境变量：
-
-```bash
-export OPENVIKING_URL="http://localhost:1933"
-export OPENVIKING_API_KEY="your-key"  # 如果启用了认证
-```
+如果服务端启用了认证，需要传入 `api_key`：
 
 ```python
 import openviking as ov
 
-# url 和 api_key 自动从环境变量读取
-client = ov.OpenViking()
+client = ov.OpenViking(url="http://localhost:1933", api_key="your-key")
 ```
 
 **完整示例：**
@@ -74,6 +77,29 @@ try:
 
 finally:
     client.close()
+```
+
+## 使用 CLI 连接
+
+创建 CLI 连接配置文件 `~/.openviking/ovcli.conf`：
+
+```json
+{
+  "url": "http://localhost:1933"
+}
+```
+
+然后直接使用 CLI 命令：
+
+```bash
+python -m openviking health
+python -m openviking find "what is openviking"
+```
+
+如果配置文件在其他位置，通过环境变量指定：
+
+```bash
+export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 ```
 
 ## 使用 curl 连接

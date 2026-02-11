@@ -5,7 +5,6 @@
 Implements BaseClient interface using HTTP calls to OpenViking Server.
 """
 
-import os
 from typing import Any, Dict, List, Optional, Union
 
 import httpx
@@ -123,7 +122,7 @@ class HTTPClient(BaseClient):
             user: User name for session management
         """
         self._url = url.rstrip("/")
-        self._api_key = api_key or os.environ.get("OPENVIKING_API_KEY")
+        self._api_key = api_key
         self._user = user or UserIdentifier.the_default_user()
         self._http: Optional[httpx.AsyncClient] = None
         self._observer: Optional[_HTTPObserver] = None
@@ -418,11 +417,11 @@ class HTTPClient(BaseClient):
 
     # ============= Sessions =============
 
-    async def create_session(self, user: Optional[str] = None) -> Dict[str, Any]:
+    async def create_session(self) -> Dict[str, Any]:
         """Create a new session."""
         response = await self._http.post(
             "/api/v1/sessions",
-            json={"user": user or self._user.to_dict()},
+            json={},
         )
         return self._handle_response(response)
 
@@ -441,14 +440,9 @@ class HTTPClient(BaseClient):
         response = await self._http.delete(f"/api/v1/sessions/{session_id}")
         self._handle_response(response)
 
-    async def compress_session(self, session_id: str) -> Dict[str, Any]:
-        """Compress a session (commit)."""
-        response = await self._http.post(f"/api/v1/sessions/{session_id}/compress")
-        return self._handle_response(response)
-
-    async def extract_session(self, session_id: str) -> List[Any]:
-        """Extract memories from a session."""
-        response = await self._http.post(f"/api/v1/sessions/{session_id}/extract")
+    async def commit_session(self, session_id: str) -> Dict[str, Any]:
+        """Commit a session (archive and extract memories)."""
+        response = await self._http.post(f"/api/v1/sessions/{session_id}/commit")
         return self._handle_response(response)
 
     async def add_message(self, session_id: str, role: str, content: str) -> Dict[str, Any]:

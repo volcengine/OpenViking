@@ -5,7 +5,7 @@
 Session delegates all operations to the underlying Client (LocalClient or HTTPClient).
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List
+from typing import TYPE_CHECKING, Any, Dict
 
 from openviking.session.user_id import UserIdentifier
 
@@ -29,7 +29,7 @@ class Session:
             user: User name
         """
         self._client = client
-        self.id = session_id
+        self.session_id = session_id
         self.user = user
 
     async def add_message(self, role: str, content: str) -> Dict[str, Any]:
@@ -42,35 +42,19 @@ class Session:
         Returns:
             Result dict with session_id and message_count
         """
-        return await self._client.add_message(self.id, role, content)
-
-    async def compress(self) -> Dict[str, Any]:
-        """Compress the session (commit and archive).
-
-        Returns:
-            Compression result
-        """
-        return await self._client.compress_session(self.id)
+        return await self._client.add_message(self.session_id, role, content)
 
     async def commit(self) -> Dict[str, Any]:
-        """Commit the session (alias for compress).
+        """Commit the session (archive messages and extract memories).
 
         Returns:
             Commit result
         """
-        return await self._client.compress_session(self.id)
-
-    async def extract(self) -> List[Any]:
-        """Extract memories from the session.
-
-        Returns:
-            List of extracted memories
-        """
-        return await self._client.extract_session(self.id)
+        return await self._client.commit_session(self.session_id)
 
     async def delete(self) -> None:
         """Delete the session."""
-        await self._client.delete_session(self.id)
+        await self._client.delete_session(self.session_id)
 
     async def load(self) -> Dict[str, Any]:
         """Load session data.
@@ -78,7 +62,7 @@ class Session:
         Returns:
             Session details
         """
-        return await self._client.get_session(self.id)
+        return await self._client.get_session(self.session_id)
 
     def __repr__(self) -> str:
-        return f"Session(id={self.id}, user={self.user.__str__()})"
+        return f"Session(id={self.session_id}, user={self.user.__str__()})"

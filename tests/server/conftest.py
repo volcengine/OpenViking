@@ -18,6 +18,7 @@ from openviking import AsyncOpenViking
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig
 from openviking.service.core import OpenVikingService
+from openviking.session.user_id import UserIdentifier
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -67,7 +68,7 @@ def sample_markdown_file(temp_dir: Path) -> Path:
 @pytest_asyncio.fixture(scope="function")
 async def service(temp_dir: Path):
     """Create and initialize an OpenVikingService in embedded mode."""
-    svc = OpenVikingService(path=str(temp_dir / "data"), user="test_user")
+    svc = OpenVikingService(path=str(temp_dir / "data"), user=UserIdentifier.the_default_user("test_user"))
     await svc.initialize()
     yield svc
     await svc.close()
@@ -117,7 +118,7 @@ async def running_server(temp_dir: Path):
     await AsyncOpenViking.reset()
 
     svc = OpenVikingService(
-        path=str(temp_dir / "sdk_data"), user="sdk_test_user"
+        path=str(temp_dir / "sdk_data"), user=UserIdentifier.the_default_user("sdk_test_user")
     )
     await svc.initialize()
 

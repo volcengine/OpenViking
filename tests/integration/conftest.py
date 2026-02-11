@@ -23,6 +23,7 @@ from openviking import AsyncOpenViking
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig
 from openviking.service.core import OpenVikingService
+from openviking.session.user_id import UserIdentifier
 
 
 TEST_ROOT = Path(__file__).parent
@@ -50,7 +51,7 @@ def server_url(temp_dir):
     loop = asyncio.new_event_loop()
 
     svc = OpenVikingService(
-        path=str(temp_dir / "data"), user="test_user"
+        path=str(temp_dir / "data"), user=UserIdentifier.the_default_user("test_user")
     )
     loop.run_until_complete(svc.initialize())
 

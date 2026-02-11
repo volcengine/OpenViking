@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Volcengine Embedder Implementation"""
 
-import os
 from typing import Any, Dict, List, Optional
 
 import volcenginesdkarkruntime
@@ -81,14 +80,8 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
         """
         super().__init__(model_name, config)
 
-        self.api_key = (
-            api_key or os.getenv("OPENVIKING_EMBEDDING_API_KEY") or os.getenv("VOLC_API_KEY")
-        )
-        self.api_base = (
-            api_base
-            or os.getenv("OPENVIKING_EMBEDDING_API_BASE")
-            or "https://ark.cn-beijing.volces.com/api/v3"
-        )
+        self.api_key = api_key
+        self.api_base = api_base or "https://ark.cn-beijing.volces.com/api/v3"
         self.dimension = dimension
         self.input_type = input_type
 

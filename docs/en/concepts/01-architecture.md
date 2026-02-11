@@ -27,7 +27,7 @@ OpenViking is a context database designed for AI Agents, unifying all context ty
 │    │  (Context   │          │  (Session   │          │  (Context   │      │
 │    │  Retrieval) │          │  Management)│          │  Extraction)│      │
 │    │ search/find │          │ add/used    │          │ Doc parsing │      │
-│    │ Intent      │          │ compress    │          │ L0/L1/L2    │      │
+│    │ Intent      │          │ commit      │          │ L0/L1/L2    │      │
 │    │ Rerank      │          │ commit      │          │ Tree build  │      │
 │    └──────┬──────┘          └──────┬──────┘          └──────┬──────┘      │
 │           │                        │                        │             │
@@ -69,7 +69,7 @@ The Service layer decouples business logic from the transport layer, enabling re
 |---------|----------------|-------------|
 | **FSService** | File system operations | ls, mkdir, rm, mv, tree, stat, read, abstract, overview, grep, glob |
 | **SearchService** | Semantic search | search, find |
-| **SessionService** | Session management | session, sessions, compress, extract, delete |
+| **SessionService** | Session management | session, sessions, commit, delete |
 | **ResourceService** | Resource import | add_resource, add_skill, wait_processed |
 | **RelationService** | Relation management | relations, link, unlink |
 | **PackService** | Import/export | export_ovpack, import_ovpack |
@@ -134,24 +134,9 @@ client = OpenViking(path="./data")
 - Uses local vector index
 - Singleton pattern
 
-### Service Mode
-
-For production distributed deployment:
-
-```python
-client = OpenViking(
-    vectordb_url="http://vectordb:5000",
-    agfs_url="http://agfs:8080"
-)
-```
-
-- Connects to remote services
-- Supports multiple concurrent instances
-- Independently scalable
-
 ### HTTP Mode
 
-For team sharing and cross-language integration:
+For team sharing, production deployment, and cross-language integration:
 
 ```python
 # Python SDK connects to OpenViking Server

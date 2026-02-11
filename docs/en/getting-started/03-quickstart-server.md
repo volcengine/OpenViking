@@ -9,8 +9,17 @@ Run OpenViking as a standalone HTTP server and connect from any client.
 
 ## Start the Server
 
+Make sure you have a config file at `~/.openviking/ov.conf` with your model and storage settings (see [Configuration](../guides/01-configuration.md)).
+
 ```bash
-python -m openviking serve --path ./data
+# Config file at default path ~/.openviking/ov.conf — just start
+python -m openviking serve
+
+# Config file at a different location — specify with --config
+python -m openviking serve --config /path/to/ov.conf
+
+# Override host/port
+python -m openviking serve --port 8000
 ```
 
 You should see:
@@ -34,18 +43,12 @@ import openviking as ov
 client = ov.OpenViking(url="http://localhost:1933")
 ```
 
-Or use environment variables:
-
-```bash
-export OPENVIKING_URL="http://localhost:1933"
-export OPENVIKING_API_KEY="your-key"  # if authentication is enabled
-```
+If the server has authentication enabled, pass the API key:
 
 ```python
 import openviking as ov
 
-# url and api_key are read from environment variables automatically
-client = ov.OpenViking()
+client = ov.OpenViking(url="http://localhost:1933", api_key="your-key")
 ```
 
 **Full example:**
@@ -74,6 +77,29 @@ try:
 
 finally:
     client.close()
+```
+
+## Connect with CLI
+
+Create a CLI config file `~/.openviking/ovcli.conf` that points to your server:
+
+```json
+{
+  "url": "http://localhost:1933"
+}
+```
+
+Then use CLI commands to interact with the server:
+
+```bash
+python -m openviking health
+python -m openviking find "what is openviking"
+```
+
+If the config file is at a different location, specify it via environment variable:
+
+```bash
+export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 ```
 
 ## Connect with curl

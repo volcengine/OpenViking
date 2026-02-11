@@ -52,12 +52,14 @@ dependencies = [
     "urllib3>=2.6.3",
     "protobuf>=6.33.5",
     "pdfminer-six>=20251230",
+    "typer>=0.12.0",
 ]
 
 [project.optional-dependencies]
 test = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
+    "boto3>=1.42.44",
     "pytest-cov>=4.0.0",
 ]
 dev = [
@@ -77,7 +79,7 @@ Repository = "https://github.com/volcengine/openviking"
 Issues = "https://github.com/volcengine/openviking/issues"
 
 [project.scripts]
-openviking-viewer = "openviking.tools.viewer:main"
+openviking = "openviking.cli.main:app"
 openviking-server = "openviking.server.bootstrap:main"
 
 [tool.setuptools_scm]

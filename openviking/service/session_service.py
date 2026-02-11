@@ -3,7 +3,7 @@
 """
 Session Service for OpenViking.
 
-Provides session management operations: session, sessions, add_message, compress, extract, delete.
+Provides session management operations: session, sessions, add_message, commit, delete.
 """
 
 from typing import Any, Dict, List, Optional
@@ -117,14 +117,14 @@ class SessionService:
             logger.error(f"Failed to delete session {session_id}: {e}")
             raise NotFoundError(session_id, "session")
 
-    async def compress(self, session_id: str) -> Dict[str, Any]:
-        """Compress a session (commit and archive).
+    async def commit(self, session_id: str) -> Dict[str, Any]:
+        """Commit a session (archive messages and extract memories).
 
         Args:
-            session_id: Session ID to compress
+            session_id: Session ID to commit
 
         Returns:
-            Compression result
+            Commit result
         """
         self._ensure_initialized()
         session = self.session(session_id)

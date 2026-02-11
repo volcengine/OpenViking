@@ -8,7 +8,6 @@ scattered across different modules. All configurations inherit from ParserConfig
 and can be loaded from ov.conf files.
 """
 
-import os
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
@@ -83,42 +82,6 @@ class ParserConfig:
 
         with open(yaml_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f) or {}
-
-        return cls.from_dict(data)
-
-    @classmethod
-    def from_env(cls, prefix: str = "OPENVIKING_PARSER") -> "ParserConfig":
-        """
-        Load configuration from environment variables.
-
-        Environment variables should be prefixed with the given prefix
-        and use uppercase field names. For example:
-        - OPENVIKING_PARSER_MAX_CONTENT_LENGTH=50000
-
-        Args:
-            prefix: Environment variable prefix
-
-        Returns:
-            ParserConfig instance
-
-        Examples:
-            >>> config = ParserConfig.from_env("OPENVIKING_PARSER")
-        """
-        data = {}
-        for field_name in cls.__dataclass_fields__:
-            env_var = f"{prefix}_{field_name.upper()}"
-            if env_var in os.environ:
-                value = os.environ[env_var]
-                # Type conversion
-                field_type = cls.__dataclass_fields__[field_name].type
-                if field_type is bool:
-                    data[field_name] = value.lower() in ("true", "1", "yes")
-                elif field_type is int:
-                    data[field_name] = int(value)
-                elif field_type is float:
-                    data[field_name] = float(value)
-                else:
-                    data[field_name] = value
 
         return cls.from_dict(data)
 
@@ -206,30 +169,6 @@ class PDFConfig(ParserConfig):
         if self.mineru_timeout <= 0:
             raise ValueError("mineru_timeout must be positive")
 
-    @classmethod
-    def from_env(cls, prefix: str = "OPENVIKING_PDF") -> "PDFConfig":
-        """
-        Load PDF configuration from environment variables.
-
-        Environment variables:
-        - OPENVIKING_PDF_STRATEGY=auto
-        - OPENVIKING_PDF_MINERU_ENDPOINT=https://...
-        - OPENVIKING_PDF_MINERU_API_KEY=your-key
-
-        Args:
-            prefix: Environment variable prefix
-
-        Returns:
-            PDFConfig instance
-
-        Examples:
-            >>> # Set environment variables first:
-            >>> # export OPENVIKING_PDF_STRATEGY=mineru
-            >>> # export OPENVIKING_PDF_MINERU_API_KEY=your-key
-            >>> config = PDFConfig.from_env()
-        """
-        return super().from_env(prefix)
-
 
 @dataclass
 class CodeConfig(ParserConfig):
@@ -283,24 +222,6 @@ class CodeConfig(ParserConfig):
                 "Must be 'head', 'tail', or 'balanced'"
             )
 
-    @classmethod
-    def from_env(cls, prefix: str = "OPENVIKING_CODE") -> "CodeConfig":
-        """
-        Load code configuration from environment variables.
-
-        Environment variables:
-        - OPENVIKING_CODE_ENABLE_AST=true
-        - OPENVIKING_CODE_EXTRACT_FUNCTIONS=true
-        - OPENVIKING_CODE_MAX_TOKEN_LIMIT=50000
-
-        Args:
-            prefix: Environment variable prefix
-
-        Returns:
-            CodeConfig instance
-        """
-        return super().from_env(prefix)
-
 
 @dataclass
 class ImageConfig(ParserConfig):
@@ -335,24 +256,6 @@ class ImageConfig(ParserConfig):
         if self.max_dimension <= 0:
             raise ValueError("max_dimension must be positive")
 
-    @classmethod
-    def from_env(cls, prefix: str = "OPENVIKING_IMAGE") -> "ImageConfig":
-        """
-        Load image configuration from environment variables.
-
-        Environment variables:
-        - OPENVIKING_IMAGE_ENABLE_OCR=false
-        - OPENVIKING_IMAGE_ENABLE_VLM=true
-        - OPENVIKING_IMAGE_MAX_DIMENSION=2048
-
-        Args:
-            prefix: Environment variable prefix
-
-        Returns:
-            ImageConfig instance
-        """
-        return super().from_env(prefix)
-
 
 @dataclass
 class AudioConfig(ParserConfig):
@@ -384,23 +287,6 @@ class AudioConfig(ParserConfig):
         # Validate audio-specific fields
         if not self.transcription_model:
             raise ValueError("transcription_model cannot be empty")
-
-    @classmethod
-    def from_env(cls, prefix: str = "OPENVIKING_AUDIO") -> "AudioConfig":
-        """
-        Load audio configuration from environment variables.
-
-        Environment variables:
-        - OPENVIKING_AUDIO_ENABLE_TRANSCRIPTION=true
-        - OPENVIKING_AUDIO_TRANSCRIPTION_MODEL=whisper-large-v3
-
-        Args:
-            prefix: Environment variable prefix
-
-        Returns:
-            AudioConfig instance
-        """
-        return super().from_env(prefix)
 
 
 @dataclass
@@ -439,24 +325,6 @@ class VideoConfig(ParserConfig):
         if self.max_duration <= 0:
             raise ValueError("max_duration must be positive")
 
-    @classmethod
-    def from_env(cls, prefix: str = "OPENVIKING_VIDEO") -> "VideoConfig":
-        """
-        Load video configuration from environment variables.
-
-        Environment variables:
-        - OPENVIKING_VIDEO_EXTRACT_FRAMES=true
-        - OPENVIKING_VIDEO_FRAME_INTERVAL=10.0
-        - OPENVIKING_VIDEO_MAX_DURATION=3600.0
-
-        Args:
-            prefix: Environment variable prefix
-
-        Returns:
-            VideoConfig instance
-        """
-        return super().from_env(prefix)
-
 
 @dataclass
 class MarkdownConfig(ParserConfig):
@@ -489,21 +357,6 @@ class MarkdownConfig(ParserConfig):
         if self.max_heading_depth < 1:
             raise ValueError("max_heading_depth must be at least 1")
 
-    @classmethod
-    def from_env(cls, prefix: str = "OPENVIKING_MARKDOWN") -> "MarkdownConfig":
-        """
-        Load Markdown configuration from environment variables.
-
-        Environment variables:
-        - OPENVIKING_MARKDOWN_PRESERVE_LINKS=true
-        Args:
-            prefix: Environment variable prefix
-
-        Returns:
-            MarkdownConfig instance
-        """
-        return super().from_env(prefix)
-
 
 @dataclass
 class HTMLConfig(ParserConfig):
@@ -533,22 +386,6 @@ class HTMLConfig(ParserConfig):
         super().validate()
 
         # No additional validation needed for HTML config
-
-    @classmethod
-    def from_env(cls, prefix: str = "OPENVIKING_HTML") -> "HTMLConfig":
-        """
-        Load HTML configuration from environment variables.
-
-        Environment variables:
-        - OPENVIKING_HTML_EXTRACT_TEXT_ONLY=false
-
-        Args:
-            prefix: Environment variable prefix
-
-        Returns:
-            HTMLConfig instance
-        """
-        return super().from_env(prefix)
 
 
 @dataclass
@@ -581,22 +418,6 @@ class TextConfig(ParserConfig):
         # Validate text-specific fields
         if self.max_paragraph_length <= 0:
             raise ValueError("max_paragraph_length must be positive")
-
-    @classmethod
-    def from_env(cls, prefix: str = "OPENVIKING_TEXT") -> "TextConfig":
-        """
-        Load text configuration from environment variables.
-
-        Environment variables:
-        - OPENVIKING_TEXT_SPLIT_BY_PARAGRAPHS=true
-
-        Args:
-            prefix: Environment variable prefix
-
-        Returns:
-            TextConfig instance
-        """
-        return super().from_env(prefix)
 
 
 # Configuration registry for dynamic loading

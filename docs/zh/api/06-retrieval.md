@@ -90,6 +90,12 @@ curl -X POST http://localhost:1933/api/v1/search/find \
   }'
 ```
 
+**CLI**
+
+```bash
+openviking find "how to authenticate users" [--uri viking://resources/] [--limit 10]
+```
+
 **响应**
 
 ```json
@@ -234,6 +240,12 @@ curl -X POST http://localhost:1933/api/v1/search/search \
   }'
 ```
 
+**CLI**
+
+```bash
+openviking search "best practices" [--session-id abc123] [--limit 10]
+```
+
 **响应**
 
 ```json
@@ -340,6 +352,12 @@ curl -X POST http://localhost:1933/api/v1/search/grep \
   }'
 ```
 
+**CLI**
+
+```bash
+openviking grep viking://resources/ "authentication" [--ignore-case]
+```
+
 **响应**
 
 ```json
@@ -407,6 +425,12 @@ curl -X POST http://localhost:1933/api/v1/search/glob \
     "pattern": "**/*.md",
     "uri": "viking://resources/"
   }'
+```
+
+**CLI**
+
+```bash
+openviking glob "**/*.md" [--uri viking://resources/]
 ```
 
 **响应**

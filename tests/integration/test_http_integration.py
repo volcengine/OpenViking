@@ -12,6 +12,7 @@ import pytest_asyncio
 from openviking import AsyncOpenViking
 from openviking.client import HTTPClient
 from openviking.exceptions import NotFoundError
+from openviking.session.user_id import UserIdentifier
 
 
 class TestHTTPClientIntegration:
@@ -20,7 +21,7 @@ class TestHTTPClientIntegration:
     @pytest_asyncio.fixture
     async def client(self, server_url):
         """Create and initialize HTTPClient."""
-        client = HTTPClient(url=server_url, user="test_user")
+        client = HTTPClient(url=server_url, user=UserIdentifier.the_default_user("test_user"))
         await client.initialize()
         yield client
         await client.close()
@@ -83,7 +84,7 @@ class TestSessionIntegration:
     @pytest_asyncio.fixture
     async def client(self, server_url):
         """Create and initialize HTTPClient."""
-        client = HTTPClient(url=server_url, user="test_user")
+        client = HTTPClient(url=server_url, user=UserIdentifier.the_default_user("test_user"))
         await client.initialize()
         yield client
         await client.close()
@@ -92,7 +93,7 @@ class TestSessionIntegration:
     async def test_session_lifecycle(self, client):
         """Test session create, add message, and delete."""
         # Create session
-        result = await client.create_session(user="test_user")
+        result = await client.create_session()
         assert "session_id" in result
         session_id = result["session_id"]
 
@@ -124,7 +125,7 @@ class TestAsyncOpenVikingHTTPMode:
     @pytest_asyncio.fixture
     async def ov(self, server_url):
         """Create AsyncOpenViking in HTTP mode."""
-        client = AsyncOpenViking(url=server_url, user="test_user")
+        client = AsyncOpenViking(url=server_url, user=UserIdentifier.the_default_user("test_user"))
         await client.initialize()
         yield client
         await client.close()

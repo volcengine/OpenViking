@@ -169,7 +169,7 @@ class BaseClient(ABC):
     # ============= Sessions =============
 
     @abstractmethod
-    async def create_session(self, user: Optional[str] = None) -> Dict[str, Any]:
+    async def create_session(self) -> Dict[str, Any]:
         """Create a new session."""
         ...
 
@@ -189,13 +189,8 @@ class BaseClient(ABC):
         ...
 
     @abstractmethod
-    async def compress_session(self, session_id: str) -> Dict[str, Any]:
-        """Compress a session (commit and archive)."""
-        ...
-
-    @abstractmethod
-    async def extract_session(self, session_id: str) -> List[Any]:
-        """Extract memories from a session."""
+    async def commit_session(self, session_id: str) -> Dict[str, Any]:
+        """Commit a session (archive and extract memories)."""
         ...
 
     @abstractmethod

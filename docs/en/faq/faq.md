@@ -100,7 +100,7 @@ Create an `~/.openviking/ov.conf` configuration file in your project directory:
 }
 ```
 
-Configuration priority: Constructor parameters > Config object > Config file > Environment variables > Default values
+Config files at the default path `~/.openviking/ov.conf` are loaded automatically; you can also specify a different path via the `OPENVIKING_CONFIG_FILE` environment variable or `--config` flag. See [Configuration Guide](../guides/01-configuration.md) for details.
 
 ### What Embedding providers are supported?
 
@@ -119,16 +119,16 @@ Supports Dense, Sparse, and Hybrid embedding modes.
 ```python
 import openviking as ov
 
-# Async client (recommended)
+# Async client - embedded mode (recommended)
 client = ov.AsyncOpenViking(path="./my_data")
 await client.initialize()
 
-# Or use a config object
-from openviking.utils.config import OpenVikingConfig
-config = OpenVikingConfig(...)
-client = ov.AsyncOpenViking(config=config)
+# Async client - HTTP client mode
+client = ov.AsyncOpenViking(url="http://localhost:1933", api_key="your-key")
 await client.initialize()
 ```
+
+The SDK constructor only accepts `url`, `api_key`, `path`, and `user` parameters. Other configuration (embedding, vlm, etc.) is managed through the `ov.conf` config file.
 
 ### What file formats are supported?
 
@@ -362,11 +362,8 @@ This strategy finds semantically matching fragments while understanding the comp
 # Embedded mode
 client = ov.AsyncOpenViking(path="./data")
 
-# Service mode
-client = ov.AsyncOpenViking(
-    vectordb_url="http://vectordb:5000",
-    agfs_url="http://agfs:8080"
-)
+# HTTP client mode (connects to a remote server)
+client = ov.AsyncOpenViking(url="http://localhost:1933", api_key="your-key")
 ```
 
 ### Is OpenViking open source?

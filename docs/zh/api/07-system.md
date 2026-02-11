@@ -33,6 +33,12 @@ GET /health
 curl -X GET http://localhost:1933/health
 ```
 
+**CLI**
+
+```bash
+openviking health
+```
+
 **响应**
 
 ```json
@@ -69,6 +75,12 @@ GET /api/v1/system/status
 ```bash
 curl -X GET http://localhost:1933/api/v1/system/status \
   -H "X-API-Key: your-key"
+```
+
+**CLI**
+
+```bash
+openviking status
 ```
 
 **响应**
@@ -129,6 +141,12 @@ curl -X POST http://localhost:1933/api/v1/system/wait \
   }'
 ```
 
+**CLI**
+
+```bash
+openviking wait [--timeout 60]
+```
+
 **响应**
 
 ```json
@@ -184,6 +202,12 @@ curl -X GET http://localhost:1933/api/v1/observer/queue \
   -H "X-API-Key: your-key"
 ```
 
+**CLI**
+
+```bash
+openviking observer queue
+```
+
 **响应**
 
 ```json
@@ -231,6 +255,12 @@ curl -X GET http://localhost:1933/api/v1/observer/vikingdb \
   -H "X-API-Key: your-key"
 ```
 
+**CLI**
+
+```bash
+openviking observer vikingdb
+```
+
 **响应**
 
 ```json
@@ -272,6 +302,12 @@ GET /api/v1/observer/vlm
 ```bash
 curl -X GET http://localhost:1933/api/v1/observer/vlm \
   -H "X-API-Key: your-key"
+```
+
+**CLI**
+
+```bash
+openviking observer vlm
 ```
 
 **响应**
@@ -321,6 +357,12 @@ GET /api/v1/observer/system
 ```bash
 curl -X GET http://localhost:1933/api/v1/observer/system \
   -H "X-API-Key: your-key"
+```
+
+**CLI**
+
+```bash
+openviking observer system
 ```
 
 **响应**

@@ -240,56 +240,75 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 }
 ```
 
-## 环境变量
+## 配置文件
+
+OpenViking 使用两个配置文件：
+
+| 配置文件 | 用途 | 默认路径 |
+|---------|------|---------|
+| `ov.conf` | SDK 嵌入模式 + 服务端配置 | `~/.openviking/ov.conf` |
+| `ovcli.conf` | CLI 连接远程服务端 | `~/.openviking/ovcli.conf` |
+
+配置文件放在默认路径时，OpenViking 自动加载，无需额外设置。
+
+如果配置文件在其他位置，有两种指定方式：
 
 ```bash
-export VOLCENGINE_API_KEY="your-api-key"
-export OPENVIKING_DATA_PATH="./data"
+# 方式一：环境变量
+export OPENVIKING_CONFIG_FILE=/path/to/ov.conf
+export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
+
+# 方式二：命令行参数（仅 serve 命令）
+python -m openviking serve --config /path/to/ov.conf
 ```
 
-## 配置优先级
+### ov.conf
 
-1. 构造函数参数（最高）
-2. Config 对象
-3. 配置文件（`~/.openviking/ov.conf`）
-4. 环境变量
-5. 默认值（最低）
+本文档上方各配置段（embedding、vlm、rerank、storage）均属于 `ov.conf`。SDK 嵌入模式和服务端共用此文件。
 
-## 编程式配置
+### ovcli.conf
 
-```python
-from openviking.utils.config import (
-    OpenVikingConfig,
-    StorageConfig,
-    AGFSConfig,
-    VectorDBBackendConfig,
-    EmbeddingConfig,
-    DenseEmbeddingConfig
-)
+CLI 工具连接远程服务端的配置文件：
 
-config = OpenVikingConfig(
-    storage=StorageConfig(
-        agfs=AGFSConfig(
-            backend="local",
-            path="./custom_data",
-        ),
-        vectordb=VectorDBBackendConfig(
-            backend="local",
-            path="./custom_data",
-        )
-    ),
-    embedding=EmbeddingConfig(
-        dense=DenseEmbeddingConfig(
-            provider="volcengine",
-            api_key="your-api-key",
-            model="doubao-embedding-vision-250615",
-            dimension=1024
-        )
-    )
-)
-
-client = ov.AsyncOpenViking(config=config)
+```json
+{
+  "url": "http://localhost:1933",
+  "api_key": "your-secret-key",
+  "output": "table"
+}
 ```
+
+| 字段 | 说明 | 默认值 |
+|------|------|--------|
+| `url` | 服务端地址 | （必填） |
+| `api_key` | API Key 认证 | `null`（无认证） |
+| `output` | 默认输出格式：`"table"` 或 `"json"` | `"table"` |
+
+详见 [服务部署](./03-deployment.md)。
+
+## server 段
+
+将 OpenViking 作为 HTTP 服务运行时，在 `ov.conf` 中添加 `server` 段：
+
+```json
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 1933,
+    "api_key": "your-secret-key",
+    "cors_origins": ["*"]
+  }
+}
+```
+
+| 字段 | 类型 | 说明 | 默认值 |
+|------|------|------|--------|
+| `host` | str | 绑定地址 | `0.0.0.0` |
+| `port` | int | 绑定端口 | `1933` |
+| `api_key` | str | API Key 认证，不设则禁用认证 | `null` |
+| `cors_origins` | list | CORS 允许的来源 | `["*"]` |
+
+启动方式和部署详情见 [服务部署](./03-deployment.md)，认证详情见 [认证](./04-authentication.md)。
 
 ## 完整 Schema
 
@@ -328,41 +347,18 @@ client = ov.AsyncOpenViking(config=config)
       "url": "string"
     }
   },
+  "server": {
+    "host": "string",
+    "port": 1933,
+    "api_key": "string",
+    "cors_origins": ["string"]
+  },
   "user": "string"
 }
 ```
 
 说明：
 - `storage.vectordb.sparse_weight` 用于混合（dense + sparse）索引/检索的权重，仅在使用 hybrid 索引时生效；设置为 > 0 才会启用 sparse 信号。
-
-## Server 配置
-
-将 OpenViking 作为 HTTP 服务运行时，服务端从同一个 JSON 配置文件中读取配置（通过 `--config` 或 `OPENVIKING_CONFIG_FILE`）：
-
-```json
-{
-  "server": {
-    "host": "0.0.0.0",
-    "port": 1933,
-    "api_key": "your-secret-key",
-    "cors_origins": ["*"]
-  },
-  "storage": {
-    "path": "/data/openviking"
-  }
-}
-```
-
-Server 配置也可以通过环境变量设置：
-
-| 变量 | 说明 |
-|------|------|
-| `OPENVIKING_HOST` | 服务主机地址 |
-| `OPENVIKING_PORT` | 服务端口 |
-| `OPENVIKING_API_KEY` | 用于认证的 API Key |
-| `OPENVIKING_PATH` | 存储路径 |
-
-详见 [服务部署](./03-deployment.md)。
 
 ## 故障排除
 
@@ -402,7 +398,7 @@ Error: Rate limit exceeded
 
 ## 相关文档
 
-- [火山引擎购买指南](./volcengine-purchase-guide.md) - API Key 获取
+- [火山引擎购买指南](./02-volcengine-purchase-guide.md) - API Key 获取
 - [API 概览](../api/01-overview.md) - 客户端初始化
 - [服务部署](./03-deployment.md) - Server 配置
 - [上下文层级](../concepts/03-context-layers.md) - L0/L1/L2

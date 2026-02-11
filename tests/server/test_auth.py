@@ -11,6 +11,7 @@ from openviking.server.app import create_app
 from openviking.server.config import ServerConfig
 from openviking.server.dependencies import set_service
 from openviking.service.core import OpenVikingService
+from openviking.session.user_id import UserIdentifier
 
 
 TEST_API_KEY = "test-secret-key-12345"
@@ -19,7 +20,7 @@ TEST_API_KEY = "test-secret-key-12345"
 @pytest_asyncio.fixture(scope="function")
 async def auth_service(temp_dir):
     """Service for auth tests."""
-    svc = OpenVikingService(path=str(temp_dir / "auth_data"), user="auth_user")
+    svc = OpenVikingService(path=str(temp_dir / "auth_data"), user=UserIdentifier.the_default_user("auth_user"))
     await svc.initialize()
     yield svc
     await svc.close()

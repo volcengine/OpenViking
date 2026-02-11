@@ -1,6 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
-import os
 from typing import Any, Optional
 
 from pydantic import BaseModel, Field, model_validator
@@ -97,56 +96,6 @@ class EmbeddingConfig(BaseModel):
     dense: Optional[EmbeddingModelConfig] = Field(default=None)
     sparse: Optional[EmbeddingModelConfig] = Field(default=None)
     hybrid: Optional[EmbeddingModelConfig] = Field(default=None)
-
-    @model_validator(mode="before")
-    @classmethod
-    def apply_env_defaults(cls, data):
-        if not isinstance(data, dict):
-            return data
-
-        config_sections = [
-            ("dense", "OPENVIKING_EMBEDDING_DENSE_"),
-            ("sparse", "OPENVIKING_EMBEDDING_SPARSE_"),
-            ("hybrid", "OPENVIKING_EMBEDDING_HYBRID_"),
-        ]
-
-        env_fields = {
-            "model": str,
-            "api_key": str,
-            "api_base": str,
-            "dimension": int,
-            "batch_size": int,
-            "input": str,
-            "provider": str,
-            "backend": str,
-            "version": str,
-            "ak": str,
-            "sk": str,
-            "region": str,
-            "host": str,
-        }
-
-        for section, prefix in config_sections:
-            section_env_data = {}
-            for field, field_type in env_fields.items():
-                env_key = f"{prefix}{field.upper()}"
-                val = os.getenv(env_key)
-                if val is not None:
-                    try:
-                        section_env_data[field] = field_type(val)
-                    except ValueError:
-                        continue
-
-            if section_env_data:
-                if data.get(section) is None:
-                    data[section] = {}
-
-                if isinstance(data[section], dict):
-                    for k, v in section_env_data.items():
-                        if data[section].get(k) is None:
-                            data[section][k] = v
-
-        return data
 
     @model_validator(mode="after")
     def validate_config(self):

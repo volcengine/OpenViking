@@ -1,15 +1,19 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 import json
-import os
 from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field
 
+from .config_loader import (
+    DEFAULT_OV_CONF,
+    OPENVIKING_CONFIG_ENV,
+    resolve_config_path,
+    load_json_config,
+)
 from openviking.session.user_id import UserIdentifier
-
 from .embedding_config import EmbeddingConfig
 from .parser_config import (
     AudioConfig,
@@ -151,38 +155,67 @@ class OpenVikingConfig(BaseModel):
 
 
 class OpenVikingConfigSingleton:
-    """Global singleton for OpenVikingConfig."""
+    """Global singleton for OpenVikingConfig.
+
+    Resolution chain for ov.conf:
+      1. Explicit path passed to initialize()
+      2. OPENVIKING_CONFIG_FILE environment variable
+      3. ~/.openviking/ov.conf
+      4. Error with clear guidance
+    """
 
     _instance: Optional[OpenVikingConfig] = None
     _lock: Lock = Lock()
 
     @classmethod
     def get_instance(cls) -> OpenVikingConfig:
-        """Get the global singleton instance."""
+        """Get the global singleton instance.
+
+        Raises FileNotFoundError if no config file is found.
+        """
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
-                    # Check if environment variable specifies a config file
-                    config_file = os.getenv("OPENVIKING_CONFIG_FILE")
-                    if config_file and Path(config_file).exists():
-                        cls._instance = cls._load_from_file(config_file)
+                    config_path = resolve_config_path(None, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
+                    if config_path is not None:
+                        cls._instance = cls._load_from_file(str(config_path))
                     else:
-                        cls._instance = OpenVikingConfig()
+                        from .config_loader import DEFAULT_CONFIG_DIR
+                        default_path = DEFAULT_CONFIG_DIR / DEFAULT_OV_CONF
+                        raise FileNotFoundError(
+                            f"OpenViking configuration file not found.\n"
+                            f"Please create {default_path} or set {OPENVIKING_CONFIG_ENV}.\n"
+                            f"See: https://openviking.dev/docs/guides/configuration"
+                        )
         return cls._instance
 
     @classmethod
-    def initialize(cls, config: Optional[Dict[str, Any]] = None) -> OpenVikingConfig:
-        """Initialize the global singleton with optional config dict."""
+    def initialize(
+        cls,
+        config_dict: Optional[Dict[str, Any]] = None,
+        config_path: Optional[str] = None,
+    ) -> OpenVikingConfig:
+        """Initialize the global singleton.
+
+        Args:
+            config_dict: Direct config dictionary (highest priority).
+            config_path: Explicit path to ov.conf file.
+        """
         with cls._lock:
-            if config is None:
-                # Check if environment variable specifies a config file
-                config_file = os.getenv("OPENVIKING_CONFIG_FILE")
-                if config_file and Path(config_file).exists():
-                    cls._instance = cls._load_from_file(config_file)
-                else:
-                    cls._instance = OpenVikingConfig()
+            if config_dict is not None:
+                cls._instance = OpenVikingConfig.from_dict(config_dict)
             else:
-                cls._instance = OpenVikingConfig.from_dict(config)
+                path = resolve_config_path(config_path, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
+                if path is not None:
+                    cls._instance = cls._load_from_file(str(path))
+                else:
+                    from .config_loader import DEFAULT_CONFIG_DIR
+                    default_path = DEFAULT_CONFIG_DIR / DEFAULT_OV_CONF
+                    raise FileNotFoundError(
+                        f"OpenViking configuration file not found.\n"
+                        f"Please create {default_path} or set {OPENVIKING_CONFIG_ENV}.\n"
+                        f"See: https://openviking.dev/docs/guides/configuration"
+                    )
         return cls._instance
 
     @classmethod
@@ -217,7 +250,7 @@ def get_openviking_config() -> OpenVikingConfig:
 
 def set_openviking_config(config: OpenVikingConfig) -> None:
     """Set the global OpenVikingConfig instance."""
-    OpenVikingConfigSingleton.initialize(config.to_dict())
+    OpenVikingConfigSingleton.initialize(config_dict=config.to_dict())
 
 
 def is_valid_openviking_config(config: OpenVikingConfig) -> bool:
@@ -259,34 +292,27 @@ def is_valid_openviking_config(config: OpenVikingConfig) -> bool:
 
 
 def initialize_openviking_config(
-    config: Optional[OpenVikingConfig] = None,
     user: Optional[UserIdentifier] = None,
     path: Optional[str] = None,
-    vectordb_url: Optional[str] = None,
-    agfs_url: Optional[str] = None,
 ) -> OpenVikingConfig:
     """
     Initialize OpenViking configuration with provided parameters.
 
+    Loads ov.conf from the standard resolution chain, then applies
+    parameter overrides.
+
     Args:
-        config: Optional OpenVikingConfig object to use as base configuration
         user: UserIdentifier for session management
         path: Local storage path for embedded mode
-        vectordb_url: Remote VectorDB service URL for service mode
-        agfs_url: Remote AGFS service URL for service mode
 
     Returns:
         Configured OpenVikingConfig instance
 
     Raises:
         ValueError: If the resulting configuration is invalid
+        FileNotFoundError: If no config file is found
     """
-    # Initialize config
-    if config is not None:
-        set_openviking_config(config)
-        config = get_openviking_config()
-    else:
-        config = get_openviking_config()
+    config = get_openviking_config()
 
     if user:
         # Set user if provided, like a email address or a account_id
@@ -301,12 +327,6 @@ def initialize_openviking_config(
         config.storage.agfs.path = path
         config.storage.vectordb.backend = config.storage.vectordb.backend or "local"
         config.storage.vectordb.path = path
-    elif vectordb_url and agfs_url:
-        # Service mode: remote services
-        config.storage.agfs.backend = "local"
-        config.storage.agfs.url = agfs_url
-        config.storage.vectordb.backend = "http"
-        config.storage.vectordb.url = vectordb_url
 
     # Ensure vector dimension is synced if not set in storage
     if config.storage.vectordb.dimension == 0:
