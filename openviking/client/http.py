@@ -417,11 +417,11 @@ class HTTPClient(BaseClient):
 
     # ============= Sessions =============
 
-    async def create_session(self, user: Optional[str] = None) -> Dict[str, Any]:
+    async def create_session(self) -> Dict[str, Any]:
         """Create a new session."""
         response = await self._http.post(
             "/api/v1/sessions",
-            json={"user": user or self._user.to_dict()},
+            json={},
         )
         return self._handle_response(response)
 

@@ -13,7 +13,6 @@
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | session_id | str | 否 | None | 会话 ID。如果为 None，则创建一个自动生成 ID 的新会话 |
-| user | str | 否 | None | 用户标识符（仅 HTTP API） |
 
 **Python SDK**
 
@@ -39,16 +38,13 @@ POST /api/v1/sessions
 ```bash
 curl -X POST http://localhost:1933/api/v1/sessions \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{
-    "user": "alice"
-  }'
+  -H "X-API-Key: your-key"
 ```
 
 **CLI**
 
 ```bash
-openviking session new [--user alice]
+openviking session new
 ```
 
 **响应**
@@ -498,9 +494,8 @@ client.close()
 # 步骤 1：创建会话
 curl -X POST http://localhost:1933/api/v1/sessions \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{"user": "alice"}'
-# 返回：{"status": "ok", "result": {"session_id": "a1b2c3d4", "user": "alice"}}
+  -H "X-API-Key: your-key"
+# 返回：{"status": "ok", "result": {"session_id": "a1b2c3d4"}}
 
 # 步骤 2：添加用户消息
 curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages \

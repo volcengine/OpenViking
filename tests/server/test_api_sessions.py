@@ -8,7 +8,7 @@ import httpx
 
 async def test_create_session(client: httpx.AsyncClient):
     resp = await client.post(
-        "/api/v1/sessions", json={"user": "test_user"}
+        "/api/v1/sessions", json={}
     )
     assert resp.status_code == 200
     body = resp.json()
@@ -18,7 +18,7 @@ async def test_create_session(client: httpx.AsyncClient):
 
 async def test_list_sessions(client: httpx.AsyncClient):
     # Create a session first
-    await client.post("/api/v1/sessions", json={"user": "test"})
+    await client.post("/api/v1/sessions", json={})
     resp = await client.get("/api/v1/sessions")
     assert resp.status_code == 200
     body = resp.json()
@@ -28,7 +28,7 @@ async def test_list_sessions(client: httpx.AsyncClient):
 
 async def test_get_session(client: httpx.AsyncClient):
     create_resp = await client.post(
-        "/api/v1/sessions", json={"user": "test"}
+        "/api/v1/sessions", json={}
     )
     session_id = create_resp.json()["result"]["session_id"]
 
@@ -41,7 +41,7 @@ async def test_get_session(client: httpx.AsyncClient):
 
 async def test_add_message(client: httpx.AsyncClient):
     create_resp = await client.post(
-        "/api/v1/sessions", json={"user": "test"}
+        "/api/v1/sessions", json={}
     )
     session_id = create_resp.json()["result"]["session_id"]
 
@@ -57,7 +57,7 @@ async def test_add_message(client: httpx.AsyncClient):
 
 async def test_add_multiple_messages(client: httpx.AsyncClient):
     create_resp = await client.post(
-        "/api/v1/sessions", json={"user": "test"}
+        "/api/v1/sessions", json={}
     )
     session_id = create_resp.json()["result"]["session_id"]
 
@@ -87,7 +87,7 @@ async def test_add_multiple_messages(client: httpx.AsyncClient):
 
 async def test_delete_session(client: httpx.AsyncClient):
     create_resp = await client.post(
-        "/api/v1/sessions", json={"user": "test"}
+        "/api/v1/sessions", json={}
     )
     session_id = create_resp.json()["result"]["session_id"]
 
@@ -106,7 +106,7 @@ async def test_delete_session(client: httpx.AsyncClient):
 
 async def test_compress_session(client: httpx.AsyncClient):
     create_resp = await client.post(
-        "/api/v1/sessions", json={"user": "test"}
+        "/api/v1/sessions", json={}
     )
     session_id = create_resp.json()["result"]["session_id"]
 

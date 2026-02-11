@@ -195,7 +195,7 @@ class LocalClient(BaseClient):
 
     # ============= Sessions =============
 
-    async def create_session(self, user: Optional[str] = None) -> Dict[str, Any]:
+    async def create_session(self) -> Dict[str, Any]:
         """Create a new session."""
         session = self._service.sessions.session()
         return {

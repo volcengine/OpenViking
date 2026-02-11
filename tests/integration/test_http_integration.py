@@ -92,7 +92,7 @@ class TestSessionIntegration:
     async def test_session_lifecycle(self, client):
         """Test session create, add message, and delete."""
         # Create session
-        result = await client.create_session(user="test_user")
+        result = await client.create_session()
         assert "session_id" in result
         session_id = result["session_id"]
 

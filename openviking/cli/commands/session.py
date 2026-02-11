@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Session commands."""
 
-from typing import Optional
-
 import typer
 
 from openviking.cli.context import get_cli_context
@@ -16,10 +14,9 @@ session_app = typer.Typer(help="Session management commands")
 @session_app.command("new")
 def session_new_command(
     ctx: typer.Context,
-    user: Optional[str] = typer.Option(None, "--user", help="Override session user"),
 ) -> None:
     """Create a new session."""
-    run(ctx, lambda client: client.create_session(user=user))
+    run(ctx, lambda client: client.create_session())
 
 
 @session_app.command("list")

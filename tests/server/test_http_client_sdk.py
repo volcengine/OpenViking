@@ -91,7 +91,7 @@ async def test_sdk_session_lifecycle(http_client):
     client, _ = http_client
 
     # Create
-    session_info = await client.create_session(user="sdk_user")
+    session_info = await client.create_session()
     session_id = session_info["session_id"]
     assert session_id
 

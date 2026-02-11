@@ -32,9 +32,9 @@ class SyncOpenViking:
         """Create new session or load existing session."""
         return self._async_client.session(session_id)
 
-    def create_session(self, user: Optional[str] = None) -> Dict[str, Any]:
+    def create_session(self) -> Dict[str, Any]:
         """Create a new session."""
-        return run_async(self._async_client.create_session(user=user))
+        return run_async(self._async_client.create_session())
 
     def list_sessions(self) -> List[Any]:
         """List all sessions."""

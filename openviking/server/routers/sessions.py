@@ -2,8 +2,6 @@
 # SPDX-License-Identifier: Apache-2.0
 """Sessions endpoints for OpenViking HTTP Server."""
 
-from typing import Optional
-
 from fastapi import APIRouter, Depends, Path
 from pydantic import BaseModel
 
@@ -12,12 +10,6 @@ from openviking.server.dependencies import get_service
 from openviking.server.models import Response
 
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
-
-
-class CreateSessionRequest(BaseModel):
-    """Request model for creating a session."""
-
-    user: Optional[str] = None
 
 
 class AddMessageRequest(BaseModel):
@@ -29,7 +21,6 @@ class AddMessageRequest(BaseModel):
 
 @router.post("")
 async def create_session(
-    request: CreateSessionRequest,
     _: bool = Depends(verify_api_key),
 ):
     """Create a new session."""
@@ -39,7 +30,7 @@ async def create_session(
         status="ok",
         result={
             "session_id": session.session_id,
-            "user": session.user,
+            "user": session.user.to_dict(),
         },
     )
 
@@ -67,7 +58,7 @@ async def get_session(
         status="ok",
         result={
             "session_id": session.session_id,
-            "user": session.user,
+            "user": session.user.to_dict(),
             "message_count": len(session.messages),
         },
     )

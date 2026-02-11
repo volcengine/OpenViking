@@ -13,7 +13,6 @@ Create a new session.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | session_id | str | No | None | Session ID. Creates new session with auto-generated ID if None |
-| user | str | No | None | User identifier (HTTP API only) |
 
 **Python SDK**
 
@@ -39,16 +38,13 @@ POST /api/v1/sessions
 ```bash
 curl -X POST http://localhost:1933/api/v1/sessions \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{
-    "user": "alice"
-  }'
+  -H "X-API-Key: your-key"
 ```
 
 **CLI**
 
 ```bash
-openviking session new [--user alice]
+openviking session new
 ```
 
 **Response**
@@ -498,9 +494,8 @@ client.close()
 # Step 1: Create session
 curl -X POST http://localhost:1933/api/v1/sessions \
   -H "Content-Type: application/json" \
-  -H "X-API-Key: your-key" \
-  -d '{"user": "alice"}'
-# Returns: {"status": "ok", "result": {"session_id": "a1b2c3d4", "user": "alice"}}
+  -H "X-API-Key: your-key"
+# Returns: {"status": "ok", "result": {"session_id": "a1b2c3d4"}}
 
 # Step 2: Add user message
 curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages \
