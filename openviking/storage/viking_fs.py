@@ -129,14 +129,20 @@ class VikingFS:
     async def read(self, uri: str, offset: int = 0, size: int = -1) -> bytes:
         """Read file"""
         path = self._uri_to_path(uri)
-        return await asyncio.to_thread(self.agfs.read, path, offset, size)
+        result = self.agfs.read(path, offset, size)
+        if isinstance(result, bytes):
+            return result
+        elif result is not None and hasattr(result, "content"):
+            return result.content
+        else:
+            return b""
 
     async def write(self, uri: str, data: Union[bytes, str]) -> str:
         """Write file"""
         path = self._uri_to_path(uri)
         if isinstance(data, str):
             data = data.encode("utf-8")
-        return await asyncio.to_thread(self.agfs.write, path, data)
+        return self.agfs.write(path, data)
 
     async def mkdir(self, uri: str, mode: str = "755", exist_ok: bool = False) -> None:
         """Create directory."""
@@ -151,13 +157,13 @@ class VikingFS:
             except Exception:
                 pass
 
-        await asyncio.to_thread(self.agfs.mkdir, path)
+        self.agfs.mkdir(path)
 
     async def rm(self, uri: str, recursive: bool = False) -> Dict[str, Any]:
         """Delete file/directory + recursively update vector index."""
         path = self._uri_to_path(uri)
         uris_to_delete = await self._collect_uris(path, recursive)
-        result = await asyncio.to_thread(self.agfs.rm, path, recursive)
+        result = self.agfs.rm(path, recursive)
         if uris_to_delete:
             await self._delete_from_vector_store(uris_to_delete)
         return result
@@ -167,15 +173,15 @@ class VikingFS:
         old_path = self._uri_to_path(old_uri)
         new_path = self._uri_to_path(new_uri)
         uris_to_move = await self._collect_uris(old_path, recursive=True)
-        result = await asyncio.to_thread(self.agfs.mv, old_path, new_path)
+        result = self.agfs.mv(old_path, new_path)
         if uris_to_move:
             await self._update_vector_store_uris(uris_to_move, old_uri, new_uri)
         return result
 
     async def grep(self, uri: str, pattern: str, case_insensitive: bool = False) -> Dict:
-        """Content search."""
+        """Content search by pattern or keywords."""
         path = self._uri_to_path(uri)
-        result = await asyncio.to_thread(self.agfs.grep, path, pattern, True, case_insensitive)
+        result = self.agfs.grep(path, pattern, True, case_insensitive)
         # Change file to uri
         if result.get("matches", None) is None:
             result["matches"] = []
@@ -184,9 +190,13 @@ class VikingFS:
         return result
 
     async def stat(self, uri: str) -> Dict[str, Any]:
-        """File/directory information."""
+        """
+        File/directory information.
+
+        example: {'name': 'resources', 'size': 128, 'mode': 2147484141, 'modTime': '2026-02-10T21:26:02.934376379+08:00', 'isDir': True, 'meta': {'Name': 'localfs', 'Type': 'local', 'Content': {'local_path': '...'}}}
+        """
         path = self._uri_to_path(uri)
-        return await asyncio.to_thread(self.agfs.stat, path)
+        return self.agfs.stat(path)
 
     async def glob(self, pattern: str, uri: str = "viking://") -> Dict:
         """File pattern matching, supports **/*.md recursive."""
@@ -208,7 +218,7 @@ class VikingFS:
         all_entries = []
 
         async def _walk(current_path: str, current_rel: str):
-            for entry in await asyncio.to_thread(self.agfs.ls, current_path):
+            for entry in self.agfs.ls(current_path):
                 name = entry.get("name", "")
                 if name in [".", ".."]:
                     continue
@@ -232,12 +242,12 @@ class VikingFS:
     ) -> str:
         """Read directory's L0 summary (.abstract.md)."""
         path = self._uri_to_path(uri)
-        info = await asyncio.to_thread(self.agfs.stat, path)
+        info = self.agfs.stat(path)
         if not info.get("isDir"):
             raise ValueError(f"{uri} is not a directory")
         file_path = f"{path}/.abstract.md"
-        content = await asyncio.to_thread(self.agfs.read, file_path)
-        return content.decode("utf-8") if isinstance(content, bytes) else content
+        content = self.agfs.read(file_path)
+        return self._handle_agfs_content(content)
 
     async def overview(
         self,
@@ -245,12 +255,12 @@ class VikingFS:
     ) -> str:
         """Read directory's L1 overview (.overview.md)."""
         path = self._uri_to_path(uri)
-        info = await asyncio.to_thread(self.agfs.stat, path)
+        info = self.agfs.stat(path)
         if not info.get("isDir"):
             raise ValueError(f"{uri} is not a directory")
         file_path = f"{path}/.overview.md"
-        content = await asyncio.to_thread(self.agfs.read, file_path)
-        return content.decode("utf-8") if isinstance(content, bytes) else content
+        content = self.agfs.read(file_path)
+        return self._handle_agfs_content(content)
 
     async def relations(
         self,
@@ -547,6 +557,36 @@ class VikingFS:
         else:
             return f"viking://{path}"
 
+    def _handle_agfs_read(self, result: Union[bytes, Any, None]) -> bytes:
+        """Handle AGFSClient read return types consistently."""
+        if isinstance(result, bytes):
+            return result
+        elif result is None:
+            return b""
+        elif hasattr(result, "content") and result.content is not None:
+            return result.content
+        else:
+            # Try to convert to bytes
+            try:
+                return str(result).encode("utf-8")
+            except Exception:
+                return b""
+
+    def _handle_agfs_content(self, result: Union[bytes, Any, None]) -> str:
+        """Handle AGFSClient content return types consistently."""
+        if isinstance(result, bytes):
+            return result.decode("utf-8")
+        elif hasattr(result, "content"):
+            return result.content.decode("utf-8")
+        elif result is None:
+            return ""
+        else:
+            # Try to convert to string
+            try:
+                return str(result)
+            except Exception:
+                return ""
+
     def _infer_context_type(self, uri: str):
         """Infer context_type from URI."""
         from openviking.retrieve import ContextType
@@ -565,7 +605,7 @@ class VikingFS:
 
         async def _collect(p: str):
             try:
-                for entry in await asyncio.to_thread(self.agfs.ls, p):
+                for entry in self.agfs.ls(p):
                     name = entry.get("name", "")
                     if name in [".", ".."]:
                         continue
@@ -663,7 +703,7 @@ class VikingFS:
         for i in range(1, len(parts)):
             parent = "/" + "/".join(parts[:i])
             try:
-                await asyncio.to_thread(self.agfs.mkdir, parent)
+                self.agfs.mkdir(parent)
             except Exception as e:
                 # Log the error but continue, as parent might already exist
                 # or we might be creating it in the next iteration
@@ -676,8 +716,8 @@ class VikingFS:
         """Read .relations.json."""
         table_path = f"{dir_path}/.relations.json"
         try:
-            content = await asyncio.to_thread(self.agfs.read, table_path)
-            data = json.loads(content.decode("utf-8") if isinstance(content, bytes) else content)
+            content = self._handle_agfs_read(self.agfs.read(table_path))
+            data = json.loads(content.decode("utf-8"))
         except FileNotFoundError:
             return []
         except Exception:
@@ -707,7 +747,7 @@ class VikingFS:
         table_path = f"{dir_path}/.relations.json"
         if isinstance(content, str):
             content = content.encode("utf-8")
-        await asyncio.to_thread(self.agfs.write, table_path, content)
+        self.agfs.write(table_path, content)
 
     # ========== Batch Read (backward compatible) ==========
 
@@ -716,6 +756,7 @@ class VikingFS:
         results = {}
         for uri in uris:
             try:
+                content = ""
                 if level == "l0":
                     content = await self.abstract(uri)
                 elif level == "l1":
@@ -738,7 +779,7 @@ class VikingFS:
 
         if isinstance(content, str):
             content = content.encode("utf-8")
-        await asyncio.to_thread(self.agfs.write, path, content)
+        self.agfs.write(path, content)
 
     async def read_file(
         self,
@@ -746,8 +787,8 @@ class VikingFS:
     ) -> str:
         """Read single file."""
         path = self._uri_to_path(uri)
-        content = await asyncio.to_thread(self.agfs.read, path)
-        return content.decode("utf-8") if isinstance(content, bytes) else content
+        content = self.agfs.read(path)
+        return self._handle_agfs_content(content)
 
     async def read_file_bytes(
         self,
@@ -756,7 +797,7 @@ class VikingFS:
         """Read single binary file."""
         path = self._uri_to_path(uri)
         try:
-            return await asyncio.to_thread(self.agfs.read, path)
+            return self._handle_agfs_read(self.agfs.read(path))
         except Exception as e:
             raise FileNotFoundError(f"Failed to read {uri}: {e}")
 
@@ -768,7 +809,7 @@ class VikingFS:
         """Write single binary file."""
         path = self._uri_to_path(uri)
         await self._ensure_parent_dirs(path)
-        await asyncio.to_thread(self.agfs.write, path, content)
+        self.agfs.write(path, content)
 
     async def append_file(
         self,
@@ -781,13 +822,13 @@ class VikingFS:
         try:
             existing = ""
             try:
-                existing_bytes = await asyncio.to_thread(self.agfs.read, path)
+                existing_bytes = self._handle_agfs_read(self.agfs.read(path))
                 existing = existing_bytes.decode("utf-8")
             except Exception:
                 pass
 
             await self._ensure_parent_dirs(path)
-            await asyncio.to_thread(self.agfs.write, path, (existing + content).encode("utf-8"))
+            self.agfs.write(path, (existing + content).encode("utf-8"))
 
         except Exception as e:
             logger.error(f"[VikingFS] Failed to append to file {uri}: {e}")
@@ -800,7 +841,7 @@ class VikingFS:
         """List directory contents (URI version)."""
         path = self._uri_to_path(uri)
         try:
-            entries = await asyncio.to_thread(self.agfs.ls, path)
+            entries = self.agfs.ls(path)
             # AGFS returns read-only structure, need to create new dict
             result = []
             for entry in entries:
@@ -820,10 +861,10 @@ class VikingFS:
         """Move file."""
         from_path = self._uri_to_path(from_uri)
         to_path = self._uri_to_path(to_uri)
-        content = await asyncio.to_thread(self.agfs.read, from_path)
+        content = self.agfs.read(from_path)
         await self._ensure_parent_dirs(to_path)
-        await asyncio.to_thread(self.agfs.write, to_path, content)
-        await asyncio.to_thread(self.agfs.rm, from_path)
+        self.agfs.write(to_path, content)
+        self.agfs.rm(from_path)
 
     # ========== Temp File Operations (backward compatible) ==========
 
@@ -838,7 +879,7 @@ class VikingFS:
         """Delete temp directory and its contents."""
         path = self._uri_to_path(temp_uri)
         try:
-            for entry in await asyncio.to_thread(self.agfs.ls, path):
+            for entry in self.agfs.ls(path):
                 name = entry.get("name", "")
                 if name in [".", ".."]:
                     continue
@@ -846,8 +887,8 @@ class VikingFS:
                 if entry.get("isDir"):
                     await self.delete_temp(f"{temp_uri}/{name}")
                 else:
-                    await asyncio.to_thread(self.agfs.rm, entry_path)
-            await asyncio.to_thread(self.agfs.rm, path)
+                    self.agfs.rm(entry_path)
+            self.agfs.rm(path)
         except Exception as e:
             logger.warning(f"[VikingFS] Failed to delete temp {temp_uri}: {e}")
 
@@ -871,6 +912,8 @@ class VikingFS:
             return []
 
         results = []
+        abstracts = {}
+        overviews = {}
         if include_l0:
             abstracts = await self.read_batch(relation_uris, level="l0")
         if include_l1:
@@ -901,7 +944,7 @@ class VikingFS:
         try:
             await self._ensure_parent_dirs(path)
             try:
-                await asyncio.to_thread(self.agfs.mkdir, path)
+                self.agfs.mkdir(path)
             except Exception as e:
                 if "exist" not in str(e).lower():
                     raise
@@ -910,15 +953,15 @@ class VikingFS:
                 content_path = f"{path}/{content_filename}"
                 if isinstance(content, str):
                     content = content.encode("utf-8")
-                await asyncio.to_thread(self.agfs.write, content_path, content)
+                self.agfs.write(content_path, content)
 
             if abstract:
                 abstract_path = f"{path}/.abstract.md"
-                await asyncio.to_thread(self.agfs.write, abstract_path, abstract.encode("utf-8"))
+                self.agfs.write(abstract_path, abstract.encode("utf-8"))
 
             if overview:
                 overview_path = f"{path}/.overview.md"
-                await asyncio.to_thread(self.agfs.write, overview_path, overview.encode("utf-8"))
+                self.agfs.write(overview_path, overview.encode("utf-8"))
 
         except Exception as e:
             logger.error(f"[VikingFS] Failed to write {uri}: {e}")
