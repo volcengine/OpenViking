@@ -11,13 +11,21 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 
 from openviking.parse.base import ParseResult
+from openviking.parse.parsers.audio import AudioParser
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking.parse.parsers.epub import EPubParser
+from openviking.parse.parsers.excel import ExcelParser
 
 # Import will be handled dynamically to avoid dependency issues
 from openviking.parse.parsers.html import HTMLParser
 from openviking.parse.parsers.markdown import MarkdownParser
 from openviking.parse.parsers.pdf import PDFParser
+from openviking.parse.parsers.powerpoint import PowerPointParser
 from openviking.parse.parsers.text import TextParser
+
+# Import markitdown-inspired parsers
+from openviking.parse.parsers.word import WordParser
+from openviking.parse.parsers.zip_archive import ZipParser
 
 if TYPE_CHECKING:
     from openviking.parse.custom import CustomParserProtocol
@@ -49,6 +57,14 @@ class ParserRegistry:
         self.register("pdf", PDFParser())
         self.register("html", HTMLParser())
 
+        # Register markitdown-inspired parsers (with graceful fallback)
+        self._register_optional("word", WordParser, ["docx"])
+        self._register_optional("powerpoint", PowerPointParser, ["pptx"])
+        self._register_optional("excel", ExcelParser, ["openpyxl"])
+        self._register_optional("epub", EPubParser, ["ebooklib"])
+        self._register_optional("zip", ZipParser, [])
+        self._register_optional("audio", AudioParser, ["mutagen"])
+
         # Register code parser dynamically
         try:
             from openviking.parse.parsers.code import CodeRepositoryParser
@@ -66,6 +82,65 @@ class ParserRegistry:
                 logger.info("Registered ImageParser for image formats")
             except ImportError as e:
                 logger.debug(f"ImageParser not registered: {e}")
+
+        # Register markitdown-inspired parsers (optional)
+        self._register_markitdown_parsers()
+
+    def _register_markitdown_parsers(self) -> None:
+        """Register markitdown-inspired parsers for office documents and archives."""
+        # Word (.docx) parser
+        try:
+            from openviking.parse.parsers.word import WordParser
+
+            self.register("word", WordParser())
+            logger.info("Registered WordParser for .docx files")
+        except ImportError as e:
+            logger.debug(f"WordParser not registered: {e}")
+
+        # PowerPoint (.pptx) parser
+        try:
+            from openviking.parse.parsers.powerpoint import PowerPointParser
+
+            self.register("powerpoint", PowerPointParser())
+            logger.info("Registered PowerPointParser for .pptx files")
+        except ImportError as e:
+            logger.debug(f"PowerPointParser not registered: {e}")
+
+        # Excel (.xlsx) parser
+        try:
+            from openviking.parse.parsers.excel import ExcelParser
+
+            self.register("excel", ExcelParser())
+            logger.info("Registered ExcelParser for .xlsx files")
+        except ImportError as e:
+            logger.debug(f"ExcelParser not registered: {e}")
+
+        # EPUB parser
+        try:
+            from openviking.parse.parsers.epub import EPubParser
+
+            self.register("epub", EPubParser())
+            logger.info("Registered EPubParser for .epub files")
+        except ImportError as e:
+            logger.debug(f"EPubParser not registered: {e}")
+
+        # ZIP parser
+        try:
+            from openviking.parse.parsers.zip_parser import ZipParser
+
+            self.register("zip", ZipParser())
+            logger.info("Registered ZipParser for .zip files")
+        except ImportError as e:
+            logger.debug(f"ZipParser not registered: {e}")
+
+        # Audio parser
+        try:
+            from openviking.parse.parsers.audio import AudioParser
+
+            self.register("audio", AudioParser())
+            logger.info("Registered AudioParser for audio files")
+        except ImportError as e:
+            logger.debug(f"AudioParser not registered: {e}")
 
     def register(self, name: str, parser: BaseParser) -> None:
         """
@@ -239,6 +314,29 @@ class ParserRegistry:
 
         # Content string - use text parser
         return await self._parsers["text"].parse_content(source_str, **kwargs)
+
+    def _register_optional(self, name: str, parser_class: type, required_packages: list) -> None:
+        """
+        Register an optional parser with graceful fallback.
+
+        Args:
+            name: Parser name
+            parser_class: Parser class to instantiate
+            required_packages: List of required package names to check
+        """
+        try:
+            # Check if required packages are available
+            for pkg in required_packages:
+                try:
+                    __import__(pkg)
+                except ImportError:
+                    logger.debug(f"Optional parser '{name}' not registered: {pkg} not installed")
+                    return
+
+            self.register(name, parser_class())
+            logger.info(f"Registered optional parser '{name}'")
+        except Exception as e:
+            logger.debug(f"Optional parser '{name}' not registered: {e}")
 
     def list_parsers(self) -> List[str]:
         """List registered parser names."""
