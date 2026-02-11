@@ -1,91 +1,78 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 """
-Excel (.xlsx) parser for OpenViking.
+Excel (.xlsx/.xls/.xlsm) parser for OpenViking.
 
 Converts Excel spreadsheets to Markdown then parses using MarkdownParser.
 Inspired by microsoft/markitdown approach.
 """
 
-import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, List, Optional, Union
+from typing import List, Optional, Union
 
 from openviking.parse.base import ParseResult
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking.utils.config.parser_config import ParserConfig
+from openviking.utils.logger import get_logger
 
-logger = logging.getLogger(__name__)
-
-if TYPE_CHECKING:
-    pass
+logger = get_logger(__name__)
 
 
 class ExcelParser(BaseParser):
     """
     Excel spreadsheet parser for OpenViking.
 
-    Supports: .xlsx, .xls
+    Supports: .xlsx, .xls, .xlsm
 
     Converts Excel spreadsheets to Markdown using openpyxl,
     then delegates to MarkdownParser for tree structure creation.
     """
 
-    def __init__(self, max_rows_per_sheet: int = 1000):
+    def __init__(self, config: Optional[ParserConfig] = None, max_rows_per_sheet: int = 1000):
         """
         Initialize Excel parser.
 
         Args:
+            config: Parser configuration
             max_rows_per_sheet: Maximum rows to process per sheet (0 = unlimited)
         """
+        from openviking.parse.parsers.markdown import MarkdownParser
+
+        self._md_parser = MarkdownParser(config=config)
+        self.config = config or ParserConfig()
         self.max_rows_per_sheet = max_rows_per_sheet
-        self._markdown_parser = None
-
-    def _get_markdown_parser(self):
-        """Lazy import MarkdownParser."""
-        if self._markdown_parser is None:
-            from openviking.parse.parsers.markdown import MarkdownParser
-
-            self._markdown_parser = MarkdownParser()
-        return self._markdown_parser
 
     @property
     def supported_extensions(self) -> List[str]:
-        """Return list of supported file extensions."""
-        return [".xlsx", ".xls"]
+        return [".xlsx", ".xls", ".xlsm"]
 
     async def parse(self, source: Union[str, Path], instruction: str = "", **kwargs) -> ParseResult:
         """Parse Excel spreadsheet from file path."""
         path = Path(source)
-        if not path.exists():
-            raise FileNotFoundError(f"Excel file not found: {path}")
 
-        try:
+        if path.exists():
             import openpyxl
-        except ImportError:
-            raise ImportError(
-                "openpyxl is required for Excel parsing. Install with: pip install openpyxl"
-            )
 
-        markdown_content = self._convert_to_markdown(path, openpyxl)
-        result = await self._get_markdown_parser().parse_content(
-            markdown_content, str(path), instruction, **kwargs
-        )
+            markdown_content = self._convert_to_markdown(path, openpyxl)
+            result = await self._md_parser.parse_content(
+                markdown_content, source_path=str(path), instruction=instruction, **kwargs
+            )
+        else:
+            result = await self._md_parser.parse_content(
+                str(source), instruction=instruction, **kwargs
+            )
         result.source_format = "xlsx"
+        result.parser_name = "ExcelParser"
         return result
 
     async def parse_content(
-        self,
-        content: str,
-        source_path: Optional[str] = None,
-        instruction: str = "",
-        **kwargs,
+        self, content: str, source_path: Optional[str] = None, instruction: str = "", **kwargs
     ) -> ParseResult:
-        """Parse Excel content."""
-        if source_path and Path(source_path).exists():
-            return await self.parse(source_path, instruction, **kwargs)
-        raise ValueError(
-            "ExcelParser.parse_content() requires a valid source_path to the .xlsx file"
-        )
+        """Parse content - delegates to MarkdownParser."""
+        result = await self._md_parser.parse_content(content, source_path, **kwargs)
+        result.source_format = "xlsx"
+        result.parser_name = "ExcelParser"
+        return result
 
     def _convert_to_markdown(self, path: Path, openpyxl) -> str:
         """Convert Excel spreadsheet to Markdown string."""

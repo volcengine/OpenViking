@@ -49,7 +49,7 @@ class ZipParser(BaseParser):
 
         if path.exists():
             markdown_content = self._convert_zip_to_markdown(path)
-            return await self._md_parser.parse_content(
+            result = await self._md_parser.parse_content(
                 markdown_content,
                 source_path=str(path),
                 instruction=instruction,
@@ -57,9 +57,12 @@ class ZipParser(BaseParser):
             )
         else:
             # Treat as raw content string
-            return await self._md_parser.parse_content(
+            result = await self._md_parser.parse_content(
                 str(source), instruction=instruction, **kwargs
             )
+        result.source_format = "zip"
+        result.parser_name = "ZipParser"
+        return result
 
     async def parse_content(
         self, content: str, source_path: Optional[str] = None, instruction: str = "", **kwargs

@@ -3,148 +3,84 @@
 """
 Audio file parser for OpenViking.
 
-Extracts metadata from audio files and optionally transcribes content.
+Extracts metadata from audio files using mutagen.
 Inspired by microsoft/markitdown approach.
 """
 
-import logging
 import os
 from pathlib import Path
-from typing import TYPE_CHECKING, List, Optional, Union
+from typing import List, Optional, Union
 
 from openviking.parse.base import ParseResult
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking.utils.config.parser_config import ParserConfig
+from openviking.utils.logger import get_logger
 
-logger = logging.getLogger(__name__)
-
-if TYPE_CHECKING:
-    pass
+logger = get_logger(__name__)
 
 
 class AudioParser(BaseParser):
     """
     Audio file parser for OpenViking.
 
-    Supports: .mp3, .wav, .m4a, .flac, .ogg, .aac
+    Supports: .mp3, .wav, .m4a, .flac, .ogg, .aac, .wma
 
     Extracts metadata from audio files using mutagen,
-    and optionally provides transcription placeholder.
-    Converts to markdown and delegates to MarkdownParser.
-
-    Features:
-    - ID3 tag extraction (title, artist, album, etc.)
-    - Audio properties (duration, bitrate, sample rate)
-    - Transcription placeholder (requires additional setup)
+    converts to markdown and delegates to MarkdownParser.
     """
 
-    def __init__(self, include_transcription: bool = False):
+    def __init__(self, config: Optional[ParserConfig] = None, include_transcription: bool = False):
         """
         Initialize Audio parser.
 
         Args:
+            config: Parser configuration
             include_transcription: Whether to include transcription placeholder
-                                  (actual transcription requires external service)
         """
+        from openviking.parse.parsers.markdown import MarkdownParser
+
+        self._md_parser = MarkdownParser(config=config)
+        self.config = config or ParserConfig()
         self.include_transcription = include_transcription
-        self._markdown_parser = None
-        self._mutagen_module = None
-
-    def _get_markdown_parser(self):
-        """Lazy import MarkdownParser."""
-        if self._markdown_parser is None:
-            from openviking.parse.parsers.markdown import MarkdownParser
-
-            self._markdown_parser = MarkdownParser()
-        return self._markdown_parser
-
-    def _get_mutagen(self):
-        """Lazy import mutagen."""
-        if self._mutagen_module is None:
-            try:
-                import mutagen
-
-                self._mutagen_module = mutagen
-            except ImportError:
-                raise ImportError(
-                    "mutagen is required for audio metadata extraction. "
-                    "Install with: pip install mutagen"
-                )
-        return self._mutagen_module
 
     @property
     def supported_extensions(self) -> List[str]:
-        """Return list of supported file extensions."""
         return [".mp3", ".wav", ".m4a", ".flac", ".ogg", ".aac", ".wma"]
 
     async def parse(self, source: Union[str, Path], instruction: str = "", **kwargs) -> ParseResult:
-        """
-        Parse audio file from file path.
-
-        Args:
-            source: File path to audio file
-            instruction: Processing instruction
-            **kwargs: Additional arguments
-
-        Returns:
-            ParseResult with document tree
-        """
+        """Parse audio file from file path."""
         path = Path(source)
-        if not path.exists():
-            raise FileNotFoundError(f"Audio file not found: {path}")
 
-        # Convert to markdown
-        markdown_content = self._convert_to_markdown(path)
-
-        # Delegate to MarkdownParser
-        result = await self._get_markdown_parser().parse_content(
-            markdown_content, str(path), instruction, **kwargs
-        )
+        if path.exists():
+            markdown_content = self._convert_to_markdown(path)
+            result = await self._md_parser.parse_content(
+                markdown_content, source_path=str(path), instruction=instruction, **kwargs
+            )
+        else:
+            result = await self._md_parser.parse_content(
+                str(source), instruction=instruction, **kwargs
+            )
         result.source_format = "audio"
+        result.parser_name = "AudioParser"
         return result
 
     async def parse_content(
-        self,
-        content: str,
-        source_path: Optional[str] = None,
-        instruction: str = "",
-        **kwargs,
+        self, content: str, source_path: Optional[str] = None, instruction: str = "", **kwargs
     ) -> ParseResult:
-        """
-        Parse audio content.
-
-        Note: This expects the actual audio binary content, which isn't directly
-        usable. Use parse() with a file path instead.
-
-        Args:
-            content: Not directly supported for binary audio content
-            source_path: Optional source path for reference
-            instruction: Processing instruction
-            **kwargs: Additional arguments
-
-        Returns:
-            ParseResult with document tree
-        """
-        if source_path and Path(source_path).exists():
-            return await self.parse(source_path, instruction, **kwargs)
-        raise ValueError(
-            "AudioParser.parse_content() requires a valid source_path to the audio file"
-        )
+        """Parse content - delegates to MarkdownParser."""
+        result = await self._md_parser.parse_content(content, source_path, **kwargs)
+        result.source_format = "audio"
+        result.parser_name = "AudioParser"
+        return result
 
     def _convert_to_markdown(self, path: Path) -> str:
-        """
-        Convert audio file metadata to Markdown string.
-
-        Args:
-            path: Path to audio file
-
-        Returns:
-            Markdown formatted string
-        """
+        """Convert audio file metadata to Markdown string."""
         markdown_parts = []
         markdown_parts.append(f"# Audio File: {path.name}")
 
         try:
-            mutagen = self._get_mutagen()
+            import mutagen
+
             audio = mutagen.File(path)
 
             if audio is None:
@@ -246,16 +182,13 @@ class AudioParser(BaseParser):
 
         return tags
 
-    def _format_size(self, size_bytes: int) -> str:
-        """Format byte size to human readable string."""
-        if size_bytes < 1024:
-            return f"{size_bytes} B"
-        elif size_bytes < 1024 * 1024:
-            return f"{size_bytes / 1024:.1f} KB"
-        elif size_bytes < 1024 * 1024 * 1024:
-            return f"{size_bytes / (1024 * 1024):.1f} MB"
-        else:
-            return f"{size_bytes / (1024 * 1024 * 1024):.1f} GB"
+    def _format_size(self, size: int) -> str:
+        """Format file size in human-readable format."""
+        for unit in ["B", "KB", "MB", "GB", "TB"]:
+            if size < 1024.0:
+                return f"{size:.1f} {unit}"
+            size /= 1024.0
+        return f"{size:.1f} PB"
 
     def _format_duration(self, seconds: float) -> str:
         """Format duration in seconds to human readable string."""

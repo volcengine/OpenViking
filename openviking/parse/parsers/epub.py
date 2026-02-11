@@ -8,19 +8,17 @@ Inspired by microsoft/markitdown approach.
 """
 
 import html
-import logging
 import re
 import zipfile
 from pathlib import Path
-from typing import TYPE_CHECKING, List, Optional, Union
+from typing import List, Optional, Union
 
 from openviking.parse.base import ParseResult
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking.utils.config.parser_config import ParserConfig
+from openviking.utils.logger import get_logger
 
-logger = logging.getLogger(__name__)
-
-if TYPE_CHECKING:
-    pass
+logger = get_logger(__name__)
 
 
 class EPubParser(BaseParser):
@@ -33,49 +31,42 @@ class EPubParser(BaseParser):
     or falls back to manual extraction, then delegates to MarkdownParser.
     """
 
-    def __init__(self):
+    def __init__(self, config: Optional[ParserConfig] = None):
         """Initialize EPub parser."""
-        self._markdown_parser = None
+        from openviking.parse.parsers.markdown import MarkdownParser
 
-    def _get_markdown_parser(self):
-        """Lazy import MarkdownParser."""
-        if self._markdown_parser is None:
-            from openviking.parse.parsers.markdown import MarkdownParser
-
-            self._markdown_parser = MarkdownParser()
-        return self._markdown_parser
+        self._md_parser = MarkdownParser(config=config)
+        self.config = config or ParserConfig()
 
     @property
     def supported_extensions(self) -> List[str]:
-        """Return list of supported file extensions."""
         return [".epub"]
 
     async def parse(self, source: Union[str, Path], instruction: str = "", **kwargs) -> ParseResult:
         """Parse EPub e-book from file path."""
         path = Path(source)
-        if not path.exists():
-            raise FileNotFoundError(f"EPub file not found: {path}")
 
-        markdown_content = self._convert_to_markdown(path)
-        result = await self._get_markdown_parser().parse_content(
-            markdown_content, str(path), instruction, **kwargs
-        )
+        if path.exists():
+            markdown_content = self._convert_to_markdown(path)
+            result = await self._md_parser.parse_content(
+                markdown_content, source_path=str(path), instruction=instruction, **kwargs
+            )
+        else:
+            result = await self._md_parser.parse_content(
+                str(source), instruction=instruction, **kwargs
+            )
         result.source_format = "epub"
+        result.parser_name = "EPubParser"
         return result
 
     async def parse_content(
-        self,
-        content: str,
-        source_path: Optional[str] = None,
-        instruction: str = "",
-        **kwargs,
+        self, content: str, source_path: Optional[str] = None, instruction: str = "", **kwargs
     ) -> ParseResult:
-        """Parse EPub content."""
-        if source_path and Path(source_path).exists():
-            return await self.parse(source_path, instruction, **kwargs)
-        raise ValueError(
-            "EPubParser.parse_content() requires a valid source_path to the .epub file"
-        )
+        """Parse content - delegates to MarkdownParser."""
+        result = await self._md_parser.parse_content(content, source_path, **kwargs)
+        result.source_format = "epub"
+        result.parser_name = "EPubParser"
+        return result
 
     def _convert_to_markdown(self, path: Path) -> str:
         """Convert EPub e-book to Markdown string."""

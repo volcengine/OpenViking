@@ -37,6 +37,13 @@ class TestWordParser:
         assert result.source_format == "docx"
         assert result.parser_name == "WordParser"
 
+    @pytest.mark.asyncio
+    async def test_parse_nonexistent_file_falls_back(self, word_parser):
+        """Test that parse() with non-existent path treats source as content."""
+        result = await word_parser.parse("# Heading\n\nSome content")
+        assert result.source_format == "docx"
+        assert result.parser_name == "WordParser"
+
 
 # -----------------------------------------------------------------------------
 # PowerPoint Parser Tests
@@ -77,6 +84,7 @@ class TestExcelParser:
 
     def test_supported_extensions(self, excel_parser):
         assert ".xlsx" in excel_parser.supported_extensions
+        assert ".xls" in excel_parser.supported_extensions
         assert ".xlsm" in excel_parser.supported_extensions
 
     @pytest.mark.asyncio
@@ -163,6 +171,23 @@ class TestZipParser:
         assert groups[".json"] == ["data.json"]
         assert groups[".py"] == ["script.py"]
 
+    @pytest.mark.asyncio
+    async def test_parse_zip_file(self, zip_parser, sample_zip):
+        """Test parsing an actual ZIP file."""
+        result = await zip_parser.parse(sample_zip)
+
+        assert result.source_format == "zip"
+        assert result.parser_name == "ZipParser"
+
+    @pytest.mark.asyncio
+    async def test_parse_content_delegates_to_markdown(self, zip_parser):
+        """Test that parse_content delegates to MarkdownParser."""
+        content = "# ZIP Archive: test.zip\n\nSome content"
+        result = await zip_parser.parse_content(content)
+
+        assert result.source_format == "zip"
+        assert result.parser_name == "ZipParser"
+
 
 # -----------------------------------------------------------------------------
 # Audio Parser Tests
@@ -188,6 +213,7 @@ class TestAudioParser:
         """Test file size formatting."""
         assert audio_parser._format_size(500) == "500.0 B"
         assert audio_parser._format_size(2048) == "2.0 KB"
+        assert audio_parser._format_size(2097152) == "2.0 MB"
 
     def test_format_duration(self, audio_parser):
         """Test duration formatting."""
@@ -198,7 +224,7 @@ class TestAudioParser:
     @pytest.mark.asyncio
     async def test_parse_content_delegates_to_markdown(self, audio_parser):
         """Test that parse_content delegates to MarkdownParser."""
-        content = "# Audio File: test.mp3"
+        content = "# Audio File: test.mp3\n\n**Duration:** 3:45"
         result = await audio_parser.parse_content(content, source_path="test.mp3")
 
         assert result.source_format == "audio"
@@ -219,52 +245,42 @@ class TestRegistryIntegration:
 
         return ParserRegistry(register_optional=False)
 
-    def test_register_word_parser(self, registry):
-        """Test Word parser can be registered."""
-        try:
-            from openviking.parse.parsers.word import WordParser
+    def test_markitdown_parsers_registered(self, registry):
+        """Test all markitdown parsers are registered by default."""
+        parsers = registry.list_parsers()
+        assert "word" in parsers
+        assert "powerpoint" in parsers
+        assert "excel" in parsers
+        assert "epub" in parsers
+        assert "zip" in parsers
+        assert "audio" in parsers
 
-            registry.register("word", WordParser())
-            assert "word" in registry.list_parsers()
-            assert ".docx" in registry.list_supported_extensions()
-        except ImportError:
-            pytest.skip("python-docx not installed")
-
-    def test_register_ppt_parser(self, registry):
-        """Test PowerPoint parser can be registered."""
-        try:
-            from openviking.parse.parsers.powerpoint import PowerPointParser
-
-            registry.register("powerpoint", PowerPointParser())
-            assert "powerpoint" in registry.list_parsers()
-            assert ".pptx" in registry.list_supported_extensions()
-        except ImportError:
-            pytest.skip("python-pptx not installed")
-
-    def test_register_excel_parser(self, registry):
-        """Test Excel parser can be registered."""
-        try:
-            from openviking.parse.parsers.excel import ExcelParser
-
-            registry.register("excel", ExcelParser())
-            assert "excel" in registry.list_parsers()
-            assert ".xlsx" in registry.list_supported_extensions()
-        except ImportError:
-            pytest.skip("openpyxl not installed")
+    def test_extensions_mapped(self, registry):
+        """Test file extensions are properly mapped."""
+        extensions = registry.list_supported_extensions()
+        assert ".docx" in extensions
+        assert ".pptx" in extensions
+        assert ".xlsx" in extensions
+        assert ".xlsm" in extensions
+        assert ".epub" in extensions
+        assert ".zip" in extensions
+        assert ".mp3" in extensions
+        assert ".wav" in extensions
 
     def test_get_parser_for_file(self, registry):
         """Test getting parser for specific file types."""
-        try:
-            from openviking.parse.parsers.excel import ExcelParser
-            from openviking.parse.parsers.word import WordParser
-            from openviking.parse.parsers.zip_parser import ZipParser
+        assert registry.get_parser_for_file("test.docx") is not None
+        assert registry.get_parser_for_file("test.xlsx") is not None
+        assert registry.get_parser_for_file("test.zip") is not None
+        assert registry.get_parser_for_file("test.pptx") is not None
+        assert registry.get_parser_for_file("test.epub") is not None
+        assert registry.get_parser_for_file("test.mp3") is not None
 
-            registry.register("word", WordParser())
-            registry.register("excel", ExcelParser())
-            registry.register("zip", ZipParser())
-
-            assert registry.get_parser_for_file("test.docx") is not None
-            assert registry.get_parser_for_file("test.xlsx") is not None
-            assert registry.get_parser_for_file("test.zip") is not None
-        except ImportError:
-            pytest.skip("Required dependencies not installed")
+    def test_parser_types(self, registry):
+        """Test parsers are the correct types."""
+        assert isinstance(registry.get_parser("word"), WordParser)
+        assert isinstance(registry.get_parser("powerpoint"), PowerPointParser)
+        assert isinstance(registry.get_parser("excel"), ExcelParser)
+        assert isinstance(registry.get_parser("epub"), EPubParser)
+        assert isinstance(registry.get_parser("zip"), ZipParser)
+        assert isinstance(registry.get_parser("audio"), AudioParser)

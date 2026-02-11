@@ -25,7 +25,7 @@ from openviking.parse.parsers.text import TextParser
 
 # Import markitdown-inspired parsers
 from openviking.parse.parsers.word import WordParser
-from openviking.parse.parsers.zip_archive import ZipParser
+from openviking.parse.parsers.zip_parser import ZipParser
 
 if TYPE_CHECKING:
     from openviking.parse.custom import CustomParserProtocol
