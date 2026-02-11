@@ -6,6 +6,7 @@
 from pathlib import Path
 
 from openviking import AsyncOpenViking
+from openviking.session.user_id import UserIdentifier
 
 
 class TestClientInitialization:
@@ -34,7 +35,7 @@ class TestClientClose:
     async def test_close_success(self, test_data_dir: Path):
         """Test normal close"""
         await AsyncOpenViking.reset()
-        client = AsyncOpenViking(path=str(test_data_dir), user="test")
+        client = AsyncOpenViking(path=str(test_data_dir), user=UserIdentifier.the_default_user("test"))
         await client.initialize()
 
         await client.close()
@@ -45,7 +46,7 @@ class TestClientClose:
     async def test_close_idempotent(self, test_data_dir: Path):
         """Test repeated close is safe"""
         await AsyncOpenViking.reset()
-        client = AsyncOpenViking(path=str(test_data_dir), user="test")
+        client = AsyncOpenViking(path=str(test_data_dir), user=UserIdentifier.the_default_user("test"))
         await client.initialize()
 
         await client.close()
@@ -61,12 +62,12 @@ class TestClientReset:
         """Test reset clears singleton"""
         await AsyncOpenViking.reset()
 
-        client1 = AsyncOpenViking(path=str(test_data_dir), user="test")
+        client1 = AsyncOpenViking(path=str(test_data_dir), user=UserIdentifier.the_default_user("test"))
         await client1.initialize()
 
         await AsyncOpenViking.reset()
 
-        client2 = AsyncOpenViking(path=str(test_data_dir), user="test")
+        client2 = AsyncOpenViking(path=str(test_data_dir), user=UserIdentifier.the_default_user("test"))
         # Should be new instance after reset
         assert client1 is not client2
 
@@ -80,8 +81,8 @@ class TestClientSingleton:
         """Test embedded mode uses singleton"""
         await AsyncOpenViking.reset()
 
-        client1 = AsyncOpenViking(path=str(test_data_dir), user="test")
-        client2 = AsyncOpenViking(path=str(test_data_dir), user="test")
+        client1 = AsyncOpenViking(path=str(test_data_dir), user=UserIdentifier.the_default_user("test"))
+        client2 = AsyncOpenViking(path=str(test_data_dir), user=UserIdentifier.the_default_user("test"))
 
         assert client1 is client2
 

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest_asyncio
 
 from openviking.client.http import HTTPClient
+from openviking.session.user_id import UserIdentifier
 from tests.server.conftest import SAMPLE_MD_CONTENT, TEST_TMP_DIR
 
 
@@ -17,7 +18,7 @@ async def http_client(running_server):
     port, svc = running_server
     client = HTTPClient(
         url=f"http://127.0.0.1:{port}",
-        user="sdk_test_user",
+        user=UserIdentifier.the_default_user("sdk_test_user"),
     )
     await client.initialize()
     yield client, svc
