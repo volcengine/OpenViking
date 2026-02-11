@@ -3,6 +3,7 @@
 
 """Full workflow integration tests"""
 
+import shutil
 from pathlib import Path
 
 import pytest_asyncio
@@ -16,6 +17,10 @@ from openviking.session.user_id import UserIdentifier
 async def integration_client(test_data_dir: Path):
     """Integration test client"""
     await AsyncOpenViking.reset()
+
+    # Clean data directory to avoid AGFS "directory already exists" errors
+    shutil.rmtree(test_data_dir, ignore_errors=True)
+    test_data_dir.mkdir(parents=True, exist_ok=True)
 
     client = AsyncOpenViking(path=str(test_data_dir), user=UserIdentifier.the_default_user("integration_test_user"))
     await client.initialize()
