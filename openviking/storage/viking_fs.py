@@ -19,6 +19,8 @@ from datetime import datetime
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
+from pyagfs import AGFSClient
+
 from openviking.storage.vikingdb_interface import VikingDBInterface
 from openviking.utils.logger import get_logger
 
@@ -111,13 +113,6 @@ class VikingFS:
         vector_store: Optional["VikingDBInterface"] = None,
         timeout: int = 10,
     ):
-        try:
-            from pyagfs import AGFSClient
-        except ImportError:
-            raise ImportError(
-                "pyagfs not found. Please install: pip install -e third_party/agfs/agfs-sdk/python"
-            )
-
         self.agfs = AGFSClient(api_base_url=agfs_url, timeout=timeout)
         self.query_embedder = query_embedder
         self.rerank_config = rerank_config
@@ -534,17 +529,10 @@ class VikingFS:
 
     def _uri_to_path(self, uri: str) -> str:
         """viking://user/memories/preferences/test -> /local/user/memories/preferences/test"""
-        if uri.startswith("viking://"):
-            path = uri.replace("viking://", "/")
-        elif uri.startswith("/"):
-            path = uri
-        else:
-            path = f"/{uri}"
-
-        if not path.startswith("/local/"):
-            path = "/local" + path
-
-        return path.rstrip("/")
+        remainder = uri[len("viking://"):].strip("/")
+        if not remainder:
+            return "/local"
+        return f"/local/{remainder}"
 
     def _path_to_uri(self, path: str) -> str:
         """/local/user/memories/preferences -> viking://user/memories/preferences"""

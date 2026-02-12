@@ -57,7 +57,11 @@ def _run_cli(args, server_url, env=None, expected_exit_code=0):
 
 
 def test_requires_ovcli_conf():
-    result = runner.invoke(app, ["find", "hello"], env={})
+    result = runner.invoke(
+        app,
+        ["find", "hello"],
+        env={"OPENVIKING_CLI_CONFIG_FILE": "/tmp/nonexistent/ovcli.conf"},
+    )
 
     assert result.exit_code == 2
     assert "ovcli.conf" in result.output

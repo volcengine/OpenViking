@@ -4,6 +4,8 @@ from typing import Dict, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
+COLLECTION_NAME = "context"
+
 
 class VolcengineConfig(BaseModel):
     """Configuration for Volcengine VikingDB."""
@@ -38,7 +40,7 @@ class VectorDBBackendConfig(BaseModel):
         description="VectorDB backend type: 'local' (file-based), 'http' (remote service), or 'volcengine' (VikingDB)",
     )
 
-    name: Optional[str] = Field(default="context", description="Collection name for VectorDB")
+    name: Optional[str] = Field(default=COLLECTION_NAME, description="Collection name for VectorDB")
 
     path: Optional[str] = Field(default="./data", description="Local storage path for 'local' type")
 

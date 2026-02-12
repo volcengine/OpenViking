@@ -19,8 +19,6 @@ from openviking.utils.config.open_viking_config import OpenVikingConfig
 
 logger = get_logger(__name__)
 
-COLLECTION_NAME = "context"
-
 
 class CollectionSchemas:
     """

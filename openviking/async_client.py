@@ -1,15 +1,15 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 """
-Async OpenViking client implementation.
+Async OpenViking client implementation (embedded mode only).
 
-Supports both embedded mode (LocalClient) and HTTP mode (HTTPClient).
+For HTTP mode, use AsyncHTTPClient or SyncHTTPClient.
 """
 
 import threading
 from typing import Any, Dict, List, Optional, Union
 
-from openviking.client import HTTPClient, LocalClient, Session
+from openviking.client import LocalClient, Session
 from openviking.client.base import BaseClient
 from openviking.service.debug_service import SystemStatus
 from openviking.session.user_id import UserIdentifier
@@ -20,23 +20,13 @@ logger = get_logger(__name__)
 
 class AsyncOpenViking:
     """
-    OpenViking main client class (Asynchronous).
+    OpenViking main client class (Asynchronous, embedded mode only).
 
-    Supports two deployment modes:
-    - Embedded mode: Uses local storage and auto-starts services (singleton)
-    - HTTP mode: Connects to remote OpenViking Server via HTTP API (not singleton)
+    Uses local storage and auto-starts services (singleton).
+    For HTTP mode, use AsyncHTTPClient or SyncHTTPClient instead.
 
     Examples:
-        # 1. Embedded mode (loads config from ov.conf)
         client = AsyncOpenViking(path="./data")
-        await client.initialize()
-
-        # 2. HTTP mode (connects to OpenViking Server)
-        client = AsyncOpenViking(
-            url="http://localhost:8000",
-            api_key="your-api-key",
-            user="alice"
-        )
         await client.initialize()
     """
 
@@ -44,12 +34,6 @@ class AsyncOpenViking:
     _lock = threading.Lock()
 
     def __new__(cls, *args, **kwargs):
-        # HTTP mode: no singleton
-        url = kwargs.get("url")
-        if url:
-            return object.__new__(cls)
-
-        # Embedded mode: use singleton
         if cls._instance is None:
             with cls._lock:
                 if cls._instance is None:
@@ -59,41 +43,26 @@ class AsyncOpenViking:
     def __init__(
         self,
         path: Optional[str] = None,
-        url: Optional[str] = None,
-        api_key: Optional[str] = None,
-        user: Optional[UserIdentifier] = None,
         **kwargs,
     ):
         """
-        Initialize OpenViking client.
+        Initialize OpenViking client (embedded mode).
 
         Args:
-            path: Local storage path for embedded mode (overrides ov.conf storage path).
-            url: OpenViking Server URL for HTTP mode.
-            api_key: API key for HTTP mode authentication.
-            user: UserIdentifier object for session management.
+            path: Local storage path (overrides ov.conf storage path).
             **kwargs: Additional configuration parameters.
         """
         # Singleton guard for repeated initialization
         if hasattr(self, "_singleton_initialized") and self._singleton_initialized:
             return
 
-        if isinstance(user, str):
-            user = UserIdentifier.the_default_user(user)
-        self.user = user or UserIdentifier.the_default_user()
+        self.user = UserIdentifier.the_default_user()
         self._initialized = False
         self._singleton_initialized = True
 
-        # Create the appropriate client
-        if url:
-            # HTTP mode
-            self._client: BaseClient = HTTPClient(url=url, api_key=api_key, user=self.user)
-        else:
-            # Embedded mode - LocalClient loads config from ov.conf singleton
-            self._client: BaseClient = LocalClient(
-                path=path,
-                user=self.user,
-            )
+        self._client: BaseClient = LocalClient(
+            path=path,
+        )
 
     # ============= Lifecycle methods =============
 

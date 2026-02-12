@@ -21,15 +21,66 @@ client = ov.OpenViking(path="./data")
 client.initialize()
 ```
 
+Embedded mode uses `ov.conf` to configure embedding, vlm, storage, and other modules. Default path: `~/.openviking/ov.conf`. You can also specify the path via environment variable:
+
+```bash
+export OPENVIKING_CONFIG_FILE=/path/to/ov.conf
+```
+
+Minimal configuration example:
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "api_base": "<api-endpoint>",
+      "api_key": "<your-api-key>",
+      "provider": "<volcengine|openai>",
+      "dimension": 1024,
+      "model": "<model-name>"
+    }
+  },
+  "vlm": {
+    "api_base": "<api-endpoint>",
+    "api_key": "<your-api-key>",
+    "provider": "<volcengine|openai>",
+    "model": "<model-name>"
+  }
+}
+```
+
+For full configuration options and provider-specific examples, see the [Configuration Guide](../guides/01-configuration.md).
+
 ### HTTP Mode
 
 ```python
-client = ov.OpenViking(
+client = ov.SyncHTTPClient(
     url="http://localhost:1933",
     api_key="your-key",
 )
 client.initialize()
 ```
+
+When `url` is not explicitly provided, the HTTP client automatically loads connection info from `ovcli.conf`. This config file is shared between the HTTP client and CLI. Default path: `~/.openviking/ovcli.conf`. You can also specify the path via environment variable:
+
+```bash
+export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
+```
+
+```json
+{
+  "url": "http://localhost:1933",
+  "api_key": "your-key"
+}
+```
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| `url` | Server address | (required) |
+| `api_key` | API key | `null` (no auth) |
+| `output` | Default output format: `"table"` or `"json"` | `"table"` |
+
+See the [Configuration Guide](../guides/01-configuration.md#ovcliconf) for details.
 
 ### Direct HTTP (curl)
 
@@ -40,18 +91,7 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
 
 ### CLI Mode
 
-The CLI connects to an OpenViking server and exposes all operations as shell commands.
-
-**Configuration**
-
-Create `~/.openviking/ovcli.conf` (or set `OPENVIKING_CLI_CONFIG_FILE` environment variable):
-
-```json
-{
-  "url": "http://localhost:1933",
-  "api_key": "your-key"
-}
-```
+The CLI connects to an OpenViking server and exposes all operations as shell commands. The CLI also loads connection info from `ovcli.conf` (shared with the HTTP client).
 
 **Basic Usage**
 
@@ -74,15 +114,32 @@ openviking --json ls viking://resources/
 openviking -o json ls viking://resources/
 ```
 
-## Client Lifecycle
+## Lifecycle
+
+**Embedded Mode**
 
 ```python
-client = ov.OpenViking(path="./data")  # or url="http://..."
-client.initialize()  # Required before any operations
+import openviking as ov
+
+client = ov.OpenViking(path="./data")
+client.initialize()
 
 # ... use client ...
 
-client.close()  # Release resources
+client.close()
+```
+
+**HTTP Mode**
+
+```python
+import openviking as ov
+
+client = ov.SyncHTTPClient(url="http://localhost:1933")
+client.initialize()
+
+# ... use client ...
+
+client.close()
 ```
 
 ## Authentication

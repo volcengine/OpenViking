@@ -53,57 +53,7 @@ OpenViking 支持多种模型服务：
 }
 ```
 
-### 配置示例
-
-<details>
-<summary><b>示例 1：使用火山引擎（豆包模型）</b></summary>
-
-```json
-{
-  "embedding": {
-    "dense": {
-      "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
-      "api_key"  : "your-volcengine-api-key",
-      "provider" : "volcengine",
-      "dimension": 1024,
-      "model"    : "doubao-embedding-vision-250615"
-    }
-  },
-  "vlm": {
-    "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
-    "api_key"  : "your-volcengine-api-key",
-    "provider" : "volcengine",
-    "model"    : "doubao-seed-1-8-251228"
-  }
-}
-```
-
-</details>
-
-<details>
-<summary><b>示例 2：使用 OpenAI 模型</b></summary>
-
-```json
-{
-  "embedding": {
-    "dense": {
-      "api_base" : "https://api.openai.com/v1",
-      "api_key"  : "your-openai-api-key",
-      "provider" : "openai",
-      "dimension": 3072,
-      "model"    : "text-embedding-3-large"
-    }
-  },
-  "vlm": {
-    "api_base" : "https://api.openai.com/v1",
-    "api_key"  : "your-openai-api-key",
-    "provider" : "openai",
-    "model"    : "gpt-4-vision-preview"
-  }
-}
-```
-
-</details>
+各模型服务的完整配置示例请参见 [配置指南 - 配置示例](../guides/01-configuration.md#配置示例)。
 
 ### 设置环境变量
 

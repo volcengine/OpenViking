@@ -18,6 +18,8 @@ from openviking.prompts import render_prompt
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.utils import get_logger
 from openviking.utils.config import get_openviking_config
+from openviking.session.user_id import UserIdentifier
+
 
 logger = get_logger(__name__)
 
@@ -67,11 +69,11 @@ class MemoryExtractor:
     async def extract(
         self,
         context: dict,
-        user: str,
+        user: UserIdentifier,
         session_id: str,
     ) -> List[CandidateMemory]:
         """Extract memory candidates from messages."""
-        user = user or "default"
+        user = user
         vlm = get_openviking_config().vlm
         if not vlm or not vlm.is_available():
             logger.warning("LLM not available, skipping memory extraction")
@@ -91,7 +93,7 @@ class MemoryExtractor:
             {
                 "summary": "",
                 "recent_messages": formatted_messages,
-                "user": user,
+                "user": user._user_id,
                 "feedback": "",
             },
         )

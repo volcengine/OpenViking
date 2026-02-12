@@ -42,8 +42,8 @@ bash client_cli.sh                       # CLI 使用示例
 ## 文件说明
 
 ```
-client_sync.py      # 同步客户端示例（SyncOpenViking HTTP mode）
-client_async.py     # 异步客户端示例（AsyncOpenViking HTTP mode）
+client_sync.py      # 同步客户端示例（SyncHTTPClient）
+client_async.py     # 异步客户端示例（AsyncHTTPClient）
 client_cli.sh       # CLI 使用示例（覆盖所有命令和参数）
 ov.conf.example     # Server/SDK 配置文件模板（ov.conf）
 ovcli.conf.example  # CLI 连接配置文件模板（ovcli.conf）
@@ -73,14 +73,12 @@ pyproject.toml      # 项目依赖
 |------|------|--------|
 | `url` | Server 地址 | （必填） |
 | `api_key` | API Key 认证 | `null`（无认证） |
-| `user` | 默认用户名 | `"default"` |
 | `output` | 默认输出格式：`"table"` 或 `"json"` | `"table"` |
 
 ```json
 {
   "url": "http://localhost:1933",
   "api_key": null,
-  "user": "default",
   "output": "table"
 }
 ```
@@ -116,7 +114,7 @@ main()
 ```python
 import openviking as ov
 
-client = ov.OpenViking(url="http://localhost:1933", api_key="your-key")
+client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 client.add_resource(path="./document.md")
@@ -131,7 +129,7 @@ client.close()
 ```python
 import openviking as ov
 
-client = ov.AsyncOpenViking(url="http://localhost:1933", api_key="your-key")
+client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 await client.initialize()
 
 await client.add_resource(path="./document.md")

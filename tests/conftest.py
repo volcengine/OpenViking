@@ -12,7 +12,6 @@ import pytest
 import pytest_asyncio
 
 from openviking import AsyncOpenViking
-from openviking.session.user_id import UserIdentifier
 
 # Test data root directory
 TEST_ROOT = Path(__file__).parent
@@ -150,7 +149,7 @@ async def client(test_data_dir: Path) -> AsyncGenerator[AsyncOpenViking, None]:
     """Create initialized OpenViking client"""
     await AsyncOpenViking.reset()
 
-    client = AsyncOpenViking(path=str(test_data_dir), user=UserIdentifier.the_default_user("test_user"))
+    client = AsyncOpenViking(path=str(test_data_dir))
     await client.initialize()
 
     yield client
@@ -164,7 +163,7 @@ async def uninitialized_client(test_data_dir: Path) -> AsyncGenerator[AsyncOpenV
     """Create uninitialized OpenViking client (for testing initialization flow)"""
     await AsyncOpenViking.reset()
 
-    client = AsyncOpenViking(path=str(test_data_dir), user=UserIdentifier.the_default_user("test_user"))
+    client = AsyncOpenViking(path=str(test_data_dir))
 
     yield client
 

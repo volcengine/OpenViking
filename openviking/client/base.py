@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Base client interface for OpenViking.
 
-Defines the abstract base class that both LocalClient and HTTPClient implement.
+Defines the abstract base class that both LocalClient and AsyncHTTPClient implement.
 """
 
 from abc import ABC, abstractmethod
@@ -12,7 +12,7 @@ from typing import Any, Dict, List, Optional, Union
 class BaseClient(ABC):
     """Abstract base class for OpenViking clients.
 
-    Both LocalClient (embedded mode) and HTTPClient (HTTP mode) implement this interface.
+    Both LocalClient (embedded mode) and AsyncHTTPClient (HTTP mode) implement this interface.
     """
 
     # ============= Lifecycle =============

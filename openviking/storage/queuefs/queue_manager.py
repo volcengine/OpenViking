@@ -11,6 +11,8 @@ import threading
 import time
 from typing import Any, Dict, Optional, Union
 
+from pyagfs import AGFSClient
+
 from openviking.utils.logger import get_logger
 
 from .embedding_queue import EmbeddingQueue
@@ -82,13 +84,6 @@ class QueueManager:
         """Start QueueManager, establish connection and ensure queuefs is mounted."""
         if self._started:
             return
-
-        try:
-            from pyagfs import AGFSClient
-        except ImportError:
-            raise ImportError(
-                "pyagfs not found. Please install: pip install -e third_party/agfs/agfs-sdk/python"
-            )
 
         self._agfs = AGFSClient(api_base_url=self._agfs_url, timeout=self.timeout)
         self._started = True

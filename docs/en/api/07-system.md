@@ -8,19 +8,12 @@ OpenViking provides system health, observability, and debug APIs for monitoring 
 
 Basic health check endpoint. No authentication required.
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 # Check if system is healthy
 if client.observer.is_healthy():
     print("System OK")
-
-client.close()
 ```
 
 **HTTP API**
@@ -53,17 +46,10 @@ openviking health
 
 Get system status including initialization state and user info.
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 print(client.observer.system)
-
-client.close()
 ```
 
 **HTTP API**
@@ -108,22 +94,15 @@ Wait for all asynchronous processing (embedding, semantic generation) to complet
 |-----------|------|----------|---------|-------------|
 | timeout | float | No | None | Timeout in seconds |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 # Add resources
 client.add_resource("./docs/")
 
 # Wait for all processing to complete
 status = client.wait_processed()
 print(f"Processing complete: {status}")
-
-client.close()
 ```
 
 **HTTP API**
@@ -172,14 +151,9 @@ The observer API provides detailed component-level monitoring.
 
 Get queue system status (embedding and semantic processing queues).
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 print(client.observer.queue)
 # Output:
 # [queue] (healthy)
@@ -187,8 +161,6 @@ print(client.observer.queue)
 # Embedding             0        0            10         0       10
 # Semantic              0        0            10         0       10
 # TOTAL                 0        0            20         0       20
-
-client.close()
 ```
 
 **HTTP API**
@@ -229,7 +201,7 @@ openviking observer queue
 
 Get VikingDB status (collections, indexes, vector counts).
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 print(client.observer.vikingdb)
@@ -282,7 +254,7 @@ openviking observer vikingdb
 
 Get VLM (Vision Language Model) token usage status.
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 print(client.observer.vlm)
@@ -331,7 +303,7 @@ openviking observer vlm
 
 Get overall system status including all components.
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 print(client.observer.system)
@@ -404,20 +376,13 @@ openviking observer system
 
 Quick health check for the entire system.
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 if client.observer.is_healthy():
     print("System OK")
 else:
     print(client.observer.system)
-
-client.close()
 ```
 
 **HTTP API**

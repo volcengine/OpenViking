@@ -19,7 +19,7 @@ python -m openviking serve
 python -m openviking serve --config /path/to/ov.conf
 
 # 覆盖 host/port
-python -m openviking serve --port 8000
+python -m openviking serve --port 1933
 ```
 
 你应该看到：
@@ -40,7 +40,7 @@ curl http://localhost:1933/health
 ```python
 import openviking as ov
 
-client = ov.OpenViking(url="http://localhost:1933")
+client = ov.SyncHTTPClient(url="http://localhost:1933")
 ```
 
 如果服务端启用了认证，需要传入 `api_key`：
@@ -48,7 +48,7 @@ client = ov.OpenViking(url="http://localhost:1933")
 ```python
 import openviking as ov
 
-client = ov.OpenViking(url="http://localhost:1933", api_key="your-key")
+client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 ```
 
 **完整示例：**
@@ -56,7 +56,7 @@ client = ov.OpenViking(url="http://localhost:1933", api_key="your-key")
 ```python
 import openviking as ov
 
-client = ov.OpenViking(url="http://localhost:1933")
+client = ov.SyncHTTPClient(url="http://localhost:1933")
 
 try:
     client.initialize()

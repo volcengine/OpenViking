@@ -2,7 +2,7 @@
 """
 OpenViking 同步客户端示例 (HTTP mode)
 
-使用 SyncOpenViking 通过 HTTP 连接远程 Server，演示完整 API。
+使用 SyncHTTPClient 通过 HTTP 连接远程 Server，演示完整 API。
 
 前置条件:
     先启动 Server: openviking serve
@@ -63,7 +63,7 @@ def main():
     parser.add_argument("--api-key", default=None, help="API key")
     args = parser.parse_args()
 
-    client = ov.OpenViking(url=args.url, api_key=args.api_key)
+    client = ov.SyncHTTPClient(url=args.url, api_key=args.api_key)
 
     try:
         # ── Connect ──
@@ -182,7 +182,7 @@ def main():
 
         ctx_results = spin(
             "Searching with session context...",
-            client.search, "how to use it", session=session, limit=3,
+            client.search, "how to use it", session_id=session.session_id, limit=3,
         )
         if hasattr(ctx_results, "resources") and ctx_results.resources:
             for r in ctx_results.resources:

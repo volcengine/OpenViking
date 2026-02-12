@@ -18,7 +18,7 @@ curl http://localhost:1933/health
 
 ### 整体系统健康状态
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 status = client.get_status()
@@ -60,7 +60,7 @@ curl http://localhost:1933/api/v1/observer/system \
 
 ### 快速健康检查
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 if client.is_healthy():

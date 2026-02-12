@@ -14,19 +14,12 @@ OpenViking 提供类 Unix 的文件系统操作来管理上下文。
 |------|------|------|--------|------|
 | uri | str | 是 | - | Viking URI（必须是目录） |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 abstract = client.abstract("viking://resources/docs/")
 print(f"Abstract: {abstract}")
 # Output: "Documentation for the project API, covering authentication, endpoints..."
-
-client.close()
 ```
 
 **HTTP API**
@@ -68,18 +61,11 @@ openviking abstract viking://resources/docs/
 |------|------|------|--------|------|
 | uri | str | 是 | - | Viking URI（必须是目录） |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 overview = client.overview("viking://resources/docs/")
 print(f"Overview:\n{overview}")
-
-client.close()
 ```
 
 **HTTP API**
@@ -121,18 +107,11 @@ openviking overview viking://resources/docs/
 |------|------|------|--------|------|
 | uri | str | 是 | - | Viking URI |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 content = client.read("viking://resources/docs/api.md")
 print(f"Content:\n{content}")
-
-client.close()
 ```
 
 **HTTP API**
@@ -190,20 +169,13 @@ openviking read viking://resources/docs/api.md
 }
 ```
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 entries = client.ls("viking://resources/")
 for entry in entries:
     type_str = "dir" if entry['isDir'] else "file"
     print(f"{entry['name']} - {type_str}")
-
-client.close()
 ```
 
 **HTTP API**
@@ -263,20 +235,13 @@ openviking ls viking://resources/ [--simple] [--recursive]
 |------|------|------|--------|------|
 | uri | str | 是 | - | Viking URI |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 entries = client.tree("viking://resources/")
 for entry in entries:
     type_str = "dir" if entry['isDir'] else "file"
     print(f"{entry['rel_path']} - {type_str}")
-
-client.close()
 ```
 
 **HTTP API**
@@ -333,19 +298,12 @@ openviking tree viking://resources/my-project/
 |------|------|------|--------|------|
 | uri | str | 是 | - | Viking URI |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 info = client.stat("viking://resources/docs/api.md")
 print(f"Size: {info['size']}")
 print(f"Is directory: {info['isDir']}")
-
-client.close()
 ```
 
 **HTTP API**
@@ -394,17 +352,10 @@ openviking stat viking://resources/my-project/docs/api.md
 |------|------|------|--------|------|
 | uri | str | 是 | - | 新目录的 Viking URI |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 client.mkdir("viking://resources/new-project/")
-
-client.close()
 ```
 
 **HTTP API**
@@ -453,21 +404,14 @@ openviking mkdir viking://resources/new-project/
 | uri | str | 是 | - | 要删除的 Viking URI |
 | recursive | bool | 否 | False | 递归删除目录 |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 # 删除单个文件
 client.rm("viking://resources/docs/old.md")
 
 # 递归删除目录
 client.rm("viking://resources/old-project/", recursive=True)
-
-client.close()
 ```
 
 **HTTP API**
@@ -517,20 +461,13 @@ openviking rm viking://resources/old.md [--recursive]
 | from_uri | str | 是 | - | 源 Viking URI |
 | to_uri | str | 是 | - | 目标 Viking URI |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 client.mv(
     "viking://resources/old-name/",
     "viking://resources/new-name/"
 )
-
-client.close()
 ```
 
 **HTTP API**
@@ -582,14 +519,9 @@ openviking mv viking://resources/old-name/ viking://resources/new-name/
 | pattern | str | 是 | - | 搜索模式（正则表达式） |
 | case_insensitive | bool | 否 | False | 忽略大小写 |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 results = client.grep(
     "viking://resources/",
     "authentication",
@@ -600,8 +532,6 @@ print(f"Found {results['count']} matches")
 for match in results['matches']:
     print(f"  {match['uri']}:{match['line']}")
     print(f"    {match['content']}")
-
-client.close()
 ```
 
 **HTTP API**
@@ -659,14 +589,9 @@ openviking grep viking://resources/ "authentication" [--ignore-case]
 | pattern | str | 是 | - | Glob 模式（例如 `**/*.md`） |
 | uri | str | 否 | "viking://" | 起始 URI |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 # 查找所有 Markdown 文件
 results = client.glob("**/*.md", "viking://resources/")
 print(f"Found {results['count']} markdown files:")
@@ -676,8 +601,6 @@ for uri in results['matches']:
 # 查找所有 Python 文件
 results = client.glob("**/*.py", "viking://resources/")
 print(f"Found {results['count']} Python files")
-
-client.close()
 ```
 
 **HTTP API**
@@ -732,14 +655,9 @@ openviking glob "**/*.md" [--uri viking://resources/]
 | uris | str 或 List[str] | 是 | - | 目标 URI |
 | reason | str | 否 | "" | 关联原因 |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 # 单个关联
 client.link(
     "viking://resources/docs/auth/",
@@ -756,8 +674,6 @@ client.link(
     ],
     reason="Related documentation"
 )
-
-client.close()
 ```
 
 **HTTP API**
@@ -819,20 +735,13 @@ openviking link viking://resources/docs/auth/ viking://resources/docs/security/ 
 |------|------|------|--------|------|
 | uri | str | 是 | - | Viking URI |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 relations = client.relations("viking://resources/docs/auth/")
 for rel in relations:
     print(f"Related: {rel['uri']}")
     print(f"  Reason: {rel['reason']}")
-
-client.close()
 ```
 
 **HTTP API**
@@ -878,20 +787,13 @@ openviking relations viking://resources/docs/auth/
 | from_uri | str | 是 | - | 源 URI |
 | uri | str | 是 | - | 要取消关联的目标 URI |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 client.unlink(
     "viking://resources/docs/auth/",
     "viking://resources/docs/security/"
 )
-
-client.close()
 ```
 
 **HTTP API**

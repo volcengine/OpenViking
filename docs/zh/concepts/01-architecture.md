@@ -139,7 +139,7 @@ client = OpenViking(path="./data")
 
 ```python
 # Python SDK 连接 OpenViking Server
-client = OpenViking(url="http://localhost:1933", api_key="xxx")
+client = SyncHTTPClient(url="http://localhost:1933", api_key="xxx")
 ```
 
 ```bash

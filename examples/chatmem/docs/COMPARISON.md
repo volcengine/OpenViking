@@ -82,7 +82,7 @@ self.session = None
 # In run()
 self.client = SyncOpenViking(path=data_path, config=config)
 self.client.initialize()
-self.session = self.client.session(user="default", session_id=session_id)
+self.session = self.client.session(session_id=session_id)
 self.session.load()
 
 # Recording messages

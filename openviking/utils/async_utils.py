@@ -4,8 +4,8 @@
 Async helper utilities for running coroutines from sync code.
 """
 
-import atexit
 import asyncio
+import atexit
 import threading
 from typing import Coroutine, TypeVar
 
@@ -55,17 +55,15 @@ def run_async(coro: Coroutine[None, None, T]) -> T:
         coro: The coroutine to run
 
     Returns:
-        The result of the coroutine
+        The result of coroutine
     """
     try:
         loop = asyncio.get_running_loop()
-        # Already in event loop, use nest_asyncio to allow nested calls
         import nest_asyncio
 
         nest_asyncio.apply()
         return loop.run_until_complete(coro)
     except RuntimeError:
-        # No running event loop — dispatch to the shared background loop
         loop = _get_loop()
         future = asyncio.run_coroutine_threadsafe(coro, loop)
         return future.result()

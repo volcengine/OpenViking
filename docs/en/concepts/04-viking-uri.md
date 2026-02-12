@@ -120,7 +120,7 @@ viking://
 │       ├── entities/             # Each independent
 │       └── events/               # Each independent
 │
-├── agent/{unique_space_name}/
+├── agent/{unique_space_name}/    # unique_space_name see UserIdentifier
 │   ├── skills/                   # Skill definitions
 │   ├── memories/
 │   │   ├── cases/

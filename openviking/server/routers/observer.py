@@ -36,8 +36,7 @@ def _system_to_dict(status: SystemStatus) -> dict:
         "is_healthy": status.is_healthy,
         "errors": status.errors,
         "components": {
-            name: _component_to_dict(component)
-            for name, component in status.components.items()
+            name: _component_to_dict(component) for name, component in status.components.items()
         },
     }
 
@@ -69,6 +68,16 @@ async def observer_vlm(
     """Get VLM (Vision Language Model) token usage status."""
     service = get_service()
     component = service.debug.observer.vlm
+    return Response(status="ok", result=_component_to_dict(component))
+
+
+@router.get("/transaction")
+async def observer_transaction(
+    _: bool = Depends(verify_api_key),
+):
+    """Get transaction system status."""
+    service = get_service()
+    component = service.debug.observer.transaction
     return Response(status="ok", result=_component_to_dict(component))
 
 

@@ -46,14 +46,9 @@ Add a resource to the knowledge base.
 | wait | bool | No | False | Wait for semantic processing to complete |
 | timeout | float | No | None | Timeout in seconds (only used when wait=True) |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 result = client.add_resource(
     "./documents/guide.md",
     reason="User guide documentation"
@@ -61,7 +56,6 @@ result = client.add_resource(
 print(f"Added: {result['root_uri']}")
 
 client.wait_processed()
-client.close()
 ```
 
 **HTTP API**
@@ -103,7 +97,7 @@ openviking add-resource ./documents/guide.md --reason "User guide documentation"
 
 **Example: Add from URL**
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 result = client.add_resource(
@@ -136,7 +130,7 @@ openviking add-resource https://example.com/api-docs.md --to viking://resources/
 
 **Example: Wait for Processing**
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 # Option 1: Wait inline
@@ -187,21 +181,14 @@ Export a resource tree as a `.ovpack` file.
 | uri | str | Yes | - | Viking URI to export |
 | to | str | Yes | - | Target file path |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 path = client.export_ovpack(
     "viking://resources/my-project/",
     "./exports/my-project.ovpack"
 )
 print(f"Exported to: {path}")
-
-client.close()
 ```
 
 **HTTP API**
@@ -253,14 +240,9 @@ Import a `.ovpack` file.
 | force | bool | No | False | Overwrite existing resources |
 | vectorize | bool | No | True | Trigger vectorization after import |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 uri = client.import_ovpack(
     "./exports/my-project.ovpack",
     "viking://resources/imported/",
@@ -270,7 +252,6 @@ uri = client.import_ovpack(
 print(f"Imported to: {uri}")
 
 client.wait_processed()
-client.close()
 ```
 
 **HTTP API**
@@ -315,7 +296,7 @@ openviking import ./exports/my-project.ovpack viking://resources/imported/ --for
 
 ### List Resources
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 # List all resources
@@ -388,7 +369,7 @@ openviking ls viking://resources/ --recursive
 
 ### Read Resource Content
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 # L0: Abstract
@@ -444,7 +425,7 @@ openviking read viking://resources/docs/api.md
 
 ### Move Resources
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 client.mv(
@@ -492,7 +473,7 @@ openviking mv viking://resources/old-project/ viking://resources/new-project/
 
 ### Delete Resources
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 # Delete single file
@@ -544,7 +525,7 @@ openviking rm viking://resources/old-project/ --recursive
 
 ### Create Links
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 # Link related resources
@@ -616,7 +597,7 @@ openviking link viking://resources/docs/auth/ viking://resources/docs/security/ 
 
 ### Get Relations
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 relations = client.relations("viking://resources/docs/auth/")
@@ -658,7 +639,7 @@ openviking relations viking://resources/docs/auth/
 
 ### Remove Links
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 client.unlink(
