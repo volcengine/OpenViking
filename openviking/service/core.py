@@ -22,6 +22,7 @@ from openviking.session.compressor import SessionCompressor
 from openviking.session.user_id import UserIdentifier
 from openviking.storage import VikingDBManager
 from openviking.storage.collection_schemas import init_context_collection
+from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_manager
 from openviking.storage.transaction import TransactionManager, init_transaction_manager
 from openviking.storage.viking_fs import VikingFS, init_viking_fs
 from openviking.utils import get_logger
@@ -65,6 +66,7 @@ class OpenVikingService:
         # Infrastructure
         self._agfs_manager: Optional[AGFSManager] = None
         self._agfs_url: Optional[str] = None
+        self._queue_manager: Optional[QueueManager] = None
         self._vikingdb_manager: Optional[VikingDBManager] = None
         self._viking_fs: Optional[VikingFS] = None
         self._embedder: Optional[Any] = None
@@ -104,9 +106,23 @@ class OpenVikingService:
         else:
             self._agfs_url = config.agfs.url
 
+        # Initialize QueueManager
+        if self._agfs_url:
+            self._queue_manager = init_queue_manager(
+                agfs_url=self._agfs_url,
+                timeout=config.agfs.timeout,
+            )
+        else:
+            logger.warning("AGFS URL not configured, skipping queue manager initialization")
+
+        # Initialize VikingDBManager with QueueManager
         self._vikingdb_manager = VikingDBManager(
-            vectordb_config=config.vectordb, agfs_config=config.agfs
+            vectordb_config=config.vectordb, queue_manager=self._queue_manager
         )
+
+        # Configure queues if QueueManager is available
+        if self._queue_manager:
+            self._queue_manager.setup_standard_queues(self._vikingdb_manager)
 
         # Initialize TransactionManager
         self._transaction_manager = init_transaction_manager(agfs_config=config.agfs)
@@ -244,6 +260,11 @@ class OpenVikingService:
         if self._transaction_manager:
             self._transaction_manager.stop()
             self._transaction_manager = None
+
+        if self._queue_manager:
+            self._queue_manager.stop()
+            self._queue_manager = None
+            logger.info("Queue manager stopped")
 
         if self._vikingdb_manager:
             await self._vikingdb_manager.close()
