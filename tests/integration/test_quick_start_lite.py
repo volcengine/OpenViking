@@ -215,9 +215,10 @@ class TestQuickStartLite(unittest.TestCase):
         with (
             patch.dict(os.environ, env_override),
             patch(
-                "openviking.utils.config.EmbeddingConfig.get_embedder", return_value=mock_embedder
+                "openviking_cli.utils.config.EmbeddingConfig.get_embedder",
+                return_value=mock_embedder,
             ),
-            patch("openviking.utils.config.VLMConfig.get_vlm_instance", return_value=mock_vlm),
+            patch("openviking_cli.utils.config.VLMConfig.get_vlm_instance", return_value=mock_vlm),
         ):
             # Reset the singleton again inside the patched environment just in case
             from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton

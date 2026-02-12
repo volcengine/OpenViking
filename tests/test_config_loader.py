@@ -39,7 +39,7 @@ class TestResolveConfigPath:
         assert result is None
 
     def test_default_path(self, tmp_path, monkeypatch):
-        import openviking.utils.config.config_loader as loader
+        import openviking_cli.utils.config.config_loader as loader
 
         conf = tmp_path / "ov.conf"
         conf.write_text("{}")
