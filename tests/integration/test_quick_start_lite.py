@@ -132,13 +132,11 @@ class TestQuickStartLite(unittest.TestCase):
             generate_pseudo_completion(prompt)
         )
 
-        mock_vlm.get_vision_completion.side_effect = (
-            lambda prompt, images, **kwargs: generate_pseudo_completion(prompt, images)
+        mock_vlm.get_vision_completion.side_effect = lambda prompt, images, **kwargs: (
+            generate_pseudo_completion(prompt, images)
         )
-        mock_vlm.get_vision_completion_async.side_effect = (
-            lambda prompt, images, **kwargs: async_return(
-                generate_pseudo_completion(prompt, images)
-            )
+        mock_vlm.get_vision_completion_async.side_effect = lambda prompt, images, **kwargs: (
+            async_return(generate_pseudo_completion(prompt, images))
         )
 
         # --- 2. Mock Embedder ---
