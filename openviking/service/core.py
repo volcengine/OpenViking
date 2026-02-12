@@ -24,7 +24,7 @@ from openviking.storage import VikingDBManager
 from openviking.storage.collection_schemas import init_context_collection
 from openviking.storage.viking_fs import VikingFS, init_viking_fs
 from openviking.utils import get_logger
-from openviking.utils.config import OpenVikingConfig, get_openviking_config
+from openviking.utils.config import get_openviking_config
 from openviking.utils.config.open_viking_config import initialize_openviking_config
 from openviking.utils.config.storage_config import StorageConfig
 from openviking.utils.resource_processor import ResourceProcessor
@@ -177,9 +177,6 @@ class OpenVikingService:
 
         # Create context collection
         await init_context_collection(self._vikingdb_manager)
-
-        # Start queues after collections are ready
-        self._vikingdb_manager.start_queues()
 
         # Initialize VikingFS
         self._viking_fs = init_viking_fs(
