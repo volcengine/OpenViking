@@ -149,7 +149,9 @@ Memex uses a modular RAG (Retrieval-Augmented Generation) architecture:
 | **MemexRecipe** | `rag/recipe.py` | RAG orchestration: search → context → LLM |
 | **MemexClient** | `client.py` | OpenViking client wrapper with session support |
 | **MemexConfig** | `config.py` | Configuration management |
+| **CLI** | `cli.py` | Main CLI application and command dispatch |
 | **Commands** | `commands/*.py` | CLI command implementations |
+| **Feishu** | `feishu.py` | Feishu/Lark integration |
 
 ### RAG Flow
 
@@ -185,21 +187,20 @@ Memex uses a modular RAG (Retrieval-Augmented Generation) architecture:
 examples/memex/
 ├── __init__.py
 ├── __main__.py          # Entry point
-├── app.py               # Main application
+├── cli.py               # Main CLI application
 ├── client.py            # MemexClient wrapper
 ├── config.py            # Configuration
+├── feishu.py            # Feishu integration
 ├── rag/
 │   ├── __init__.py
 │   └── recipe.py        # RAG recipe implementation
 ├── commands/
 │   ├── __init__.py
-│   ├── base.py          # Base command class
 │   ├── browse.py        # Browse commands (/ls, /tree, /read)
-│   ├── feishu.py        # Feishu integration
 │   ├── knowledge.py     # Knowledge management (/add, /rm)
 │   ├── query.py         # Q&A commands (/ask, /chat)
 │   ├── search.py        # Search commands (/find, /search)
-│   └── system.py        # System commands (/stats, /info)
+│   └── stats.py         # Stats commands (/stats, /info)
 ├── ov.conf.example      # Example configuration
 └── README.md
 ```
@@ -208,7 +209,7 @@ examples/memex/
 
 ```bash
 # From project root
-uv run pytest examples/memex/tests/ -v
+uv run pytest tests/ -v
 ```
 
 ## License

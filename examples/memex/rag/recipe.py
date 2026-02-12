@@ -12,8 +12,8 @@ from typing import Any, Optional
 
 from openai import OpenAI
 
-from client import MemexClient
-from config import MemexConfig
+from ..client import MemexClient
+from ..config import MemexConfig
 
 try:
     from openviking.message import TextPart, ContextPart

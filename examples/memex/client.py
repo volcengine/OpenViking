@@ -6,7 +6,7 @@ from typing import Any, Optional
 
 import openviking as ov
 
-from config import MemexConfig
+from .config import MemexConfig
 
 
 class MemexClient:

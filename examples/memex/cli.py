@@ -43,16 +43,16 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.markdown import Markdown
 
-from config import MemexConfig
-from client import MemexClient
-from commands import (
+from .config import MemexConfig
+from .client import MemexClient
+from .commands import (
     BrowseCommands,
     KnowledgeCommands,
     SearchCommands,
     QueryCommands,
     StatsCommands,
 )
-from feishu import FeishuCommands
+from .feishu import FeishuCommands
 
 
 BANNER = """

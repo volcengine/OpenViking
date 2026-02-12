@@ -6,7 +6,7 @@ from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
 
-from client import MemexClient
+from ..client import MemexClient
 
 
 class StatsCommands:

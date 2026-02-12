@@ -9,7 +9,7 @@ from rich.table import Table
 from rich.panel import Panel
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
-from client import MemexClient
+from ..client import MemexClient
 
 
 class SearchCommands:
