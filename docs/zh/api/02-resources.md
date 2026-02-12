@@ -46,14 +46,9 @@ Input -> Parser -> TreeBuilder -> AGFS -> SemanticQueue -> Vector Index
 | wait | bool | 否 | False | 等待语义处理完成 |
 | timeout | float | 否 | None | 超时时间（秒），仅在 wait=True 时生效 |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 result = client.add_resource(
     "./documents/guide.md",
     reason="User guide documentation"
@@ -61,7 +56,6 @@ result = client.add_resource(
 print(f"Added: {result['root_uri']}")
 
 client.wait_processed()
-client.close()
 ```
 
 **HTTP API**
@@ -103,7 +97,7 @@ openviking add-resource ./documents/guide.md --reason "User guide documentation"
 
 **示例：从 URL 添加**
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 result = client.add_resource(
@@ -136,7 +130,7 @@ openviking add-resource https://example.com/api-docs.md --to viking://resources/
 
 **示例：等待处理完成**
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 # 方式 1：内联等待
@@ -187,21 +181,14 @@ openviking add-resource ./documents/guide.md --wait
 | uri | str | 是 | - | 要导出的 Viking URI |
 | to | str | 是 | - | 目标文件路径 |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 path = client.export_ovpack(
     "viking://resources/my-project/",
     "./exports/my-project.ovpack"
 )
 print(f"Exported to: {path}")
-
-client.close()
 ```
 
 **HTTP API**
@@ -253,14 +240,9 @@ openviking export viking://resources/my-project/ ./exports/my-project.ovpack
 | force | bool | 否 | False | 覆盖已有资源 |
 | vectorize | bool | 否 | True | 导入后触发向量化 |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 uri = client.import_ovpack(
     "./exports/my-project.ovpack",
     "viking://resources/imported/",
@@ -270,7 +252,6 @@ uri = client.import_ovpack(
 print(f"Imported to: {uri}")
 
 client.wait_processed()
-client.close()
 ```
 
 **HTTP API**
@@ -315,7 +296,7 @@ openviking import ./exports/my-project.ovpack viking://resources/imported/ --for
 
 ### 列出资源
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 # 列出所有资源
@@ -388,7 +369,7 @@ openviking ls viking://resources/ --recursive
 
 ### 读取资源内容
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 # L0：摘要
@@ -444,7 +425,7 @@ openviking read viking://resources/docs/api.md
 
 ### 移动资源
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 client.mv(
@@ -492,7 +473,7 @@ openviking mv viking://resources/old-project/ viking://resources/new-project/
 
 ### 删除资源
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 # 删除单个文件
@@ -544,7 +525,7 @@ openviking rm viking://resources/old-project/ --recursive
 
 ### 创建链接
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 # 链接相关资源
@@ -616,7 +597,7 @@ openviking link viking://resources/docs/auth/ viking://resources/docs/security/ 
 
 ### 获取关联
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 relations = client.relations("viking://resources/docs/auth/")
@@ -658,7 +639,7 @@ openviking relations viking://resources/docs/auth/
 
 ### 删除链接
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 client.unlink(

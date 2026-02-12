@@ -345,10 +345,10 @@ OpenViking 提供三种接口，面向不同使用场景：
 
 ```python
 # 构造函数参数
-client = OpenViking(url="http://localhost:1933", api_key="your-api-key", user="alice")
+client = SyncHTTPClient(url="http://localhost:1933", api_key="your-api-key")
 ```
 
-SDK 构造函数只接受 `url`、`api_key`、`path`、`user` 参数。不支持 `config` 参数，也不支持 `vectordb_url`/`agfs_url` 参数。
+SDK 构造函数只接受 `url`、`api_key`、`path` 参数。不支持 `config` 参数，也不支持 `vectordb_url`/`agfs_url` 参数。
 
 #### CLI 配置
 
@@ -358,7 +358,6 @@ CLI 通过 `ovcli.conf` 配置文件管理连接信息，不使用 `--url`、`--
 {
   "url": "http://localhost:1933",
   "api_key": "sk-xxx",
-  "user": "alice",
   "output": "table"
 }
 ```
@@ -652,7 +651,7 @@ class UsageInfo:
 **session**（Python CLI 返回 Session 对象，HTTP API 返回 JSON）
 ```python
 # Python CLI
-session = client.session(user="alice")
+session = client.session()
 session.id          # "session-abc123"
 session.user        # "alice"
 session.created_at  # datetime
@@ -871,7 +870,6 @@ export OPENVIKING_CLI_CONFIG_FILE=~/.openviking/ovcli.conf
 # {
 #   "url": "http://localhost:1933",
 #   "api_key": "sk-xxx",
-#   "user": "alice",
 #   "output": "table"
 # }
 
@@ -1024,7 +1022,7 @@ for r in results.data.results:
     print(f"{r.uri}: {r.score:.2f}")
 
 # 会话管理（OOP 模式）
-session = client.session(user="alice")
+session = client.session()
 session.add_message("user", "What is OpenViking?")
 results = client.search("What is OpenViking?", session=session)
 

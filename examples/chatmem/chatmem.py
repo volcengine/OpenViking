@@ -336,7 +336,7 @@ class ChatREPL:
                 config_dict = json.load(f)
             config = OpenVikingConfig.from_dict(config_dict)
 
-            self.client = SyncOpenViking(path=self.data_path, config=config, user="default")
+            self.client = SyncOpenViking(path=self.data_path, config=config)
             self.client.initialize()
 
             # Create/load session

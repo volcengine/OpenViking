@@ -124,11 +124,11 @@ client = ov.AsyncOpenViking(path="./my_data")
 await client.initialize()
 
 # Async client - HTTP client mode
-client = ov.AsyncOpenViking(url="http://localhost:1933", api_key="your-key")
+client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 await client.initialize()
 ```
 
-The SDK constructor only accepts `url`, `api_key`, `path`, and `user` parameters. Other configuration (embedding, vlm, etc.) is managed through the `ov.conf` config file.
+The SDK constructor only accepts `url`, `api_key`, and `path` parameters. Other configuration (embedding, vlm, etc.) is managed through the `ov.conf` config file.
 
 ### What file formats are supported?
 
@@ -347,7 +347,7 @@ This strategy finds semantically matching fragments while understanding the comp
 1. **Batch processing**: Adding multiple resources at once is more efficient than one by one
 2. **Set appropriate `batch_size`**: Adjust batch processing size in Embedding configuration
 3. **Use local storage**: Use `local` backend during development to reduce network latency
-4. **Async operations**: Fully utilize `AsyncOpenViking`'s async capabilities
+4. **Async operations**: Fully utilize `AsyncOpenViking` / `AsyncHTTPClient`'s async capabilities
 
 ## Deployment
 
@@ -363,7 +363,7 @@ This strategy finds semantically matching fragments while understanding the comp
 client = ov.AsyncOpenViking(path="./data")
 
 # HTTP client mode (connects to a remote server)
-client = ov.AsyncOpenViking(url="http://localhost:1933", api_key="your-key")
+client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 ```
 
 ### Is OpenViking open source?

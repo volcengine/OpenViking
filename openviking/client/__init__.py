@@ -2,17 +2,19 @@
 # SPDX-License-Identifier: Apache-2.0
 """OpenViking Client module.
 
-Provides client implementations for both embedded (LocalClient) and HTTP (HTTPClient) modes.
+Provides client implementations for embedded (LocalClient) and HTTP (AsyncHTTPClient/SyncHTTPClient) modes.
 """
 
 from openviking.client.base import BaseClient
-from openviking.client.http import HTTPClient
+from openviking.client.http import AsyncHTTPClient
 from openviking.client.local import LocalClient
 from openviking.client.session import Session
+from openviking.client.sync_http import SyncHTTPClient
 
 __all__ = [
     "BaseClient",
-    "HTTPClient",
+    "AsyncHTTPClient",
+    "SyncHTTPClient",
     "LocalClient",
     "Session",
 ]

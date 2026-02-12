@@ -178,7 +178,6 @@ SESSION_ID=$(openviking --json session new | python3 -c "
 import sys, json; print(json.load(sys.stdin)['result']['session_id'])
 ")
 echo "  session_id: $SESSION_ID"
-# openviking session new --user "alice"    # with custom user
 
 section "7.2 Add Messages"
 openviking session add-message "$SESSION_ID" \

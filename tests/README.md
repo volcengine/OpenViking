@@ -126,7 +126,7 @@ Tests for the OpenViking client API (`AsyncOpenViking` / `SyncOpenViking`).
 
 ### server/
 
-Tests for the OpenViking HTTP server API and HTTPClient SDK.
+Tests for the OpenViking HTTP server API and AsyncHTTPClient SDK.
 
 | File | Description | Key Test Cases |
 |------|-------------|----------------|
@@ -140,7 +140,7 @@ Tests for the OpenViking HTTP server API and HTTPClient SDK.
 | `test_api_relations.py` | Relations endpoints | Get relations, link single/multiple targets, unlink |
 | `test_api_observer.py` | Observer endpoints | Queue, VikingDB, VLM, system observer status |
 | `test_error_scenarios.py` | Error handling | Invalid JSON, missing fields, not found, wrong content type, invalid URI format |
-| `test_http_client_sdk.py` | HTTPClient SDK E2E | Health, add resource, wait, ls, mkdir, tree, session lifecycle, find, full workflow (real HTTP server) |
+| `test_http_client_sdk.py` | AsyncHTTPClient SDK E2E | Health, add resource, wait, ls, mkdir, tree, session lifecycle, find, full workflow (real HTTP server) |
 
 ### session/
 

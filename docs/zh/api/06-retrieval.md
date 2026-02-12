@@ -54,14 +54,9 @@ class MatchedContext:
     relations: List[RelatedContext]  # 关联上下文
 ```
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 results = client.find("how to authenticate users")
 
 for ctx in results.resources:
@@ -70,8 +65,6 @@ for ctx in results.resources:
     print(f"Type: {ctx.context_type}")
     print(f"Abstract: {ctx.abstract[:100]}...")
     print("---")
-
-client.close()
 ```
 
 **HTTP API**
@@ -122,7 +115,7 @@ openviking find "how to authenticate users" [--uri viking://resources/] [--limit
 
 **示例：使用 Target URI 搜索**
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 # 仅在资源中搜索
@@ -192,14 +185,10 @@ curl -X POST http://localhost:1933/api/v1/search/find \
 | score_threshold | float | 否 | None | 最低相关性分数阈值 |
 | filter | Dict | 否 | None | 元数据过滤器 |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
 from openviking.message import TextPart
-
-client = ov.OpenViking(path="./data")
-client.initialize()
 
 # 创建带对话上下文的会话
 session = client.session()
@@ -219,8 +208,6 @@ results = client.search(
 for ctx in results.resources:
     print(f"Found: {ctx.uri}")
     print(f"Abstract: {ctx.abstract[:200]}...")
-
-client.close()
 ```
 
 **HTTP API**
@@ -275,7 +262,7 @@ openviking search "best practices" [--session-id abc123] [--limit 10]
 
 **示例：不使用会话的搜索**
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 # search 也可以在没有会话的情况下使用
@@ -313,14 +300,9 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 | pattern | str | 是 | - | 搜索模式（正则表达式） |
 | case_insensitive | bool | 否 | False | 忽略大小写 |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 results = client.grep(
     "viking://resources/",
     "authentication",
@@ -331,8 +313,6 @@ print(f"Found {results['count']} matches")
 for match in results['matches']:
     print(f"  {match['uri']}:{match['line']}")
     print(f"    {match['content']}")
-
-client.close()
 ```
 
 **HTTP API**
@@ -390,14 +370,9 @@ openviking grep viking://resources/ "authentication" [--ignore-case]
 | pattern | str | 是 | - | Glob 模式（例如 `**/*.md`） |
 | uri | str | 否 | "viking://" | 起始 URI |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 # 查找所有 markdown 文件
 results = client.glob("**/*.md", "viking://resources/")
 print(f"Found {results['count']} markdown files:")
@@ -407,8 +382,6 @@ for uri in results['matches']:
 # 查找所有 Python 文件
 results = client.glob("**/*.py", "viking://resources/")
 print(f"Found {results['count']} Python files")
-
-client.close()
 ```
 
 **HTTP API**
@@ -466,7 +439,7 @@ openviking glob "**/*.md" [--uri viking://resources/]
 
 ### 渐进式读取内容
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 results = client.find("authentication")
@@ -505,7 +478,7 @@ curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://resources/do
 
 ### 获取关联资源
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 results = client.find("OAuth implementation")

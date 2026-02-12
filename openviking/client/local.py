@@ -22,17 +22,15 @@ class LocalClient(BaseClient):
     def __init__(
         self,
         path: Optional[str] = None,
-        user: Optional[UserIdentifier] = None,
     ):
         """Initialize LocalClient.
 
         Args:
             path: Local storage path (overrides ov.conf storage path)
-            user: User name for session management
         """
         self._service = OpenVikingService(
             path=path,
-            user=user or UserIdentifier.the_default_user(),
+            user=UserIdentifier.the_default_user(),
         )
         self._user = self._service.user
 

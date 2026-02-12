@@ -7,26 +7,12 @@ from typing import TYPE_CHECKING, Optional
 
 import typer
 
-from openviking.utils.config.config_loader import (
-    DEFAULT_CONFIG_DIR,
-    DEFAULT_OVCLI_CONF,
-    OPENVIKING_CLI_CONFIG_ENV,
-    require_config,
-)
-
 if TYPE_CHECKING:
-    from openviking.sync_client import SyncOpenViking
+    from openviking.client.sync_http import SyncHTTPClient
 
 
 class CliConfigError(ValueError):
     """Raised when required CLI configuration is missing or invalid."""
-
-
-def build_sync_client(**kwargs) -> "SyncOpenViking":
-    """Create SyncOpenViking lazily to keep CLI import lightweight."""
-    from openviking.sync_client import SyncOpenViking
-
-    return SyncOpenViking(**kwargs)
 
 
 @dataclass
@@ -35,42 +21,20 @@ class CLIContext:
 
     json_output: bool = False
     output_format: str = "table"
-    _client: Optional["SyncOpenViking"] = field(default=None, init=False, repr=False)
+    _client: Optional["SyncHTTPClient"] = field(default=None, init=False, repr=False)
 
-    def get_client_http_only(self) -> "SyncOpenViking":
-        """Create an HTTP client from ovcli.conf."""
+    def get_client_http_only(self) -> "SyncHTTPClient":
+        """Create an HTTP client (auto-loads ovcli.conf)."""
         if self._client is not None:
             return self._client
 
+        from openviking.client.sync_http import SyncHTTPClient
+
         try:
-            cli_config = require_config(
-                None,
-                OPENVIKING_CLI_CONFIG_ENV,
-                DEFAULT_OVCLI_CONF,
-                "CLI",
-            )
-        except FileNotFoundError:
-            default_path = DEFAULT_CONFIG_DIR / DEFAULT_OVCLI_CONF
-            raise CliConfigError(
-                f"CLI configuration file not found.\n"
-                f"Please create {default_path} or set {OPENVIKING_CLI_CONFIG_ENV}.\n"
-                f"Example content: "
-                f'{{"url": "http://localhost:1933", "api_key": null}}'
-            )
-
-        url = cli_config.get("url")
-        if not url:
-            default_path = DEFAULT_CONFIG_DIR / DEFAULT_OVCLI_CONF
-            raise CliConfigError(
-                f'"url" is required in {default_path}.\n'
-                f'Example: {{"url": "http://localhost:1933"}}'
-            )
-
-        self._client = build_sync_client(
-            url=url,
-            api_key=cli_config.get("api_key"),
-            user=cli_config.get("user"),
-        )
+            self._client = SyncHTTPClient()
+        except ValueError as e:
+            raise CliConfigError(str(e)) from e
+        self._client.initialize()
         return self._client
 
     def close_client(self) -> None:
