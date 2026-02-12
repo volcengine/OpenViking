@@ -14,19 +14,12 @@ Create a new session.
 |-----------|------|----------|---------|-------------|
 | session_id | str | No | None | Session ID. Creates new session with auto-generated ID if None |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data", user="alice")
-client.initialize()
-
 # Create new session (auto-generated ID)
 session = client.session()
 print(f"Session URI: {session.uri}")
-
-client.close()
 ```
 
 **HTTP API**
@@ -66,19 +59,12 @@ openviking session new
 
 List all sessions.
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 sessions = client.ls("viking://session/")
 for s in sessions:
     print(f"{s['name']}")
-
-client.close()
 ```
 
 **HTTP API**
@@ -123,20 +109,13 @@ Get session details.
 |-----------|------|----------|---------|-------------|
 | session_id | str | Yes | - | Session ID |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 # Load existing session
 session = client.session(session_id="a1b2c3d4")
 session.load()
 print(f"Loaded {len(session.messages)} messages")
-
-client.close()
 ```
 
 **HTTP API**
@@ -182,17 +161,10 @@ Delete a session.
 |-----------|------|----------|---------|-------------|
 | session_id | str | Yes | - | Session ID to delete |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 client.rm("viking://session/a1b2c3d4/", recursive=True)
-
-client.close()
 ```
 
 **HTTP API**
@@ -264,14 +236,10 @@ ToolPart(
 )
 ```
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
 from openviking.message import TextPart
-
-client = ov.OpenViking(path="./data")
-client.initialize()
 
 session = client.session()
 
@@ -284,8 +252,6 @@ session.add_message("user", [
 session.add_message("assistant", [
     TextPart(text="You can use OAuth 2.0 for authentication...")
 ])
-
-client.close()
 ```
 
 **HTTP API**
@@ -345,14 +311,9 @@ Commit a session by archiving messages and extracting memories.
 |-----------|------|----------|---------|-------------|
 | session_id | str | Yes | - | Session ID to commit |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 session = client.session(session_id="a1b2c3d4")
 session.load()
 
@@ -360,8 +321,6 @@ session.load()
 result = session.commit()
 print(f"Status: {result['status']}")
 print(f"Memories extracted: {result['memories_extracted']}")
-
-client.close()
 ```
 
 **HTTP API**
@@ -447,7 +406,7 @@ viking://session/{session_id}/
 
 ## Full Example
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 import openviking as ov

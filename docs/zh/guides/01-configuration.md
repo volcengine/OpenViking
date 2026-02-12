@@ -23,25 +23,75 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
   },
   "embedding": {
     "dense": {
-      "model": "doubao-embedding-vision-250615",
-      "api_key": "{your-api-key}",
-      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+      "api_base" : "<api-endpoint>",
+      "api_key"  : "<your-api-key>",
+      "provider" : "<provider-type>",
       "dimension": 1024,
-      "provider": "volcengine",
-      "input": "multimodal"
+      "model"    : "<model-name>"
     }
   },
   "vlm": {
-    "model": "doubao-seed-1-8-251228",
-    "api_key": "{your-api-key}",
-    "api_base": "https://ark.cn-beijing.volces.com/api/v3",
-    "temperature": 0.0,
-    "max_retries": 2,
-    "provider": "volcengine"
+    "api_base" : "<api-endpoint>",
+    "api_key"  : "<your-api-key>",
+    "provider" : "<provider-type>",
+    "model"    : "<model-name>"
   }
 }
 
 ```
+
+## 配置示例
+
+<details>
+<summary><b>火山引擎（豆包模型）</b></summary>
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
+      "api_key"  : "your-volcengine-api-key",
+      "provider" : "volcengine",
+      "dimension": 1024,
+      "model"    : "doubao-embedding-vision-250615",
+      "input": "multimodal"
+    }
+  },
+  "vlm": {
+    "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
+    "api_key"  : "your-volcengine-api-key",
+    "provider" : "volcengine",
+    "model"    : "doubao-seed-1-8-251228"
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><b>OpenAI 模型</b></summary>
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "api_base" : "https://api.openai.com/v1",
+      "api_key"  : "your-openai-api-key",
+      "provider" : "openai",
+      "dimension": 3072,
+      "model"    : "text-embedding-3-large"
+    }
+  },
+  "vlm": {
+    "api_base" : "https://api.openai.com/v1",
+    "api_key"  : "your-openai-api-key",
+    "provider" : "openai",
+    "model"    : "gpt-4-vision-preview"
+  }
+}
+```
+
+</details>
 
 ## 配置部分
 
@@ -247,7 +297,7 @@ OpenViking 使用两个配置文件：
 | 配置文件 | 用途 | 默认路径 |
 |---------|------|---------|
 | `ov.conf` | SDK 嵌入模式 + 服务端配置 | `~/.openviking/ov.conf` |
-| `ovcli.conf` | CLI 连接远程服务端 | `~/.openviking/ovcli.conf` |
+| `ovcli.conf` | HTTP 客户端和 CLI 连接远程服务端 | `~/.openviking/ovcli.conf` |
 
 配置文件放在默认路径时，OpenViking 自动加载，无需额外设置。
 
@@ -268,7 +318,7 @@ python -m openviking serve --config /path/to/ov.conf
 
 ### ovcli.conf
 
-CLI 工具连接远程服务端的配置文件：
+HTTP 客户端（`SyncHTTPClient` / `AsyncHTTPClient`）和 CLI 工具连接远程服务端的配置文件：
 
 ```json
 {
@@ -352,8 +402,7 @@ CLI 工具连接远程服务端的配置文件：
     "port": 1933,
     "api_key": "string",
     "cors_origins": ["string"]
-  },
-  "user": "string"
+  }
 }
 ```
 

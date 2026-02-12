@@ -4,8 +4,7 @@
 """Shared fixtures for integration tests.
 
 Automatically starts an OpenViking server in a background thread so that
-HTTPClient / AsyncOpenViking integration tests can run without a manually
-started server process.
+AsyncHTTPClient integration tests can run without a manually started server process.
 """
 
 import shutil

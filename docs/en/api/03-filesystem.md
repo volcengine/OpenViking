@@ -14,19 +14,12 @@ Read L0 abstract (~100 tokens summary).
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI (must be a directory) |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 abstract = client.abstract("viking://resources/docs/")
 print(f"Abstract: {abstract}")
 # Output: "Documentation for the project API, covering authentication, endpoints..."
-
-client.close()
 ```
 
 **HTTP API**
@@ -68,18 +61,11 @@ Read L1 overview, applies to directories.
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI (must be a directory) |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 overview = client.overview("viking://resources/docs/")
 print(f"Overview:\n{overview}")
-
-client.close()
 ```
 
 **HTTP API**
@@ -121,18 +107,11 @@ Read L2 full content.
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 content = client.read("viking://resources/docs/api.md")
 print(f"Content:\n{content}")
-
-client.close()
 ```
 
 **HTTP API**
@@ -190,20 +169,13 @@ List directory contents.
 }
 ```
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 entries = client.ls("viking://resources/")
 for entry in entries:
     type_str = "dir" if entry['isDir'] else "file"
     print(f"{entry['name']} - {type_str}")
-
-client.close()
 ```
 
 **HTTP API**
@@ -263,20 +235,13 @@ Get directory tree structure.
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 entries = client.tree("viking://resources/")
 for entry in entries:
     type_str = "dir" if entry['isDir'] else "file"
     print(f"{entry['rel_path']} - {type_str}")
-
-client.close()
 ```
 
 **HTTP API**
@@ -333,19 +298,12 @@ Get file or directory status information.
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 info = client.stat("viking://resources/docs/api.md")
 print(f"Size: {info['size']}")
 print(f"Is directory: {info['isDir']}")
-
-client.close()
 ```
 
 **HTTP API**
@@ -394,17 +352,10 @@ Create a directory.
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI for the new directory |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 client.mkdir("viking://resources/new-project/")
-
-client.close()
 ```
 
 **HTTP API**
@@ -453,21 +404,14 @@ Remove file or directory.
 | uri | str | Yes | - | Viking URI to remove |
 | recursive | bool | No | False | Remove directory recursively |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 # Remove single file
 client.rm("viking://resources/docs/old.md")
 
 # Remove directory recursively
 client.rm("viking://resources/old-project/", recursive=True)
-
-client.close()
 ```
 
 **HTTP API**
@@ -517,20 +461,13 @@ Move file or directory.
 | from_uri | str | Yes | - | Source Viking URI |
 | to_uri | str | Yes | - | Destination Viking URI |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 client.mv(
     "viking://resources/old-name/",
     "viking://resources/new-name/"
 )
-
-client.close()
 ```
 
 **HTTP API**
@@ -582,14 +519,9 @@ Search content by pattern.
 | pattern | str | Yes | - | Search pattern (regex) |
 | case_insensitive | bool | No | False | Ignore case |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 results = client.grep(
     "viking://resources/",
     "authentication",
@@ -600,8 +532,6 @@ print(f"Found {results['count']} matches")
 for match in results['matches']:
     print(f"  {match['uri']}:{match['line']}")
     print(f"    {match['content']}")
-
-client.close()
 ```
 
 **HTTP API**
@@ -659,14 +589,9 @@ Match files by pattern.
 | pattern | str | Yes | - | Glob pattern (e.g., `**/*.md`) |
 | uri | str | No | "viking://" | Starting URI |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 # Find all markdown files
 results = client.glob("**/*.md", "viking://resources/")
 print(f"Found {results['count']} markdown files:")
@@ -676,8 +601,6 @@ for uri in results['matches']:
 # Find all Python files
 results = client.glob("**/*.py", "viking://resources/")
 print(f"Found {results['count']} Python files")
-
-client.close()
 ```
 
 **HTTP API**
@@ -732,14 +655,9 @@ Create relations between resources.
 | uris | str or List[str] | Yes | - | Target URI(s) |
 | reason | str | No | "" | Reason for the link |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 # Single link
 client.link(
     "viking://resources/docs/auth/",
@@ -756,8 +674,6 @@ client.link(
     ],
     reason="Related documentation"
 )
-
-client.close()
 ```
 
 **HTTP API**
@@ -819,20 +735,13 @@ Get relations for a resource.
 |-----------|------|----------|---------|-------------|
 | uri | str | Yes | - | Viking URI |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 relations = client.relations("viking://resources/docs/auth/")
 for rel in relations:
     print(f"Related: {rel['uri']}")
     print(f"  Reason: {rel['reason']}")
-
-client.close()
 ```
 
 **HTTP API**
@@ -878,20 +787,13 @@ Remove a relation.
 | from_uri | str | Yes | - | Source URI |
 | uri | str | Yes | - | Target URI to unlink |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 client.unlink(
     "viking://resources/docs/auth/",
     "viking://resources/docs/security/"
 )
-
-client.close()
 ```
 
 **HTTP API**

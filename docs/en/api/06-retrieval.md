@@ -54,14 +54,9 @@ class MatchedContext:
     relations: List[RelatedContext]  # Related contexts
 ```
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 results = client.find("how to authenticate users")
 
 for ctx in results.resources:
@@ -70,8 +65,6 @@ for ctx in results.resources:
     print(f"Type: {ctx.context_type}")
     print(f"Abstract: {ctx.abstract[:100]}...")
     print("---")
-
-client.close()
 ```
 
 **HTTP API**
@@ -122,7 +115,7 @@ openviking find "how to authenticate users" [--uri viking://resources/] [--limit
 
 **Example: Search with Target URI**
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 # Search only in resources
@@ -192,14 +185,10 @@ Search with session context and intent analysis.
 | score_threshold | float | No | None | Minimum relevance score threshold |
 | filter | Dict | No | None | Metadata filters |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
 from openviking.message import TextPart
-
-client = ov.OpenViking(path="./data")
-client.initialize()
 
 # Create session with conversation context
 session = client.session()
@@ -219,8 +208,6 @@ results = client.search(
 for ctx in results.resources:
     print(f"Found: {ctx.uri}")
     print(f"Abstract: {ctx.abstract[:200]}...")
-
-client.close()
 ```
 
 **HTTP API**
@@ -275,7 +262,7 @@ openviking search "best practices" [--session-id abc123] [--limit 10]
 
 **Example: Search Without Session**
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 # search can also be used without session
@@ -313,14 +300,9 @@ Search content by pattern (regex).
 | pattern | str | Yes | - | Search pattern (regex) |
 | case_insensitive | bool | No | False | Ignore case |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 results = client.grep(
     "viking://resources/",
     "authentication",
@@ -331,8 +313,6 @@ print(f"Found {results['count']} matches")
 for match in results['matches']:
     print(f"  {match['uri']}:{match['line']}")
     print(f"    {match['content']}")
-
-client.close()
 ```
 
 **HTTP API**
@@ -390,14 +370,9 @@ Match files by glob pattern.
 | pattern | str | Yes | - | Glob pattern (e.g., `**/*.md`) |
 | uri | str | No | "viking://" | Starting URI |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 # Find all markdown files
 results = client.glob("**/*.md", "viking://resources/")
 print(f"Found {results['count']} markdown files:")
@@ -407,8 +382,6 @@ for uri in results['matches']:
 # Find all Python files
 results = client.glob("**/*.py", "viking://resources/")
 print(f"Found {results['count']} Python files")
-
-client.close()
 ```
 
 **HTTP API**
@@ -466,7 +439,7 @@ Query -> Intent Analysis -> Vector Search (L0) -> Rerank (L1) -> Results
 
 ### Read Content Progressively
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 results = client.find("authentication")
@@ -505,7 +478,7 @@ curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://resources/do
 
 ### Get Related Resources
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 results = client.find("OAuth implementation")

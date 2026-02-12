@@ -14,19 +14,12 @@
 |------|------|------|--------|------|
 | session_id | str | 否 | None | 会话 ID。如果为 None，则创建一个自动生成 ID 的新会话 |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data", user="alice")
-client.initialize()
-
 # 创建新会话（自动生成 ID）
 session = client.session()
 print(f"Session URI: {session.uri}")
-
-client.close()
 ```
 
 **HTTP API**
@@ -66,19 +59,12 @@ openviking session new
 
 列出所有会话。
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 sessions = client.ls("viking://session/")
 for s in sessions:
     print(f"{s['name']}")
-
-client.close()
 ```
 
 **HTTP API**
@@ -123,20 +109,13 @@ openviking session list
 |------|------|------|--------|------|
 | session_id | str | 是 | - | 会话 ID |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 # 加载已有会话
 session = client.session(session_id="a1b2c3d4")
 session.load()
 print(f"Loaded {len(session.messages)} messages")
-
-client.close()
 ```
 
 **HTTP API**
@@ -182,17 +161,10 @@ openviking session get a1b2c3d4
 |------|------|------|--------|------|
 | session_id | str | 是 | - | 要删除的会话 ID |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 client.rm("viking://session/a1b2c3d4/", recursive=True)
-
-client.close()
 ```
 
 **HTTP API**
@@ -264,14 +236,10 @@ ToolPart(
 )
 ```
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
 from openviking.message import TextPart
-
-client = ov.OpenViking(path="./data")
-client.initialize()
 
 session = client.session()
 
@@ -284,8 +252,6 @@ session.add_message("user", [
 session.add_message("assistant", [
     TextPart(text="You can use OAuth 2.0 for authentication...")
 ])
-
-client.close()
 ```
 
 **HTTP API**
@@ -345,14 +311,9 @@ openviking session add-message a1b2c3d4 --role user --content "How do I authenti
 |------|------|------|--------|------|
 | session_id | str | 是 | - | 要提交的会话 ID |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 session = client.session(session_id="a1b2c3d4")
 session.load()
 
@@ -360,8 +321,6 @@ session.load()
 result = session.commit()
 print(f"Status: {result['status']}")
 print(f"Memories extracted: {result['memories_extracted']}")
-
-client.close()
 ```
 
 **HTTP API**
@@ -447,7 +406,7 @@ viking://session/{session_id}/
 
 ## 完整示例
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 import openviking as ov

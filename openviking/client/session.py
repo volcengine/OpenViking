@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Lightweight Session class for OpenViking client.
 
-Session delegates all operations to the underlying Client (LocalClient or HTTPClient).
+Session delegates all operations to the underlying Client (LocalClient or AsyncHTTPClient).
 """
 
 from typing import TYPE_CHECKING, Any, Dict
@@ -24,7 +24,7 @@ class Session:
         """Initialize Session.
 
         Args:
-            client: The underlying client (LocalClient or HTTPClient)
+            client: The underlying client (LocalClient or AsyncHTTPClient)
             session_id: Session ID
             user: User name
         """

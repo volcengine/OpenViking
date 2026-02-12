@@ -40,12 +40,12 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
   -H "Authorization: Bearer your-secret-key"
 ```
 
-**Python SDK**
+**Python SDK (HTTP)**
 
 ```python
 import openviking as ov
 
-client = ov.OpenViking(
+client = ov.SyncHTTPClient(
     url="http://localhost:1933",
     api_key="your-secret-key"
 )

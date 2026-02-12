@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
-"""HTTP Client for OpenViking.
+"""Async HTTP Client for OpenViking.
 
 Implements BaseClient interface using HTTP calls to OpenViking Server.
 """
@@ -10,6 +10,12 @@ from typing import Any, Dict, List, Optional, Union
 import httpx
 
 from openviking.client.base import BaseClient
+from openviking.utils.config.config_loader import (
+    DEFAULT_OVCLI_CONF,
+    OPENVIKING_CLI_CONFIG_ENV,
+    load_json_config,
+    resolve_config_path,
+)
 from openviking.exceptions import (
     AlreadyExistsError,
     DeadlineExceededError,
@@ -56,7 +62,7 @@ class _HTTPObserver:
     Provides the same interface as the local observer but fetches data via HTTP.
     """
 
-    def __init__(self, client: "HTTPClient"):
+    def __init__(self, client: "AsyncHTTPClient"):
         self._client = client
         self._cache = {}
 
@@ -102,28 +108,45 @@ class _HTTPObserver:
         return status.get("is_healthy", False)
 
 
-class HTTPClient(BaseClient):
-    """HTTP Client for OpenViking Server.
+class AsyncHTTPClient(BaseClient):
+    """Async HTTP Client for OpenViking Server.
 
     Implements BaseClient interface using HTTP calls.
+    Supports auto-loading url/api_key from ovcli.conf when not provided.
+
+    Examples:
+        # Explicit url
+        client = AsyncHTTPClient(url="http://localhost:1933", api_key="key")
+
+        # Auto-load from ~/.openviking/ovcli.conf
+        client = AsyncHTTPClient()
     """
 
     def __init__(
         self,
-        url: str,
+        url: Optional[str] = None,
         api_key: Optional[str] = None,
-        user: Optional[UserIdentifier] = None,
     ):
-        """Initialize HTTPClient.
+        """Initialize AsyncHTTPClient.
 
         Args:
-            url: OpenViking Server URL
-            api_key: API key for authentication
-            user: User name for session management
+            url: OpenViking Server URL. If not provided, reads from ovcli.conf.
+            api_key: API key for authentication. If not provided, reads from ovcli.conf.
         """
+        if url is None:
+            config_path = resolve_config_path(None, OPENVIKING_CLI_CONFIG_ENV, DEFAULT_OVCLI_CONF)
+            if config_path:
+                cfg = load_json_config(config_path)
+                url = cfg.get("url")
+                api_key = api_key or cfg.get("api_key")
+        if not url:
+            raise ValueError(
+                "url is required. Pass it explicitly or configure in "
+                "~/.openviking/ovcli.conf (key: \"url\")."
+            )
         self._url = url.rstrip("/")
         self._api_key = api_key
-        self._user = user or UserIdentifier.the_default_user()
+        self._user = UserIdentifier.the_default_user()
         self._http: Optional[httpx.AsyncClient] = None
         self._observer: Optional[_HTTPObserver] = None
 
@@ -349,18 +372,20 @@ class HTTPClient(BaseClient):
         self,
         query: str,
         target_uri: str = "",
+        session: Optional[Any] = None,
         session_id: Optional[str] = None,
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
     ) -> FindResult:
         """Semantic search with optional session context."""
+        sid = session_id or (session.session_id if session else None)
         response = await self._http.post(
             "/api/v1/search/search",
             json={
                 "query": query,
                 "target_uri": target_uri,
-                "session_id": session_id,
+                "session_id": sid,
                 "limit": limit,
                 "score_threshold": score_threshold,
                 "filter": filter,

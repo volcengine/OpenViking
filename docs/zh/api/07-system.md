@@ -8,19 +8,12 @@ OpenViking 提供系统健康检查、可观测性和调试 API，用于监控�
 
 基础健康检查端点。无需认证。
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 # 检查系统是否健康
 if client.observer.is_healthy():
     print("System OK")
-
-client.close()
 ```
 
 **HTTP API**
@@ -53,17 +46,10 @@ openviking health
 
 获取系统状态，包括初始化状态和用户信息。
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 print(client.observer.system)
-
-client.close()
 ```
 
 **HTTP API**
@@ -108,22 +94,15 @@ openviking status
 |------|------|------|--------|------|
 | timeout | float | 否 | None | 超时时间（秒） |
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 # 添加资源
 client.add_resource("./docs/")
 
 # 等待所有处理完成
 status = client.wait_processed()
 print(f"Processing complete: {status}")
-
-client.close()
 ```
 
 **HTTP API**
@@ -172,14 +151,9 @@ Observer API 提供详细的组件级监控。
 
 获取队列系统状态（embedding 和语义处理队列）。
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 print(client.observer.queue)
 # Output:
 # [queue] (healthy)
@@ -187,8 +161,6 @@ print(client.observer.queue)
 # Embedding             0        0            10         0       10
 # Semantic              0        0            10         0       10
 # TOTAL                 0        0            20         0       20
-
-client.close()
 ```
 
 **HTTP API**
@@ -229,7 +201,7 @@ openviking observer queue
 
 获取 VikingDB 状态（集合、索引、向量数量）。
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 print(client.observer.vikingdb)
@@ -282,7 +254,7 @@ openviking observer vikingdb
 
 获取 VLM（视觉语言模型）token 使用状态。
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 print(client.observer.vlm)
@@ -331,7 +303,7 @@ openviking observer vlm
 
 获取整体系统状态，包括所有组件。
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 print(client.observer.system)
@@ -404,20 +376,13 @@ openviking observer system
 
 快速检查整个系统的健康状态。
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 if client.observer.is_healthy():
     print("System OK")
 else:
     print(client.observer.system)
-
-client.close()
 ```
 
 **HTTP API**

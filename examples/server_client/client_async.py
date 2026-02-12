@@ -2,7 +2,7 @@
 """
 OpenViking 异步客户端示例 (HTTP mode)
 
-使用 AsyncOpenViking 通过 HTTP 连接远程 Server，演示完整 API。
+使用 AsyncHTTPClient 通过 HTTP 连接远程 Server，演示完整 API。
 
 前置条件:
     先启动 Server: openviking serve
@@ -37,7 +37,7 @@ async def main():
     parser.add_argument("--api-key", default=None, help="API key")
     args = parser.parse_args()
 
-    client = ov.AsyncOpenViking(url=args.url, api_key=args.api_key)
+    client = ov.AsyncHTTPClient(url=args.url, api_key=args.api_key)
 
     try:
         # ── Connect ──

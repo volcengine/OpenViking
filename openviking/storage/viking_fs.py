@@ -534,17 +534,10 @@ class VikingFS:
 
     def _uri_to_path(self, uri: str) -> str:
         """viking://user/memories/preferences/test -> /local/user/memories/preferences/test"""
-        if uri.startswith("viking://"):
-            path = uri.replace("viking://", "/")
-        elif uri.startswith("/"):
-            path = uri
-        else:
-            path = f"/{uri}"
-
-        if not path.startswith("/local/"):
-            path = "/local" + path
-
-        return path.rstrip("/")
+        remainder = uri[len("viking://"):].strip("/")
+        if not remainder:
+            return "/local"
+        return f"/local/{remainder}"
 
     def _path_to_uri(self, path: str) -> str:
         """/local/user/memories/preferences -> viking://user/memories/preferences"""

@@ -21,15 +21,66 @@ client = ov.OpenViking(path="./data")
 client.initialize()
 ```
 
+嵌入式模式通过 `ov.conf` 配置 embedding、vlm、storage 等模块。默认路径 `~/.openviking/ov.conf`，也可通过环境变量指定：
+
+```bash
+export OPENVIKING_CONFIG_FILE=/path/to/ov.conf
+```
+
+最小配置示例：
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "api_base": "<api-endpoint>",
+      "api_key": "<your-api-key>",
+      "provider": "<volcengine|openai>",
+      "dimension": 1024,
+      "model": "<model-name>"
+    }
+  },
+  "vlm": {
+    "api_base": "<api-endpoint>",
+    "api_key": "<your-api-key>",
+    "provider": "<volcengine|openai>",
+    "model": "<model-name>"
+  }
+}
+```
+
+完整配置选项和各服务商示例见 [配置指南](../guides/01-configuration.md)。
+
 ### HTTP 模式
 
 ```python
-client = ov.OpenViking(
+client = ov.SyncHTTPClient(
     url="http://localhost:1933",
     api_key="your-key",
 )
 client.initialize()
 ```
+
+未显式传入 `url` 时，HTTP 客户端会自动从 `ovcli.conf` 读取连接信息。`ovcli.conf` 是 HTTP 客户端和 CLI 共享的配置文件，默认路径 `~/.openviking/ovcli.conf`，也可通过环境变量指定：
+
+```bash
+export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
+```
+
+```json
+{
+  "url": "http://localhost:1933",
+  "api_key": "your-key"
+}
+```
+
+| 字段 | 说明 | 默认值 |
+|------|------|--------|
+| `url` | 服务端地址 | （必填） |
+| `api_key` | API Key | `null`（无认证） |
+| `output` | 默认输出格式：`"table"` 或 `"json"` | `"table"` |
+
+详见 [配置指南](../guides/01-configuration.md#ovcliconf)。
 
 ### 直接 HTTP（curl）
 
@@ -40,18 +91,7 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
 
 ### CLI 模式
 
-CLI 连接到 OpenViking 服务端，将所有操作暴露为 Shell 命令。
-
-**配置**
-
-创建 `~/.openviking/ovcli.conf`（或设置 `OPENVIKING_CLI_CONFIG_FILE` 环境变量）：
-
-```json
-{
-  "url": "http://localhost:1933",
-  "api_key": "your-key"
-}
-```
+CLI 连接到 OpenViking 服务端，将所有操作暴露为 Shell 命令。CLI 同样从 `ovcli.conf` 读取连接信息（与 HTTP 客户端共享）。
 
 **基本用法**
 
@@ -74,15 +114,32 @@ openviking --json ls viking://resources/
 openviking -o json ls viking://resources/
 ```
 
-## 客户端生命周期
+## 生命周期
+
+**嵌入式模式**
 
 ```python
-client = ov.OpenViking(path="./data")  # or url="http://..."
-client.initialize()  # Required before any operations
+import openviking as ov
 
-# ... use client ...
+client = ov.OpenViking(path="./data")
+client.initialize()
 
-client.close()  # Release resources
+# ... 使用 client ...
+
+client.close()
+```
+
+**HTTP 模式**
+
+```python
+import openviking as ov
+
+client = ov.SyncHTTPClient(url="http://localhost:1933")
+client.initialize()
+
+# ... 使用 client ...
+
+client.close()
 ```
 
 ## 认证

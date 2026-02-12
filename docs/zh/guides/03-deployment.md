@@ -101,7 +101,7 @@ python -m openviking serve
 ```python
 import openviking as ov
 
-client = ov.OpenViking(url="http://localhost:1933", api_key="your-key")
+client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 client.initialize()
 
 results = client.find("how to use openviking")

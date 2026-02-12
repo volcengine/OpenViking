@@ -1,24 +1,22 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 
-"""SDK tests using HTTPClient against a real uvicorn server."""
+"""SDK tests using AsyncHTTPClient against a real uvicorn server."""
 
 from pathlib import Path
 
 import pytest_asyncio
 
-from openviking.client.http import HTTPClient
-from openviking.session.user_id import UserIdentifier
+from openviking.client.http import AsyncHTTPClient
 from tests.server.conftest import SAMPLE_MD_CONTENT, TEST_TMP_DIR
 
 
 @pytest_asyncio.fixture()
 async def http_client(running_server):
-    """Create an HTTPClient connected to the running server."""
+    """Create an AsyncHTTPClient connected to the running server."""
     port, svc = running_server
-    client = HTTPClient(
+    client = AsyncHTTPClient(
         url=f"http://127.0.0.1:{port}",
-        user=UserIdentifier.the_default_user("sdk_test_user"),
     )
     await client.initialize()
     yield client, svc

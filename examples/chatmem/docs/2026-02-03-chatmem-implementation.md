@@ -282,7 +282,6 @@ def run(self):
 
         # Create/load session
         self.session = self.client.session(
-            user="default",
             session_id=self.session_id
         )
         self.session.load()
@@ -432,7 +431,7 @@ client = SyncOpenViking(path='./data', config=config)
 client.initialize()
 
 # Create session
-session = client.session(user="test", session_id="test-123")
+session = client.session(session_id="test-123")
 
 # Add messages
 session.add_message("user", [TextPart("Hello")])
@@ -1070,7 +1069,7 @@ self.session = None
 # In run()
 self.client = SyncOpenViking(path=data_path, config=config)
 self.client.initialize()
-self.session = self.client.session(user="default", session_id=session_id)
+self.session = self.client.session(session_id=session_id)
 self.session.load()
 
 # Recording messages

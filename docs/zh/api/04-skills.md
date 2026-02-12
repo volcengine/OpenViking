@@ -57,14 +57,9 @@ description: Skill description
    - 单个文件：指向 `SKILL.md` 文件的路径
    - 目录：指向包含 `SKILL.md` 的目录路径（辅助文件会一并包含）
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 skill = {
     "name": "search-web",
     "description": "Search the web for current information",
@@ -81,8 +76,6 @@ Search the web for current information.
 
 result = client.add_skill(skill)
 print(f"Added: {result['uri']}")
-
-client.close()
 ```
 
 **HTTP API**
@@ -127,14 +120,9 @@ openviking add-skill ./my-skill/ [--wait]
 
 **示例：从 MCP Tool 添加**
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 # MCP tool 格式会被自动检测并转换
 mcp_tool = {
     "name": "calculator",
@@ -153,8 +141,6 @@ mcp_tool = {
 
 result = client.add_skill(mcp_tool)
 print(f"Added: {result['uri']}")
-
-client.close()
 ```
 
 **HTTP API**
@@ -183,14 +169,9 @@ curl -X POST http://localhost:1933/api/v1/skills \
 
 **示例：从 SKILL.md 文件添加**
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 # 从文件路径添加
 result = client.add_skill("./skills/search-web/SKILL.md")
 print(f"Added: {result['uri']}")
@@ -199,8 +180,6 @@ print(f"Added: {result['uri']}")
 result = client.add_skill("./skills/code-runner/")
 print(f"Added: {result['uri']}")
 print(f"Auxiliary files: {result['auxiliary_files']}")
-
-client.close()
 ```
 
 **HTTP API**
@@ -269,14 +248,9 @@ Concrete examples of skill invocation.
 
 ### 列出技能
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 # 列出所有技能
 skills = client.ls("viking://agent/skills/")
 for skill in skills:
@@ -285,8 +259,6 @@ for skill in skills:
 # 简单列表（仅名称）
 names = client.ls("viking://agent/skills/", simple=True)
 print(names)
-
-client.close()
 ```
 
 **HTTP API**
@@ -298,7 +270,7 @@ curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://agent/skills/" \
 
 ### 读取技能内容
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 uri = "viking://agent/skills/search-web/"
@@ -334,7 +306,7 @@ curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://agent/skills
 
 ### 搜索技能
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 # 语义搜索技能
@@ -365,7 +337,7 @@ curl -X POST http://localhost:1933/api/v1/search/find \
 
 ### 删除技能
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 client.rm("viking://agent/skills/old-skill/", recursive=True)

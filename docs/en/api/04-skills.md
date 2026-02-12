@@ -57,14 +57,9 @@ description: Skill description
    - Single file: Path to `SKILL.md` file
    - Directory: Path to directory containing `SKILL.md` (auxiliary files included)
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 skill = {
     "name": "search-web",
     "description": "Search the web for current information",
@@ -81,8 +76,6 @@ Search the web for current information.
 
 result = client.add_skill(skill)
 print(f"Added: {result['uri']}")
-
-client.close()
 ```
 
 **HTTP API**
@@ -127,14 +120,9 @@ openviking add-skill ./my-skill/ [--wait]
 
 **Example: Add from MCP Tool**
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 # MCP tool format is auto-detected and converted
 mcp_tool = {
     "name": "calculator",
@@ -153,8 +141,6 @@ mcp_tool = {
 
 result = client.add_skill(mcp_tool)
 print(f"Added: {result['uri']}")
-
-client.close()
 ```
 
 **HTTP API**
@@ -183,14 +169,9 @@ curl -X POST http://localhost:1933/api/v1/skills \
 
 **Example: Add from SKILL.md File**
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 # Add from file path
 result = client.add_skill("./skills/search-web/SKILL.md")
 print(f"Added: {result['uri']}")
@@ -199,8 +180,6 @@ print(f"Added: {result['uri']}")
 result = client.add_skill("./skills/code-runner/")
 print(f"Added: {result['uri']}")
 print(f"Auxiliary files: {result['auxiliary_files']}")
-
-client.close()
 ```
 
 **HTTP API**
@@ -269,14 +248,9 @@ Concrete examples of skill invocation.
 
 ### List Skills
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
-import openviking as ov
-
-client = ov.OpenViking(path="./data")
-client.initialize()
-
 # List all skills
 skills = client.ls("viking://agent/skills/")
 for skill in skills:
@@ -285,8 +259,6 @@ for skill in skills:
 # Simple list (names only)
 names = client.ls("viking://agent/skills/", simple=True)
 print(names)
-
-client.close()
 ```
 
 **HTTP API**
@@ -298,7 +270,7 @@ curl -X GET "http://localhost:1933/api/v1/fs/ls?uri=viking://agent/skills/" \
 
 ### Read Skill Content
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 uri = "viking://agent/skills/search-web/"
@@ -334,7 +306,7 @@ curl -X GET "http://localhost:1933/api/v1/content/read?uri=viking://agent/skills
 
 ### Search Skills
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 # Semantic search for skills
@@ -365,7 +337,7 @@ curl -X POST http://localhost:1933/api/v1/search/find \
 
 ### Remove Skills
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 client.rm("viking://agent/skills/old-skill/", recursive=True)

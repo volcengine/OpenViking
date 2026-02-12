@@ -39,6 +39,59 @@ Create `~/.openviking/ov.conf` in your project directory:
 }
 ```
 
+## Configuration Examples
+
+<details>
+<summary><b>Volcengine (Doubao Models)</b></summary>
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
+      "api_key"  : "your-volcengine-api-key",
+      "provider" : "volcengine",
+      "dimension": 1024,
+      "model"    : "doubao-embedding-vision-250615",
+      "input": "multimodal"
+    }
+  },
+  "vlm": {
+    "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
+    "api_key"  : "your-volcengine-api-key",
+    "provider" : "volcengine",
+    "model"    : "doubao-seed-1-8-251228"
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><b>OpenAI Models</b></summary>
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "api_base" : "https://api.openai.com/v1",
+      "api_key"  : "your-openai-api-key",
+      "provider" : "openai",
+      "dimension": 3072,
+      "model"    : "text-embedding-3-large"
+    }
+  },
+  "vlm": {
+    "api_base" : "https://api.openai.com/v1",
+    "api_key"  : "your-openai-api-key",
+    "provider" : "openai",
+    "model"    : "gpt-4-vision-preview"
+  }
+}
+```
+
+</details>
+
 ## Configuration Sections
 
 ### embedding
@@ -241,7 +294,7 @@ OpenViking uses two config files:
 | File | Purpose | Default Path |
 |------|---------|-------------|
 | `ov.conf` | SDK embedded mode + server config | `~/.openviking/ov.conf` |
-| `ovcli.conf` | CLI connection to remote server | `~/.openviking/ovcli.conf` |
+| `ovcli.conf` | HTTP client and CLI connection to remote server | `~/.openviking/ovcli.conf` |
 
 When config files are at the default path, OpenViking loads them automatically — no additional setup needed.
 
@@ -262,7 +315,7 @@ The config sections documented above (embedding, vlm, rerank, storage) all belon
 
 ### ovcli.conf
 
-Config file for CLI to connect to a remote server:
+Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI to connect to a remote server:
 
 ```json
 {
@@ -346,8 +399,7 @@ For startup and deployment details see [Deployment](./03-deployment.md), for aut
     "port": 1933,
     "api_key": "string",
     "cors_origins": ["*"]
-  },
-  "user": "string"
+  }
 }
 ```
 

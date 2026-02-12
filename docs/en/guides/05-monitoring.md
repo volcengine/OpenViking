@@ -18,7 +18,7 @@ curl http://localhost:1933/health
 
 ### Overall System Health
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 status = client.get_status()
@@ -60,7 +60,7 @@ Check individual components:
 
 ### Quick Health Check
 
-**Python SDK**
+**Python SDK (Embedded / HTTP)**
 
 ```python
 if client.is_healthy():

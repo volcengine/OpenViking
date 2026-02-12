@@ -53,57 +53,7 @@ Create a configuration file `~/.openviking/ov.conf`:
 }
 ```
 
-### Configuration Examples
-
-<details>
-<summary><b>Example 1: Using Volcengine (Doubao Models)</b></summary>
-
-```json
-{
-  "embedding": {
-    "dense": {
-      "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
-      "api_key"  : "your-volcengine-api-key",
-      "provider" : "volcengine",
-      "dimension": 1024,
-      "model"    : "doubao-embedding-vision-250615"
-    }
-  },
-  "vlm": {
-    "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
-    "api_key"  : "your-volcengine-api-key",
-    "provider" : "volcengine",
-    "model"    : "doubao-seed-1-8-251228"
-  }
-}
-```
-
-</details>
-
-<details>
-<summary><b>Example 2: Using OpenAI Models</b></summary>
-
-```json
-{
-  "embedding": {
-    "dense": {
-      "api_base" : "https://api.openai.com/v1",
-      "api_key"  : "your-openai-api-key",
-      "provider" : "openai",
-      "dimension": 3072,
-      "model"    : "text-embedding-3-large"
-    }
-  },
-  "vlm": {
-    "api_base" : "https://api.openai.com/v1",
-    "api_key"  : "your-openai-api-key",
-    "provider" : "openai",
-    "model"    : "gpt-4-vision-preview"
-  }
-}
-```
-
-</details>
+For complete examples for each model provider, see [Configuration Guide - Examples](../guides/01-configuration.md#configuration-examples).
 
 ### Environment Variables
 

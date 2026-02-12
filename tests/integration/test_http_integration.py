@@ -9,19 +9,17 @@ defined in ``conftest.py``.
 import pytest
 import pytest_asyncio
 
-from openviking import AsyncOpenViking
-from openviking.client import HTTPClient
+from openviking.client.http import AsyncHTTPClient
 from openviking.exceptions import NotFoundError
-from openviking.session.user_id import UserIdentifier
 
 
 class TestHTTPClientIntegration:
-    """Integration tests for HTTPClient."""
+    """Integration tests for AsyncHTTPClient."""
 
     @pytest_asyncio.fixture
     async def client(self, server_url):
-        """Create and initialize HTTPClient."""
-        client = HTTPClient(url=server_url, user=UserIdentifier.the_default_user("test_user"))
+        """Create and initialize AsyncHTTPClient."""
+        client = AsyncHTTPClient(url=server_url)
         await client.initialize()
         yield client
         await client.close()
@@ -83,8 +81,8 @@ class TestSessionIntegration:
 
     @pytest_asyncio.fixture
     async def client(self, server_url):
-        """Create and initialize HTTPClient."""
-        client = HTTPClient(url=server_url, user=UserIdentifier.the_default_user("test_user"))
+        """Create and initialize AsyncHTTPClient."""
+        client = AsyncHTTPClient(url=server_url)
         await client.initialize()
         yield client
         await client.close()
@@ -119,43 +117,38 @@ class TestSessionIntegration:
         assert isinstance(result, list)
 
 
-class TestAsyncOpenVikingHTTPMode:
-    """Integration tests for AsyncOpenViking in HTTP mode."""
+class TestAsyncHTTPClientIntegration:
+    """Integration tests for AsyncHTTPClient as a standalone client."""
 
     @pytest_asyncio.fixture
-    async def ov(self, server_url):
-        """Create AsyncOpenViking in HTTP mode."""
-        client = AsyncOpenViking(url=server_url, user=UserIdentifier.the_default_user("test_user"))
+    async def client(self, server_url):
+        """Create AsyncHTTPClient."""
+        client = AsyncHTTPClient(url=server_url)
         await client.initialize()
         yield client
         await client.close()
 
     @pytest.mark.asyncio
-    async def test_http_mode_detection(self, ov):
-        """Test HTTP mode is correctly detected."""
-        assert isinstance(ov._client, HTTPClient)
-
-    @pytest.mark.asyncio
-    async def test_find_via_ov(self, ov):
-        """Test find via AsyncOpenViking."""
-        result = await ov.find(query="test", limit=5)
+    async def test_find_via_client(self, client):
+        """Test find via AsyncHTTPClient."""
+        result = await client.find(query="test", limit=5)
         assert result is not None
 
     @pytest.mark.asyncio
-    async def test_ls_via_ov(self, ov):
-        """Test ls via AsyncOpenViking."""
-        result = await ov.ls("viking://")
+    async def test_ls_via_client(self, client):
+        """Test ls via AsyncHTTPClient."""
+        result = await client.ls("viking://")
         assert isinstance(result, list)
 
     @pytest.mark.asyncio
-    async def test_observer_access(self, ov):
-        """Test observer access in HTTP mode."""
-        observer = ov.observer
+    async def test_observer_access(self, client):
+        """Test observer access."""
+        observer = client.observer
         assert observer is not None
 
     @pytest.mark.asyncio
-    async def test_session_via_ov(self, ov):
-        """Test session creation via AsyncOpenViking."""
-        session = ov.session()
+    async def test_session_via_client(self, client):
+        """Test session creation via AsyncHTTPClient."""
+        session = client.session()
         assert session is not None
         assert session._client is not None

@@ -108,7 +108,7 @@ async def client_with_resource(client, service, sample_markdown_file):
 
 
 # ---------------------------------------------------------------------------
-# SDK fixtures: real uvicorn server + HTTPClient (end-to-end tests)
+# SDK fixtures: real uvicorn server + AsyncHTTPClient (end-to-end tests)
 # ---------------------------------------------------------------------------
 
 

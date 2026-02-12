@@ -140,7 +140,7 @@ For team sharing, production deployment, and cross-language integration:
 
 ```python
 # Python SDK connects to OpenViking Server
-client = OpenViking(url="http://localhost:1933", api_key="xxx")
+client = SyncHTTPClient(url="http://localhost:1933", api_key="xxx")
 ```
 
 ```bash

@@ -3,7 +3,7 @@
 Memex CLI - Personal Knowledge Assistant
 
 Usage:
-    python -m memex.cli [--data-path PATH] [--user USER]
+    python -m memex.cli [--data-path PATH]
 
 Commands:
     /help               Show help
@@ -425,14 +425,11 @@ def main():
         default="./ov.conf",
         help="Path to OpenViking config file (default: ./ov.conf)",
     )
-    parser.add_argument("--user", default="default", help="User name (default: default)")
-
     args = parser.parse_args()
 
     config = MemexConfig(
         data_path=args.data_path,
         config_path=args.config_path,
-        user=args.user,
     )
 
     cli = MemexCLI(config)
