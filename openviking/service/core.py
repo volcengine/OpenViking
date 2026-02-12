@@ -245,13 +245,13 @@ class OpenVikingService:
             self._transaction_manager.stop()
             self._transaction_manager = None
 
-        if self._agfs_manager:
-            self._agfs_manager.stop()
-            self._agfs_manager = None
-
         if self._vikingdb_manager:
             await self._vikingdb_manager.close()
             self._vikingdb_manager = None
+
+        if self._agfs_manager:
+            self._agfs_manager.stop()
+            self._agfs_manager = None
 
         self._viking_fs = None
         self._resource_processor = None

@@ -58,6 +58,7 @@ class VikingDBManager(VikingVectorIndexBackend):
         self._queue_manager = None
         self._embedding_handler = None
         self._semantic_processor = None
+        self._closing = False
 
         # Initialize queue manager if AGFS URL is provided
         self._init_queue_manager()
@@ -114,8 +115,9 @@ class VikingDBManager(VikingVectorIndexBackend):
 
     async def close(self) -> None:
         """Close storage connection and release resources, including queue manager."""
+        self._closing = True
         try:
-            # First stop the queue manager to prevent new operations
+            # Close should stop queue processing immediately.
             if self._queue_manager:
                 self._queue_manager.stop()
                 self._queue_manager = None
@@ -126,6 +128,11 @@ class VikingDBManager(VikingVectorIndexBackend):
 
         except Exception as e:
             logger.error(f"Error closing VikingDB manager: {e}")
+
+    @property
+    def is_closing(self) -> bool:
+        """Whether the manager is in shutdown flow."""
+        return self._closing
 
     # =========================================================================
     # Queue Management Properties

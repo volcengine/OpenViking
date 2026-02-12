@@ -138,6 +138,7 @@ class QueueManager:
 
     def stop(self) -> None:
         """Stop QueueManager and release resources."""
+        global _instance
         if not self._started:
             return
 
@@ -152,6 +153,10 @@ class QueueManager:
         self._agfs = None
         self._queues.clear()
         self._started = False
+
+        if _instance is self:
+            _instance = None
+
         logger.info("[QueueManager] Stopped")
 
     def is_running(self) -> bool:
