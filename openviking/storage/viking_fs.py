@@ -372,10 +372,10 @@ class VikingFS:
         """
         from openviking_cli.retrieve.intent_analyzer import IntentAnalyzer
 
+        from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
         from openviking_cli.retrieve import (
             ContextType,
             FindResult,
-            HierarchicalRetriever,
             QueryPlan,
             TypedQuery,
         )
