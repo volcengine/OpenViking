@@ -14,8 +14,8 @@ from openviking.core.context import Context
 from openviking.models.embedder.base import EmbedResult
 from openviking.prompts import render_prompt
 from openviking.storage import VikingDBManager
-from openviking.utils import get_logger
-from openviking.utils.config import get_openviking_config
+from openviking_cli.utils import get_logger
+from openviking_cli.utils.config import get_openviking_config
 
 from .memory_extractor import CandidateMemory
 
@@ -105,7 +105,13 @@ class MemoryDeduplicator:
                 collection=collection,
                 query_vector=query_vector,
                 limit=5,
-                filter= {"op": "and", "conds": [{"field": "category", "op": "must", "conds": [category_value]}, {"field": "is_leaf", "op": "must", "conds": [True]}]},
+                filter={
+                    "op": "and",
+                    "conds": [
+                        {"field": "category", "op": "must", "conds": [category_value]},
+                        {"field": "is_leaf", "op": "must", "conds": [True]},
+                    ],
+                },
             )
 
             # Filter by similarity threshold
@@ -150,7 +156,7 @@ class MemoryDeduplicator:
         )
 
         try:
-            from openviking.utils.llm import parse_json_from_response
+            from openviking_cli.utils.llm import parse_json_from_response
 
             response = await vlm.get_completion_async(prompt)
             data = parse_json_from_response(response) or {}

@@ -11,7 +11,7 @@ from typing import List, Optional, Union
 
 from openviking.parse.base import ParseResult
 from openviking.parse.parsers.base_parser import BaseParser
-from openviking.utils.config.parser_config import ParserConfig
+from openviking_cli.utils.config.parser_config import ParserConfig
 
 
 class TextParser(BaseParser):

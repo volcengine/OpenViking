@@ -12,7 +12,7 @@ import pytest
 
 from openviking.agfs_manager import AGFSManager
 from openviking.storage.viking_fs import init_viking_fs
-from openviking.utils.config.agfs_config import AGFSConfig
+from openviking_cli.utils.config.agfs_config import AGFSConfig
 
 # 1. Config loading logic
 # Try to load from environment variable or default ov.conf
@@ -22,6 +22,7 @@ if not CONFIG_FILE:
     default_conf = Path(__file__).parent / "ov.conf"
     if default_conf.exists():
         CONFIG_FILE = str(default_conf)
+
 
 def load_agfs_config() -> AGFSConfig:
     """Load only AGFS configuration from the config file."""
@@ -41,13 +42,15 @@ def load_agfs_config() -> AGFSConfig:
     except Exception:
         return None
 
+
 AGFS_CONF = load_agfs_config()
 
 # 2. Skip tests if no local config found or backend is not local
 pytestmark = pytest.mark.skipif(
     AGFS_CONF is None or AGFS_CONF.backend != "local",
-    reason="AGFS local configuration not found in ov.conf or backend is not local"
+    reason="AGFS local configuration not found in ov.conf or backend is not local",
 )
+
 
 @pytest.fixture(scope="module")
 async def viking_fs_instance():
@@ -62,6 +65,7 @@ async def viking_fs_instance():
 
     # AGFSManager.stop is synchronous
     manager.stop()
+
 
 @pytest.mark.asyncio
 class TestVikingFSLocal:

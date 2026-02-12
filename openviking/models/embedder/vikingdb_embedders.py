@@ -11,7 +11,7 @@ from openviking.models.embedder.base import (
     SparseEmbedderBase,
 )
 from openviking.storage.vectordb.collection.volcengine_clients import ClientForDataApi
-from openviking.utils.logger import default_logger as logger
+from openviking_cli.utils.logger import default_logger as logger
 
 
 class VikingDBClientMixin:

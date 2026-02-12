@@ -17,7 +17,7 @@ from PIL import Image
 
 from openviking.parse.base import NodeType, ParseResult, ResourceNode
 from openviking.parse.parsers.base_parser import BaseParser
-from openviking.utils.config.parser_config import AudioConfig, ImageConfig, VideoConfig
+from openviking_cli.utils.config.parser_config import AudioConfig, ImageConfig, VideoConfig
 
 # =============================================================================
 # Configuration Classes

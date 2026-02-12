@@ -3,11 +3,9 @@
 
 """SDK tests using AsyncHTTPClient against a real uvicorn server."""
 
-from pathlib import Path
-
 import pytest_asyncio
 
-from openviking.client.http import AsyncHTTPClient
+from openviking_cli.client.http import AsyncHTTPClient
 from tests.server.conftest import SAMPLE_MD_CONTENT, TEST_TMP_DIR
 
 
@@ -44,9 +42,7 @@ async def test_sdk_add_resource(http_client):
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(SAMPLE_MD_CONTENT)
 
-    result = await client.add_resource(
-        path=str(f), reason="sdk test", wait=True
-    )
+    result = await client.add_resource(path=str(f), reason="sdk test", wait=True)
     assert "root_uri" in result
     assert result["root_uri"].startswith("viking://")
 
@@ -95,9 +91,7 @@ async def test_sdk_session_lifecycle(http_client):
     assert session_id
 
     # Add message
-    msg_result = await client.add_message(
-        session_id, "user", "Hello from SDK"
-    )
+    msg_result = await client.add_message(session_id, "user", "Hello from SDK")
     assert msg_result["message_count"] == 1
 
     # Get
@@ -140,9 +134,7 @@ async def test_sdk_full_workflow(http_client):
     f = TEST_TMP_DIR / "sdk_e2e.md"
     f.parent.mkdir(parents=True, exist_ok=True)
     f.write_text(SAMPLE_MD_CONTENT)
-    result = await client.add_resource(
-        path=str(f), reason="e2e test", wait=True
-    )
+    result = await client.add_resource(path=str(f), reason="e2e test", wait=True)
     uri = result["root_uri"]
 
     # Search

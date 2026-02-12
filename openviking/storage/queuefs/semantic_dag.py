@@ -7,8 +7,8 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
 from openviking.storage.viking_fs import get_viking_fs
-from openviking.utils import VikingURI
-from openviking.utils.logger import get_logger
+from openviking_cli.utils import VikingURI
+from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

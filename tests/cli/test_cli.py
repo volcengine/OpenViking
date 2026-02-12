@@ -5,12 +5,10 @@
 import json
 import os
 import tempfile
-from pathlib import Path
 
-import pytest
 from typer.testing import CliRunner
 
-from openviking.cli.main import app
+from openviking_cli.cli.main import app
 
 runner = CliRunner()
 
@@ -130,9 +128,7 @@ def test_cli_help_smoke():
 
     for args in commands:
         result = runner.invoke(app, args, env={})
-        assert result.exit_code == 0, "command failed: {}\n{}".format(
-            " ".join(args), result.output
-        )
+        assert result.exit_code == 0, "command failed: {}\n{}".format(" ".join(args), result.output)
 
 
 def test_cli_connection_refused():

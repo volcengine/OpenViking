@@ -11,8 +11,8 @@ from typing import Dict, Optional
 from openviking.storage.observers.base_observer import BaseObserver
 from openviking.storage.queuefs.named_queue import QueueStatus
 from openviking.storage.queuefs.queue_manager import QueueManager
-from openviking.utils import run_async
-from openviking.utils.logger import get_logger
+from openviking_cli.utils import run_async
+from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

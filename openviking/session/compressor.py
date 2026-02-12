@@ -12,10 +12,10 @@ from typing import Dict, List, Optional
 
 from openviking.core.context import Context, Vectorize
 from openviking.message import Message
-from openviking.session.user_id import UserIdentifier
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import get_viking_fs
-from openviking.utils import get_logger
+from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils import get_logger
 
 from .memory_deduplicator import DedupDecision, MemoryDeduplicator
 from .memory_extractor import MemoryCategory, MemoryExtractor

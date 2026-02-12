@@ -8,11 +8,11 @@ Provides ovpack export/import operations.
 
 from typing import Optional
 
-from openviking.exceptions import NotInitializedError
 from openviking.storage.local_fs import export_ovpack as local_export_ovpack
 from openviking.storage.local_fs import import_ovpack as local_import_ovpack
 from openviking.storage.viking_fs import VikingFS
-from openviking.utils import get_logger
+from openviking_cli.exceptions import NotInitializedError
+from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
@@ -61,4 +61,6 @@ class PackService:
             Imported root resource URI
         """
         viking_fs = self._ensure_initialized()
-        return await local_import_ovpack(viking_fs, file_path, parent, force=force, vectorize=vectorize)
+        return await local_import_ovpack(
+            viking_fs, file_path, parent, force=force, vectorize=vectorize
+        )

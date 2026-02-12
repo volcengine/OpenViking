@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from openviking.session import Session
 
 from openviking.async_client import AsyncOpenViking
-from openviking.utils import run_async
+from openviking_cli.utils import run_async
 
 
 class SyncOpenViking:

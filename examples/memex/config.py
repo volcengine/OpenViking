@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from openviking.utils.config import OpenVikingConfig
+from openviking_cli.utils.config import OpenVikingConfig
 
 
 @dataclass

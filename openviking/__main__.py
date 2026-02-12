@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Main entry point for `python -m openviking`."""
 
-from openviking.cli.main import app
-
+from openviking_cli.cli.main import app
 
 
 def main() -> None:

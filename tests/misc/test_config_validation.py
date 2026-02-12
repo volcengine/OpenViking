@@ -5,10 +5,10 @@
 
 import sys
 
-from openviking.utils.config.agfs_config import AGFSConfig, S3Config
-from openviking.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
-from openviking.utils.config.vectordb_config import VectorDBBackendConfig
-from openviking.utils.config.vlm_config import VLMConfig
+from openviking_cli.utils.config.agfs_config import AGFSConfig, S3Config
+from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
+from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
+from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
 def test_agfs_validation():
@@ -51,7 +51,7 @@ def test_agfs_validation():
                 region="us-west-1",
                 access_key="fake-access-key-for-testing",
                 secret_key="fake-secret-key-for-testing-12345",
-                endpoint="https://s3.amazonaws.com"
+                endpoint="https://s3.amazonaws.com",
             ),
         )
         print("   Pass")

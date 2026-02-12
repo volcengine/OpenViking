@@ -16,10 +16,9 @@ from uuid import uuid4
 from openviking.core.context import Context, ContextType, Vectorize
 from openviking.prompts import render_prompt
 from openviking.storage.viking_fs import get_viking_fs
-from openviking.utils import get_logger
-from openviking.utils.config import get_openviking_config
-from openviking.session.user_id import UserIdentifier
-
+from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils import get_logger
+from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 
@@ -99,7 +98,7 @@ class MemoryExtractor:
         )
 
         try:
-            from openviking.utils.llm import parse_json_from_response
+            from openviking_cli.utils.llm import parse_json_from_response
 
             response = await vlm.get_completion_async(prompt)
             data = parse_json_from_response(response) or {}
@@ -156,7 +155,9 @@ class MemoryExtractor:
                 session_id=session_id,
                 user=user,
             )
-            logger.info(f"uri {memory_uri} abstract: {candidate.abstract} content: {candidate.content}")
+            logger.info(
+                f"uri {memory_uri} abstract: {candidate.abstract} content: {candidate.content}"
+            )
             memory.set_vectorize(Vectorize(text=candidate.content))
             return memory
 

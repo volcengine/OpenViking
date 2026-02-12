@@ -79,7 +79,7 @@ Repository = "https://github.com/volcengine/openviking"
 Issues = "https://github.com/volcengine/openviking/issues"
 
 [project.scripts]
-openviking = "openviking.cli.main:app"
+openviking = "openviking_cli.cli.main:app"
 openviking-server = "openviking.server.bootstrap:main"
 
 [tool.setuptools_scm]

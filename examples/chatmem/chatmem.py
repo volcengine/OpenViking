@@ -25,7 +25,7 @@ from rich.spinner import Spinner
 
 from openviking import SyncOpenViking
 from openviking.message import TextPart
-from openviking.utils.config.open_viking_config import OpenVikingConfig
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 
 console = Console()
 PANEL_WIDTH = 78

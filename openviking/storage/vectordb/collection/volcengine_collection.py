@@ -17,7 +17,7 @@ from openviking.storage.vectordb.collection.volcengine_clients import (
     ClientForConsoleApi,
     ClientForDataApi,
 )
-from openviking.utils.logger import default_logger as logger
+from openviking_cli.utils.logger import default_logger as logger
 
 
 def get_or_create_volcengine_collection(config: Dict[str, Any], meta_data: Dict[str, Any]):

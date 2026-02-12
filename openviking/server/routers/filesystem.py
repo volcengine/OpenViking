@@ -3,13 +3,13 @@
 """Filesystem endpoints for OpenViking HTTP Server."""
 
 from fastapi import APIRouter, Depends, Query
-from pydantic import BaseModel
 from pyagfs.exceptions import AGFSClientError
+from pydantic import BaseModel
 
-from openviking.exceptions import NotFoundError
 from openviking.server.auth import verify_api_key
 from openviking.server.dependencies import get_service
 from openviking.server.models import Response
+from openviking_cli.exceptions import NotFoundError
 
 router = APIRouter(prefix="/api/v1/fs", tags=["filesystem"])
 

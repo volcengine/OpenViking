@@ -10,7 +10,6 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from openviking.exceptions import OpenVikingError
 from openviking.server.config import ServerConfig, load_server_config
 from openviking.server.dependencies import set_service
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
@@ -27,7 +26,8 @@ from openviking.server.routers import (
     system_router,
 )
 from openviking.service.core import OpenVikingService
-from openviking.utils import get_logger
+from openviking_cli.exceptions import OpenVikingError
+from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 

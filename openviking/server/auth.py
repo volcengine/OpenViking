@@ -7,7 +7,7 @@ from typing import Optional
 
 from fastapi import Header, Request
 
-from openviking.exceptions import UnauthenticatedError
+from openviking_cli.exceptions import UnauthenticatedError
 
 
 async def verify_api_key(

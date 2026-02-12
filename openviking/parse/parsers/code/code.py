@@ -35,7 +35,7 @@ from openviking.parse.parsers.constants import (
     IGNORE_EXTENSIONS,
 )
 from openviking.parse.parsers.upload_utils import upload_directory
-from openviking.utils.logger import get_logger
+from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

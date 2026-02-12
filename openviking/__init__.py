@@ -7,11 +7,11 @@ Data in, Context out.
 """
 
 from openviking.async_client import AsyncOpenViking
-from openviking.client.http import AsyncHTTPClient
-from openviking.client.sync_http import SyncHTTPClient
 from openviking.session import Session
-from openviking.session.user_id import UserIdentifier
 from openviking.sync_client import SyncOpenViking
+from openviking_cli.client.http import AsyncHTTPClient
+from openviking_cli.client.sync_http import SyncHTTPClient
+from openviking_cli.session.user_id import UserIdentifier
 
 OpenViking = SyncOpenViking
 

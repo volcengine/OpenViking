@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
-from openviking.utils.logger import get_logger
+from openviking_cli.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from pyagfs import AGFSClient

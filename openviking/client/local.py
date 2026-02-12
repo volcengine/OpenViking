@@ -7,10 +7,9 @@ Implements BaseClient interface using direct service calls (embedded mode).
 
 from typing import Any, Dict, List, Optional, Union
 
-from openviking.client.base import BaseClient
 from openviking.service import OpenVikingService
-from openviking.session.user_id import UserIdentifier
-from openviking.utils.config import OpenVikingConfig
+from openviking_cli.client.base import BaseClient
+from openviking_cli.session.user_id import UserIdentifier
 
 
 class LocalClient(BaseClient):

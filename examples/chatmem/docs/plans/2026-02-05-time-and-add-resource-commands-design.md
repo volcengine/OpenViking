@@ -208,7 +208,7 @@ from pathlib import Path
 from typing import Optional
 
 import openviking as ov
-from openviking.utils.config.open_viking_config import OpenVikingConfig
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 from rich.console import Console
 
 

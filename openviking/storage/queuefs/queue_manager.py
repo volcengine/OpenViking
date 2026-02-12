@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional, Union
 
 from pyagfs import AGFSClient
 
-from openviking.utils.logger import get_logger
+from openviking_cli.utils.logger import get_logger
 
 from .embedding_queue import EmbeddingQueue
 from .named_queue import DequeueHandlerBase, EnqueueHookBase, NamedQueue, QueueStatus

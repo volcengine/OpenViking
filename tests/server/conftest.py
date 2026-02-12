@@ -18,7 +18,7 @@ from openviking import AsyncOpenViking
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig
 from openviking.service.core import OpenVikingService
-from openviking.session.user_id import UserIdentifier
+from openviking_cli.session.user_id import UserIdentifier
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -68,7 +68,9 @@ def sample_markdown_file(temp_dir: Path) -> Path:
 @pytest_asyncio.fixture(scope="function")
 async def service(temp_dir: Path):
     """Create and initialize an OpenVikingService in embedded mode."""
-    svc = OpenVikingService(path=str(temp_dir / "data"), user=UserIdentifier.the_default_user("test_user"))
+    svc = OpenVikingService(
+        path=str(temp_dir / "data"), user=UserIdentifier.the_default_user("test_user")
+    )
     await svc.initialize()
     yield svc
     await svc.close()
@@ -90,9 +92,7 @@ async def app(service: OpenVikingService):
 async def client(app):
     """httpx AsyncClient bound to the ASGI app (no real network)."""
     transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(
-        transport=transport, base_url="http://testserver"
-    ) as c:
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as c:
         yield c
 
 
@@ -130,9 +130,7 @@ async def running_server(temp_dir: Path):
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
 
-    uvi_config = uvicorn.Config(
-        fastapi_app, host="127.0.0.1", port=port, log_level="warning"
-    )
+    uvi_config = uvicorn.Config(fastapi_app, host="127.0.0.1", port=port, log_level="warning")
     server = uvicorn.Server(uvi_config)
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()
@@ -140,9 +138,7 @@ async def running_server(temp_dir: Path):
     # Wait for server ready
     for _ in range(50):
         try:
-            r = httpx.get(
-                f"http://127.0.0.1:{port}/health", timeout=1
-            )
+            r = httpx.get(f"http://127.0.0.1:{port}/health", timeout=1)
             if r.status_code == 200:
                 break
         except Exception:

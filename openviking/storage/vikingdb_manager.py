@@ -11,9 +11,9 @@ from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.queuefs.embedding_queue import EmbeddingQueue
 from openviking.storage.queuefs.queue_manager import init_queue_manager
 from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
-from openviking.utils import get_logger
-from openviking.utils.config.agfs_config import AGFSConfig
-from openviking.utils.config.vectordb_config import VectorDBBackendConfig
+from openviking_cli.utils import get_logger
+from openviking_cli.utils.config.agfs_config import AGFSConfig
+from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 
 logger = get_logger(__name__)
 
@@ -214,7 +214,7 @@ class VikingDBManager(VikingVectorIndexBackend):
             Embedder instance or None if not configured
         """
         try:
-            from openviking.utils.config import get_openviking_config
+            from openviking_cli.utils.config import get_openviking_config
 
             config = get_openviking_config()
             return config.embedding.get_embedder()

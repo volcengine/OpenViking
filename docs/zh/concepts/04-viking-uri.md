@@ -138,7 +138,7 @@ viking://
 ### 解析
 
 ```python
-from openviking.utils.uri import VikingURI
+from openviking_cli.utils.uri import VikingURI
 
 uri = VikingURI("viking://resources/docs/api")
 print(uri.scope)      # "resources"

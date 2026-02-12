@@ -9,8 +9,8 @@ from typing import cast
 from openviking.core.context import Context
 from openviking.storage.queuefs import EmbeddingQueue, get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
-from openviking.utils.logger import get_logger
-from openviking.utils.uri import VikingURI
+from openviking_cli.utils.logger import get_logger
+from openviking_cli.utils.uri import VikingURI
 
 logger = get_logger(__name__)
 

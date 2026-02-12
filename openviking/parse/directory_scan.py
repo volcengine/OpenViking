@@ -14,11 +14,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import List, Optional, Set, Union
 
-from openviking.exceptions import UnsupportedDirectoryFilesError
 from openviking.parse.parsers.constants import IGNORE_DIRS
 from openviking.parse.parsers.upload_utils import is_text_file
 from openviking.parse.registry import ParserRegistry, get_registry
-from openviking.utils.logger import get_logger
+from openviking_cli.exceptions import UnsupportedDirectoryFilesError
+from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

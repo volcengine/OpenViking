@@ -153,7 +153,7 @@ class DirectoryInitializer:
 
     async def initialize_all(self) -> int:
         """Initialize all global preset directories (skip user scope)."""
-        from openviking.utils.logger import get_logger
+        from openviking_cli.utils.logger import get_logger
 
         logger = get_logger(__name__)
         count = 0
@@ -207,7 +207,7 @@ class DirectoryInitializer:
         scope: str,
     ) -> bool:
         """Ensure directory exists, return whether newly created."""
-        from openviking.utils.logger import get_logger
+        from openviking_cli.utils.logger import get_logger
 
         logger = get_logger(__name__)
         created = False
@@ -220,7 +220,7 @@ class DirectoryInitializer:
             logger.debug(f"[VikingFS] Directory {uri} already exists")
 
         # 2. Ensure record exists in vector storage
-        from openviking.utils.config.vectordb_config import COLLECTION_NAME
+        from openviking_cli.utils.config.vectordb_config import COLLECTION_NAME
 
         existing = await self.vikingdb.filter(
             collection=COLLECTION_NAME,

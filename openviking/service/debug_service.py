@@ -16,7 +16,7 @@ from openviking.storage.observers import (
 )
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.transaction import get_transaction_manager
-from openviking.utils.config import OpenVikingConfig
+from openviking_cli.utils.config import OpenVikingConfig
 
 
 @dataclass

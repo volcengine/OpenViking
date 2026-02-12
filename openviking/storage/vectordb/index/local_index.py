@@ -13,7 +13,7 @@ from openviking.storage.vectordb.index.index import IIndex
 from openviking.storage.vectordb.store.data import CandidateData, DeltaRecord
 from openviking.storage.vectordb.utils.constants import IndexFileMarkers
 from openviking.storage.vectordb.utils.data_processor import DataProcessor
-from openviking.utils.logger import default_logger as logger
+from openviking_cli.utils.logger import default_logger as logger
 
 
 def normalize_vector(vector: List[float]) -> List[float]:

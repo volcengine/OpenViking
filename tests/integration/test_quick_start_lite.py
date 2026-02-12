@@ -60,7 +60,7 @@ class TestQuickStartLite(unittest.TestCase):
         shutil.rmtree(self.config_dir)
 
         # Reset OpenVikingConfig singleton to avoid side effects
-        from openviking.utils.config.open_viking_config import OpenVikingConfigSingleton
+        from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 
         OpenVikingConfigSingleton.reset_instance()
 
@@ -220,7 +220,7 @@ class TestQuickStartLite(unittest.TestCase):
             patch("openviking.utils.config.VLMConfig.get_vlm_instance", return_value=mock_vlm),
         ):
             # Reset the singleton again inside the patched environment just in case
-            from openviking.utils.config.open_viking_config import OpenVikingConfigSingleton
+            from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 
             OpenVikingConfigSingleton.reset_instance()
 

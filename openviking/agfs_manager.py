@@ -12,10 +12,10 @@ from typing import TYPE_CHECKING, Optional
 
 import yaml
 
-from openviking.utils import get_logger
+from openviking_cli.utils import get_logger
 
 if TYPE_CHECKING:
-    from openviking.utils.config.agfs_config import AGFSConfig
+    from openviking_cli.utils.config.agfs_config import AGFSConfig
 
 logger = get_logger(__name__)
 
@@ -26,7 +26,7 @@ class AGFSManager:
 
     Examples:
         # 1. Local backend
-        from openviking.utils.config.agfs_config import AGFSConfig
+        from openviking_cli.utils.config.agfs_config import AGFSConfig
 
         config = AGFSConfig(
             path="./data",
@@ -38,7 +38,7 @@ class AGFSManager:
         manager.start()
 
         # 2. S3 backend
-        from openviking.utils.config.agfs_config import AGFSConfig, S3Config
+        from openviking_cli.utils.config.agfs_config import AGFSConfig, S3Config
 
         config = AGFSConfig(
             path="./data",

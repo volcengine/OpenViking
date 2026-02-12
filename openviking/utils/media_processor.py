@@ -7,11 +7,11 @@ from typing import TYPE_CHECKING, Optional
 
 from openviking.parse import DocumentConverter, parse
 from openviking.parse.base import ParseResult
-from openviking.utils.logger import get_logger
+from openviking_cli.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from openviking.parse.vlm import VLMProcessor
-    from openviking.utils.storage import StoragePath
+    from openviking_cli.utils.storage import StoragePath
 
 logger = get_logger(__name__)
 

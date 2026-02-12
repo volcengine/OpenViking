@@ -9,8 +9,8 @@ defined in ``conftest.py``.
 import pytest
 import pytest_asyncio
 
-from openviking.client.http import AsyncHTTPClient
-from openviking.exceptions import NotFoundError
+from openviking_cli.client.http import AsyncHTTPClient
+from openviking_cli.exceptions import NotFoundError
 
 
 class TestHTTPClientIntegration:

@@ -45,7 +45,7 @@ from openviking.storage.vectordb.utils.str_to_uint64 import str_to_uint64
 from openviking.storage.vectordb.vectorize.base import BaseVectorizer
 from openviking.storage.vectordb.vectorize.vectorizer import VectorizerAdapter
 from openviking.storage.vectordb.vectorize.vectorizer_factory import VectorizerFactory
-from openviking.utils.logger import default_logger as logger
+from openviking_cli.utils.logger import default_logger as logger
 
 # Use imported constants, no longer defined here
 AUTO_ID_KEY = SpecialFields.AUTO_ID.value

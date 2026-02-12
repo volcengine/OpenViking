@@ -18,9 +18,9 @@ from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecutor
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.viking_fs import get_viking_fs
-from openviking.utils import VikingURI
-from openviking.utils.config import get_openviking_config
-from openviking.utils.logger import get_logger
+from openviking_cli.utils import VikingURI
+from openviking_cli.utils.config import get_openviking_config
+from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

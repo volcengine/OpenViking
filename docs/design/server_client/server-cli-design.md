@@ -298,7 +298,7 @@ OpenViking 提供三种接口，面向不同使用场景：
 
 支持多租户场景，首先通过 account_id 区分不同的应用租户，然后允许通过 `user` 和 `agent` 实现租户内的身份隔离：
 
-用户或智能体身份标识详见 `from openviking.session.user_id import UserIdentifier`
+用户或智能体身份标识详见 `from openviking_cli.session.user_id import UserIdentifier`
 
 | 参数 | 说明 | 默认值 |
 |------|------|------|

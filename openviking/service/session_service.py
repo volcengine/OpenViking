@@ -8,13 +8,13 @@ Provides session management operations: session, sessions, add_message, commit, 
 
 from typing import Any, Dict, List, Optional
 
-from openviking.exceptions import NotFoundError, NotInitializedError
 from openviking.session import Session
 from openviking.session.compressor import SessionCompressor
-from openviking.session.user_id import UserIdentifier
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import VikingFS
-from openviking.utils import get_logger
+from openviking_cli.exceptions import NotFoundError, NotInitializedError
+from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 

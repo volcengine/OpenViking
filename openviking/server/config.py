@@ -5,7 +5,7 @@
 from dataclasses import dataclass, field
 from typing import List, Optional
 
-from openviking.utils.config.config_loader import (
+from openviking_cli.utils.config.config_loader import (
     DEFAULT_OV_CONF,
     OPENVIKING_CONFIG_ENV,
     load_json_config,
@@ -46,7 +46,8 @@ def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
     """
     path = resolve_config_path(config_path, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
     if path is None:
-        from openviking.utils.config.config_loader import DEFAULT_CONFIG_DIR
+        from openviking_cli.utils.config.config_loader import DEFAULT_CONFIG_DIR
+
         default_path = DEFAULT_CONFIG_DIR / DEFAULT_OV_CONF
         raise FileNotFoundError(
             f"OpenViking configuration file not found.\n"

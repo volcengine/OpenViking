@@ -8,13 +8,13 @@ import os
 import uuid
 from pathlib import Path
 
-import botocore
 import boto3
+import botocore
 import pytest
 
 from openviking.agfs_manager import AGFSManager
 from openviking.storage.viking_fs import VikingFS, init_viking_fs
-from openviking.utils.config.agfs_config import AGFSConfig
+from openviking_cli.utils.config.agfs_config import AGFSConfig
 
 # 1. Simplified Config loading logic
 # Only extract the AGFS part for focused testing
@@ -24,6 +24,7 @@ if not CONFIG_FILE:
     default_conf = Path(__file__).parent / "ov.conf"
     if default_conf.exists():
         CONFIG_FILE = str(default_conf)
+
 
 def load_agfs_config() -> AGFSConfig:
     """Load only AGFS configuration from the config file."""
@@ -43,13 +44,15 @@ def load_agfs_config() -> AGFSConfig:
     except Exception:
         return None
 
+
 AGFS_CONF = load_agfs_config()
 
 # 2. Skip tests if no S3 config found or backend is not S3
 pytestmark = pytest.mark.skipif(
     AGFS_CONF is None or AGFS_CONF.backend != "s3",
-    reason="AGFS S3 configuration not found in ov.conf"
+    reason="AGFS S3 configuration not found in ov.conf",
 )
+
 
 @pytest.fixture(scope="module")
 def s3_client():
@@ -57,13 +60,14 @@ def s3_client():
 
     s3_conf = AGFS_CONF.s3
     return boto3.client(
-        's3',
+        "s3",
         aws_access_key_id=s3_conf.access_key,
         aws_secret_access_key=s3_conf.secret_key,
         region_name=s3_conf.region,
         endpoint_url=s3_conf.endpoint,
-        use_ssl=s3_conf.use_ssl
+        use_ssl=s3_conf.use_ssl,
     )
+
 
 @pytest.fixture(scope="module")
 async def viking_fs_instance():
@@ -78,6 +82,7 @@ async def viking_fs_instance():
 
     # AGFSManager.stop is synchronous
     manager.stop()
+
 
 @pytest.mark.asyncio
 class TestVikingFSS3:
@@ -100,7 +105,7 @@ class TestVikingFSS3:
         # 2. Verify existence and content via S3 client
         s3_key = f"{prefix}{test_filename}"
         response = s3_client.get_object(Bucket=bucket, Key=s3_key)
-        s3_content = response['Body'].read().decode('utf-8')
+        s3_content = response["Body"].read().decode("utf-8")
         assert s3_content == test_content
 
         # 3. Stat via VikingFS
@@ -122,7 +127,7 @@ class TestVikingFSS3:
         # 7. Verify deletion via S3 client
         with pytest.raises(botocore.exceptions.ClientError) as excinfo:
             s3_client.get_object(Bucket=bucket, Key=s3_key)
-        assert excinfo.value.response['Error']['Code'] in ['NoSuchKey', '404']
+        assert excinfo.value.response["Error"]["Code"] in ["NoSuchKey", "404"]
 
     async def test_directory_operations(self, viking_fs_instance, s3_client):
         """Test VikingFS directory operations and verify with S3 client."""
@@ -144,7 +149,7 @@ class TestVikingFSS3:
 
         s3_key = f"{prefix}{test_dir}/inner.txt"
         response = s3_client.get_object(Bucket=bucket, Key=s3_key)
-        assert response['Body'].read().decode('utf-8') == file_content
+        assert response["Body"].read().decode("utf-8") == file_content
 
         # 3. List via VikingFS
         root_entries = await vfs.ls("viking://")

@@ -27,7 +27,7 @@ from openviking.storage.vectordb.service.app_models import (
 )
 from openviking.storage.vectordb.service.code import ErrorCode
 from openviking.storage.vectordb.utils import data_utils
-from openviking.utils.logger import default_logger as logger
+from openviking_cli.utils.logger import default_logger as logger
 
 
 # Helper functions for responses

@@ -10,7 +10,7 @@ from typing import Optional
 from rich.console import Console
 
 import openviking as ov
-from openviking.utils.config.open_viking_config import OpenVikingConfig
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 
 
 def create_client(config_path: str = "./ov.conf", data_path: str = "./data") -> ov.SyncOpenViking:

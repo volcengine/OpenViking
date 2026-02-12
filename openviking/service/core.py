@@ -10,7 +10,6 @@ from typing import Any, Optional
 
 from openviking.agfs_manager import AGFSManager
 from openviking.core.directories import DirectoryInitializer
-from openviking.exceptions import NotInitializedError
 from openviking.service.debug_service import DebugService
 from openviking.service.fs_service import FSService
 from openviking.service.pack_service import PackService
@@ -19,17 +18,18 @@ from openviking.service.resource_service import ResourceService
 from openviking.service.search_service import SearchService
 from openviking.service.session_service import SessionService
 from openviking.session.compressor import SessionCompressor
-from openviking.session.user_id import UserIdentifier
 from openviking.storage import VikingDBManager
 from openviking.storage.collection_schemas import init_context_collection
 from openviking.storage.transaction import TransactionManager, init_transaction_manager
 from openviking.storage.viking_fs import VikingFS, init_viking_fs
-from openviking.utils import get_logger
-from openviking.utils.config import get_openviking_config
-from openviking.utils.config.open_viking_config import initialize_openviking_config
-from openviking.utils.config.storage_config import StorageConfig
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking.utils.skill_processor import SkillProcessor
+from openviking_cli.exceptions import NotInitializedError
+from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils import get_logger
+from openviking_cli.utils.config import get_openviking_config
+from openviking_cli.utils.config.open_viking_config import initialize_openviking_config
+from openviking_cli.utils.config.storage_config import StorageConfig
 
 logger = get_logger(__name__)
 

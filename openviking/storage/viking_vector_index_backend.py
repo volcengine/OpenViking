@@ -15,8 +15,8 @@ from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.result import FetchDataInCollectionResult
 from openviking.storage.vectordb.utils.logging_init import init_cpp_logging
 from openviking.storage.vikingdb_interface import CollectionNotFoundError, VikingDBInterface
-from openviking.utils import get_logger
-from openviking.utils.config.vectordb_config import VectorDBBackendConfig
+from openviking_cli.utils import get_logger
+from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 
 logger = get_logger(__name__)
 
@@ -64,7 +64,7 @@ class VikingVectorIndexBackend(VikingDBInterface):
             backend = VikingVectorIndexBackend(config=config)
 
             # 3. Volcengine VikingDB
-            from openviking.utils.config.storage_config import VolcengineConfig
+            from openviking_cli.utils.config.storage_config import VolcengineConfig
             config = VectorDBBackendConfig(
                 backend="volcengine",
                 volcengine=VolcengineConfig(

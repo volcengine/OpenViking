@@ -7,7 +7,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from openviking.session.user_id import UserIdentifier
+from openviking_cli.session.user_id import UserIdentifier
 
 
 class ResourceContentType(str, Enum):

@@ -6,7 +6,6 @@ from pathlib import Path
 
 import pytest
 
-from openviking.exceptions import UnsupportedDirectoryFilesError
 from openviking.parse.directory_scan import (
     CLASS_PROCESSABLE,
     ClassifiedFile,
@@ -14,6 +13,7 @@ from openviking.parse.directory_scan import (
     scan_directory,
 )
 from openviking.parse.registry import ParserRegistry
+from openviking_cli.exceptions import UnsupportedDirectoryFilesError
 
 # ---------------------------------------------------------------------------
 # Fixtures

@@ -7,7 +7,7 @@ from typing import Any, Dict, Optional
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.local_collection import get_or_create_local_collection
 from openviking.storage.vectordb.utils.dict_utils import ThreadSafeDictManager
-from openviking.utils.logger import default_logger as logger
+from openviking_cli.utils.logger import default_logger as logger
 
 
 def get_or_create_local_project(path: str = ""):

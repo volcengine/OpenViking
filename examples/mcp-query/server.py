@@ -27,7 +27,7 @@ from common.recipe import Recipe
 from mcp.server.fastmcp import FastMCP
 
 import openviking as ov
-from openviking.utils.config.open_viking_config import OpenVikingConfig
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("openviking-mcp")

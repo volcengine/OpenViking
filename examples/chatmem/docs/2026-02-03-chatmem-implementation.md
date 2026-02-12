@@ -161,7 +161,7 @@ Add after existing imports at top of `chat.py`:
 import json
 from openviking import SyncOpenViking
 from openviking.message import TextPart
-from openviking.utils.config.open_viking_config import OpenVikingConfig
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 ```
 
 **Step 2: Remove ChatSession class**
@@ -418,7 +418,7 @@ Create a simple test script `test_messages.py`:
 """Test message recording"""
 from openviking import SyncOpenViking
 from openviking.message import TextPart
-from openviking.utils.config.open_viking_config import OpenVikingConfig
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 import json
 
 # Load config

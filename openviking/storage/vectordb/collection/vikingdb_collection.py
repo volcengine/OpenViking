@@ -15,7 +15,7 @@ from openviking.storage.vectordb.collection.vikingdb_clients import (
     VIKINGDB_APIS,
     VikingDBClient,
 )
-from openviking.utils.logger import default_logger as logger
+from openviking_cli.utils.logger import default_logger as logger
 
 
 class VikingDBCollection(ICollection):

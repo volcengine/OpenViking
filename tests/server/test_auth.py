@@ -4,15 +4,13 @@
 """Tests for API key authentication (openviking/server/auth.py)."""
 
 import httpx
-import pytest
 import pytest_asyncio
 
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig
 from openviking.server.dependencies import set_service
 from openviking.service.core import OpenVikingService
-from openviking.session.user_id import UserIdentifier
-
+from openviking_cli.session.user_id import UserIdentifier
 
 TEST_API_KEY = "test-secret-key-12345"
 
@@ -20,7 +18,9 @@ TEST_API_KEY = "test-secret-key-12345"
 @pytest_asyncio.fixture(scope="function")
 async def auth_service(temp_dir):
     """Service for auth tests."""
-    svc = OpenVikingService(path=str(temp_dir / "auth_data"), user=UserIdentifier.the_default_user("auth_user"))
+    svc = OpenVikingService(
+        path=str(temp_dir / "auth_data"), user=UserIdentifier.the_default_user("auth_user")
+    )
     await svc.initialize()
     yield svc
     await svc.close()
@@ -39,9 +39,7 @@ async def auth_app(auth_service):
 async def auth_client(auth_app):
     """Client bound to auth-enabled app."""
     transport = httpx.ASGITransport(app=auth_app)
-    async with httpx.AsyncClient(
-        transport=transport, base_url="http://testserver"
-    ) as c:
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as c:
         yield c
 
 
@@ -120,7 +118,5 @@ async def test_auth_on_protected_endpoints(auth_client: httpx.AsyncClient):
 
     # Same endpoints with valid key should work
     for method, url in endpoints:
-        resp = await auth_client.request(
-            method, url, headers={"X-API-Key": TEST_API_KEY}
-        )
+        resp = await auth_client.request(method, url, headers={"X-API-Key": TEST_API_KEY})
         assert resp.status_code == 200, f"{method} {url} should succeed with key"

@@ -9,7 +9,7 @@ from openviking.storage.vectordb.collection.http_collection import (
     list_vikingdb_collections,
 )
 from openviking.storage.vectordb.utils.dict_utils import ThreadSafeDictManager
-from openviking.utils.logger import default_logger as logger
+from openviking_cli.utils.logger import default_logger as logger
 
 
 def get_or_create_http_project(

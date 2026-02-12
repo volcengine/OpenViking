@@ -2,12 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for config_loader utilities."""
 
-import json
-import os
-
 import pytest
 
-from openviking.utils.config.config_loader import (
+from openviking_cli.utils.config.config_loader import (
     load_json_config,
     require_config,
     resolve_config_path,

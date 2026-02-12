@@ -8,9 +8,9 @@ Provides relation management operations: relations, link, unlink.
 
 from typing import Any, Dict, List, Optional, Union
 
-from openviking.exceptions import NotInitializedError
 from openviking.storage.viking_fs import VikingFS
-from openviking.utils import get_logger
+from openviking_cli.exceptions import NotInitializedError
+from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 

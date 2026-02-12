@@ -13,7 +13,7 @@ from typing import List, Optional
 from pyagfs import AGFSClient
 
 from openviking.storage.transaction.transaction_record import TransactionRecord
-from openviking.utils.logger import get_logger
+from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

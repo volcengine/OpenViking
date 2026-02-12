@@ -51,7 +51,7 @@ def init_cpp_logging():
 
         try:
             from openviking.storage.vectordb.engine import init_logging
-            from openviking.utils.config import get_openviking_config
+            from openviking_cli.utils.config import get_openviking_config
 
             config = get_openviking_config()
 

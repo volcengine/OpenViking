@@ -16,7 +16,7 @@ from openviking.parse.parsers.constants import (
     TEXT_ENCODINGS,
     UTF8_VARIANTS,
 )
-from openviking.utils.logger import get_logger
+from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

@@ -13,9 +13,9 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import uuid4
 
 from openviking.message import Message, Part
-from openviking.session.user_id import UserIdentifier
-from openviking.utils import get_logger, run_async
-from openviking.utils.config import get_openviking_config
+from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils import get_logger, run_async
+from openviking_cli.utils.config import get_openviking_config
 
 if TYPE_CHECKING:
     from openviking.session.compressor import SessionCompressor

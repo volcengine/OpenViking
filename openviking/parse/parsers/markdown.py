@@ -24,8 +24,8 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from openviking.parse.base import NodeType, ParseResult, ResourceNode, create_parse_result
 from openviking.parse.parsers.base_parser import BaseParser
-from openviking.utils.config.parser_config import ParserConfig
-from openviking.utils.logger import get_logger
+from openviking_cli.utils.config.parser_config import ParserConfig
+from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

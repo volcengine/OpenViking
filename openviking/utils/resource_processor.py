@@ -12,8 +12,8 @@ from typing import TYPE_CHECKING, Any, Dict, Optional
 from openviking.parse.tree_builder import TreeBuilder
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import get_viking_fs
-from openviking.utils import get_logger
-from openviking.utils.storage import StoragePath
+from openviking_cli.utils import get_logger
+from openviking_cli.utils.storage import StoragePath
 
 if TYPE_CHECKING:
     from openviking.parse.vlm import VLMProcessor

@@ -7,10 +7,10 @@ Session delegates all operations to the underlying Client (LocalClient or AsyncH
 
 from typing import TYPE_CHECKING, Any, Dict
 
-from openviking.session.user_id import UserIdentifier
+from openviking_cli.session.user_id import UserIdentifier
 
 if TYPE_CHECKING:
-    from openviking.client.base import BaseClient
+    from openviking_cli.client.base import BaseClient
 
 
 class Session:

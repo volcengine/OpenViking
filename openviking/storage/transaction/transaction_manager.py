@@ -18,7 +18,7 @@ from openviking.storage.transaction.transaction_record import (
     TransactionRecord,
     TransactionStatus,
 )
-from openviking.utils.logger import get_logger
+from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

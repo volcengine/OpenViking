@@ -22,10 +22,10 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 from pyagfs import AGFSClient
 
 from openviking.storage.vikingdb_interface import VikingDBInterface
-from openviking.utils.logger import get_logger
+from openviking_cli.utils.logger import get_logger
 
 if TYPE_CHECKING:
-    from openviking.utils.config import RerankConfig
+    from openviking_cli.utils.config import RerankConfig
 
 logger = get_logger(__name__)
 
@@ -529,7 +529,7 @@ class VikingFS:
 
     def _uri_to_path(self, uri: str) -> str:
         """viking://user/memories/preferences/test -> /local/user/memories/preferences/test"""
-        remainder = uri[len("viking://"):].strip("/")
+        remainder = uri[len("viking://") :].strip("/")
         if not remainder:
             return "/local"
         return f"/local/{remainder}"

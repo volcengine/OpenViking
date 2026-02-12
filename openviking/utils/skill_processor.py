@@ -12,12 +12,12 @@ from typing import Any, Dict, List, Optional
 from openviking.core.context import Context, ContextType, Vectorize
 from openviking.core.mcp_converter import is_mcp_format, mcp_to_skill
 from openviking.core.skill_loader import SkillLoader
-from openviking.session.user_id import UserIdentifier
 from openviking.storage import VikingDBManager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.viking_fs import VikingFS
-from openviking.utils import get_logger
-from openviking.utils.config import get_openviking_config
+from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils import get_logger
+from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 

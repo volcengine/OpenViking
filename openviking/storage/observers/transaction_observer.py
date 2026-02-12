@@ -12,8 +12,8 @@ from typing import Any, Dict
 from openviking.storage.observers.base_observer import BaseObserver
 from openviking.storage.transaction import TransactionManager
 from openviking.storage.transaction.transaction_record import TransactionStatus
-from openviking.utils import run_async
-from openviking.utils.logger import get_logger
+from openviking_cli.utils import run_async
+from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

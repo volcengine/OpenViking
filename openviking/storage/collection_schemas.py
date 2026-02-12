@@ -14,8 +14,8 @@ from openviking.models.embedder.base import EmbedResult
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.vikingdb_interface import CollectionNotFoundError, VikingDBInterface
-from openviking.utils import get_logger
-from openviking.utils.config.open_viking_config import OpenVikingConfig
+from openviking_cli.utils import get_logger
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 
 logger = get_logger(__name__)
 
@@ -70,7 +70,7 @@ async def init_context_collection(storage) -> bool:
     Returns:
         True if collection was created, False if already exists
     """
-    from openviking.utils.config import get_openviking_config
+    from openviking_cli.utils.config import get_openviking_config
 
     config = get_openviking_config()
     name = config.storage.vectordb.name
@@ -97,7 +97,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
         Args:
             vikingdb: VikingDBInterface instance for writing to vector database
         """
-        from openviking.utils.config import get_openviking_config
+        from openviking_cli.utils.config import get_openviking_config
 
         self._vikingdb = vikingdb
         self._embedder = None
@@ -129,7 +129,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
 
             # Initialize embedder if not already initialized
             if not self._embedder:
-                from openviking.utils.config import get_openviking_config
+                from openviking_cli.utils.config import get_openviking_config
 
                 config = get_openviking_config()
                 self._initialize_embedder(config)

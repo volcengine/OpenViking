@@ -9,7 +9,7 @@ to EmbeddingMsg objects for asynchronous vector processing.
 
 from openviking.core.context import Context
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
-from openviking.utils import get_logger
+from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 

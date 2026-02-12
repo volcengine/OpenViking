@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Optional
 
 from openviking.core.building_tree import BuildingTree
 from openviking.storage.viking_fs import get_viking_fs
-from openviking.utils.uri import VikingURI
+from openviking_cli.utils.uri import VikingURI
 
 if TYPE_CHECKING:
     pass

@@ -15,15 +15,12 @@ from pathlib import Path
 
 import httpx
 import pytest
-import pytest_asyncio
 import uvicorn
 
-from openviking import AsyncOpenViking
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig
 from openviking.service.core import OpenVikingService
-from openviking.session.user_id import UserIdentifier
-
+from openviking_cli.session.user_id import UserIdentifier
 
 TEST_ROOT = Path(__file__).parent
 TEST_TMP_DIR = TEST_ROOT / ".tmp_integration"
@@ -62,9 +59,7 @@ def server_url(temp_dir):
         s.bind(("127.0.0.1", 0))
         port = s.getsockname()[1]
 
-    uvi_config = uvicorn.Config(
-        fastapi_app, host="127.0.0.1", port=port, log_level="warning"
-    )
+    uvi_config = uvicorn.Config(fastapi_app, host="127.0.0.1", port=port, log_level="warning")
     server = uvicorn.Server(uvi_config)
     thread = threading.Thread(target=server.run, daemon=True)
     thread.start()

@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 
 import openviking as ov
-from openviking.utils.config.open_viking_config import OpenVikingConfig
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 
 
 def add_resource(resource_path: str, config_path: str = "./ov.conf", data_path: str = "./data"):
