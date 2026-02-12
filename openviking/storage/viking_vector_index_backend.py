@@ -225,8 +225,11 @@ class VikingVectorIndexBackend(VikingDBInterface):
                 logger.debug(f"Collection '{name}' already exists")
                 return False
 
-            # Extract configuration from schema
-            collection_meta = schema
+            collection_meta = schema.copy()
+
+            scalar_index_fields = []
+            if "ScalarIndex" in collection_meta:
+                scalar_index_fields = collection_meta.pop("ScalarIndex")
 
             # Ensure CollectionName is set
             if "CollectionName" not in collection_meta:
@@ -245,21 +248,23 @@ class VikingVectorIndexBackend(VikingDBInterface):
             # Create collection using vectordb project
             collection = self.project.create_collection(name, collection_meta)
 
-            # Build scalar index fields list from Fields
-            scalar_index_fields = []
-            exclude_types = {"vector", "sparse_vector", "abstract"}
-
-            for field in collection_meta.get("Fields", []):
-                field_name = field.get("FieldName")
-                field_type = field.get("FieldType")
-                is_primary_key = field.get("IsPrimaryKey", False)
-                # Index all non-vector and non-primary-key fields by default
-                if field_name and field_type not in exclude_types and not is_primary_key:
-                    scalar_index_fields.append(field_name)
+            # Filter date_time fields for volcengine and vikingdb backends
+            if self._mode in ["volcengine", "vikingdb"]:
+                date_time_fields = {
+                    field.get("FieldName")
+                    for field in collection_meta.get("Fields", [])
+                    if field.get("FieldType") == "date_time"
+                }
+                scalar_index_fields = [
+                    field for field in scalar_index_fields if field not in date_time_fields
+                ]
 
             # Create default index for the collection
             use_sparse = self.sparse_weight > 0.0
             index_type = "flat_hybrid" if use_sparse else "flat"
+            if self._mode in ["volcengine", "vikingdb"]:
+                index_type = "hnsw_hybrid" if use_sparse else "hnsw"
+
             index_meta = {
                 "IndexName": self.DEFAULT_INDEX_NAME,
                 "VectorIndex": {

@@ -6,6 +6,8 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, List, Union
 
+from openviking.utils.time_utils import format_iso8601
+
 from .token_usage import TokenUsageTracker
 
 
@@ -94,7 +96,7 @@ class VLMBase(ABC):
             "total_prompt_tokens": total_usage.prompt_tokens,
             "total_completion_tokens": total_usage.completion_tokens,
             "total_tokens": total_usage.total_tokens,
-            "last_updated": total_usage.last_updated.isoformat(),
+            "last_updated": format_iso8601(total_usage.last_updated),
         }
 
     def reset_token_usage(self) -> None:

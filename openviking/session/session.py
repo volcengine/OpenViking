@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import uuid4
 
 from openviking.message import Message, Part
+from openviking.utils.time_utils import get_current_timestamp
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger, run_async
 from openviking_cli.utils.config import get_openviking_config
@@ -57,7 +58,7 @@ class Usage:
     input: str = ""
     output: str = ""
     success: bool = True
-    timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
+    timestamp: str = field(default_factory=get_current_timestamp)
 
 
 class Session:
@@ -498,7 +499,7 @@ class Session:
             "input": tool_part.tool_input,
             "output": output,
             "status": status,
-            "time": {"created": datetime.now().isoformat()},
+            "time": {"created": get_current_timestamp()},
         }
         run_async(
             self._viking_fs.write_file(
