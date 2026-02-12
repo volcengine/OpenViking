@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional
 from openviking.models.embedder.base import EmbedResult
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
-from openviking.storage.vikingdb_interface import VikingDBInterface
+from openviking.storage.vikingdb_interface import CollectionNotFoundError, VikingDBInterface
 from openviking.utils import get_logger
 from openviking.utils.config.open_viking_config import OpenVikingConfig
 
@@ -165,6 +165,15 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     logger.debug(
                         f"Successfully wrote embedding to database: {record_id} abstract {inserted_data['abstract']} vector {inserted_data['vector'][:5]}"
                     )
+            except CollectionNotFoundError as db_err:
+                # During shutdown, queue workers may finish one dequeued item.
+                if getattr(self._vikingdb, "is_closing", False):
+                    logger.debug(f"Skip embedding write during shutdown: {db_err}")
+                    self.report_success()
+                    return None
+                logger.error(f"Failed to write to vector database: {db_err}")
+                self.report_error(str(db_err), data)
+                return None
             except Exception as db_err:
                 logger.error(f"Failed to write to vector database: {db_err}")
                 import traceback
