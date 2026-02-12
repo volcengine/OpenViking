@@ -292,7 +292,12 @@ class VikingFS:
         Returns:
             FindResult
         """
-        from openviking.retrieve import ContextType, FindResult, HierarchicalRetriever, TypedQuery
+        from openviking_cli.retrieve import (
+            ContextType,
+            FindResult,
+            HierarchicalRetriever,
+            TypedQuery,
+        )
 
         if not self.rerank_config:
             raise RuntimeError("rerank_config is required for find")
@@ -365,14 +370,15 @@ class VikingFS:
         Returns:
             FindResult
         """
-        from openviking.retrieve import (
+        from openviking_cli.retrieve.intent_analyzer import IntentAnalyzer
+
+        from openviking_cli.retrieve import (
             ContextType,
             FindResult,
             HierarchicalRetriever,
             QueryPlan,
             TypedQuery,
         )
-        from openviking.retrieve.intent_analyzer import IntentAnalyzer
 
         session_summary = session_info.get("summary") if session_info else None
         recent_messages = session_info.get("recent_messages") if session_info else None
@@ -577,7 +583,7 @@ class VikingFS:
 
     def _infer_context_type(self, uri: str):
         """Infer context_type from URI."""
-        from openviking.retrieve import ContextType
+        from openviking_cli.retrieve import ContextType
 
         if "/memories" in uri:
             return ContextType.MEMORY

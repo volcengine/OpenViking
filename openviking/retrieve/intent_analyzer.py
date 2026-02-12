@@ -10,7 +10,7 @@ from typing import List, Optional
 
 from openviking.message import Message
 from openviking.prompts import render_prompt
-from openviking.retrieve.types import ContextType, QueryPlan, TypedQuery
+from openviking_cli.retrieve.types import ContextType, QueryPlan, TypedQuery
 from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.llm import parse_json_from_response
 from openviking_cli.utils.logger import get_logger

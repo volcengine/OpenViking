@@ -9,7 +9,6 @@ from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
-from openviking.retrieve.types import FindResult
 from openviking_cli.client.base import BaseClient
 from openviking_cli.exceptions import (
     AlreadyExistsError,
@@ -28,6 +27,7 @@ from openviking_cli.exceptions import (
     UnavailableError,
     VLMFailedError,
 )
+from openviking_cli.retrieve.types import FindResult
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import run_async
 from openviking_cli.utils.config.config_loader import (
