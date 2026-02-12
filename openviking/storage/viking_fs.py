@@ -370,9 +370,8 @@ class VikingFS:
         Returns:
             FindResult
         """
-        from openviking_cli.retrieve.intent_analyzer import IntentAnalyzer
-
         from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
+        from openviking.retrieve.intent_analyzer import IntentAnalyzer
         from openviking_cli.retrieve import (
             ContextType,
             FindResult,
