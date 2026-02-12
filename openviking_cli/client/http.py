@@ -553,7 +553,7 @@ class AsyncHTTPClient(BaseClient):
         Returns:
             Session object
         """
-        from openviking_cli.client.session import Session
+        from openviking.client.session import Session
 
         if not session_id:
             result = run_async(self.create_session())

@@ -9,8 +9,8 @@ For HTTP mode, use AsyncHTTPClient or SyncHTTPClient.
 import threading
 from typing import Any, Dict, List, Optional, Union
 
+from openviking.client import LocalClient, Session
 from openviking.service.debug_service import SystemStatus
-from openviking_cli.client import LocalClient, Session
 from openviking_cli.client.base import BaseClient
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
