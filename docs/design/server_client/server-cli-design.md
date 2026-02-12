@@ -456,7 +456,7 @@ openviking/
 
 ```toml
 [project.scripts]
-openviking = "openviking.cli.main:app"
+openviking = "openviking_cli.cli.main:app"
 ```
 
 ### 4.4 新增依赖

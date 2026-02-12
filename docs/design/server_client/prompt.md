@@ -166,7 +166,7 @@ openviking/cli/
 2. **更新 pyproject.toml**：
 ```toml
 [project.scripts]
-openviking = "openviking.cli.main:app"
+openviking = "openviking_cli.cli.main:app"
 
 [project.optional-dependencies]
 cli = [
