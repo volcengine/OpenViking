@@ -59,6 +59,8 @@ def get_or_create_volcengine_collection(config: Dict[str, Any], meta_data: Dict[
         logger.error(f"Failed to create collection: {e}")
         raise e
 
+    return VolcengineCollection(ak, sk, region, host, meta_data)
+
 
 class VolcengineCollection(ICollection):
     def __init__(
@@ -277,7 +279,6 @@ class VolcengineCollection(ICollection):
                 ]
             if "ids_not_exist" in data:
                 result.ids_not_exist = data.get("ids_not_exist", [])
-        # print(result)
         return result
 
     def _parse_search_result(self, data: Dict[str, Any]) -> SearchResult:

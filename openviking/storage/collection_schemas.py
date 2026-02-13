@@ -57,6 +57,18 @@ class CollectionSchemas:
                 {"FieldName": "tags", "FieldType": "string"},
                 {"FieldName": "abstract", "FieldType": "string"},
             ],
+            "ScalarIndex": [
+                "uri",
+                "type",
+                "context_type",
+                "created_at",
+                "updated_at",
+                "active_count",
+                "parent_uri",
+                "is_leaf",
+                "name",
+                "tags",
+            ],
         }
 
 
