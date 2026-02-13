@@ -21,17 +21,42 @@ def register(app: typer.Typer) -> None:
             "-r",
             help="List all subdirectories recursively",
         ),
+        output_format: str = typer.Option(
+            "agent", "--output-format", "-o", help="Output format: agent or origional"
+        ),
+        abs_limit: int = typer.Option(256, "--abs-limit", "-l", help="Abstract content limit"),
+        all_hidden: bool = typer.Option(False, "--all", "-a", help="Show all hidden files"),
     ) -> None:
         """List directory contents."""
-        run(ctx, lambda client: client.ls(uri, simple=simple, recursive=recursive))
+        run(
+            ctx,
+            lambda client: client.ls(
+                uri,
+                simple=simple,
+                recursive=recursive,
+                output=output_format,
+                abs_limit=abs_limit,
+                all_hidden=all_hidden,
+            ),
+        )
 
     @app.command("tree")
     def tree_command(
         ctx: typer.Context,
         uri: str = typer.Argument(..., help="Viking URI"),
+        output_format: str = typer.Option(
+            "agent", "--output-format", "-o", help="Output format: agent or origional"
+        ),
+        abs_limit: int = typer.Option(128, "--abs-limit", "-l", help="Abstract content limit"),
+        all_hidden: bool = typer.Option(False, "--all", "-a", help="Show all hidden files"),
     ) -> None:
         """Get directory tree."""
-        run(ctx, lambda client: client.tree(uri))
+        run(
+            ctx,
+            lambda client: client.tree(
+                uri, output=output_format, abs_limit=abs_limit, all_hidden=all_hidden
+            ),
+        )
 
     @app.command("mkdir")
     def mkdir_command(
