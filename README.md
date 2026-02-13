@@ -415,7 +415,7 @@ For more details, please visit our [Full Documentation](./docs/en/).
 
 ### About Us
 
-OpenViking is an open-source project initiated and maintained by the **ByteDance Volcengine Viking Team**.
+OpenViking is an open-source context database initiated and maintained by the **ByteDance Volcengine Viking Team**.
 
 The Viking team focuses on unstructured information processing and intelligent retrieval, accumulating rich commercial practical experience in context engineering technology:
 
