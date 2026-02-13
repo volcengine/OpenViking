@@ -88,13 +88,36 @@ class LocalClient(BaseClient):
 
     # ============= File System =============
 
-    async def ls(self, uri: str, simple: bool = False, recursive: bool = False) -> List[Any]:
+    async def ls(
+        self,
+        uri: str,
+        simple: bool = False,
+        recursive: bool = False,
+        output: str = "original",
+        abs_limit: int = 256,
+        show_all_hidden: bool = False,
+    ) -> List[Any]:
         """List directory contents."""
-        return await self._service.fs.ls(uri, simple=simple, recursive=recursive)
+        return await self._service.fs.ls(
+            uri,
+            simple=simple,
+            recursive=recursive,
+            output=output,
+            abs_limit=abs_limit,
+            show_all_hidden=show_all_hidden,
+        )
 
-    async def tree(self, uri: str) -> List[Dict[str, Any]]:
+    async def tree(
+        self,
+        uri: str,
+        output: str = "original",
+        abs_limit: int = 128,
+        show_all_hidden: bool = False,
+    ) -> List[Dict[str, Any]]:
         """Get directory tree."""
-        return await self._service.fs.tree(uri)
+        return await self._service.fs.tree(
+            uri, output=output, abs_limit=abs_limit, show_all_hidden=show_all_hidden
+        )
 
     async def stat(self, uri: str) -> Dict[str, Any]:
         """Get resource status."""

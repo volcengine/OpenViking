@@ -60,12 +60,26 @@ class BaseClient(ABC):
     # ============= File System =============
 
     @abstractmethod
-    async def ls(self, uri: str, simple: bool = False, recursive: bool = False) -> List[Any]:
+    async def ls(
+        self,
+        uri: str,
+        simple: bool = False,
+        recursive: bool = False,
+        output: str = "original",
+        abs_limit: int = 256,
+        show_all_hidden: bool = False,
+    ) -> List[Any]:
         """List directory contents."""
         ...
 
     @abstractmethod
-    async def tree(self, uri: str) -> List[Dict[str, Any]]:
+    async def tree(
+        self,
+        uri: str,
+        output: str = "original",
+        abs_limit: int = 128,
+        show_all_hidden: bool = False,
+    ) -> List[Dict[str, Any]]:
         """Get directory tree."""
         ...
 

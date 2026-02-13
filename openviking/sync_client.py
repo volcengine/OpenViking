@@ -175,9 +175,9 @@ class SyncOpenViking:
         """Move resource"""
         return run_async(self._async_client.mv(from_uri, to_uri))
 
-    def tree(self, uri: str) -> Dict:
+    def tree(self, uri: str, **kwargs) -> Dict:
         """Get directory tree"""
-        return run_async(self._async_client.tree(uri))
+        return run_async(self._async_client.tree(uri, **kwargs))
 
     def stat(self, uri: str) -> Dict:
         """Get resource status"""

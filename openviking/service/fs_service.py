@@ -31,20 +31,35 @@ class FSService:
             raise NotInitializedError("VikingFS")
         return self._viking_fs
 
-    async def ls(self, uri: str, recursive: bool = False, simple: bool = False) -> List[Any]:
+    async def ls(
+        self,
+        uri: str,
+        recursive: bool = False,
+        simple: bool = False,
+        output: str = "original",
+        abs_limit: int = 256,
+        show_all_hidden: bool = False,
+    ) -> List[Any]:
         """List directory contents.
 
         Args:
             uri: Viking URI
             recursive: List all subdirectories recursively
             simple: Return only relative path list
+            output: str = "original" or "agent"
+            abs_limit: int = 256 if output == "agent" else ignore
+            show_all_hidden: bool = False (list all hidden files, like -a)
         """
         viking_fs = self._ensure_initialized()
 
         if recursive:
-            entries = await viking_fs.tree(uri)
+            entries = await viking_fs.tree(
+                uri, output=output, abs_limit=abs_limit, show_all_hidden=show_all_hidden
+            )
         else:
-            entries = await viking_fs.ls(uri)
+            entries = await viking_fs.ls(
+                uri, output=output, abs_limit=abs_limit, show_all_hidden=show_all_hidden
+            )
 
         if simple:
             return [e.get("rel_path", e.get("name", "")) for e in entries]
@@ -65,10 +80,18 @@ class FSService:
         viking_fs = self._ensure_initialized()
         await viking_fs.mv(from_uri, to_uri)
 
-    async def tree(self, uri: str) -> List[Dict[str, Any]]:
+    async def tree(
+        self,
+        uri: str,
+        output: str = "original",
+        abs_limit: int = 128,
+        show_all_hidden: bool = False,
+    ) -> List[Dict[str, Any]]:
         """Get directory tree."""
         viking_fs = self._ensure_initialized()
-        return await viking_fs.tree(uri)
+        return await viking_fs.tree(
+            uri, output=output, abs_limit=abs_limit, show_all_hidden=show_all_hidden
+        )
 
     async def stat(self, uri: str) -> Dict[str, Any]:
         """Get resource status."""

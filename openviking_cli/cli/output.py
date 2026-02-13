@@ -11,7 +11,7 @@ from tabulate import tabulate
 
 from openviking_cli.cli.context import CLIContext
 
-_MAX_COL_WIDTH = 80
+_MAX_COL_WIDTH = 256
 
 
 def _to_serializable(value: Any) -> Any:

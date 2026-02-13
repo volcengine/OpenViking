@@ -19,22 +19,37 @@ async def ls(
     uri: str = Query(..., description="Viking URI"),
     simple: bool = Query(False, description="Return only relative path list"),
     recursive: bool = Query(False, description="List all subdirectories recursively"),
+    output: str = Query("agent", description="Output format: original or agent"),
+    abs_limit: int = Query(256, description="Abstract limit (only for agent output)"),
+    show_all_hidden: bool = Query(False, description="List all hidden files, like -a"),
     _: bool = Depends(verify_api_key),
 ):
     """List directory contents."""
     service = get_service()
-    result = await service.fs.ls(uri, recursive=recursive, simple=simple)
+    result = await service.fs.ls(
+        uri,
+        recursive=recursive,
+        simple=simple,
+        output=output,
+        abs_limit=abs_limit,
+        show_all_hidden=show_all_hidden,
+    )
     return Response(status="ok", result=result)
 
 
 @router.get("/tree")
 async def tree(
     uri: str = Query(..., description="Viking URI"),
+    output: str = Query("agent", description="Output format: original or agent"),
+    abs_limit: int = Query(256, description="Abstract limit (only for agent output)"),
+    show_all_hidden: bool = Query(False, description="List all hidden files, like -a"),
     _: bool = Depends(verify_api_key),
 ):
     """Get directory tree."""
     service = get_service()
-    result = await service.fs.tree(uri)
+    result = await service.fs.tree(
+        uri, output=output, abs_limit=abs_limit, show_all_hidden=show_all_hidden
+    )
     return Response(status="ok", result=result)
 
 
