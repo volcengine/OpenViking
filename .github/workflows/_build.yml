@@ -75,13 +75,16 @@ jobs:
       run: uv pip install build setuptools_scm
 
     - name: Clean workspace (force ignore dirty)
+      shell: bash
       run: |
         git reset --hard HEAD
         git clean -fd
+        rm -rf openviking/_version.py openviking.egg-info
         # Ignore uv.lock changes to avoid dirty state in setuptools_scm
         git update-index --assume-unchanged uv.lock || true
 
     - name: Debug Git and SCM
+      shell: bash
       run: |
         echo "=== Git Describe ==="
         git describe --tags --long --dirty --always
@@ -203,13 +206,16 @@ jobs:
       run: uv pip install setuptools setuptools_scm pybind11 cmake wheel build
 
     - name: Clean workspace (force ignore dirty)
+      shell: bash
       run: |
         git reset --hard HEAD
         git clean -fd
+        rm -rf openviking/_version.py openviking.egg-info
         # Ignore uv.lock changes to avoid dirty state in setuptools_scm
         git update-index --assume-unchanged uv.lock || true
 
     - name: Debug Git and SCM
+      shell: bash
       run: |
         echo "=== Git Describe ==="
         git describe --tags --long --dirty --always
@@ -314,13 +320,16 @@ jobs:
       run: uv pip install setuptools setuptools_scm pybind11 cmake wheel build
 
     - name: Clean workspace (force ignore dirty)
+      shell: bash
       run: |
         git reset --hard HEAD
         git clean -fd
+        rm -rf openviking/_version.py openviking.egg-info
         # Ignore uv.lock changes to avoid dirty state in setuptools_scm
         git update-index --assume-unchanged uv.lock || true
 
     - name: Debug Git and SCM
+      shell: bash
       run: |
         echo "=== Git Describe ==="
         git describe --tags --long --dirty --always
