@@ -1,9 +1,9 @@
 [package]
 name = "openviking-cli"
-version = "0.1.1"
+version = "0.1.0"
 edition = "2021"
 authors = ["OpenViking Contributors"]
-description = "CLI client for OpenViking - Testing release build"
+description = "CLI client for OpenViking"
 license = "MIT"
 
 [dependencies]

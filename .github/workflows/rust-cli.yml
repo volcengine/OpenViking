@@ -3,7 +3,7 @@ name: Rust CLI Build
 on:
   workflow_call:
   push:
-    branches: [ main, feat/rust-cli, test-release-actions ]
+    branches: [ main, feat/rust-cli ]
     paths: 
       - 'crates/**'
       - 'Cargo.toml'

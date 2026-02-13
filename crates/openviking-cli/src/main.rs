@@ -1,4 +1,3 @@
-// Testing GitHub Actions Rust release build
 mod client;
 mod commands;
 mod config;
@@ -323,24 +322,6 @@ enum ConfigCommands {
     Show,
     /// Validate configuration file
     Validate,
-    /// Initialize configuration with defaults
-    Init {
-        /// OpenViking server URL
-        #[arg(long, default_value = "http://localhost:1933")]
-        url: String,
-        /// API key (optional)
-        #[arg(long)]
-        api_key: Option<String>,
-        /// Username (optional)
-        #[arg(long)]
-        user: Option<String>,
-        /// Output format
-        #[arg(long, default_value = "table")]
-        output: String,
-        /// Force overwrite existing config
-        #[arg(long)]
-        force: bool,
-    },
 }
 
 #[tokio::main]
@@ -591,36 +572,6 @@ async fn handle_config(cmd: ConfigCommands, _ctx: CliContext) -> Result<()> {
                     Err(Error::Config(e.to_string()))
                 }
             }
-        }
-        ConfigCommands::Init { url, api_key, user, output, force } => {
-            let config_path = config::default_config_path()?;
-            
-            if config_path.exists() && !force {
-                return Err(Error::Config(format!(
-                    "Configuration file already exists at {}. Use --force to overwrite.",
-                    config_path.display()
-                )));
-            }
-            
-            let new_config = Config {
-                url,
-                api_key,
-                user,
-                output,
-            };
-            
-            new_config.save_default()?;
-            println!("Configuration initialized at: {}", config_path.display());
-            println!("Settings:");
-            println!("  URL: {}", new_config.url);
-            println!("  Output format: {}", new_config.output);
-            if new_config.api_key.is_some() {
-                println!("  API key: [configured]");
-            }
-            if new_config.user.is_some() {
-                println!("  User: {}", new_config.user.as_ref().unwrap());
-            }
-            Ok(())
         }
     }
 }
