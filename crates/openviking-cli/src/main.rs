@@ -1,3 +1,4 @@
+// Testing GitHub Actions Rust release build
 mod client;
 mod commands;
 mod config;
