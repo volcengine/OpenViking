@@ -268,16 +268,16 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         recursive = kwargs.get("recursive", False)
         simple = kwargs.get("simple", False)
-        output = kwargs.get("output", "origional")
+        output = kwargs.get("output", "original")
         abs_limit = kwargs.get("abs_limit", 256)
-        all_hidden = kwargs.get("all_hidden", True)
+        show_all_hidden = kwargs.get("show_all_hidden", True)
         return await self._client.ls(
             uri,
             recursive=recursive,
             simple=simple,
             output=output,
             abs_limit=abs_limit,
-            all_hidden=all_hidden,
+            show_all_hidden=show_all_hidden,
         )
 
     async def rm(self, uri: str, recursive: bool = False) -> None:
@@ -303,11 +303,11 @@ class AsyncOpenViking:
     async def tree(self, uri: str, **kwargs) -> Dict:
         """Get directory tree"""
         await self._ensure_initialized()
-        output = kwargs.get("output", "origional")
+        output = kwargs.get("output", "original")
         abs_limit = kwargs.get("abs_limit", 128)
-        all_hidden = kwargs.get("all_hidden", True)
+        show_all_hidden = kwargs.get("show_all_hidden", True)
         return await self._client.tree(
-            uri, output=output, abs_limit=abs_limit, all_hidden=all_hidden
+            uri, output=output, abs_limit=abs_limit, show_all_hidden=show_all_hidden
         )
 
     async def mkdir(self, uri: str) -> None:

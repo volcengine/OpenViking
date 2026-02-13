@@ -239,33 +239,33 @@ class VikingFS:
     async def tree(
         self,
         uri: str = "viking://",
-        output: str = "origional",
+        output: str = "original",
         abs_limit: int = 256,
-        all_hidden: bool = False,
+        show_all_hidden: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         Recursively list all contents (includes rel_path).
 
         Args:
             uri: Viking URI
-            output: str = "origional" or "agent"
+            output: str = "original" or "agent"
             abs_limit: int = 256 (for agent output abstract truncation)
-            all_hidden: bool = False (list all hidden files, like -a)
+            show_all_hidden: bool = False (list all hidden files, like -a)
 
-        output="origional"
+        output="original"
         [{'name': '.abstract.md', 'size': 100, 'mode': 420, 'modTime': '2026-02-11T16:52:16.256334192+08:00', 'isDir': False, 'meta': {...}, 'rel_path': '.abstract.md', 'uri': 'viking://resources...'}]
 
         output="agent"
         [{'name': '.abstract.md', 'size': 100, 'modTime': '2026-02-11 16:52:16', 'isDir': False, 'rel_path': '.abstract.md', 'uri': 'viking://resources...', 'abstract': "..."}]
         """
-        if output == "origional":
-            return await self._tree_origional(uri, all_hidden)
+        if output == "original":
+            return await self._tree_original(uri, show_all_hidden)
         elif output == "agent":
-            return await self._tree_agent(uri, abs_limit, all_hidden)
+            return await self._tree_agent(uri, abs_limit, show_all_hidden)
         else:
             raise ValueError(f"Invalid output format: {output}")
 
-    async def _tree_origional(self, uri: str, all_hidden: bool = False) -> List[Dict[str, Any]]:
+    async def _tree_original(self, uri: str, show_all_hidden: bool = False) -> List[Dict[str, Any]]:
         """Recursively list all contents (original format)."""
         path = self._uri_to_path(uri)
         all_entries = []
@@ -284,14 +284,14 @@ class VikingFS:
                     await _walk(f"{current_path}/{name}", rel_path)
                 elif not name.startswith("."):
                     all_entries.append(new_entry)
-                elif all_hidden:
+                elif show_all_hidden:
                     all_entries.append(new_entry)
 
         await _walk(path, "")
         return all_entries
 
     async def _tree_agent(
-        self, uri: str, abs_limit: int, all_hidden: bool = False
+        self, uri: str, abs_limit: int, show_all_hidden: bool = False
     ) -> List[Dict[str, Any]]:
         """Recursively list all contents (agent format with abstracts)."""
         path = self._uri_to_path(uri)
@@ -317,7 +317,7 @@ class VikingFS:
                     await _walk(f"{current_path}/{name}", rel_path)
                 elif not name.startswith("."):
                     all_entries.append(new_entry)
-                elif all_hidden:
+                elif show_all_hidden:
                     all_entries.append(new_entry)
 
         await _walk(path, "")
@@ -927,33 +927,35 @@ class VikingFS:
     async def ls(
         self,
         uri: str,
-        output: str = "origional",
+        output: str = "original",
         abs_limit: int = 256,
-        all_hidden: bool = False,
+        show_all_hidden: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         List directory contents (URI version).
 
         Args:
             uri: Viking URI
-            output: str = "origional"
+            output: str = "original"
             abs_limit: int = 256
-            all_hidden: bool = False (list all hidden files, like -a)
+            show_all_hidden: bool = False (list all hidden files, like -a)
 
-        output="origional"
+        output="original"
         [{'name': '.abstract.md', 'size': 100, 'mode': 420, 'modTime': '2026-02-11T16:52:16.256334192+08:00', 'isDir': False, 'meta': {'Name': 'localfs', 'Type': 'local', 'Content': None}, 'uri': 'viking://resources/.abstract.md'}]
 
         output="agent"
         [{'name': '.abstract.md', 'size': 100, 'modTime': '2026-02-11(or 16:52:16 for today)', 'isDir': False, 'uri': 'viking://resources/.abstract.md', 'abstract': "..."}]
         """
-        if output == "origional":
-            return await self._ls_origional(uri, all_hidden)
+        if output == "original":
+            return await self._ls_original(uri, show_all_hidden)
         elif output == "agent":
-            return await self._ls_agent(uri, abs_limit, all_hidden)
+            return await self._ls_agent(uri, abs_limit, show_all_hidden)
         else:
             raise ValueError(f"Invalid output format: {output}")
 
-    async def _ls_agent(self, uri: str, abs_limit: int, all_hidden: bool) -> List[Dict[str, Any]]:
+    async def _ls_agent(
+        self, uri: str, abs_limit: int, show_all_hidden: bool
+    ) -> List[Dict[str, Any]]:
         """List directory contents (URI version)."""
         path = self._uri_to_path(uri)
         try:
@@ -975,13 +977,13 @@ class VikingFS:
                 all_entries.append(new_entry)
             elif not name.startswith("."):
                 all_entries.append(new_entry)
-            elif all_hidden:
+            elif show_all_hidden:
                 all_entries.append(new_entry)
         # call abstract in parallel 6 threads
         await self._batch_fetch_abstracts(all_entries, abs_limit)
         return all_entries
 
-    async def _ls_origional(self, uri: str, all_hidden: bool = False) -> List[Dict[str, Any]]:
+    async def _ls_original(self, uri: str, show_all_hidden: bool = False) -> List[Dict[str, Any]]:
         """List directory contents (URI version)."""
         path = self._uri_to_path(uri)
         try:
@@ -996,7 +998,7 @@ class VikingFS:
                     all_entries.append(new_entry)
                 elif not name.startswith("."):
                     all_entries.append(new_entry)
-                elif all_hidden:
+                elif show_all_hidden:
                     all_entries.append(new_entry)
             return all_entries
         except Exception as e:

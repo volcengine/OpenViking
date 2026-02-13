@@ -157,9 +157,9 @@ class SyncHTTPClient:
         uri: str,
         simple: bool = False,
         recursive: bool = False,
-        output: str = "origional",
+        output: str = "original",
         abs_limit: int = 256,
-        all_hidden: bool = False,
+        show_all_hidden: bool = False,
     ) -> List[Any]:
         """List directory contents."""
         return run_async(
@@ -169,16 +169,22 @@ class SyncHTTPClient:
                 recursive=recursive,
                 output=output,
                 abs_limit=abs_limit,
-                all_hidden=all_hidden,
+                show_all_hidden=show_all_hidden,
             )
         )
 
     def tree(
-        self, uri: str, output: str = "origional", abs_limit: int = 128, all_hidden: bool = False
+        self,
+        uri: str,
+        output: str = "original",
+        abs_limit: int = 128,
+        show_all_hidden: bool = False,
     ) -> Dict:
         """Get directory tree."""
         return run_async(
-            self._async_client.tree(uri, output=output, abs_limit=abs_limit, all_hidden=all_hidden)
+            self._async_client.tree(
+                uri, output=output, abs_limit=abs_limit, show_all_hidden=show_all_hidden
+            )
         )
 
     def stat(self, uri: str) -> Dict:
