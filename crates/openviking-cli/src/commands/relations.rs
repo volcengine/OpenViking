@@ -1,33 +1,54 @@
 use crate::client::HttpClient;
-use crate::output::OutputFormat;
 use crate::error::Result;
+use crate::output::{output_success, OutputFormat};
 
 pub async fn list_relations(
-    _client: &HttpClient,
-    _uri: &str,
-    _format: OutputFormat,
+    client: &HttpClient,
+    uri: &str,
+    format: OutputFormat,
 ) -> Result<()> {
-    println!("Relations list - not implemented");
+    let result = client.relations(uri).await?;
+    output_success(&result, format, false);
     Ok(())
 }
 
 pub async fn link(
-    _client: &HttpClient,
-    _from_uri: &str,
-    _to_uris: &Vec<String>,
-    _reason: &str,
-    _format: OutputFormat,
+    client: &HttpClient,
+    from_uri: &str,
+    to_uris: &Vec<String>,
+    reason: &str,
+    format: OutputFormat,
 ) -> Result<()> {
-    println!("Relations link - not implemented");
+    let result = client.link(from_uri, to_uris, reason).await?;
+    // If the server returns null/empty, show a confirmation summary
+    if result.is_null() {
+        let summary = serde_json::json!({
+            "from": from_uri,
+            "to": to_uris,
+            "reason": reason,
+        });
+        output_success(&summary, format, false);
+    } else {
+        output_success(&result, format, false);
+    }
     Ok(())
 }
 
 pub async fn unlink(
-    _client: &HttpClient,
-    _from_uri: &str,
-    _to_uri: &str,
-    _format: OutputFormat,
+    client: &HttpClient,
+    from_uri: &str,
+    to_uri: &str,
+    format: OutputFormat,
 ) -> Result<()> {
-    println!("Relations unlink - not implemented");
+    let result = client.unlink(from_uri, to_uri).await?;
+    if result.is_null() {
+        let summary = serde_json::json!({
+            "from": from_uri,
+            "to": to_uri,
+        });
+        output_success(&summary, format, false);
+    } else {
+        output_success(&result, format, false);
+    }
     Ok(())
 }

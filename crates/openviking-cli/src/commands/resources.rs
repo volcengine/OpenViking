@@ -1,28 +1,32 @@
 use crate::client::HttpClient;
-use crate::output::OutputFormat;
 use crate::error::Result;
+use crate::output::{output_success, OutputFormat};
 
 pub async fn add_resource(
-    _client: &HttpClient,
-    _path: &str,
-    _to: Option<String>,
-    _reason: String,
-    _instruction: String,
-    _wait: bool,
-    _timeout: Option<f64>,
-    _format: OutputFormat,
+    client: &HttpClient,
+    path: &str,
+    to: Option<String>,
+    reason: String,
+    instruction: String,
+    wait: bool,
+    timeout: Option<f64>,
+    format: OutputFormat,
 ) -> Result<()> {
-    println!("Add resource - not implemented");
+    let result = client
+        .add_resource(path, to, &reason, &instruction, wait, timeout)
+        .await?;
+    output_success(&result, format, false);
     Ok(())
 }
 
 pub async fn add_skill(
-    _client: &HttpClient,
-    _data: &str,
-    _wait: bool,
-    _timeout: Option<f64>,
-    _format: OutputFormat,
+    client: &HttpClient,
+    data: &str,
+    wait: bool,
+    timeout: Option<f64>,
+    format: OutputFormat,
 ) -> Result<()> {
-    println!("Add skill - not implemented");
+    let result = client.add_skill(data, wait, timeout).await?;
+    output_success(&result, format, false);
     Ok(())
 }

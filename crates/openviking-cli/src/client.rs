@@ -98,6 +98,25 @@ impl HttpClient {
         self.handle_response(response).await
     }
 
+    /// Make a DELETE request with a JSON body
+    pub async fn delete_with_body<B: serde::Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T> {
+        let url = format!("{}{}", self.base_url, path);
+        let response = self
+            .http
+            .delete(&url)
+            .headers(self.build_headers())
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+
+        self.handle_response(response).await
+    }
+
     async fn handle_response<T: DeserializeOwned>(
         &self,
         response: reqwest::Response,
@@ -266,5 +285,96 @@ impl HttpClient {
             "uri": uri,
         });
         self.post("/api/v1/search/glob", &body).await
+    }
+
+    // ============ Resource Methods ============
+
+    pub async fn add_resource(
+        &self,
+        path: &str,
+        target: Option<String>,
+        reason: &str,
+        instruction: &str,
+        wait: bool,
+        timeout: Option<f64>,
+    ) -> Result<serde_json::Value> {
+        let body = serde_json::json!({
+            "path": path,
+            "target": target,
+            "reason": reason,
+            "instruction": instruction,
+            "wait": wait,
+            "timeout": timeout,
+        });
+        self.post("/api/v1/resources", &body).await
+    }
+
+    pub async fn add_skill(
+        &self,
+        data: &str,
+        wait: bool,
+        timeout: Option<f64>,
+    ) -> Result<serde_json::Value> {
+        let body = serde_json::json!({
+            "data": data,
+            "wait": wait,
+            "timeout": timeout,
+        });
+        self.post("/api/v1/skills", &body).await
+    }
+
+    // ============ Relation Methods ============
+
+    pub async fn relations(&self, uri: &str) -> Result<serde_json::Value> {
+        let params = vec![("uri".to_string(), uri.to_string())];
+        self.get("/api/v1/relations", &params).await
+    }
+
+    pub async fn link(
+        &self,
+        from_uri: &str,
+        to_uris: &[String],
+        reason: &str,
+    ) -> Result<serde_json::Value> {
+        let body = serde_json::json!({
+            "from_uri": from_uri,
+            "to_uris": to_uris,
+            "reason": reason,
+        });
+        self.post("/api/v1/relations/link", &body).await
+    }
+
+    pub async fn unlink(&self, from_uri: &str, to_uri: &str) -> Result<serde_json::Value> {
+        let body = serde_json::json!({
+            "from_uri": from_uri,
+            "to_uri": to_uri,
+        });
+        self.delete_with_body("/api/v1/relations/link", &body).await
+    }
+
+    // ============ Pack Methods ============
+
+    pub async fn export_ovpack(&self, uri: &str, to: &str) -> Result<serde_json::Value> {
+        let body = serde_json::json!({
+            "uri": uri,
+            "to": to,
+        });
+        self.post("/api/v1/pack/export", &body).await
+    }
+
+    pub async fn import_ovpack(
+        &self,
+        file_path: &str,
+        parent: &str,
+        force: bool,
+        vectorize: bool,
+    ) -> Result<serde_json::Value> {
+        let body = serde_json::json!({
+            "file_path": file_path,
+            "parent": parent,
+            "force": force,
+            "vectorize": vectorize,
+        });
+        self.post("/api/v1/pack/import", &body).await
     }
 }

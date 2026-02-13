@@ -1,25 +1,30 @@
 use crate::client::HttpClient;
-use crate::output::OutputFormat;
 use crate::error::Result;
+use crate::output::{output_success, OutputFormat};
 
 pub async fn export(
-    _client: &HttpClient,
-    _uri: &str,
-    _to: &str,
-    _format: OutputFormat,
+    client: &HttpClient,
+    uri: &str,
+    to: &str,
+    format: OutputFormat,
 ) -> Result<()> {
-    println!("Pack export - not implemented");
+    let result = client.export_ovpack(uri, to).await?;
+    output_success(&result, format, false);
     Ok(())
 }
 
 pub async fn import(
-    _client: &HttpClient,
-    _file_path: &str,
-    _target: &str,
-    _force: bool,
-    _no_vectorize: bool,
-    _format: OutputFormat,
+    client: &HttpClient,
+    file_path: &str,
+    target: &str,
+    force: bool,
+    no_vectorize: bool,
+    format: OutputFormat,
 ) -> Result<()> {
-    println!("Pack import - not implemented");
+    let vectorize = !no_vectorize;
+    let result = client
+        .import_ovpack(file_path, target, force, vectorize)
+        .await?;
+    output_success(&result, format, false);
     Ok(())
 }
