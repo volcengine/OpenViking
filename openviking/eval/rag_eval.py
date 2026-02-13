@@ -317,9 +317,9 @@ async def run_ragas_evaluation(eval_results: Dict[str, Any]):
 
         return ragas_result
 
-    except ImportError:
-        print("\nRAGAS not installed.")
-        print("   Install with: pip install ragas datasets")
+    except ImportError as e:
+        logger.error(f"RAGAS not installed.", exc_info=e)
+        logger.info("   Install with: pip install ragas datasets")
         return None
 
 

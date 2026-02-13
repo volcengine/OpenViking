@@ -7,27 +7,27 @@
         {
           "uri": "viking://resources/tmpxopdbp8j/Overview.md",
           "content": "This is an overview document (Overview.md) introducing OpenViking, an open-source context database for AI Agents, aimed at helping developers address AI Agent context management pain points.\nIt first outlines 5 core challenges in AI Agent development, including fragmented context, surging context demand, poor retrieval effectiveness, unobservable context, and limited memory iteration. It then presents OpenViking as the solution, detailing its innovative file system paradigm and 5 key features: unified filesystem-style context management, tiered on-demand context loading, directory recursive retrieval, visualized retrieval trajectories, and automatic session management, each targeted at solving a specific development challenge.\nThe intended audience is AI Agent developers, with no explicit prerequisite knowledge noted. Key keywords: AI Agent, context database, OpenViking, file system paradigm, RAG, memory management.",
-          "score": 0.6200702786445618
+          "score": 0.617599606513977
         },
         {
           "uri": "viking://resources/tmppq4ecq8g/Overview.md",
           "content": "This is an overview document (Overview.md) introducing OpenViking, an open-source context database for AI Agents, designed to address core pain points in agent development.\nMain sections cover key challenges in AI Agent development, including fragmented context, surging context demand, poor retrieval effectiveness, unobservable context, and limited memory iteration, followed by the OpenViking solution and its core features.\nKey takeaways: OpenViking uses a file system paradigm to unify context management, with tiered loading to cut token costs, recursive directory retrieval for better precision, visualized retrieval trajectories for debuggability, and automatic session management for memory iteration.\nIntended for AI Agent developers, it requires basic familiarity with AI Agent and RAG concepts, offering a streamlined way to build and manage agent context systems.\nKeywords: AI Agent, context database, OpenViking, RAG, file system paradigm, tiered context loading, memory iteration",
-          "score": 0.6173746287822723
+          "score": 0.6148812770843506
         },
         {
           "uri": "viking://resources/tmpxopdbp8j/Community_Team.md",
           "content": "This is an introductory community and team overview document for the OpenViking open-source project.\nIt covers three main sections: About Us, Join the Community, and Star Trend. The About Us section details OpenViking's origin as a ByteDance Volcengine Viking Team project, tracing the team's 2019-2026 milestones in unstructured data processing, vector databases, and AI Agent context tools, including the 2026 open-sourcing of OpenViking. The Join the Community section invites developer participation via starring the project, using its website/docs, joining Lark, WeChat, Discord, or X communities, and contributing code. The Star Trend section includes a star history chart link.\nThe target audience is developers passionate about AI Agent technology, with no specific prerequisite knowledge noted. Key keywords: OpenViking, ByteDance Volcengine Viking Team, AI Agent, context database, open-source community.",
-          "score": 0.6150552332401276
+          "score": 0.6117583513259888
         },
         {
           "uri": "viking://resources/tmppq4ecq8g/Community_Team.md",
           "content": "This is an introductory community and team overview document for the OpenViking open-source project.\nIt covers three main sections: About Us, Join the Community, and Star Trend. The About Us section details that OpenViking is maintained by ByteDance's Volcengine Viking Team, traces the team's 2019–2026 timeline of unstructured data processing and AI context tool developments, and notes OpenViking's 2026 launch as AI Agent context database support. The Join the Community section invites developer engagement via starring the project, using its website/docs, joining Lark, WeChat, Discord, or X communities, and contributing code. The Star Trend section includes a star history chart link.\nIt targets developers passionate about AI Agent technology, with no specific prerequisites listed, and key keywords include OpenViking, AI Agent, context database, VikingDB, open-source community.",
-          "score": 0.6146640479564667
+          "score": 0.6113711297512054
         },
         {
           "uri": "viking://resources/tmpxlvfx_b2/Overview.md",
           "content": "This document is a reference guide outlining challenges in AI Agent development and introducing OpenViking, an open-source Context Database. It covers five key challenges: fragmented context, surging context demand, poor retrieval effectiveness, unobservable context, and limited memory iteration. OpenViking addresses these with a \"file system paradigm\" for unified context management, tiered context loading, directory recursive retrieval, visualized retrieval trajectories, and automatic session management. Targeted at AI developers building Agents, it emphasizes simplified context management and improved retrieval/debugging capabilities. Keywords: AI Agent, Context Database, OpenViking, RAG, context management.",
-          "score": 0.6114547550678253
+          "score": 0.6089275181293488
         }
       ],
       "context_count": 5,
@@ -36,7 +36,7 @@
         "OpenViking/README.md",
         "OpenViking/docs/en/concepts/01-architecture.md"
       ],
-      "retrieval_time": 0.5225210189819336
+      "retrieval_time": 1.0662388801574707
     },
     {
       "question": "分层记忆设计（L0 抽象层、L1 概述层、L2 内容层）的设计初衷是什么？三层之间如何保持语义一致性？",
@@ -44,27 +44,27 @@
         {
           "uri": "viking://resources/tmpxopdbp8j/Core_Concepts/Core_Concepts_1_Filesystem_Management_Paradigm_Solves_Fragmentat_2_Tiered_Context_Loading_Reduces_Token_Consumption_3_Directory_Recursive_Retrieval_Improves_Retrieval.md",
           "content": "This is a conceptual reference document for OpenViking, designed to explain its context management system to developers or AI agent builders with basic AI context handling knowledge. Its primary purpose is to break down three core design concepts that solve key context management challenges.\n\nThe document covers three main sections: first, the Filesystem Management Paradigm, which maps all context (resources, user data, agent capabilities) to a virtual `viking://` filesystem, turning vague context management into traceable file operations to fix fragmentation. Second, Tiered Context Loading, which structures context into L0 (abstract), L1 (overview), and L2 (full detail) layers to load only necessary context, cutting token costs. Third, Directory Recursive Retrieval, a multi-step strategy that combines intent analysis, vector positioning, and recursive exploration to boost retrieval accuracy by capturing both relevant fragments and their broader context. Key keywords include OpenViking, virtual filesystem context management, tiered context loading, directory recursive retrieval, token optimization.",
-          "score": 0.5766141414642334
+          "score": 0.5772071480751038
         },
         {
           "uri": "viking://resources/tmpxlvfx_b2/Core_Concepts/Core_Concepts_1_Filesystem_Management_Paradigm_Solves_Fragmentat_2_Tiered_Context_Loading_Reduces_Token_Consumption_3_Directory_Recursive_Retrieval_Improves_Retrieval.md",
           "content": "This document explains OpenViking's three core concepts for context management, aiming to optimize token usage and retrieval efficiency. The first concept, Filesystem Management Paradigm, unifies context into a virtual filesystem (viking://) with directories for resources, user data, and agent skills, enabling precise \"file operations\" like ls/find. The second, Tiered Context Loading, processes context into L0 (abstract summary), L1 (overview), and L2 (details) layers to reduce token consumption by loading only needed data. The third, Directory Recursive Retrieval, uses intent analysis, vector retrieval, and recursive exploration to improve retrieval accuracy by prioritizing high-score directories and refining content. Targeted at developers or AI system architects needing efficient context handling, it references deeper docs on URI, context types, and retrieval mechanisms. Keywords: context management, virtual filesystem, tiered loading, recursive retrieval, token optimization.",
-          "score": 0.5766141414642334
+          "score": 0.5772071480751038
         },
         {
           "uri": "viking://resources/tmppq4ecq8g/Core_Concepts/Core_Concepts_1_Filesystem_Management_Paradigm_Solves_Fragmentat_2_Tiered_Context_Loading_Reduces_Token_Consumption_3_Directory_Recursive_Retrieval_Improves_Retrieval.md",
           "content": "This is a conceptual reference document for OpenViking's context management system, intended for developers working with AI agents. Its primary purpose is to explain three core design concepts that solve key context management challenges. \n\nFirst, it introduces a filesystem management paradigm that models all context (resources, user memories, agent skills) as a virtual `viking://` filesystem, replacing vague semantic matching with traceable, precise file-like operations to eliminate context fragmentation. Second, it covers tiered context loading, which structures context into L0 (abstract), L1 (overview), and L2 (full detail) layers to load only necessary context, cutting token costs and reducing noise. Third, it outlines a directory recursive retrieval strategy that combines intent analysis, vector positioning, and recursive exploration to improve retrieval accuracy by capturing both relevant fragments and their broader context. Key keywords include OpenViking, virtual filesystem context, tiered context loading, directory recursive retrieval, token optimization.",
-          "score": 0.5765180587768555
+          "score": 0.5770350098609924
         },
         {
           "uri": "viking://resources/README/Core_Concepts/Core_Concepts_1_Filesystem_Management_Paradigm_Solves_Fragmentat_2_Tiered_Context_Loading_Reduces_Token_Consumption_3_Directory_Recursive_Retrieval_Improves_Retrieval.md",
           "content": "This is a conceptual reference document explaining core design principles of OpenViking's context management system, intended for developers or users working with AI agents. Its primary purpose is to detail three key solutions to common AI context management challenges.\n\nFirst, it covers the Filesystem Management Paradigm, which organizes all context (resources, user preferences, agent skills) into a virtual `viking://` filesystem, replacing vague semantic matching with traceable, precise file-like operations to resolve context fragmentation. Second, Tiered Context Loading structures data into 3 layers (L0 abstract, L1 overview, L2 full details) to load context on demand, cutting token costs and reducing noise. Third, Directory Recursive Retrieval uses a multi-step intent-based, layered retrieval strategy to boost retrieval accuracy by capturing both relevant fragments and their broader context. Key keywords: OpenViking, context management, virtual filesystem, tiered context loading, directory recursive retrieval, token optimization.",
-          "score": 0.5461457967758179
+          "score": 0.5466936826705933
         },
         {
           "uri": "viking://agent/memories",
           "content": "Agent's long-term memory storage. Contains cases and patterns, managed hierarchically by type.",
-          "score": 0.5329568088054657
+          "score": 0.5339879989624023
         }
       ],
       "context_count": 5,
@@ -72,7 +72,7 @@
       "files": [
         "OpenViking/docs/en/concepts/03-context-layers.md"
       ],
-      "retrieval_time": 0.48657989501953125
+      "retrieval_time": 0.42914319038391113
     },
     {
       "question": "六种记忆类别（profile、preferences、entities、events、cases、patterns）的划分依据是什么？在实际应用中如何自动分类？",
@@ -80,27 +80,27 @@
         {
           "uri": "viking://agent/memories/patterns",
           "content": "Agent's effective patterns. Stores reusable processes and best practices distilled from multiple interactions, validated general solutions.",
-          "score": 0.614244282245636
+          "score": 0.6162217557430267
         },
         {
           "uri": "viking://agent/memories/patterns",
           "content": "Agent's effective patterns. Stores reusable processes and best practices distilled from multiple interactions, validated general solutions.",
-          "score": 0.5882379412651062
+          "score": 0.5911256670951843
         },
         {
           "uri": "viking://user/memories/preferences",
           "content": "User's personalized preference memories. Stores preferences by topic (communication style, code standards, domain interests, etc.), one subdirectory per preference type, same-type preferences can be appended.",
-          "score": 0.5881708413362503
+          "score": 0.5886013805866241
         },
         {
           "uri": "viking://user/memories/events",
           "content": "User's event records. Each event has its own subdirectory, recording important events, decisions, milestones, etc. Events are time-independent, historical records not updated.",
-          "score": 0.5549069494009018
+          "score": 0.5574605762958527
         },
         {
           "uri": "viking://user/memories/entities",
           "content": "Entity memories from user's world. Each entity has its own subdirectory, including projects, people, concepts, etc. Entities are important objects in user's world, can append additional information.",
-          "score": 0.5412153154611588
+          "score": 0.5426380187273026
         }
       ],
       "context_count": 5,
@@ -109,7 +109,7 @@
         "OpenViking/docs/en/concepts/02-context-types.md",
         "OpenViking/openviking/session/memory_extractor.py"
       ],
-      "retrieval_time": 0.46695494651794434
+      "retrieval_time": 0.5345959663391113
     },
     {
       "question": "OpenViking 如何支持多 Agent 协作场景？不同 Agent 之间的记忆如何隔离与共享？",
@@ -117,27 +117,27 @@
         {
           "uri": "viking://resources/tmppq4ecq8g/Overview.md",
           "content": "This is an overview document (Overview.md) introducing OpenViking, an open-source context database for AI Agents, designed to address core pain points in agent development.\nMain sections cover key challenges in AI Agent development, including fragmented context, surging context demand, poor retrieval effectiveness, unobservable context, and limited memory iteration, followed by the OpenViking solution and its core features.\nKey takeaways: OpenViking uses a file system paradigm to unify context management, with tiered loading to cut token costs, recursive directory retrieval for better precision, visualized retrieval trajectories for debuggability, and automatic session management for memory iteration.\nIntended for AI Agent developers, it requires basic familiarity with AI Agent and RAG concepts, offering a streamlined way to build and manage agent context systems.\nKeywords: AI Agent, context database, OpenViking, RAG, file system paradigm, tiered context loading, memory iteration",
-          "score": 0.5863590836524963
+          "score": 0.5836554765701294
         },
         {
           "uri": "viking://resources/tmpxlvfx_b2/Overview.md",
           "content": "This document is a reference guide outlining challenges in AI Agent development and introducing OpenViking, an open-source Context Database. It covers five key challenges: fragmented context, surging context demand, poor retrieval effectiveness, unobservable context, and limited memory iteration. OpenViking addresses these with a \"file system paradigm\" for unified context management, tiered context loading, directory recursive retrieval, visualized retrieval trajectories, and automatic session management. Targeted at AI developers building Agents, it emphasizes simplified context management and improved retrieval/debugging capabilities. Keywords: AI Agent, Context Database, OpenViking, RAG, context management.",
-          "score": 0.5791678428649902
+          "score": 0.5764603912830353
         },
         {
           "uri": "viking://resources/tmpxopdbp8j/Overview.md",
           "content": "This is an overview document (Overview.md) introducing OpenViking, an open-source context database for AI Agents, aimed at helping developers address AI Agent context management pain points.\nIt first outlines 5 core challenges in AI Agent development, including fragmented context, surging context demand, poor retrieval effectiveness, unobservable context, and limited memory iteration. It then presents OpenViking as the solution, detailing its innovative file system paradigm and 5 key features: unified filesystem-style context management, tiered on-demand context loading, directory recursive retrieval, visualized retrieval trajectories, and automatic session management, each targeted at solving a specific development challenge.\nThe intended audience is AI Agent developers, with no explicit prerequisite knowledge noted. Key keywords: AI Agent, context database, OpenViking, file system paradigm, RAG, memory management.",
-          "score": 0.5783627927303314
+          "score": 0.5754421055316925
         },
         {
           "uri": "viking://resources/tmppq4ecq8g/Community_Team.md",
           "content": "This is an introductory community and team overview document for the OpenViking open-source project.\nIt covers three main sections: About Us, Join the Community, and Star Trend. The About Us section details that OpenViking is maintained by ByteDance's Volcengine Viking Team, traces the team's 2019–2026 timeline of unstructured data processing and AI context tool developments, and notes OpenViking's 2026 launch as AI Agent context database support. The Join the Community section invites developer engagement via starring the project, using its website/docs, joining Lark, WeChat, Discord, or X communities, and contributing code. The Star Trend section includes a star history chart link.\nIt targets developers passionate about AI Agent technology, with no specific prerequisites listed, and key keywords include OpenViking, AI Agent, context database, VikingDB, open-source community.",
-          "score": 0.5641409754753113
+          "score": 0.5615692138671875
         },
         {
           "uri": "viking://resources/tmppq4ecq8g/Core_Concepts/4_Visualized_Retrieval_Trajectory_Observable_Conte_5_Automatic_Session_Management_Context_Self-Iterat.md",
           "content": "This is a technical reference document excerpt for OpenViking, designed to explain two core context management features to developers working with the framework.\n\nIt covers two key sections: 4. Visualized Retrieval Trajectory → Observable Context, and 5. Automatic Session Management → Context Self-Iteration. The first details a hierarchical virtual filesystem with unique viking:// URIs and preserved recursive retrieval trajectories, enabling transparent, observable context access and retrieval logic optimization. The second outlines a built-in memory self-iteration loop that updates user preference memories and accumulates agent operational experience post-session, driving agent self-evolution.\n\nKey keywords include OpenViking, visualized retrieval trajectory, observable context, automatic session management, context self-iteration, virtual filesystem, memory self-iteration loop.",
-          "score": 0.560738742351532
+          "score": 0.5577421486377716
         }
       ],
       "context_count": 5,
@@ -146,7 +146,7 @@
         "OpenViking/docs/en/concepts/02-context-types.md",
         "OpenViking/docs/en/concepts/01-architecture.md"
       ],
-      "retrieval_time": 0.5057251453399658
+      "retrieval_time": 0.48984217643737793
     },
     {
       "question": "会话的生命周期是如何管理的？commit_session 后记忆如何被持久化和索引？",
@@ -154,27 +154,27 @@
         {
           "uri": "viking://resources/tmppq4ecq8g/Core_Concepts/4_Visualized_Retrieval_Trajectory_Observable_Conte_5_Automatic_Session_Management_Context_Self-Iterat.md",
           "content": "This is a technical reference document excerpt for OpenViking, designed to explain two core context management features to developers working with the framework.\n\nIt covers two key sections: 4. Visualized Retrieval Trajectory → Observable Context, and 5. Automatic Session Management → Context Self-Iteration. The first details a hierarchical virtual filesystem with unique viking:// URIs and preserved recursive retrieval trajectories, enabling transparent, observable context access and retrieval logic optimization. The second outlines a built-in memory self-iteration loop that updates user preference memories and accumulates agent operational experience post-session, driving agent self-evolution.\n\nKey keywords include OpenViking, visualized retrieval trajectory, observable context, automatic session management, context self-iteration, virtual filesystem, memory self-iteration loop.",
-          "score": 0.513485848903656
+          "score": 0.5131984949111938
         },
         {
           "uri": "viking://resources/README/Core_Concepts/4_Visualized_Retrieval_Trajectory_Observable_Conte_5_Automatic_Session_Management_Context_Self-Iterat.md",
           "content": "This is a reference document excerpt for OpenViking, designed to explain two core context management features to developers working with the framework.\n\nIt covers two key sections: first, Visualized Retrieval Trajectory for Observable Context, which uses a hierarchical virtual filesystem with unique viking:// URIs and a recursive directory retrieval strategy to preserve and display retrieval paths, enabling transparent context tracking and retrieval logic optimization. Second, Automatic Session Management for Context Self-Iteration, which includes a built-in memory self-iteration loop that updates user preference memory and accumulates agent operational experience post-session to drive agent self-evolution.\n\nKey keywords include OpenViking, visualized retrieval trajectory, observable context, hierarchical virtual filesystem, automatic session management, context self-iteration, user memory, agent experience accumulation.",
-          "score": 0.513485848903656
-        },
-        {
-          "uri": "viking://resources/tmpxopdbp8j/Core_Concepts/4_Visualized_Retrieval_Trajectory_Observable_Conte_5_Automatic_Session_Management_Context_Self-Iterat.md",
-          "content": "This is a reference document excerpt for OpenViking, designed to explain two core context management features for developers working with the framework.\n\nIt covers two key sections: First, Visualized Retrieval Trajectory for Observable Context, which uses a hierarchical virtual filesystem with unique viking:// URIs and preserves recursive directory retrieval paths to make context management transparent and enable retrieval logic optimization. Second, Automatic Session Management for Context Self-Iteration, which includes a built-in memory loop that updates user preference memories and accumulates agent operational experience post-session to drive agent self-evolution.\n\nKey takeaways include the shift from flat to hierarchical context management and the agent's ability to improve over time via interaction data. Relevant keywords: OpenViking, visualized retrieval trajectory, observable context, automatic session management, context self-iteration, virtual filesystem, agent memory evolution.",
-          "score": 0.5128142237663269
+          "score": 0.5131984949111938
         },
         {
           "uri": "viking://resources/README/Core_Concepts/Core_Concepts_1_Filesystem_Management_Paradigm_Solves_Fragmentat_2_Tiered_Context_Loading_Reduces_Token_Consumption_3_Directory_Recursive_Retrieval_Improves_Retrieval.md",
           "content": "This is a conceptual reference document explaining core design principles of OpenViking's context management system, intended for developers or users working with AI agents. Its primary purpose is to detail three key solutions to common AI context management challenges.\n\nFirst, it covers the Filesystem Management Paradigm, which organizes all context (resources, user preferences, agent skills) into a virtual `viking://` filesystem, replacing vague semantic matching with traceable, precise file-like operations to resolve context fragmentation. Second, Tiered Context Loading structures data into 3 layers (L0 abstract, L1 overview, L2 full details) to load context on demand, cutting token costs and reducing noise. Third, Directory Recursive Retrieval uses a multi-step intent-based, layered retrieval strategy to boost retrieval accuracy by capturing both relevant fragments and their broader context. Key keywords: OpenViking, context management, virtual filesystem, tiered context loading, directory recursive retrieval, token optimization.",
-          "score": 0.5068780779838562
+          "score": 0.5058718919754028
         },
         {
           "uri": "viking://resources/tmppq4ecq8g/Core_Concepts/Core_Concepts_1_Filesystem_Management_Paradigm_Solves_Fragmentat_2_Tiered_Context_Loading_Reduces_Token_Consumption_3_Directory_Recursive_Retrieval_Improves_Retrieval.md",
           "content": "This is a conceptual reference document for OpenViking's context management system, intended for developers working with AI agents. Its primary purpose is to explain three core design concepts that solve key context management challenges. \n\nFirst, it introduces a filesystem management paradigm that models all context (resources, user memories, agent skills) as a virtual `viking://` filesystem, replacing vague semantic matching with traceable, precise file-like operations to eliminate context fragmentation. Second, it covers tiered context loading, which structures context into L0 (abstract), L1 (overview), and L2 (full detail) layers to load only necessary context, cutting token costs and reducing noise. Third, it outlines a directory recursive retrieval strategy that combines intent analysis, vector positioning, and recursive exploration to improve retrieval accuracy by capturing both relevant fragments and their broader context. Key keywords include OpenViking, virtual filesystem context, tiered context loading, directory recursive retrieval, token optimization.",
-          "score": 0.5052346587181091
+          "score": 0.5041170716285706
+        },
+        {
+          "uri": "viking://resources/tmpxlvfx_b2/Core_Concepts/4_Visualized_Retrieval_Trajectory_Observable_Conte_5_Automatic_Session_Management_Context_Self-Iterat.md",
+          "content": "This document explains OpenViking's hierarchical virtual filesystem and automatic session management for context self-iteration. It covers two main sections: 1) Visualized Retrieval Trajectory, using directory recursive strategies with preserved browsing paths for issue diagnosis and retrieval optimization, and 2) Automatic Session Management, where post-session memory extraction updates user preferences and agent experience for self-evolution. The target audience likely includes developers or users needing to understand context management and retrieval mechanisms, with prerequisites in basic virtual filesystem concepts. Keywords: OpenViking, retrieval trajectory, session management, context self-iteration, hierarchical filesystem.",
+          "score": 0.501256912946701
         }
       ],
       "context_count": 5,
@@ -182,7 +182,7 @@
       "files": [
         "OpenViking/docs/en/concepts/08-session.md"
       ],
-      "retrieval_time": 0.6565828323364258
+      "retrieval_time": 0.7359678745269775
     },
     {
       "question": "技能系统的设计理念是什么？与传统的 Function Calling 或 Tool Use 有何不同？",
@@ -190,27 +190,27 @@
         {
           "uri": "viking://resources/tmpxopdbp8j/Core_Concepts/Core_Concepts_1_Filesystem_Management_Paradigm_Solves_Fragmentat_2_Tiered_Context_Loading_Reduces_Token_Consumption_3_Directory_Recursive_Retrieval_Improves_Retrieval.md",
           "content": "This is a conceptual reference document for OpenViking, designed to explain its context management system to developers or AI agent builders with basic AI context handling knowledge. Its primary purpose is to break down three core design concepts that solve key context management challenges.\n\nThe document covers three main sections: first, the Filesystem Management Paradigm, which maps all context (resources, user data, agent capabilities) to a virtual `viking://` filesystem, turning vague context management into traceable file operations to fix fragmentation. Second, Tiered Context Loading, which structures context into L0 (abstract), L1 (overview), and L2 (full detail) layers to load only necessary context, cutting token costs. Third, Directory Recursive Retrieval, a multi-step strategy that combines intent analysis, vector positioning, and recursive exploration to boost retrieval accuracy by capturing both relevant fragments and their broader context. Key keywords include OpenViking, virtual filesystem context management, tiered context loading, directory recursive retrieval, token optimization.",
-          "score": 0.5121556520462036
+          "score": 0.514183759689331
         },
         {
           "uri": "viking://resources/tmpxlvfx_b2/Core_Concepts/Core_Concepts_1_Filesystem_Management_Paradigm_Solves_Fragmentat_2_Tiered_Context_Loading_Reduces_Token_Consumption_3_Directory_Recursive_Retrieval_Improves_Retrieval.md",
           "content": "This document explains OpenViking's three core concepts for context management, aiming to optimize token usage and retrieval efficiency. The first concept, Filesystem Management Paradigm, unifies context into a virtual filesystem (viking://) with directories for resources, user data, and agent skills, enabling precise \"file operations\" like ls/find. The second, Tiered Context Loading, processes context into L0 (abstract summary), L1 (overview), and L2 (details) layers to reduce token consumption by loading only needed data. The third, Directory Recursive Retrieval, uses intent analysis, vector retrieval, and recursive exploration to improve retrieval accuracy by prioritizing high-score directories and refining content. Targeted at developers or AI system architects needing efficient context handling, it references deeper docs on URI, context types, and retrieval mechanisms. Keywords: context management, virtual filesystem, tiered loading, recursive retrieval, token optimization.",
-          "score": 0.5121556520462036
+          "score": 0.514183759689331
         },
         {
           "uri": "viking://resources/tmppq4ecq8g/Core_Concepts/Core_Concepts_1_Filesystem_Management_Paradigm_Solves_Fragmentat_2_Tiered_Context_Loading_Reduces_Token_Consumption_3_Directory_Recursive_Retrieval_Improves_Retrieval.md",
           "content": "This is a conceptual reference document for OpenViking's context management system, intended for developers working with AI agents. Its primary purpose is to explain three core design concepts that solve key context management challenges. \n\nFirst, it introduces a filesystem management paradigm that models all context (resources, user memories, agent skills) as a virtual `viking://` filesystem, replacing vague semantic matching with traceable, precise file-like operations to eliminate context fragmentation. Second, it covers tiered context loading, which structures context into L0 (abstract), L1 (overview), and L2 (full detail) layers to load only necessary context, cutting token costs and reducing noise. Third, it outlines a directory recursive retrieval strategy that combines intent analysis, vector positioning, and recursive exploration to improve retrieval accuracy by capturing both relevant fragments and their broader context. Key keywords include OpenViking, virtual filesystem context, tiered context loading, directory recursive retrieval, token optimization.",
-          "score": 0.5112937092781067
+          "score": 0.5132688879966736
         },
         {
           "uri": "viking://resources/README/Core_Concepts/Core_Concepts_1_Filesystem_Management_Paradigm_Solves_Fragmentat_2_Tiered_Context_Loading_Reduces_Token_Consumption_3_Directory_Recursive_Retrieval_Improves_Retrieval.md",
           "content": "This is a conceptual reference document explaining core design principles of OpenViking's context management system, intended for developers or users working with AI agents. Its primary purpose is to detail three key solutions to common AI context management challenges.\n\nFirst, it covers the Filesystem Management Paradigm, which organizes all context (resources, user preferences, agent skills) into a virtual `viking://` filesystem, replacing vague semantic matching with traceable, precise file-like operations to resolve context fragmentation. Second, Tiered Context Loading structures data into 3 layers (L0 abstract, L1 overview, L2 full details) to load context on demand, cutting token costs and reducing noise. Third, Directory Recursive Retrieval uses a multi-step intent-based, layered retrieval strategy to boost retrieval accuracy by capturing both relevant fragments and their broader context. Key keywords: OpenViking, context management, virtual filesystem, tiered context loading, directory recursive retrieval, token optimization.",
-          "score": 0.5074567496776581
+          "score": 0.5088968276977539
         },
         {
           "uri": "viking://resources/tmpxopdbp8j/Overview.md",
           "content": "This is an overview document (Overview.md) introducing OpenViking, an open-source context database for AI Agents, aimed at helping developers address AI Agent context management pain points.\nIt first outlines 5 core challenges in AI Agent development, including fragmented context, surging context demand, poor retrieval effectiveness, unobservable context, and limited memory iteration. It then presents OpenViking as the solution, detailing its innovative file system paradigm and 5 key features: unified filesystem-style context management, tiered on-demand context loading, directory recursive retrieval, visualized retrieval trajectories, and automatic session management, each targeted at solving a specific development challenge.\nThe intended audience is AI Agent developers, with no explicit prerequisite knowledge noted. Key keywords: AI Agent, context database, OpenViking, file system paradigm, RAG, memory management.",
-          "score": 0.5042992830276489
+          "score": 0.5051383376121521
         }
       ],
       "context_count": 5,
@@ -219,35 +219,35 @@
         "OpenViking/docs/en/api/04-skills.md",
         "OpenViking/docs/en/concepts/02-context-types.md"
       ],
-      "retrieval_time": 0.5217361450195312
+      "retrieval_time": 0.4178810119628906
     },
     {
       "question": "OpenViking 适合哪些具体的应用场景？例如：长期记忆助手、知识库问答、代码助手等场景的适配性如何？",
       "contexts": [
         {
+          "uri": "viking://resources/tmpxopdbp8j/Overview.md",
+          "content": "This is an overview document (Overview.md) introducing OpenViking, an open-source context database for AI Agents, aimed at helping developers address AI Agent context management pain points.\nIt first outlines 5 core challenges in AI Agent development, including fragmented context, surging context demand, poor retrieval effectiveness, unobservable context, and limited memory iteration. It then presents OpenViking as the solution, detailing its innovative file system paradigm and 5 key features: unified filesystem-style context management, tiered on-demand context loading, directory recursive retrieval, visualized retrieval trajectories, and automatic session management, each targeted at solving a specific development challenge.\nThe intended audience is AI Agent developers, with no explicit prerequisite knowledge noted. Key keywords: AI Agent, context database, OpenViking, file system paradigm, RAG, memory management.",
+          "score": 0.5825387239456177
+        },
+        {
+          "uri": "viking://resources/README/Overview.md",
+          "content": "This is an overview document (Overview.md) introducing the open-source AI Agent-focused context database OpenViking, intended for AI Agent developers. It first outlines 5 core challenges in Agent development: fragmented context management, surging context demand with information loss risks, poor traditional RAG retrieval effectiveness, unobservable retrieval chains, and limited memory iteration. It then presents OpenViking as the solution, detailing its innovative file system paradigm and 5 key features: unified context management, tiered on-demand context loading, directory recursive retrieval, visualized retrieval trajectories, and automatic session management, which directly address the listed challenges to simplify Agent context management, cut costs, boost retrieval precision, enable observability, and drive Agent memory iteration.",
+          "score": 0.5806686282157898
+        },
+        {
+          "uri": "viking://resources/tmpxlvfx_b2/Overview.md",
+          "content": "This document is a reference guide outlining challenges in AI Agent development and introducing OpenViking, an open-source Context Database. It covers five key challenges: fragmented context, surging context demand, poor retrieval effectiveness, unobservable context, and limited memory iteration. OpenViking addresses these with a \"file system paradigm\" for unified context management, tiered context loading, directory recursive retrieval, visualized retrieval trajectories, and automatic session management. Targeted at AI developers building Agents, it emphasizes simplified context management and improved retrieval/debugging capabilities. Keywords: AI Agent, Context Database, OpenViking, RAG, context management.",
+          "score": 0.5806686282157898
+        },
+        {
           "uri": "viking://resources/tmppq4ecq8g/Overview.md",
           "content": "This is an overview document (Overview.md) introducing OpenViking, an open-source context database for AI Agents, designed to address core pain points in agent development.\nMain sections cover key challenges in AI Agent development, including fragmented context, surging context demand, poor retrieval effectiveness, unobservable context, and limited memory iteration, followed by the OpenViking solution and its core features.\nKey takeaways: OpenViking uses a file system paradigm to unify context management, with tiered loading to cut token costs, recursive directory retrieval for better precision, visualized retrieval trajectories for debuggability, and automatic session management for memory iteration.\nIntended for AI Agent developers, it requires basic familiarity with AI Agent and RAG concepts, offering a streamlined way to build and manage agent context systems.\nKeywords: AI Agent, context database, OpenViking, RAG, file system paradigm, tiered context loading, memory iteration",
-          "score": 0.5636794567108154
+          "score": 0.5664624869823456
         },
         {
           "uri": "viking://resources/README/Quick_Start/Prerequisites_1_Installation_2_Model_Preparation.md",
           "content": "This is a setup guide for the OpenViking tool, designed to help users prepare their environment, install the tool, and set up required models. It covers three core sections: Prerequisites, Installation, and Model Preparation. The prerequisites specify a minimum Python 3.10 version, support for Linux, macOS, or Windows, and a stable network for dependencies and model access. Installation is done via a single pip command. For model preparation, it requires a VLM model for image/content understanding and an embedding model for vectorization/semantic retrieval, supporting OpenAI models, cost-effective Volcengine Doubao models (with new user free quotas), and custom OpenAI API-compatible models. The target audience is developers or users looking to deploy and use OpenViking, with basic Python and environment setup knowledge assumed. Key keywords: OpenViking, setup guide, VLM model, embedding model, Python environment, pip installation, OpenAI API, Volcengine Doubao.",
-          "score": 0.5478948950767517
-        },
-        {
-          "uri": "viking://resources/tmppq4ecq8g/Quick_Start/Prerequisites_1_Installation_2_Model_Preparation.md",
-          "content": "This is a getting-started guide for the OpenViking tool, intended for users looking to set up and prepare the tool for image/content understanding and semantic retrieval tasks, with basic Python and environment setup knowledge assumed. \n\nIt covers three core sections: Prerequisites, which lists requirements including Python 3.10+, Linux/macOS/Windows OS, and a stable network; Installation, which provides a single pip command to install OpenViking; and Model Preparation, which outlines required model types (VLM for content understanding, Embedding for vectorization) and supported model services (OpenAI models, cost-effective Volcengine Doubao models with new user free quotas, and custom OpenAI API-compatible models).\n\nKey keywords: OpenViking, setup guide, VLM model, embedding model, Python environment, pip installation, Volcengine Doubao, OpenAI API compatibility",
-          "score": 0.5471926331520081
-        },
-        {
-          "uri": "viking://resources/tmppq4ecq8g/Community_Team.md",
-          "content": "This is an introductory community and team overview document for the OpenViking open-source project.\nIt covers three main sections: About Us, Join the Community, and Star Trend. The About Us section details that OpenViking is maintained by ByteDance's Volcengine Viking Team, traces the team's 2019–2026 timeline of unstructured data processing and AI context tool developments, and notes OpenViking's 2026 launch as AI Agent context database support. The Join the Community section invites developer engagement via starring the project, using its website/docs, joining Lark, WeChat, Discord, or X communities, and contributing code. The Star Trend section includes a star history chart link.\nIt targets developers passionate about AI Agent technology, with no specific prerequisites listed, and key keywords include OpenViking, AI Agent, context database, VikingDB, open-source community.",
-          "score": 0.5460795164108276
-        },
-        {
-          "uri": "viking://resources/tmppq4ecq8g/Quick_Start",
-          "content": "This is a comprehensive getting-started resource pack for the OpenViking tool, tailored for developers and users with basic Python and environment setup knowledge. It covers end-to-end onboarding, including prerequisites, installation, model preparation, API configuration, and hands-on practice with core features like semantic analysis and retrieval. Core keywords: OpenViking, VLM, embedding model, API configuration, semantic search.",
-          "score": 0.5459795892238617
+          "score": 0.5538870096206665
         }
       ],
       "context_count": 5,
@@ -256,7 +256,7 @@
         "OpenViking/README.md",
         "OpenViking/docs/en/concepts/01-architecture.md"
       ],
-      "retrieval_time": 0.4371318817138672
+      "retrieval_time": 0.49646687507629395
     },
     {
       "question": "如何评估 OpenViking 的检索质量？是否有内置的评测机制或指标？",
@@ -264,27 +264,27 @@
         {
           "uri": "viking://resources/tmpxopdbp8j/Overview.md",
           "content": "This is an overview document (Overview.md) introducing OpenViking, an open-source context database for AI Agents, aimed at helping developers address AI Agent context management pain points.\nIt first outlines 5 core challenges in AI Agent development, including fragmented context, surging context demand, poor retrieval effectiveness, unobservable context, and limited memory iteration. It then presents OpenViking as the solution, detailing its innovative file system paradigm and 5 key features: unified filesystem-style context management, tiered on-demand context loading, directory recursive retrieval, visualized retrieval trajectories, and automatic session management, each targeted at solving a specific development challenge.\nThe intended audience is AI Agent developers, with no explicit prerequisite knowledge noted. Key keywords: AI Agent, context database, OpenViking, file system paradigm, RAG, memory management.",
-          "score": 0.5594266653060913
+          "score": 0.5605080127716064
         },
         {
           "uri": "viking://resources/tmpxopdbp8j/Core_Concepts/4_Visualized_Retrieval_Trajectory_Observable_Conte_5_Automatic_Session_Management_Context_Self-Iterat.md",
           "content": "This is a reference document excerpt for OpenViking, designed to explain two core context management features for developers working with the framework.\n\nIt covers two key sections: First, Visualized Retrieval Trajectory for Observable Context, which uses a hierarchical virtual filesystem with unique viking:// URIs and preserves recursive directory retrieval paths to make context management transparent and enable retrieval logic optimization. Second, Automatic Session Management for Context Self-Iteration, which includes a built-in memory loop that updates user preference memories and accumulates agent operational experience post-session to drive agent self-evolution.\n\nKey takeaways include the shift from flat to hierarchical context management and the agent's ability to improve over time via interaction data. Relevant keywords: OpenViking, visualized retrieval trajectory, observable context, automatic session management, context self-iteration, virtual filesystem, agent memory evolution.",
-          "score": 0.5575109124183655
-        },
-        {
-          "uri": "viking://resources/tmpxopdbp8j/tmpxopdbp8j.md",
-          "content": "This appears to be the landing page documentation for OpenViking, serving as an introductory overview to orient users to the project.\nMain content includes a top-aligned banner image for branding, with no additional visible text sections, headings, or detailed topics provided in the shared snippet.\nNo specific key concepts, functional details, or structured guidance is present in the visible content; it functions as a visual and foundational opening to the broader OpenViking documentation set.\nThe intended audience is likely developers, tech enthusiasts, or users interested in the OpenViking project, with no explicit prerequisites noted. Keywords: OpenViking, project documentation landing page, introductory tech docs.",
-          "score": 0.5543058514595032
+          "score": 0.5584777593612671
         },
         {
           "uri": "viking://resources/tmppq4ecq8g/Overview.md",
           "content": "This is an overview document (Overview.md) introducing OpenViking, an open-source context database for AI Agents, designed to address core pain points in agent development.\nMain sections cover key challenges in AI Agent development, including fragmented context, surging context demand, poor retrieval effectiveness, unobservable context, and limited memory iteration, followed by the OpenViking solution and its core features.\nKey takeaways: OpenViking uses a file system paradigm to unify context management, with tiered loading to cut token costs, recursive directory retrieval for better precision, visualized retrieval trajectories for debuggability, and automatic session management for memory iteration.\nIntended for AI Agent developers, it requires basic familiarity with AI Agent and RAG concepts, offering a streamlined way to build and manage agent context systems.\nKeywords: AI Agent, context database, OpenViking, RAG, file system paradigm, tiered context loading, memory iteration",
-          "score": 0.5542341768741608
+          "score": 0.5558652579784393
         },
         {
           "uri": "viking://resources/tmppq4ecq8g/Core_Concepts/4_Visualized_Retrieval_Trajectory_Observable_Conte_5_Automatic_Session_Management_Context_Self-Iterat.md",
           "content": "This is a technical reference document excerpt for OpenViking, designed to explain two core context management features to developers working with the framework.\n\nIt covers two key sections: 4. Visualized Retrieval Trajectory → Observable Context, and 5. Automatic Session Management → Context Self-Iteration. The first details a hierarchical virtual filesystem with unique viking:// URIs and preserved recursive retrieval trajectories, enabling transparent, observable context access and retrieval logic optimization. The second outlines a built-in memory self-iteration loop that updates user preference memories and accumulates agent operational experience post-session, driving agent self-evolution.\n\nKey keywords include OpenViking, visualized retrieval trajectory, observable context, automatic session management, context self-iteration, virtual filesystem, memory self-iteration loop.",
-          "score": 0.5538447499275208
+          "score": 0.5554179251194
+        },
+        {
+          "uri": "viking://resources/tmpxopdbp8j/tmpxopdbp8j.md",
+          "content": "This appears to be the landing page documentation for OpenViking, serving as an introductory overview to orient users to the project.\nMain content includes a top-aligned banner image for branding, with no additional visible text sections, headings, or detailed topics provided in the shared snippet.\nNo specific key concepts, functional details, or structured guidance is present in the visible content; it functions as a visual and foundational opening to the broader OpenViking documentation set.\nThe intended audience is likely developers, tech enthusiasts, or users interested in the OpenViking project, with no explicit prerequisites noted. Keywords: OpenViking, project documentation landing page, introductory tech docs.",
+          "score": 0.5548014640808105
         }
       ],
       "context_count": 5,
@@ -293,7 +293,7 @@
         "OpenViking/openviking/eval/__init__.py:1-25",
         "OpenViking/examples/eval/rag_eval.py"
       ],
-      "retrieval_time": 0.5046532154083252
+      "retrieval_time": 0.41803503036499023
     },
     {
       "question": "OpenViking 与主流 RAG 框架（LlamaIndex、LangChain）的集成方式是什么？是否可以无缝替换其向量存储组件？",
@@ -330,7 +330,7 @@
         "OpenViking/docs/en/concepts/05-storage.md",
         "OpenViking/docs/en/api/06-retrieval.md"
       ],
-      "retrieval_time": 0.39022326469421387
+      "retrieval_time": 0.47424983978271484
     },
     {
       "question": "在生产环境中，OpenViking 的性能瓶颈可能出现在哪些环节？如何进行容量规划和性能调优？",
@@ -338,27 +338,27 @@
         {
           "uri": "viking://resources/tmpxlvfx_b2/Quick_Start/Prerequisites_1_Installation_2_Model_Preparation.md",
           "content": "This document is a guide outlining prerequisites, installation, and model preparation for using OpenViking. It specifies Python 3.10+, Linux/macOS/Windows, and a stable network. Installation is via `pip install openviking`. Model requirements include VLM (image/content understanding) and embedding models, with supported services: OpenAI (GPT-4V, embeddings), Volcengine (cost-effective, new user quotas), and custom OpenAI-compatible APIs. The target audience is users setting up OpenViking, needing basic Python and model service familiarity. Keywords: OpenViking, prerequisites, installation, VLM, embedding model, OpenAI, Volcengine.",
-          "score": 0.48584671318531036
+          "score": 0.489092156291008
         },
         {
           "uri": "viking://resources/tmppq4ecq8g/Quick_Start/Prerequisites_1_Installation_2_Model_Preparation.md",
           "content": "This is a getting-started guide for the OpenViking tool, intended for users looking to set up and prepare the tool for image/content understanding and semantic retrieval tasks, with basic Python and environment setup knowledge assumed. \n\nIt covers three core sections: Prerequisites, which lists requirements including Python 3.10+, Linux/macOS/Windows OS, and a stable network; Installation, which provides a single pip command to install OpenViking; and Model Preparation, which outlines required model types (VLM for content understanding, Embedding for vectorization) and supported model services (OpenAI models, cost-effective Volcengine Doubao models with new user free quotas, and custom OpenAI API-compatible models).\n\nKey keywords: OpenViking, setup guide, VLM model, embedding model, Python environment, pip installation, Volcengine Doubao, OpenAI API compatibility",
-          "score": 0.4851243495941162
+          "score": 0.4887363761663437
         },
         {
           "uri": "viking://resources/tmpxopdbp8j/Quick_Start/Prerequisites_1_Installation_2_Model_Preparation.md",
           "content": "This is a getting-started guide for the OpenViking tool, designed to help users set up the environment and prepare required models.\n\nIt is structured into three core sections: Prerequisites, Installation, and Model Preparation. The Prerequisites section lists environment requirements: Python 3.10+, compatibility with Linux, macOS, or Windows, and a stable network for dependency and model downloads. The Installation section provides a single pip command to install OpenViking. The Model Preparation section specifies two required model types—VLM for image/content understanding and Embedding for vectorization/semantic retrieval—and supports multiple model services including OpenAI models, cost-effective Volcengine Doubao models (with new user free quotas), and custom services compatible with OpenAI API format.\n\nKey takeaways include clear setup steps and flexible model options. The target audience is developers or users looking to deploy and use OpenViking, with basic knowledge of Python and command-line operations assumed. Relevant keywords: OpenViking, VLM model, embedding model, Python installation, Volcengine Doubao, OpenAI API compatibility.",
-          "score": 0.484770804643631
+          "score": 0.4882722496986389
         },
         {
           "uri": "viking://resources/tmpxlvfx_b2/tmpxlvfx_b2.md",
           "content": "This document appears to be a guide or reference for OpenViking, likely focusing on its usage, setup, or features, as indicated by the banner image. Key sections may include installation, core concepts (definitions of OpenViking's components), and operational workflows. It serves as a resource for users needing to understand and interact with OpenViking, possibly covering its architecture, commands, or integration with other tools. The target audience is likely developers, system administrators, or technical users familiar with basic software deployment and command-line operations, with prerequisites including foundational knowledge of similar systems. Relevant keywords: OpenViking, documentation, guide, reference, setup, usage, concepts.",
-          "score": 0.47427238523960114
+          "score": 0.47775520384311676
         },
         {
           "uri": "viking://resources/tmpxopdbp8j/tmpxopdbp8j.md",
           "content": "This appears to be the landing page documentation for OpenViking, serving as an introductory overview to orient users to the project.\nMain content includes a top-aligned banner image for branding, with no additional visible text sections, headings, or detailed topics provided in the shared snippet.\nNo specific key concepts, functional details, or structured guidance is present in the visible content; it functions as a visual and foundational opening to the broader OpenViking documentation set.\nThe intended audience is likely developers, tech enthusiasts, or users interested in the OpenViking project, with no explicit prerequisites noted. Keywords: OpenViking, project documentation landing page, introductory tech docs.",
-          "score": 0.4727441668510437
+          "score": 0.4764075130224228
         }
       ],
       "context_count": 5,
@@ -367,7 +367,7 @@
         "OpenViking/docs/en/concepts/05-storage.md",
         "OpenViking/openviking/storage/viking_vector_index_backend.py"
       ],
-      "retrieval_time": 0.398975133895874
+      "retrieval_time": 0.43782615661621094
     },
     {
       "question": "VikingFS 与 AGFS 的关系是什么？为什么需要两层文件系统抽象？",
@@ -375,27 +375,27 @@
         {
           "uri": "viking://resources/tmpxlvfx_b2/Core_Concepts/Core_Concepts_1_Filesystem_Management_Paradigm_Solves_Fragmentat_2_Tiered_Context_Loading_Reduces_Token_Consumption_3_Directory_Recursive_Retrieval_Improves_Retrieval.md",
           "content": "This document explains OpenViking's three core concepts for context management, aiming to optimize token usage and retrieval efficiency. The first concept, Filesystem Management Paradigm, unifies context into a virtual filesystem (viking://) with directories for resources, user data, and agent skills, enabling precise \"file operations\" like ls/find. The second, Tiered Context Loading, processes context into L0 (abstract summary), L1 (overview), and L2 (details) layers to reduce token consumption by loading only needed data. The third, Directory Recursive Retrieval, uses intent analysis, vector retrieval, and recursive exploration to improve retrieval accuracy by prioritizing high-score directories and refining content. Targeted at developers or AI system architects needing efficient context handling, it references deeper docs on URI, context types, and retrieval mechanisms. Keywords: context management, virtual filesystem, tiered loading, recursive retrieval, token optimization.",
-          "score": 0.5035875737667084
+          "score": 0.4964594393968582
         },
         {
           "uri": "viking://resources/tmpxopdbp8j/Core_Concepts/Core_Concepts_1_Filesystem_Management_Paradigm_Solves_Fragmentat_2_Tiered_Context_Loading_Reduces_Token_Consumption_3_Directory_Recursive_Retrieval_Improves_Retrieval.md",
           "content": "This is a conceptual reference document for OpenViking, designed to explain its context management system to developers or AI agent builders with basic AI context handling knowledge. Its primary purpose is to break down three core design concepts that solve key context management challenges.\n\nThe document covers three main sections: first, the Filesystem Management Paradigm, which maps all context (resources, user data, agent capabilities) to a virtual `viking://` filesystem, turning vague context management into traceable file operations to fix fragmentation. Second, Tiered Context Loading, which structures context into L0 (abstract), L1 (overview), and L2 (full detail) layers to load only necessary context, cutting token costs. Third, Directory Recursive Retrieval, a multi-step strategy that combines intent analysis, vector positioning, and recursive exploration to boost retrieval accuracy by capturing both relevant fragments and their broader context. Key keywords include OpenViking, virtual filesystem context management, tiered context loading, directory recursive retrieval, token optimization.",
-          "score": 0.5024471282958984
+          "score": 0.49462276697158813
         },
         {
           "uri": "viking://resources/README/Core_Concepts/Core_Concepts_1_Filesystem_Management_Paradigm_Solves_Fragmentat_2_Tiered_Context_Loading_Reduces_Token_Consumption_3_Directory_Recursive_Retrieval_Improves_Retrieval.md",
           "content": "This is a conceptual reference document explaining core design principles of OpenViking's context management system, intended for developers or users working with AI agents. Its primary purpose is to detail three key solutions to common AI context management challenges.\n\nFirst, it covers the Filesystem Management Paradigm, which organizes all context (resources, user preferences, agent skills) into a virtual `viking://` filesystem, replacing vague semantic matching with traceable, precise file-like operations to resolve context fragmentation. Second, Tiered Context Loading structures data into 3 layers (L0 abstract, L1 overview, L2 full details) to load context on demand, cutting token costs and reducing noise. Third, Directory Recursive Retrieval uses a multi-step intent-based, layered retrieval strategy to boost retrieval accuracy by capturing both relevant fragments and their broader context. Key keywords: OpenViking, context management, virtual filesystem, tiered context loading, directory recursive retrieval, token optimization.",
-          "score": 0.494504913687706
+          "score": 0.4874509125947952
         },
         {
           "uri": "viking://resources/tmppq4ecq8g/Core_Concepts/Core_Concepts_1_Filesystem_Management_Paradigm_Solves_Fragmentat_2_Tiered_Context_Loading_Reduces_Token_Consumption_3_Directory_Recursive_Retrieval_Improves_Retrieval.md",
           "content": "This is a conceptual reference document for OpenViking's context management system, intended for developers working with AI agents. Its primary purpose is to explain three core design concepts that solve key context management challenges. \n\nFirst, it introduces a filesystem management paradigm that models all context (resources, user memories, agent skills) as a virtual `viking://` filesystem, replacing vague semantic matching with traceable, precise file-like operations to eliminate context fragmentation. Second, it covers tiered context loading, which structures context into L0 (abstract), L1 (overview), and L2 (full detail) layers to load only necessary context, cutting token costs and reducing noise. Third, it outlines a directory recursive retrieval strategy that combines intent analysis, vector positioning, and recursive exploration to improve retrieval accuracy by capturing both relevant fragments and their broader context. Key keywords include OpenViking, virtual filesystem context, tiered context loading, directory recursive retrieval, token optimization.",
-          "score": 0.4885639101266861
+          "score": 0.4814775735139847
         },
         {
           "uri": "viking://resources/README/Overview.md",
           "content": "This is an overview document (Overview.md) introducing the open-source AI Agent-focused context database OpenViking, intended for AI Agent developers. It first outlines 5 core challenges in Agent development: fragmented context management, surging context demand with information loss risks, poor traditional RAG retrieval effectiveness, unobservable retrieval chains, and limited memory iteration. It then presents OpenViking as the solution, detailing its innovative file system paradigm and 5 key features: unified context management, tiered on-demand context loading, directory recursive retrieval, visualized retrieval trajectories, and automatic session management, which directly address the listed challenges to simplify Agent context management, cut costs, boost retrieval precision, enable observability, and drive Agent memory iteration.",
-          "score": 0.48678678274154663
+          "score": 0.4794021248817444
         }
       ],
       "context_count": 5,
@@ -403,7 +403,7 @@
       "files": [
         "OpenViking/docs/en/concepts/05-storage.md"
       ],
-      "retrieval_time": 0.4233212471008301
+      "retrieval_time": 0.42987990379333496
     },
     {
       "question": "`client.add_resource` 支持哪些输入格式？如何处理本地目录的递归添加和子目录过滤？",
@@ -440,7 +440,7 @@
         "OpenViking/docs/en/api/02-resources.md",
         "OpenViking/openviking/parse/directory_scan.py:1-80"
       ],
-      "retrieval_time": 0.3849070072174072
+      "retrieval_time": 0.49623990058898926
     },
     {
       "question": "向量索引是如何构建和维护的？增量更新时如何避免全量重建？",
@@ -448,27 +448,27 @@
         {
           "uri": "viking://resources/README/Core_Concepts/Core_Concepts_1_Filesystem_Management_Paradigm_Solves_Fragmentat_2_Tiered_Context_Loading_Reduces_Token_Consumption_3_Directory_Recursive_Retrieval_Improves_Retrieval.md",
           "content": "This is a conceptual reference document explaining core design principles of OpenViking's context management system, intended for developers or users working with AI agents. Its primary purpose is to detail three key solutions to common AI context management challenges.\n\nFirst, it covers the Filesystem Management Paradigm, which organizes all context (resources, user preferences, agent skills) into a virtual `viking://` filesystem, replacing vague semantic matching with traceable, precise file-like operations to resolve context fragmentation. Second, Tiered Context Loading structures data into 3 layers (L0 abstract, L1 overview, L2 full details) to load context on demand, cutting token costs and reducing noise. Third, Directory Recursive Retrieval uses a multi-step intent-based, layered retrieval strategy to boost retrieval accuracy by capturing both relevant fragments and their broader context. Key keywords: OpenViking, context management, virtual filesystem, tiered context loading, directory recursive retrieval, token optimization.",
-          "score": 0.5203514099121094
+          "score": 0.5205516219139099
         },
         {
           "uri": "viking://resources/tmpxlvfx_b2/Core_Concepts/Core_Concepts_1_Filesystem_Management_Paradigm_Solves_Fragmentat_2_Tiered_Context_Loading_Reduces_Token_Consumption_3_Directory_Recursive_Retrieval_Improves_Retrieval.md",
           "content": "This document explains OpenViking's three core concepts for context management, aiming to optimize token usage and retrieval efficiency. The first concept, Filesystem Management Paradigm, unifies context into a virtual filesystem (viking://) with directories for resources, user data, and agent skills, enabling precise \"file operations\" like ls/find. The second, Tiered Context Loading, processes context into L0 (abstract summary), L1 (overview), and L2 (details) layers to reduce token consumption by loading only needed data. The third, Directory Recursive Retrieval, uses intent analysis, vector retrieval, and recursive exploration to improve retrieval accuracy by prioritizing high-score directories and refining content. Targeted at developers or AI system architects needing efficient context handling, it references deeper docs on URI, context types, and retrieval mechanisms. Keywords: context management, virtual filesystem, tiered loading, recursive retrieval, token optimization.",
-          "score": 0.5041642934083939
+          "score": 0.5035924762487411
         },
         {
           "uri": "viking://resources/tmpxopdbp8j/Overview.md",
           "content": "This is an overview document (Overview.md) introducing OpenViking, an open-source context database for AI Agents, aimed at helping developers address AI Agent context management pain points.\nIt first outlines 5 core challenges in AI Agent development, including fragmented context, surging context demand, poor retrieval effectiveness, unobservable context, and limited memory iteration. It then presents OpenViking as the solution, detailing its innovative file system paradigm and 5 key features: unified filesystem-style context management, tiered on-demand context loading, directory recursive retrieval, visualized retrieval trajectories, and automatic session management, each targeted at solving a specific development challenge.\nThe intended audience is AI Agent developers, with no explicit prerequisite knowledge noted. Key keywords: AI Agent, context database, OpenViking, file system paradigm, RAG, memory management.",
-          "score": 0.5041232109069824
+          "score": 0.5032036900520325
         },
         {
           "uri": "viking://resources/README/Overview.md",
           "content": "This is an overview document (Overview.md) introducing the open-source AI Agent-focused context database OpenViking, intended for AI Agent developers. It first outlines 5 core challenges in Agent development: fragmented context management, surging context demand with information loss risks, poor traditional RAG retrieval effectiveness, unobservable retrieval chains, and limited memory iteration. It then presents OpenViking as the solution, detailing its innovative file system paradigm and 5 key features: unified context management, tiered on-demand context loading, directory recursive retrieval, visualized retrieval trajectories, and automatic session management, which directly address the listed challenges to simplify Agent context management, cut costs, boost retrieval precision, enable observability, and drive Agent memory iteration.",
-          "score": 0.5028623938560486
+          "score": 0.5019509792327881
         },
         {
           "uri": "viking://resources/tmpxlvfx_b2/Overview.md",
           "content": "This document is a reference guide outlining challenges in AI Agent development and introducing OpenViking, an open-source Context Database. It covers five key challenges: fragmented context, surging context demand, poor retrieval effectiveness, unobservable context, and limited memory iteration. OpenViking addresses these with a \"file system paradigm\" for unified context management, tiered context loading, directory recursive retrieval, visualized retrieval trajectories, and automatic session management. Targeted at AI developers building Agents, it emphasizes simplified context management and improved retrieval/debugging capabilities. Keywords: AI Agent, Context Database, OpenViking, RAG, context management.",
-          "score": 0.5028623938560486
+          "score": 0.5019509792327881
         }
       ],
       "context_count": 5,
@@ -477,7 +477,7 @@
         "OpenViking/openviking/storage/viking_vector_index_backend.py",
         "OpenViking/docs/en/concepts/05-storage.md"
       ],
-      "retrieval_time": 0.5945422649383545
+      "retrieval_time": 0.6188762187957764
     },
     {
       "question": "配置文件 `ov.conf` 的必填项有哪些？如何配置不同的 VLM 后端（OpenAI、Volcengine 等）？",
@@ -513,7 +513,7 @@
       "files": [
         "OpenViking/docs/en/guides/01-configuration.md:1-150"
       ],
-      "retrieval_time": 0.45855116844177246
+      "retrieval_time": 0.5496628284454346
     },
     {
       "question": "`HierarchicalRetriever` 的检索流程是怎样的？如何实现从 L0 到 L2 的层级穿透检索？",
@@ -521,27 +521,27 @@
         {
           "uri": "viking://resources/tmppq4ecq8g/Core_Concepts/Core_Concepts_1_Filesystem_Management_Paradigm_Solves_Fragmentat_2_Tiered_Context_Loading_Reduces_Token_Consumption_3_Directory_Recursive_Retrieval_Improves_Retrieval.md",
           "content": "This is a conceptual reference document for OpenViking's context management system, intended for developers working with AI agents. Its primary purpose is to explain three core design concepts that solve key context management challenges. \n\nFirst, it introduces a filesystem management paradigm that models all context (resources, user memories, agent skills) as a virtual `viking://` filesystem, replacing vague semantic matching with traceable, precise file-like operations to eliminate context fragmentation. Second, it covers tiered context loading, which structures context into L0 (abstract), L1 (overview), and L2 (full detail) layers to load only necessary context, cutting token costs and reducing noise. Third, it outlines a directory recursive retrieval strategy that combines intent analysis, vector positioning, and recursive exploration to improve retrieval accuracy by capturing both relevant fragments and their broader context. Key keywords include OpenViking, virtual filesystem context, tiered context loading, directory recursive retrieval, token optimization.",
-          "score": 0.5193595290184021
+          "score": 0.5180230736732483
         },
         {
           "uri": "viking://resources/tmpxopdbp8j/Core_Concepts/Core_Concepts_1_Filesystem_Management_Paradigm_Solves_Fragmentat_2_Tiered_Context_Loading_Reduces_Token_Consumption_3_Directory_Recursive_Retrieval_Improves_Retrieval.md",
           "content": "This is a conceptual reference document for OpenViking, designed to explain its context management system to developers or AI agent builders with basic AI context handling knowledge. Its primary purpose is to break down three core design concepts that solve key context management challenges.\n\nThe document covers three main sections: first, the Filesystem Management Paradigm, which maps all context (resources, user data, agent capabilities) to a virtual `viking://` filesystem, turning vague context management into traceable file operations to fix fragmentation. Second, Tiered Context Loading, which structures context into L0 (abstract), L1 (overview), and L2 (full detail) layers to load only necessary context, cutting token costs. Third, Directory Recursive Retrieval, a multi-step strategy that combines intent analysis, vector positioning, and recursive exploration to boost retrieval accuracy by capturing both relevant fragments and their broader context. Key keywords include OpenViking, virtual filesystem context management, tiered context loading, directory recursive retrieval, token optimization.",
-          "score": 0.5097463726997375
+          "score": 0.5089286416769028
         },
         {
           "uri": "viking://resources/tmpxlvfx_b2/Core_Concepts/Core_Concepts_1_Filesystem_Management_Paradigm_Solves_Fragmentat_2_Tiered_Context_Loading_Reduces_Token_Consumption_3_Directory_Recursive_Retrieval_Improves_Retrieval.md",
           "content": "This document explains OpenViking's three core concepts for context management, aiming to optimize token usage and retrieval efficiency. The first concept, Filesystem Management Paradigm, unifies context into a virtual filesystem (viking://) with directories for resources, user data, and agent skills, enabling precise \"file operations\" like ls/find. The second, Tiered Context Loading, processes context into L0 (abstract summary), L1 (overview), and L2 (details) layers to reduce token consumption by loading only needed data. The third, Directory Recursive Retrieval, uses intent analysis, vector retrieval, and recursive exploration to improve retrieval accuracy by prioritizing high-score directories and refining content. Targeted at developers or AI system architects needing efficient context handling, it references deeper docs on URI, context types, and retrieval mechanisms. Keywords: context management, virtual filesystem, tiered loading, recursive retrieval, token optimization.",
-          "score": 0.5080987513065338
+          "score": 0.5066549330949783
         },
         {
           "uri": "viking://resources/README/Core_Concepts/Core_Concepts_1_Filesystem_Management_Paradigm_Solves_Fragmentat_2_Tiered_Context_Loading_Reduces_Token_Consumption_3_Directory_Recursive_Retrieval_Improves_Retrieval.md",
           "content": "This is a conceptual reference document explaining core design principles of OpenViking's context management system, intended for developers or users working with AI agents. Its primary purpose is to detail three key solutions to common AI context management challenges.\n\nFirst, it covers the Filesystem Management Paradigm, which organizes all context (resources, user preferences, agent skills) into a virtual `viking://` filesystem, replacing vague semantic matching with traceable, precise file-like operations to resolve context fragmentation. Second, Tiered Context Loading structures data into 3 layers (L0 abstract, L1 overview, L2 full details) to load context on demand, cutting token costs and reducing noise. Third, Directory Recursive Retrieval uses a multi-step intent-based, layered retrieval strategy to boost retrieval accuracy by capturing both relevant fragments and their broader context. Key keywords: OpenViking, context management, virtual filesystem, tiered context loading, directory recursive retrieval, token optimization.",
-          "score": 0.4896961748600006
+          "score": 0.4886302202939987
         },
         {
           "uri": "viking://resources/tmpxopdbp8j/Core_Concepts/4_Visualized_Retrieval_Trajectory_Observable_Conte_5_Automatic_Session_Management_Context_Self-Iterat.md",
           "content": "This is a reference document excerpt for OpenViking, designed to explain two core context management features for developers working with the framework.\n\nIt covers two key sections: First, Visualized Retrieval Trajectory for Observable Context, which uses a hierarchical virtual filesystem with unique viking:// URIs and preserves recursive directory retrieval paths to make context management transparent and enable retrieval logic optimization. Second, Automatic Session Management for Context Self-Iteration, which includes a built-in memory loop that updates user preference memories and accumulates agent operational experience post-session to drive agent self-evolution.\n\nKey takeaways include the shift from flat to hierarchical context management and the agent's ability to improve over time via interaction data. Relevant keywords: OpenViking, visualized retrieval trajectory, observable context, automatic session management, context self-iteration, virtual filesystem, agent memory evolution.",
-          "score": 0.483104407787323
+          "score": 0.4820985049009323
         }
       ],
       "context_count": 5,
@@ -549,7 +549,7 @@
       "files": [
         "OpenViking/openviking/retrieve/hierarchical_retriever.py"
       ],
-      "retrieval_time": 0.3798198699951172
+      "retrieval_time": 0.5491971969604492
     },
     {
       "question": "语义处理队列的工作机制是什么？如何监控和调试异步处理状态？",
@@ -557,27 +557,27 @@
         {
           "uri": "viking://resources/tmpxlvfx_b2/Core_Concepts/4_Visualized_Retrieval_Trajectory_Observable_Conte_5_Automatic_Session_Management_Context_Self-Iterat.md",
           "content": "This document explains OpenViking's hierarchical virtual filesystem and automatic session management for context self-iteration. It covers two main sections: 1) Visualized Retrieval Trajectory, using directory recursive strategies with preserved browsing paths for issue diagnosis and retrieval optimization, and 2) Automatic Session Management, where post-session memory extraction updates user preferences and agent experience for self-evolution. The target audience likely includes developers or users needing to understand context management and retrieval mechanisms, with prerequisites in basic virtual filesystem concepts. Keywords: OpenViking, retrieval trajectory, session management, context self-iteration, hierarchical filesystem.",
-          "score": 0.403056800365448
+          "score": 0.404070645570755
         },
         {
           "uri": "viking://resources/tmpxopdbp8j/Core_Concepts/4_Visualized_Retrieval_Trajectory_Observable_Conte_5_Automatic_Session_Management_Context_Self-Iterat.md",
           "content": "This is a reference document excerpt for OpenViking, designed to explain two core context management features for developers working with the framework.\n\nIt covers two key sections: First, Visualized Retrieval Trajectory for Observable Context, which uses a hierarchical virtual filesystem with unique viking:// URIs and preserves recursive directory retrieval paths to make context management transparent and enable retrieval logic optimization. Second, Automatic Session Management for Context Self-Iteration, which includes a built-in memory loop that updates user preference memories and accumulates agent operational experience post-session to drive agent self-evolution.\n\nKey takeaways include the shift from flat to hierarchical context management and the agent's ability to improve over time via interaction data. Relevant keywords: OpenViking, visualized retrieval trajectory, observable context, automatic session management, context self-iteration, virtual filesystem, agent memory evolution.",
-          "score": 0.38154222071170807
+          "score": 0.38255666196346283
         },
         {
           "uri": "viking://resources/README/Core_Concepts/4_Visualized_Retrieval_Trajectory_Observable_Conte_5_Automatic_Session_Management_Context_Self-Iterat.md",
           "content": "This is a reference document excerpt for OpenViking, designed to explain two core context management features to developers working with the framework.\n\nIt covers two key sections: first, Visualized Retrieval Trajectory for Observable Context, which uses a hierarchical virtual filesystem with unique viking:// URIs and a recursive directory retrieval strategy to preserve and display retrieval paths, enabling transparent context tracking and retrieval logic optimization. Second, Automatic Session Management for Context Self-Iteration, which includes a built-in memory self-iteration loop that updates user preference memory and accumulates agent operational experience post-session to drive agent self-evolution.\n\nKey keywords include OpenViking, visualized retrieval trajectory, observable context, hierarchical virtual filesystem, automatic session management, context self-iteration, user memory, agent experience accumulation.",
-          "score": 0.38071294128894806
+          "score": 0.3814372569322586
         },
         {
           "uri": "viking://resources/tmppq4ecq8g/Core_Concepts/4_Visualized_Retrieval_Trajectory_Observable_Conte_5_Automatic_Session_Management_Context_Self-Iterat.md",
           "content": "This is a technical reference document excerpt for OpenViking, designed to explain two core context management features to developers working with the framework.\n\nIt covers two key sections: 4. Visualized Retrieval Trajectory → Observable Context, and 5. Automatic Session Management → Context Self-Iteration. The first details a hierarchical virtual filesystem with unique viking:// URIs and preserved recursive retrieval trajectories, enabling transparent, observable context access and retrieval logic optimization. The second outlines a built-in memory self-iteration loop that updates user preference memories and accumulates agent operational experience post-session, driving agent self-evolution.\n\nKey keywords include OpenViking, visualized retrieval trajectory, observable context, automatic session management, context self-iteration, virtual filesystem, memory self-iteration loop.",
-          "score": 0.38008424639701843
+          "score": 0.3809397369623184
         },
         {
           "uri": "viking://resources/tmpxopdbp8j/Core_Concepts/Core_Concepts_1_Filesystem_Management_Paradigm_Solves_Fragmentat_2_Tiered_Context_Loading_Reduces_Token_Consumption_3_Directory_Recursive_Retrieval_Improves_Retrieval.md",
           "content": "This is a conceptual reference document for OpenViking, designed to explain its context management system to developers or AI agent builders with basic AI context handling knowledge. Its primary purpose is to break down three core design concepts that solve key context management challenges.\n\nThe document covers three main sections: first, the Filesystem Management Paradigm, which maps all context (resources, user data, agent capabilities) to a virtual `viking://` filesystem, turning vague context management into traceable file operations to fix fragmentation. Second, Tiered Context Loading, which structures context into L0 (abstract), L1 (overview), and L2 (full detail) layers to load only necessary context, cutting token costs. Third, Directory Recursive Retrieval, a multi-step strategy that combines intent analysis, vector positioning, and recursive exploration to boost retrieval accuracy by capturing both relevant fragments and their broader context. Key keywords include OpenViking, virtual filesystem context management, tiered context loading, directory recursive retrieval, token optimization.",
-          "score": 0.3535913676023483
+          "score": 0.35402944684028625
         }
       ],
       "context_count": 5,
@@ -586,35 +586,35 @@
         "OpenViking/docs/en/concepts/01-architecture.md",
         "OpenViking/openviking/service/resource_service.py:1-80"
       ],
-      "retrieval_time": 0.611083984375
+      "retrieval_time": 0.6488373279571533
     },
     {
       "question": "如何通过代码动态创建和管理 Session？Session 与 Memory 的关系是什么？",
       "contexts": [
         {
-          "uri": "viking://resources/README/Core_Concepts/Core_Concepts_1_Filesystem_Management_Paradigm_Solves_Fragmentat_2_Tiered_Context_Loading_Reduces_Token_Consumption_3_Directory_Recursive_Retrieval_Improves_Retrieval.md",
-          "content": "This is a conceptual reference document explaining core design principles of OpenViking's context management system, intended for developers or users working with AI agents. Its primary purpose is to detail three key solutions to common AI context management challenges.\n\nFirst, it covers the Filesystem Management Paradigm, which organizes all context (resources, user preferences, agent skills) into a virtual `viking://` filesystem, replacing vague semantic matching with traceable, precise file-like operations to resolve context fragmentation. Second, Tiered Context Loading structures data into 3 layers (L0 abstract, L1 overview, L2 full details) to load context on demand, cutting token costs and reducing noise. Third, Directory Recursive Retrieval uses a multi-step intent-based, layered retrieval strategy to boost retrieval accuracy by capturing both relevant fragments and their broader context. Key keywords: OpenViking, context management, virtual filesystem, tiered context loading, directory recursive retrieval, token optimization.",
-          "score": 0.44861188530921936
-        },
-        {
           "uri": "viking://resources/tmppq4ecq8g/Core_Concepts/Core_Concepts_1_Filesystem_Management_Paradigm_Solves_Fragmentat_2_Tiered_Context_Loading_Reduces_Token_Consumption_3_Directory_Recursive_Retrieval_Improves_Retrieval.md",
           "content": "This is a conceptual reference document for OpenViking's context management system, intended for developers working with AI agents. Its primary purpose is to explain three core design concepts that solve key context management challenges. \n\nFirst, it introduces a filesystem management paradigm that models all context (resources, user memories, agent skills) as a virtual `viking://` filesystem, replacing vague semantic matching with traceable, precise file-like operations to eliminate context fragmentation. Second, it covers tiered context loading, which structures context into L0 (abstract), L1 (overview), and L2 (full detail) layers to load only necessary context, cutting token costs and reducing noise. Third, it outlines a directory recursive retrieval strategy that combines intent analysis, vector positioning, and recursive exploration to improve retrieval accuracy by capturing both relevant fragments and their broader context. Key keywords include OpenViking, virtual filesystem context, tiered context loading, directory recursive retrieval, token optimization.",
-          "score": 0.44839662313461304
+          "score": 0.453225314617157
         },
         {
           "uri": "viking://resources/tmpxlvfx_b2/Core_Concepts/Core_Concepts_1_Filesystem_Management_Paradigm_Solves_Fragmentat_2_Tiered_Context_Loading_Reduces_Token_Consumption_3_Directory_Recursive_Retrieval_Improves_Retrieval.md",
           "content": "This document explains OpenViking's three core concepts for context management, aiming to optimize token usage and retrieval efficiency. The first concept, Filesystem Management Paradigm, unifies context into a virtual filesystem (viking://) with directories for resources, user data, and agent skills, enabling precise \"file operations\" like ls/find. The second, Tiered Context Loading, processes context into L0 (abstract summary), L1 (overview), and L2 (details) layers to reduce token consumption by loading only needed data. The third, Directory Recursive Retrieval, uses intent analysis, vector retrieval, and recursive exploration to improve retrieval accuracy by prioritizing high-score directories and refining content. Targeted at developers or AI system architects needing efficient context handling, it references deeper docs on URI, context types, and retrieval mechanisms. Keywords: context management, virtual filesystem, tiered loading, recursive retrieval, token optimization.",
-          "score": 0.44224244356155396
+          "score": 0.44598470628261566
         },
         {
           "uri": "viking://resources/tmpxopdbp8j/Core_Concepts/Core_Concepts_1_Filesystem_Management_Paradigm_Solves_Fragmentat_2_Tiered_Context_Loading_Reduces_Token_Consumption_3_Directory_Recursive_Retrieval_Improves_Retrieval.md",
           "content": "This is a conceptual reference document for OpenViking, designed to explain its context management system to developers or AI agent builders with basic AI context handling knowledge. Its primary purpose is to break down three core design concepts that solve key context management challenges.\n\nThe document covers three main sections: first, the Filesystem Management Paradigm, which maps all context (resources, user data, agent capabilities) to a virtual `viking://` filesystem, turning vague context management into traceable file operations to fix fragmentation. Second, Tiered Context Loading, which structures context into L0 (abstract), L1 (overview), and L2 (full detail) layers to load only necessary context, cutting token costs. Third, Directory Recursive Retrieval, a multi-step strategy that combines intent analysis, vector positioning, and recursive exploration to boost retrieval accuracy by capturing both relevant fragments and their broader context. Key keywords include OpenViking, virtual filesystem context management, tiered context loading, directory recursive retrieval, token optimization.",
-          "score": 0.44049589335918427
+          "score": 0.44532591104507446
         },
         {
-          "uri": "viking://resources/tmpxlvfx_b2/Core_Concepts/4_Visualized_Retrieval_Trajectory_Observable_Conte_5_Automatic_Session_Management_Context_Self-Iterat.md",
-          "content": "This document explains OpenViking's hierarchical virtual filesystem and automatic session management for context self-iteration. It covers two main sections: 1) Visualized Retrieval Trajectory, using directory recursive strategies with preserved browsing paths for issue diagnosis and retrieval optimization, and 2) Automatic Session Management, where post-session memory extraction updates user preferences and agent experience for self-evolution. The target audience likely includes developers or users needing to understand context management and retrieval mechanisms, with prerequisites in basic virtual filesystem concepts. Keywords: OpenViking, retrieval trajectory, session management, context self-iteration, hierarchical filesystem.",
-          "score": 0.43616998195648193
+          "uri": "viking://resources/README/Core_Concepts/Core_Concepts_1_Filesystem_Management_Paradigm_Solves_Fragmentat_2_Tiered_Context_Loading_Reduces_Token_Consumption_3_Directory_Recursive_Retrieval_Improves_Retrieval.md",
+          "content": "This is a conceptual reference document explaining core design principles of OpenViking's context management system, intended for developers or users working with AI agents. Its primary purpose is to detail three key solutions to common AI context management challenges.\n\nFirst, it covers the Filesystem Management Paradigm, which organizes all context (resources, user preferences, agent skills) into a virtual `viking://` filesystem, replacing vague semantic matching with traceable, precise file-like operations to resolve context fragmentation. Second, Tiered Context Loading structures data into 3 layers (L0 abstract, L1 overview, L2 full details) to load context on demand, cutting token costs and reducing noise. Third, Directory Recursive Retrieval uses a multi-step intent-based, layered retrieval strategy to boost retrieval accuracy by capturing both relevant fragments and their broader context. Key keywords: OpenViking, context management, virtual filesystem, tiered context loading, directory recursive retrieval, token optimization.",
+          "score": 0.4440246820449829
+        },
+        {
+          "uri": "viking://resources/tmppq4ecq8g/Core_Concepts/4_Visualized_Retrieval_Trajectory_Observable_Conte_5_Automatic_Session_Management_Context_Self-Iterat.md",
+          "content": "This is a technical reference document excerpt for OpenViking, designed to explain two core context management features to developers working with the framework.\n\nIt covers two key sections: 4. Visualized Retrieval Trajectory → Observable Context, and 5. Automatic Session Management → Context Self-Iteration. The first details a hierarchical virtual filesystem with unique viking:// URIs and preserved recursive retrieval trajectories, enabling transparent, observable context access and retrieval logic optimization. The second outlines a built-in memory self-iteration loop that updates user preference memories and accumulates agent operational experience post-session, driving agent self-evolution.\n\nKey keywords include OpenViking, visualized retrieval trajectory, observable context, automatic session management, context self-iteration, virtual filesystem, memory self-iteration loop.",
+          "score": 0.4414727985858917
         }
       ],
       "context_count": 5,
@@ -623,7 +623,7 @@
         "OpenViking/docs/en/concepts/08-session.md",
         "OpenViking/openviking/session/memory_extractor.py"
       ],
-      "retrieval_time": 0.45108819007873535
+      "retrieval_time": 0.645859956741333
     },
     {
       "question": "OpenViking Server 模式与本地模式的区别是什么？如何选择部署方式？",
@@ -631,27 +631,27 @@
         {
           "uri": "viking://resources/tmppq4ecq8g/Quick_Start/Prerequisites_1_Installation_2_Model_Preparation.md",
           "content": "This is a getting-started guide for the OpenViking tool, intended for users looking to set up and prepare the tool for image/content understanding and semantic retrieval tasks, with basic Python and environment setup knowledge assumed. \n\nIt covers three core sections: Prerequisites, which lists requirements including Python 3.10+, Linux/macOS/Windows OS, and a stable network; Installation, which provides a single pip command to install OpenViking; and Model Preparation, which outlines required model types (VLM for content understanding, Embedding for vectorization) and supported model services (OpenAI models, cost-effective Volcengine Doubao models with new user free quotas, and custom OpenAI API-compatible models).\n\nKey keywords: OpenViking, setup guide, VLM model, embedding model, Python environment, pip installation, Volcengine Doubao, OpenAI API compatibility",
-          "score": 0.46595947444438934
+          "score": 0.4701300859451294
         },
         {
           "uri": "viking://resources/tmpxopdbp8j/Quick_Start/Prerequisites_1_Installation_2_Model_Preparation.md",
           "content": "This is a getting-started guide for the OpenViking tool, designed to help users set up the environment and prepare required models.\n\nIt is structured into three core sections: Prerequisites, Installation, and Model Preparation. The Prerequisites section lists environment requirements: Python 3.10+, compatibility with Linux, macOS, or Windows, and a stable network for dependency and model downloads. The Installation section provides a single pip command to install OpenViking. The Model Preparation section specifies two required model types—VLM for image/content understanding and Embedding for vectorization/semantic retrieval—and supports multiple model services including OpenAI models, cost-effective Volcengine Doubao models (with new user free quotas), and custom services compatible with OpenAI API format.\n\nKey takeaways include clear setup steps and flexible model options. The target audience is developers or users looking to deploy and use OpenViking, with basic knowledge of Python and command-line operations assumed. Relevant keywords: OpenViking, VLM model, embedding model, Python installation, Volcengine Doubao, OpenAI API compatibility.",
-          "score": 0.46478821337223053
+          "score": 0.4690190702676773
         },
         {
           "uri": "viking://resources/tmppq4ecq8g/Project_Architecture_Advanced_Reading.md",
           "content": "This is a reference document titled Project_Architecture_Advanced_Reading.md for the OpenViking project, designed to detail its modular structure and point users to deeper resources. It first outlines the project's hierarchical directory structure, breaking down core components like the Python-based core source code (with modules for client logic, model integration, retrieval, storage, session management, etc.), C++ performance extensions, documentation, examples, tests, and configuration files. It then links to full advanced documentation. Key keywords include OpenViking, modular architecture, vector DB, VLM, embedding models, C++ extensions. The target audience is developers, contributors, and advanced users seeking to understand the project's layout for development, integration, or customization; basic familiarity with software architecture and Python/C++ development is assumed.",
-          "score": 0.4546384662389755
+          "score": 0.4591626971960068
         },
         {
           "uri": "viking://resources/tmpxopdbp8j/Project_Architecture_Advanced_Reading.md",
           "content": "This is a reference document titled Project_Architecture_Advanced_Reading.md for the OpenViking project, designed to detail its modular architecture and point users to advanced resources.\n\nIt first lays out the project's full directory structure, breaking down core components like the Python-based core source code (with submodules for model integration, retrieval, session management, etc.), multilingual documentation, usage examples, test suites, C++ performance extensions, third-party dependencies, and configuration files. It then links to full advanced documentation for deeper details.\n\nKey takeaways include the project's split between Python modular core and high-performance C++ extensions, organized test coverage, and structured documentation. It targets developers, contributors, and advanced users seeking to understand, modify, or extend OpenViking, with prerequisite knowledge of software architecture and modular development expected. Keywords: OpenViking, modular architecture, core source code, C++ extensions, vector DB, semantic retrieval, session management.",
-          "score": 0.4535587877035141
+          "score": 0.4581373333930969
         },
         {
           "uri": "viking://resources/tmpxopdbp8j/tmpxopdbp8j.md",
           "content": "This appears to be the landing page documentation for OpenViking, serving as an introductory overview to orient users to the project.\nMain content includes a top-aligned banner image for branding, with no additional visible text sections, headings, or detailed topics provided in the shared snippet.\nNo specific key concepts, functional details, or structured guidance is present in the visible content; it functions as a visual and foundational opening to the broader OpenViking documentation set.\nThe intended audience is likely developers, tech enthusiasts, or users interested in the OpenViking project, with no explicit prerequisites noted. Keywords: OpenViking, project documentation landing page, introductory tech docs.",
-          "score": 0.44461143016815186
+          "score": 0.4496975690126419
         }
       ],
       "context_count": 5,
@@ -660,7 +660,7 @@
         "OpenViking/openviking/server/bootstrap.py:1-61",
         "OpenViking/docs/en/concepts/01-architecture.md"
       ],
-      "retrieval_time": 0.3880958557128906
+      "retrieval_time": 0.481982946395874
     },
     {
       "question": "如何扩展自定义的 Parser？例如支持新的文档格式或代码语言？",
@@ -668,27 +668,27 @@
         {
           "uri": "viking://resources/tmppq4ecq8g/Quick_Start/4_Run_Your_First_Example.md",
           "content": "This is a step-by-step tutorial document titled 4_Run_Your_First_Example.md, designed to help users experience core features of OpenViking after completing prior environment configuration.\n\nIt covers three main sections: creating a Python script that initializes an OpenViking client, adds a remote README.md resource, explores its structure, reads content, waits for semantic processing, generates abstracts/overviews, and runs semantic searches; executing the script via a bash command; and listing expected output.\n\nKey takeaways include hands-on exposure to OpenViking's resource management, semantic analysis, and search capabilities. The target audience is developers or users new to OpenViking, seeking practical, guided experience with the tool's core workflows.",
-          "score": 0.44274719059467316
+          "score": 0.4437263160943985
         },
         {
           "uri": "viking://resources/tmpxopdbp8j/Quick_Start/4_Run_Your_First_Example.md",
           "content": "This is a hands-on tutorial document titled \"4. Run Your First Example\" for the OpenViking tool, intended for users who have completed prior environment configuration. Its primary purpose is to walk users through executing a full example to experience OpenViking's core features.\n\nThe document covers three main sections: creating a Python script that initializes an OpenViking client, adds a remote resource, explores its structure, reads content, waits for semantic processing, generates abstracts/overviews, and runs semantic searches; executing the script via a bash command; and outlining expected output.\n\nKey takeaways include learning to use OpenViking's core functions like resource management, content reading, semantic analysis, and semantic search. Target users are developers or technical users looking to get started with OpenViking's document processing and semantic capabilities.",
-          "score": 0.4401681572198868
+          "score": 0.44099316000938416
         },
         {
           "uri": "viking://resources/tmpxlvfx_b2/Quick_Start/4_Run_Your_First_Example.md",
           "content": "This document is a tutorial guiding users to run their first OpenViking example after environment setup. It covers creating a Python script with key OpenViking client operations: initializing the client, adding resources (URLs), exploring directory structure, globbing files, reading content, processing, and semantic search. The script uses functions like `initialize()`, `add_resource()`, `ls()`, `glob()`, `read()`, `wait_processed()`, `abstract()`, `overview()`, and `find()`. The example runs via `python example.py` with expected output showing directory, content, and search results. Intended for developers wanting to experience OpenViking's core features (resource management, semantic processing, search). Prerequisite: completed prior environment configuration. Keywords: OpenViking, Python client, semantic search, resource management.",
-          "score": 0.4395790100097656
+          "score": 0.4404049515724182
         },
         {
           "uri": "viking://resources/README/Quick_Start/4_Run_Your_First_Example.md",
           "content": "This is a tutorial document titled \"4. Run Your First Example\" for the OpenViking tool, intended for users who have completed prior environment configuration. Its primary purpose is to walk users through executing a sample workflow to experience OpenViking's core features.\n\nThe document covers three main sections: creating a Python script that demonstrates initializing the OpenViking client, adding/exploring resources, accessing content, waiting for semantic processing, generating abstracts/overviews, and running semantic searches; running the script via a bash command; and outlining the expected output.\n\nKey takeaways include hands-on exposure to OpenViking's resource management, semantic analysis, and search capabilities. Relevant keywords: OpenViking, semantic processing, semantic search, resource management, Python client tutorial.",
-          "score": 0.438483864068985
+          "score": 0.43934452533721924
         },
         {
-          "uri": "viking://resources/tmpxopdbp8j/Project_Architecture_Advanced_Reading.md",
-          "content": "This is a reference document titled Project_Architecture_Advanced_Reading.md for the OpenViking project, designed to detail its modular architecture and point users to advanced resources.\n\nIt first lays out the project's full directory structure, breaking down core components like the Python-based core source code (with submodules for model integration, retrieval, session management, etc.), multilingual documentation, usage examples, test suites, C++ performance extensions, third-party dependencies, and configuration files. It then links to full advanced documentation for deeper details.\n\nKey takeaways include the project's split between Python modular core and high-performance C++ extensions, organized test coverage, and structured documentation. It targets developers, contributors, and advanced users seeking to understand, modify, or extend OpenViking, with prerequisite knowledge of software architecture and modular development expected. Keywords: OpenViking, modular architecture, core source code, C++ extensions, vector DB, semantic retrieval, session management.",
-          "score": 0.42565858364105225
+          "uri": "viking://resources/tmppq4ecq8g/Quick_Start/Prerequisites_1_Installation_2_Model_Preparation.md",
+          "content": "This is a getting-started guide for the OpenViking tool, intended for users looking to set up and prepare the tool for image/content understanding and semantic retrieval tasks, with basic Python and environment setup knowledge assumed. \n\nIt covers three core sections: Prerequisites, which lists requirements including Python 3.10+, Linux/macOS/Windows OS, and a stable network; Installation, which provides a single pip command to install OpenViking; and Model Preparation, which outlines required model types (VLM for content understanding, Embedding for vectorization) and supported model services (OpenAI models, cost-effective Volcengine Doubao models with new user free quotas, and custom OpenAI API-compatible models).\n\nKey keywords: OpenViking, setup guide, VLM model, embedding model, Python environment, pip installation, Volcengine Doubao, OpenAI API compatibility",
+          "score": 0.42629384994506836
         }
       ],
       "context_count": 5,
@@ -697,7 +697,7 @@
         "OpenViking/openviking/parse/registry.py",
         "OpenViking/openviking/parse/parsers/base_parser.py:1-80"
       ],
-      "retrieval_time": 0.4022657871246338
+      "retrieval_time": 0.4003031253814697
     },
     {
       "question": "eval 模块的 RAGAS 集成是如何实现的？如何自定义评测指标？",
@@ -705,27 +705,27 @@
         {
           "uri": "viking://resources/tmpxopdbp8j/Overview.md",
           "content": "This is an overview document (Overview.md) introducing OpenViking, an open-source context database for AI Agents, aimed at helping developers address AI Agent context management pain points.\nIt first outlines 5 core challenges in AI Agent development, including fragmented context, surging context demand, poor retrieval effectiveness, unobservable context, and limited memory iteration. It then presents OpenViking as the solution, detailing its innovative file system paradigm and 5 key features: unified filesystem-style context management, tiered on-demand context loading, directory recursive retrieval, visualized retrieval trajectories, and automatic session management, each targeted at solving a specific development challenge.\nThe intended audience is AI Agent developers, with no explicit prerequisite knowledge noted. Key keywords: AI Agent, context database, OpenViking, file system paradigm, RAG, memory management.",
-          "score": 0.33331090211868286
+          "score": 0.33305710554122925
         },
         {
           "uri": "viking://resources/README/Overview.md",
           "content": "This is an overview document (Overview.md) introducing the open-source AI Agent-focused context database OpenViking, intended for AI Agent developers. It first outlines 5 core challenges in Agent development: fragmented context management, surging context demand with information loss risks, poor traditional RAG retrieval effectiveness, unobservable retrieval chains, and limited memory iteration. It then presents OpenViking as the solution, detailing its innovative file system paradigm and 5 key features: unified context management, tiered on-demand context loading, directory recursive retrieval, visualized retrieval trajectories, and automatic session management, which directly address the listed challenges to simplify Agent context management, cut costs, boost retrieval precision, enable observability, and drive Agent memory iteration.",
-          "score": 0.3328678011894226
+          "score": 0.33265814185142517
         },
         {
           "uri": "viking://resources/tmpxlvfx_b2/Overview.md",
           "content": "This document is a reference guide outlining challenges in AI Agent development and introducing OpenViking, an open-source Context Database. It covers five key challenges: fragmented context, surging context demand, poor retrieval effectiveness, unobservable context, and limited memory iteration. OpenViking addresses these with a \"file system paradigm\" for unified context management, tiered context loading, directory recursive retrieval, visualized retrieval trajectories, and automatic session management. Targeted at AI developers building Agents, it emphasizes simplified context management and improved retrieval/debugging capabilities. Keywords: AI Agent, Context Database, OpenViking, RAG, context management.",
-          "score": 0.3328678011894226
+          "score": 0.33265814185142517
         },
         {
           "uri": "viking://resources/tmppq4ecq8g/Overview.md",
           "content": "This is an overview document (Overview.md) introducing OpenViking, an open-source context database for AI Agents, designed to address core pain points in agent development.\nMain sections cover key challenges in AI Agent development, including fragmented context, surging context demand, poor retrieval effectiveness, unobservable context, and limited memory iteration, followed by the OpenViking solution and its core features.\nKey takeaways: OpenViking uses a file system paradigm to unify context management, with tiered loading to cut token costs, recursive directory retrieval for better precision, visualized retrieval trajectories for debuggability, and automatic session management for memory iteration.\nIntended for AI Agent developers, it requires basic familiarity with AI Agent and RAG concepts, offering a streamlined way to build and manage agent context systems.\nKeywords: AI Agent, context database, OpenViking, RAG, file system paradigm, tiered context loading, memory iteration",
-          "score": 0.31902940571308136
+          "score": 0.31892725825309753
         },
         {
           "uri": "viking://resources/tmpxopdbp8j/Project_Architecture_Advanced_Reading.md",
           "content": "This is a reference document titled Project_Architecture_Advanced_Reading.md for the OpenViking project, designed to detail its modular architecture and point users to advanced resources.\n\nIt first lays out the project's full directory structure, breaking down core components like the Python-based core source code (with submodules for model integration, retrieval, session management, etc.), multilingual documentation, usage examples, test suites, C++ performance extensions, third-party dependencies, and configuration files. It then links to full advanced documentation for deeper details.\n\nKey takeaways include the project's split between Python modular core and high-performance C++ extensions, organized test coverage, and structured documentation. It targets developers, contributors, and advanced users seeking to understand, modify, or extend OpenViking, with prerequisite knowledge of software architecture and modular development expected. Keywords: OpenViking, modular architecture, core source code, C++ extensions, vector DB, semantic retrieval, session management.",
-          "score": 0.3107398748397827
+          "score": 0.31029212474823
         }
       ],
       "context_count": 5,
@@ -734,7 +734,7 @@
         "OpenViking/openviking/eval/ragas.py",
         "OpenViking/openviking/eval/base.py:1-60"
       ],
-      "retrieval_time": 0.3574409484863281
+      "retrieval_time": 0.43626904487609863
     }
   ],
   "metrics": {
@@ -742,7 +742,7 @@
     "avg_contexts_per_question": 5.0,
     "questions_with_contexts": 20,
     "retrieval_success_rate": 1.0,
-    "avg_retrieval_time_ms": 467.11,
-    "total_retrieval_time_ms": 9342.2
+    "avg_retrieval_time_ms": 537.87,
+    "total_retrieval_time_ms": 10757.36
   }
 }

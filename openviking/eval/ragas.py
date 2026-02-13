@@ -5,6 +5,7 @@ RAGAS evaluator integration for OpenViking.
 """
 
 import asyncio
+import os
 from typing import Any, Dict, List, Optional
 
 from openviking.eval.base import BaseEvaluator
@@ -12,6 +13,91 @@ from openviking.eval.types import EvalDataset, EvalResult, EvalSample, SummaryRe
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+RAGAS_LLM_API_KEY_ENV = "RAGAS_LLM_API_KEY"
+RAGAS_LLM_API_BASE_ENV = "RAGAS_LLM_API_BASE"
+RAGAS_LLM_MODEL_ENV = "RAGAS_LLM_MODEL"
+
+
+def _get_llm_config_from_env() -> Optional[Dict[str, str]]:
+    """
+    Get LLM configuration from environment variables.
+
+    Environment variables:
+        - RAGAS_LLM_API_KEY: API key for the LLM
+        - RAGAS_LLM_API_BASE: API base URL (e.g., https://ark.cn-beijing.volces.com/api/v3)
+        - RAGAS_LLM_MODEL: Model name (e.g., ep-xxxx-xxxx)
+
+    Returns:
+        Dict with api_key, api_base, model or None if not configured.
+    """
+    api_key = os.environ.get(RAGAS_LLM_API_KEY_ENV)
+    api_base = os.environ.get(RAGAS_LLM_API_BASE_ENV)
+    model = os.environ.get(RAGAS_LLM_MODEL_ENV)
+
+    if api_key:
+        return {
+            "api_key": api_key,
+            "api_base": api_base,
+            "model": model,
+        }
+    return None
+
+
+def _create_ragas_llm_from_config() -> Optional[Any]:
+    """
+    Create a RAGAS-compatible LLM from OpenViking VLM configuration or environment variables.
+
+    Priority:
+        1. Environment variables (RAGAS_LLM_API_KEY, RAGAS_LLM_API_BASE, RAGAS_LLM_MODEL)
+        2. OpenViking VLM configuration (~/.openviking/ov.conf)
+
+    Returns:
+        RAGAS LLM instance or None if VLM is not configured.
+    """
+    try:
+        from ragas.llms import llm_factory
+        from openai import OpenAI
+    except ImportError:
+        return None
+
+    env_config = _get_llm_config_from_env()
+    if env_config:
+        api_key = env_config["api_key"]
+        api_base = env_config["api_base"]
+        model_name = env_config["model"] or "gpt-4o-mini"
+
+        logger.info(f"Using RAGAS LLM from environment: model={model_name}, base_url={api_base}")
+
+        client = OpenAI(
+            api_key=api_key,
+            base_url=api_base,
+        )
+        return llm_factory(model_name, client=client)
+
+    try:
+        from openviking_cli.utils.config import get_openviking_config
+    except ImportError:
+        return None
+
+    config = get_openviking_config()
+    vlm_config = config.vlm
+
+    if not vlm_config.is_available():
+        logger.warning(
+            "VLM is not configured for RAGAS evaluation. "
+            "Please configure VLM in ~/.openviking/ov.conf or set environment variables "
+            "(RAGAS_LLM_API_KEY, RAGAS_LLM_API_BASE, RAGAS_LLM_MODEL)."
+        )
+        return None
+
+    client = OpenAI(
+        api_key=vlm_config.api_key,
+        base_url=vlm_config.api_base,
+    )
+
+    model_name = vlm_config.model or "gpt-4o-mini"
+    return llm_factory(model_name, client=client)
 
 
 class RagasEvaluator(BaseEvaluator):
@@ -31,19 +117,17 @@ class RagasEvaluator(BaseEvaluator):
         Initialize Ragas evaluator.
 
         Args:
-            metrics: List of Ragas metrics (e.g., faithfulness, answer_relevance).
+            metrics: List of Ragas metrics (e.g., faithfulness, answer_relevancy).
                     If None, uses a default set.
-            llm: LLM to use for evaluation (LangChain base LLM).
-            embeddings: Embeddings to use for evaluation (LangChain base embeddings).
+            llm: LLM to use for evaluation (RAGAS LLM instance).
+                 If None, uses OpenViking VLM configuration.
+            embeddings: Embeddings to use for evaluation.
         """
         try:
-            from ragas import metrics as ragas_metrics
-            from ragas.metrics import (
-                answer_relevance,
-                context_precision,
-                context_recall,
-                faithfulness,
-            )
+            from ragas.metrics._answer_relevance import AnswerRelevancy
+            from ragas.metrics._context_precision import ContextPrecision
+            from ragas.metrics._context_recall import ContextRecall
+            from ragas.metrics._faithfulness import Faithfulness
         except ImportError:
             raise ImportError(
                 "RAGAS evaluation requires 'ragas' package. "
@@ -51,12 +135,12 @@ class RagasEvaluator(BaseEvaluator):
             )
 
         self.metrics = metrics or [
-            faithfulness,
-            answer_relevance,
-            context_precision,
-            context_recall,
+            Faithfulness(),
+            AnswerRelevancy(),
+            ContextPrecision(),
+            ContextRecall(),
         ]
-        self.llm = llm
+        self.llm = llm or _create_ragas_llm_from_config()
         self.embeddings = embeddings
 
     async def evaluate_sample(self, sample: EvalSample) -> EvalResult:
@@ -75,6 +159,15 @@ class RagasEvaluator(BaseEvaluator):
             raise ImportError(
                 "RAGAS evaluation requires 'datasets' package. "
                 "Install it with: pip install datasets"
+            )
+
+        if self.llm is None:
+            raise ValueError(
+                "RAGAS evaluation requires an LLM. "
+                "Please configure via one of:\n"
+                "  1. Environment variables: RAGAS_LLM_API_KEY, RAGAS_LLM_API_BASE, RAGAS_LLM_MODEL\n"
+                "  2. OpenViking VLM config in ~/.openviking/ov.conf\n"
+                "  3. Pass an llm parameter to RagasEvaluator"
             )
 
         # Prepare Ragas compatible dataset
