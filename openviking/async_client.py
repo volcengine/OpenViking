@@ -268,7 +268,11 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         recursive = kwargs.get("recursive", False)
         simple = kwargs.get("simple", False)
-        return await self._client.ls(uri, recursive=recursive, simple=simple)
+        output = kwargs.get("output", "origional")
+        abs_limit = kwargs.get("abs_limit", 256)
+        return await self._client.ls(
+            uri, recursive=recursive, simple=simple, output=output, abs_limit=abs_limit
+        )
 
     async def rm(self, uri: str, recursive: bool = False) -> None:
         """Remove resource"""

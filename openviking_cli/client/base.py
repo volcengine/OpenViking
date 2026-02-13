@@ -60,7 +60,14 @@ class BaseClient(ABC):
     # ============= File System =============
 
     @abstractmethod
-    async def ls(self, uri: str, simple: bool = False, recursive: bool = False) -> List[Any]:
+    async def ls(
+        self,
+        uri: str,
+        simple: bool = False,
+        recursive: bool = False,
+        output: str = "origional",
+        abs_limit: int = 256,
+    ) -> List[Any]:
         """List directory contents."""
         ...
 

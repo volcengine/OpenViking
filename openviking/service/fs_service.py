@@ -53,7 +53,7 @@ class FSService:
         if recursive:
             entries = await viking_fs.tree(uri)
         else:
-            entries = await viking_fs.ls(uri)
+            entries = await viking_fs.ls(uri, output=output, abs_limit=abs_limit)
 
         if simple:
             return [e.get("rel_path", e.get("name", "")) for e in entries]

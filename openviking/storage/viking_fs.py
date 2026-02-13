@@ -868,7 +868,7 @@ class VikingFS:
         for entry in entries:
             name = entry.get("name", "")
             mod_time = entry.get("modTime", "")
-            time = datetime.fromisoformat(mod_time)
+            time = datetime.fromisoformat(mod_time).replace(tzinfo=None)
             # if in a day
             if (now - time).days < 1:
                 mod_time = time.strftime("%H:%M:%S")
@@ -877,6 +877,8 @@ class VikingFS:
             new_entry = dict(entry)  # Copy original data
             new_entry["uri"] = str(VikingURI(uri).join(name))
             new_entry["modTime"] = mod_time
+            del new_entry["meta"]
+            del new_entry["mode"]
             results.append(new_entry)
         # call abstract in parallel 6 threads
         semaphore = asyncio.Semaphore(6)
@@ -886,8 +888,8 @@ class VikingFS:
                 try:
                     abstract = await self.abstract(str(VikingURI(uri).join(name)))
                     return index, abstract
-                except Exception as e:
-                    logger.warning(f"[VikingFS] Failed to fetch abstract for {name}: {e}")
+                except Exception:
+                    # logger.debug(f"[VikingFS] Failed to fetch abstract for {name}: {e}")
                     return index, "[.abstract.md is not ready]"
 
         tasks = [fetch_abstract(i, entry.get("name", "")) for i, entry in enumerate(results)]
