@@ -47,11 +47,14 @@ jobs:
       with:
         targets: ${{ matrix.target }}
 
-    - name: Install cross-compilation tools
-      if: matrix.target == 'aarch64-unknown-linux-gnu'
+    - name: Install system dependencies
+      if: runner.os == 'Linux'
       run: |
         sudo apt-get update
-        sudo apt-get install -y gcc-aarch64-linux-gnu
+        sudo apt-get install -y pkg-config libssl-dev
+        if [[ "${{ matrix.target }}" == "aarch64-unknown-linux-gnu" ]]; then
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+        fi
       env:
         CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
 
