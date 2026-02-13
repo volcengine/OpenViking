@@ -148,7 +148,6 @@ class VolcengineProject:
         updated_meta = {
             **meta_data,
             "CollectionName": collection_name,
-            "ProjectName": self.project_name,
         }
 
         logger.info(f"Creating Volcengine collection: {collection_name}")

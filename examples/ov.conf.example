@@ -10,7 +10,6 @@
       "name": "context",
       "backend": "local",
       "path": "./data",
-      "project": "default",
       "volcengine": {
         "region": "cn-beijing",
         "ak": null,
@@ -24,15 +23,10 @@
       "backend": "local",
       "timeout": 10,
       "retry_times": 3,
-      "s3": {
-        "bucket": null,
-        "region": null,
-        "access_key": null,
-        "secret_key": null,
-        "endpoint": null,
-        "prefix": "",
-        "use_ssl": true
-      }
+      "s3_bucket": null,
+      "s3_region": null,
+      "s3_access_key": null,
+      "s3_secret_key": null
     }
   },
   "embedding": {
