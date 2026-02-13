@@ -32,7 +32,7 @@ class VikingURI:
     """
 
     SCHEME = "viking"
-    VALID_SCOPES = {"resources", "user", "agent", "session", "queue"}
+    VALID_SCOPES = {"resources", "user", "agent", "session", "queue", "temp"}
 
     def __init__(self, uri: str):
         """
