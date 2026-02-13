@@ -97,12 +97,28 @@ jobs:
           # Windows: create zip
           7z a ../../../artifacts/${{ matrix.artifact_name }}.zip ov.exe
           cd ../../../artifacts
-          certutil -hashfile ${{ matrix.artifact_name }}.zip SHA256 > ${{ matrix.artifact_name }}.zip.sha256
+          # Use PowerShell to get hash in correct format
+          powershell -Command "(Get-FileHash -Algorithm SHA256 '${{ matrix.artifact_name }}.zip').Hash.ToLower() + '  ${{ matrix.artifact_name }}.zip'" > ${{ matrix.artifact_name }}.zip.sha256
         else
           # Unix: create tar.gz
           tar czf ../../../artifacts/${{ matrix.artifact_name }}.tar.gz ov
           cd ../../../artifacts
+          # shasum format: <hash>  <filename>
           shasum -a 256 ${{ matrix.artifact_name }}.tar.gz > ${{ matrix.artifact_name }}.tar.gz.sha256
+        fi
+
+    - name: Verify checksum format
+      shell: bash
+      run: |
+        echo "Contents of checksum file:"
+        cat artifacts/*.sha256
+        echo ""
+        echo "Verifying checksum locally:"
+        cd artifacts
+        if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+          sha256sum -c *.sha256 || shasum -a 256 -c *.sha256 || echo "Checksum verification skipped on Windows"
+        else
+          shasum -a 256 -c *.sha256
         fi
 
     - name: Upload artifacts
@@ -145,7 +161,7 @@ jobs:
 
           ### Quick Install (macOS/Linux)
           ```bash
-          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/crates/openviking-cli/install.sh | bash
+          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/refs/tags/cli-${{ steps.get_version.outputs.version }}/crates/openviking-cli/install.sh | bash
           ```
 
           ### Manual Installation

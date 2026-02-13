@@ -2,11 +2,14 @@
 set -e
 
 # OpenViking CLI Installer
-# Usage: curl -sSL https://raw.githubusercontent.com/volcengine/OpenViking/main/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/refs/tags/<TAG>/crates/openviking-cli/install.sh | bash
+# Example: curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/refs/tags/cli-0.1.0/crates/openviking-cli/install.sh | bash
+# Skip checksum: SKIP_CHECKSUM=1 curl -fsSL ... | bash
 
 REPO="volcengine/OpenViking"
 BINARY_NAME="ov"
 INSTALL_DIR="/usr/local/bin"
+SKIP_CHECKSUM="${SKIP_CHECKSUM:-0}"
 
 # Colors for output
 RED='\033[0;31m'
@@ -83,11 +86,17 @@ download_binary() {
         error "Failed to download from $DOWNLOAD_URL"
     fi
 
-    # Download checksum
-    if ! curl -sSL -o "$CHECKSUM_FILE" "$CHECKSUM_URL"; then
+    # Download and verify checksum
+    if [[ "$SKIP_CHECKSUM" == "1" ]]; then
+        warn "Skipping checksum verification (SKIP_CHECKSUM=1)"
+    elif ! curl -sSL -o "$CHECKSUM_FILE" "$CHECKSUM_URL"; then
         warn "Could not download checksum file, skipping verification"
     else
         info "Verifying checksum..."
+        # Debug: show checksum file content
+        info "Checksum file content:"
+        cat "$CHECKSUM_FILE"
+
         if command -v sha256sum >/dev/null; then
             (cd "$TEMP_DIR" && sha256sum -c "${ARTIFACT_NAME}.${ARCHIVE_EXT}.sha256") || error "Checksum verification failed"
         elif command -v shasum >/dev/null; then
