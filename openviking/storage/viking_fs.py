@@ -13,6 +13,7 @@ Responsibilities:
 """
 
 import asyncio
+import datetime
 import json
 from dataclasses import dataclass, field
 from pathlib import PurePath
@@ -21,7 +22,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 from pyagfs import AGFSClient
 
 from openviking.storage.vikingdb_interface import VikingDBInterface
-from openviking.utils.time_utils import get_current_timestamp
+from openviking.utils.time_utils import format_simplified, get_current_timestamp
 from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
 
@@ -867,13 +868,7 @@ class VikingFS:
         results = []
         for entry in entries:
             name = entry.get("name", "")
-            mod_time = entry.get("modTime", "")
-            time = datetime.fromisoformat(mod_time).replace(tzinfo=None)
-            # if in a day
-            if (now - time).days < 1:
-                mod_time = time.strftime("%H:%M:%S")
-            else:
-                mod_time = time.strftime("%Y-%m-%d")
+            mod_time = format_simplified(datetime.fromisoformat(entry.get("modTime", "")), now)
             new_entry = dict(entry)  # Copy original data
             new_entry["uri"] = str(VikingURI(uri).join(name))
             new_entry["modTime"] = mod_time
