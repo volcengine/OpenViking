@@ -79,7 +79,19 @@ jobs:
         git reset --hard HEAD
         git clean -fd
 
+    - name: Debug Git and SCM
+      run: |
+        echo "=== Git Describe ==="
+        git describe --tags --long --dirty --always
+        echo "=== Setuptools SCM Version ==="
+        uv run python -m setuptools_scm
+        echo "=== Git Status (Ignored included) ==="
+        git status --ignored
+        echo "=== Check openviking/_version.py ==="
+        if [ -f openviking/_version.py ]; then cat openviking/_version.py; else echo "Not found"; fi
+
     - name: Build sdist
+      run: uv run python -m build --sdist
       run: uv run python -m build --sdist
 
     - name: Store the distribution packages
@@ -194,6 +206,17 @@ jobs:
         git reset --hard HEAD
         git clean -fd
 
+    - name: Debug Git and SCM
+      run: |
+        echo "=== Git Describe ==="
+        git describe --tags --long --dirty --always
+        echo "=== Setuptools SCM Version ==="
+        uv run python -m setuptools_scm
+        echo "=== Git Status (Ignored included) ==="
+        git status --ignored
+        echo "=== Check openviking/_version.py ==="
+        if [ -f openviking/_version.py ]; then cat openviking/_version.py; else echo "Not found"; fi
+
     - name: Build package (Wheel Only)
       run: uv run python -m build --wheel
 
@@ -291,6 +314,17 @@ jobs:
       run: |
         git reset --hard HEAD
         git clean -fd
+
+    - name: Debug Git and SCM
+      run: |
+        echo "=== Git Describe ==="
+        git describe --tags --long --dirty --always
+        echo "=== Setuptools SCM Version ==="
+        uv run python -m setuptools_scm
+        echo "=== Git Status (Ignored included) ==="
+        git status --ignored
+        echo "=== Check openviking/_version.py ==="
+        if [ -f openviking/_version.py ]; then cat openviking/_version.py; else echo "Not found"; fi
 
     - name: Build package (Wheel Only)
       run: uv run python -m build --wheel
