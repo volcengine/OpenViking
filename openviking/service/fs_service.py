@@ -38,6 +38,7 @@ class FSService:
         simple: bool = False,
         output: str = "origional",
         abs_limit: int = 256,
+        all_hidden: bool = False,
     ) -> List[Any]:
         """List directory contents.
 
@@ -47,13 +48,18 @@ class FSService:
             simple: Return only relative path list
             output: str = "origional" or "agent"
             abs_limit: int = 256 if output == "agent" else ignore
+            all_hidden: bool = False (list all hidden files, like -a)
         """
         viking_fs = self._ensure_initialized()
 
         if recursive:
-            entries = await viking_fs.tree(uri)
+            entries = await viking_fs.tree(
+                uri, output=output, abs_limit=abs_limit, all_hidden=all_hidden
+            )
         else:
-            entries = await viking_fs.ls(uri, output=output, abs_limit=abs_limit)
+            entries = await viking_fs.ls(
+                uri, output=output, abs_limit=abs_limit, all_hidden=all_hidden
+            )
 
         if simple:
             return [e.get("rel_path", e.get("name", "")) for e in entries]
@@ -74,10 +80,12 @@ class FSService:
         viking_fs = self._ensure_initialized()
         await viking_fs.mv(from_uri, to_uri)
 
-    async def tree(self, uri: str) -> List[Dict[str, Any]]:
+    async def tree(
+        self, uri: str, output: str = "origional", abs_limit: int = 128, all_hidden: bool = False
+    ) -> List[Dict[str, Any]]:
         """Get directory tree."""
         viking_fs = self._ensure_initialized()
-        return await viking_fs.tree(uri)
+        return await viking_fs.tree(uri, output=output, abs_limit=abs_limit, all_hidden=all_hidden)
 
     async def stat(self, uri: str) -> Dict[str, Any]:
         """Get resource status."""

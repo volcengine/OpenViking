@@ -13,9 +13,9 @@ Responsibilities:
 """
 
 import asyncio
-import datetime
 import json
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
@@ -206,11 +206,67 @@ class VikingFS:
                 matches.append(f"{base_uri}/{rel_path}")
         return {"matches": matches, "count": len(matches)}
 
+    async def _batch_fetch_abstracts(
+        self,
+        entries: List[Dict[str, Any]],
+        abs_limit: int,
+    ) -> None:
+        """Batch fetch abstracts for entries.
+
+        Args:
+            entries: List of entries to fetch abstracts for
+            abs_limit: Maximum length for abstract truncation
+        """
+        semaphore = asyncio.Semaphore(6)
+
+        async def fetch_abstract(index: int, entry: Dict[str, Any]) -> tuple[int, str]:
+            async with semaphore:
+                if not entry.get("isDir", False):
+                    return index, ""
+                try:
+                    abstract = await self.abstract(entry["uri"])
+                    return index, abstract
+                except Exception:
+                    return index, "[.abstract.md is not ready]"
+
+        tasks = [fetch_abstract(i, entry) for i, entry in enumerate(entries)]
+        abstract_results = await asyncio.gather(*tasks)
+        for index, abstract in abstract_results:
+            if len(abstract) > abs_limit:
+                abstract = abstract[: abs_limit - 3] + "..."
+            entries[index]["abstract"] = abstract
+
     async def tree(
         self,
         uri: str = "viking://",
+        output: str = "origional",
+        abs_limit: int = 256,
+        all_hidden: bool = False,
     ) -> List[Dict[str, Any]]:
-        """Recursively list all contents (includes rel_path)."""
+        """
+        Recursively list all contents (includes rel_path).
+
+        Args:
+            uri: Viking URI
+            output: str = "origional" or "agent"
+            abs_limit: int = 256 (for agent output abstract truncation)
+            all_hidden: bool = False (list all hidden files, like -a)
+
+        output="origional"
+        [{'name': '.abstract.md', 'size': 100, 'mode': 420, 'modTime': '2026-02-11T16:52:16.256334192+08:00', 'isDir': False, 'meta': {...}, 'rel_path': '.abstract.md', 'uri': 'viking://resources...'}]
+
+        output="agent"
+        [{'name': '.abstract.md', 'size': 100, 'modTime': '2026-02-11 16:52:16', 'isDir': False, 'rel_path': '.abstract.md', 'uri': 'viking://resources...', 'abstract': "..."}]
+        """
+        if output == "origional":
+            return await self._tree_origional(uri, all_hidden)
+        elif output == "agent":
+            return await self._tree_agent(uri, abs_limit, all_hidden)
+        else:
+            raise ValueError(f"Invalid output format: {output}")
+
+    async def _tree_origional(self, uri: str, all_hidden: bool = False) -> List[Dict[str, Any]]:
+        """Recursively list all contents (original format)."""
         path = self._uri_to_path(uri)
         all_entries = []
 
@@ -220,15 +276,54 @@ class VikingFS:
                 if name in [".", ".."]:
                     continue
                 rel_path = f"{current_rel}/{name}" if current_rel else name
-                # Create new dict to add rel_path, avoid modifying original data
                 new_entry = dict(entry)
                 new_entry["rel_path"] = rel_path
                 new_entry["uri"] = self._path_to_uri(f"{current_path}/{name}")
-                all_entries.append(new_entry)
                 if entry.get("isDir"):
+                    all_entries.append(new_entry)
                     await _walk(f"{current_path}/{name}", rel_path)
+                elif not name.startswith("."):
+                    all_entries.append(new_entry)
+                elif all_hidden:
+                    all_entries.append(new_entry)
 
         await _walk(path, "")
+        return all_entries
+
+    async def _tree_agent(
+        self, uri: str, abs_limit: int, all_hidden: bool = False
+    ) -> List[Dict[str, Any]]:
+        """Recursively list all contents (agent format with abstracts)."""
+        path = self._uri_to_path(uri)
+        all_entries = []
+        now = datetime.now()
+
+        async def _walk(current_path: str, current_rel: str):
+            for entry in self.agfs.ls(current_path):
+                name = entry.get("name", "")
+                if name in [".", ".."]:
+                    continue
+                rel_path = f"{current_rel}/{name}" if current_rel else name
+                new_entry = {
+                    "uri": str(VikingURI(uri).join(name)),
+                    "size": entry.get("size", 0),
+                    "isDir": entry.get("isDir", False),
+                    "modTime": format_simplified(
+                        datetime.fromisoformat(entry.get("modTime", "")), now
+                    ),
+                }
+                if entry.get("isDir"):
+                    all_entries.append(new_entry)
+                    await _walk(f"{current_path}/{name}", rel_path)
+                elif not name.startswith("."):
+                    all_entries.append(new_entry)
+                elif all_hidden:
+                    all_entries.append(new_entry)
+
+        await _walk(path, "")
+
+        await self._batch_fetch_abstracts(all_entries, abs_limit)
+
         return all_entries
 
     # ========== VikingFS Specific Capabilities ==========
@@ -834,6 +929,7 @@ class VikingFS:
         uri: str,
         output: str = "origional",
         abs_limit: int = 256,
+        all_hidden: bool = False,
     ) -> List[Dict[str, Any]]:
         """
         List directory contents (URI version).
@@ -842,6 +938,7 @@ class VikingFS:
             uri: Viking URI
             output: str = "origional"
             abs_limit: int = 256
+            all_hidden: bool = False (list all hidden files, like -a)
 
         output="origional"
         [{'name': '.abstract.md', 'size': 100, 'mode': 420, 'modTime': '2026-02-11T16:52:16.256334192+08:00', 'isDir': False, 'meta': {'Name': 'localfs', 'Type': 'local', 'Content': None}, 'uri': 'viking://resources/.abstract.md'}]
@@ -850,13 +947,13 @@ class VikingFS:
         [{'name': '.abstract.md', 'size': 100, 'modTime': '2026-02-11 16:52:16', 'isDir': False, 'uri': 'viking://resources/.abstract.md', 'abstract': "..."}]
         """
         if output == "origional":
-            return await self._ls_origional(uri)
+            return await self._ls_origional(uri, all_hidden)
         elif output == "agent":
-            return await self._ls_agent(uri, abs_limit)
+            return await self._ls_agent(uri, abs_limit, all_hidden)
         else:
             raise ValueError(f"Invalid output format: {output}")
 
-    async def _ls_agent(self, uri: str, abs_limit: int) -> List[Dict[str, Any]]:
+    async def _ls_agent(self, uri: str, abs_limit: int, all_hidden: bool) -> List[Dict[str, Any]]:
         """List directory contents (URI version)."""
         path = self._uri_to_path(uri)
         try:
@@ -865,49 +962,43 @@ class VikingFS:
             raise FileNotFoundError(f"Failed to list {uri}: {e}")
         # basic info
         now = datetime.now()
-        results = []
+        all_entries = []
         for entry in entries:
             name = entry.get("name", "")
-            mod_time = format_simplified(datetime.fromisoformat(entry.get("modTime", "")), now)
-            new_entry = dict(entry)  # Copy original data
-            new_entry["uri"] = str(VikingURI(uri).join(name))
-            new_entry["modTime"] = mod_time
-            del new_entry["meta"]
-            del new_entry["mode"]
-            results.append(new_entry)
+            new_entry = {
+                "uri": str(VikingURI(uri).join(name)),
+                "size": entry.get("size", 0),
+                "isDir": entry.get("isDir", False),
+                "modTime": format_simplified(datetime.fromisoformat(entry.get("modTime", "")), now),
+            }
+            if entry.get("isDir"):
+                all_entries.append(new_entry)
+            elif not name.startswith("."):
+                all_entries.append(new_entry)
+            elif all_hidden:
+                all_entries.append(new_entry)
         # call abstract in parallel 6 threads
-        semaphore = asyncio.Semaphore(6)
+        await self._batch_fetch_abstracts(all_entries, abs_limit)
+        return all_entries
 
-        async def fetch_abstract(index: int, name: str) -> tuple[int, str]:
-            async with semaphore:
-                try:
-                    abstract = await self.abstract(str(VikingURI(uri).join(name)))
-                    return index, abstract
-                except Exception:
-                    # logger.debug(f"[VikingFS] Failed to fetch abstract for {name}: {e}")
-                    return index, "[.abstract.md is not ready]"
-
-        tasks = [fetch_abstract(i, entry.get("name", "")) for i, entry in enumerate(results)]
-        abstract_results = await asyncio.gather(*tasks)
-        for index, abstract in abstract_results:
-            if len(abstract) > abs_limit:
-                abstract = abstract[: abs_limit - 3] + "..."
-            results[index]["abstract"] = abstract
-        return results
-
-    async def _ls_origional(self, uri: str) -> List[Dict[str, Any]]:
+    async def _ls_origional(self, uri: str, all_hidden: bool = False) -> List[Dict[str, Any]]:
         """List directory contents (URI version)."""
         path = self._uri_to_path(uri)
         try:
             entries = self.agfs.ls(path)
             # AGFS returns read-only structure, need to create new dict
-            results = []
+            all_entries = []
             for entry in entries:
                 name = entry.get("name", "")
                 new_entry = dict(entry)  # Copy original data
                 new_entry["uri"] = str(VikingURI(uri).join(name))
-                results.append(new_entry)
-            return results
+                if entry.get("isDir"):
+                    all_entries.append(new_entry)
+                elif not name.startswith("."):
+                    all_entries.append(new_entry)
+                elif all_hidden:
+                    all_entries.append(new_entry)
+            return all_entries
         except Exception as e:
             raise FileNotFoundError(f"Failed to list {uri}: {e}")
 
