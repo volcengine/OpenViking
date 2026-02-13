@@ -41,6 +41,8 @@ class S3Config(BaseModel):
         description="Enable/Disable SSL (HTTPS) for S3 connections. Set to False for local testing without HTTPS.",
     )
 
+    model_config = {"extra": "forbid"}
+
     def validate_config(self):
         """Validate S3 configuration completeness"""
         missing = []
@@ -91,6 +93,8 @@ class AGFSConfig(BaseModel):
     # These settings are used when backend is set to 's3'.
     # AGFS will act as a gateway to the specified S3 bucket.
     s3: S3Config = Field(default_factory=lambda: S3Config(), description="S3 backend configuration")
+
+    model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
     def validate_config(self):

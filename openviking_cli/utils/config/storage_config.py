@@ -21,3 +21,5 @@ class StorageConfig(BaseModel):
     params: Dict[str, Any] = Field(
         default_factory=dict, description="Additional storage-specific parameters"
     )
+
+    model_config = {"extra": "forbid"}

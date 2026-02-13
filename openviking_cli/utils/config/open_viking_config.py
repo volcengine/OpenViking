@@ -128,7 +128,7 @@ class OpenVikingConfig(BaseModel):
         default="stdout", description="Log output: stdout, stderr, or file path"
     )
 
-    model_config = {"arbitrary_types_allowed": True}
+    model_config = {"arbitrary_types_allowed": True, "extra": "forbid"}
 
     @classmethod
     def from_dict(cls, config: Dict[str, Any]) -> "OpenVikingConfig":

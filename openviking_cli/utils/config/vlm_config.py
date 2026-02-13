@@ -22,8 +22,7 @@ class VLMConfig(BaseModel):
 
     _vlm_instance: Optional[Any] = None
 
-    class Config:
-        arbitrary_types_allowed = True
+    model_config = {"arbitrary_types_allowed": True, "extra": "forbid"}
 
     @model_validator(mode="before")
     @classmethod
