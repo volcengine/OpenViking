@@ -291,8 +291,23 @@ class LocalCollection(ICollection):
             if not self.store_mgr:
                 raise RuntimeError("Store manager is not initialized")
             cands_list = self.store_mgr.fetch_cands_data(label_list)
-            cands_list = [cand for cand in cands_list if cand is not None]
+
+            valid_indices = []
+            for i, cand in enumerate(cands_list):
+                if cand is not None:
+                    valid_indices.append(i)
+                else:
+                    logger.warning(
+                        f"Candidate data is None for label index {i} (label: {label_list[i] if i < len(label_list) else 'unknown'}), skipping."
+                    )
+
+            if len(valid_indices) < len(cands_list):
+                cands_list = [cands_list[i] for i in valid_indices]
+                pk_list = [pk_list[i] for i in valid_indices]
+                scores_list = [scores_list[i] for i in valid_indices]
+
             cands_fields = [json.loads(cand.fields) for cand in cands_list]
+
             if self.meta.primary_key:
                 pk_list = [
                     cands_field.get(self.meta.primary_key, "") for cands_field in cands_fields
