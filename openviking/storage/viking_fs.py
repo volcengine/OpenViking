@@ -305,7 +305,7 @@ class VikingFS:
                     continue
                 rel_path = f"{current_rel}/{name}" if current_rel else name
                 new_entry = {
-                    "uri": str(VikingURI(uri).join(name)),
+                    "uri": str(VikingURI(uri).join(rel_path)),
                     "size": entry.get("size", 0),
                     "isDir": entry.get("isDir", False),
                     "modTime": format_simplified(
