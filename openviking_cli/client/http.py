@@ -270,19 +270,45 @@ class AsyncHTTPClient(BaseClient):
 
     # ============= File System =============
 
-    async def ls(self, uri: str, simple: bool = False, recursive: bool = False) -> List[Any]:
+    async def ls(
+        self,
+        uri: str,
+        simple: bool = False,
+        recursive: bool = False,
+        output: str = "origional",
+        abs_limit: int = 256,
+        all_hidden: bool = False,
+    ) -> List[Any]:
         """List directory contents."""
         response = await self._http.get(
             "/api/v1/fs/ls",
-            params={"uri": uri, "simple": simple, "recursive": recursive},
+            params={
+                "uri": uri,
+                "simple": simple,
+                "recursive": recursive,
+                "output": output,
+                "abs_limit": abs_limit,
+                "all_hidden": all_hidden,
+            },
         )
         return self._handle_response(response)
 
-    async def tree(self, uri: str) -> List[Dict[str, Any]]:
+    async def tree(
+        self,
+        uri: str,
+        output: str = "origional",
+        abs_limit: int = 128,
+        all_hidden: bool = False,
+    ) -> List[Dict[str, Any]]:
         """Get directory tree."""
         response = await self._http.get(
             "/api/v1/fs/tree",
-            params={"uri": uri},
+            params={
+                "uri": uri,
+                "output": output,
+                "abs_limit": abs_limit,
+                "all_hidden": all_hidden,
+            },
         )
         return self._handle_response(response)
 

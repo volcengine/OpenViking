@@ -67,12 +67,19 @@ class BaseClient(ABC):
         recursive: bool = False,
         output: str = "origional",
         abs_limit: int = 256,
+        all_hidden: bool = False,
     ) -> List[Any]:
         """List directory contents."""
         ...
 
     @abstractmethod
-    async def tree(self, uri: str) -> List[Dict[str, Any]]:
+    async def tree(
+        self,
+        uri: str,
+        output: str = "origional",
+        abs_limit: int = 128,
+        all_hidden: bool = False,
+    ) -> List[Dict[str, Any]]:
         """Get directory tree."""
         ...
 
