@@ -394,8 +394,7 @@ HTTP 客户端（`SyncHTTPClient` / `AsyncHTTPClient`）和 CLI 工具连接远�
     "vectordb": {
       "backend": "local|remote",
       "path": "string",
-      "url": "string",
-      "project": "string"
+      "url": "string"
     }
   },
   "server": {

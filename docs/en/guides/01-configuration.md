@@ -30,6 +30,10 @@ Create `~/.openviking/ov.conf` in your project directory:
     "agfs": {
       "backend": "local",
       "path": "./data"
+    },
+    "vectordb": {
+      "backend": "local",
+      "path": "./data"
     }
   }
 }
@@ -387,8 +391,7 @@ For startup and deployment details see [Deployment](./03-deployment.md), for aut
     "vectordb": {
       "backend": "local|remote",
       "path": "string",
-      "url": "string",
-      "project": "string"
+      "url": "string"
     }
   },
   "server": {
