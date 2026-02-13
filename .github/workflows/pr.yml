@@ -31,7 +31,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       deps_changed: ${{ steps.check.outputs.deps_changed }}
-      rust_changed: ${{ steps.check.outputs.rust_changed }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -42,42 +41,22 @@ jobs:
         run: |
           git fetch origin ${{ github.base_ref }}
           
-          # Define grep pattern for Python dependency files
-          PYTHON_PATTERN="pyproject\.toml|setup\.py|uv\.lock|src/CMakeLists\.txt|third_party/|\.github/workflows/_build\.yml"
+          # Define grep pattern for dependency files
+          PATTERN="pyproject\.toml|setup\.py|uv\.lock|src/CMakeLists\.txt|third_party/|\.github/workflows/_build\.yml"
           
-          # Define grep pattern for Rust files
-          RUST_PATTERN="crates/|Cargo\.toml|\.github/workflows/rust-cli\.yml"
-          
-          # Check for Python dependency changes
-          CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }} HEAD | grep -E "$PYTHON_PATTERN" || true)
+          # Check for changes
+          CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }} HEAD | grep -E "$PATTERN" || true)
           
           if [ -n "$CHANGED_FILES" ]; then
-            echo "Python dependency changes detected:"
+            echo "Dependency changes detected:"
             echo "$CHANGED_FILES"
             echo "deps_changed=true" >> $GITHUB_OUTPUT
           else
-            echo "No Python dependency changes detected."
+            echo "No dependency changes detected."
             echo "deps_changed=false" >> $GITHUB_OUTPUT
-          fi
-          
-          # Check for Rust changes
-          RUST_FILES=$(git diff --name-only origin/${{ github.base_ref }} HEAD | grep -E "$RUST_PATTERN" || true)
-          
-          if [ -n "$RUST_FILES" ]; then
-            echo "Rust changes detected:"
-            echo "$RUST_FILES"
-            echo "rust_changed=true" >> $GITHUB_OUTPUT
-          else
-            echo "No Rust changes detected."
-            echo "rust_changed=false" >> $GITHUB_OUTPUT
           fi
 
   build:
     needs: check-deps
     if: ${{ needs.check-deps.outputs.deps_changed == 'true' }}
     uses: ./.github/workflows/_build.yml
-
-  rust-cli:
-    needs: check-deps
-    if: ${{ needs.check-deps.outputs.rust_changed == 'true' }}
-    uses: ./.github/workflows/rust-cli.yml
