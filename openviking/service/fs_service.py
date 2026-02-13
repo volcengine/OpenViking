@@ -31,13 +31,22 @@ class FSService:
             raise NotInitializedError("VikingFS")
         return self._viking_fs
 
-    async def ls(self, uri: str, recursive: bool = False, simple: bool = False) -> List[Any]:
+    async def ls(
+        self,
+        uri: str,
+        recursive: bool = False,
+        simple: bool = False,
+        output: str = "origional",
+        abs_limit: int = 256,
+    ) -> List[Any]:
         """List directory contents.
 
         Args:
             uri: Viking URI
             recursive: List all subdirectories recursively
             simple: Return only relative path list
+            output: str = "origional" or "agent"
+            abs_limit: int = 256 if output == "agent" else ignore
         """
         viking_fs = self._ensure_initialized()
 

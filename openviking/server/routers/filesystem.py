@@ -19,11 +19,15 @@ async def ls(
     uri: str = Query(..., description="Viking URI"),
     simple: bool = Query(False, description="Return only relative path list"),
     recursive: bool = Query(False, description="List all subdirectories recursively"),
+    output: str = Query("agent", description="Output format: origional or agent"),
+    abs_limit: int = Query(256, description="Abstract limit (only for agent output)"),
     _: bool = Depends(verify_api_key),
 ):
     """List directory contents."""
     service = get_service()
-    result = await service.fs.ls(uri, recursive=recursive, simple=simple)
+    result = await service.fs.ls(
+        uri, recursive=recursive, simple=simple, output=output, abs_limit=abs_limit
+    )
     return Response(status="ok", result=result)
 
 

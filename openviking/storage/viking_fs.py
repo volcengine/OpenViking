@@ -23,6 +23,7 @@ from pyagfs import AGFSClient
 
 from openviking.storage.vikingdb_interface import VikingDBInterface
 from openviking_cli.utils.logger import get_logger
+from openviking_cli.utils.uri import VikingURI
 
 if TYPE_CHECKING:
     from openviking_cli.utils.config import RerankConfig
@@ -830,19 +831,86 @@ class VikingFS:
     async def ls(
         self,
         uri: str,
+        output: str = "origional",
+        abs_limit: int = 256,
     ) -> List[Dict[str, Any]]:
+        """
+        List directory contents (URI version).
+
+        Args:
+            uri: Viking URI
+            output: str = "origional"
+            abs_limit: int = 256
+
+        output="origional"
+        [{'name': '.abstract.md', 'size': 100, 'mode': 420, 'modTime': '2026-02-11T16:52:16.256334192+08:00', 'isDir': False, 'meta': {'Name': 'localfs', 'Type': 'local', 'Content': None}, 'uri': 'viking://resources/.abstract.md'}]
+
+        output="agent"
+        [{'name': '.abstract.md', 'size': 100, 'modTime': '2026-02-11 16:52:16', 'isDir': False, 'uri': 'viking://resources/.abstract.md', 'abstract': "..."}]
+        """
+        if output == "origional":
+            return await self._ls_origional(uri)
+        elif output == "agent":
+            return await self._ls_agent(uri, abs_limit)
+        else:
+            raise ValueError(f"Invalid output format: {output}")
+
+    async def _ls_agent(self, uri: str, abs_limit: int) -> List[Dict[str, Any]]:
+        """List directory contents (URI version)."""
+        path = self._uri_to_path(uri)
+        try:
+            entries = self.agfs.ls(path)
+        except Exception as e:
+            raise FileNotFoundError(f"Failed to list {uri}: {e}")
+        # basic info
+        now = datetime.now()
+        results = []
+        for entry in entries:
+            name = entry.get("name", "")
+            mod_time = entry.get("modTime", "")
+            time = datetime.fromisoformat(mod_time)
+            # if in a day
+            if (now - time).days < 1:
+                mod_time = time.strftime("%H:%M:%S")
+            else:
+                mod_time = time.strftime("%Y-%m-%d")
+            new_entry = dict(entry)  # Copy original data
+            new_entry["uri"] = str(VikingURI(uri).join(name))
+            new_entry["modTime"] = mod_time
+            results.append(new_entry)
+        # call abstract in parallel 6 threads
+        semaphore = asyncio.Semaphore(6)
+
+        async def fetch_abstract(index: int, name: str) -> tuple[int, str]:
+            async with semaphore:
+                try:
+                    abstract = await self.abstract(str(VikingURI(uri).join(name)))
+                    return index, abstract
+                except Exception as e:
+                    logger.warning(f"[VikingFS] Failed to fetch abstract for {name}: {e}")
+                    return index, "[.abstract.md is not ready]"
+
+        tasks = [fetch_abstract(i, entry.get("name", "")) for i, entry in enumerate(results)]
+        abstract_results = await asyncio.gather(*tasks)
+        for index, abstract in abstract_results:
+            if len(abstract) > abs_limit:
+                abstract = abstract[: abs_limit - 3] + "..."
+            results[index]["abstract"] = abstract
+        return results
+
+    async def _ls_origional(self, uri: str) -> List[Dict[str, Any]]:
         """List directory contents (URI version)."""
         path = self._uri_to_path(uri)
         try:
             entries = self.agfs.ls(path)
             # AGFS returns read-only structure, need to create new dict
-            result = []
+            results = []
             for entry in entries:
                 name = entry.get("name", "")
                 new_entry = dict(entry)  # Copy original data
-                new_entry["uri"] = f"{uri.rstrip('/')}/{name}"
-                result.append(new_entry)
-            return result
+                new_entry["uri"] = str(VikingURI(uri).join(name))
+                results.append(new_entry)
+            return results
         except Exception as e:
             raise FileNotFoundError(f"Failed to list {uri}: {e}")
 
