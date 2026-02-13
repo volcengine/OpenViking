@@ -1021,10 +1021,7 @@ class VikingFS:
 
     def create_temp_uri(self) -> str:
         """Create temp directory URI."""
-        import uuid
-
-        temp_id = uuid.uuid4().hex[:8]
-        return f"viking://temp/{temp_id}"
+        return VikingURI.create_temp_uri()
 
     async def delete_temp(self, temp_uri: str) -> None:
         """Delete temp directory and its contents."""

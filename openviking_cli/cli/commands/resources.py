@@ -20,7 +20,7 @@ def register(app: typer.Typer) -> None:
         reason: str = typer.Option("", help="Reason for import"),
         instruction: str = typer.Option("", help="Additional instruction"),
         wait: bool = typer.Option(False, "--wait", help="Wait until processing is complete"),
-        timeout: Optional[float] = typer.Option(None, help="Wait timeout in seconds"),
+        timeout: Optional[float] = typer.Option(600.0, help="Wait timeout in seconds"),
     ) -> None:
         """Add resources into OpenViking."""
         run(
@@ -40,7 +40,7 @@ def register(app: typer.Typer) -> None:
         ctx: typer.Context,
         data: str = typer.Argument(..., help="Skill directory, SKILL.md, or raw content"),
         wait: bool = typer.Option(False, "--wait", help="Wait until processing is complete"),
-        timeout: Optional[float] = typer.Option(None, help="Wait timeout in seconds"),
+        timeout: Optional[float] = typer.Option(600.0, help="Wait timeout in seconds"),
     ) -> None:
         """Add a skill into OpenViking."""
         run(
