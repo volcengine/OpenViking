@@ -92,7 +92,6 @@ jobs:
 
     - name: Build sdist
       run: uv run python -m build --sdist
-      run: uv run python -m build --sdist
 
     - name: Store the distribution packages
       uses: actions/upload-artifact@v6
