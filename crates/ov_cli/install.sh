@@ -2,8 +2,8 @@
 set -e
 
 # OpenViking CLI Installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/<OWNER>/<REPO>/refs/tags/<TAG>/crates/openviking-cli/install.sh | bash
-# Example: curl -fsSL https://raw.githubusercontent.com/volcengine/openviking/refs/tags/cli-0.1.0/crates/openviking-cli/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/<OWNER>/<REPO>/refs/tags/<TAG>/crates/ov_cli/install.sh | bash
+# Example: curl -fsSL https://raw.githubusercontent.com/volcengine/openviking/refs/tags/cli-0.1.0/crates/ov_cli/install.sh | bash
 # Skip checksum: curl -fsSL ... | SKIP_CHECKSUM=1 bash
 # Custom repo: REPO=owner/repo curl -fsSL ... | bash
 
@@ -60,17 +60,44 @@ detect_platform() {
     fi
 }
 
-# Get latest release info
+# Get latest CLI release info
 get_latest_release() {
-    info "Getting latest release information..."
-    LATEST_RELEASE=$(curl -s "https://api.github.com/repos/${REPO}/releases/latest")
-    TAG_NAME=$(echo "$LATEST_RELEASE" | grep '"tag_name"' | sed -E 's/.*"tag_name": "([^"]+)".*/\1/')
+    info "Getting latest CLI release information..."
+    
+    # Paginate through releases and stop at first CLI match
+    PAGE=1
+    PER_PAGE=30
+    TAG_NAME=""
+    
+    while [[ -z "$TAG_NAME" ]]; do
+        RELEASES=$(curl -s "https://api.github.com/repos/${REPO}/releases?per_page=${PER_PAGE}&page=${PAGE}")
+        
+        # Check if we got any releases
+        RELEASE_COUNT=$(echo "$RELEASES" | jq 'length')
+        if [[ "$RELEASE_COUNT" -eq 0 ]]; then
+            error "Could not find any CLI releases. Make sure CLI releases exist with tags starting with 'cli-'"
+        fi
+        
+        # Find first CLI release in this page
+        TAG_NAME=$(echo "$RELEASES" | jq -r '.[] | select(.tag_name | startswith("cli-")) | .tag_name' | head -n 1)
+        
+        if [[ -n "$TAG_NAME" ]]; then
+            break
+        fi
+        
+        PAGE=$((PAGE + 1))
+        
+        # Safety limit: don't fetch more than 5 pages (150 releases)
+        if [[ "$PAGE" -gt 5 ]]; then
+            error "Could not find any CLI releases in the last 150 releases"
+        fi
+    done
     
     if [[ -z "$TAG_NAME" ]]; then
-        error "Could not determine latest release version"
+        error "Could not determine latest CLI release version"
     fi
     
-    info "Latest version: $TAG_NAME"
+    info "Latest CLI version: $TAG_NAME"
     DOWNLOAD_URL="https://github.com/${REPO}/releases/download/${TAG_NAME}/${ARTIFACT_NAME}.${ARCHIVE_EXT}"
     CHECKSUM_URL="https://github.com/${REPO}/releases/download/${TAG_NAME}/${ARTIFACT_NAME}.${ARCHIVE_EXT}.sha256"
 }

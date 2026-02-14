@@ -162,7 +162,7 @@ jobs:
 
           ### Quick Install (macOS/Linux)
           ```bash
-          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/refs/tags/cli-${{ steps.get_version.outputs.version }}/crates/openviking-cli/install.sh | bash
+          curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/refs/tags/cli-${{ steps.get_version.outputs.version }}/crates/ov_cli/install.sh | bash
           ```
 
           ### Manual Installation

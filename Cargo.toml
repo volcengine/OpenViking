@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/openviking-cli"]
+members = ["crates/ov_cli"]
 resolver = "2"
 
 [profile.release]
