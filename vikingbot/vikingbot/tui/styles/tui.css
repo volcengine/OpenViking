@@ -1,0 +1,90 @@
+/* vikingbot TUI 样式 */
+
+/* 应用整体样式 */
+NanobotTUI {
+    background: $surface;
+}
+
+/* 聊天区域 */
+#chat-area {
+    height: 1fr;
+    padding: 0 1 0 1;
+    border: solid $primary;
+}
+
+/* 消息列表 */
+#message-list {
+    height: 1fr;
+    padding: 0 1 0 1;
+    background: $surface;
+    border: none;
+}
+
+/* 思考指示器 */
+#thinking-indicator {
+    height: 1;
+    padding: 0 1 0 1;
+    color: $text-muted;
+    text-style: italic;
+}
+
+/* 聊天输入容器 */
+#chat-input-container {
+    height: auto;
+    padding: 1 1 1 1;
+    border-top: solid $primary;
+    background: $surface;
+}
+
+/* 输入框 */
+#chat-input {
+    width: 1fr;
+    margin-right: 1;
+}
+
+/* 发送按钮 */
+#send-button {
+    width: auto;
+    min-width: 8;
+}
+
+/* 状态栏 */
+StatusBar {
+    height: 1;
+    padding: 0 1 0 1;
+    background: $panel;
+    color: $text-muted;
+}
+
+/* 消息样式 */
+.assistant-message {
+    color: $success;
+}
+
+.user-message {
+    color: $primary;
+}
+
+.system-message {
+    color: $text-muted;
+    text-style: italic;
+}
+
+/* 错误消息 */
+.error-message {
+    color: $error;
+}
+
+/* 按钮悬停效果 */
+Button:hover {
+    background: $primary-lighten-1;
+}
+
+Button:focus {
+    border: solid $primary;
+}
+
+/* 输入框焦点效果 */
+Input:focus {
+    border: solid $primary;
+}
