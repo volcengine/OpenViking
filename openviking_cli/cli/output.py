@@ -35,20 +35,37 @@ def _truncate(val: Any) -> Any:
     return s[: _MAX_COL_WIDTH - 3] + "..." if len(s) > _MAX_COL_WIDTH else val
 
 
-def _format_list_table(rows: List[Dict[str, Any]]) -> Optional[str]:
-    """Render a list of dict rows as a table with truncation."""
+def _format_list_table(rows: List[Dict[str, Any]], output="agent") -> Optional[str]:
+    """Render a list of dict rows as a table with truncation, skipping empty columns."""
     if not rows:
         return None
-    headers: List[str] = []
+
+    all_headers: List[str] = []
     for row in rows:
         for key in row.keys():
             key_str = str(key)
-            if key_str not in headers:
-                headers.append(key_str)
-    if not headers:
+            if key_str not in all_headers:
+                all_headers.append(key_str)
+
+    if not all_headers:
         return None
-    values = [[_truncate(row.get(h, "")) for h in headers] for row in rows]
-    return tabulate(values, headers=headers, tablefmt="plain")
+
+    non_empty_headers = []
+    for header in all_headers:
+        has_value = False
+        for row in rows:
+            val = row.get(header)
+            if val:
+                if val is not None and val != "" and not (isinstance(val, list) and len(val) == 0):
+                    has_value = True
+                    break
+        if has_value or output != "agent":
+            non_empty_headers.append(header)
+    if not non_empty_headers:
+        return None
+
+    values = [[_truncate(row.get(h, "")) for h in non_empty_headers] for row in rows]
+    return tabulate(values, headers=non_empty_headers, tablefmt="plain")
 
 
 def _is_primitive_list(v: Any) -> bool:
