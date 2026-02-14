@@ -85,15 +85,25 @@ finally:
 
 ```json
 {
-  "url": "http://localhost:1933"
+  "url": "http://localhost:1933",
+  "api_key": "your-key"
 }
 ```
 
 然后直接使用 CLI 命令：
 
 ```bash
-python -m openviking health
-python -m openviking find "what is openviking"
+# Check system health
+openviking observer system
+
+# Add a resource to memory
+openviking add-resource https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md
+
+# List all synchronized resources
+openviking ls viking://resources
+
+# Query
+openviking find "what is openviking"
 ```
 
 如果配置文件在其他位置，通过环境变量指定：
