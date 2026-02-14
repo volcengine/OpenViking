@@ -104,13 +104,11 @@ openviking [global options] <command> [arguments] [command options]
 | Option | Description |
 |--------|-------------|
 | `--output`, `-o` | Output format: `table` (default), `json` |
-| `--json` | Compact JSON with `{ok, result}` wrapper (for scripts) |
 | `--version` | Show CLI version |
 
 Example:
 
 ```bash
-openviking --json ls viking://resources/
 openviking -o json ls viking://resources/
 ```
 

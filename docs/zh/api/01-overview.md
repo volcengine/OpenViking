@@ -104,14 +104,12 @@ openviking [全局选项] <command> [参数] [命令选项]
 | 选项 | 说明 |
 |------|------|
 | `--output`, `-o` | 输出格式：`table`（默认）、`json` |
-| `--compact`, `-c` | 紧凑表示，默认为 true，对 JSON 输出进行压缩，或对 Table 输出进行采取精简表示 |
 | `--version` | 显示 CLI 版本 |
 
 示例：
 
 ```bash
-openviking --compact ls viking://resources/
-openviking -o json -c ls viking://resources/
+openviking -o json ls viking://resources/
 ```
 
 ## 生命周期
