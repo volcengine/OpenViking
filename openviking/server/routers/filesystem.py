@@ -6,8 +6,9 @@ from fastapi import APIRouter, Depends, Query
 from pyagfs.exceptions import AGFSClientError
 from pydantic import BaseModel
 
-from openviking.server.auth import verify_api_key
+from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
+from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking_cli.exceptions import NotFoundError
 
@@ -22,7 +23,7 @@ async def ls(
     output: str = Query("agent", description="Output format: original or agent"),
     abs_limit: int = Query(256, description="Abstract limit (only for agent output)"),
     show_all_hidden: bool = Query(False, description="List all hidden files, like -a"),
-    _: bool = Depends(verify_api_key),
+    _ctx: RequestContext = Depends(get_request_context),
 ):
     """List directory contents."""
     service = get_service()
@@ -43,7 +44,7 @@ async def tree(
     output: str = Query("agent", description="Output format: original or agent"),
     abs_limit: int = Query(256, description="Abstract limit (only for agent output)"),
     show_all_hidden: bool = Query(False, description="List all hidden files, like -a"),
-    _: bool = Depends(verify_api_key),
+    _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get directory tree."""
     service = get_service()
@@ -56,7 +57,7 @@ async def tree(
 @router.get("/stat")
 async def stat(
     uri: str = Query(..., description="Viking URI"),
-    _: bool = Depends(verify_api_key),
+    _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get resource status."""
     service = get_service()
@@ -78,7 +79,7 @@ class MkdirRequest(BaseModel):
 @router.post("/mkdir")
 async def mkdir(
     request: MkdirRequest,
-    _: bool = Depends(verify_api_key),
+    _ctx: RequestContext = Depends(get_request_context),
 ):
     """Create directory."""
     service = get_service()
@@ -90,7 +91,7 @@ async def mkdir(
 async def rm(
     uri: str = Query(..., description="Viking URI"),
     recursive: bool = Query(False, description="Remove recursively"),
-    _: bool = Depends(verify_api_key),
+    _ctx: RequestContext = Depends(get_request_context),
 ):
     """Remove resource."""
     service = get_service()
@@ -108,7 +109,7 @@ class MvRequest(BaseModel):
 @router.post("/mv")
 async def mv(
     request: MvRequest,
-    _: bool = Depends(verify_api_key),
+    _ctx: RequestContext = Depends(get_request_context),
 ):
     """Move resource."""
     service = get_service()

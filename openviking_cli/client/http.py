@@ -126,12 +126,14 @@ class AsyncHTTPClient(BaseClient):
         self,
         url: Optional[str] = None,
         api_key: Optional[str] = None,
+        agent_id: Optional[str] = None,
     ):
         """Initialize AsyncHTTPClient.
 
         Args:
             url: OpenViking Server URL. If not provided, reads from ovcli.conf.
             api_key: API key for authentication. If not provided, reads from ovcli.conf.
+            agent_id: Agent identifier. If not provided, reads from ovcli.conf.
         """
         if url is None:
             config_path = resolve_config_path(None, OPENVIKING_CLI_CONFIG_ENV, DEFAULT_OVCLI_CONF)
@@ -139,6 +141,7 @@ class AsyncHTTPClient(BaseClient):
                 cfg = load_json_config(config_path)
                 url = cfg.get("url")
                 api_key = api_key or cfg.get("api_key")
+                agent_id = agent_id or cfg.get("agent_id")
         if not url:
             raise ValueError(
                 "url is required. Pass it explicitly or configure in "
@@ -146,6 +149,7 @@ class AsyncHTTPClient(BaseClient):
             )
         self._url = url.rstrip("/")
         self._api_key = api_key
+        self._agent_id = agent_id
         self._user = UserIdentifier.the_default_user()
         self._http: Optional[httpx.AsyncClient] = None
         self._observer: Optional[_HTTPObserver] = None
@@ -157,6 +161,8 @@ class AsyncHTTPClient(BaseClient):
         headers = {}
         if self._api_key:
             headers["X-API-Key"] = self._api_key
+        if self._agent_id:
+            headers["X-OpenViking-Agent"] = self._agent_id
         self._http = httpx.AsyncClient(
             base_url=self._url,
             headers=headers,
@@ -566,6 +572,61 @@ class AsyncHTTPClient(BaseClient):
     async def _get_system_status(self) -> Dict[str, Any]:
         """Get system overall status (internal for _HTTPObserver)."""
         response = await self._http.get("/api/v1/observer/system")
+        return self._handle_response(response)
+
+    # ============= Admin =============
+
+    async def admin_create_account(self, account_id: str, admin_user_id: str) -> Dict[str, Any]:
+        """Create a new account with its first admin user."""
+        response = await self._http.post(
+            "/api/v1/admin/accounts",
+            json={"account_id": account_id, "admin_user_id": admin_user_id},
+        )
+        return self._handle_response(response)
+
+    async def admin_list_accounts(self) -> List[Any]:
+        """List all accounts."""
+        response = await self._http.get("/api/v1/admin/accounts")
+        return self._handle_response(response)
+
+    async def admin_delete_account(self, account_id: str) -> Dict[str, Any]:
+        """Delete an account and all associated users."""
+        response = await self._http.delete(f"/api/v1/admin/accounts/{account_id}")
+        return self._handle_response(response)
+
+    async def admin_register_user(
+        self, account_id: str, user_id: str, role: str = "user"
+    ) -> Dict[str, Any]:
+        """Register a new user in an account."""
+        response = await self._http.post(
+            f"/api/v1/admin/accounts/{account_id}/users",
+            json={"user_id": user_id, "role": role},
+        )
+        return self._handle_response(response)
+
+    async def admin_list_users(self, account_id: str) -> List[Any]:
+        """List all users in an account."""
+        response = await self._http.get(f"/api/v1/admin/accounts/{account_id}/users")
+        return self._handle_response(response)
+
+    async def admin_remove_user(self, account_id: str, user_id: str) -> Dict[str, Any]:
+        """Remove a user from an account."""
+        response = await self._http.delete(f"/api/v1/admin/accounts/{account_id}/users/{user_id}")
+        return self._handle_response(response)
+
+    async def admin_set_role(self, account_id: str, user_id: str, role: str) -> Dict[str, Any]:
+        """Change a user's role."""
+        response = await self._http.put(
+            f"/api/v1/admin/accounts/{account_id}/users/{user_id}/role",
+            json={"role": role},
+        )
+        return self._handle_response(response)
+
+    async def admin_regenerate_key(self, account_id: str, user_id: str) -> Dict[str, Any]:
+        """Regenerate a user's API key. Old key is immediately invalidated."""
+        response = await self._http.post(
+            f"/api/v1/admin/accounts/{account_id}/users/{user_id}/key",
+        )
         return self._handle_response(response)
 
     # ============= New methods for BaseClient interface =============

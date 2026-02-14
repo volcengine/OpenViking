@@ -48,7 +48,7 @@ The `server` section in `ov.conf` controls server behavior:
   "server": {
     "host": "0.0.0.0",
     "port": 1933,
-    "api_key": "your-secret-key",
+    "root_api_key": "your-secret-root-key",
     "cors_origins": ["*"]
   },
   "storage": {
@@ -101,7 +101,7 @@ python -m openviking serve
 ```python
 import openviking as ov
 
-client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key", agent_id="my-agent")
 client.initialize()
 
 results = client.find("how to use openviking")

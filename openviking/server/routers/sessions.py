@@ -2,13 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 """Sessions endpoints for OpenViking HTTP Server."""
 
-from typing import Any, Optional
+from typing import Any
+
 from fastapi import APIRouter, Depends, Path
 from pydantic import BaseModel
 
 from openviking.message.part import TextPart
-from openviking.server.auth import verify_api_key
+from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
+from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
@@ -35,7 +37,7 @@ def _to_jsonable(value: Any) -> Any:
 
 @router.post("")
 async def create_session(
-    _: bool = Depends(verify_api_key),
+    _ctx: RequestContext = Depends(get_request_context),
 ):
     """Create a new session."""
     service = get_service()
@@ -51,7 +53,7 @@ async def create_session(
 
 @router.get("")
 async def list_sessions(
-    _: bool = Depends(verify_api_key),
+    _ctx: RequestContext = Depends(get_request_context),
 ):
     """List all sessions."""
     service = get_service()
@@ -62,7 +64,7 @@ async def list_sessions(
 @router.get("/{session_id}")
 async def get_session(
     session_id: str = Path(..., description="Session ID"),
-    _: bool = Depends(verify_api_key),
+    _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get session details."""
     service = get_service()
@@ -81,7 +83,7 @@ async def get_session(
 @router.delete("/{session_id}")
 async def delete_session(
     session_id: str = Path(..., description="Session ID"),
-    _: bool = Depends(verify_api_key),
+    _ctx: RequestContext = Depends(get_request_context),
 ):
     """Delete a session."""
     service = get_service()
@@ -92,7 +94,7 @@ async def delete_session(
 @router.post("/{session_id}/commit")
 async def commit_session(
     session_id: str = Path(..., description="Session ID"),
-    _: bool = Depends(verify_api_key),
+    _ctx: RequestContext = Depends(get_request_context),
 ):
     """Commit a session (archive and extract memories)."""
     service = get_service()
@@ -103,7 +105,7 @@ async def commit_session(
 @router.post("/{session_id}/extract")
 async def extract_session(
     session_id: str = Path(..., description="Session ID"),
-    _: bool = Depends(verify_api_key),
+    _ctx: RequestContext = Depends(get_request_context),
 ):
     """Extract memories from a session."""
     service = get_service()
@@ -115,7 +117,7 @@ async def extract_session(
 async def add_message(
     request: AddMessageRequest,
     session_id: str = Path(..., description="Session ID"),
-    _: bool = Depends(verify_api_key),
+    _ctx: RequestContext = Depends(get_request_context),
 ):
     """Add a message to a session."""
     service = get_service()

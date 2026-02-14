@@ -43,12 +43,12 @@ import openviking as ov
 client = ov.SyncHTTPClient(url="http://localhost:1933")
 ```
 
-If the server has authentication enabled, pass the API key:
+If the server has authentication enabled, pass the API key and optionally an agent ID:
 
 ```python
 import openviking as ov
 
-client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key", agent_id="my-agent")
 ```
 
 **Full example:**

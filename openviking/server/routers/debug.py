@@ -8,8 +8,9 @@ Provides debug API for system diagnostics.
 
 from fastapi import APIRouter, Depends
 
-from openviking.server.auth import verify_api_key
+from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
+from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 
 router = APIRouter(prefix="/api/v1/debug", tags=["debug"])
@@ -17,7 +18,7 @@ router = APIRouter(prefix="/api/v1/debug", tags=["debug"])
 
 @router.get("/health")
 async def debug_health(
-    _: bool = Depends(verify_api_key),
+    _ctx: RequestContext = Depends(get_request_context),
 ):
     """Quick health check."""
     service = get_service()

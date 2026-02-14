@@ -31,8 +31,9 @@ class SyncHTTPClient:
         self,
         url: Optional[str] = None,
         api_key: Optional[str] = None,
+        agent_id: Optional[str] = None,
     ):
-        self._async_client = AsyncHTTPClient(url=url, api_key=api_key)
+        self._async_client = AsyncHTTPClient(url=url, api_key=api_key, agent_id=agent_id)
         self._initialized = False
 
     # ============= Lifecycle =============
@@ -242,6 +243,42 @@ class SyncHTTPClient:
     ) -> str:
         """Import .ovpack file."""
         return run_async(self._async_client.import_ovpack(file_path, target, force, vectorize))
+
+    # ============= Admin =============
+
+    def admin_create_account(self, account_id: str, admin_user_id: str) -> Dict[str, Any]:
+        """Create a new account with its first admin user."""
+        return run_async(self._async_client.admin_create_account(account_id, admin_user_id))
+
+    def admin_list_accounts(self) -> List[Any]:
+        """List all accounts."""
+        return run_async(self._async_client.admin_list_accounts())
+
+    def admin_delete_account(self, account_id: str) -> Dict[str, Any]:
+        """Delete an account and all associated users."""
+        return run_async(self._async_client.admin_delete_account(account_id))
+
+    def admin_register_user(
+        self, account_id: str, user_id: str, role: str = "user"
+    ) -> Dict[str, Any]:
+        """Register a new user in an account."""
+        return run_async(self._async_client.admin_register_user(account_id, user_id, role))
+
+    def admin_list_users(self, account_id: str) -> List[Any]:
+        """List all users in an account."""
+        return run_async(self._async_client.admin_list_users(account_id))
+
+    def admin_remove_user(self, account_id: str, user_id: str) -> Dict[str, Any]:
+        """Remove a user from an account."""
+        return run_async(self._async_client.admin_remove_user(account_id, user_id))
+
+    def admin_set_role(self, account_id: str, user_id: str, role: str) -> Dict[str, Any]:
+        """Change a user's role."""
+        return run_async(self._async_client.admin_set_role(account_id, user_id, role))
+
+    def admin_regenerate_key(self, account_id: str, user_id: str) -> Dict[str, Any]:
+        """Regenerate a user's API key. Old key is immediately invalidated."""
+        return run_async(self._async_client.admin_regenerate_key(account_id, user_id))
 
     # ============= Debug =============
 

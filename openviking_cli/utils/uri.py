@@ -55,15 +55,18 @@ class VikingURI:
             raise ValueError(f"URI must start with '{self.SCHEME}://'")
 
         # Remove scheme
-        path = self.uri[len(f"{self.SCHEME}://") :]
+        path = self.uri[len(f"{self.SCHEME}://") :].strip("/")
 
-        # Split path components
-        parts = path.split("/")
-        if len(parts) < 1:
-            raise ValueError(f"Invalid URI format: {self.uri}")
+        # Root URI: viking://
+        if not path:
+            return {
+                "scheme": self.SCHEME,
+                "scope": "",
+                "full_path": "",
+            }
 
         # Parse scope
-        scope = parts[0]
+        scope = path.split("/")[0]
         if scope not in self.VALID_SCOPES:
             raise ValueError(f"Invalid scope '{scope}'. Must be one of {self.VALID_SCOPES}")
 
@@ -128,9 +131,9 @@ class VikingURI:
 
         after_scheme = uri[scheme_end + len(scheme_sep) :]
 
-        # If no / in after_scheme, only scope exists, no path
+        # If no / in after_scheme, only scope exists → parent is root
         if "/" not in after_scheme:
-            return None
+            return VikingURI(f"{self.SCHEME}://") if after_scheme else None
 
         # Find last / and truncate
         last_slash = uri.rfind("/")
@@ -157,18 +160,14 @@ class VikingURI:
         """
         Join URI parts, handling slashes correctly.
         """
+        part = part.strip("/") if part else ""
         if not part:
             return self
 
-        # Start with first part, strip trailing slash
-        result = self.uri.rstrip("/")
-
-        # Add remaining parts, strip leading/trailing slashes
-        part = part.strip("/")
-        if part:
-            result = f"{result}/{part}"
-
-        return VikingURI(result)
+        full = self.full_path.rstrip("/")
+        if full:
+            return VikingURI(f"{self.SCHEME}://{full}/{part}")
+        return VikingURI(f"{self.SCHEME}://{part}")
 
     @staticmethod
     def build(scope: str, *path_parts: str) -> str:

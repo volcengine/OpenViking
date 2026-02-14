@@ -57,6 +57,7 @@ export OPENVIKING_CONFIG_FILE=/path/to/ov.conf
 client = ov.SyncHTTPClient(
     url="http://localhost:1933",
     api_key="your-key",
+    agent_id="my-agent",
 )
 client.initialize()
 ```
@@ -70,7 +71,8 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 ```json
 {
   "url": "http://localhost:1933",
-  "api_key": "your-key"
+  "api_key": "your-key",
+  "agent_id": "my-agent"
 }
 ```
 
@@ -78,6 +80,7 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 |------|------|--------|
 | `url` | 服务端地址 | （必填） |
 | `api_key` | API Key | `null`（无认证） |
+| `agent_id` | Agent 标识符 | `null` |
 | `output` | 默认输出格式：`"table"` 或 `"json"` | `"table"` |
 
 详见 [配置指南](../guides/01-configuration.md#ovcliconf)。

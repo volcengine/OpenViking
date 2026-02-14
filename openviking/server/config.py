@@ -19,7 +19,7 @@ class ServerConfig:
 
     host: str = "0.0.0.0"
     port: int = 1933
-    api_key: Optional[str] = None
+    root_api_key: Optional[str] = None
     cors_origins: List[str] = field(default_factory=lambda: ["*"])
 
 
@@ -61,7 +61,7 @@ def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
     config = ServerConfig(
         host=server_data.get("host", "0.0.0.0"),
         port=server_data.get("port", 1933),
-        api_key=server_data.get("api_key"),
+        root_api_key=server_data.get("root_api_key"),
         cors_origins=server_data.get("cors_origins", ["*"]),
     )
 

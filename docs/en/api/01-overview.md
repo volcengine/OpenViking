@@ -57,6 +57,7 @@ For full configuration options and provider-specific examples, see the [Configur
 client = ov.SyncHTTPClient(
     url="http://localhost:1933",
     api_key="your-key",
+    agent_id="my-agent",
 )
 client.initialize()
 ```
@@ -70,7 +71,8 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 ```json
 {
   "url": "http://localhost:1933",
-  "api_key": "your-key"
+  "api_key": "your-key",
+  "agent_id": "my-agent"
 }
 ```
 

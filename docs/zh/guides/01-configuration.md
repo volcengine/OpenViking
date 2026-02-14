@@ -324,6 +324,7 @@ HTTP 客户端（`SyncHTTPClient` / `AsyncHTTPClient`）和 CLI 工具连接远�
 {
   "url": "http://localhost:1933",
   "api_key": "your-secret-key",
+  "agent_id": "my-agent",
   "output": "table"
 }
 ```
@@ -331,7 +332,8 @@ HTTP 客户端（`SyncHTTPClient` / `AsyncHTTPClient`）和 CLI 工具连接远�
 | 字段 | 说明 | 默认值 |
 |------|------|--------|
 | `url` | 服务端地址 | （必填） |
-| `api_key` | API Key 认证 | `null`（无认证） |
+| `api_key` | API Key 认证（root key 或 user key） | `null`（无认证） |
+| `agent_id` | Agent 标识，用于 agent space 隔离 | `null` |
 | `output` | 默认输出格式：`"table"` 或 `"json"` | `"table"` |
 
 详见 [服务部署](./03-deployment.md)。
@@ -345,7 +347,7 @@ HTTP 客户端（`SyncHTTPClient` / `AsyncHTTPClient`）和 CLI 工具连接远�
   "server": {
     "host": "0.0.0.0",
     "port": 1933,
-    "api_key": "your-secret-key",
+    "root_api_key": "your-secret-root-key",
     "cors_origins": ["*"]
   }
 }
@@ -355,8 +357,10 @@ HTTP 客户端（`SyncHTTPClient` / `AsyncHTTPClient`）和 CLI 工具连接远�
 |------|------|------|--------|
 | `host` | str | 绑定地址 | `0.0.0.0` |
 | `port` | int | 绑定端口 | `1933` |
-| `api_key` | str | API Key 认证，不设则禁用认证 | `null` |
+| `root_api_key` | str | Root API Key，启用多租户认证，不设则为开发模式 | `null` |
 | `cors_origins` | list | CORS 允许的来源 | `["*"]` |
+
+配置 `root_api_key` 后，服务端启用多租户认证。通过 Admin API 创建工作区和用户 key。不配置时为开发模式，不需要认证。
 
 启动方式和部署详情见 [服务部署](./03-deployment.md)，认证详情见 [认证](./04-authentication.md)。
 
@@ -400,7 +404,7 @@ HTTP 客户端（`SyncHTTPClient` / `AsyncHTTPClient`）和 CLI 工具连接远�
   "server": {
     "host": "string",
     "port": 1933,
-    "api_key": "string",
+    "root_api_key": "string",
     "cors_origins": ["string"]
   }
 }

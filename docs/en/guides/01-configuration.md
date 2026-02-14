@@ -321,6 +321,7 @@ Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI t
 {
   "url": "http://localhost:1933",
   "api_key": "your-secret-key",
+  "agent_id": "my-agent",
   "output": "table"
 }
 ```
@@ -328,7 +329,8 @@ Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI t
 | Field | Description | Default |
 |-------|-------------|---------|
 | `url` | Server address | (required) |
-| `api_key` | API key for authentication | `null` (no auth) |
+| `api_key` | API key for authentication (root key or user key) | `null` (no auth) |
+| `agent_id` | Agent identifier for agent space isolation | `null` |
 | `output` | Default output format: `"table"` or `"json"` | `"table"` |
 
 See [Deployment](./03-deployment.md) for details.
@@ -342,7 +344,7 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
   "server": {
     "host": "0.0.0.0",
     "port": 1933,
-    "api_key": "your-secret-key",
+    "root_api_key": "your-secret-root-key",
     "cors_origins": ["*"]
   }
 }
@@ -352,8 +354,10 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 |-------|------|-------------|---------|
 | `host` | str | Bind address | `0.0.0.0` |
 | `port` | int | Bind port | `1933` |
-| `api_key` | str | API Key auth, disabled if not set | `null` |
+| `root_api_key` | str | Root API key for multi-tenant auth, disabled if not set | `null` |
 | `cors_origins` | list | Allowed CORS origins | `["*"]` |
+
+When `root_api_key` is configured, the server enables multi-tenant authentication. Use the Admin API to create accounts and user keys. When not set, the server runs in dev mode with no authentication.
 
 For startup and deployment details see [Deployment](./03-deployment.md), for authentication see [Authentication](./04-authentication.md).
 
@@ -397,7 +401,7 @@ For startup and deployment details see [Deployment](./03-deployment.md), for aut
   "server": {
     "host": "0.0.0.0",
     "port": 1933,
-    "api_key": "string",
+    "root_api_key": "string",
     "cors_origins": ["*"]
   }
 }

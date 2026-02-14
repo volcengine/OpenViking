@@ -2,7 +2,7 @@
   "server": {
     "host": "0.0.0.0",
     "port": 1933,
-    "root_api_key": null,
+    "root_api_key": "my-root-key",
     "cors_origins": ["*"]
   },
   "storage": {

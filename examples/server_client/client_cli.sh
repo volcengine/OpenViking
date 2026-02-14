@@ -26,12 +26,14 @@
 #        {
 #          "url": "http://localhost:1933",
 #          "api_key": null,
+#          "agent_id": null,
 #          "output": "table"
 #        }
 #
 #      Fields:
 #        url      - Server address (required)
 #        api_key  - API key for authentication (null = no auth)
+#        agent_id - Agent identifier (null = not set)
 #        output   - Default output format: "table" or "json" (default: "table")
 #
 # Usage:
