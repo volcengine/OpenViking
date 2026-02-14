@@ -86,7 +86,7 @@ jobs:
           ${{ runner.os }}-target-${{ matrix.target }}-
 
     - name: Build CLI
-      run: cargo build --release --target ${{ matrix.target }} -p openviking-cli
+      run: cargo build --release --target ${{ matrix.target }} -p ov_cli
         
     - name: Create compressed artifacts
       shell: bash
