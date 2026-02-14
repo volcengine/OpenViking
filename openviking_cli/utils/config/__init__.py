@@ -21,7 +21,6 @@ from .open_viking_config import (
 )
 from .parser_config import (
     PARSER_CONFIG_REGISTRY,
-    AudioConfig,
     CodeConfig,
     HTMLConfig,
     ImageConfig,
@@ -56,7 +55,6 @@ __all__ = [
     "PDFConfig",
     "CodeConfig",
     "ImageConfig",
-    "AudioConfig",
     "VideoConfig",
     "MarkdownConfig",
     "HTMLConfig",

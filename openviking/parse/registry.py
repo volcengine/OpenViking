@@ -11,7 +11,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 
 from openviking.parse.base import ParseResult
-from openviking.parse.parsers.audio import AudioParser
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.epub import EPubParser
 from openviking.parse.parsers.excel import ExcelParser
@@ -63,7 +62,6 @@ class ParserRegistry:
         self.register("excel", ExcelParser())
         self.register("epub", EPubParser())
         self.register("zip", ZipParser())
-        self.register("audio", AudioParser())
 
         # Register code parser dynamically
         try:
