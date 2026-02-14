@@ -42,7 +42,6 @@ dependencies = [
     "python-pptx>=1.0.0",
     "openpyxl>=3.0.0",
     "ebooklib>=0.18.0",
-    "mutagen>=1.45.0",
     "json-repair>=0.25.0",
     "apscheduler>=3.11.0",
     "volcengine>=1.0.216",
