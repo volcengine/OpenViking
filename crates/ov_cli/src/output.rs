@@ -69,6 +69,12 @@ fn print_table<T: Serialize>(result: T, compact: bool) {
         }
     };
 
+    // First, try to format as component or system status (like Python CLI)
+    if let Some(formatted) = format_component_or_system_status(&value) {
+        println!("{}", formatted);
+        return;
+    }
+
     // Handle string result
     if let Some(s) = value.as_str() {
         println!("{}", s);
@@ -349,6 +355,50 @@ fn value_to_table(value: &serde_json::Value, compact: bool) -> Option<String> {
     None
 }
 
+fn format_component_or_system_status(value: &serde_json::Value) -> Option<String> {
+    // Rule 5: ComponentStatus (name + is_healthy + status)
+    if let Some(obj) = value.as_object() {
+        if obj.contains_key("name") && obj.contains_key("is_healthy") && obj.contains_key("status") {
+            let name = obj.get("name")?.as_str()?;
+            let is_healthy = obj.get("is_healthy")?.as_bool()?;
+            let status = obj.get("status")?.as_str()?;
+            let health = if is_healthy { "healthy" } else { "unhealthy" };
+            return Some(format!("[{}] ({})\n{}", name, health, status));
+        }
+
+        // Rule 6: SystemStatus (is_healthy + components)
+        if obj.contains_key("components") && obj.contains_key("is_healthy") {
+            let mut lines = Vec::new();
+            if let Some(components) = obj.get("components")?.as_object() {
+                for comp in components.values() {
+                    if let Some(table) = format_component_or_system_status(comp) {
+                        lines.push(table);
+                        lines.push(String::new());
+                    }
+                }
+            }
+
+            let is_healthy = obj.get("is_healthy")?.as_bool()?;
+            let health = if is_healthy { "healthy" } else { "unhealthy" };
+            lines.push(format!("[system] ({})", health));
+
+            if let Some(errors) = obj.get("errors").and_then(|e| e.as_array()) {
+                if !errors.is_empty() {
+                    let error_strs: Vec<_> = errors
+                        .iter()
+                        .filter_map(|e| e.as_str())
+                        .collect();
+                    lines.push(format!("Errors: {}", error_strs.join(", ")));
+                }
+            }
+
+            return Some(lines.join("\n"));
+        }
+    }
+
+    None
+}
+
 struct ColumnInfo {
     max_width: usize,    // Max width for alignment (capped at 120)
     is_numeric: bool,    // True if all values in column are numeric
@@ -526,14 +576,18 @@ fn is_numeric_value(v: &serde_json::Value) -> bool {
 fn truncate_string(s: &str, is_uri: bool, max_width: usize) -> (String, bool) {
     let display_width = s.width();
 
-    // URI columns: never truncate
-    if is_uri {
-        if display_width > max_width {
-            return (s.to_string(), true); // true = skip padding
-        } else {
-            return (s.to_string(), false);
-        }
+    // If it's a multi-line string, don't truncate
+    if s.contains('\n') {
+        return (s.to_string(), false);
     }
+
+    // URI columns: don't truncate if exceeds threshold
+    if is_uri && display_width > max_width {
+        return (s.to_string(), true); // true = skip padding
+    } else {
+        return (s.to_string(), false);
+    }
+
 
     // Normal truncation - truncate by display width
     if display_width > MAX_COL_WIDTH {
