@@ -50,6 +50,7 @@ class MarkdownParser(BaseParser):
     # Configuration constants
     DEFAULT_MAX_SECTION_SIZE = 1024  # Maximum tokens per section
     DEFAULT_MIN_SECTION_TOKENS = 512  # Minimum tokens to create a separate section
+    MAX_MERGED_FILENAME_LENGTH = 32  # Maximum length for merged section filenames
 
     def __init__(
         self,
@@ -564,14 +565,40 @@ class MarkdownParser(BaseParser):
         for i, part in enumerate(parts, 1):
             await viking_fs.write_file(f"{section_dir}/{name}_{i}.md", part)
 
+    def _generate_merged_filename(self, sections: List[Tuple[str, str, int]]) -> str:
+        """
+        Smart merged filename generation, limited to MAX_MERGED_FILENAME_LENGTH characters.
+
+        Strategy:
+        - Single section: Use directly (truncated to MAX_MERGED_FILENAME_LENGTH chars)
+        - Multiple sections: {first_section}_{count}more (e.g., Intro_3more)
+        - Total length strictly limited: MAX_MERGED_FILENAME_LENGTH characters
+        """
+        if not sections:
+            return "merged"
+
+        names = [n for n, _, _ in sections]
+        count = len(names)
+
+        if count == 1:
+            name = names[0][: self.MAX_MERGED_FILENAME_LENGTH]
+        else:
+            suffix = f"_{count}more"
+            max_first_len = self.MAX_MERGED_FILENAME_LENGTH - len(suffix)
+            first_name = names[0][: max(max_first_len, 1)]
+            name = f"{first_name}{suffix}"
+
+        name = name[: self.MAX_MERGED_FILENAME_LENGTH].strip("_")
+        return name or "merged"
+
     async def _save_merged(
         self, viking_fs, parent_dir: str, sections: List[Tuple[str, str, int]]
     ) -> None:
-        """Save merged sections as single file."""
-        name = "_".join(n for n, _, _ in sections)
+        """Save merged sections as single file with smart naming."""
+        name = self._generate_merged_filename(sections)
         content = "\n\n".join(c for _, c, _ in sections)
         await viking_fs.write_file(f"{parent_dir}/{name}.md", content)
-        logger.debug(f"[MarkdownParser] Merged: {name}.md")
+        logger.debug(f"[MarkdownParser] Merged: {name}.md ({len(sections)} sections)")
 
     def _get_section_info(
         self,

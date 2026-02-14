@@ -50,7 +50,9 @@ def register(app: typer.Typer) -> None:
         abs_limit: int = typer.Option(128, "--abs-limit", "-l", help="Abstract content limit"),
         show_all_hidden: bool = typer.Option(False, "--all", "-a", help="Show all hidden files"),
     ) -> None:
-        """Get directory tree."""
+        """
+        Get directory tree info.
+        """
         run(
             ctx,
             lambda client: client.tree(
