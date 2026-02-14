@@ -119,7 +119,7 @@ curl -X POST http://localhost:1933/api/v1/search/find \
   -d '{"query": "what is openviking"}'
 ```
 
-## 推荐生产部署方案：火山引擎 ECS
+## 推荐云端部署方案：火山引擎 ECS
 
 为了获得高性能、可扩展的 Context Memory 能力，能够像“长期记忆”一样为 Agent 提供支持，我们推荐使用 **火山引擎云服务器 (ECS)** 结合 **veLinux** 操作系统进行部署。
 
