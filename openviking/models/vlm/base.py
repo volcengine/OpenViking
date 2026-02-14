@@ -123,18 +123,21 @@ class VLMFactory:
         """
         provider = config.get("provider") or config.get("backend") or "openai"
 
-        if provider == "openai":
-            from .backends.openai_vlm import OpenAIVLM
+        use_litellm = config.get("use_litellm", True)
 
-            return OpenAIVLM(config)
-        elif provider == "volcengine":
-            from .backends.volcengine_vlm import VolcEngineVLM
+        if not use_litellm:
+            if provider == "openai":
+                from .backends.openai_vlm import OpenAIVLM
+                return OpenAIVLM(config)
+            elif provider == "volcengine":
+                from .backends.volcengine_vlm import VolcEngineVLM
+                return VolcEngineVLM(config)
 
-            return VolcEngineVLM(config)
-        else:
-            raise ValueError(f"Unsupported VLM provider: {provider}")
+        from .backends.litellm_vlm import LiteLLMVLMProvider
+        return LiteLLMVLMProvider(config)
 
     @staticmethod
     def get_available_providers() -> List[str]:
         """Get list of available providers"""
-        return ["openai", "volcengine"]
+        from .registry import get_all_provider_names
+        return get_all_provider_names()
