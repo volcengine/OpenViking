@@ -6,18 +6,20 @@ use serde_json::json;
 pub async fn new_session(
     client: &HttpClient,
     output_format: OutputFormat,
+    compact: bool,
 ) -> Result<()> {
     let response: serde_json::Value = client.post("/api/v1/sessions", &json!({})).await?;
-    output_success(&response, output_format, false);
+    output_success(&response, output_format, compact);
     Ok(())
 }
 
 pub async fn list_sessions(
     client: &HttpClient,
     output_format: OutputFormat,
+    compact: bool,
 ) -> Result<()> {
     let response: serde_json::Value = client.get("/api/v1/sessions", &[]).await?;
-    output_success(&response, output_format, false);
+    output_success(&response, output_format, compact);
     Ok(())
 }
 
@@ -25,10 +27,11 @@ pub async fn get_session(
     client: &HttpClient,
     session_id: &str,
     output_format: OutputFormat,
+    compact: bool,
 ) -> Result<()> {
     let path = format!("/api/v1/sessions/{}", url_encode(session_id));
     let response: serde_json::Value = client.get(&path, &[]).await?;
-    output_success(&response, output_format, false);
+    output_success(&response, output_format, compact);
     Ok(())
 }
 
@@ -36,6 +39,7 @@ pub async fn delete_session(
     client: &HttpClient,
     session_id: &str,
     output_format: OutputFormat,
+    compact: bool,
 ) -> Result<()> {
     let path = format!("/api/v1/sessions/{}", url_encode(session_id));
     let response: serde_json::Value = client.delete(&path, &[]).await?;
@@ -47,7 +51,7 @@ pub async fn delete_session(
         response
     };
     
-    output_success(&result, output_format, false);
+    output_success(&result, output_format, compact);
     Ok(())
 }
 
@@ -57,6 +61,7 @@ pub async fn add_message(
     role: &str,
     content: &str,
     output_format: OutputFormat,
+    compact: bool,
 ) -> Result<()> {
     let path = format!("/api/v1/sessions/{}/messages", url_encode(session_id));
     let body = json!({
@@ -65,7 +70,7 @@ pub async fn add_message(
     });
     
     let response: serde_json::Value = client.post(&path, &body).await?;
-    output_success(&response, output_format, false);
+    output_success(&response, output_format, compact);
     Ok(())
 }
 
@@ -73,10 +78,11 @@ pub async fn commit_session(
     client: &HttpClient,
     session_id: &str,
     output_format: OutputFormat,
+    compact: bool,
 ) -> Result<()> {
     let path = format!("/api/v1/sessions/{}/commit", url_encode(session_id));
     let response: serde_json::Value = client.post(&path, &json!({})).await?;
-    output_success(&response, output_format, false);
+    output_success(&response, output_format, compact);
     Ok(())
 }
 

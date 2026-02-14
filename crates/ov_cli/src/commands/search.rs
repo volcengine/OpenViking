@@ -9,9 +9,10 @@ pub async fn find(
     limit: i32,
     threshold: Option<f64>,
     output_format: OutputFormat,
+    compact: bool,
 ) -> Result<()> {
     let result = client.find(query.to_string(), uri.to_string(), limit, threshold).await?;
-    output_success(&result, output_format, false);
+    output_success(&result, output_format, compact);
     Ok(())
 }
 
@@ -23,9 +24,10 @@ pub async fn search(
     limit: i32,
     threshold: Option<f64>,
     output_format: OutputFormat,
+    compact: bool,
 ) -> Result<()> {
     let result = client.search(query.to_string(), uri.to_string(), session_id, limit, threshold).await?;
-    output_success(&result, output_format, false);
+    output_success(&result, output_format, compact);
     Ok(())
 }
 
@@ -35,9 +37,10 @@ pub async fn grep(
     pattern: &str,
     ignore_case: bool,
     output_format: OutputFormat,
+    compact: bool,
 ) -> Result<()> {
     let result = client.grep(uri, pattern, ignore_case).await?;
-    output_success(&result, output_format, false);
+    output_success(&result, output_format, compact);
     Ok(())
 }
 
@@ -46,8 +49,9 @@ pub async fn glob(
     pattern: &str,
     uri: &str,
     output_format: OutputFormat,
+    compact: bool,
 ) -> Result<()> {
     let result = client.glob(pattern, uri).await?;
-    output_success(&result, output_format, false);
+    output_success(&result, output_format, compact);
     Ok(())
 }

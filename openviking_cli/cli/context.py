@@ -19,7 +19,7 @@ class CliConfigError(ValueError):
 class CLIContext:
     """Shared state for one CLI invocation."""
 
-    json_output: bool = False
+    compact: bool = True
     output_format: str = "table"
     _client: Optional["SyncHTTPClient"] = field(default=None, init=False, repr=False)
 

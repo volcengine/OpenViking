@@ -7,9 +7,10 @@ pub async fn export(
     uri: &str,
     to: &str,
     format: OutputFormat,
+    compact: bool,
 ) -> Result<()> {
     let result = client.export_ovpack(uri, to).await?;
-    output_success(&result, format, false);
+    output_success(&result, format, compact);
     Ok(())
 }
 
@@ -20,11 +21,12 @@ pub async fn import(
     force: bool,
     no_vectorize: bool,
     format: OutputFormat,
+    compact: bool,
 ) -> Result<()> {
     let vectorize = !no_vectorize;
     let result = client
         .import_ovpack(file_path, target, force, vectorize)
         .await?;
-    output_success(&result, format, false);
+    output_success(&result, format, compact);
     Ok(())
 }

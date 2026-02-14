@@ -17,17 +17,24 @@ impl From<&str> for OutputFormat {
     }
 }
 
-pub fn output_success<T: Serialize>(result: T, format: OutputFormat, json_output: bool) {
-    if json_output || matches!(format, OutputFormat::Json) {
-        println!("{}", json!({ "ok": true, "result": result }));
+pub fn output_success<T: Serialize>(result: T, format: OutputFormat, compact: bool) {
+    if matches!(format, OutputFormat::Json) {
+        if compact {
+            println!("{}", json!({ "ok": true, "result": result }));
+        } else {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&result).unwrap_or_default()
+            );
+        }
     } else {
-        print_table(result);
+        print_table(result, compact);
     }
 }
 
 #[allow(dead_code)]
-pub fn output_error(code: &str, message: &str, format: OutputFormat, json_output: bool) {
-    if json_output || matches!(format, OutputFormat::Json) {
+pub fn output_error(code: &str, message: &str, format: OutputFormat, compact: bool) {
+    if matches!(format, OutputFormat::Json) && compact {
         eprintln!(
             "{}",
             json!({
@@ -43,26 +50,33 @@ pub fn output_error(code: &str, message: &str, format: OutputFormat, json_output
     }
 }
 
-fn print_table<T: Serialize>(result: T) {
+fn print_table<T: Serialize>(result: T, compact: bool) {
     // Convert to json Value for processing
     let value = match serde_json::to_value(&result) {
         Ok(v) => v,
         Err(_) => {
-            println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
+            if compact {
+                println!("{}", serde_json::to_string(&result).unwrap_or_default());
+            } else {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&result).unwrap_or_default()
+                );
+            }
             return;
         }
     };
-    
+
     // Handle string result
     if let Some(s) = value.as_str() {
         println!("{}", s);
         return;
     }
-    
+
     // Handle array of objects
     if let Some(items) = value.as_array() {
         if !items.is_empty() {
-            if let Some(table) = format_array_to_table(items) {
+            if let Some(table) = format_array_to_table(items, compact) {
                 println!("{}", table);
                 return;
             }
@@ -71,16 +85,12 @@ fn print_table<T: Serialize>(result: T) {
             return;
         }
     }
-    
+
     // Handle object
     if let Some(obj) = value.as_object() {
         if !obj.is_empty() {
             // Calculate max key width
-            let max_key_width = obj.keys()
-                .map(|k| k.width())
-                .max()
-                .unwrap_or(0)
-                .min(120);
+            let max_key_width = obj.keys().map(|k| k.width()).max().unwrap_or(0).min(120);
 
             let mut output = String::new();
             for (k, v) in obj {
@@ -94,18 +104,25 @@ fn print_table<T: Serialize>(result: T) {
             return;
         }
     }
-    
+
     // Default: JSON output
-    println!("{}", serde_json::to_string_pretty(&result).unwrap_or_default());
+    if compact {
+        println!("{}", serde_json::to_string(&result).unwrap_or_default());
+    } else {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&result).unwrap_or_default()
+        );
+    }
 }
 
 struct ColumnInfo {
-    max_width: usize,      // Max width for alignment (capped at 120)
-    is_numeric: bool,      // True if all values in column are numeric
-    is_uri_column: bool,   // True if column name is "uri"
+    max_width: usize,    // Max width for alignment (capped at 120)
+    is_numeric: bool,    // True if all values in column are numeric
+    is_uri_column: bool, // True if column name is "uri"
 }
 
-fn format_array_to_table(items: &Vec<serde_json::Value>) -> Option<String> {
+fn format_array_to_table(items: &Vec<serde_json::Value>, compact: bool) -> Option<String> {
     if items.is_empty() {
         return None;
     }
@@ -138,6 +155,33 @@ fn format_array_to_table(items: &Vec<serde_json::Value>) -> Option<String> {
     if keys.is_empty() {
         return None;
     }
+
+    // Filter out empty columns when compact is true
+    let filtered_keys: Vec<String> = if compact {
+        keys.iter()
+            .filter(|key| {
+                items.iter().any(|item| {
+                    if let Some(obj) = item.as_object() {
+                        if let Some(value) = obj.get(*key) {
+                            return !value.is_null()
+                                && value != ""
+                                && !(value.is_array() && value.as_array().unwrap().is_empty());
+                        }
+                    }
+                    false
+                })
+            })
+            .cloned()
+            .collect()
+    } else {
+        keys.clone()
+    };
+
+    if filtered_keys.is_empty() {
+        return None;
+    }
+
+    let keys = filtered_keys;
 
     // First pass: analyze columns
     let mut column_info: Vec<ColumnInfo> = Vec::new();
@@ -175,7 +219,8 @@ fn format_array_to_table(items: &Vec<serde_json::Value>) -> Option<String> {
     let mut output = String::new();
 
     // Header row
-    let header_cells: Vec<String> = keys.iter()
+    let header_cells: Vec<String> = keys
+        .iter()
         .enumerate()
         .map(|(i, k)| pad_cell(k, column_info[i].max_width, false))
         .collect();
@@ -185,19 +230,15 @@ fn format_array_to_table(items: &Vec<serde_json::Value>) -> Option<String> {
     // Data rows
     for item in items {
         if let Some(obj) = item.as_object() {
-            let row_cells: Vec<String> = keys.iter()
+            let row_cells: Vec<String> = keys
+                .iter()
                 .enumerate()
                 .map(|(i, k)| {
                     let info = &column_info[i];
-                    let value = obj.get(k)
-                        .map(|v| format_value(v))
-                        .unwrap_or_default();
+                    let value = obj.get(k).map(|v| format_value(v)).unwrap_or_default();
 
-                    let (content, skip_padding) = truncate_string(
-                        &value,
-                        info.is_uri_column,
-                        info.max_width
-                    );
+                    let (content, skip_padding) =
+                        truncate_string(&value, info.is_uri_column, info.max_width);
 
                     if skip_padding {
                         // Long URI, output as-is without padding
@@ -294,7 +335,7 @@ mod tests {
 
         // This should not panic and should produce aligned output
         // We can't easily capture stdout, but at least verify it doesn't crash
-        print_table(obj);
+        print_table(obj, true);
     }
 
     #[test]
@@ -305,12 +346,12 @@ mod tests {
             "uri": "viking://resources/very/long/path/that/exceeds/normal/width/limits/and/should/not/be/truncated/because/it/is/a/uri"
         });
 
-        print_table(obj);
+        print_table(obj, true);
     }
 
     #[test]
     fn test_empty_object() {
         let obj = json!({});
-        print_table(obj);
+        print_table(obj, true);
     }
 }
