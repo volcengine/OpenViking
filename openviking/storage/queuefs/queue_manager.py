@@ -294,12 +294,16 @@ class QueueManager:
         queue_name: Optional[str] = None,
         timeout: Optional[float] = None,
         poll_interval: float = 0.5,
+        progress_callback=None,
     ) -> Dict[str, QueueStatus]:
         """Wait for completion and return final status."""
         start = time.time()
         while True:
-            if await self.is_all_complete(queue_name):
-                return await self.check_status(queue_name)
+            statuses = await self.check_status(queue_name)
+            if all(s.is_complete for s in statuses.values()):
+                return statuses
+            if progress_callback is not None:
+                progress_callback(statuses)
             if timeout and (time.time() - start) > timeout:
                 raise TimeoutError(f"Queue processing not complete after {timeout}s")
             await asyncio.sleep(poll_interval)

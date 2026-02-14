@@ -4,7 +4,7 @@
 Synchronous OpenViking client implementation.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 if TYPE_CHECKING:
     from openviking.session import Session
@@ -159,9 +159,23 @@ class SyncOpenViking:
         """Delete resource"""
         return run_async(self._async_client.rm(uri, recursive))
 
-    def wait_processed(self, timeout: float = None) -> Dict[str, Any]:
-        """Wait for all async operations to complete"""
-        return run_async(self._async_client.wait_processed(timeout))
+    def wait_processed(
+        self,
+        timeout: float = None,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ) -> None:
+        """Wait for all async operations to complete.
+
+        Args:
+            timeout: Wait timeout in seconds.
+            progress_callback: Optional callback invoked each poll iteration with
+                queue status dicts.
+        """
+        return run_async(
+            self._async_client.wait_processed(
+                timeout, progress_callback=progress_callback
+            )
+        )
 
     def grep(self, uri: str, pattern: str, case_insensitive: bool = False) -> Dict:
         """Content search"""

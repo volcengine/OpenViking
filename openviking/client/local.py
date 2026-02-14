@@ -5,7 +5,7 @@
 Implements BaseClient interface using direct service calls (embedded mode).
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 from openviking.service import OpenVikingService
 from openviking_cli.client.base import BaseClient
@@ -82,9 +82,15 @@ class LocalClient(BaseClient):
             timeout=timeout,
         )
 
-    async def wait_processed(self, timeout: Optional[float] = None) -> Dict[str, Any]:
+    async def wait_processed(
+        self,
+        timeout: Optional[float] = None,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ) -> Dict[str, Any]:
         """Wait for all processing to complete."""
-        return await self._service.resources.wait_processed(timeout=timeout)
+        return await self._service.resources.wait_processed(
+            timeout=timeout, progress_callback=progress_callback
+        )
 
     # ============= File System =============
 

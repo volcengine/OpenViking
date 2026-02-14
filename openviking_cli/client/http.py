@@ -5,7 +5,7 @@
 Implements BaseClient interface using HTTP calls to OpenViking Server.
 """
 
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import httpx
 
@@ -260,8 +260,15 @@ class AsyncHTTPClient(BaseClient):
         )
         return self._handle_response(response)
 
-    async def wait_processed(self, timeout: Optional[float] = None) -> Dict[str, Any]:
-        """Wait for all processing to complete."""
+    async def wait_processed(
+        self,
+        timeout: Optional[float] = None,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ) -> Dict[str, Any]:
+        """Wait for all processing to complete.
+
+        Note: progress_callback is not supported in HTTP mode and will be ignored.
+        """
         response = await self._http.post(
             "/api/v1/system/wait",
             json={"timeout": timeout},

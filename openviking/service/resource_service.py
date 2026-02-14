@@ -6,7 +6,7 @@ Resource Service for OpenViking.
 Provides resource management operations: add_resource, add_skill, wait_processed.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 
 from openviking.storage import VikingDBManager
 from openviking.storage.queuefs import get_queue_manager
@@ -164,18 +164,42 @@ class ResourceService:
 
         return result
 
-    async def wait_processed(self, timeout: Optional[float] = None) -> Dict[str, Any]:
+    async def wait_processed(
+        self,
+        timeout: Optional[float] = None,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ) -> Dict[str, Any]:
         """Wait for all queued processing to complete.
 
         Args:
             timeout: Wait timeout in seconds
+            progress_callback: Optional callback invoked each poll iteration with
+                queue status dicts.
 
         Returns:
             Queue status
         """
         qm = get_queue_manager()
+
+        if progress_callback is not None:
+            def adapted(statuses):
+                progress_callback({
+                    name: {
+                        "pending": s.pending,
+                        "in_progress": s.in_progress,
+                        "processed": s.processed,
+                        "error_count": s.error_count,
+                        "total": s.total,
+                    }
+                    for name, s in statuses.items()
+                })
+        else:
+            adapted = None
+
         try:
-            status = await qm.wait_complete(timeout=timeout)
+            status = await qm.wait_complete(
+                timeout=timeout, progress_callback=adapted
+            )
         except TimeoutError as exc:
             raise DeadlineExceededError("queue processing", timeout) from exc
         return {
