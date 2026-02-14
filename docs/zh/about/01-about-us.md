@@ -123,7 +123,7 @@ Haojie Qin, Jiahui Zhou, Linggang Wang, Maojia Sheng, Yaohui Sun
 
 扫描下方二维码添加小助手微信，备注「OpenViking」后即可加入微信交流群：
 
-![微信扫码加群](/docs/images/wechat-group-qrcode.jpg)
+![微信扫码加群](/docs/images/wechat-group-qrcode2.jpeg)
 
 **Discord**
 
