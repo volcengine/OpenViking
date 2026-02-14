@@ -179,11 +179,17 @@ class VikingFS:
         """Content search by pattern or keywords."""
         path = self._uri_to_path(uri)
         result = self.agfs.grep(path, pattern, True, case_insensitive)
-        # Change file to uri
         if result.get("matches", None) is None:
             result["matches"] = []
+        new_matches = []
         for match in result.get("matches", []):
-            match["uri"] = self._path_to_uri(match.pop("file"))
+            new_match = {
+                "line": match.get("line"),
+                "uri": self._path_to_uri(match.get("file")),
+                "content": match.get("content"),
+            }
+            new_matches.append(new_match)
+        result["matches"] = new_matches
         return result
 
     async def stat(self, uri: str) -> Dict[str, Any]:
