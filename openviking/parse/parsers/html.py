@@ -153,13 +153,6 @@ class URLTypeDetector:
             if re.match(pattern, url):
                 return True
 
-        # Check if it's a GitHub/GitLab URL
-        parsed = urlparse(url)
-        if parsed.netloc in ["github.com", "gitlab.com"]:
-            path_parts = parsed.path.strip("/").split("/")
-            if len(path_parts) >= 2:
-                return True
-
         return False
 
 
@@ -359,14 +352,17 @@ class HTMLParser(BaseParser):
             # Get appropriate parser
             if file_type == "pdf":
                 from openviking.parse.parsers.pdf import PDFParser
+
                 parser = PDFParser()
                 result = await parser.parse(temp_path)
             elif file_type == "markdown":
                 from openviking.parse.parsers.markdown import MarkdownParser
+
                 parser = MarkdownParser()
                 result = await parser.parse(temp_path)
             elif file_type == "text":
                 from openviking.parse.parsers.text import TextParser
+
                 parser = TextParser()
                 result = await parser.parse(temp_path)
             elif file_type == "html":
@@ -478,6 +474,22 @@ class HTMLParser(BaseParser):
             response.raise_for_status()
             return response.text
 
+    def _convert_to_raw_url(self, url: str) -> str:
+        """Convert GitHub/GitLab blob URL to raw URL."""
+        parsed = urlparse(url)
+
+        if parsed.netloc == "github.com":
+            path_parts = parsed.path.strip("/").split("/")
+            if len(path_parts) >= 4 and path_parts[2] == "blob":
+                # Remove 'blob'
+                new_path = "/".join(path_parts[:2] + path_parts[3:])
+                return f"https://raw.githubusercontent.com/{new_path}"
+
+        if parsed.netloc == "gitlab.com" and "/blob/" in parsed.path:
+            return url.replace("/blob/", "/raw/")
+
+        return url
+
     async def _download_file(self, url: str) -> str:
         """
         Download file from URL to temporary location.
@@ -492,6 +504,8 @@ class HTMLParser(BaseParser):
             Exception: If download fails
         """
         httpx = lazy_import("httpx")
+
+        url = self._convert_to_raw_url(url)
 
         # Determine file extension from URL
         parsed = urlparse(url)

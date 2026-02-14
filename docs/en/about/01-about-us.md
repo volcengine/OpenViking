@@ -123,7 +123,7 @@ Scan the QR code below to join the Lark group and communicate with the core deve
 
 Scan the QR code below to add the assistant on WeChat, mention "OpenViking" and you will be invited to the WeChat group:
 
-![Join via WeChat QR](/docs/images/wechat-group-qrcode.jpg)
+![Join via WeChat QR](/docs/images/wechat-group-qrcode2.jpeg)
 
 **Discord**
 

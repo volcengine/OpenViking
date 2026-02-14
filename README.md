@@ -286,6 +286,17 @@ Congratulations! You have successfully run OpenViking 🎉
 
 ---
 
+## Server Deployment
+
+For production environments, we recommend running OpenViking as a standalone HTTP service to provide persistent, high-performance context support for your AI Agents.
+
+🚀 **Deploy OpenViking on Cloud**:
+To ensure optimal storage performance and data security, we recommend deploying on **Volcengine Elastic Compute Service (ECS)** using the **veLinux** operating system. We have prepared a detailed step-by-step guide to get you started quickly.
+
+👉 **[View: Server Deployment & ECS Setup Guide](./docs/en/getting-started/03-quickstart-server.md)**
+
+---
+
 ## Core Concepts
 
 After running the first example, let's dive into the design philosophy of OpenViking. These five core concepts correspond one-to-one with the solutions mentioned earlier, together building a complete context management system:
