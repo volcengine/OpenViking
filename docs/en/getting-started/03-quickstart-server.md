@@ -85,15 +85,26 @@ Create a CLI config file `~/.openviking/ovcli.conf` that points to your server:
 
 ```json
 {
-  "url": "http://localhost:1933"
+  "url": "http://localhost:1933",
+  "api_key": "your-key"
 }
 ```
 
-Then use CLI commands to interact with the server:
+Once configured, use the CLI to manage resources and query your Agent's memory:
 
 ```bash
-python -m openviking health
-python -m openviking find "what is openviking"
+# Check system health
+openviking observer system
+
+# Add a resource to memory
+openviking add-resource https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md
+
+# List all synchronized resources
+openviking ls viking://resources
+
+# Query
+openviking find "what is openviking"
+
 ```
 
 If the config file is at a different location, specify it via environment variable:
