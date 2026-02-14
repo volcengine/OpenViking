@@ -32,14 +32,14 @@ pub async fn health(
     client: &HttpClient,
     output_format: OutputFormat,
 ) -> Result<()> {
-    let response: serde_json::Value = client.get("/api/v1/system/health", &[]).await?;
+    let response: serde_json::Value = client.get("/health", &[]).await?;
     
-    // For health check, if it's a simple boolean, just print it
-    if let Some(healthy) = response.get("healthy").and_then(|v| v.as_bool()) {
+    // For health check, if it's a simple status, just print it
+    if let Some(status) = response.get("status").and_then(|v| v.as_str()) {
         if matches!(output_format, OutputFormat::Json) {
             output_success(&response, output_format, false);
         } else {
-            println!("{}", healthy);
+            println!("{}", status);
         }
     } else {
         output_success(&response, output_format, false);
