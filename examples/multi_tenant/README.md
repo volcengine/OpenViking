@@ -113,8 +113,9 @@ ROOT_KEY=my-root-key SERVER=http://localhost:1933 bash admin_workflow.sh
  7. Change Role               ROOT 将 bob 提升为 ADMIN
  8. Regenerate Key            为 charlie 重新生成 key，旧 key 立即失效
  9. Access Data               bob 使用 user key 访问数据
-10. Remove User               删除 charlie，验证其 key 失效
-11. Delete Account            删除 account "acme"，验证 alice 的 key 也失效
+10. Error Tests               非法 key、权限不足、重复创建、旧 key 等负面用例
+11. Remove User               删除 charlie，验证其 key 失效
+12. Delete Account            删除 account "acme"，验证 alice 的 key 也失效
 ```
 
 ## CLI 命令参考

@@ -271,7 +271,7 @@ class VikingFS:
         all_entries = []
 
         async def _walk(current_path: str, current_rel: str):
-            for entry in self.agfs.ls(current_path):
+            for entry in self._ls_entries(current_path):
                 name = entry.get("name", "")
                 if name in [".", ".."]:
                     continue
@@ -299,13 +299,13 @@ class VikingFS:
         now = datetime.now()
 
         async def _walk(current_path: str, current_rel: str):
-            for entry in self.agfs.ls(current_path):
+            for entry in self._ls_entries(current_path):
                 name = entry.get("name", "")
                 if name in [".", ".."]:
                     continue
                 rel_path = f"{current_rel}/{name}" if current_rel else name
                 new_entry = {
-                    "uri": str(VikingURI(uri).join(rel_path)),
+                    "uri": self._path_to_uri(f"{current_path}/{name}"),
                     "size": entry.get("size", 0),
                     "isDir": entry.get("isDir", False),
                     "modTime": format_simplified(
@@ -636,6 +636,20 @@ class VikingFS:
             return "/local"
         return f"/local/{remainder}"
 
+    _INTERNAL_DIRS = {"_system"}
+    _ROOT_PATH = "/local"
+
+    def _ls_entries(self, path: str) -> List[Dict[str, Any]]:
+        """List directory entries, filtering out internal directories.
+
+        At root level (/local), uses VALID_SCOPES whitelist.
+        At other levels, uses _INTERNAL_DIRS blacklist.
+        """
+        entries = self.agfs.ls(path)
+        if path == self._ROOT_PATH:
+            return [e for e in entries if e.get("name") in VikingURI.VALID_SCOPES]
+        return [e for e in entries if e.get("name") not in self._INTERNAL_DIRS]
+
     def _path_to_uri(self, path: str) -> str:
         """/local/user/memories/preferences -> viking://user/memories/preferences"""
         if path.startswith("viking://"):
@@ -695,7 +709,7 @@ class VikingFS:
 
         async def _collect(p: str):
             try:
-                for entry in self.agfs.ls(p):
+                for entry in self._ls_entries(p):
                     name = entry.get("name", "")
                     if name in [".", ".."]:
                         continue
@@ -959,7 +973,7 @@ class VikingFS:
         """List directory contents (URI version)."""
         path = self._uri_to_path(uri)
         try:
-            entries = self.agfs.ls(path)
+            entries = self._ls_entries(path)
         except Exception as e:
             raise FileNotFoundError(f"Failed to list {uri}: {e}")
         # basic info
@@ -968,7 +982,7 @@ class VikingFS:
         for entry in entries:
             name = entry.get("name", "")
             new_entry = {
-                "uri": str(VikingURI(uri).join(name)),
+                "uri": self._path_to_uri(f"{path}/{name}"),
                 "size": entry.get("size", 0),
                 "isDir": entry.get("isDir", False),
                 "modTime": format_simplified(datetime.fromisoformat(entry.get("modTime", "")), now),
@@ -987,13 +1001,13 @@ class VikingFS:
         """List directory contents (URI version)."""
         path = self._uri_to_path(uri)
         try:
-            entries = self.agfs.ls(path)
+            entries = self._ls_entries(path)
             # AGFS returns read-only structure, need to create new dict
             all_entries = []
             for entry in entries:
                 name = entry.get("name", "")
                 new_entry = dict(entry)  # Copy original data
-                new_entry["uri"] = str(VikingURI(uri).join(name))
+                new_entry["uri"] = self._path_to_uri(f"{path}/{name}")
                 if entry.get("isDir"):
                     all_entries.append(new_entry)
                 elif not name.startswith("."):
@@ -1027,7 +1041,7 @@ class VikingFS:
         """Delete temp directory and its contents."""
         path = self._uri_to_path(temp_uri)
         try:
-            for entry in self.agfs.ls(path):
+            for entry in self._ls_entries(path):
                 name = entry.get("name", "")
                 if name in [".", ".."]:
                     continue

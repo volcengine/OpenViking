@@ -120,11 +120,6 @@ PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
         overview="Globally shared resource storage, organized by project/topic. "
         "No preset subdirectory structure, users create project directories as needed.",
     ),
-    "transactions": DirectoryDefinition(
-        path="",
-        abstract="Transaction scope. Stores transaction records",
-        overview="Per-account transaction storage",
-    ),
 }
 
 

@@ -55,10 +55,10 @@ class VikingURI:
             raise ValueError(f"URI must start with '{self.SCHEME}://'")
 
         # Remove scheme
-        path = self.uri[len(f"{self.SCHEME}://") :].strip("/")
+        path = self.uri[len(f"{self.SCHEME}://") :]
 
         # Root URI: viking://
-        if not path:
+        if not path.strip("/"):
             return {
                 "scheme": self.SCHEME,
                 "scope": "",
