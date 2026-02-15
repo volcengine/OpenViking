@@ -2,9 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """LiteLLM VLM Provider implementation with multi-provider support."""
 
+import os
+
+os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+
 import asyncio
 import base64
-import os
 from pathlib import Path
 from typing import Any, Dict, List, Union
 
