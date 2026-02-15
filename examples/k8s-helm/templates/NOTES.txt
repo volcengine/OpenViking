@@ -1,0 +1,53 @@
+{{- if not .Values.openviking.config.embedding.dense.api_key -}}
+#####################################################################################
+### WARNING: No embedding API key configured!                                      ###
+#####################################################################################
+
+The OpenViking server is deployed but no embedding API key is configured.
+You need to update the secret with your Volcengine API key:
+
+  kubectl create secret generic {{ include "openviking.fullname" . }}-config \
+    --from-literal=ov.conf='{{ toJson .Values.openviking.config }}' \
+    --dry-run=client -o yaml | kubectl apply -f -
+
+Or use:
+
+  helm upgrade {{ .Release.Name }} openviking/openviking \
+    --set openviking.config.embedding.dense.api_key=YOUR_API_KEY
+
+{{- end }}
+
+OpenViking has been deployed!
+
+1. Get the application URL by running these commands:
+{{- if contains "LoadBalancer" .Values.service.type }}
+     NOTE: It may take a few minutes for the LoadBalancer IP to be available.
+           You can watch the status by running:
+           kubectl get --namespace {{ .Release.Namespace }} svc -w {{ include "openviking.fullname" . }}
+
+  export SERVICE_IP=$(kubectl get svc --namespace {{ .Release.Namespace }} {{ include "openviking.fullname" . }} --template "{{"{{ range (index .status.loadBalancer.ingress 0) }}{{.}}{{ end }}"}}")
+  echo http://$SERVICE_IP:{{ .Values.service.port }}
+{{- else if contains "ClusterIP" .Values.service.type }}
+  export POD_NAME=$(kubectl get pods --namespace {{ .Release.Namespace }} -l "app.kubernetes.io/name={{ include "openviking.name" . }},app.kubernetes.io/instance={{ .Release.Name }}" -o jsonpath="{.items[0].metadata.name}")
+  export CONTAINER_PORT=$(kubectl get pod --namespace {{ .Release.Namespace }} $POD_NAME -o jsonpath="{.spec.containers[0].ports[0].containerPort}")
+  echo "Visit http://127.0.0.1:8080 to use your application"
+  kubectl --namespace {{ .Release.Namespace }} port-forward $POD_NAME 8080:$CONTAINER_PORT
+{{- end }}
+
+2. Check the health of your deployment:
+
+  kubectl get pods -n {{ .Release.Namespace }} -l app.kubernetes.io/name={{ include "openviking.name" . }}
+  curl http://$SERVICE_IP:{{ .Values.service.port }}/health
+
+3. To use the OpenViking CLI with your server:
+
+   Create an ovcli.conf file:
+   {
+     "url": "http://$SERVICE_IP:{{ .Values.service.port }}",
+     "api_key": null,
+     "output": "table"
+   }
+
+4. For more information:
+   - Documentation: https://github.com/volcengine/OpenViking
+   - Configuration: Check values.yaml for all available options

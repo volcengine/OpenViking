@@ -1,0 +1,249 @@
+# Default values for openviking.
+# This is a YAML-formatted file.
+
+# Cloud provider configuration for LoadBalancer annotations
+# Supported: "gcp", "aws", ""
+cloudProvider: ""
+
+# Number of replicas
+replicaCount: 1
+
+image:
+  # Use ghcr.io/astral-sh/uv as base image for running OpenViking with uv
+  repository: ghcr.io/astral-sh/uv
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: "python3.12-bookworm"
+
+# Image pull secrets
+imagePullSecrets: []
+
+nameOverride: ""
+fullnameOverride: ""
+
+# Service account configuration
+serviceAccount:
+  # Specifies whether a service account should be created
+  create: true
+  # Automatically mount a ServiceAccount's API credentials?
+  automount: true
+  # Annotations to add to the service account
+  annotations: {}
+  # The name of the service account to use.
+  name: ""
+
+# Pod annotations
+podAnnotations: {}
+
+# Pod security context
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  fsGroup: 1000
+
+# Container security context
+securityContext:
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop:
+      - ALL
+  readOnlyRootFilesystem: false
+  runAsNonRoot: true
+  runAsUser: 1000
+
+# Service configuration
+service:
+  type: LoadBalancer
+  port: 1933
+  targetPort: 1933
+  # Additional annotations for the service (merged with cloud provider annotations)
+  annotations: {}
+
+# Resource limits and requests
+resources:
+  limits:
+    cpu: 2000m
+    memory: 4Gi
+  requests:
+    cpu: 500m
+    memory: 1Gi
+
+# Liveness probe
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 30
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+# Readiness probe
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 10
+  periodSeconds: 5
+  timeoutSeconds: 3
+  failureThreshold: 3
+
+# Horizontal Pod Autoscaler
+autoscaling:
+  enabled: false
+  minReplicas: 1
+  maxReplicas: 100
+  targetCPUUtilizationPercentage: 80
+  targetMemoryUtilizationPercentage: 80
+
+# Node selector
+nodeSelector: {}
+
+# Tolerations
+tolerations: []
+
+# Affinity
+affinity: {}
+
+# OpenViking configuration (ov.conf content)
+# This will be stored in a Secret and mounted into the container
+openviking:
+  config:
+    server:
+      host: "0.0.0.0"
+      port: 1933
+      api_key: null
+      cors_origins:
+        - "*"
+    storage:
+      vectordb:
+        name: "context"
+        backend: "local"
+        path: "/data/vectordb"
+        volcengine:
+          region: "cn-beijing"
+          ak: null
+          sk: null
+      agfs:
+        port: 1833
+        log_level: "warn"
+        path: "/data/agfs"
+        backend: "local"
+        timeout: 10
+        retry_times: 3
+        s3_bucket: null
+        s3_region: null
+        s3_access_key: null
+        s3_secret_key: null
+    embedding:
+      dense:
+        model: "doubao-embedding-vision-250615"
+        api_key: null
+        api_base: "https://ark.cn-beijing.volces.com/api/v3"
+        dimension: 1024
+        provider: "volcengine"
+        input: "multimodal"
+    vlm:
+      model: "doubao-seed-1-8-251228"
+      api_key: null
+      api_base: "https://ark.cn-beijing.volces.com/api/v3"
+      temperature: 0.0
+      max_retries: 2
+      provider: "volcengine"
+    rerank:
+      ak: null
+      sk: null
+      host: "api-vikingdb.vikingdb.cn-beijing.volces.com"
+      model_name: "doubao-seed-rerank"
+      model_version: "251028"
+      threshold: 0.1
+      return_directories: false
+    auto_generate_l0: true
+    auto_generate_l1: true
+    default_search_mode: "thinking"
+    default_search_limit: 3
+    enable_memory_decay: true
+    memory_decay_check_interval: 3600
+    log_level: "INFO"
+    log_format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+    log_output: "stdout"
+    parsers:
+      pdf:
+        strategy: "auto"
+        max_content_length: 100000
+        max_section_size: 4000
+        section_size_flexibility: 0.3
+        mineru_endpoint: null
+        mineru_api_key: null
+        mineru_timeout: 300.0
+      code:
+        enable_ast: true
+        extract_functions: true
+        extract_classes: true
+        extract_imports: true
+        include_comments: true
+        max_line_length: 1000
+        max_token_limit: 50000
+        truncation_strategy: "head"
+        warn_on_truncation: true
+      image:
+        enable_ocr: false
+        enable_vlm: true
+        ocr_lang: "eng"
+        vlm_model: "gpt-4-vision"
+        max_dimension: 2048
+      audio:
+        enable_transcription: true
+        transcription_model: "whisper-large-v3"
+        language: null
+        extract_metadata: true
+      video:
+        extract_frames: true
+        frame_interval: 10.0
+        enable_transcription: true
+        enable_vlm_description: false
+        max_duration: 3600.0
+      markdown:
+        preserve_links: true
+        extract_frontmatter: true
+        include_metadata: true
+        max_heading_depth: 3
+      html:
+        extract_text_only: false
+        preserve_structure: true
+        clean_html: true
+        extract_metadata: true
+      text:
+        detect_language: true
+        split_by_paragraphs: true
+        max_paragraph_length: 1000
+        preserve_line_breaks: false
+
+  # Extra environment variables
+  env: []
+    # - name: OPENVIKING_LOG_LEVEL
+    #   value: "DEBUG"
+
+  # Data volume configuration
+  # Note: For MVP, data is stored in emptyDir. For production, consider using PVC.
+  dataVolume:
+    enabled: true
+    # Use emptyDir for MVP. Set to true and configure pvc section for persistent storage.
+    usePVC: false
+    size: 10Gi
+    storageClassName: ""
+    accessModes:
+      - ReadWriteOnce
+
+# Cloud provider specific annotations
+cloudProviders:
+  gcp:
+    service:
+      annotations:
+        networking.gke.io/load-balancer-type: "External"
+  aws:
+    service:
+      annotations:
+        service.beta.kubernetes.io/aws-load-balancer-type: "external"
+        service.beta.kubernetes.io/aws-load-balancer-scheme: "internet-facing"
+        service.beta.kubernetes.io/aws-load-balancer-nlb-target-type: "ip"

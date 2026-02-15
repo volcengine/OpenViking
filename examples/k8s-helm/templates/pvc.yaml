@@ -1,0 +1,17 @@
+{{- if and .Values.openviking.dataVolume.enabled .Values.openviking.dataVolume.usePVC }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "openviking.fullname" . }}-data
+  labels:
+    {{- include "openviking.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    {{- toYaml .Values.openviking.dataVolume.accessModes | nindent 4 }}
+  resources:
+    requests:
+      storage: {{ .Values.openviking.dataVolume.size }}
+  {{- if .Values.openviking.dataVolume.storageClassName }}
+  storageClassName: {{ .Values.openviking.dataVolume.storageClassName }}
+  {{- end }}
+{{- end }}

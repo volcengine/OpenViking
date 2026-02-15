@@ -1,0 +1,107 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "openviking.fullname" . }}
+  labels:
+    {{- include "openviking.labels" . | nindent 4 }}
+spec:
+  {{- if not .Values.autoscaling.enabled }}
+  replicas: {{ .Values.replicaCount }}
+  {{- end }}
+  selector:
+    matchLabels:
+      {{- include "openviking.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      {{- with .Values.podAnnotations }}
+      annotations:
+        {{- toYaml . | nindent 8 }}
+        # Force redeployment when config changes
+        checksum/config: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+      {{- end }}
+      labels:
+        {{- include "openviking.labels" . | nindent 8 }}
+    spec:
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      serviceAccountName: {{ include "openviking.serviceAccountName" . }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: {{ .Chart.Name }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          image: "{{ .Values.image.repository }}:{{ .Values.image.tag | default .Chart.AppVersion }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command:
+            - /bin/sh
+            - -c
+          args:
+            - |
+              # Create data directories
+              mkdir -p /data/vectordb /data/agfs
+              
+              # Clone OpenViking if not already present
+              if [ ! -d /app/openviking ]; then
+                echo "Installing OpenViking..."
+                cd /app
+                uv pip install openviking
+              fi
+              
+              # Start OpenViking server
+              echo "Starting OpenViking server..."
+              exec uv run --with openviking openviking serve --config /etc/openviking/ov.conf
+          ports:
+            - name: http
+              containerPort: {{ .Values.openviking.config.server.port }}
+              protocol: TCP
+          livenessProbe:
+            {{- toYaml .Values.livenessProbe | nindent 12 }}
+          readinessProbe:
+            {{- toYaml .Values.readinessProbe | nindent 12 }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          env:
+            - name: OPENVIKING_CONFIG_FILE
+              value: "/etc/openviking/ov.conf"
+            {{- with .Values.openviking.env }}
+            {{- toYaml . | nindent 12 }}
+            {{- end }}
+          volumeMounts:
+            - name: config
+              mountPath: /etc/openviking
+              readOnly: true
+            - name: data
+              mountPath: /data
+          {{- if .Values.openviking.config.storage.agfs.backend == "s3" }}
+          envFrom:
+            - secretRef:
+                name: {{ include "openviking.fullname" . }}-s3-credentials
+                optional: true
+          {{- end }}
+      volumes:
+        - name: config
+          secret:
+            secretName: {{ include "openviking.fullname" . }}-config
+        - name: data
+          {{- if and .Values.openviking.dataVolume.enabled .Values.openviking.dataVolume.usePVC }}
+          persistentVolumeClaim:
+            claimName: {{ include "openviking.fullname" . }}-data
+          {{- else }}
+          emptyDir:
+            sizeLimit: {{ .Values.openviking.dataVolume.size }}
+          {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
