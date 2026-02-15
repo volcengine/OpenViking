@@ -33,8 +33,11 @@ def _version_callback(value: bool) -> None:
 @app.callback()
 def main(
     ctx: typer.Context,
-    json_output: bool = typer.Option(
-        False, "--json", help="Compact JSON with {ok, result} wrapper (for scripts)"
+    compact: bool = typer.Option(
+        True,
+        "--compact",
+        "-c",
+        help="Compact representation, defaults to true - compacts JSON output or uses simplified representation for Table output",
     ),
     output_format: Optional[str] = typer.Option(
         None, "--output", "-o", help="Output format: table (default), json"
@@ -60,7 +63,7 @@ def main(
         if output_format is None:
             output_format = "table"
 
-    ctx.obj = CLIContext(json_output=json_output, output_format=output_format)
+    ctx.obj = CLIContext(compact=compact, output_format=output_format)
 
 
 register_commands(app)

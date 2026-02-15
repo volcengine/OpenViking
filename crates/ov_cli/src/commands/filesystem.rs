@@ -8,9 +8,10 @@ pub async fn ls(
     simple: bool,
     recursive: bool,
     output_format: OutputFormat,
+    compact: bool,
 ) -> Result<()> {
     let result = client.ls(uri, simple, recursive).await?;
-    output_success(&result, output_format, false);
+    output_success(&result, output_format, compact);
     Ok(())
 }
 
@@ -18,9 +19,10 @@ pub async fn tree(
     client: &HttpClient,
     uri: &str,
     output_format: OutputFormat,
+    compact: bool,
 ) -> Result<()> {
     let result = client.tree(uri).await?;
-    output_success(&result, output_format, false);
+    output_success(&result, output_format, compact);
     Ok(())
 }
 
@@ -28,6 +30,7 @@ pub async fn mkdir(
     client: &HttpClient,
     uri: &str,
     _output_format: OutputFormat,
+    _compact: bool,
 ) -> Result<()> {
     client.mkdir(uri).await?;
     println!("Directory created: {}", uri);
@@ -39,6 +42,7 @@ pub async fn rm(
     uri: &str,
     recursive: bool,
     _output_format: OutputFormat,
+    _compact: bool,
 ) -> Result<()> {
     client.rm(uri, recursive).await?;
     println!("Removed: {}", uri);
@@ -50,6 +54,7 @@ pub async fn mv(
     from_uri: &str,
     to_uri: &str,
     _output_format: OutputFormat,
+    _compact: bool,
 ) -> Result<()> {
     client.mv(from_uri, to_uri).await?;
     println!("Moved: {} -> {}", from_uri, to_uri);
@@ -60,8 +65,9 @@ pub async fn stat(
     client: &HttpClient,
     uri: &str,
     output_format: OutputFormat,
+    compact: bool,
 ) -> Result<()> {
     let result = client.stat(uri).await?;
-    output_success(&result, output_format, false);
+    output_success(&result, output_format, compact);
     Ok(())
 }

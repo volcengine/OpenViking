@@ -14,14 +14,16 @@ use output::OutputFormat;
 pub struct CliContext {
     pub config: Config,
     pub output_format: OutputFormat,
+    pub compact: bool,
 }
 
 impl CliContext {
-    pub fn new(output_format: OutputFormat) -> Result<Self> {
+    pub fn new(output_format: OutputFormat, compact: bool) -> Result<Self> {
         let config = Config::load()?;
         Ok(Self {
             config,
             output_format,
+            compact,
         })
     }
 
@@ -40,9 +42,9 @@ struct Cli {
     #[arg(short, long, value_enum, default_value = "table", global = true)]
     output: OutputFormat,
 
-    /// Output compact JSON with {ok, result} wrapper (for scripts)
-    #[arg(long, global = true)]
-    json: bool,
+    /// Compact representation, defaults to true - compacts JSON output or uses simplified representation for Table output
+    #[arg(short, long, global = true, default_value = "true")]
+    compact: bool,
 
     #[command(subcommand)]
     command: Commands,
@@ -328,14 +330,10 @@ enum ConfigCommands {
 async fn main() {
     let cli = Cli::parse();
     
-    // --json flag overrides output format
-    let output_format = if cli.json {
-        OutputFormat::Json
-    } else {
-        cli.output
-    };
+    let output_format = cli.output;
+    let compact = cli.compact;
 
-    let ctx = match CliContext::new(output_format) {
+    let ctx = match CliContext::new(output_format, compact) {
         Ok(ctx) => ctx,
         Err(e) => {
             eprintln!("Error: {}", e);
@@ -425,7 +423,7 @@ async fn handle_add_resource(
 ) -> Result<()> {
     let client = ctx.get_client();
     commands::resources::add_resource(
-        &client, &path, to, reason, instruction, wait, timeout, ctx.output_format
+        &client, &path, to, reason, instruction, wait, timeout, ctx.output_format, ctx.compact
     ).await
 }
 
@@ -437,13 +435,13 @@ async fn handle_add_skill(
 ) -> Result<()> {
     let client = ctx.get_client();
     commands::resources::add_skill(
-        &client, &data, wait, timeout, ctx.output_format
+        &client, &data, wait, timeout, ctx.output_format, ctx.compact
     ).await
 }
 
 async fn handle_relations(uri: String, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
-    commands::relations::list_relations(&client, &uri, ctx.output_format
+    commands::relations::list_relations(&client, &uri, ctx.output_format, ctx.compact
     ).await
 }
 
@@ -455,7 +453,7 @@ async fn handle_link(
 ) -> Result<()> {
     let client = ctx.get_client();
     commands::relations::link(
-        &client, &from_uri, &to_uris, &reason, ctx.output_format
+        &client, &from_uri, &to_uris, &reason, ctx.output_format, ctx.compact
     ).await
 }
 
@@ -466,13 +464,13 @@ async fn handle_unlink(
 ) -> Result<()> {
     let client = ctx.get_client();
     commands::relations::unlink(
-        &client, &from_uri, &to_uri, ctx.output_format
+        &client, &from_uri, &to_uri, ctx.output_format, ctx.compact
     ).await
 }
 
 async fn handle_export(uri: String, to: String, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
-    commands::pack::export(&client, &uri, &to, ctx.output_format
+    commands::pack::export(&client, &uri, &to, ctx.output_format, ctx.compact
     ).await
 }
 
@@ -485,7 +483,7 @@ async fn handle_import(
 ) -> Result<()> {
     let client = ctx.get_client();
     commands::pack::import(
-        &client, &file_path, &target_uri, force, no_vectorize, ctx.output_format
+        &client, &file_path, &target_uri, force, no_vectorize, ctx.output_format, ctx.compact
     ).await
 }
 
@@ -493,13 +491,13 @@ async fn handle_system(cmd: SystemCommands, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     match cmd {
         SystemCommands::Wait { timeout } => {
-            commands::system::wait(&client, timeout, ctx.output_format).await
+            commands::system::wait(&client, timeout, ctx.output_format, ctx.compact).await
         }
         SystemCommands::Status => {
-            commands::system::status(&client, ctx.output_format).await
+            commands::system::status(&client, ctx.output_format, ctx.compact).await
         }
         SystemCommands::Health => {
-            commands::system::health(&client, ctx.output_format).await
+            commands::system::health(&client, ctx.output_format, ctx.compact).await
         }
     }
 }
@@ -508,16 +506,16 @@ async fn handle_observer(cmd: ObserverCommands, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     match cmd {
         ObserverCommands::Queue => {
-            commands::observer::queue(&client, ctx.output_format).await
+            commands::observer::queue(&client, ctx.output_format, ctx.compact).await
         }
         ObserverCommands::Vikingdb => {
-            commands::observer::vikingdb(&client, ctx.output_format).await
+            commands::observer::vikingdb(&client, ctx.output_format, ctx.compact).await
         }
         ObserverCommands::Vlm => {
-            commands::observer::vlm(&client, ctx.output_format).await
+            commands::observer::vlm(&client, ctx.output_format, ctx.compact).await
         }
         ObserverCommands::System => {
-            commands::observer::system(&client, ctx.output_format).await
+            commands::observer::system(&client, ctx.output_format, ctx.compact).await
         }
     }
 }
@@ -526,26 +524,26 @@ async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     match cmd {
         SessionCommands::New => {
-            commands::session::new_session(&client, ctx.output_format).await
+            commands::session::new_session(&client, ctx.output_format, ctx.compact).await
         }
         SessionCommands::List => {
-            commands::session::list_sessions(&client, ctx.output_format).await
+            commands::session::list_sessions(&client, ctx.output_format, ctx.compact).await
         }
         SessionCommands::Get { session_id } => {
-            commands::session::get_session(&client, &session_id, ctx.output_format
+            commands::session::get_session(&client, &session_id, ctx.output_format, ctx.compact
             ).await
         }
         SessionCommands::Delete { session_id } => {
-            commands::session::delete_session(&client, &session_id, ctx.output_format
+            commands::session::delete_session(&client, &session_id, ctx.output_format, ctx.compact
             ).await
         }
         SessionCommands::AddMessage { session_id, role, content } => {
             commands::session::add_message(
-                &client, &session_id, &role, &content, ctx.output_format
+                &client, &session_id, &role, &content, ctx.output_format, ctx.compact
             ).await
         }
         SessionCommands::Commit { session_id } => {
-            commands::session::commit_session(&client, &session_id, ctx.output_format
+            commands::session::commit_session(&client, &session_id, ctx.output_format, ctx.compact
             ).await
         }
     }
@@ -578,17 +576,17 @@ async fn handle_config(cmd: ConfigCommands, _ctx: CliContext) -> Result<()> {
 
 async fn handle_read(uri: String, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
-    commands::content::read(&client, &uri, ctx.output_format).await
+    commands::content::read(&client, &uri, ctx.output_format, ctx.compact).await
 }
 
 async fn handle_abstract(uri: String, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
-    commands::content::abstract_content(&client, &uri, ctx.output_format).await
+    commands::content::abstract_content(&client, &uri, ctx.output_format, ctx.compact).await
 }
 
 async fn handle_overview(uri: String, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
-    commands::content::overview(&client, &uri, ctx.output_format).await
+    commands::content::overview(&client, &uri, ctx.output_format, ctx.compact).await
 }
 
 async fn handle_find(
@@ -599,7 +597,7 @@ async fn handle_find(
     ctx: CliContext,
 ) -> Result<()> {
     let client = ctx.get_client();
-    commands::search::find(&client, &query, &uri, limit, threshold, ctx.output_format).await
+    commands::search::find(&client, &query, &uri, limit, threshold, ctx.output_format, ctx.compact).await
 }
 
 async fn handle_search(
@@ -611,45 +609,45 @@ async fn handle_search(
     ctx: CliContext,
 ) -> Result<()> {
     let client = ctx.get_client();
-    commands::search::search(&client, &query, &uri, session_id, limit, threshold, ctx.output_format).await
+    commands::search::search(&client, &query, &uri, session_id, limit, threshold, ctx.output_format, ctx.compact).await
 }
 
 async fn handle_ls(uri: String, simple: bool, recursive: bool, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
-    commands::filesystem::ls(&client, &uri, simple, recursive, ctx.output_format).await
+    commands::filesystem::ls(&client, &uri, simple, recursive, ctx.output_format, ctx.compact).await
 }
 
 async fn handle_tree(uri: String, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
-    commands::filesystem::tree(&client, &uri, ctx.output_format).await
+    commands::filesystem::tree(&client, &uri, ctx.output_format, ctx.compact).await
 }
 
 async fn handle_mkdir(uri: String, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
-    commands::filesystem::mkdir(&client, &uri, ctx.output_format).await
+    commands::filesystem::mkdir(&client, &uri, ctx.output_format, ctx.compact).await
 }
 
 async fn handle_rm(uri: String, recursive: bool, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
-    commands::filesystem::rm(&client, &uri, recursive, ctx.output_format).await
+    commands::filesystem::rm(&client, &uri, recursive, ctx.output_format, ctx.compact).await
 }
 
 async fn handle_mv(from_uri: String, to_uri: String, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
-    commands::filesystem::mv(&client, &from_uri, &to_uri, ctx.output_format).await
+    commands::filesystem::mv(&client, &from_uri, &to_uri, ctx.output_format, ctx.compact).await
 }
 
 async fn handle_stat(uri: String, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
-    commands::filesystem::stat(&client, &uri, ctx.output_format).await
+    commands::filesystem::stat(&client, &uri, ctx.output_format, ctx.compact).await
 }
 
 async fn handle_grep(uri: String, pattern: String, ignore_case: bool, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
-    commands::search::grep(&client, &uri, &pattern, ignore_case, ctx.output_format).await
+    commands::search::grep(&client, &uri, &pattern, ignore_case, ctx.output_format, ctx.compact).await
 }
 
 async fn handle_glob(pattern: String, uri: String, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
-    commands::search::glob(&client, &pattern, &uri, ctx.output_format).await
+    commands::search::glob(&client, &pattern, &uri, ctx.output_format, ctx.compact).await
 }

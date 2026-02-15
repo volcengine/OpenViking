@@ -35,20 +35,37 @@ def _truncate(val: Any) -> Any:
     return s[: _MAX_COL_WIDTH - 3] + "..." if len(s) > _MAX_COL_WIDTH else val
 
 
-def _format_list_table(rows: List[Dict[str, Any]]) -> Optional[str]:
-    """Render a list of dict rows as a table with truncation."""
+def _format_list_table(rows: List[Dict[str, Any]], compact: bool = True) -> Optional[str]:
+    """Render a list of dict rows as a table with truncation, skipping empty columns when compact=True."""
     if not rows:
         return None
-    headers: List[str] = []
+
+    all_headers: List[str] = []
     for row in rows:
         for key in row.keys():
             key_str = str(key)
-            if key_str not in headers:
-                headers.append(key_str)
-    if not headers:
+            if key_str not in all_headers:
+                all_headers.append(key_str)
+
+    if not all_headers:
         return None
-    values = [[_truncate(row.get(h, "")) for h in headers] for row in rows]
-    return tabulate(values, headers=headers, tablefmt="plain")
+
+    non_empty_headers = []
+    for header in all_headers:
+        has_value = False
+        for row in rows:
+            val = row.get(header)
+            if val:
+                if val is not None and val != "" and not (isinstance(val, list) and len(val) == 0):
+                    has_value = True
+                    break
+        if has_value or not compact:
+            non_empty_headers.append(header)
+    if not non_empty_headers:
+        return None
+
+    values = [[_truncate(row.get(h, "")) for h in non_empty_headers] for row in rows]
+    return tabulate(values, headers=non_empty_headers, tablefmt="plain")
 
 
 def _is_primitive_list(v: Any) -> bool:
@@ -59,11 +76,11 @@ def _is_dict_list(v: Any) -> bool:
     return isinstance(v, list) and v and all(isinstance(r, dict) for r in v)
 
 
-def _to_table(data: Any) -> Optional[str]:
+def _to_table(data: Any, compact: bool = True) -> Optional[str]:
     """Try to render data as a table. Returns None if not possible."""
     # Rule 1: list[dict] -> multi-row table
     if isinstance(data, list) and data and all(isinstance(r, dict) for r in data):
-        return _format_list_table(data)
+        return _format_list_table(data, compact)
 
     if not isinstance(data, dict):
         return None
@@ -77,7 +94,7 @@ def _to_table(data: Any) -> Optional[str]:
     if "components" in data and "is_healthy" in data:
         lines: List[str] = []
         for comp in data["components"].values():
-            table = _to_table(comp)
+            table = _to_table(comp, compact)
             if table:
                 lines.append(table)
                 lines.append("")
@@ -95,11 +112,11 @@ def _to_table(data: Any) -> Optional[str]:
     if not dict_lists and len(prim_lists) == 1:
         key, items = next(iter(prim_lists.items()))
         col = key.rstrip("es") if key.endswith("es") else key.rstrip("s")
-        return _format_list_table([{col: item} for item in items])
+        return _format_list_table([{col: item} for item in items], compact)
 
     # Rule 3b: single list[dict] -> render directly
     if len(dict_lists) == 1 and not prim_lists:
-        return _format_list_table(next(iter(dict_lists.values())))
+        return _format_list_table(next(iter(dict_lists.values())), compact)
 
     # Rule 2: multiple list[dict] -> flatten with type column
     if dict_lists:
@@ -108,7 +125,7 @@ def _to_table(data: Any) -> Optional[str]:
             for item in items:
                 merged.append({"type": key.rstrip("s"), **item})
         if merged:
-            return _format_list_table(merged)
+            return _format_list_table(merged, compact)
 
     # Rule 4: plain dict (no expandable lists) -> single-row horizontal table
     if not dict_lists and not prim_lists:
@@ -123,7 +140,7 @@ def output_success(ctx: CLIContext, result: Any) -> None:
     """Print successful command result."""
     serializable = _to_serializable(result)
 
-    if ctx.json_output:
+    if ctx.output_format == "json" and ctx.compact:
         typer.echo(json.dumps({"ok": True, "result": serializable}, ensure_ascii=False))
         return
     if serializable is None:
@@ -133,12 +150,15 @@ def output_success(ctx: CLIContext, result: Any) -> None:
         return
 
     if ctx.output_format == "table":
-        table = _to_table(serializable)
+        table = _to_table(serializable, ctx.compact)
         if table is not None:
             typer.echo(table)
             return
 
-    typer.echo(json.dumps(serializable, ensure_ascii=False, indent=2))
+    if ctx.compact:
+        typer.echo(json.dumps(serializable, ensure_ascii=False))
+    else:
+        typer.echo(json.dumps(serializable, ensure_ascii=False, indent=2))
 
 
 def output_error(
@@ -151,7 +171,7 @@ def output_error(
 ) -> None:
     """Print error in JSON or plain format then exit."""
     details = details or {}
-    if ctx.json_output:
+    if ctx.output_format == "json" and ctx.compact:
         payload = {
             "ok": False,
             "error": {

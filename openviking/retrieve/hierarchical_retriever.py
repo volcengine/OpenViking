@@ -323,7 +323,7 @@ class HierarchicalRetriever:
                 if passes_threshold(final_score) and uri not in visited:
                     r["_final_score"] = final_score
                     collected.append(r)
-                    logger.info(
+                    logger.debug(
                         f"[RecursiveSearch] Added URI: {uri} to candidates with score: {final_score}"
                     )
                     if r.get("is_leaf"):
@@ -331,7 +331,7 @@ class HierarchicalRetriever:
                         continue
                     heapq.heappush(dir_queue, (-final_score, uri))
                 else:
-                    logger.info(
+                    logger.debug(
                         f"[RecursiveSearch] URI {uri} score {final_score} did not pass threshold {effective_threshold}"
                     )
 

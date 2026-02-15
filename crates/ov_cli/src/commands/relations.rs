@@ -6,9 +6,10 @@ pub async fn list_relations(
     client: &HttpClient,
     uri: &str,
     format: OutputFormat,
+    compact: bool,
 ) -> Result<()> {
     let result = client.relations(uri).await?;
-    output_success(&result, format, false);
+    output_success(&result, format, compact);
     Ok(())
 }
 
@@ -18,6 +19,7 @@ pub async fn link(
     to_uris: &Vec<String>,
     reason: &str,
     format: OutputFormat,
+    compact: bool,
 ) -> Result<()> {
     let result = client.link(from_uri, to_uris, reason).await?;
     // If the server returns null/empty, show a confirmation summary
@@ -27,9 +29,9 @@ pub async fn link(
             "to": to_uris,
             "reason": reason,
         });
-        output_success(&summary, format, false);
+        output_success(&summary, format, compact);
     } else {
-        output_success(&result, format, false);
+        output_success(&result, format, compact);
     }
     Ok(())
 }
@@ -39,6 +41,7 @@ pub async fn unlink(
     from_uri: &str,
     to_uri: &str,
     format: OutputFormat,
+    compact: bool,
 ) -> Result<()> {
     let result = client.unlink(from_uri, to_uri).await?;
     if result.is_null() {
@@ -46,9 +49,9 @@ pub async fn unlink(
             "from": from_uri,
             "to": to_uri,
         });
-        output_success(&summary, format, false);
+        output_success(&summary, format, compact);
     } else {
-        output_success(&result, format, false);
+        output_success(&result, format, compact);
     }
     Ok(())
 }
