@@ -74,12 +74,18 @@ class ParserRegistry:
         # Register optional media parsers
         if register_optional:
             try:
-                from openviking.parse.parsers.media import ImageParser
+                from openviking.parse.parsers.media import AudioParser, ImageParser, VideoParser
 
                 self.register("image", ImageParser())
                 logger.info("Registered ImageParser for image formats")
+
+                self.register("audio", AudioParser())
+                logger.info("Registered AudioParser for audio formats")
+
+                self.register("video", VideoParser())
+                logger.info("Registered VideoParser for video formats")
             except ImportError as e:
-                logger.debug(f"ImageParser not registered: {e}")
+                logger.debug(f"Media parsers not registered: {e}")
 
     def register(self, name: str, parser: BaseParser) -> None:
         """

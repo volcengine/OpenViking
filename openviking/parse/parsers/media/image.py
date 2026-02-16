@@ -17,7 +17,7 @@ from PIL import Image
 
 from openviking.parse.base import NodeType, ParseResult, ResourceNode
 from openviking.parse.parsers.base_parser import BaseParser
-from openviking_cli.utils.config.parser_config import AudioConfig, ImageConfig, VideoConfig
+from openviking_cli.utils.config.parser_config import ImageConfig
 
 # =============================================================================
 # Configuration Classes
@@ -106,17 +106,23 @@ class ImageParser(BaseParser):
         image_bytes = file_path.read_bytes()
         ext = file_path.suffix
 
-        # 1.1 Save original image
-        await viking_fs.write_file_bytes(f"{temp_uri}/content{ext}", image_bytes)
+        root_dir_name = file_path.stem
+        root_dir_uri = f"{temp_uri}/{root_dir_name}"
+        await viking_fs.mkdir(root_dir_uri)
 
-        # 1.2 Extract image metadata
+        # 1.1 Save original image
+        await viking_fs.write_file_bytes(f"{root_dir_uri}/content{ext}", image_bytes)
+
+        # 1.2 Validate and extract image metadata
         try:
+            img = Image.open(file_path)
+            img.verify()  # Verify that it's a valid image
+            img.close()  # Close and reopen to reset after verify()
             img = Image.open(file_path)
             width, height = img.size
             format_str = img.format or ext[1:].upper()
-        except Exception:
-            width, height = 0, 0
-            format_str = ext[1:].upper()
+        except Exception as e:
+            raise ValueError(f"Invalid image file: {file_path}. Error: {e}") from e
 
         # 1.3 Generate VLM description
         description = ""
@@ -126,14 +132,14 @@ class ImageParser(BaseParser):
             # Fallback: basic description
             description = f"Image file: {file_path.name} ({format_str}, {width}x{height})"
 
-        await viking_fs.write_file(f"{temp_uri}/description.md", description)
+        await viking_fs.write_file(f"{root_dir_uri}/description.md", description)
 
         # 1.4 OCR (optional)
         ocr_text = None
         if self.config.enable_ocr:
             ocr_text = await self._ocr_extract(image_bytes, self.config.ocr_lang)
             if ocr_text:
-                await viking_fs.write_file(f"{temp_uri}/ocr.md", ocr_text)
+                await viking_fs.write_file(f"{root_dir_uri}/ocr.md", ocr_text)
 
         # Create ResourceNode
         root_node = ResourceNode(
@@ -154,7 +160,7 @@ class ImageParser(BaseParser):
         )
 
         # Phase 2: Generate semantic info
-        await self._generate_semantic_info(root_node, temp_uri, viking_fs, ocr_text is not None)
+        await self._generate_semantic_info(root_node, root_dir_uri, viking_fs, ocr_text is not None)
 
         # Phase 3: Build directory structure (handled by TreeBuilder)
         return ParseResult(
@@ -283,254 +289,3 @@ class ImageParser(BaseParser):
             NotImplementedError: This feature is not yet implemented
         """
         raise NotImplementedError("Image parsing not yet implemented")
-
-
-class AudioParser(BaseParser):
-    """
-    Audio parser - Future implementation.
-
-    Planned Features:
-    1. Speech-to-text transcription using ASR models
-    2. Audio metadata extraction (duration, sample rate, channels)
-    3. Speaker diarization (identify different speakers)
-    4. Timestamp alignment for transcribed text
-    5. Generate structured ResourceNode with transcript
-
-    Example workflow:
-        1. Load audio file
-        2. Extract metadata (duration, format, sample rate)
-        3. Transcribe speech to text using Whisper or similar
-        4. (Optional) Perform speaker diarization
-        5. Create ResourceNode with:
-           - type: NodeType.ROOT
-           - children: sections for each speaker/timestamp
-           - meta: audio metadata and timestamps
-        6. Return ParseResult
-
-    Supported formats: MP3, WAV, OGG, FLAC, AAC, M4A
-    """
-
-    def __init__(self, config: Optional[AudioConfig] = None, **kwargs):
-        """
-        Initialize AudioParser.
-
-        Args:
-            config: Audio parsing configuration
-            **kwargs: Additional configuration parameters
-        """
-        self.config = config or AudioConfig()
-
-    @property
-    def supported_extensions(self) -> List[str]:
-        """Return supported audio file extensions."""
-        return [".mp3", ".wav", ".ogg", ".flac", ".aac", ".m4a", ".opus"]
-
-    async def parse(self, source: Union[str, Path], instruction: str = "", **kwargs) -> ParseResult:
-        """
-        Parse audio file - Not yet implemented.
-
-        Planned implementation:
-        1. Load audio file
-        2. Extract metadata using librosa or similar
-        3. If enable_transcription:
-           - Transcribe using Whisper or similar ASR model
-           - Generate timestamps for each segment
-           - (Optional) Perform speaker diarization
-        4. Create ResourceNode tree:
-           - Root node with audio metadata
-           - Child nodes for each transcribed segment
-        5. Return ParseResult
-
-        Args:
-            source: Audio file path or URL
-            **kwargs: Additional parsing parameters
-
-        Returns:
-            ParseResult with transcribed content
-
-        Raises:
-            NotImplementedError: This feature is not yet implemented
-        """
-        raise NotImplementedError(
-            "Audio parsing is not yet implemented. "
-            "This is a placeholder interface for future expansion. "
-            "\n\nPlanned features:"
-            "\n- Speech-to-text transcription (Whisper)"
-            "\n- Speaker diarization"
-            "\n- Timestamp alignment"
-            "\n- Audio metadata extraction"
-            "\n\nWorkaround: Extract audio manually and add transcripts as "
-            "text or markdown files."
-        )
-
-    async def parse_content(
-        self, content: str, source_path: Optional[str] = None, instruction: str = "", **kwargs
-    ) -> ParseResult:
-        """
-        Parse audio from content string - Not yet implemented.
-
-        Args:
-            content: Audio content (base64 or binary string)
-            source_path: Optional source path for metadata
-            **kwargs: Additional parsing parameters
-
-        Returns:
-            ParseResult with transcribed content
-
-        Raises:
-            NotImplementedError: This feature is not yet implemented
-        """
-        raise NotImplementedError("Audio parsing not yet implemented")
-
-
-class VideoParser(BaseParser):
-    """
-    Video parser - Future implementation.
-
-    Planned Features:
-    1. Key frame extraction at regular intervals
-    2. Audio track transcription using ASR
-    3. VLM-based scene description for key frames
-    4. Video metadata extraction (duration, resolution, codec)
-    5. Generate structured ResourceNode combining visual and audio
-
-    Example workflow:
-        1. Load video file
-        2. Extract metadata (duration, resolution, fps)
-        3. Extract audio track → transcribe using AudioParser
-        4. Extract key frames at specified intervals
-        5. For each frame: generate VLM description
-        6. Create ResourceNode tree:
-           - Root: video metadata
-           - Children: timeline nodes (each with frame + transcript)
-        7. Return ParseResult
-
-    Supported formats: MP4, AVI, MOV, MKV, WEBM
-    """
-
-    def __init__(self, config: Optional[VideoConfig] = None, **kwargs):
-        """
-        Initialize VideoParser.
-
-        Args:
-            config: Video parsing configuration
-            **kwargs: Additional configuration parameters
-        """
-        self.config = config or VideoConfig()
-
-    @property
-    def supported_extensions(self) -> List[str]:
-        """Return supported video file extensions."""
-        return [".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"]
-
-    async def parse(self, source: Union[str, Path], instruction: str = "", **kwargs) -> ParseResult:
-        """
-        Parse video file - Not yet implemented.
-
-        Planned implementation:
-        1. Load video file using cv2 or similar
-        2. Extract metadata (duration, resolution, fps, codec)
-        3. Extract audio track:
-           - Save as temporary audio file
-           - Parse using AudioParser
-        4. Extract key frames:
-           - At specified intervals (e.g., every 10 seconds)
-           - Save frames as images
-        5. For each frame (if enable_vlm_description):
-           - Use VLM to generate scene description
-        6. Create ResourceNode tree:
-           - Root: video metadata
-           - Children: Timeline segments
-             - Each segment contains:
-               - Timestamp
-               - Frame description (VLM)
-               - Transcript (ASR)
-        7. Return ParseResult
-
-        Args:
-            source: Video file path or URL
-            **kwargs: Additional parsing parameters
-
-        Returns:
-            ParseResult with video content
-
-        Raises:
-            NotImplementedError: This feature is not yet implemented
-        """
-        raise NotImplementedError(
-            "Video parsing is not yet implemented. "
-            "This is a placeholder interface for future expansion. "
-            "\n\nPlanned features:"
-            "\n- Key frame extraction"
-            "\n- Audio track transcription"
-            "\n- VLM scene description"
-            "\n- Timeline-based structured output"
-            "\n\nWorkaround: Extract frames and audio manually, then process "
-            "as images and audio files."
-        )
-
-    async def parse_content(
-        self, content: str, source_path: Optional[str] = None, instruction: str = "", **kwargs
-    ) -> ParseResult:
-        """
-        Parse video from content string - Not yet implemented.
-
-        Args:
-            content: Video content (base64 or binary string)
-            source_path: Optional source path for metadata
-            **kwargs: Additional parsing parameters
-
-        Returns:
-            ParseResult with video content
-
-        Raises:
-            NotImplementedError: This feature is not yet implemented
-        """
-        raise NotImplementedError("Video parsing not yet implemented")
-
-
-# =============================================================================
-# Utility Functions
-# =============================================================================
-
-
-def is_media_parser_available(parser_type: str) -> bool:
-    """
-    Check if a media parser type is currently available.
-
-    Args:
-        parser_type: Type of parser ("image", "audio", "video")
-
-    Returns:
-        False (all media parsers are future implementations)
-
-    Examples:
-        >>> is_media_parser_available("image")
-        False
-        >>> is_media_parser_available("video")
-        False
-    """
-    return False
-
-
-def get_media_parser_status() -> dict:
-    """
-    Get status of all media parsers.
-
-    Returns:
-        Dictionary with parser names and their implementation status
-
-    Examples:
-        >>> status = get_media_parser_status()
-        >>> print(status)
-        {
-            "image": "planned",
-            "audio": "planned",
-            "video": "planned"
-        }
-    """
-    return {
-        "image": "planned",
-        "audio": "planned",
-        "video": "planned",
-    }

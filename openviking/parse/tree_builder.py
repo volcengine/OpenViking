@@ -108,14 +108,48 @@ class TreeBuilder:
         doc_dirs = [e for e in entries if e.get("isDir") and e["name"] not in [".", ".."]]
 
         if len(doc_dirs) != 1:
-            raise ValueError(f"Expected 1 document directory in {temp_uri}, found {len(doc_dirs)}")
+            logger.error(
+                f"[TreeBuilder] Expected 1 document directory in {temp_uri}, found {len(doc_dirs)}"
+            )
+            raise ValueError(
+                f"[TreeBuilder] Expected 1 document directory in {temp_uri}, found {len(doc_dirs)}"
+            )
 
         doc_name = doc_dirs[0]["name"]
         doc_uri = f"{temp_uri}/{doc_name}"
 
         # 2. Determine base_uri
         if base_uri is None:
-            base_uri = self._get_base_uri(scope)
+            # Check if it's a media file (image/audio/video)
+            media_type = None
+            if source_format:
+                if source_format in ["image", "audio", "video"]:
+                    media_type = source_format
+            elif source_path:
+                from pathlib import Path
+
+                ext = Path(source_path).suffix.lower()
+                image_exts = [".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg"]
+                audio_exts = [".mp3", ".wav", ".ogg", ".flac", ".aac", ".m4a", ".opus"]
+                video_exts = [".mp4", ".mov", ".avi", ".webm", ".mkv"]
+                if ext in image_exts:
+                    media_type = "image"
+                elif ext in audio_exts:
+                    media_type = "audio"
+                elif ext in video_exts:
+                    media_type = "video"
+
+            if media_type:
+                # Map singular media types to plural directory names
+                media_dir_map = {"image": "images", "audio": "audio", "video": "video"}
+                media_dir = media_dir_map.get(media_type, media_type)
+                # Get current date in YYYYMMDD format
+                from datetime import datetime
+
+                date_str = datetime.now().strftime("%Y%m%d")
+                base_uri = f"viking://resources/{media_dir}/{date_str}"
+            else:
+                base_uri = self._get_base_uri(scope)
 
         logger.info(f"Finalizing from temp: {temp_uri} -> {base_uri}")
 
