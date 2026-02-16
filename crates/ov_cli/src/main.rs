@@ -162,11 +162,29 @@ enum Commands {
         /// List all subdirectories recursively
         #[arg(short, long)]
         recursive: bool,
+        /// Abstract content limit (only for agent output)
+        #[arg(long = "abs-limit", short = 'l', default_value = "256")]
+        abs_limit: i32,
+        /// Show all hidden files
+        #[arg(short, long)]
+        all: bool,
+        /// Maximum number of nodes to list
+        #[arg(long = "node-limit", short = 'n', default_value = "1000")]
+        node_limit: i32,
     },
     /// Get directory tree
     Tree {
         /// Viking URI to get tree for
         uri: String,
+        /// Abstract content limit (only for agent output)
+        #[arg(long = "abs-limit", short = 'l', default_value = "128")]
+        abs_limit: i32,
+        /// Show all hidden files
+        #[arg(short, long)]
+        all: bool,
+        /// Maximum number of nodes to list
+        #[arg(long = "node-limit", short = 'n', default_value = "1000")]
+        node_limit: i32,
     },
     /// Create directory
     Mkdir {
@@ -385,11 +403,11 @@ async fn main() {
         Commands::System { action } => handle_system(action, ctx).await,
         Commands::Observer { action } => handle_observer(action, ctx).await,
         Commands::Session { action } => handle_session(action, ctx).await,
-        Commands::Ls { uri, simple, recursive } => {
-            handle_ls(uri, simple, recursive, ctx).await
+        Commands::Ls { uri, simple, recursive, abs_limit, all, node_limit } => {
+            handle_ls(uri, simple, recursive, abs_limit, all, node_limit, ctx).await
         }
-        Commands::Tree { uri } => {
-            handle_tree(uri, ctx).await
+        Commands::Tree { uri, abs_limit, all, node_limit } => {
+            handle_tree(uri, abs_limit, all, node_limit, ctx).await
         }
         Commands::Mkdir { uri } => {
             handle_mkdir(uri, ctx).await
@@ -631,14 +649,16 @@ async fn handle_search(
     commands::search::search(&client, &query, &uri, session_id, limit, threshold, ctx.output_format, ctx.compact).await
 }
 
-async fn handle_ls(uri: String, simple: bool, recursive: bool, ctx: CliContext) -> Result<()> {
+async fn handle_ls(uri: String, simple: bool, recursive: bool, abs_limit: i32, show_all_hidden: bool, node_limit: i32, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
-    commands::filesystem::ls(&client, &uri, simple, recursive, ctx.output_format, ctx.compact).await
+    let api_output = if ctx.compact { "agent" } else { "original" };
+    commands::filesystem::ls(&client, &uri, simple, recursive, api_output, abs_limit, show_all_hidden, node_limit, ctx.output_format, ctx.compact).await
 }
 
-async fn handle_tree(uri: String, ctx: CliContext) -> Result<()> {
+async fn handle_tree(uri: String, abs_limit: i32, show_all_hidden: bool, node_limit: i32, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
-    commands::filesystem::tree(&client, &uri, ctx.output_format, ctx.compact).await
+    let api_output = if ctx.compact { "agent" } else { "original" };
+    commands::filesystem::tree(&client, &uri, api_output, abs_limit, show_all_hidden, node_limit, ctx.output_format, ctx.compact).await
 }
 
 async fn handle_mkdir(uri: String, ctx: CliContext) -> Result<()> {

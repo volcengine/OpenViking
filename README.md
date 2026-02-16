@@ -581,7 +581,7 @@ Let's work together to define and build the future of AI Agent context managemen
 
 ### Star Trend
 
-[![Star History Chart](https://api.star-history.com/svg?repos=volcengine/OpenViking&type=Timeline)](https://www.star-history.com/#volcengine/OpenViking&Timeline)
+[![Star History Chart](https://api.star-history.com/svg?repos=volcengine/OpenViking&type=timeline&legend=top-left)](https://www.star-history.com/#volcengine/OpenViking&type=timeline&legend=top-left)
 
 ---
 
