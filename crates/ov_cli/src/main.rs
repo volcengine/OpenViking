@@ -249,6 +249,13 @@ enum Commands {
         #[arg(short, long, default_value = "viking://")]
         uri: String,
     },
+    /// Add memory in one shot (creates session, adds messages, commits)
+    AddMemory {
+        /// Content to memorize. Plain string (treated as user message),
+        /// JSON {"role":"...","content":"..."} for a single message,
+        /// or JSON array of such objects for multiple messages.
+        content: String,
+    },
     /// Configuration management
     Config {
         #[command(subcommand)]
@@ -383,6 +390,9 @@ async fn main() {
         }
         Commands::Stat { uri } => {
             handle_stat(uri, ctx).await
+        }
+        Commands::AddMemory { content } => {
+            handle_add_memory(content, ctx).await
         }
         Commands::Config { action } => handle_config(action, ctx).await,
         Commands::Version => {
@@ -547,6 +557,11 @@ async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()> {
             ).await
         }
     }
+}
+
+async fn handle_add_memory(content: String, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    commands::session::add_memory(&client, &content, ctx.output_format, ctx.compact).await
 }
 
 async fn handle_config(cmd: ConfigCommands, _ctx: CliContext) -> Result<()> {
