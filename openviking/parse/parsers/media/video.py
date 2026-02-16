@@ -96,12 +96,17 @@ class VideoParser(BaseParser):
 
         from openviking_cli.utils.uri import VikingURI
 
-        root_dir_name = VikingURI.sanitize_segment(file_path.stem)
+        # Sanitize original filename (replace spaces with underscores)
+        original_filename = file_path.name.replace(" ", "_")
+        # Root directory name: filename stem + _ + extension (without dot)
+        stem = file_path.stem.replace(" ", "_")
+        ext_no_dot = ext[1:] if ext else ""
+        root_dir_name = VikingURI.sanitize_segment(f"{stem}_{ext_no_dot}")
         root_dir_uri = f"{temp_uri}/{root_dir_name}"
         await viking_fs.mkdir(root_dir_uri)
 
-        # 1.1 Save original video
-        await viking_fs.write_file_bytes(f"{root_dir_uri}/content{ext}", video_bytes)
+        # 1.1 Save original video with original filename (sanitized)
+        await viking_fs.write_file_bytes(f"{root_dir_uri}/{original_filename}", video_bytes)
 
         # 1.2 Validate video file using magic bytes
         # Define magic bytes for supported video formats
@@ -168,6 +173,7 @@ class VideoParser(BaseParser):
                 "content_type": "video",
                 "source_title": file_path.stem,
                 "semantic_name": file_path.stem,
+                "original_filename": original_filename,
             },
         )
 
@@ -220,7 +226,7 @@ class VideoParser(BaseParser):
             "## Content Summary\n",
             description,
             "\n\n## Available Files\n",
-            f"- content.{node.meta['format']}: Original video file ({node.meta['duration']}s, {node.meta['width']}x{node.meta['height']}, {node.meta['fps']}fps, {node.meta['format'].upper()} format)\n",
+            f"- {node.meta['original_filename']}: Original video file ({node.meta['duration']}s, {node.meta['width']}x{node.meta['height']}, {node.meta['fps']}fps, {node.meta['format'].upper()} format)\n",
         ]
 
         if has_key_frames:

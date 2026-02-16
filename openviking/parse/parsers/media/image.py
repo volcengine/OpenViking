@@ -107,12 +107,17 @@ class ImageParser(BaseParser):
 
         from openviking_cli.utils.uri import VikingURI
 
-        root_dir_name = VikingURI.sanitize_segment(file_path.stem)
+        # Sanitize original filename (replace spaces with underscores)
+        original_filename = file_path.name.replace(" ", "_")
+        # Root directory name: filename stem + _ + extension (without dot)
+        stem = file_path.stem.replace(" ", "_")
+        ext_no_dot = ext[1:] if ext else ""
+        root_dir_name = VikingURI.sanitize_segment(f"{stem}_{ext_no_dot}")
         root_dir_uri = f"{temp_uri}/{root_dir_name}"
         await viking_fs.mkdir(root_dir_uri)
 
-        # 1.1 Save original image
-        await viking_fs.write_file_bytes(f"{root_dir_uri}/content{ext}", image_bytes)
+        # 1.1 Save original image with original filename (sanitized)
+        await viking_fs.write_file_bytes(f"{root_dir_uri}/{original_filename}", image_bytes)
 
         # 1.2 Validate and extract image metadata
         try:
@@ -155,6 +160,7 @@ class ImageParser(BaseParser):
                 "content_type": "image",
                 "source_title": file_path.stem,
                 "semantic_name": file_path.stem,
+                "original_filename": original_filename,
             },
         )
 
@@ -223,7 +229,7 @@ class ImageParser(BaseParser):
             "## Content Summary\n",
             description,
             "\n\n## Available Files\n",
-            f"- content.{node.meta['format']}: Original image file ({node.meta['width']}x{node.meta['height']}, {node.meta['format'].upper()} format)\n",
+            f"- {node.meta['original_filename']}: Original image file ({node.meta['width']}x{node.meta['height']}, {node.meta['format'].upper()} format)\n",
         ]
 
         if has_ocr:
