@@ -95,7 +95,9 @@ class VideoParser(BaseParser):
         video_bytes = file_path.read_bytes()
         ext = file_path.suffix
 
-        root_dir_name = file_path.stem
+        from openviking_cli.utils.uri import VikingURI
+
+        root_dir_name = VikingURI.sanitize_segment(file_path.stem)
         root_dir_uri = f"{temp_uri}/{root_dir_name}"
         await viking_fs.mkdir(root_dir_uri)
 

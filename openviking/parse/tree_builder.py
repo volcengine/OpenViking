@@ -115,7 +115,9 @@ class TreeBuilder:
                 f"[TreeBuilder] Expected 1 document directory in {temp_uri}, found {len(doc_dirs)}"
             )
 
-        doc_name = doc_dirs[0]["name"]
+        from openviking_cli.utils.uri import VikingURI
+
+        doc_name = VikingURI.sanitize_segment(doc_dirs[0]["name"])
         doc_uri = f"{temp_uri}/{doc_name}"
 
         # 2. Determine base_uri

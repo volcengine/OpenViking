@@ -201,7 +201,7 @@ class VikingURI:
         Build a semantic URI based on parent URI.
         """
         # Sanitize semantic name for URI
-        safe_name = VikingURI._sanitize_segment(semantic_name)
+        safe_name = VikingURI.sanitize_segment(semantic_name)
 
         if not is_leaf:
             return f"{parent_uri}/{safe_name}"
@@ -211,7 +211,7 @@ class VikingURI:
             return f"{parent_uri}/{safe_name}/{node_id}"
 
     @staticmethod
-    def _sanitize_segment(text: str) -> str:
+    def sanitize_segment(text: str) -> str:
         """
         Sanitize text for use in URI segment.
 
