@@ -74,7 +74,13 @@ class SyncOpenViking:
         """
         return run_async(
             self._async_client.add_resource(
-                path, target, reason, instruction, wait, timeout, **kwargs,
+                path,
+                target,
+                reason,
+                instruction,
+                wait,
+                timeout,
+                **kwargs,
             )
         )
 

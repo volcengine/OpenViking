@@ -138,23 +138,35 @@ class DirectoryParser(BaseParser):
                 file_parser = self._assign_parser(cf, registry)
                 parser_name = type(file_parser).__name__ if file_parser else "direct"
                 ok = await self._process_single_file(
-                    cf, file_parser, target_uri, viking_fs, warnings,
+                    cf,
+                    file_parser,
+                    target_uri,
+                    viking_fs,
+                    warnings,
                 )
                 if ok:
                     file_count += 1
-                    processed_files.append({
-                        "path": cf.rel_path,
-                        "parser": parser_name,
-                    })
+                    processed_files.append(
+                        {
+                            "path": cf.rel_path,
+                            "parser": parser_name,
+                        }
+                    )
                 else:
-                    failed_files.append({
-                        "path": cf.rel_path,
-                        "parser": parser_name,
-                    })
+                    failed_files.append(
+                        {
+                            "path": cf.rel_path,
+                            "parser": parser_name,
+                        }
+                    )
 
             # Collect unsupported files from scan result
             unsupported_files = [
-                {"path": uf.rel_path, "status": "unsupported", "reason": uf.classification}
+                {
+                    "path": uf.rel_path,
+                    "status": "unsupported",
+                    "reason": uf.classification,
+                }
                 for uf in scan_result.unsupported
             ]
 
@@ -302,7 +314,9 @@ class DirectoryParser(BaseParser):
                     parent = str(PurePosixPath(rel_path).parent)
                     dest = f"{target_uri}/{parent}" if parent != "." else target_uri
                     await DirectoryParser._merge_temp(
-                        viking_fs, sub_result.temp_dir_path, dest,
+                        viking_fs,
+                        sub_result.temp_dir_path,
+                        dest,
                     )
                 return True
             except Exception as exc:
