@@ -59,7 +59,6 @@ class VideoParser(BaseParser):
         Phase 1: Generate temporary files
         - Copy original video to temp_uri/content.{ext}
         - Extract key frames
-        - Generate description.md for each frame using VLM
         - Extract audio track and transcribe using ASR
 
         Phase 2: Generate semantic info
@@ -145,8 +144,6 @@ class VideoParser(BaseParser):
             # Fallback: basic description
             description = f"Video file: {file_path.name} ({format_str}, {duration}s, {width}x{height}, {fps}fps)"
 
-        await viking_fs.write_file(f"{root_dir_uri}/description.md", description)
-
         # 1.4 Key frames (optional)
         key_frames_dir = f"{root_dir_uri}/keyframes"
         has_key_frames = False
@@ -175,7 +172,7 @@ class VideoParser(BaseParser):
         )
 
         # Phase 2: Generate semantic info
-        await self._generate_semantic_info(root_node, root_dir_uri, viking_fs, has_key_frames)
+        await self._generate_semantic_info(root_node, description, viking_fs, has_key_frames)
 
         # Phase 3: Build directory structure (handled by TreeBuilder)
         return ParseResult(
@@ -204,20 +201,17 @@ class VideoParser(BaseParser):
         return "Video description (video processing integration pending)\n\nThis is a video. Video processing feature has not yet integrated external libraries."
 
     async def _generate_semantic_info(
-        self, node: ResourceNode, temp_uri: str, viking_fs, has_key_frames: bool
+        self, node: ResourceNode, description: str, viking_fs, has_key_frames: bool
     ):
         """
         Phase 2: Generate abstract and overview.
 
         Args:
             node: ResourceNode to update
-            temp_uri: Temporary URI
+            description: Video description
             viking_fs: VikingFS instance
             has_key_frames: Whether key frames directory exists
         """
-        # Read description.md
-        description = await viking_fs.read_file(f"{temp_uri}/description.md")
-
         # Generate abstract (short summary, < 100 tokens)
         abstract = description[:200] if len(description) > 200 else description
 
@@ -227,7 +221,6 @@ class VideoParser(BaseParser):
             description,
             "\n\n## Available Files\n",
             f"- content.{node.meta['format']}: Original video file ({node.meta['duration']}s, {node.meta['width']}x{node.meta['height']}, {node.meta['fps']}fps, {node.meta['format'].upper()} format)\n",
-            "- description.md: Detailed video description\n",
         ]
 
         if has_key_frames:
@@ -239,13 +232,6 @@ class VideoParser(BaseParser):
         overview_parts.append("video_bytes = await video_resource.play()\n")
         overview_parts.append("# Returns: Video file binary data\n")
         overview_parts.append("# Purpose: Play or save the video\n")
-        overview_parts.append("```\n\n")
-
-        overview_parts.append("### Get Video Description\n")
-        overview_parts.append("```python\n")
-        overview_parts.append("description = await video_resource.description()\n")
-        overview_parts.append("# Returns: FileContent object for further processing\n")
-        overview_parts.append("# Purpose: Understand video content\n")
         overview_parts.append("```\n\n")
 
         if has_key_frames:

@@ -36,6 +36,7 @@ from openviking_cli.utils.config.config_loader import (
     load_json_config,
     resolve_config_path,
 )
+from openviking_cli.utils.uri import VikingURI
 
 # Error code to exception class mapping
 ERROR_CODE_TO_EXCEPTION = {
@@ -281,6 +282,7 @@ class AsyncHTTPClient(BaseClient):
         node_limit: int = 1000,
     ) -> List[Any]:
         """List directory contents."""
+        uri = VikingURI.normalize(uri)
         response = await self._http.get(
             "/api/v1/fs/ls",
             params={
@@ -304,6 +306,7 @@ class AsyncHTTPClient(BaseClient):
         node_limit: int = 1000,
     ) -> List[Dict[str, Any]]:
         """Get directory tree."""
+        uri = VikingURI.normalize(uri)
         response = await self._http.get(
             "/api/v1/fs/tree",
             params={
@@ -318,6 +321,7 @@ class AsyncHTTPClient(BaseClient):
 
     async def stat(self, uri: str) -> Dict[str, Any]:
         """Get resource status."""
+        uri = VikingURI.normalize(uri)
         response = await self._http.get(
             "/api/v1/fs/stat",
             params={"uri": uri},
@@ -326,6 +330,7 @@ class AsyncHTTPClient(BaseClient):
 
     async def mkdir(self, uri: str) -> None:
         """Create directory."""
+        uri = VikingURI.normalize(uri)
         response = await self._http.post(
             "/api/v1/fs/mkdir",
             json={"uri": uri},
@@ -334,6 +339,7 @@ class AsyncHTTPClient(BaseClient):
 
     async def rm(self, uri: str, recursive: bool = False) -> None:
         """Remove resource."""
+        uri = VikingURI.normalize(uri)
         response = await self._http.request(
             "DELETE",
             "/api/v1/fs",
@@ -343,6 +349,8 @@ class AsyncHTTPClient(BaseClient):
 
     async def mv(self, from_uri: str, to_uri: str) -> None:
         """Move resource."""
+        from_uri = VikingURI.normalize(from_uri)
+        to_uri = VikingURI.normalize(to_uri)
         response = await self._http.post(
             "/api/v1/fs/mv",
             json={"from_uri": from_uri, "to_uri": to_uri},
@@ -353,6 +361,7 @@ class AsyncHTTPClient(BaseClient):
 
     async def read(self, uri: str) -> str:
         """Read file content."""
+        uri = VikingURI.normalize(uri)
         response = await self._http.get(
             "/api/v1/content/read",
             params={"uri": uri},
@@ -361,6 +370,7 @@ class AsyncHTTPClient(BaseClient):
 
     async def abstract(self, uri: str) -> str:
         """Read L0 abstract."""
+        uri = VikingURI.normalize(uri)
         response = await self._http.get(
             "/api/v1/content/abstract",
             params={"uri": uri},
@@ -369,6 +379,7 @@ class AsyncHTTPClient(BaseClient):
 
     async def overview(self, uri: str) -> str:
         """Read L1 overview."""
+        uri = VikingURI.normalize(uri)
         response = await self._http.get(
             "/api/v1/content/overview",
             params={"uri": uri},
@@ -386,6 +397,8 @@ class AsyncHTTPClient(BaseClient):
         filter: Optional[Dict[str, Any]] = None,
     ) -> FindResult:
         """Semantic search without session context."""
+        if target_uri:
+            target_uri = VikingURI.normalize(target_uri)
         response = await self._http.post(
             "/api/v1/search/find",
             json={
@@ -409,6 +422,8 @@ class AsyncHTTPClient(BaseClient):
         filter: Optional[Dict[str, Any]] = None,
     ) -> FindResult:
         """Semantic search with optional session context."""
+        if target_uri:
+            target_uri = VikingURI.normalize(target_uri)
         sid = session_id or (session.session_id if session else None)
         response = await self._http.post(
             "/api/v1/search/search",
@@ -425,6 +440,7 @@ class AsyncHTTPClient(BaseClient):
 
     async def grep(self, uri: str, pattern: str, case_insensitive: bool = False) -> Dict[str, Any]:
         """Content search with pattern."""
+        uri = VikingURI.normalize(uri)
         response = await self._http.post(
             "/api/v1/search/grep",
             json={
@@ -437,6 +453,7 @@ class AsyncHTTPClient(BaseClient):
 
     async def glob(self, pattern: str, uri: str = "viking://") -> Dict[str, Any]:
         """File pattern matching."""
+        uri = VikingURI.normalize(uri)
         response = await self._http.post(
             "/api/v1/search/glob",
             json={"pattern": pattern, "uri": uri},
@@ -447,6 +464,7 @@ class AsyncHTTPClient(BaseClient):
 
     async def relations(self, uri: str) -> List[Any]:
         """Get relations for a resource."""
+        uri = VikingURI.normalize(uri)
         response = await self._http.get(
             "/api/v1/relations",
             params={"uri": uri},
@@ -455,6 +473,11 @@ class AsyncHTTPClient(BaseClient):
 
     async def link(self, from_uri: str, to_uris: Union[str, List[str]], reason: str = "") -> None:
         """Create link between resources."""
+        from_uri = VikingURI.normalize(from_uri)
+        if isinstance(to_uris, str):
+            to_uris = VikingURI.normalize(to_uris)
+        else:
+            to_uris = [VikingURI.normalize(u) for u in to_uris]
         response = await self._http.post(
             "/api/v1/relations/link",
             json={"from_uri": from_uri, "to_uris": to_uris, "reason": reason},
@@ -463,6 +486,8 @@ class AsyncHTTPClient(BaseClient):
 
     async def unlink(self, from_uri: str, to_uri: str) -> None:
         """Remove link between resources."""
+        from_uri = VikingURI.normalize(from_uri)
+        to_uri = VikingURI.normalize(to_uri)
         response = await self._http.request(
             "DELETE",
             "/api/v1/relations/link",
@@ -512,6 +537,7 @@ class AsyncHTTPClient(BaseClient):
 
     async def export_ovpack(self, uri: str, to: str) -> str:
         """Export context as .ovpack file."""
+        uri = VikingURI.normalize(uri)
         response = await self._http.post(
             "/api/v1/pack/export",
             json={"uri": uri, "to": to},
@@ -527,6 +553,7 @@ class AsyncHTTPClient(BaseClient):
         vectorize: bool = True,
     ) -> str:
         """Import .ovpack file."""
+        parent = VikingURI.normalize(parent)
         response = await self._http.post(
             "/api/v1/pack/import",
             json={
