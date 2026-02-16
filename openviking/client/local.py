@@ -58,6 +58,7 @@ class LocalClient(BaseClient):
         instruction: str = "",
         wait: bool = False,
         timeout: Optional[float] = None,
+        **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
         return await self._service.resources.add_resource(
@@ -67,6 +68,7 @@ class LocalClient(BaseClient):
             instruction=instruction,
             wait=wait,
             timeout=timeout,
+            **kwargs,
         )
 
     async def add_skill(

@@ -71,6 +71,14 @@ class ParserRegistry:
         except ImportError as e:
             logger.warning(f"CodeRepositoryParser not available: {e}")
 
+        # Register directory parser
+        try:
+            from openviking.parse.parsers.directory import DirectoryParser
+
+            self.register("directory", DirectoryParser())
+        except ImportError as e:
+            logger.warning(f"DirectoryParser not available: {e}")
+
         # Register optional media parsers
         if register_optional:
             try:
@@ -245,6 +253,15 @@ class ParserRegistry:
         if is_potential_path:
             path = Path(source)
             if path.exists():
+                # Directory → route to DirectoryParser
+                if path.is_dir():
+                    dir_parser = self._parsers.get("directory")
+                    if dir_parser:
+                        return await dir_parser.parse(path, **kwargs)
+                    raise ValueError(
+                        f"Source is a directory but DirectoryParser is not registered: {path}"
+                    )
+
                 parser = self.get_parser_for_file(path)
                 if parser:
                     return await parser.parse(path, **kwargs)
