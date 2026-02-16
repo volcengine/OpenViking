@@ -450,7 +450,7 @@ async fn main() {
 }
 
 async fn handle_add_resource(
-    path: String,
+    mut path: String,
     to: Option<String>,
     reason: String,
     instruction: String,
@@ -462,7 +462,9 @@ async fn handle_add_resource(
     if !path.starts_with("http://") && !path.starts_with("https://") {
         use std::path::Path;
         
-        let path_obj = Path::new(&path);
+        // Unescape path: replace backslash followed by space with just space
+        let unescaped_path = path.replace("\\ ", " ");
+        let path_obj = Path::new(&unescaped_path);
         if !path_obj.exists() {
             eprintln!("Error: Path '{}' does not exist.", path);
             
@@ -481,6 +483,7 @@ async fn handle_add_resource(
             
             std::process::exit(1);
         }
+        path = unescaped_path;
     }
     
     let client = ctx.get_client();

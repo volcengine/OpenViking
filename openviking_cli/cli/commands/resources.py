@@ -25,8 +25,11 @@ def register(app: typer.Typer) -> None:
     ) -> None:
         """Add resources into OpenViking."""
         # Validate path: if it's a local path, check if it exists
+        final_path = path
         if not (path.startswith("http://") or path.startswith("https://")):
-            local_path = Path(path)
+            unescaped_path = path.replace("\\ ", " ")
+            local_path = Path(unescaped_path)
+            final_path = unescaped_path
             if not local_path.exists():
                 # Check if there are extra arguments (possible unquoted path with spaces)
                 import sys
@@ -76,7 +79,7 @@ def register(app: typer.Typer) -> None:
         run(
             ctx,
             lambda client: client.add_resource(
-                path=path,
+                path=final_path,
                 target=to,
                 reason=reason,
                 instruction=instruction,
