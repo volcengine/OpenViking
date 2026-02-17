@@ -9,7 +9,7 @@ from loguru import logger
 from vikingbot.bus.events import OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.base import BaseChannel
-from vikingbot.config.schema import QQConfig
+from vikingbot.config.schema import QQChannelConfig
 
 try:
     import botpy
@@ -50,9 +50,9 @@ class QQChannel(BaseChannel):
 
     name = "qq"
 
-    def __init__(self, config: QQConfig, bus: MessageBus):
-        super().__init__(config, bus)
-        self.config: QQConfig = config
+    def __init__(self, config: QQChannelConfig, bus: MessageBus, **kwargs):
+        super().__init__(config, bus, **kwargs)
+        self.config: QQChannelConfig = config
         self._client: "botpy.Client | None" = None
         self._processed_ids: deque = deque(maxlen=1000)
         self._bot_task: asyncio.Task | None = None

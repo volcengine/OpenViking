@@ -13,7 +13,7 @@ from slack_sdk.web.async_client import AsyncWebClient
 from vikingbot.bus.events import OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.base import BaseChannel
-from vikingbot.config.schema import SlackConfig
+from vikingbot.config.schema import SlackChannelConfig
 
 
 class SlackChannel(BaseChannel):
@@ -21,9 +21,9 @@ class SlackChannel(BaseChannel):
 
     name = "slack"
 
-    def __init__(self, config: SlackConfig, bus: MessageBus):
-        super().__init__(config, bus)
-        self.config: SlackConfig = config
+    def __init__(self, config: SlackChannelConfig, bus: MessageBus, **kwargs):
+        super().__init__(config, bus, **kwargs)
+        self.config: SlackChannelConfig = config
         self._web_client: AsyncWebClient | None = None
         self._socket_client: SocketModeClient | None = None
         self._bot_user_id: str | None = None

@@ -169,11 +169,11 @@ class SessionManager:
                 "updated_at": session.updated_at.isoformat(),
                 "metadata": session.metadata
             }
-            f.write(json.dumps(metadata_line) + "\n")
+            f.write(json.dumps(metadata_line, ensure_ascii=False) + "\n")
             
             # Write messages
             for msg in session.messages:
-                f.write(json.dumps(msg) + "\n")
+                f.write(json.dumps(msg, ensure_ascii=False) + "\n")
         
         self._cache[session.key] = session
     

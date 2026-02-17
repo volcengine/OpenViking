@@ -6,6 +6,8 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from loguru import logger
+
 from vikingbot.agent.tools.base import Tool
 
 if TYPE_CHECKING:
@@ -75,7 +77,8 @@ class ExecTool(Tool):
         if guard_error:
             return guard_error
         
-        if self.sandbox_manager and self._session_key:
+        # Check if sandbox is enabled before trying to use it
+        if self.sandbox_manager and self._session_key and self.sandbox_manager.config.enabled:
             try:
                 sandbox = await self.sandbox_manager.get_sandbox(self._session_key)
                 
@@ -121,7 +124,9 @@ class ExecTool(Tool):
             
             result = "\n".join(output_parts) if output_parts else "(no output)"
             
-            # Truncate very long output
+            log_result = result[:2000] + ("... (truncated)" if len(result) > 2000 else "")
+            logger.info(f"ExecTool execution result:\n{log_result}")
+            
             max_len = 10000
             if len(result) > max_len:
                 result = result[:max_len] + f"\n... (truncated, {len(result) - max_len} more chars)"

@@ -1,0 +1,27 @@
+{
+  "providers": {
+    "openrouter": {
+      "apiKey": "sk-or-v1-替换为你的OpenRouter API Key"
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": "anthropic/claude-opus-4-5"
+    }
+  },
+  "channels": {
+    "telegram": {
+      "enabled": false,
+      "token": "YOUR_TELEGRAM_BOT_TOKEN",
+      "allowFrom": ["YOUR_TELEGRAM_USER_ID"]
+    },
+    "discord": {
+      "enabled": false,
+      "token": "YOUR_DISCORD_BOT_TOKEN",
+      "allowFrom": ["YOUR_DISCORD_USER_ID"]
+    }
+  },
+  "tools": {
+    "restrictToWorkspace": true
+  }
+}

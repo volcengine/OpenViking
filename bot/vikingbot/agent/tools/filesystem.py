@@ -55,7 +55,8 @@ class ReadFileTool(Tool):
     
     async def execute(self, path: str, **kwargs: Any) -> str:
         try:
-            if self._sandbox_manager and self._session_key:
+            # Check if sandbox is enabled before trying to get it
+            if self._sandbox_manager and self._session_key and self._sandbox_manager.config.enabled:
                 sandbox = await self._sandbox_manager.get_sandbox(self._session_key)
                 input_path = Path(path)
 
@@ -76,6 +77,7 @@ class ReadFileTool(Tool):
                 content = sandbox_path.read_text(encoding="utf-8")
                 return content
 
+            # If sandbox is disabled or not available, use main workspace
             file_path = _resolve_path(path, self._allowed_dir)
             if not file_path.exists():
                 return f"Error: File not found: {path}"
@@ -84,8 +86,6 @@ class ReadFileTool(Tool):
 
             content = file_path.read_text(encoding="utf-8")
             return content
-        except Exception as e:
-            return f"Error reading file: {str(e)}"
         except PermissionError as e:
             return f"Error: {e}"
         except Exception as e:
@@ -148,7 +148,7 @@ class WriteFileTool(Tool):
                 sandbox_path.write_text(content, encoding="utf-8")
                 return f"Successfully wrote {len(content)} bytes to {path}"
 
-            file_path = _resolve_path(path, self._allowed)
+            file_path = _resolve_path(path, self._allowed_dir)
             file_path.parent.mkdir(parents=True, exist_ok=True)
             file_path.write_text(content, encoding="utf-8")
             return f"Successfully wrote {len(content)} bytes to {path}"

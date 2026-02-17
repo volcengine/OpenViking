@@ -19,17 +19,33 @@ class BaseChannel(ABC):
     
     name: str = "base"
     
-    def __init__(self, config: Any, bus: MessageBus):
+    def __init__(self, config: Any, bus: MessageBus, channel_id: str | None = None):
         """
         Initialize the channel.
         
         Args:
             config: Channel-specific configuration.
             bus: The message bus for communication.
+            channel_id: Unique identifier for this channel (for multi-channel support).
         """
         self.config = config
         self.bus = bus
         self._running = False
+        self.channel_id = channel_id or getattr(config, "unique_id", self.name)
+        
+        # 如果有 channel_id，动态设置 name 为 {type}:{id} 格式
+        if self.channel_id and self.channel_id != self.name:
+            # 从 config 获取 type，或者从 self.name 获取
+            channel_type = getattr(config, "type", self.name)
+            # 确保是字符串
+            if hasattr(channel_type, "value"):
+                channel_type = channel_type.value
+            elif not isinstance(channel_type, str):
+                channel_type = str(channel_type)
+            # 确保不是 "ChannelType.FEISHU" 这种格式
+            if "." in channel_type and "ChannelType" in channel_type:
+                channel_type = channel_type.split(".")[-1].lower()
+            self.name = f"{channel_type}:{self.channel_id}"
     
     @abstractmethod
     async def start(self) -> None:

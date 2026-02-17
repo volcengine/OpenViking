@@ -12,7 +12,7 @@ from loguru import logger
 from vikingbot.bus.events import OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.base import BaseChannel
-from vikingbot.config.schema import DiscordConfig
+from vikingbot.config.schema import DiscordChannelConfig
 
 
 DISCORD_API_BASE = "https://discord.com/api/v10"
@@ -24,9 +24,9 @@ class DiscordChannel(BaseChannel):
 
     name = "discord"
 
-    def __init__(self, config: DiscordConfig, bus: MessageBus):
-        super().__init__(config, bus)
-        self.config: DiscordConfig = config
+    def __init__(self, config: DiscordChannelConfig, bus: MessageBus, **kwargs):
+        super().__init__(config, bus, **kwargs)
+        self.config: DiscordChannelConfig = config
         self._ws: websockets.WebSocketClientProtocol | None = None
         self._seq: int | None = None
         self._heartbeat_task: asyncio.Task | None = None

@@ -54,7 +54,6 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
     path = config_path or get_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     
-    # Convert to camelCase format
     data = config.model_dump()
     data = convert_to_camel(data)
     

@@ -1,0 +1,29 @@
+# 火山引擎 ACR 配置示例
+# 复制此文件为 ~/.acr_env 并填入真实值
+
+# ACR Registry 地址（从控制台获取）
+# 格式：<命名空间>-<区域>.cr.volces.com
+# 例如：vikingbot-cn-beijing.cr.volces.com
+ACR_REGISTRY=vikingbot-cn-beijing.cr.volces.com
+
+# ACR 命名空间（在 ACR 控制台创建）
+# 例如：vikingbot
+ACR_NAMESPACE=vikingbot
+
+# ACR 镜像仓库名称（在 ACR 控制台创建）
+# 例如：vikingbot
+ACR_REPOSITORY=vikingbot
+
+# ACR 用户名（从控制台访问凭证获取）
+# 格式：<邮箱>@<账户ID>
+# 例如：chenjunwen@bytedance.com@40792371
+ACR_USERNAME=你的用户名@账户ID
+
+# ACR 密码（从控制台访问凭证获取）
+ACR_PASSWORD=你的密码
+
+# 可选：镜像标签，默认为 latest
+# IMAGE_TAG=latest
+
+# 可选：本地镜像名称，默认为 vikingbot
+# LOCAL_IMAGE_NAME=vikingbot

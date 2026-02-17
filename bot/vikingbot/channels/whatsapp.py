@@ -9,7 +9,7 @@ from loguru import logger
 from vikingbot.bus.events import OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.base import BaseChannel
-from vikingbot.config.schema import WhatsAppConfig
+from vikingbot.config.schema import WhatsAppChannelConfig
 
 
 class WhatsAppChannel(BaseChannel):
@@ -22,9 +22,9 @@ class WhatsAppChannel(BaseChannel):
     
     name = "whatsapp"
     
-    def __init__(self, config: WhatsAppConfig, bus: MessageBus):
-        super().__init__(config, bus)
-        self.config: WhatsAppConfig = config
+    def __init__(self, config: WhatsAppChannelConfig, bus: MessageBus, **kwargs):
+        super().__init__(config, bus, **kwargs)
+        self.config: WhatsAppChannelConfig = config
         self._ws = None
         self._connected = False
     

@@ -5,6 +5,7 @@ import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from loguru import logger
+
 from vikingbot.sandbox.base import SandboxBackend, SandboxNotStartedError
 from vikingbot.sandbox.backends import register_backend
 
@@ -22,6 +23,13 @@ class SrtBackend(SandboxBackend):
         self._workspace = workspace
         self._process = None
         self._settings_path = self._generate_settings()
+        self._wrapper_path = Path(__file__).parent / "srt-wrapper.mjs"
+        # Find project root by looking for pyproject.toml
+        self._project_root = Path(__file__).parent
+        while self._project_root.parent != self._project_root and not (self._project_root / "pyproject.toml").exists():
+            self._project_root = self._project_root.parent
+        self._response_queue = asyncio.Queue()
+        self._task = None
 
     def _generate_settings(self) -> Path:
         """Generate SRT configuration file."""
@@ -35,7 +43,7 @@ class SrtBackend(SandboxBackend):
                 "denyRead": self.config.filesystem.deny_read,
                 "allowWrite": self.config.filesystem.allow_write,
                 "denyWrite": self.config.filesystem.deny_write
-            }
+            },
         }
 
         settings_path = Path.home() / ".vikingbot" / "sandboxes" / f"{self.session_key.replace(':', '_')}-srt-settings.json"
@@ -52,17 +60,66 @@ class SrtBackend(SandboxBackend):
 
         cmd = [
             self.config.backends.srt.node_path,
-            "-e",
-            self._get_wrapper_script(),
-            "--settings", str(self._settings_path),
-            "--workspace", str(self._workspace)
+            str(self._wrapper_path),
+            str(self._settings_path),
+            str(self._workspace),
         ]
         logger.info(f'sandbox_cmd = {cmd}')
+        logger.info(f'CWD = {self._project_root}')
+        
         self._process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE
+            stderr=asyncio.subprocess.PIPE,
+            stdin=asyncio.subprocess.PIPE,
+            cwd=str(self._project_root),
         )
+        
+        # Start reading responses from the wrapper
+        self._task = asyncio.create_task(self._read_responses())
+        
+        # Also read stderr for debugging
+        async def read_stderr():
+            if not self._process or not self._process.stderr:
+                return
+            try:
+                while True:
+                    chunk = await self._process.stderr.read(4096)
+                    if not chunk:
+                        break
+                    stderr_text = chunk.decode("utf-8", errors="replace")
+                    if stderr_text.strip():
+                        logger.error(f"[SRT wrapper stderr] {stderr_text}")
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                logger.error(f"Error reading stderr: {e}")
+        
+        asyncio.create_task(read_stderr())
+        
+        # Wait for ready signal
+        response = await self._wait_for_response()
+        if response.get("type") != "ready":
+            raise RuntimeError(f"Unexpected response from wrapper: {response}")
+        
+        # Initialize the sandbox
+        await self._send_message({"type": "initialize", "config": self._load_config()})
+        
+        response = await self._wait_for_response()
+        if response.get("type") == "initialize_failed":
+            errors = response.get("errors", [])
+            warnings = response.get("warnings", [])
+            if warnings:
+                logger.warning(f"Sandbox warnings: {warnings}")
+            raise RuntimeError(f"Failed to initialize sandbox: {errors}")
+        
+        if response.get("type") == "initialized":
+            warnings = response.get("warnings", [])
+            if warnings:
+                logger.warning(f"Sandbox warnings: {warnings}")
+            logger.info("SRT sandbox initialized successfully")
+        else:
+            raise RuntimeError(f"Unexpected response from wrapper: {response}")
 
     async def execute(self, command: str, timeout: int = 60, **kwargs: Any) -> str:
         """Execute command in sandbox."""
@@ -72,37 +129,45 @@ class SrtBackend(SandboxBackend):
         if command.strip() == "pwd":
             return "/"
         
-        process = await asyncio.create_subprocess_shell(
-            command,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            cwd=self._workspace,
-        )
+        # Execute via wrapper
+        custom_config = kwargs.get("custom_config")
+        await self._send_message({
+            "type": "execute",
+            "command": command,
+            "timeout": timeout * 1000,  # Convert to milliseconds
+            "customConfig": custom_config
+        })
         
-        try:
-            stdout, stderr = await asyncio.wait_for(
-                process.communicate(),
-                timeout=timeout
-            )
-            # logger.info(f'sandbox_cmd_result = {stdout},{stderr}')
-        except asyncio.TimeoutError:
-            process.kill()
-            return f"Error: Command timed out after {timeout} seconds"
+        response = await self._wait_for_response(timeout + 5)  # Extra 5 seconds buffer
+        
+        if response.get("type") == "error":
+            raise RuntimeError(f"Execution error: {response.get('message')}")
+        
+        if response.get("type") != "executed":
+            raise RuntimeError(f"Unexpected response from wrapper: {response}")
         
         output_parts = []
+        stdout = response.get("stdout", "")
+        stderr = response.get("stderr", "")
+        exit_code = response.get("exitCode", 0)
         
         if stdout:
-            output_parts.append(stdout.decode("utf-8", errors="replace"))
-        
+            output_parts.append(stdout)
         if stderr:
-            stderr_text = stderr.decode("utf-8", errors="replace")
-            if stderr_text.strip():
-                output_parts.append(f"STDERR:\n{stderr_text}")
-        
-        if process.returncode != 0:
-            output_parts.append(f"\nExit code: {process.returncode}")
+            output_parts.append(f"STDERR:\n{stderr}")
+        if exit_code != 0:
+            output_parts.append(f"\nExit code: {exit_code}")
         
         result = "\n".join(output_parts) if output_parts else "(no output)"
+        
+        # Log violations if any
+        violations = response.get("violations", [])
+        if violations:
+            logger.warning(f"Sandbox violations during command execution: {violations}")
+        
+        # Log the execution result (truncated if too long)
+        log_result = result[:2000] + ("... (truncated)" if len(result) > 2000 else "")
+        logger.info(f"SRT execution result:\n{log_result}")
         
         max_len = 10000
         if len(result) > max_len:
@@ -113,8 +178,30 @@ class SrtBackend(SandboxBackend):
     async def stop(self) -> None:
         """Stop sandbox process."""
         if self._process:
+            if self._task:
+                self._task.cancel()
+                try:
+                    await self._task
+                except asyncio.CancelledError:
+                    pass
+                except Exception as e:
+                    logger.warning(f"Error stopping response reader: {e}")
+            
+            if self._process.stdin:
+                try:
+                    await self._send_message({"type": "reset"})
+                    # Wait a bit for reset
+                    await asyncio.sleep(0.5)
+                except Exception:
+                    pass
+            
             self._process.terminate()
-            await self._process.wait()
+            try:
+                await asyncio.wait_for(self._process.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                self._process.kill()
+                await self._process.wait()
+            
             self._process = None
 
     def is_running(self) -> bool:
@@ -126,17 +213,62 @@ class SrtBackend(SandboxBackend):
         """Get sandbox workspace directory."""
         return self._workspace
 
-    def _get_wrapper_script(self) -> str:
-        """Get Node.js wrapper script."""
-        return """
-        const { SandboxManager } = require('@anthropic-ai/sandbox-runtime');
-
-        async function main() {
-            const config = require(process.argv[2]);
-            await SandboxManager.initialize(config);
-
-            console.log('SRT sandbox initialized');
+    def _load_config(self) -> dict[str, Any]:
+        """Load and format config for SRT."""
+        return {
+            "network": {
+                "allowedDomains": self.config.network.allowed_domains,
+                "deniedDomains": self.config.network.denied_domains,
+                "allowLocalBinding": self.config.network.allow_local_binding,
+            },
+            "filesystem": {
+                "denyRead": self.config.filesystem.deny_read,
+                "allowWrite": self.config.filesystem.allow_write,
+                "denyWrite": self.config.filesystem.deny_write,
+            },
         }
 
-        main().catch(console.error);
-        """
+    async def _send_message(self, message: dict[str, Any]) -> None:
+        """Send a message to the Node.js wrapper."""
+        if not self._process or not self._process.stdin:
+            raise SandboxNotStartedError()
+        
+        data = json.dumps(message) + "\n"
+        self._process.stdin.write(data.encode("utf-8"))
+        await self._process.stdin.drain()
+
+    async def _read_responses(self) -> None:
+        """Read responses from the Node.js wrapper."""
+        if not self._process or not self._process.stdout:
+            return
+        
+        try:
+            buffer = ""
+            while True:
+                chunk = await self._process.stdout.read(4096)
+                if not chunk:
+                    break
+                
+                buffer += chunk.decode("utf-8", errors="replace")
+                lines = buffer.split("\n")
+                buffer = lines.pop() or ""
+                
+                for line in lines:
+                    if not line.strip():
+                        continue
+                    try:
+                        response = json.loads(line)
+                        await self._response_queue.put(response)
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"Failed to parse response: {e}, line: {line}")
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            logger.error(f"Error reading responses: {e}")
+
+    async def _wait_for_response(self, timeout: float = 30.0) -> dict[str, Any]:
+        """Wait for a response from the wrapper."""
+        try:
+            return await asyncio.wait_for(self._response_queue.get(), timeout=timeout)
+        except asyncio.TimeoutError:
+            raise RuntimeError("Timeout waiting for sandbox response")

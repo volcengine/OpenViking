@@ -10,7 +10,7 @@ from loguru import logger
 from vikingbot.bus.events import OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.base import BaseChannel
-from vikingbot.config.schema import Config
+from vikingbot.config.schema import Config, ChannelsConfig
 
 
 class ChannelManager:
@@ -33,109 +33,98 @@ class ChannelManager:
     
     def _init_channels(self) -> None:
         """Initialize channels based on config."""
+        from vikingbot.config.schema import ChannelType
         
-        # Telegram channel
-        if self.config.channels.telegram.enabled:
-            try:
-                from vikingbot.channels.telegram import TelegramChannel
-                self.channels["telegram"] = TelegramChannel(
-                    self.config.channels.telegram,
-                    self.bus,
-                    groq_api_key=self.config.providers.groq.api_key,
-                )
-                logger.info("Telegram channel enabled")
-            except ImportError as e:
-                logger.warning(f"Telegram channel not available: {e}")
+        channels_config = self.config.channels_config
+        all_channel_configs = channels_config.get_all_channels()
         
-        # WhatsApp channel
-        if self.config.channels.whatsapp.enabled:
+        for channel_config in all_channel_configs:
+            if not channel_config.enabled:
+                continue
+            
+            channel_id = channel_config.unique_id
+            
             try:
-                from vikingbot.channels.whatsapp import WhatsAppChannel
-                self.channels["whatsapp"] = WhatsAppChannel(
-                    self.config.channels.whatsapp, self.bus
-                )
-                logger.info("WhatsApp channel enabled")
+                channel = None
+                if channel_config.type == ChannelType.TELEGRAM:
+                    from vikingbot.channels.telegram import TelegramChannel
+                    channel = TelegramChannel(
+                        channel_config,
+                        self.bus,
+                        channel_id=channel_id,
+                        groq_api_key=self.config.providers.groq.api_key,
+                    )
+                
+                elif channel_config.type == ChannelType.FEISHU:
+                    from vikingbot.channels.feishu import FeishuChannel
+                    channel = FeishuChannel(
+                        channel_config,
+                        self.bus,
+                        channel_id=channel_id,
+                    )
+                
+                elif channel_config.type == ChannelType.DISCORD:
+                    from vikingbot.channels.discord import DiscordChannel
+                    channel = DiscordChannel(
+                        channel_config,
+                        self.bus,
+                        channel_id=channel_id,
+                    )
+                
+                elif channel_config.type == ChannelType.WHATSAPP:
+                    from vikingbot.channels.whatsapp import WhatsAppChannel
+                    channel = WhatsAppChannel(
+                        channel_config,
+                        self.bus,
+                        channel_id=channel_id,
+                    )
+                
+                elif channel_config.type == ChannelType.MOCHAT:
+                    from vikingbot.channels.mochat import MochatChannel
+                    channel = MochatChannel(
+                        channel_config,
+                        self.bus,
+                        channel_id=channel_id,
+                    )
+                
+                elif channel_config.type == ChannelType.DINGTALK:
+                    from vikingbot.channels.dingtalk import DingTalkChannel
+                    channel = DingTalkChannel(
+                        channel_config,
+                        self.bus,
+                        channel_id=channel_id,
+                    )
+                
+                elif channel_config.type == ChannelType.EMAIL:
+                    from vikingbot.channels.email import EmailChannel
+                    channel = EmailChannel(
+                        channel_config,
+                        self.bus,
+                        channel_id=channel_id,
+                    )
+                
+                elif channel_config.type == ChannelType.SLACK:
+                    from vikingbot.channels.slack import SlackChannel
+                    channel = SlackChannel(
+                        channel_config,
+                        self.bus,
+                        channel_id=channel_id,
+                    )
+                
+                elif channel_config.type == ChannelType.QQ:
+                    from vikingbot.channels.qq import QQChannel
+                    channel = QQChannel(
+                        channel_config,
+                        self.bus,
+                        channel_id=channel_id,
+                    )
+                
+                if channel:
+                    self.channels[channel.name] = channel
+                    logger.info(f"Channel enabled: {channel.name}")
+            
             except ImportError as e:
-                logger.warning(f"WhatsApp channel not available: {e}")
-
-        # Discord channel
-        if self.config.channels.discord.enabled:
-            try:
-                from vikingbot.channels.discord import DiscordChannel
-                self.channels["discord"] = DiscordChannel(
-                    self.config.channels.discord, self.bus
-                )
-                logger.info("Discord channel enabled")
-            except ImportError as e:
-                logger.warning(f"Discord channel not available: {e}")
-        
-        # Feishu channel
-        if self.config.channels.feishu.enabled:
-            try:
-                from vikingbot.channels.feishu import FeishuChannel
-                self.channels["feishu"] = FeishuChannel(
-                    self.config.channels.feishu, self.bus
-                )
-                logger.info("Feishu channel enabled")
-            except ImportError as e:
-                logger.warning(f"Feishu channel not available: {e}")
-
-        # Mochat channel
-        if self.config.channels.mochat.enabled:
-            try:
-                from vikingbot.channels.mochat import MochatChannel
-
-                self.channels["mochat"] = MochatChannel(
-                    self.config.channels.mochat, self.bus
-                )
-                logger.info("Mochat channel enabled")
-            except ImportError as e:
-                logger.warning(f"Mochat channel not available: {e}")
-
-        # DingTalk channel
-        if self.config.channels.dingtalk.enabled:
-            try:
-                from vikingbot.channels.dingtalk import DingTalkChannel
-                self.channels["dingtalk"] = DingTalkChannel(
-                    self.config.channels.dingtalk, self.bus
-                )
-                logger.info("DingTalk channel enabled")
-            except ImportError as e:
-                logger.warning(f"DingTalk channel not available: {e}")
-
-        # Email channel
-        if self.config.channels.email.enabled:
-            try:
-                from vikingbot.channels.email import EmailChannel
-                self.channels["email"] = EmailChannel(
-                    self.config.channels.email, self.bus
-                )
-                logger.info("Email channel enabled")
-            except ImportError as e:
-                logger.warning(f"Email channel not available: {e}")
-
-        # Slack channel
-        if self.config.channels.slack.enabled:
-            try:
-                from vikingbot.channels.slack import SlackChannel
-                self.channels["slack"] = SlackChannel(
-                    self.config.channels.slack, self.bus
-                )
-                logger.info("Slack channel enabled")
-            except ImportError as e:
-                logger.warning(f"Slack channel not available: {e}")
-
-        # QQ channel
-        if self.config.channels.qq.enabled:
-            try:
-                from vikingbot.channels.qq import QQChannel
-                self.channels["qq"] = QQChannel(
-                    self.config.channels.qq,
-                    self.bus,
-                )
-                logger.info("QQ channel enabled")
-            except ImportError as e:
-                logger.warning(f"QQ channel not available: {e}")
+                logger.warning(f"Channel {channel_config.type} not available: {e}")
     
     async def _start_channel(self, name: str, channel: BaseChannel) -> None:
         """Start a channel and log any exceptions."""

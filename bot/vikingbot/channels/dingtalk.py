@@ -11,7 +11,7 @@ import httpx
 from vikingbot.bus.events import OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.base import BaseChannel
-from vikingbot.config.schema import DingTalkConfig
+from vikingbot.config.schema import DingTalkChannelConfig
 
 try:
     from dingtalk_stream import (
@@ -96,9 +96,9 @@ class DingTalkChannel(BaseChannel):
 
     name = "dingtalk"
 
-    def __init__(self, config: DingTalkConfig, bus: MessageBus):
-        super().__init__(config, bus)
-        self.config: DingTalkConfig = config
+    def __init__(self, config: DingTalkChannelConfig, bus: MessageBus, **kwargs):
+        super().__init__(config, bus, **kwargs)
+        self.config: DingTalkChannelConfig = config
         self._client: Any = None
         self._http: httpx.AsyncClient | None = None
 

@@ -1,8 +1,7 @@
-"""Web tools: web_search and web_fetch."""
+"""Web tools: web_fetch."""
 
 import html
 import json
-import os
 import re
 from typing import Any
 from urllib.parse import urlparse
@@ -45,7 +44,7 @@ def _validate_url(url: str) -> tuple[bool, str]:
 
 class WebSearchTool(Tool):
     """Search the web using Brave Search API."""
-    
+
     name = "web_search"
     description = "Search the web. Returns titles, URLs, and snippets."
     parameters = {
@@ -56,15 +55,15 @@ class WebSearchTool(Tool):
         },
         "required": ["query"]
     }
-    
+
     def __init__(self, api_key: str | None = None, max_results: int = 5):
         self.api_key = api_key or os.environ.get("BRAVE_API_KEY", "")
         self.max_results = max_results
-    
+
     async def execute(self, query: str, count: int | None = None, **kwargs: Any) -> str:
         if not self.api_key:
             return "Error: BRAVE_API_KEY not configured"
-        
+
         try:
             n = min(max(count or self.max_results, 1), 10)
             async with httpx.AsyncClient() as client:
@@ -75,11 +74,11 @@ class WebSearchTool(Tool):
                     timeout=10.0
                 )
                 r.raise_for_status()
-            
+
             results = r.json().get("web", {}).get("results", [])
             if not results:
                 return f"No results for: {query}"
-            
+
             lines = [f"Results for: {query}\n"]
             for i, item in enumerate(results[:n], 1):
                 lines.append(f"{i}. {item.get('title', '')}\n   {item.get('url', '')}")

@@ -47,7 +47,7 @@ class AgentLoop:
         provider: LLMProvider,
         workspace: Path,
         model: str | None = None,
-        max_iterations: int = 20,
+        max_iterations: int = 50,
         memory_window: int = 50,
         brave_api_key: str | None = None,
         exec_config: ExecToolConfig | None = None,
@@ -260,7 +260,7 @@ class AgentDefaults(BaseModel):
     model: str = "anthropic/claude-opus-4-5"
     max_tokens: int = 8192
     temperature: float = 0.7
-    max_tool_iterations: int = 20
+    max_tool_iterations: int = 50
     memory_window: int = 50
 ```
 

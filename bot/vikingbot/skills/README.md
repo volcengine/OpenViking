@@ -18,6 +18,7 @@ The skill format and metadata structure follow OpenClaw's conventions to maintai
 | Skill | Description |
 |-------|-------------|
 | `github` | Interact with GitHub using the `gh` CLI |
+| `github-proxy` | GitHub 国内访问加速，使用 githubproxy.cc 代理加速 GitHub 仓库克隆、文件下载等操作 |
 | `weather` | Get weather info using wttr.in and Open-Meteo |
 | `summarize` | Summarize URLs, files, and YouTube videos |
 | `tmux` | Remote-control tmux sessions |

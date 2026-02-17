@@ -1,18 +1,22 @@
 """Feishu/Lark channel implementation using lark-oapi SDK with WebSocket long connection."""
 
 import asyncio
+import base64
+import io
 import json
 import re
 import threading
 from collections import OrderedDict
 from typing import Any
+from urllib.parse import urlparse
 
+import httpx
 from loguru import logger
 
 from vikingbot.bus.events import OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.base import BaseChannel
-from vikingbot.config.schema import FeishuConfig
+from vikingbot.config.schema import FeishuChannelConfig
 
 try:
     import lark_oapi as lark
@@ -53,14 +57,114 @@ class FeishuChannel(BaseChannel):
     
     name = "feishu"
     
-    def __init__(self, config: FeishuConfig, bus: MessageBus):
-        super().__init__(config, bus)
-        self.config: FeishuConfig = config
+    def __init__(self, config: FeishuChannelConfig, bus: MessageBus, **kwargs):
+        super().__init__(config, bus, **kwargs)
+        self.config: FeishuChannelConfig = config
         self._client: Any = None
         self._ws_client: Any = None
         self._ws_thread: threading.Thread | None = None
         self._processed_message_ids: OrderedDict[str, None] = OrderedDict()  # Ordered dedup cache
         self._loop: asyncio.AbstractEventLoop | None = None
+        self._tenant_access_token: str | None = None
+        self._token_expire_time: float = 0
+    
+    async def _get_tenant_access_token(self) -> str:
+        """Get tenant access token for Feishu API."""
+        import time
+        now = time.time()
+        if self._tenant_access_token and now < self._token_expire_time - 60:  # Refresh 1 min before expire
+            return self._tenant_access_token
+        
+        url = "https://open.feishu.cn/open-apis/auth/v3/tenant_access_token/internal"
+        payload = {
+            "app_id": self.config.app_id,
+            "app_secret": self.config.app_secret
+        }
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            resp = await client.post(url, json=payload)
+            resp.raise_for_status()
+            result = resp.json()
+            if result.get("code") != 0:
+                raise Exception(f"Failed to get tenant access token: {result}")
+            
+            self._tenant_access_token = result["tenant_access_token"]
+            self._token_expire_time = now + result.get("expire", 7200)
+            return self._tenant_access_token
+    
+    async def _upload_image_to_feishu(self, image_data: bytes) -> str:
+        """
+        Upload image to Feishu media library and get image_key.
+        """
+        import time
+        
+        token = await self._get_tenant_access_token()
+        url = "https://open.feishu.cn/open-apis/im/v1/images"
+        
+        headers = {
+            "Authorization": f"Bearer {token}"
+        }
+        
+        # Use io.BytesIO properly
+        files = {
+            "image": ("image.png", io.BytesIO(image_data), "image/png")
+        }
+        data = {
+            "image_type": "message"
+        }
+        
+        logger.debug(f"Uploading image to {url} with token {token[:20]}...")
+        
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(url, headers=headers, data=data, files=files)
+            logger.debug(f"Upload response status: {resp.status_code}")
+            logger.debug(f"Upload response content: {resp.text}")
+            resp.raise_for_status()
+            result = resp.json()
+            if result.get("code") != 0:
+                raise Exception(f"Failed to upload image: {result}")
+            return result["data"]["image_key"]
+    
+    async def _parse_data_uri(self, data_uri: str) -> bytes:
+        """Parse data URI to bytes."""
+        if data_uri.startswith("data:"):
+            # Split header and data
+            header, data = data_uri.split(",", 1)
+            # Decode base64
+            if ";base64" in header:
+                return base64.b64decode(data)
+            else:
+                return data.encode("utf-8")
+        # If it's a URL, download it
+        elif data_uri.startswith("http://") or data_uri.startswith("https://"):
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.get(data_uri)
+                resp.raise_for_status()
+                return resp.content
+        else:
+            # Assume it's base64 without prefix
+            return base64.b64decode(data_uri)
+    
+    def _extract_images(self, content: str) -> tuple[list[str], str]:
+        """Extract image data URIs from content."""
+        images = []
+        # Pattern to match data URIs and URLs
+        pattern = r"(data:[^,]+,[^\s]+|https?://[^\s]+)"
+        parts = []
+        last_end = 0
+        
+        for m in re.finditer(pattern, content):
+            before = content[last_end:m.start()]
+            if before.strip():
+                parts.append(before)
+            images.append(m.group(0))
+            last_end = m.end()
+        
+        remaining = content[last_end:]
+        if remaining.strip():
+            parts.append(remaining)
+        
+        return images, "\n".join(parts)
     
     async def start(self) -> None:
         """Start the Feishu bot with WebSocket long connection."""
@@ -191,15 +295,27 @@ class FeishuChannel(BaseChannel):
     def _build_card_elements(self, content: str) -> list[dict]:
         """Split content into div/markdown + table elements for Feishu card."""
         elements, last_end = [], 0
+        table_count = 0
+        max_tables = 5  # Feishu card table limit
+        
         for m in self._TABLE_RE.finditer(content):
             before = content[last_end:m.start()]
             if before.strip():
                 elements.extend(self._split_headings(before))
-            elements.append(self._parse_md_table(m.group(1)) or {"tag": "markdown", "content": m.group(1)})
+            
+            if table_count < max_tables:
+                elements.append(self._parse_md_table(m.group(1)) or {"tag": "markdown", "content": m.group(1)})
+                table_count += 1
+            else:
+                # Exceeded table limit, render as markdown instead
+                elements.append({"tag": "markdown", "content": m.group(1)})
+            
             last_end = m.end()
+        
         remaining = content[last_end:]
         if remaining.strip():
             elements.extend(self._split_headings(remaining))
+        
         return elements or [{"tag": "markdown", "content": content}]
 
     def _split_headings(self, content: str) -> list[dict]:
@@ -251,33 +367,95 @@ class FeishuChannel(BaseChannel):
             else:
                 receive_id_type = "open_id"
             
-            # Build card with markdown + table support
-            elements = self._build_card_elements(msg.content)
-            card = {
-                "config": {"wide_screen_mode": True},
-                "elements": elements,
-            }
-            content = json.dumps(card, ensure_ascii=False)
+            # Extract images from content
+            image_data_uris, text_content = self._extract_images(msg.content)
             
-            request = CreateMessageRequest.builder() \
-                .receive_id_type(receive_id_type) \
-                .request_body(
-                    CreateMessageRequestBody.builder()
-                    .receive_id(msg.chat_id)
-                    .msg_type("interactive")
-                    .content(content)
-                    .build()
-                ).build()
-            
-            response = self._client.im.v1.message.create(request)
-            
-            if not response.success():
-                logger.error(
-                    f"Failed to send Feishu message: code={response.code}, "
-                    f"msg={response.msg}, log_id={response.get_log_id()}"
-                )
+            if image_data_uris:
+                # Handle images - upload and send each as image message
+                for img_uri in image_data_uris:
+                    try:
+                        img_bytes = await self._parse_data_uri(img_uri)
+                        image_key = await self._upload_image_to_feishu(img_bytes)
+                        
+                        # Send as image message
+                        content = json.dumps({"image_key": image_key}, ensure_ascii=False)
+                        
+                        request = CreateMessageRequest.builder() \
+                            .receive_id_type(receive_id_type) \
+                            .request_body(
+                                CreateMessageRequestBody.builder()
+                                .receive_id(msg.chat_id)
+                                .msg_type("image")
+                                .content(content)
+                                .build()
+                            ).build()
+                        
+                        response = self._client.im.v1.message.create(request)
+                        
+                        if not response.success():
+                            logger.error(
+                                f"Failed to send Feishu image: code={response.code}, "
+                                f"msg={response.msg}, log_id={response.get_log_id()}"
+                            )
+                    except Exception as e:
+                        logger.warning(f"Failed to send image: {e}")
+                
+                # Send remaining text content if any
+                if text_content.strip():
+                    elements = self._build_card_elements(text_content)
+                    card = {
+                        "config": {"wide_screen_mode": True},
+                        "elements": elements,
+                    }
+                    content = json.dumps(card, ensure_ascii=False)
+                    
+                    request = CreateMessageRequest.builder() \
+                        .receive_id_type(receive_id_type) \
+                        .request_body(
+                            CreateMessageRequestBody.builder()
+                            .receive_id(msg.chat_id)
+                            .msg_type("interactive")
+                            .content(content)
+                            .build()
+                        ).build()
+                    
+                    response = self._client.im.v1.message.create(request)
+                    
+                    if not response.success():
+                        logger.error(
+                            f"Failed to send Feishu message: code={response.code}, "
+                            f"msg={response.msg}, log_id={response.get_log_id()}"
+                        )
+                    else:
+                        logger.debug(f"Feishu message sent to {msg.chat_id}")
             else:
-                logger.debug(f"Feishu message sent to {msg.chat_id}")
+                # No images, use normal card with markdown + table support
+                elements = self._build_card_elements(msg.content)
+                card = {
+                    "config": {"wide_screen_mode": True},
+                    "elements": elements,
+                }
+                content = json.dumps(card, ensure_ascii=False)
+                
+                request = CreateMessageRequest.builder() \
+                    .receive_id_type(receive_id_type) \
+                    .request_body(
+                        CreateMessageRequestBody.builder()
+                        .receive_id(msg.chat_id)
+                        .msg_type("interactive")
+                        .content(content)
+                        .build()
+                    ).build()
+                
+                response = self._client.im.v1.message.create(request)
+                
+                if not response.success():
+                    logger.error(
+                        f"Failed to send Feishu message: code={response.code}, "
+                        f"msg={response.msg}, log_id={response.get_log_id()}"
+                    )
+                else:
+                    logger.debug(f"Feishu message sent to {msg.chat_id}")
                 
         except Exception as e:
             logger.error(f"Error sending Feishu message: {e}")
@@ -318,7 +496,7 @@ class FeishuChannel(BaseChannel):
             msg_type = message.message_type
             
             # Add reaction to indicate "seen"
-            await self._add_reaction(message_id, "THUMBSUP")
+            await self._add_reaction(message_id, "MeMeMe")
             
             # Parse message content
             if msg_type == "text":

@@ -1,6 +1,6 @@
 FROM ghcr.io/astral-sh/uv:python3.12-bookworm-slim
 
-# Install Node.js 20 for the WhatsApp bridge
+# Install Node.js 20
 RUN apt-get update && \
     apt-get install -y --no-install-recommends curl ca-certificates gnupg git && \
     mkdir -p /etc/apt/keyrings && \
@@ -14,27 +14,40 @@ RUN apt-get update && \
 
 WORKDIR /app
 
-# Install Python dependencies first (cached layer)
-COPY pyproject.toml README.md LICENSE ./
-RUN mkdir -p vikingbot bridge && touch vikingbot/__init__.py && \
-    uv pip install --system --no-cache . && \
-    rm -rf vikingbot bridge
-
-# Copy the full source and install
+# Copy all project files
+COPY pyproject.toml README.md ./
+COPY license/LICENSE ./LICENSE
 COPY vikingbot/ vikingbot/
 COPY bridge/ bridge/
-RUN uv pip install --system --no-cache .
 
-# Build the WhatsApp bridge
+# Build WhatsApp bridge
 WORKDIR /app/bridge
 RUN npm install && npm run build
 WORKDIR /app
 
-# Create config directory
-RUN mkdir -p /root/.vikingbot
+# Install Python dependencies
+RUN uv pip install --system --no-cache .
+
+# Install global npm packages for sandbox
+RUN npm install -g @anthropic-ai/sandbox-runtime
+
+# Create necessary directories
+RUN mkdir -p /root/.vikingbot /root/.vikingbot/workspace /root/.vikingbot/sandboxes /root/.vikingbot/bridge
+
+# Pre-build bridge to correct location
+RUN cp -r /app/bridge/* /root/.vikingbot/bridge/ && \
+    cd /root/.vikingbot/bridge && \
+    npm install --omit=dev
 
 # Gateway default port
 EXPOSE 18790
+
+# Environment variables
+ENV PYTHONUNBUFFERED=1
+ENV NODE_ENV=production
+
+# Set working directory
+WORKDIR /app
 
 ENTRYPOINT ["vikingbot"]
 CMD ["status"]

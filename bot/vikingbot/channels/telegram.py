@@ -12,7 +12,7 @@ from telegram.request import HTTPXRequest
 from vikingbot.bus.events import OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.base import BaseChannel
-from vikingbot.config.schema import TelegramConfig
+from vikingbot.config.schema import TelegramChannelConfig
 
 
 def _markdown_to_telegram_html(text: str) -> str:
@@ -100,8 +100,8 @@ class TelegramChannel(BaseChannel):
         bus: MessageBus,
         groq_api_key: str = "",
     ):
-        super().__init__(config, bus)
-        self.config: TelegramConfig = config
+        super().__init__(config, bus, **kwargs)
+        self.config: TelegramChannelConfig = config
         self.groq_api_key = groq_api_key
         self._app: Application | None = None
         self._chat_ids: dict[str, int] = {}  # Map sender_id to chat_id for replies

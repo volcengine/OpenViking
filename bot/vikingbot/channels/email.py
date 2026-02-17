@@ -19,7 +19,7 @@ from loguru import logger
 from vikingbot.bus.events import OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.base import BaseChannel
-from vikingbot.config.schema import EmailConfig
+from vikingbot.config.schema import EmailChannelConfig
 
 
 class EmailChannel(BaseChannel):
@@ -50,9 +50,9 @@ class EmailChannel(BaseChannel):
         "Dec",
     )
 
-    def __init__(self, config: EmailConfig, bus: MessageBus):
-        super().__init__(config, bus)
-        self.config: EmailConfig = config
+    def __init__(self, config: EmailChannelConfig, bus: MessageBus, **kwargs):
+        super().__init__(config, bus, **kwargs)
+        self.config: EmailChannelConfig = config
         self._last_subject_by_chat: dict[str, str] = {}
         self._last_message_id_by_chat: dict[str, str] = {}
         self._processed_uids: set[str] = set()  # Capped to prevent unbounded growth

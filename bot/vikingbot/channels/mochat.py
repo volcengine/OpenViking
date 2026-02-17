@@ -15,7 +15,7 @@ from loguru import logger
 from vikingbot.bus.events import OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.base import BaseChannel
-from vikingbot.config.schema import MochatConfig
+from vikingbot.config.schema import MochatChannelConfig
 from vikingbot.utils.helpers import get_data_path
 
 try:
@@ -217,9 +217,9 @@ class MochatChannel(BaseChannel):
 
     name = "mochat"
 
-    def __init__(self, config: MochatConfig, bus: MessageBus):
-        super().__init__(config, bus)
-        self.config: MochatConfig = config
+    def __init__(self, config: MochatChannelConfig, bus: MessageBus, **kwargs):
+        super().__init__(config, bus, **kwargs)
+        self.config: MochatChannelConfig = config
         self._http: httpx.AsyncClient | None = None
         self._socket: Any = None
         self._ws_connected = self._ws_ready = False

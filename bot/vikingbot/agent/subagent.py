@@ -14,7 +14,8 @@ from vikingbot.providers.base import LLMProvider
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.agent.tools.filesystem import ReadFileTool, WriteFileTool, EditFileTool, ListDirTool
 from vikingbot.agent.tools.shell import ExecTool
-from vikingbot.agent.tools.web import WebSearchTool, WebFetchTool
+from vikingbot.agent.tools.web import WebFetchTool
+from vikingbot.agent.tools.websearch import WebSearchTool
 
 if TYPE_CHECKING:
     from vikingbot.sandbox.manager import SandboxManager
@@ -36,6 +37,7 @@ class SubagentManager:
         bus: MessageBus,
         model: str | None = None,
         brave_api_key: str | None = None,
+        exa_api_key: str | None = None,
         exec_config: "ExecToolConfig | None" = None,
         restrict_to_workspace: bool = False,
         sandbox_manager: "SandboxManager | None" = None,
@@ -46,6 +48,7 @@ class SubagentManager:
         self.bus = bus
         self.model = model or provider.get_default_model()
         self.brave_api_key = brave_api_key
+        self.exa_api_key = exa_api_key
         self.exec_config = exec_config or ExecToolConfig()
         self.restrict_to_workspace = restrict_to_workspace
         self.sandbox_manager = sandbox_manager
@@ -113,7 +116,11 @@ class SubagentManager:
                 timeout=self.exec_config.timeout,
                 restrict_to_workspace=self.restrict_to_workspace,
             ))
-            tools.register(WebSearchTool(api_key=self.brave_api_key))
+            tools.register(WebSearchTool(
+                backend="auto",
+                brave_api_key=self.brave_api_key,
+                exa_api_key=self.exa_api_key
+            ))
             tools.register(WebFetchTool())
             
             # Build messages with subagent-specific prompt

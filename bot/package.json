@@ -1,0 +1,19 @@
+{
+  "name": "bot",
+  "version": "1.0.0",
+  "description": "**Vikingbot** is developed based on the project [nanobot](https://github.com/HKUDS/nanobot) , with the goal of providing an OpenClaw-like bot integrated with OpenViking.",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@anthropic-ai/sandbox-runtime": "^0.0.37"
+  }
+}

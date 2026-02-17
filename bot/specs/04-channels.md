@@ -464,3 +464,278 @@ class MyCustomChannel(BaseChannel):
 
 - 使用异步队列缓冲消息
 - 批量发送优化
+
+---
+
+## 多 Channel 支持
+
+### 概述
+
+将原来的单 channel 配置扩展为数组形式，支持配置多个同类型 channel（例如多个飞书机器人）。
+
+### 设计目标
+
+1. **向后兼容** - 现有配置继续工作，无需修改
+2. **灵活配置** - 支持数组形式配置多个 channel
+3. **会话隔离** - 不同 channel 的对话历史独立存储
+4. **唯一标识** - 每个 channel 有唯一 ID，用于会话隔离
+
+### 配置结构
+
+#### 1. ChannelType 枚举
+
+```python
+from enum import Enum
+
+class ChannelType(str, Enum):
+    WHATSAPP = "whatsapp"
+    TELEGRAM = "telegram"
+    DISCORD = "discord"
+    FEISHU = "feishu"
+    MOCHAT = "mochat"
+    DINGTALK = "dingtalk"
+    EMAIL = "email"
+    SLACK = "slack"
+    QQ = "qq"
+```
+
+#### 2. BaseChannelConfig 基类
+
+```python
+class BaseChannelConfig(BaseModel):
+    """基础 channel 配置"""
+    type: ChannelType
+    id: str | None = None  # 可选，用户自定义唯一标识
+    enabled: bool = True
+    
+    @property
+    def unique_id(self) -> str:
+        """获取唯一标识"""
+        if self.id:
+            return self.id
+        return self._generate_default_id()
+    
+    def _generate_default_id(self) -> str:
+        """生成默认唯一标识，子类实现"""
+        raise NotImplementedError()
+```
+
+#### 3. 各 Channel 配置类
+
+##### TelegramChannelConfig
+
+```python
+class TelegramChannelConfig(BaseChannelConfig):
+    type: ChannelType = ChannelType.TELEGRAM
+    token: str = ""
+    allow_from: list[str] = Field(default_factory=list)
+    proxy: str | None = None
+    
+    def _generate_default_id(self) -> str:
+        bot_id = self.token.split(":")[0] if ":" in self.token else self.token
+        return f"telegram-{bot_id}"
+```
+
+##### FeishuChannelConfig
+
+```python
+class FeishuChannelConfig(BaseChannelConfig):
+    type: ChannelType = ChannelType.FEISHU
+    app_id: str = ""
+    app_secret: str = ""
+    encrypt_key: str = ""
+    verification_token: str = ""
+    allow_from: list[str] = Field(default_factory=list)
+    
+    def _generate_default_id(self) -> str:
+        return f"feishu-{self.app_id}"
+```
+
+#### 4. ChannelsConfig 更新
+
+```python
+class ChannelsConfig(BaseModel):
+    """新的 channels 配置"""
+    
+    # 新配置：数组形式
+    channels: list[Union[
+        TelegramChannelConfig,
+        FeishuChannelConfig,
+        DiscordChannelConfig,
+        WhatsAppChannelConfig,
+        MochatChannelConfig,
+        DingTalkChannelConfig,
+        EmailChannelConfig,
+        SlackChannelConfig,
+        QQChannelConfig,
+    ]] = Field(default_factory=list)
+    
+    # 旧配置：保留向后兼容
+    whatsapp: WhatsAppConfig = Field(default_factory=WhatsAppConfig)
+    telegram: TelegramConfig = Field(default_factory=TelegramConfig)
+    discord: DiscordConfig = Field(default_factory=DiscordConfig)
+    feishu: FeishuConfig = Field(default_factory=FeishuConfig)
+    mochat: MochatConfig = Field(default_factory=MochatConfig)
+    dingtalk: DingTalkConfig = Field(default_factory=DingTalkConfig)
+    email: EmailConfig = Field(default_factory=EmailConfig)
+    slack: SlackConfig = Field(default_factory=SlackConfig)
+    qq: QQConfig = Field(default_factory=QQConfig)
+    
+    def get_all_channels(self) -> list[BaseChannelConfig]:
+        """获取所有 channels（新老格式合并）"""
+        result = list(self.channels)
+        
+        # 旧格式迁移
+        if self.telegram.enabled:
+            result.append(TelegramChannelConfig(
+                type=ChannelType.TELEGRAM,
+                id="telegram",
+                **self.telegram.model_dump()
+            ))
+        if self.feishu.enabled:
+            result.append(FeishuChannelConfig(
+                type=ChannelType.FEISHU,
+                id="feishu",
+                **self.feishu.model_dump()
+            ))
+        # ... 其他旧格式 ...
+        
+        return result
+```
+
+### 配置文件示例
+
+#### 新格式（推荐）
+
+```json
+{
+  "channels": [
+    {
+      "type": "feishu",
+      "id": "feishu-hr",
+      "enabled": true,
+      "app_id": "cli_xxx",
+      "app_secret": "xxx"
+    },
+    {
+      "type": "feishu",
+      "id": "feishu-it",
+      "enabled": true,
+      "app_id": "cli_yyy",
+      "app_secret": "yyy"
+    },
+    {
+      "type": "telegram",
+      "id": "telegram-main",
+      "enabled": true,
+      "token": "xxx"
+    }
+  ]
+}
+```
+
+#### 旧格式（向后兼容）
+
+```json
+{
+  "channels": {
+    "feishu": {
+      "enabled": true,
+      "app_id": "cli_xxx",
+      "app_secret": "xxx"
+    },
+    "telegram": {
+      "enabled": true,
+      "token": "xxx"
+    }
+  }
+}
+```
+
+### ChannelManager 修改
+
+#### 初始化逻辑
+
+```python
+def _init_channels(self) -> None:
+    self.channels: dict[str, BaseChannel] = {}  # key = channel.unique_id
+    
+    all_channel_configs = self.config.channels.get_all_channels()
+    
+    for channel_config in all_channel_configs:
+        if not channel_config.enabled:
+            continue
+            
+        channel_id = channel_config.unique_id
+        
+        # 根据 type 初始化对应的 channel
+        if channel_config.type == ChannelType.FEISHU:
+            from vikingbot.channels.feishu import FeishuChannel
+            self.channels[channel_id] = FeishuChannel(
+                channel_config, 
+                self.bus,
+                channel_id=channel_id
+            )
+        elif channel_config.type == ChannelType.TELEGRAM:
+            from vikingbot.channels.telegram import TelegramChannel
+            self.channels[channel_id] = TelegramChannel(
+                channel_config, 
+                self.bus,
+                channel_id=channel_id,
+                groq_api_key=self.config.providers.groq.api_key,
+            )
+        # ... 其他类型 ...
+        
+        logger.info(f"Channel enabled: {channel_config.type} / {channel_id}")
+```
+
+### 各 Channel 实现修改
+
+#### BaseChannel 更新
+
+```python
+class BaseChannel:
+    def __init__(self, config, bus, channel_id: str):
+        self.config = config
+        self.bus = bus
+        self.channel_id = channel_id  # 新增：唯一标识
+```
+
+#### Session Key 构建
+
+在各 channel 实现中，构建 session key 时使用 `{type}:{id}:{chat_id}` 格式：
+
+```python
+# 在各 channel 实现中
+session_key = f"{self.config.type}:{self.channel_id}:{chat_id}"
+```
+
+### Session Manager
+
+无需大改，session key 现在是 `{type}:{id}:{chat_id}`，自动就隔离了。
+
+### 目录结构变化
+
+**之前**：
+```
+~/.vikingbot/sessions/
+├── feishu:ou_xxx.jsonl
+└── telegram:12345.jsonl
+```
+
+**之后**：
+```
+~/.vikingbot/sessions/
+├── feishu:hr:ou_xxx.jsonl
+├── feishu:it:ou_yyy.jsonl
+└── telegram:main:12345.jsonl
+```
+
+### 修改文件清单
+
+| 文件 | 修改内容 |
+|------|----------|
+| `config/schema.py` | 新增 ChannelType、BaseChannelConfig 及各 channel 配置类，更新 ChannelsConfig |
+| `channels/manager.py` | 初始化逻辑改为遍历数组，key 用 unique_id |
+| `channels/base.py` | BaseChannel 添加 channel_id 参数 |
+| `channels/*.py`（各 channel） | 接收 channel_id 参数，构建 session key 时使用 |
