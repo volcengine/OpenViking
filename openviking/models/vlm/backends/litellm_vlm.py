@@ -72,6 +72,13 @@ class LiteLLMVLMProvider(VLMBase):
                 model = f"{prefix}/{model}"
             return model
 
+        if self._provider_name == "openai" and self.api_base:
+            from openviking.models.vlm.registry import find_by_name
+            openai_spec = find_by_name("openai")
+            is_openai_official = "api.openai.com" in self.api_base
+            if openai_spec and not is_openai_official and not model.startswith("openai/"):
+                return f"openai/{model}"
+
         spec = find_by_model(model)
         if spec and spec.litellm_prefix:
             if not any(model.startswith(s) for s in spec.skip_prefixes):
