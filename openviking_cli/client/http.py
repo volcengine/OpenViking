@@ -284,6 +284,7 @@ class AsyncHTTPClient(BaseClient):
         output: str = "original",
         abs_limit: int = 256,
         show_all_hidden: bool = False,
+        node_limit: int = 1000,
     ) -> List[Any]:
         """List directory contents."""
         response = await self._http.get(
@@ -295,6 +296,7 @@ class AsyncHTTPClient(BaseClient):
                 "output": output,
                 "abs_limit": abs_limit,
                 "show_all_hidden": show_all_hidden,
+                "node_limit": node_limit,
             },
         )
         return self._handle_response(response)
@@ -305,6 +307,7 @@ class AsyncHTTPClient(BaseClient):
         output: str = "original",
         abs_limit: int = 128,
         show_all_hidden: bool = False,
+        node_limit: int = 1000,
     ) -> List[Dict[str, Any]]:
         """Get directory tree."""
         response = await self._http.get(
@@ -314,6 +317,7 @@ class AsyncHTTPClient(BaseClient):
                 "output": output,
                 "abs_limit": abs_limit,
                 "show_all_hidden": show_all_hidden,
+                "node_limit": node_limit,
             },
         )
         return self._handle_response(response)

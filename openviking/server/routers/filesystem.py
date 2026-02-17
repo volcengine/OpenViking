@@ -23,6 +23,7 @@ async def ls(
     output: str = Query("agent", description="Output format: original or agent"),
     abs_limit: int = Query(256, description="Abstract limit (only for agent output)"),
     show_all_hidden: bool = Query(False, description="List all hidden files, like -a"),
+    node_limit: int = Query(1000, description="Maximum number of nodes to list"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """List directory contents."""
@@ -34,6 +35,7 @@ async def ls(
         output=output,
         abs_limit=abs_limit,
         show_all_hidden=show_all_hidden,
+        node_limit=node_limit,
     )
     return Response(status="ok", result=result)
 
@@ -44,12 +46,17 @@ async def tree(
     output: str = Query("agent", description="Output format: original or agent"),
     abs_limit: int = Query(256, description="Abstract limit (only for agent output)"),
     show_all_hidden: bool = Query(False, description="List all hidden files, like -a"),
+    node_limit: int = Query(1000, description="Maximum number of nodes to list"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get directory tree."""
     service = get_service()
     result = await service.fs.tree(
-        uri, output=output, abs_limit=abs_limit, show_all_hidden=show_all_hidden
+        uri,
+        output=output,
+        abs_limit=abs_limit,
+        show_all_hidden=show_all_hidden,
+        node_limit=node_limit,
     )
     return Response(status="ok", result=result)
 
