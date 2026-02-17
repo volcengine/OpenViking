@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from loguru import logger
@@ -67,12 +68,15 @@ class SrtBackend(SandboxBackend):
         logger.info(f'sandbox_cmd = {cmd}')
         logger.info(f'CWD = {self._project_root}')
         
+        env = dict(os.environ)
+        
         self._process = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
             stdin=asyncio.subprocess.PIPE,
             cwd=str(self._project_root),
+            env=env,
         )
         
         # Start reading responses from the wrapper
