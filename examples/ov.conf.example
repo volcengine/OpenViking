@@ -45,7 +45,8 @@
     "api_base": "https://ark.cn-beijing.volces.com/api/v3",
     "temperature": 0.0,
     "max_retries": 2,
-    "provider": "volcengine"
+    "provider": "volcengine",
+    "thinking": false
   },
   "rerank": {
     "ak": null,

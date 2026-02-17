@@ -54,22 +54,26 @@ class VolcEngineVLM(OpenAIVLM):
             )
         return self._async_client
 
-    def get_completion(self, prompt: str) -> str:
-        return super().get_completion(prompt)
+    def get_completion(self, prompt: str, thinking: bool = False) -> str:
+        return super().get_completion(prompt, thinking)
 
-    async def get_completion_async(self, prompt: str, max_retries: int = 0) -> str:
-        return await super().get_completion_async(prompt, max_retries)
+    async def get_completion_async(
+        self, prompt: str, thinking: bool = False, max_retries: int = 0
+    ) -> str:
+        return await super().get_completion_async(prompt, thinking, max_retries)
 
     def get_vision_completion(
         self,
         prompt: str,
         images: List[Union[str, Path, bytes]],
+        thinking: bool = False,
     ) -> str:
-        return super().get_vision_completion(prompt, images)
+        return super().get_vision_completion(prompt, images, thinking)
 
     async def get_vision_completion_async(
         self,
         prompt: str,
         images: List[Union[str, Path, bytes]],
+        thinking: bool = False,
     ) -> str:
-        return await super().get_vision_completion_async(prompt, images)
+        return await super().get_vision_completion_async(prompt, images, thinking)

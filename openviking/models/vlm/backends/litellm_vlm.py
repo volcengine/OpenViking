@@ -139,21 +139,31 @@ class LiteLLMVLMProvider(VLMBase):
 
         return kwargs
 
-    def get_completion(self, prompt: str) -> str:
+    def get_completion(self, prompt: str, thinking: bool = False) -> str:
         """Get text completion synchronously."""
         model = self._resolve_model(self.model or "gpt-4o-mini")
         messages = [{"role": "user", "content": prompt}]
+        original_thinking = self._thinking
+        if thinking:
+            self._thinking = thinking
         kwargs = self._build_kwargs(model, messages)
+        self._thinking = original_thinking
 
         response = completion(**kwargs)
         self._update_token_usage_from_response(response)
         return response.choices[0].message.content or ""
 
-    async def get_completion_async(self, prompt: str, max_retries: int = 0) -> str:
+    async def get_completion_async(
+        self, prompt: str, thinking: bool = False, max_retries: int = 0
+    ) -> str:
         """Get text completion asynchronously."""
         model = self._resolve_model(self.model or "gpt-4o-mini")
         messages = [{"role": "user", "content": prompt}]
+        original_thinking = self._thinking
+        if thinking:
+            self._thinking = thinking
         kwargs = self._build_kwargs(model, messages)
+        self._thinking = original_thinking
 
         last_error = None
         for attempt in range(max_retries + 1):
@@ -164,7 +174,7 @@ class LiteLLMVLMProvider(VLMBase):
             except Exception as e:
                 last_error = e
                 if attempt < max_retries:
-                    await asyncio.sleep(2 ** attempt)
+                    await asyncio.sleep(2**attempt)
 
         if last_error:
             raise last_error
@@ -174,6 +184,7 @@ class LiteLLMVLMProvider(VLMBase):
         self,
         prompt: str,
         images: List[Union[str, Path, bytes]],
+        thinking: bool = False,
     ) -> str:
         """Get vision completion synchronously."""
         model = self._resolve_model(self.model or "gpt-4o-mini")
@@ -184,7 +195,11 @@ class LiteLLMVLMProvider(VLMBase):
         content.append({"type": "text", "text": prompt})
 
         messages = [{"role": "user", "content": content}]
+        original_thinking = self._thinking
+        if thinking:
+            self._thinking = thinking
         kwargs = self._build_kwargs(model, messages)
+        self._thinking = original_thinking
 
         response = completion(**kwargs)
         self._update_token_usage_from_response(response)
@@ -194,6 +209,7 @@ class LiteLLMVLMProvider(VLMBase):
         self,
         prompt: str,
         images: List[Union[str, Path, bytes]],
+        thinking: bool = False,
     ) -> str:
         """Get vision completion asynchronously."""
         model = self._resolve_model(self.model or "gpt-4o-mini")
@@ -204,7 +220,11 @@ class LiteLLMVLMProvider(VLMBase):
         content.append({"type": "text", "text": prompt})
 
         messages = [{"role": "user", "content": content}]
+        original_thinking = self._thinking
+        if thinking:
+            self._thinking = thinking
         kwargs = self._build_kwargs(model, messages)
+        self._thinking = original_thinking
 
         response = await acompletion(**kwargs)
         self._update_token_usage_from_response(response)

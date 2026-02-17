@@ -168,34 +168,38 @@ class StructuredVLM:
         self,
         prompt: str,
         schema: Optional[Dict[str, Any]] = None,
+        thinking: bool = False,
     ) -> Optional[Dict[str, Any]]:
         """Get JSON completion from VLM."""
         if schema:
             prompt = f"{prompt}\n\n{get_json_schema_prompt(schema)}"
 
-        response = self._get_vlm().get_completion(prompt)
+        response = self._get_vlm().get_completion(prompt, thinking)
         return parse_json_from_response(response)
 
     async def complete_json_async(
         self,
         prompt: str,
         schema: Optional[Dict[str, Any]] = None,
+        thinking: bool = False,
+        max_retries: int = 0,
     ) -> Optional[Dict[str, Any]]:
         """Async version of complete_json."""
         if schema:
             prompt = f"{prompt}\n\n{get_json_schema_prompt(schema)}"
 
-        response = await self._get_vlm().get_completion_async(prompt)
+        response = await self._get_vlm().get_completion_async(prompt, thinking, max_retries)
         return parse_json_from_response(response)
 
     def complete_model(
         self,
         prompt: str,
         model_class: Type[T],
+        thinking: bool = False,
     ) -> Optional[T]:
         """Get structured completion validated against a Pydantic model."""
         schema = model_class.model_json_schema()
-        response = self.complete_json(prompt, schema=schema)
+        response = self.complete_json(prompt, schema=schema, thinking=thinking)
         if response is None:
             return None
 
@@ -209,10 +213,14 @@ class StructuredVLM:
         self,
         prompt: str,
         model_class: Type[T],
+        thinking: bool = False,
+        max_retries: int = 0,
     ) -> Optional[T]:
         """Async version of complete_model."""
         schema = model_class.model_json_schema()
-        response = await self.complete_json_async(prompt, schema=schema)
+        response = await self.complete_json_async(
+            prompt, schema=schema, thinking=thinking, max_retries=max_retries
+        )
         if response is None:
             return None
 
@@ -226,14 +234,16 @@ class StructuredVLM:
         self,
         prompt: str,
         images: list,
+        thinking: bool = False,
     ) -> str:
         """Get vision completion."""
-        return self._get_vlm().get_vision_completion(prompt, images)
+        return self._get_vlm().get_vision_completion(prompt, images, thinking)
 
     async def get_vision_completion_async(
         self,
         prompt: str,
         images: list,
+        thinking: bool = False,
     ) -> str:
         """Async vision completion."""
-        return await self._get_vlm().get_vision_completion_async(prompt, images)
+        return await self._get_vlm().get_vision_completion_async(prompt, images, thinking)
