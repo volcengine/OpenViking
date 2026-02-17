@@ -15,21 +15,172 @@ def get_data_path() -> Path:
     return ensure_dir(Path.home() / ".vikingbot")
 
 
-def get_workspace_path(workspace: str | None = None) -> Path:
+def get_sandbox_parent_path() -> Path:
+    """Get the parent directory for sandboxes (~/.vikingbot/workspace)."""
+    return ensure_dir(Path.home() / ".vikingbot" / "workspace")
+
+
+def get_source_workspace_path() -> Path:
+    """Get the source workspace path from the codebase."""
+    return Path(__file__).parent.parent.parent / "workspace"
+
+
+def get_workspace_path(workspace: str | None = None, ensure_exists: bool = True) -> Path:
     """
     Get the workspace path.
     
     Args:
         workspace: Optional workspace path. Defaults to ~/.vikingbot/workspace.
+        ensure_exists: If True, ensure the directory exists (creates it if necessary.
     
     Returns:
-        Expanded and ensured workspace path.
+        Expanded workspace path.
     """
     if workspace:
         path = Path(workspace).expanduser()
     else:
-        path = Path.home() / ".vikingbot" / "workspace"
-    return ensure_dir(path)
+        path = Path.home() / ".vikingbot" / "workspace" / "default"
+    if ensure_exists:
+        return ensure_dir(path)
+    return path
+
+
+def ensure_workspace_templates(workspace: Path) -> None:
+    """
+    Ensure workspace has template files, copy from source if empty.
+    
+    Args:
+        workspace: The workspace directory to ensure templates exist.
+    """
+    import shutil
+    
+    # Ensure workspace directory exists first
+    ensure_dir(workspace)
+    
+    # Check if workspace has any of the bootstrap files
+    bootstrap_files = ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md", "IDENTITY.md"]
+    has_any_file = any((workspace / filename).exists() for filename in bootstrap_files)
+    
+    if not has_any_file:
+        # Workspace is empty, copy templates from source
+        source_dir = Path(__file__).parent.parent.parent / "workspace"
+        
+        if not source_dir.exists():
+            # Fallback: create minimal templates
+            _create_minimal_workspace_templates(workspace)
+            return
+        
+        # Copy all files and directories from source workspace
+        for item in source_dir.iterdir():
+            src = source_dir / item.name
+            dst = workspace / item.name
+            
+            if src.is_dir():
+                if src.name == "memory":
+                    # Ensure memory directory exists
+                    dst.mkdir(exist_ok=True)
+                    # Copy memory files
+                    for mem_file in src.iterdir():
+                        if mem_file.is_file():
+                            shutil.copy2(mem_file, dst / mem_file.name)
+                else:
+                    # Copy other directories
+                    shutil.copytree(src, dst, dirs_exist_ok=True)
+            else:
+                # Copy individual files
+                if not dst.exists():
+                    shutil.copy2(src, dst)
+        
+        # Ensure skills directory exists (for custom user skills)
+        skills_dir = workspace / "skills"
+        skills_dir.mkdir(exist_ok=True)
+        
+        # Copy built-in skills to workspace skills directory
+        from vikingbot.agent.skills import BUILTIN_SKILLS_DIR
+        if BUILTIN_SKILLS_DIR.exists() and BUILTIN_SKILLS_DIR.is_dir():
+            for skill_dir in BUILTIN_SKILLS_DIR.iterdir():
+                if skill_dir.is_dir() and skill_dir.name != "README.md":
+                    dst_skill_dir = skills_dir / skill_dir.name
+                    if not dst_skill_dir.exists():
+                        shutil.copytree(skill_dir, dst_skill_dir)
+
+
+def _create_minimal_workspace_templates(workspace: Path) -> None:
+    """Create minimal workspace templates as fallback."""
+    templates = {
+        "AGENTS.md": """# Agent Instructions
+
+You are a helpful AI assistant. Be concise, accurate, and friendly.
+
+## Guidelines
+
+- Always explain what you're doing before taking actions
+- Ask for clarification when the request is ambiguous
+- Use tools to help accomplish tasks
+- Remember important information in memory/MEMORY.md; past events are logged in memory/HISTORY.md
+""",
+        "SOUL.md": """# Soul
+
+I am vikingbot, a lightweight AI assistant.
+
+## Personality
+
+- Helpful and friendly
+- Concise and to the point
+- Curious and eager to learn
+
+## Values
+
+- Accuracy over speed
+- User privacy and safety
+- Transparency in actions
+""",
+        "USER.md": """# User
+
+Information about the user goes here.
+
+## Preferences
+
+- Communication style: (casual/formal)
+- Timezone: (your timezone)
+- Language: (your preferred language)
+""",
+    }
+    
+    for filename, content in templates.items():
+        file_path = workspace / filename
+        if not file_path.exists():
+            file_path.write_text(content)
+    
+    # Create memory directory and MEMORY.md
+    memory_dir = workspace / "memory"
+    memory_dir.mkdir(exist_ok=True)
+    memory_file = memory_dir / "MEMORY.md"
+    if not memory_file.exists():
+        memory_file.write_text("""# Long-term Memory
+
+This file stores important information that should persist across sessions.
+
+## User Information
+
+(Important facts about the user)
+
+## Preferences
+
+(User preferences learned over time)
+
+## Important Notes
+
+(Things to remember)
+""")
+    
+    history_file = memory_dir / "HISTORY.md"
+    if not history_file.exists():
+        history_file.write_text("")
+    
+    # Create skills directory for custom user skills
+    skills_dir = workspace / "skills"
+    skills_dir.mkdir(exist_ok=True)
 
 
 def get_sessions_path() -> Path:

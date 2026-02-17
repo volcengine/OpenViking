@@ -23,9 +23,31 @@ class ContextBuilder:
     
     def __init__(self, workspace: Path, sandbox_manager=None):
         self.workspace = workspace
-        self.memory = MemoryStore(workspace)
-        self.skills = SkillsLoader(workspace)
+        self._templates_ensured = False
         self.sandbox_manager = sandbox_manager
+        self._memory = None
+        self._skills = None
+    
+    @property
+    def memory(self):
+        """Lazy-load MemoryStore when first needed."""
+        if self._memory is None:
+            self._memory = MemoryStore(self.workspace)
+        return self._memory
+    
+    @property
+    def skills(self):
+        """Lazy-load SkillsLoader when first needed."""
+        if self._skills is None:
+            self._skills = SkillsLoader(self.workspace)
+        return self._skills
+    
+    def _ensure_templates_once(self):
+        """Ensure workspace templates only once, when first needed."""
+        if not self._templates_ensured:
+            from vikingbot.utils.helpers import ensure_workspace_templates
+            ensure_workspace_templates(self.workspace)
+            self._templates_ensured = True
     
     def build_system_prompt(self, skill_names: list[str] | None = None) -> str:
         """
@@ -37,6 +59,9 @@ class ContextBuilder:
         Returns:
             Complete system prompt.
         """
+        # Ensure workspace templates exist only when first needed
+        self._ensure_templates_once()
+        
         parts = []
         
         # Core identity

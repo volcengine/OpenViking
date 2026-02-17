@@ -14,9 +14,10 @@ if TYPE_CHECKING:
 class SandboxManager:
     """Manager for creating and managing sandbox instances."""
 
-    def __init__(self, config: "SandboxConfig", workspace: Path):
+    def __init__(self, config: "SandboxConfig", sandbox_parent_path: Path, source_workspace_path: Path):
         self.config = config
-        self.workspace = workspace
+        self.workspace = sandbox_parent_path
+        self.source_workspace = source_workspace_path
         self._sandboxes: dict[str, SandboxBackend] = {}
         self._shared_sandbox: SandboxBackend | None = None
 
@@ -64,12 +65,13 @@ class SandboxManager:
         return instance
 
     async def _copy_bootstrap_files(self, sandbox_workspace: Path) -> None:
-        """Copy bootstrap files from main workspace to sandbox workspace."""
+        """Copy bootstrap files from source workspace to sandbox workspace."""
         from vikingbot.agent.context import ContextBuilder
         from vikingbot.agent.skills import BUILTIN_SKILLS_DIR
         import shutil
 
-        init_dir = self.workspace / ContextBuilder.INIT_DIR
+        # Copy from source workspace directly
+        init_dir = self.source_workspace / ContextBuilder.INIT_DIR
         if init_dir.exists() and init_dir.is_dir():
             for item in init_dir.iterdir():
                 src = init_dir / item.name
@@ -79,13 +81,13 @@ class SandboxManager:
                 else:
                     shutil.copy2(src, dst)
 
-        # Copy workspace skills (highest priority)
-        skills_dir = self.workspace / "skills"
+        # Copy source workspace skills (highest priority)
+        skills_dir = self.source_workspace / "skills"
         if skills_dir.exists() and skills_dir.is_dir():
             dst_skills = sandbox_workspace / "skills"
             shutil.copytree(skills_dir, dst_skills, dirs_exist_ok=True)
 
-        # Copy built-in skills (lower priority, dirs_exist_ok=True ensures workspace skills override)
+        # Copy built-in skills (lower priority, dirs_exist_ok=True ensures source skills override)
         if BUILTIN_SKILLS_DIR.exists() and BUILTIN_SKILLS_DIR.is_dir():
             dst_skills = sandbox_workspace / "skills"
             shutil.copytree(BUILTIN_SKILLS_DIR, dst_skills, dirs_exist_ok=True)
@@ -93,7 +95,7 @@ class SandboxManager:
         if not init_dir.exists():
             bootstrap_files = ContextBuilder.BOOTSTRAP_FILES
             for filename in bootstrap_files:
-                src = self.workspace / filename
+                src = self.source_workspace / filename
                 if src.exists():
                     dst = sandbox_workspace / filename
                     dst.parent.mkdir(parents=True, exist_ok=True)
@@ -101,7 +103,7 @@ class SandboxManager:
         else:
             bootstrap_files = ContextBuilder.BOOTSTRAP_FILES
             for filename in bootstrap_files:
-                src = self.workspace / filename
+                src = self.source_workspace / filename
                 if src.exists():
                     dst = sandbox_workspace / filename
                     dst.parent.mkdir(parents=True, exist_ok=True)

@@ -1,82 +1,44 @@
 """Configuration schema using Pydantic."""
 
+from enum import Enum
 from pathlib import Path
+from typing import Union, Any
 from pydantic import BaseModel, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
-class WhatsAppConfig(BaseModel):
-    """WhatsApp channel configuration."""
-    enabled: bool = False
-    bridge_url: str = "ws://localhost:3001"
-    bridge_token: str = ""  # Shared token for bridge auth (optional, recommended)
-    allow_from: list[str] = Field(default_factory=list)  # Allowed phone numbers
+class ChannelType(str, Enum):
+    """Channel type enumeration."""
+    WHATSAPP = "whatsapp"
+    TELEGRAM = "telegram"
+    DISCORD = "discord"
+    FEISHU = "feishu"
+    MOCHAT = "mochat"
+    DINGTALK = "dingtalk"
+    EMAIL = "email"
+    SLACK = "slack"
+    QQ = "qq"
 
 
-class TelegramConfig(BaseModel):
-    """Telegram channel configuration."""
-    enabled: bool = False
-    token: str = ""  # Bot token from @BotFather
-    allow_from: list[str] = Field(default_factory=list)  # Allowed user IDs or usernames
-    proxy: str | None = None  # HTTP/SOCKS5 proxy URL, e.g. "http://127.0.0.1:7890" or "socks5://127.0.0.1:1080"
+class BaseChannelConfig(BaseModel):
+    """Base channel configuration."""
+    type: ChannelType
+    id: str | None = None  # Optional user-defined unique identifier
+    enabled: bool = True
+    
+    @property
+    def unique_id(self) -> str:
+        """Get unique identifier for this channel."""
+        if self.id:
+            return self.id
+        return self._generate_default_id()
+    
+    def _generate_default_id(self) -> str:
+        """Generate default unique identifier - to be implemented by subclasses."""
+        raise NotImplementedError()
 
 
-class FeishuConfig(BaseModel):
-    """Feishu/Lark channel configuration using WebSocket long connection."""
-    enabled: bool = False
-    app_id: str = ""  # App ID from Feishu Open Platform
-    app_secret: str = ""  # App Secret from Feishu Open Platform
-    encrypt_key: str = ""  # Encrypt Key for event subscription (optional)
-    verification_token: str = ""  # Verification Token for event subscription (optional)
-    allow_from: list[str] = Field(default_factory=list)  # Allowed user open_ids
-
-
-class DingTalkConfig(BaseModel):
-    """DingTalk channel configuration using Stream mode."""
-    enabled: bool = False
-    client_id: str = ""  # AppKey
-    client_secret: str = ""  # AppSecret
-    allow_from: list[str] = Field(default_factory=list)  # Allowed staff_ids
-
-
-class DiscordConfig(BaseModel):
-    """Discord channel configuration."""
-    enabled: bool = False
-    token: str = ""  # Bot token from Discord Developer Portal
-    allow_from: list[str] = Field(default_factory=list)  # Allowed user IDs
-    gateway_url: str = "wss://gateway.discord.gg/?v=10&encoding=json"
-    intents: int = 37377  # GUILDS + GUILD_MESSAGES + DIRECT_MESSAGES + MESSAGE_CONTENT
-
-class EmailConfig(BaseModel):
-    """Email channel configuration (IMAP inbound + SMTP outbound)."""
-    enabled: bool = False
-    consent_granted: bool = False  # Explicit owner permission to access mailbox data
-
-    # IMAP (receive)
-    imap_host: str = ""
-    imap_port: int = 993
-    imap_username: str = ""
-    imap_password: str = ""
-    imap_mailbox: str = "INBOX"
-    imap_use_ssl: bool = True
-
-    # SMTP (send)
-    smtp_host: str = ""
-    smtp_port: int = 587
-    smtp_username: str = ""
-    smtp_password: str = ""
-    smtp_use_tls: bool = True
-    smtp_use_ssl: bool = False
-    from_address: str = ""
-
-    # Behavior
-    auto_reply_enabled: bool = True  # If false, inbound email is read but no automatic reply is sent
-    poll_interval_seconds: int = 30
-    mark_seen: bool = True
-    max_body_chars: int = 12000
-    subject_prefix: str = "Re: "
-    allow_from: list[str] = Field(default_factory=list)  # Allowed sender email addresses
-
+# ========== Channel helper configs ==========
 
 class MochatMentionConfig(BaseModel):
     """Mochat mention behavior configuration."""
@@ -88,9 +50,69 @@ class MochatGroupRule(BaseModel):
     require_mention: bool = False
 
 
-class MochatConfig(BaseModel):
-    """Mochat channel configuration."""
-    enabled: bool = False
+class SlackDMConfig(BaseModel):
+    """Slack DM policy configuration."""
+    enabled: bool = True
+    policy: str = "open"  # "open" or "allowlist"
+    allow_from: list[str] = Field(default_factory=list)  # Allowed Slack user IDs
+
+
+# ========== Multi-channel support ==========
+
+class TelegramChannelConfig(BaseChannelConfig):
+    """Telegram channel configuration (multi-channel support)."""
+    type: ChannelType = ChannelType.TELEGRAM
+    token: str = ""
+    allow_from: list[str] = Field(default_factory=list)
+    proxy: str | None = None
+    
+    def _generate_default_id(self) -> str:
+        # Use the bot ID from token (before colon)
+        return self.token.split(":")[0] if ":" in self.token else self.token
+
+
+class FeishuChannelConfig(BaseChannelConfig):
+    """Feishu/Lark channel configuration (multi-channel support)."""
+    type: ChannelType = ChannelType.FEISHU
+    app_id: str = ""
+    app_secret: str = ""
+    encrypt_key: str = ""
+    verification_token: str = ""
+    allow_from: list[str] = Field(default_factory=list)
+    
+    def _generate_default_id(self) -> str:
+        # Use app_id directly as the ID
+        return self.app_id
+
+
+class DiscordChannelConfig(BaseChannelConfig):
+    """Discord channel configuration (multi-channel support)."""
+    type: ChannelType = ChannelType.DISCORD
+    token: str = ""
+    allow_from: list[str] = Field(default_factory=list)
+    gateway_url: str = "wss://gateway.discord.gg/?v=10&encoding=json"
+    intents: int = 37377
+    
+    def _generate_default_id(self) -> str:
+        # Use first 20 chars of token as ID
+        return self.token[:20]
+
+
+class WhatsAppChannelConfig(BaseChannelConfig):
+    """WhatsApp channel configuration (multi-channel support)."""
+    type: ChannelType = ChannelType.WHATSAPP
+    bridge_url: str = "ws://localhost:3001"
+    bridge_token: str = ""
+    allow_from: list[str] = Field(default_factory=list)
+    
+    def _generate_default_id(self) -> str:
+        # WhatsApp typically only has one instance
+        return "whatsapp"
+
+
+class MochatChannelConfig(BaseChannelConfig):
+    """MoChat channel configuration (multi-channel support)."""
+    type: ChannelType = ChannelType.MOCHAT
     base_url: str = "https://mochat.io"
     socket_url: str = ""
     socket_path: str = "/socket.io"
@@ -102,7 +124,7 @@ class MochatConfig(BaseModel):
     watch_timeout_ms: int = 25000
     watch_limit: int = 100
     retry_delay_ms: int = 500
-    max_retry_attempts: int = 0  # 0 means unlimited retries
+    max_retry_attempts: int = 0
     claw_token: str = ""
     agent_user_id: str = ""
     sessions: list[str] = Field(default_factory=list)
@@ -110,59 +132,203 @@ class MochatConfig(BaseModel):
     allow_from: list[str] = Field(default_factory=list)
     mention: MochatMentionConfig = Field(default_factory=MochatMentionConfig)
     groups: dict[str, MochatGroupRule] = Field(default_factory=dict)
-    reply_delay_mode: str = "non-mention"  # off | non-mention
+    reply_delay_mode: str = "non-mention"
     reply_delay_ms: int = 120000
+    
+    def _generate_default_id(self) -> str:
+        # Use agent_user_id as the ID
+        return self.agent_user_id if self.agent_user_id else "mochat"
 
 
-class SlackDMConfig(BaseModel):
-    """Slack DM policy configuration."""
-    enabled: bool = True
-    policy: str = "open"  # "open" or "allowlist"
-    allow_from: list[str] = Field(default_factory=list)  # Allowed Slack user IDs
+class DingTalkChannelConfig(BaseChannelConfig):
+    """DingTalk channel configuration (multi-channel support)."""
+    type: ChannelType = ChannelType.DINGTALK
+    client_id: str = ""
+    client_secret: str = ""
+    allow_from: list[str] = Field(default_factory=list)
+    
+    def _generate_default_id(self) -> str:
+        # Use client_id directly as the ID
+        return self.client_id
 
 
-class SlackConfig(BaseModel):
-    """Slack channel configuration."""
-    enabled: bool = False
-    mode: str = "socket"  # "socket" supported
+class EmailChannelConfig(BaseChannelConfig):
+    """Email channel configuration (multi-channel support)."""
+    type: ChannelType = ChannelType.EMAIL
+    consent_granted: bool = False
+    imap_host: str = ""
+    imap_port: int = 993
+    imap_username: str = ""
+    imap_password: str = ""
+    imap_mailbox: str = "INBOX"
+    imap_use_ssl: bool = True
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_use_tls: bool = True
+    smtp_use_ssl: bool = False
+    from_address: str = ""
+    auto_reply_enabled: bool = True
+    poll_interval_seconds: int = 30
+    mark_seen: bool = True
+    max_body_chars: int = 12000
+    subject_prefix: str = "Re: "
+    allow_from: list[str] = Field(default_factory=list)
+    
+    def _generate_default_id(self) -> str:
+        # Use from_address directly as the ID
+        return self.from_address
+
+
+class SlackChannelConfig(BaseChannelConfig):
+    """Slack channel configuration (multi-channel support)."""
+    type: ChannelType = ChannelType.SLACK
+    mode: str = "socket"
     webhook_path: str = "/slack/events"
-    bot_token: str = ""  # xoxb-...
-    app_token: str = ""  # xapp-...
+    bot_token: str = ""
+    app_token: str = ""
     user_token_read_only: bool = True
-    group_policy: str = "mention"  # "mention", "open", "allowlist"
-    group_allow_from: list[str] = Field(default_factory=list)  # Allowed channel IDs if allowlist
+    group_policy: str = "mention"
+    group_allow_from: list[str] = Field(default_factory=list)
     dm: SlackDMConfig = Field(default_factory=SlackDMConfig)
+    
+    def _generate_default_id(self) -> str:
+        # Use first 20 chars of bot_token as ID
+        return self.bot_token[:20] if self.bot_token else "slack"
 
 
-class QQConfig(BaseModel):
-    """QQ channel configuration using botpy SDK."""
-    enabled: bool = False
-    app_id: str = ""  # 机器人 ID (AppID) from q.qq.com
-    secret: str = ""  # 机器人密钥 (AppSecret) from q.qq.com
-    allow_from: list[str] = Field(default_factory=list)  # Allowed user openids (empty = public access)
+class QQChannelConfig(BaseChannelConfig):
+    """QQ channel configuration (multi-channel support)."""
+    type: ChannelType = ChannelType.QQ
+    app_id: str = ""
+    secret: str = ""
+    allow_from: list[str] = Field(default_factory=list)
+    
+    def _generate_default_id(self) -> str:
+        # Use app_id directly as the ID
+        return self.app_id
 
 
 class ChannelsConfig(BaseModel):
-    """Configuration for chat channels."""
-    whatsapp: WhatsAppConfig = Field(default_factory=WhatsAppConfig)
-    telegram: TelegramConfig = Field(default_factory=TelegramConfig)
-    discord: DiscordConfig = Field(default_factory=DiscordConfig)
-    feishu: FeishuConfig = Field(default_factory=FeishuConfig)
-    mochat: MochatConfig = Field(default_factory=MochatConfig)
-    dingtalk: DingTalkConfig = Field(default_factory=DingTalkConfig)
-    email: EmailConfig = Field(default_factory=EmailConfig)
-    slack: SlackConfig = Field(default_factory=SlackConfig)
-    qq: QQConfig = Field(default_factory=QQConfig)
+    """Configuration for chat channels - array of channel configs."""
+    channels: list[Any] = Field(default_factory=list)
+    
+    def _parse_channel_config(self, config: dict[str, Any]) -> BaseChannelConfig:
+        """Parse a single channel config dict into the appropriate type."""
+        channel_type = config.get("type")
+        
+        # Handle both snake_case and camelCase for feishu
+        if "appId" in config and "app_id" not in config:
+            config["app_id"] = config.pop("appId")
+        if "appSecret" in config and "app_secret" not in config:
+            config["app_secret"] = config.pop("appSecret")
+        if "encryptKey" in config and "encrypt_key" not in config:
+            config["encrypt_key"] = config.pop("encryptKey")
+        if "verificationToken" in config and "verification_token" not in config:
+            config["verification_token"] = config.pop("verificationToken")
+        
+        # Handle camelCase for other fields
+        if "allowFrom" in config and "allow_from" not in config:
+            config["allow_from"] = config.pop("allowFrom")
+        if "bridgeUrl" in config and "bridge_url" not in config:
+            config["bridge_url"] = config.pop("bridgeUrl")
+        if "bridgeToken" in config and "bridge_token" not in config:
+            config["bridge_token"] = config.pop("bridgeToken")
+        if "clientId" in config and "client_id" not in config:
+            config["client_id"] = config.pop("clientId")
+        if "clientSecret" in config and "client_secret" not in config:
+            config["client_secret"] = config.pop("clientSecret")
+        if "consentGranted" in config and "consent_granted" not in config:
+            config["consent_granted"] = config.pop("consentGranted")
+        if "imapHost" in config and "imap_host" not in config:
+            config["imap_host"] = config.pop("imapHost")
+        if "imapPort" in config and "imap_port" not in config:
+            config["imap_port"] = config.pop("imapPort")
+        if "imapUsername" in config and "imap_username" not in config:
+            config["imap_username"] = config.pop("imapUsername")
+        if "imapPassword" in config and "imap_password" not in config:
+            config["imap_password"] = config.pop("imapPassword")
+        if "imapMailbox" in config and "imap_mailbox" not in config:
+            config["imap_mailbox"] = config.pop("imapMailbox")
+        if "imapUseSsl" in config and "imap_use_ssl" not in config:
+            config["imap_use_ssl"] = config.pop("imapUseSsl")
+        if "smtpHost" in config and "smtp_host" not in config:
+            config["smtp_host"] = config.pop("smtpHost")
+        if "smtpPort" in config and "smtp_port" not in config:
+            config["smtp_port"] = config.pop("smtpPort")
+        if "smtpUsername" in config and "smtp_username" not in config:
+            config["smtp_username"] = config.pop("smtpUsername")
+        if "smtpPassword" in config and "smtp_password" not in config:
+            config["smtp_password"] = config.pop("smtpPassword")
+        if "smtpUseTls" in config and "smtp_use_tls" not in config:
+            config["smtp_use_tls"] = config.pop("smtpUseTls")
+        if "smtpUseSsl" in config and "smtp_use_ssl" not in config:
+            config["smtp_use_ssl"] = config.pop("smtpUseSsl")
+        if "fromAddress" in config and "from_address" not in config:
+            config["from_address"] = config.pop("fromAddress")
+        if "autoReplyEnabled" in config and "auto_reply_enabled" not in config:
+            config["auto_reply_enabled"] = config.pop("autoReplyEnabled")
+        if "pollIntervalSeconds" in config and "poll_interval_seconds" not in config:
+            config["poll_interval_seconds"] = config.pop("pollIntervalSeconds")
+        if "markSeen" in config and "mark_seen" not in config:
+            config["mark_seen"] = config.pop("markSeen")
+        if "maxBodyChars" in config and "max_body_chars" not in config:
+            config["max_body_chars"] = config.pop("maxBodyChars")
+        if "subjectPrefix" in config and "subject_prefix" not in config:
+            config["subject_prefix"] = config.pop("subjectPrefix")
+        if "botToken" in config and "bot_token" not in config:
+            config["bot_token"] = config.pop("botToken")
+        if "appToken" in config and "app_token" not in config:
+            config["app_token"] = config.pop("appToken")
+        if "userTokenReadOnly" in config and "user_token_read_only" not in config:
+            config["user_token_read_only"] = config.pop("userTokenReadOnly")
+        if "groupPolicy" in config and "group_policy" not in config:
+            config["group_policy"] = config.pop("groupPolicy")
+        if "groupAllowFrom" in config and "group_allow_from" not in config:
+            config["group_allow_from"] = config.pop("groupAllowFrom")
+        
+        if channel_type == ChannelType.TELEGRAM:
+            return TelegramChannelConfig(**config)
+        elif channel_type == ChannelType.FEISHU:
+            return FeishuChannelConfig(**config)
+        elif channel_type == ChannelType.DISCORD:
+            return DiscordChannelConfig(**config)
+        elif channel_type == ChannelType.WHATSAPP:
+            return WhatsAppChannelConfig(**config)
+        elif channel_type == ChannelType.MOCHAT:
+            return MochatChannelConfig(**config)
+        elif channel_type == ChannelType.DINGTALK:
+            return DingTalkChannelConfig(**config)
+        elif channel_type == ChannelType.EMAIL:
+            return EmailChannelConfig(**config)
+        elif channel_type == ChannelType.SLACK:
+            return SlackChannelConfig(**config)
+        elif channel_type == ChannelType.QQ:
+            return QQChannelConfig(**config)
+        else:
+            return BaseChannelConfig(**config)
+    
+    def get_all_channels(self) -> list[BaseChannelConfig]:
+        """Get all channel configs."""
+        result = []
+        for item in self.channels:
+            if isinstance(item, dict):
+                result.append(self._parse_channel_config(item))
+            elif isinstance(item, BaseChannelConfig):
+                result.append(item)
+        return result
 
 
 class AgentDefaults(BaseModel):
     """Default agent configuration."""
-    workspace: str = "~/.vikingbot/workspace"
+    workspace: str = "~/.vikingbot/workspace/default"
     model: str = "anthropic/claude-opus-4-5"
     max_tokens: int = 8192
     temperature: float = 0.7
-    max_tool_iterations: int = 20
+    max_tool_iterations: int = 50
     memory_window: int = 50
+    gen_image_model: str = "openai/doubao-seedream-4-5-251128"
 
 
 class AgentsConfig(BaseModel):
@@ -219,7 +385,7 @@ class ToolsConfig(BaseModel):
     """Tools configuration."""
     web: WebToolsConfig = Field(default_factory=WebToolsConfig)
     exec: ExecToolConfig = Field(default_factory=ExecToolConfig)
-    restrict_to_workspace: bool = False  # If true, restrict all tool access to workspace directory
+    restrict_to_workspace: bool = True  # If true, restrict all tool access to workspace directory
 
 
 class SandboxNetworkConfig(BaseModel):
@@ -274,11 +440,18 @@ class SandboxConfig(BaseModel):
 class Config(BaseSettings):
     """Root configuration for vikingbot."""
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
-    channels: ChannelsConfig = Field(default_factory=ChannelsConfig)
+    channels: list[Any] = Field(default_factory=list)
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
+    
+    @property
+    def channels_config(self) -> ChannelsConfig:
+        """Get channels config wrapper."""
+        config = ChannelsConfig()
+        config.channels = self.channels
+        return config
     
     @property
     def workspace_path(self) -> Path:

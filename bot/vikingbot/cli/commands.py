@@ -166,17 +166,130 @@ def onboard():
         if not typer.confirm("Overwrite?"):
             raise typer.Exit()
     
-    # Create default config
+    # Create default config with channel examples
     config = Config()
+    config.channels = [
+        {
+            "type": "telegram",
+            "enabled": False,
+            "token": "",
+            "allowFrom": [],
+            "proxy": None
+        },
+        {
+            "type": "feishu",
+            "enabled": False,
+            "appId": "",
+            "appSecret": "",
+            "encryptKey": "",
+            "verificationToken": "",
+            "allowFrom": []
+        },
+        {
+            "type": "discord",
+            "enabled": False,
+            "token": "",
+            "allowFrom": [],
+            "gatewayUrl": "wss://gateway.discord.gg/?v=10&encoding=json",
+            "intents": 37377
+        },
+        {
+            "type": "whatsapp",
+            "enabled": False,
+            "bridgeUrl": "ws://localhost:3001",
+            "bridgeToken": "",
+            "allowFrom": []
+        },
+        {
+            "type": "mochat",
+            "enabled": False,
+            "baseUrl": "https://mochat.io",
+            "socketUrl": "",
+            "socketPath": "/socket.io",
+            "socketDisableMsgpack": False,
+            "socketReconnectDelayMs": 1000,
+            "socketMaxReconnectDelayMs": 10000,
+            "socketConnectTimeoutMs": 10000,
+            "refreshIntervalMs": 30000,
+            "watchTimeoutMs": 25000,
+            "watchLimit": 100,
+            "retryDelayMs": 500,
+            "maxRetryAttempts": 0,
+            "clawToken": "",
+            "agentUserId": "",
+            "sessions": [],
+            "panels": [],
+            "allowFrom": [],
+            "mention": {
+                "requireInGroups": False
+            },
+            "groups": {},
+            "replyDelayMode": "non-mention",
+            "replyDelayMs": 120000
+        },
+        {
+            "type": "dingtalk",
+            "enabled": False,
+            "clientId": "",
+            "clientSecret": "",
+            "allowFrom": []
+        },
+        {
+            "type": "email",
+            "enabled": False,
+            "consentGranted": False,
+            "imapHost": "",
+            "imapPort": 993,
+            "imapUsername": "",
+            "imapPassword": "",
+            "imapMailbox": "INBOX",
+            "imapUseSsl": True,
+            "smtpHost": "",
+            "smtpPort": 587,
+            "smtpUsername": "",
+            "smtpPassword": "",
+            "smtpUseTls": True,
+            "smtpUseSsl": False,
+            "fromAddress": "",
+            "autoReplyEnabled": True,
+            "pollIntervalSeconds": 30,
+            "markSeen": True,
+            "maxBodyChars": 12000,
+            "subjectPrefix": "Re: ",
+            "allowFrom": []
+        },
+        {
+            "type": "slack",
+            "enabled": False,
+            "mode": "socket",
+            "webhookPath": "/slack/events",
+            "botToken": "",
+            "appToken": "",
+            "userTokenReadOnly": True,
+            "groupPolicy": "mention",
+            "groupAllowFrom": [],
+            "dm": {
+                "enabled": True,
+                "policy": "open",
+                "allowFrom": []
+            }
+        },
+        {
+            "type": "qq",
+            "enabled": False,
+            "appId": "",
+            "secret": "",
+            "allowFrom": []
+        }
+    ]
+    
     save_config(config)
     console.print(f"[green]✓[/green] Created config at {config_path}")
     
-    # Create workspace
-    workspace = get_workspace_path()
-    console.print(f"[green]✓[/green] Created workspace at {workspace}")
-    
-    # Create default bootstrap files
-    _create_workspace_templates(workspace)
+    # Workspace directory and templates will be created/ copied when first used
+    workspace = get_workspace_path(ensure_exists=False)
+    console.print(f"[green]✓[/green] Workspace path: {workspace}")
+    console.print(f"  [dim]Workspace will be created and templates copied from source when first used[/dim]")
     
     console.print(f"\n{__logo__} vikingbot is ready!")
     console.print("\nNext steps:")
@@ -269,6 +382,49 @@ This file stores important information that should persist across sessions.
     skills_dir.mkdir(exist_ok=True)
 
 
+def copy_workspace_templates_from_source(target_workspace: Path):
+    """
+    Copy workspace templates from source directory to target workspace.
+    
+    This is called when workspace is first used and no templates exist yet.
+    """
+    import shutil
+    from pathlib import Path
+    
+    # Get source workspace path (relative to this file)
+    source_dir = Path(__file__).parent.parent.parent / "workspace"
+    
+    if not source_dir.exists():
+        console.print(f"[yellow]Warning: Source workspace directory not found at {source_dir}[/yellow]")
+        return
+    
+    console.print(f"[dim]Copying workspace templates from {source_dir} to {target_workspace}[/dim]")
+    
+    # Copy all files and directories from source workspace
+    for item in source_dir.iterdir():
+        src = source_dir / item.name
+        dst = target_workspace / item.name
+        
+        if src.is_dir():
+            if src.name == "memory":
+                # Ensure memory directory exists
+                dst.mkdir(exist_ok=True)
+                # Copy memory files
+                for mem_file in src.iterdir():
+                    if mem_file.is_file():
+                        shutil.copy2(mem_file, dst / mem_file.name)
+                        console.print(f"  [dim]Created memory/{mem_file.name}[/dim]")
+            else:
+                # Copy other directories
+                shutil.copytree(src, dst, dirs_exist_ok=True)
+                console.print(f"  [dim]Created {item.name}/[/dim]")
+        else:
+            # Copy individual files
+            if not dst.exists():
+                shutil.copy2(src, dst)
+                console.print(f"  [dim]Created {item.name}[/dim]")
+
+
 def _make_provider(config):
     """Create LiteLLMProvider from config. Exits if no API key found."""
     from vikingbot.providers.litellm_provider import LiteLLMProvider
@@ -326,8 +482,14 @@ def gateway(
     sandbox_manager = None
     if config.sandbox.enabled:
         from vikingbot.sandbox.manager import SandboxManager
-        sandbox_manager = SandboxManager(config.sandbox, config.workspace_path)
-
+        from vikingbot.utils.helpers import get_sandbox_parent_path, get_source_workspace_path
+        sandbox_parent_path = get_sandbox_parent_path()
+        source_workspace_path = get_source_workspace_path()
+        sandbox_manager = SandboxManager(config.sandbox, sandbox_parent_path, source_workspace_path)
+        console.print(f"[green]✓[/green] Sandbox: enabled (backend={config.sandbox.backend}, mode={config.sandbox.mode})")
+    else:
+        console.print("[dim]Sandbox: disabled[/dim]")
+    
     # Create agent with cron service
     agent = AgentLoop(
         bus=bus,
@@ -337,6 +499,8 @@ def gateway(
         max_iterations=config.agents.defaults.max_tool_iterations,
         memory_window=config.agents.defaults.memory_window,
         brave_api_key=config.tools.web.search.api_key or None,
+        exa_api_key=None,
+        gen_image_model=config.agents.defaults.gen_image_model,
         exec_config=config.tools.exec,
         cron_service=cron,
         restrict_to_workspace=config.tools.restrict_to_workspace,
@@ -519,64 +683,45 @@ app.add_typer(channels_app, name="channels")
 def channels_status():
     """Show channel status."""
     from vikingbot.config.loader import load_config
+    from vikingbot.config.schema import ChannelType
 
     config = load_config()
+    channels_config = config.channels_config
+    all_channels = channels_config.get_all_channels()
 
     table = Table(title="Channel Status")
-    table.add_column("Channel", style="cyan")
+    table.add_column("Type", style="cyan")
+    table.add_column("ID", style="magenta")
     table.add_column("Enabled", style="green")
     table.add_column("Configuration", style="yellow")
 
-    # WhatsApp
-    wa = config.channels.whatsapp
-    table.add_row(
-        "WhatsApp",
-        "✓" if wa.enabled else "✗",
-        wa.bridge_url
-    )
+    for channel in all_channels:
+        channel_type = str(channel.type)
+        channel_id = channel.unique_id
+        
+        config_info = ""
+        if channel.type == ChannelType.WHATSAPP:
+            config_info = channel.bridge_url
+        elif channel.type == ChannelType.FEISHU:
+            config_info = f"app_id: {channel.app_id[:10]}..." if channel.app_id else ""
+        elif channel.type == ChannelType.DISCORD:
+            config_info = channel.gateway_url
+        elif channel.type == ChannelType.MOCHAT:
+            config_info = channel.base_url or ""
+        elif channel.type == ChannelType.TELEGRAM:
+            config_info = f"token: {channel.token[:10]}..." if channel.token else ""
+        elif channel.type == ChannelType.SLACK:
+            config_info = "socket" if channel.app_token and channel.bot_token else ""
+        
+        table.add_row(
+            channel_type,
+            channel_id,
+            "✓" if channel.enabled else "✗",
+            config_info or "[dim]—[/dim]"
+        )
 
-    dc = config.channels.discord
-    table.add_row(
-        "Discord",
-        "✓" if dc.enabled else "✗",
-        dc.gateway_url
-    )
-
-    # Feishu
-    fs = config.channels.feishu
-    fs_config = f"app_id: {fs.app_id[:10]}..." if fs.app_id else "[dim]not configured[/dim]"
-    table.add_row(
-        "Feishu",
-        "✓" if fs.enabled else "✗",
-        fs_config
-    )
-
-    # Mochat
-    mc = config.channels.mochat
-    mc_base = mc.base_url or "[dim]not configured[/dim]"
-    table.add_row(
-        "Mochat",
-        "✓" if mc.enabled else "✗",
-        mc_base
-    )
-    
-    # Telegram
-    tg = config.channels.telegram
-    tg_config = f"token: {tg.token[:10]}..." if tg.token else "[dim]not configured[/dim]"
-    table.add_row(
-        "Telegram",
-        "✓" if tg.enabled else "✗",
-        tg_config
-    )
-
-    # Slack
-    slack = config.channels.slack
-    slack_config = "socket" if slack.app_token and slack.bot_token else "[dim]not configured[/dim]"
-    table.add_row(
-        "Slack",
-        "✓" if slack.enabled else "✗",
-        slack_config
-    )
+    if not all_channels:
+        table.add_row("[dim]No channels configured[/dim]", "", "", "")
 
     console.print(table)
 
@@ -644,6 +789,7 @@ def channels_login():
     """Link device via QR code."""
     import subprocess
     from vikingbot.config.loader import load_config
+    from vikingbot.config.schema import ChannelType
     
     config = load_config()
     bridge_dir = _get_bridge_dir()
@@ -652,8 +798,14 @@ def channels_login():
     console.print("Scan the QR code to connect.\n")
     
     env = {**os.environ}
-    if config.channels.whatsapp.bridge_token:
-        env["BRIDGE_TOKEN"] = config.channels.whatsapp.bridge_token
+    
+    # Find WhatsApp channel config
+    channels_config = config.channels_config
+    all_channels = channels_config.get_all_channels()
+    whatsapp_channel = next((c for c in all_channels if c.type == ChannelType.WHATSAPP), None)
+    
+    if whatsapp_channel and whatsapp_channel.bridge_token:
+        env["BRIDGE_TOKEN"] = whatsapp_channel.bridge_token
     
     try:
         subprocess.run(["npm", "start"], cwd=bridge_dir, check=True, env=env)
@@ -883,7 +1035,13 @@ def tui():
     sandbox_manager = None
     if config.sandbox.enabled:
         from vikingbot.sandbox.manager import SandboxManager
-        sandbox_manager = SandboxManager(config.sandbox, config.workspace_path)
+        from vikingbot.utils.helpers import get_sandbox_parent_path, get_source_workspace_path
+        sandbox_parent_path = get_sandbox_parent_path()
+        source_workspace_path = get_source_workspace_path()
+        sandbox_manager = SandboxManager(config.sandbox, sandbox_parent_path, source_workspace_path)
+        console.print(f"[green]✓[/green] Sandbox: enabled (backend={config.sandbox.backend}, mode={config.sandbox.mode})")
+    else:
+        console.print("[dim]Sandbox: disabled[/dim]")
     
     session_manager = SessionManager(config.workspace_path)
     

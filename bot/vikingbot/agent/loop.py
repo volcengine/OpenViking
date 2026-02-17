@@ -34,7 +34,9 @@ from vikingbot.agent.context import ContextBuilder
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.agent.tools.filesystem import ReadFileTool, WriteFileTool, EditFileTool, ListDirTool
 from vikingbot.agent.tools.shell import ExecTool
-from vikingbot.agent.tools.web import WebSearchTool, WebFetchTool
+from vikingbot.agent.tools.web import WebFetchTool
+from vikingbot.agent.tools.websearch import WebSearchTool
+from vikingbot.agent.tools.image import ImageGenerationTool
 from vikingbot.agent.tools.message import MessageTool
 from vikingbot.agent.tools.spawn import SpawnTool
 from vikingbot.agent.tools.cron import CronTool
@@ -48,7 +50,7 @@ if TYPE_CHECKING:
 class AgentLoop:
     """
     The agent loop is the core processing engine.
-    
+
     It:
     1. Receives messages from the bus
     2. Builds context with history, memory, skills
@@ -56,16 +58,18 @@ class AgentLoop:
     4. Executes tool calls
     5. Sends responses back
     """
-    
+
     def __init__(
         self,
         bus: MessageBus,
         provider: LLMProvider,
         workspace: Path,
         model: str | None = None,
-        max_iterations: int = 20,
+        max_iterations: int = 50,
         memory_window: int = 50,
         brave_api_key: str | None = None,
+        exa_api_key: str | None = None,
+        gen_image_model: str | None = None,
         exec_config: "ExecToolConfig | None" = None,
         cron_service: "CronService | None" = None,
         restrict_to_workspace: bool = False,
@@ -82,10 +86,14 @@ class AgentLoop:
         self.max_iterations = max_iterations
         self.memory_window = memory_window
         self.brave_api_key = brave_api_key
+        self.exa_api_key = exa_api_key
+        self.gen_image_model = gen_image_model or "openai/doubao-seedream-4-5-251128"
         self.exec_config = exec_config or ExecToolConfig()
         self.cron_service = cron_service
-        self.restrict_to_workspace = restrict_to_workspace
+        # When sandbox is enabled, automatically enable restrict_to_workspace
         self.sandbox_manager = sandbox_manager
+        sandbox_enabled = sandbox_manager and sandbox_manager.config.enabled
+        self.restrict_to_workspace = bool(restrict_to_workspace or sandbox_enabled)
 
         self.context = ContextBuilder(workspace, sandbox_manager=sandbox_manager)
         self.sessions = session_manager or SessionManager(workspace, sandbox_manager=sandbox_manager)
@@ -96,6 +104,7 @@ class AgentLoop:
             bus=bus,
             model=self.model,
             brave_api_key=brave_api_key,
+            exa_api_key=exa_api_key,
             exec_config=self.exec_config,
             restrict_to_workspace=restrict_to_workspace,
             sandbox_manager=sandbox_manager,
@@ -104,7 +113,7 @@ class AgentLoop:
         self._running = False
         self.thinking_callback = thinking_callback
         self._register_default_tools()
-    
+
     def _register_default_tools(self) -> None:
         """Register default set of tools."""
         # File tools (restrict to workspace if configured)
@@ -135,8 +144,19 @@ class AgentLoop:
         ))
 
         # Web tools
-        self.tools.register(WebSearchTool(api_key=self.brave_api_key))
+        self.tools.register(WebSearchTool(
+            backend="auto",
+            brave_api_key=self.brave_api_key,
+            exa_api_key=self.exa_api_key
+        ))
         self.tools.register(WebFetchTool())
+
+        # Image generation tool
+        self.tools.register(ImageGenerationTool(
+            gen_image_model=self.gen_image_model,
+            api_key=self.provider.api_key,
+            api_base=self.provider.api_base
+        ))
 
         # Message tool
         message_tool = MessageTool(send_callback=self.bus.publish_outbound)
@@ -149,12 +169,12 @@ class AgentLoop:
         # Cron tool (for scheduling)
         if self.cron_service:
             self.tools.register(CronTool(self.cron_service))
-    
+
     async def run(self) -> None:
         """Run the agent loop, processing messages from the bus."""
         self._running = True
         logger.info("Agent loop started")
-        
+
         while self._running:
             try:
                 # Wait for next message
@@ -162,7 +182,7 @@ class AgentLoop:
                     self.bus.consume_inbound(),
                     timeout=1.0
                 )
-                
+
                 # Process it
                 try:
                     response = await self._process_message(msg)
@@ -178,20 +198,20 @@ class AgentLoop:
                     ))
             except asyncio.TimeoutError:
                 continue
-    
+
     def stop(self) -> None:
         """Stop the agent loop."""
         self._running = False
         logger.info("Agent loop stopping")
-    
+
     async def _process_message(self, msg: InboundMessage, session_key: str | None = None) -> OutboundMessage | None:
         """
         Process a single inbound message.
-        
+
         Args:
             msg: The inbound message to process.
             session_key: Override session key (used by process_direct).
-        
+
         Returns:
             The response message, or None if no response needed.
         """
@@ -199,14 +219,14 @@ class AgentLoop:
         # The chat_id contains the original "channel:chat_id" to route back to
         if msg.channel == "system":
             return await self._process_system_message(msg)
-        
+
         preview = msg.content[:80] + "..." if len(msg.content) > 80 else msg.content
         logger.info(f"Processing message from {msg.channel}:{msg.sender_id}: {preview}")
-        
+
         # Get or create session
         key = session_key or msg.session_key
         session = self.sessions.get_or_create(key)
-        
+
         # Handle slash commands
         cmd = msg.content.strip().lower()
         if cmd == "/new":
@@ -218,11 +238,11 @@ class AgentLoop:
         if cmd == "/help":
             return OutboundMessage(channel=msg.channel, chat_id=msg.chat_id,
                                   content="🐈 vikingbot commands:\n/new — Start a new conversation\n/help — Show available commands")
-        
+
         # Consolidate memory before processing if session is too large
         if len(session.messages) > self.memory_window:
             await self._consolidate_memory(session)
-        
+
         # Update tool contexts
         message_tool = self.tools.get("message")
         if isinstance(message_tool, MessageTool):
@@ -251,15 +271,15 @@ class AgentLoop:
             channel=msg.channel,
             chat_id=msg.chat_id,
         )
-        
+
         # Agent loop
         iteration = 0
         final_content = None
         tools_used: list[str] = []
-        
+
         while iteration < self.max_iterations:
             iteration += 1
-            
+
             # 回调：迭代开始
             if self.thinking_callback:
                 self.thinking_callback(ThinkingStep(
@@ -267,14 +287,14 @@ class AgentLoop:
                     content=f"Iteration {iteration}/{self.max_iterations}",
                     metadata={"iteration": iteration}
                 ))
-            
+
             # Call LLM
             response = await self.provider.chat(
                 messages=messages,
                 tools=self.tools.get_definitions(),
                 model=self.model
             )
-            
+
             # 回调：推理内容
             if response.reasoning_content and self.thinking_callback:
                 self.thinking_callback(ThinkingStep(
@@ -282,31 +302,42 @@ class AgentLoop:
                     content=response.reasoning_content,
                     metadata={}
                 ))
-            
+
             # Handle tool calls
             if response.has_tool_calls:
-                # Add assistant message with tool calls
+                # Prepare truncated tool call arguments for messages (avoid large base64)
+                truncated_args_list = []
+                for tc in response.tool_calls:
+                    args = tc.arguments.copy()
+                    # Truncate large image-related parameters
+                    if tc.name == "generate_image":
+                        for key in ["base_image", "mask"]:
+                            if key in args and len(str(args[key])) > 500:
+                                args[key] = f"{str(args[key])[:200]}..."  # Truncate to 200 chars
+                    truncated_args_list.append(args)
+
+                # Add assistant message with tool calls (using truncated args)
                 tool_call_dicts = [
                     {
                         "id": tc.id,
                         "type": "function",
                         "function": {
                             "name": tc.name,
-                            "arguments": json.dumps(tc.arguments)  # Must be JSON string
+                            "arguments": json.dumps(truncated_args)  # Use truncated args
                         }
                     }
-                    for tc in response.tool_calls
+                    for tc, truncated_args in zip(response.tool_calls, truncated_args_list)
                 ]
                 messages = self.context.add_assistant_message(
                     messages, response.content, tool_call_dicts,
                     reasoning_content=response.reasoning_content,
                 )
-                
+
                 # Execute tools
                 for tool_call in response.tool_calls:
                     tools_used.append(tool_call.name)
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
-                    
+
                     # 回调：工具调用
                     if self.thinking_callback:
                         self.thinking_callback(ThinkingStep(
@@ -314,13 +345,28 @@ class AgentLoop:
                             content=f"{tool_call.name}({args_str})",
                             metadata={"tool": tool_call.name, "args": tool_call.arguments}
                         ))
-                    
+
                     logger.info(f"Tool call: {tool_call.name}({args_str[:200]})")
                     result = await self.tools.execute(tool_call.name, tool_call.arguments)
-                    
+
+                    # Special handling for image generation tool
+                    if tool_call.name == "generate_image" and result and not result.startswith("Error"):
+                        # Send image directly as a separate message
+                        image_msg = OutboundMessage(
+                            channel=msg.channel,
+                            chat_id=msg.chat_id,
+                            content=result,
+                            metadata=msg.metadata or {},
+                        )
+                        await self.bus.publish_outbound(image_msg)
+                        # Give LLM a short confirmation instead of the full base64
+                        result_for_llm = "Image generated successfully and sent to user."
+                    else:
+                        result_for_llm = result
+
                     # 回调：工具结果
                     if self.thinking_callback:
-                        result_str = str(result)
+                        result_str = str(result_for_llm)
                         if len(result_str) > 500:
                             result_str = result_str[:500] + "..."
                         self.thinking_callback(ThinkingStep(
@@ -328,9 +374,9 @@ class AgentLoop:
                             content=result_str,
                             metadata={"tool": tool_call.name}
                         ))
-                    
+
                     messages = self.context.add_tool_result(
-                        messages, tool_call.id, tool_call.name, result
+                        messages, tool_call.id, tool_call.name, result_for_llm
                     )
                 # Interleaved CoT: reflect before next action
                 messages.append({"role": "user", "content": "Reflect on the results and decide next steps."})
