@@ -340,7 +340,7 @@ class LocalCollection(ICollection):
         pk = self.meta.primary_key
         label = str_to_uint64(str(id)) if pk != AUTO_ID_KEY else int(id)
         cands_list: List[CandidateData] = self.store_mgr.fetch_cands_data([label])
-        if not cands_list:
+        if not cands_list or cands_list[0] is None:
             return SearchResult()
         cands = cands_list[0]
         sparse_vector = (
