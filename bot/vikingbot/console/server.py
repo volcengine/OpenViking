@@ -28,6 +28,17 @@ app.add_middleware(
 _start_time = time.time()
 
 
+@app.get("/health")
+@app.get("/healthz")
+async def health_check():
+    """Health check endpoint for Kubernetes probes"""
+    return {
+        "status": "healthy",
+        "version": __version__,
+        "uptime": int(time.time() - _start_time)
+    }
+
+
 @app.get("/api/v1/status")
 async def get_status():
     config = load_config()
@@ -69,7 +80,7 @@ async def serve_frontend(path: str):
     return FileResponse(static_dir / "index.html")
 
 
-async def start_console_server(port: int = 18791, host: str = "127.0.0.1"):
+async def start_console_server(port: int = 18791, host: str = "0.0.0.0"):
     import uvicorn
     config = uvicorn.Config(
         app,

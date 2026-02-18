@@ -152,19 +152,12 @@ def main(
 # ============================================================================
 
 
-@app.command()
-def onboard():
-    """Initialize vikingbot configuration and workspace."""
+def _run_onboard_logic():
     from vikingbot.config.loader import get_config_path, save_config
     from vikingbot.config.schema import Config
     from vikingbot.utils.helpers import get_workspace_path
     
     config_path = get_config_path()
-    
-    if config_path.exists():
-        console.print(f"[yellow]Config already exists at {config_path}[/yellow]")
-        if not typer.confirm("Overwrite?"):
-            raise typer.Exit()
     
     # Create default config with channel examples
     config = Config()
@@ -290,6 +283,19 @@ def onboard():
     workspace = get_workspace_path(ensure_exists=False)
     console.print(f"[green]✓[/green] Workspace path: {workspace}")
     console.print(f"  [dim]Workspace will be created and templates copied from source when first used[/dim]")
+
+@app.command()
+def onboard():
+    """Initialize vikingbot configuration and workspace."""
+    from vikingbot.config.loader import get_config_path
+    
+    config_path = get_config_path()
+    
+    if config_path.exists():
+        console.print(f"Config already exists at {config_path}, skipping initialization")
+        raise typer.Exit()
+    
+    _run_onboard_logic()
     
     console.print(f"\n{__logo__} vikingbot is ready!")
     console.print("\nNext steps:")
@@ -456,7 +462,7 @@ def gateway(
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
 ):
     """Start the vikingbot gateway."""
-    from vikingbot.config.loader import load_config, get_data_dir
+    from vikingbot.config.loader import load_config, get_data_dir, get_config_path
     from vikingbot.bus.queue import MessageBus
     from vikingbot.agent.loop import AgentLoop
     from vikingbot.channels.manager import ChannelManager
@@ -470,6 +476,11 @@ def gateway(
         logging.basicConfig(level=logging.DEBUG)
     
     console.print(f"{__logo__} Starting vikingbot gateway on port {port}...")
+    
+    config_path = get_config_path()
+    if not config_path.exists():
+        console.print("Config not found, running onboard...")
+        _run_onboard_logic()
     
     config = load_config()
     bus = MessageBus()
