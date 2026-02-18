@@ -3,7 +3,10 @@
 
 """Tests for search endpoints: find, search, grep, glob."""
 
+import shutil
+
 import httpx
+import pytest
 
 
 async def test_find_basic(client_with_resource):
@@ -66,9 +69,7 @@ async def test_search_basic(client_with_resource):
 async def test_search_with_session(client_with_resource):
     client, uri = client_with_resource
     # Create a session first
-    sess_resp = await client.post(
-        "/api/v1/sessions", json={"user": "test"}
-    )
+    sess_resp = await client.post("/api/v1/sessions", json={"user": "test"})
     session_id = sess_resp.json()["result"]["session_id"]
 
     resp = await client.post(
@@ -160,3 +161,30 @@ async def test_ast_grep_invalid_arguments(client):
     body = resp.json()
     assert body["status"] == "error"
     assert body["error"]["code"] == "INVALID_ARGUMENT"
+
+
+async def test_ast_grep_real_engine(client, service):
+    if shutil.which("sg") is None:
+        pytest.skip("ast-grep binary 'sg' is not installed")
+
+    file_uri = "viking://resources/ast_grep_real/sub/sample.py"
+    await service.viking_fs.write_file(
+        file_uri,
+        "def greet(name):\n    return f'hello {name}'\n",
+    )
+
+    resp = await client.post(
+        "/api/v1/search/ast-grep",
+        json={
+            "uri": "viking://resources/ast_grep_real/",
+            "pattern": "def $NAME($$$ARGS): $$$BODY",
+            "file_glob": "**/*.py",
+            "limit": 10,
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["result"]["count"] >= 1
+    assert body["result"]["scanned_files"] >= 1
+    assert any(m["uri"] == file_uri for m in body["result"]["matches"])
