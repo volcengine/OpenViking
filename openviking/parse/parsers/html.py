@@ -11,6 +11,7 @@ Unified parser that handles:
 Preserves natural document hierarchy and filters out navigation/ads.
 """
 
+import hashlib
 import re
 import tempfile
 import time
@@ -599,8 +600,14 @@ class HTMLParser(BaseParser):
 
         return result
 
-    def _sanitize_for_path(self, text: str) -> str:
-        """Sanitize text for use in file path."""
+    def _sanitize_for_path(self, text: str, max_length: int = 50) -> str:
+        """Sanitize text for use in file path, hash & shorten if too long."""
         safe = re.sub(r"[^\w\u4e00-\u9fff\s-]", "", text)
         safe = re.sub(r"\s+", "_", safe)
-        return safe.strip("_")[:50] or "section"
+        safe = safe.strip("_")
+        if not safe:
+            return "section"
+        if len(safe) > max_length:
+            hash_suffix = hashlib.sha256(text.encode()).hexdigest()[:8]
+            return f"{safe[: max_length - 9]}_{hash_suffix}"
+        return safe
