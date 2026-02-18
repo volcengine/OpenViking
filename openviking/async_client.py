@@ -143,12 +143,15 @@ class AsyncOpenViking:
         instruction: str = "",
         wait: bool = False,
         timeout: float = None,
+        **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking (only supports resources scope).
 
         Args:
             wait: Whether to wait for semantic extraction and vectorization to complete
             timeout: Wait timeout in seconds
+            **kwargs: Extra options forwarded to the parser chain, e.g.
+                ``strict``, ``ignore_dirs``, ``include``, ``exclude``.
         """
         await self._ensure_initialized()
         return await self._client.add_resource(
@@ -158,6 +161,7 @@ class AsyncOpenViking:
             instruction=instruction,
             wait=wait,
             timeout=timeout,
+            **kwargs,
         )
 
     async def wait_processed(self, timeout: float = None) -> Dict[str, Any]:
@@ -328,8 +332,13 @@ class AsyncOpenViking:
         output = kwargs.get("output", "original")
         abs_limit = kwargs.get("abs_limit", 128)
         show_all_hidden = kwargs.get("show_all_hidden", True)
+        node_limit = kwargs.get("node_limit", 1000)
         return await self._client.tree(
-            uri, output=output, abs_limit=abs_limit, show_all_hidden=show_all_hidden
+            uri,
+            output=output,
+            abs_limit=abs_limit,
+            show_all_hidden=show_all_hidden,
+            node_limit=node_limit,
         )
 
     async def mkdir(self, uri: str) -> None:

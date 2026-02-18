@@ -7,10 +7,14 @@ pub async fn ls(
     uri: &str,
     simple: bool,
     recursive: bool,
+    output: &str,
+    abs_limit: i32,
+    show_all_hidden: bool,
+    node_limit: i32,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let result = client.ls(uri, simple, recursive).await?;
+    let result = client.ls(uri, simple, recursive, output, abs_limit, show_all_hidden, node_limit).await?;
     output_success(&result, output_format, compact);
     Ok(())
 }
@@ -18,10 +22,14 @@ pub async fn ls(
 pub async fn tree(
     client: &HttpClient,
     uri: &str,
+    output: &str,
+    abs_limit: i32,
+    show_all_hidden: bool,
+    node_limit: i32,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let result = client.tree(uri).await?;
+    let result = client.tree(uri, output, abs_limit, show_all_hidden, node_limit).await?;
     output_success(&result, output_format, compact);
     Ok(())
 }

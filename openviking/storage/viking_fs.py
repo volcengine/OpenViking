@@ -240,9 +240,9 @@ class VikingFS:
         path = self._uri_to_path(uri)
         return self.agfs.stat(path)
 
-    async def glob(self, pattern: str, uri: str = "viking://") -> Dict:
+    async def glob(self, pattern: str, uri: str = "viking://", node_limit: int = 1000) -> Dict:
         """File pattern matching, supports **/*.md recursive."""
-        entries = await self.tree(uri)
+        entries = await self.tree(uri, node_limit=node_limit)
         base_uri = uri.rstrip("/")
         matches = []
         for entry in entries:
@@ -618,6 +618,7 @@ class VikingFS:
         output: str = "original",
         abs_limit: int = 256,
         show_all_hidden: bool = False,
+        node_limit: int = 1000,
     ) -> List[Dict[str, Any]]:
         """
         Recursively list all contents (includes rel_path).
@@ -635,19 +636,25 @@ class VikingFS:
         [{'name': '.abstract.md', 'size': 100, 'modTime': '2026-02-11 16:52:16', 'isDir': False, 'rel_path': '.abstract.md', 'uri': 'viking://resources...', 'abstract': "..."}]
         """
         if output == "original":
-            return await self._tree_original(uri, show_all_hidden)
+            return await self._tree_original(uri, show_all_hidden, node_limit)
         elif output == "agent":
-            return await self._tree_agent(uri, abs_limit, show_all_hidden)
+            return await self._tree_agent(uri, abs_limit, show_all_hidden, node_limit)
         else:
             raise ValueError(f"Invalid output format: {output}")
 
-    async def _tree_original(self, uri: str, show_all_hidden: bool = False) -> List[Dict[str, Any]]:
+    async def _tree_original(
+        self, uri: str, show_all_hidden: bool = False, node_limit: int = 1000
+    ) -> List[Dict[str, Any]]:
         """Recursively list all contents (original format)."""
         path = self._uri_to_path(uri)
         all_entries = []
 
         async def _walk(current_path: str, current_rel: str):
+            if len(all_entries) >= node_limit:
+                return
             for entry in self.agfs.ls(current_path):
+                if len(all_entries) >= node_limit:
+                    break
                 name = entry.get("name", "")
                 if name in [".", ".."]:
                     continue
@@ -667,7 +674,7 @@ class VikingFS:
         return all_entries
 
     async def _tree_agent(
-        self, uri: str, abs_limit: int, show_all_hidden: bool = False
+        self, uri: str, abs_limit: int, show_all_hidden: bool = False, node_limit: int = 1000
     ) -> List[Dict[str, Any]]:
         """Recursively list all contents (agent format with abstracts)."""
         path = self._uri_to_path(uri)
@@ -675,7 +682,11 @@ class VikingFS:
         now = datetime.now()
 
         async def _walk(current_path: str, current_rel: str):
+            if len(all_entries) >= node_limit:
+                return
             for entry in self.agfs.ls(current_path):
+                if len(all_entries) >= node_limit:
+                    break
                 name = entry.get("name", "")
                 if name in [".", ".."]:
                     continue

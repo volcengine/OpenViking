@@ -191,17 +191,27 @@ impl HttpClient {
 
     // ============ Filesystem Methods ============
 
-    pub async fn ls(&self, uri: &str, simple: bool, recursive: bool) -> Result<serde_json::Value> {
+    pub async fn ls(&self, uri: &str, simple: bool, recursive: bool, output: &str, abs_limit: i32, show_all_hidden: bool, node_limit: i32) -> Result<serde_json::Value> {
         let params = vec![
             ("uri".to_string(), uri.to_string()),
             ("simple".to_string(), simple.to_string()),
             ("recursive".to_string(), recursive.to_string()),
+            ("output".to_string(), output.to_string()),
+            ("abs_limit".to_string(), abs_limit.to_string()),
+            ("show_all_hidden".to_string(), show_all_hidden.to_string()),
+            ("node_limit".to_string(), node_limit.to_string()),
         ];
         self.get("/api/v1/fs/ls", &params).await
     }
 
-    pub async fn tree(&self, uri: &str) -> Result<serde_json::Value> {
-        let params = vec![("uri".to_string(), uri.to_string())];
+    pub async fn tree(&self, uri: &str, output: &str, abs_limit: i32, show_all_hidden: bool, node_limit: i32) -> Result<serde_json::Value> {
+        let params = vec![
+            ("uri".to_string(), uri.to_string()),
+            ("output".to_string(), output.to_string()),
+            ("abs_limit".to_string(), abs_limit.to_string()),
+            ("show_all_hidden".to_string(), show_all_hidden.to_string()),
+            ("node_limit".to_string(), node_limit.to_string()),
+        ];
         self.get("/api/v1/fs/tree", &params).await
     }
 

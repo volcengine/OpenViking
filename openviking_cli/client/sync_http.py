@@ -183,6 +183,7 @@ class SyncHTTPClient:
         output: str = "original",
         abs_limit: int = 256,
         show_all_hidden: bool = False,
+        node_limit: int = 1000,
     ) -> List[Any]:
         """List directory contents."""
         return run_async(
@@ -193,6 +194,7 @@ class SyncHTTPClient:
                 output=output,
                 abs_limit=abs_limit,
                 show_all_hidden=show_all_hidden,
+                node_limit=node_limit,
             )
         )
 
@@ -202,11 +204,16 @@ class SyncHTTPClient:
         output: str = "original",
         abs_limit: int = 128,
         show_all_hidden: bool = False,
-    ) -> Dict:
+        node_limit: int = 1000,
+    ) -> List[Dict[str, Any]]:
         """Get directory tree."""
         return run_async(
             self._async_client.tree(
-                uri, output=output, abs_limit=abs_limit, show_all_hidden=show_all_hidden
+                uri,
+                output=output,
+                abs_limit=abs_limit,
+                show_all_hidden=show_all_hidden,
+                node_limit=node_limit,
             )
         )
 

@@ -56,6 +56,7 @@ dependencies = [
     "protobuf>=6.33.5",
     "pdfminer-six>=20251230",
     "typer>=0.12.0",
+    "litellm>=1.0.0",
 ]
 
 [project.optional-dependencies]

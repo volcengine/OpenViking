@@ -119,8 +119,11 @@ class TreeBuilder:
 
         logger.info(f"Finalizing from temp: {temp_uri} -> {base_uri}")
 
-        # 3. Build final URI using VikingURI.join to handle slashes correctly
-        final_uri = VikingURI(base_uri).join(doc_name).uri
+        # 3. Build final URI, auto-renaming on conflict (e.g. doc_1, doc_2, ...)
+        candidate_uri = VikingURI(base_uri).join(doc_name).uri
+        final_uri = await self._resolve_unique_uri(candidate_uri)
+        if final_uri != candidate_uri:
+            logger.info(f"Resolved name conflict: {candidate_uri} -> {final_uri}")
 
         # 4. Move directory tree from temp to final location in AGFS
         await self._move_directory_in_agfs(doc_uri, final_uri)
@@ -151,6 +154,34 @@ class TreeBuilder:
         logger.info(f"Finalized tree: root_uri={final_uri}")
 
         return tree
+
+    async def _resolve_unique_uri(self, uri: str, max_attempts: int = 100) -> str:
+        """Return a URI that does not collide with an existing resource.
+
+        If *uri* is free, return it unchanged.  Otherwise append ``_1``,
+        ``_2``, … until a free name is found (like macOS Finder / Windows
+        Explorer).
+        """
+        viking_fs = get_viking_fs()
+
+        async def _exists(u: str) -> bool:
+            try:
+                await viking_fs.stat(u)
+                return True
+            except Exception:
+                return False
+
+        if not await _exists(uri):
+            return uri
+
+        for i in range(1, max_attempts + 1):
+            candidate = f"{uri}_{i}"
+            if not await _exists(candidate):
+                return candidate
+
+        raise FileExistsError(
+            f"Cannot resolve unique name for {uri} after {max_attempts} attempts"
+        )
 
     async def _move_directory_in_agfs(self, src_uri: str, dst_uri: str) -> None:
         """Recursively move AGFS directory tree (copy + delete)."""
