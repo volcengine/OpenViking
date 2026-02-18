@@ -136,6 +136,7 @@ def _sanitize_rel_path(rel_path: str) -> str:
 
     Uses OS-independent checks so that Windows-style drive prefixes and
     backslash separators are rejected even when running on Linux/macOS.
+    Also enforces filename length limits to prevent filesystem issues.
     """
     if not rel_path:
         raise ValueError(f"Unsafe relative path rejected: {rel_path!r}")
@@ -148,8 +149,33 @@ def _sanitize_rel_path(rel_path: str) -> str:
     # Reject parent-directory traversal (../ or ..\)
     if _UNSAFE_PATH_RE.search(rel_path):
         raise ValueError(f"Unsafe relative path rejected: {rel_path}")
-    # Normalize to forward slashes
-    return rel_path.replace("\\", "/")
+    
+    # Check filename length limits (most filesystems limit to 255 bytes)
+    normalized_path = rel_path.replace("\\", "/")
+    path_components = normalized_path.split("/")
+    
+    for component in path_components:
+        if len(component.encode('utf-8')) > 255:
+            # Truncate the filename while preserving the extension
+            if "." in component:
+                name, ext = component.rsplit(".", 1)
+                # Reserve space for extension and separator
+                max_name_bytes = 255 - len(ext.encode('utf-8')) - 1
+                if max_name_bytes > 0:
+                    # Truncate name to fit within byte limit
+                    truncated_name = name.encode('utf-8')[:max_name_bytes].decode('utf-8', errors='ignore')
+                    component = f"{truncated_name}.{ext}"
+                else:
+                    # Extension itself is too long, truncate everything
+                    component = component.encode('utf-8')[:255].decode('utf-8', errors='ignore')
+            else:
+                # No extension, just truncate
+                component = component.encode('utf-8')[:255].decode('utf-8', errors='ignore')
+            
+            logger.warning(f"Truncated long filename component from {len(rel_path.encode('utf-8'))} to {len(component.encode('utf-8'))} bytes")
+    
+    # Rebuild path with potentially truncated components
+    return "/".join(path_components) if len(path_components) > 1 else path_components[0] if path_components else ""
 
 
 async def upload_text_files(
