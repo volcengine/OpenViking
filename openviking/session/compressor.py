@@ -17,8 +17,8 @@ from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 
-from .memory_deduplicator import DedupDecision, MemoryDeduplicator
-from .memory_extractor import MemoryCategory, MemoryExtractor
+from .memory_deduplicator import DedupDecision, MemoryActionDecision, MemoryDeduplicator
+from .memory_extractor import CandidateMemory, MemoryCategory, MemoryExtractor
 
 logger = get_logger(__name__)
 
@@ -39,6 +39,7 @@ class ExtractionStats:
 
     created: int = 0
     merged: int = 0
+    deleted: int = 0
     skipped: int = 0
 
 
@@ -61,6 +62,47 @@ class SessionCompressor:
         embedding_msg = EmbeddingMsgConverter.from_context(memory)
         await self.vikingdb.enqueue_embedding_msg(embedding_msg)
         logger.info(f"Enqueued memory for vectorization: {memory.uri}")
+        return True
+
+    async def _merge_into_existing(
+        self,
+        candidate: CandidateMemory,
+        target_memory: Context,
+        viking_fs,
+    ) -> bool:
+        """Merge candidate content into an existing memory file."""
+        try:
+            existing_content = await viking_fs.read_file(target_memory.uri)
+            merged = await self.extractor._merge_memory(
+                existing_content,
+                candidate.content,
+                candidate.category.value,
+                output_language=candidate.language,
+            )
+            if not merged:
+                return False
+
+            await viking_fs.write_file(target_memory.uri, merged)
+            target_memory.set_vectorize(Vectorize(text=merged))
+            await self._index_memory(target_memory)
+            return True
+        except Exception as e:
+            logger.error(f"Failed to merge memory {target_memory.uri}: {e}")
+            return False
+
+    async def _delete_existing_memory(self, memory: Context, viking_fs) -> bool:
+        """Hard delete an existing memory file and clean up its vector record."""
+        try:
+            await viking_fs.rm(memory.uri, recursive=False)
+        except Exception as e:
+            logger.error(f"Failed to delete memory file {memory.uri}: {e}")
+            return False
+
+        try:
+            # rm() already syncs vector deletion in most cases; keep this as a safe fallback.
+            await self.vikingdb.remove_by_uri("context", memory.uri)
+        except Exception as e:
+            logger.warning(f"Failed to remove vector record for {memory.uri}: {e}")
         return True
 
     async def extract_long_term_memories(
@@ -95,46 +137,64 @@ class SessionCompressor:
 
             # Dedup check for other categories
             result = await self.deduplicator.deduplicate(candidate)
+            actions = result.actions or []
+            decision = result.decision
 
-            if result.decision == DedupDecision.SKIP:
+            # Safety net: create+merge should be treated as none.
+            if decision == DedupDecision.CREATE and any(
+                a.decision == MemoryActionDecision.MERGE for a in actions
+            ):
+                logger.warning(
+                    f"Dedup returned create with merge action, normalizing to none: "
+                    f"{candidate.abstract}"
+                )
+                decision = DedupDecision.NONE
+
+            if decision == DedupDecision.SKIP:
                 stats.skipped += 1
                 continue
 
-            if result.decision == DedupDecision.CREATE:
+            if decision == DedupDecision.NONE:
+                if not actions:
+                    stats.skipped += 1
+                    continue
+
+                for action in actions:
+                    if action.decision == MemoryActionDecision.DELETE:
+                        if viking_fs and await self._delete_existing_memory(
+                            action.memory, viking_fs
+                        ):
+                            stats.deleted += 1
+                        else:
+                            stats.skipped += 1
+                    elif action.decision == MemoryActionDecision.MERGE:
+                        if candidate.category in MERGE_SUPPORTED_CATEGORIES and viking_fs:
+                            if await self._merge_into_existing(candidate, action.memory, viking_fs):
+                                stats.merged += 1
+                            else:
+                                stats.skipped += 1
+                        else:
+                            # events/cases don't support MERGE, treat as SKIP
+                            stats.skipped += 1
+                continue
+
+            if decision == DedupDecision.CREATE:
+                # create can optionally include delete actions (delete first, then create)
+                for action in actions:
+                    if action.decision == MemoryActionDecision.DELETE:
+                        if viking_fs and await self._delete_existing_memory(
+                            action.memory, viking_fs
+                        ):
+                            stats.deleted += 1
+                        else:
+                            stats.skipped += 1
+
                 memory = await self.extractor.create_memory(candidate, user, session_id)
                 if memory:
                     memories.append(memory)
                     stats.created += 1
                     await self._index_memory(memory)
-
-            elif result.decision == DedupDecision.MERGE:
-                # Only merge for supported categories
-                if (
-                    candidate.category in MERGE_SUPPORTED_CATEGORIES
-                    and result.similar_memories
-                    and viking_fs
-                ):
-                    target_memory = result.similar_memories[0]
-                    try:
-                        existing_content = await viking_fs.read_file(target_memory.uri)
-                        merged = await self.extractor._merge_memory(
-                            existing_content,
-                            candidate.content,
-                            candidate.category.value,
-                            output_language=candidate.language,
-                        )
-                        if merged:
-                            await viking_fs.write_file(target_memory.uri, merged)
-                            target_memory.set_vectorize(Vectorize(text=merged))
-                            await self._index_memory(target_memory)
-                            stats.merged += 1
-                        else:
-                            stats.skipped += 1
-                    except Exception as e:
-                        logger.error(f"Failed to merge memory: {e}")
-                        stats.skipped += 1
                 else:
-                    # events/cases don't support MERGE, treat as SKIP
                     stats.skipped += 1
 
         # Extract URIs used in messages, create relations
@@ -144,7 +204,7 @@ class SessionCompressor:
 
         logger.info(
             f"Memory extraction: created={stats.created}, "
-            f"merged={stats.merged}, skipped={stats.skipped}"
+            f"merged={stats.merged}, deleted={stats.deleted}, skipped={stats.skipped}"
         )
         return memories
 
