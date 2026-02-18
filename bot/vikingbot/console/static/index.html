@@ -1295,7 +1295,13 @@
             
             for (var i = 0; i < files.length; i++) {
                 var f = files[i];
-                var fullPath = (data.path === '/' ? '' : data.path) + '/' + f.name;
+                // 正确构造完整路径
+                var fullPath;
+                if (data.path === '/') {
+                    fullPath = '/' + f.name;
+                } else {
+                    fullPath = data.path + '/' + f.name;
+                }
                 if (f.type === 'directory') {
                     html.push('<div class="file-item" data-action="navigate" data-path="' + fullPath + '"><span>📁</span> ' + f.name + '</div>');
                 } else {

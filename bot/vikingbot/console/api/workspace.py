@@ -104,6 +104,8 @@ async def list_files(
         relative_path = str(target_path.relative_to(workspace_path))
         if relative_path == ".":
             relative_path = "/"
+        else:
+            relative_path = "/" + relative_path
         
         return {
             "success": True,
