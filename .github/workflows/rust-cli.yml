@@ -65,7 +65,7 @@ jobs:
         echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++" >> $GITHUB_ENV
 
     - name: Cache Cargo registry and index
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: |
           ~/.cargo/registry/index
@@ -77,7 +77,7 @@ jobs:
           ${{ runner.os }}-cargo-
 
     - name: Cache build artifacts
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: target
         key: ${{ runner.os }}-target-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('crates/**/*.rs') }}
