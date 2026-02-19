@@ -29,6 +29,7 @@ from typing import List, Optional, Union
 
 from openviking.parse.base import NodeType, ParseResult, ResourceNode
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking.parse.parsers.media.constants import AUDIO_EXTENSIONS
 from openviking_cli.utils.config.parser_config import AudioConfig
 
 
@@ -50,7 +51,7 @@ class AudioParser(BaseParser):
     @property
     def supported_extensions(self) -> List[str]:
         """Return supported audio file extensions."""
-        return [".mp3", ".wav", ".ogg", ".flac", ".aac", ".m4a", ".opus"]
+        return AUDIO_EXTENSIONS
 
     async def parse(self, source: Union[str, Path], instruction: str = "", **kwargs) -> ParseResult:
         """

@@ -12,7 +12,9 @@ from openviking.parse.parsers.constants import (
     FILE_TYPE_CODE,
     FILE_TYPE_DOCUMENTATION,
     FILE_TYPE_OTHER,
+    IGNORE_EXTENSIONS,
 )
+from openviking.parse.parsers.upload_utils import is_text_file
 from openviking.prompts import render_prompt
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecutor
@@ -289,10 +291,26 @@ class SemanticProcessor(DequeueHandlerBase):
         file_name = file_path.split("/")[-1]
 
         try:
+            # Check if this is a binary file that should be skipped
+            from pathlib import Path
+
+            p = Path(file_name)
+            extension = p.suffix.lower()
+
+            # Skip binary files (using IGNORE_EXTENSIONS as reference)
+            if extension in IGNORE_EXTENSIONS or not is_text_file(file_name):
+                logger.debug(f"Skipping binary file for summary generation: {file_path}")
+                return {"name": file_name, "summary": ""}
+
             # Read file content (limit length)
             content = await viking_fs.read_file(file_path)
             if isinstance(content, bytes):
-                content = content.decode("utf-8")
+                # Try to decode with error handling for text files
+                try:
+                    content = content.decode("utf-8")
+                except UnicodeDecodeError:
+                    logger.warning(f"Failed to decode file as UTF-8, skipping: {file_path}")
+                    return {"name": file_name, "summary": ""}
 
             # Limit content length (about 10000 tokens)
             max_chars = 30000

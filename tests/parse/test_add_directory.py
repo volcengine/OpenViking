@@ -180,6 +180,18 @@ def tmp_mixed(tmp_path: Path) -> Path:
     return tmp_path
 
 
+@pytest.fixture
+def tmp_media_files(tmp_path: Path) -> Path:
+    """Directory with various media files and regular files."""
+    (tmp_path / "docs.md").write_text("# Documentation", encoding="utf-8")
+    (tmp_path / "image.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    (tmp_path / "photo.jpg").write_bytes(b"\xff\xd8\xff")
+    (tmp_path / "audio.mp3").write_bytes(b"ID3")
+    (tmp_path / "video.mp4").write_bytes(b"\x00\x00\x00\x18ftyp")
+    (tmp_path / "script.js").write_text("console.log('test')", encoding="utf-8")
+    return tmp_path
+
+
 # ---------------------------------------------------------------------------
 # Tests: basic properties
 # ---------------------------------------------------------------------------
@@ -461,3 +473,92 @@ class TestParseResultMetadata:
         assert result.meta["dir_name"] == tmp_code.name
         assert result.meta["total_processable"] == 3
         assert result.meta["file_count"] == 3
+
+
+# ---------------------------------------------------------------------------
+# Tests: directly_upload_media parameter
+# ---------------------------------------------------------------------------
+
+
+class TestDirectlyUploadMedia:
+    """Test the directly_upload_media parameter behavior."""
+
+    @pytest.mark.asyncio
+    async def test_default_directly_upload_media_true(self, tmp_media_files: Path, fake_fs) -> None:
+        """Test that with directly_upload_media=True (default), media files are uploaded directly."""
+        with patch.object(BaseParser, "_get_viking_fs", return_value=fake_fs):
+            parser = DirectoryParser()
+            await parser.parse(str(tmp_media_files))
+
+        uploaded_names = {uri.split("/")[-1] for uri in fake_fs.files}
+
+        assert "docs.md" in uploaded_names
+        assert "image.png" in uploaded_names
+        assert "photo.jpg" in uploaded_names
+        assert "audio.mp3" in uploaded_names
+        assert "video.mp4" in uploaded_names
+        assert "script.js" in uploaded_names
+
+    @pytest.mark.asyncio
+    async def test_directly_upload_media_false(self, tmp_media_files: Path, fake_fs) -> None:
+        """Test that with directly_upload_media=False, media files go through their parsers."""
+        mock_image_result = create_parse_result(
+            root=ResourceNode(type=NodeType.ROOT),
+            source_path=str(tmp_media_files / "image.png"),
+            source_format="image",
+            parser_name="ImageParser",
+            parse_time=0.1,
+        )
+        mock_image_result.temp_dir_path = fake_fs.create_temp_uri()
+
+        mock_audio_result = create_parse_result(
+            root=ResourceNode(type=NodeType.ROOT),
+            source_path=str(tmp_media_files / "audio.mp3"),
+            source_format="audio",
+            parser_name="AudioParser",
+            parse_time=0.1,
+        )
+        mock_audio_result.temp_dir_path = fake_fs.create_temp_uri()
+
+        mock_video_result = create_parse_result(
+            root=ResourceNode(type=NodeType.ROOT),
+            source_path=str(tmp_media_files / "video.mp4"),
+            source_format="video",
+            parser_name="VideoParser",
+            parse_time=0.1,
+        )
+        mock_video_result.temp_dir_path = fake_fs.create_temp_uri()
+
+        with patch.object(BaseParser, "_get_viking_fs", return_value=fake_fs):
+            parser = DirectoryParser()
+
+            with patch.object(parser, "_assign_parser") as mock_assign:
+                from openviking.parse.parsers.media.audio import AudioParser
+                from openviking.parse.parsers.media.image import ImageParser
+                from openviking.parse.parsers.media.video import VideoParser
+
+                mock_image = AsyncMock(spec=ImageParser)
+                mock_image.parse = AsyncMock(return_value=mock_image_result)
+
+                mock_audio = AsyncMock(spec=AudioParser)
+                mock_audio.parse = AsyncMock(return_value=mock_audio_result)
+
+                mock_video = AsyncMock(spec=VideoParser)
+                mock_video.parse = AsyncMock(return_value=mock_video_result)
+
+                def assign_side_effect(cf, registry):
+                    if cf.path.suffix in {".png", ".jpg"}:
+                        return mock_image
+                    elif cf.path.suffix in {".mp3"}:
+                        return mock_audio
+                    elif cf.path.suffix in {".mp4"}:
+                        return mock_video
+                    return registry.get_parser_for_file(cf.path)
+
+                mock_assign.side_effect = assign_side_effect
+
+                await parser.parse(str(tmp_media_files), directly_upload_media=False)
+
+        assert mock_image.parse.call_count == 2
+        mock_audio.parse.assert_called_once()
+        mock_video.parse.assert_called_once()

@@ -61,9 +61,6 @@ class OpenAIVLM(VLMBase):
             "temperature": self.temperature,
         }
 
-        if self.provider == "volcengine":
-            kwargs["thinking"] = {"type": "disabled" if not thinking else "enabled"}
-
         response = client.chat.completions.create(**kwargs)
         self._update_token_usage_from_response(response)
         return response.choices[0].message.content or ""
@@ -78,9 +75,6 @@ class OpenAIVLM(VLMBase):
             "messages": [{"role": "user", "content": prompt}],
             "temperature": self.temperature,
         }
-
-        if self.provider == "volcengine":
-            kwargs["thinking"] = {"type": "disabled" if not thinking else "enabled"}
 
         last_error = None
         for attempt in range(max_retries + 1):
@@ -147,9 +141,6 @@ class OpenAIVLM(VLMBase):
             "temperature": self.temperature,
         }
 
-        if self.provider == "volcengine":
-            kwargs["thinking"] = {"type": "disabled" if not thinking else "enabled"}
-
         response = client.chat.completions.create(**kwargs)
         self._update_token_usage_from_response(response)
         return response.choices[0].message.content or ""
@@ -173,9 +164,6 @@ class OpenAIVLM(VLMBase):
             "messages": [{"role": "user", "content": content}],
             "temperature": self.temperature,
         }
-
-        if self.provider == "volcengine":
-            kwargs["thinking"] = {"type": "disabled" if not thinking else "enabled"}
 
         response = await client.chat.completions.create(**kwargs)
         self._update_token_usage_from_response(response)

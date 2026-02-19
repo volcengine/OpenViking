@@ -164,6 +164,7 @@ def _classify_file(
 
     Processable: ParserRegistry has a parser, or is_text_file (code/config/docs).
     """
+    # Normal classification logic
     if registry.get_parser_for_file(file_path) is not None:
         return CLASS_PROCESSABLE
     if is_text_file(file_path):

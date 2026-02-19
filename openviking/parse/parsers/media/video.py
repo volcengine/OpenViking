@@ -29,6 +29,7 @@ from typing import List, Optional, Union
 
 from openviking.parse.base import NodeType, ParseResult, ResourceNode
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking.parse.parsers.media.constants import VIDEO_EXTENSIONS
 from openviking_cli.utils.config.parser_config import VideoConfig
 
 
@@ -50,7 +51,7 @@ class VideoParser(BaseParser):
     @property
     def supported_extensions(self) -> List[str]:
         """Return supported video file extensions."""
-        return [".mp4", ".avi", ".mov", ".mkv", ".webm", ".flv", ".wmv"]
+        return VIDEO_EXTENSIONS
 
     async def parse(self, source: Union[str, Path], instruction: str = "", **kwargs) -> ParseResult:
         """

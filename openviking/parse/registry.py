@@ -8,16 +8,19 @@ Provides automatic parser selection based on file type.
 
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
 from openviking.parse.base import ParseResult
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking.parse.parsers.code import CodeRepositoryParser
+from openviking.parse.parsers.directory import DirectoryParser
 from openviking.parse.parsers.epub import EPubParser
 from openviking.parse.parsers.excel import ExcelParser
 
 # Import will be handled dynamically to avoid dependency issues
 from openviking.parse.parsers.html import HTMLParser
 from openviking.parse.parsers.markdown import MarkdownParser
+from openviking.parse.parsers.media import AudioParser, ImageParser, VideoParser
 from openviking.parse.parsers.pdf import PDFParser
 from openviking.parse.parsers.powerpoint import PowerPointParser
 from openviking.parse.parsers.text import TextParser
@@ -25,6 +28,8 @@ from openviking.parse.parsers.text import TextParser
 # Import markitdown-inspired parsers
 from openviking.parse.parsers.word import WordParser
 from openviking.parse.parsers.zip_parser import ZipParser
+from openviking_cli.utils.config import get_openviking_config
+from openviking_cli.utils.config.parser_config import load_parser_configs_from_dict
 
 if TYPE_CHECKING:
     from openviking.parse.custom import CustomParserProtocol
@@ -34,27 +39,35 @@ logger = logging.getLogger(__name__)
 
 class ParserRegistry:
     """
-    Registry for document parsers.
+    Registry for document parsers, which is a singleton.
 
     Automatically selects appropriate parser based on file extension.
     """
 
-    def __init__(self, register_optional: bool = True):
+    def __init__(
+        self, register_optional: bool = True, parser_configs: Optional[Dict[str, Any]] = None
+    ):
         """
         Initialize registry with default parsers.
 
         Args:
             register_optional: Whether to register optional parsers
                               that require extra dependencies
+            parser_configs: Dictionary of parser configurations (from load_parser_configs_from_dict)
         """
         self._parsers: Dict[str, BaseParser] = {}
         self._extension_map: Dict[str, str] = {}
 
+        # Get parser configs
+        self._parser_configs = parser_configs or {}
+        config = get_openviking_config()
+        self._parser_configs = load_parser_configs_from_dict(config.parsers)
+
         # Register core parsers
-        self.register("text", TextParser())
-        self.register("markdown", MarkdownParser())
-        self.register("pdf", PDFParser())
-        self.register("html", HTMLParser())
+        self.register("text", TextParser(config=self._parser_configs.get("text")))
+        self.register("markdown", MarkdownParser(config=self._parser_configs.get("markdown")))
+        self.register("pdf", PDFParser(config=self._parser_configs.get("pdf")))
+        self.register("html", HTMLParser())  # HTMLParser doesn't accept config yet
 
         # Register markitdown-inspired parsers (built-in)
         self.register("word", WordParser())
@@ -62,38 +75,12 @@ class ParserRegistry:
         self.register("excel", ExcelParser())
         self.register("epub", EPubParser())
         self.register("zip", ZipParser())
+        self.register("code", CodeRepositoryParser())
+        self.register("directory", DirectoryParser())
 
-        # Register code parser dynamically
-        try:
-            from openviking.parse.parsers.code import CodeRepositoryParser
-
-            self.register("code", CodeRepositoryParser())
-        except ImportError as e:
-            logger.warning(f"CodeRepositoryParser not available: {e}")
-
-        # Register directory parser
-        try:
-            from openviking.parse.parsers.directory import DirectoryParser
-
-            self.register("directory", DirectoryParser())
-        except ImportError as e:
-            logger.warning(f"DirectoryParser not available: {e}")
-
-        # Register optional media parsers
-        if register_optional:
-            try:
-                from openviking.parse.parsers.media import AudioParser, ImageParser, VideoParser
-
-                self.register("image", ImageParser())
-                logger.info("Registered ImageParser for image formats")
-
-                self.register("audio", AudioParser())
-                logger.info("Registered AudioParser for audio formats")
-
-                self.register("video", VideoParser())
-                logger.info("Registered VideoParser for video formats")
-            except ImportError as e:
-                logger.debug(f"Media parsers not registered: {e}")
+        self.register("image", ImageParser(config=self._parser_configs.get("image")))
+        self.register("audio", AudioParser(config=self._parser_configs.get("audio")))
+        self.register("video", VideoParser(config=self._parser_configs.get("video")))
 
     def register(self, name: str, parser: BaseParser) -> None:
         """
@@ -290,11 +277,11 @@ class ParserRegistry:
 _default_registry: Optional[ParserRegistry] = None
 
 
-def get_registry() -> ParserRegistry:
+def get_registry(parser_configs: Optional[Dict[str, Any]] = None) -> ParserRegistry:
     """Get the default parser registry."""
     global _default_registry
     if _default_registry is None:
-        _default_registry = ParserRegistry()
+        _default_registry = ParserRegistry(parser_configs=parser_configs)
     return _default_registry
 
 

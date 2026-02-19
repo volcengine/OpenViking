@@ -17,7 +17,12 @@ from PIL import Image
 
 from openviking.parse.base import NodeType, ParseResult, ResourceNode
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking.parse.parsers.media.constants import IMAGE_EXTENSIONS
+from openviking.storage.viking_fs import get_viking_fs
+from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.config.parser_config import ImageConfig
+from openviking_cli.utils.logger import get_logger
+from openviking_cli.utils.uri import VikingURI
 
 # =============================================================================
 # Configuration Classes
@@ -62,7 +67,7 @@ class ImageParser(BaseParser):
     @property
     def supported_extensions(self) -> List[str]:
         """Return supported image file extensions."""
-        return [".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp", ".svg"]
+        return IMAGE_EXTENSIONS
 
     async def parse(self, source: Union[str, Path], instruction: str = "", **kwargs) -> ParseResult:
         """
@@ -91,7 +96,6 @@ class ImageParser(BaseParser):
             FileNotFoundError: If source file does not exist
             IOError: If image processing fails
         """
-        from openviking.storage.viking_fs import get_viking_fs
 
         # Convert to Path object
         file_path = Path(source) if isinstance(source, str) else source
@@ -104,8 +108,6 @@ class ImageParser(BaseParser):
         # Phase 1: Generate temporary files
         image_bytes = file_path.read_bytes()
         ext = file_path.suffix
-
-        from openviking_cli.utils.uri import VikingURI
 
         # Sanitize original filename (replace spaces with underscores)
         original_filename = file_path.name.replace(" ", "_")
@@ -165,7 +167,9 @@ class ImageParser(BaseParser):
         )
 
         # Phase 2: Generate semantic info
-        await self._generate_semantic_info(root_node, description, viking_fs, ocr_text is not None)
+        await self._generate_semantic_info(
+            root_node, description, viking_fs, ocr_text is not None, root_dir_uri
+        )
 
         # Phase 3: Build directory structure (handled by TreeBuilder)
         return ParseResult(
@@ -187,11 +191,34 @@ class ImageParser(BaseParser):
 
         Returns:
             Image description in markdown format
-
-        TODO: Integrate with actual VLM API (OpenAI GPT-4V, Claude Vision, etc.)
         """
-        # Fallback implementation - returns basic placeholder
-        return "Image description (VLM integration pending)\n\nThis is an image. VLM description feature has not yet integrated external API."
+        from openviking.prompts import render_prompt
+
+        logger = get_logger(__name__)
+
+        try:
+            vlm = get_openviking_config().vlm
+
+            # Render prompt
+            prompt = render_prompt(
+                "parsing.image_summary",
+                {
+                    "context": "No additional context",
+                },
+            )
+
+            # Call VLM
+            response = await vlm.get_vision_completion_async(
+                prompt=prompt,
+                images=[image_bytes],
+            )
+
+            return response.strip()
+
+        except Exception as e:
+            logger.error(f"Error in VLM image description: {e}")
+            # Fallback to basic description
+            return "Image description (VLM integration failed)\n\nThis is an image file."
 
     async def _ocr_extract(self, image_bytes: bytes, lang: str) -> Optional[str]:
         """
@@ -210,16 +237,17 @@ class ImageParser(BaseParser):
         return None
 
     async def _generate_semantic_info(
-        self, node: ResourceNode, description: str, viking_fs, has_ocr: bool
+        self, node: ResourceNode, description: str, viking_fs, has_ocr: bool, root_dir_uri: str
     ):
         """
-        Phase 2: Generate abstract and overview.
+        Phase 2: Generate abstract and overview and write to .abstract.md and .overview.md.
 
         Args:
             node: ResourceNode to update
             description: Image description
             viking_fs: VikingFS instance
             has_ocr: Whether OCR file exists
+            root_dir_uri: Root directory URI to write semantic files
         """
         # Generate abstract (short summary, < 100 tokens)
         abstract = description[:200] if len(description) > 200 else description
@@ -264,6 +292,10 @@ class ImageParser(BaseParser):
         # Store in node meta
         node.meta["abstract"] = abstract
         node.meta["overview"] = overview
+
+        # Write to files in temp directory
+        await viking_fs.write_file(f"{root_dir_uri}/.abstract.md", abstract)
+        await viking_fs.write_file(f"{root_dir_uri}/.overview.md", overview)
 
     async def parse_content(
         self, content: str, source_path: Optional[str] = None, instruction: str = "", **kwargs
