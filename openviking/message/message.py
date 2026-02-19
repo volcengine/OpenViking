@@ -7,10 +7,11 @@ Message = role + parts, supports serialization to JSONL.
 
 import json
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import List, Literal, Optional
 
 from openviking.message.part import ContextPart, Part, TextPart, ToolPart
+from openviking.utils.time_utils import format_iso8601
 
 
 @dataclass
@@ -32,11 +33,13 @@ class Message:
 
     def to_dict(self) -> dict:
         """Serialize to JSONL."""
+        created_at_val = self.created_at or datetime.now(timezone.utc)
+        created_at_str = format_iso8601(created_at_val)
         return {
             "id": self.id,
             "role": self.role,
             "parts": [self._part_to_dict(p) for p in self.parts],
-            "created_at": (self.created_at or datetime.now()).isoformat(),
+            "created_at": created_at_str,
         }
 
     def _part_to_dict(self, part: Part) -> dict:
@@ -108,7 +111,7 @@ class Message:
             id=msg_id or f"msg_{uuid4().hex}",
             role="user",
             parts=[TextPart(text=content)],
-            created_at=datetime.now(),
+            created_at=datetime.now(timezone.utc),
         )
 
     @classmethod
@@ -151,7 +154,7 @@ class Message:
             id=msg_id or f"msg_{uuid4().hex}",
             role="assistant",
             parts=parts,
-            created_at=datetime.now(),
+            created_at=datetime.now(timezone.utc),
         )
 
     def get_context_parts(self) -> List[ContextPart]:

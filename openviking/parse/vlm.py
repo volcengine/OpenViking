@@ -7,9 +7,9 @@ from pathlib import Path
 from typing import Any, Dict, List, Union
 
 from openviking.prompts import render_prompt
-from openviking.utils.extractor import ImageInfo, TableInfo
-from openviking.utils.llm import parse_json_from_response
-from openviking.utils.logger import get_logger
+from openviking_cli.utils.extractor import ImageInfo, TableInfo
+from openviking_cli.utils.llm import parse_json_from_response
+from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -52,7 +52,7 @@ class VLMProcessor:
 
     def _get_vlm(self):
         """Get VLM singleton."""
-        from openviking.utils.config import get_openviking_config
+        from openviking_cli.utils.config import get_openviking_config
 
         return get_openviking_config().vlm
 

@@ -69,12 +69,11 @@ pip install openviking
 
 ### 如何配置 OpenViking？
 
-在项目目录创建 `ov.conf` 配置文件：
+在项目目录创建 `~/.openviking/ov.conf` 配置文件：
 
 ```json
 {
-  "user": "default_user",
-    "embedding": {
+  "embedding": {
     "dense": {
       "provider": "volcengine",
       "api_key": "your-api-key",
@@ -101,7 +100,7 @@ pip install openviking
 }
 ```
 
-配置优先级：构造函数参数 > Config 对象 > 配置文件 > 环境变量 > 默认值
+配置文件放在默认路径 `~/.openviking/ov.conf` 时自动加载；也可通过环境变量 `OPENVIKING_CONFIG_FILE` 或命令行 `--config` 指定其他路径。详见 [配置指南](../guides/01-configuration.md)。
 
 ### 支持哪些 Embedding Provider？
 
@@ -120,16 +119,16 @@ pip install openviking
 ```python
 import openviking as ov
 
-# 异步客户端（推荐）
+# 异步客户端（推荐）- 嵌入模式
 client = ov.AsyncOpenViking(path="./my_data")
 await client.initialize()
 
-# 或使用配置对象
-from openviking.utils.config import OpenVikingConfig
-config = OpenVikingConfig(...)
-client = ov.AsyncOpenViking(config=config)
+# 异步客户端 - 服务模式
+client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 await client.initialize()
 ```
+
+SDK 构造函数仅接受 `url`、`api_key`、`path` 参数。其他配置（embedding、vlm 等）通过 `ov.conf` 配置文件管理。
 
 ### 支持哪些文件格式？
 
@@ -282,7 +281,7 @@ OpenViking 使用分数传播机制：
    ```
 
 2. **Embedding 模型配置错误**
-   - 检查 `ov.conf` 中的 `api_key` 是否正确
+   - 检查 `~/.openviking/ov.conf` 中的 `api_key` 是否正确
    - 确认模型名称和 endpoint 配置正确
 
 3. **文件格式不支持**
@@ -348,7 +347,7 @@ OpenViking 使用分数传播机制：
 1. **批量处理**：一次添加多个资源比逐个添加更高效
 2. **合理设置 `batch_size`**：Embedding 配置中调整批处理大小
 3. **使用本地存储**：开发阶段使用 `local` 后端减少网络延迟
-4. **异步操作**：充分利用 `AsyncOpenViking` 的异步特性
+4. **异步操作**：充分利用 `AsyncOpenViking` / `AsyncHTTPClient` 的异步特性
 
 ## 部署相关
 
@@ -364,10 +363,7 @@ OpenViking 使用分数传播机制：
 client = ov.AsyncOpenViking(path="./data")
 
 # 服务模式
-client = ov.AsyncOpenViking(
-    vectordb_url="http://vectordb:5000",
-    agfs_url="http://agfs:8080"
-)
+client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 ```
 
 ### OpenViking 是开源的吗？
@@ -376,8 +372,8 @@ client = ov.AsyncOpenViking(
 
 ## 相关文档
 
-- [简介](../getting-started/introduction.md) - 了解 OpenViking 的设计理念
-- [快速开始](../getting-started/quickstart.md) - 5 分钟上手教程
+- [简介](../getting-started/01-introduction.md) - 了解 OpenViking 的设计理念
+- [快速开始](../getting-started/02-quickstart.md) - 5 分钟上手教程
 - [架构概述](../concepts/01-architecture.md) - 深入理解系统设计
-- [检索机制](../concepts/06-retrieval.md) - 检索流程详解
-- [配置指南](../configuration/configuration.md) - 完整配置参考
+- [检索机制](../concepts/07-retrieval.md) - 检索流程详解
+- [配置指南](../guides/01-configuration.md) - 完整配置参考

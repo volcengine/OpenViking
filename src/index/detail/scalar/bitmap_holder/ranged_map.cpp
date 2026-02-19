@@ -500,7 +500,8 @@ BitmapPtr RangedMap2D::get_range2d_bitmap_with_slot_data(double x, double y,
   temp_p->get_set_list(offsets);
   const double dist_square_max = radius * radius;
   for (uint32_t offset : offsets) {
-    if (dist_square_to(x, y, offset) > dist_square_max) {
+    double d2 = dist_square_to(x, y, offset);
+    if (d2 > dist_square_max) {
       temp_p->Unset(offset);
     }
   }

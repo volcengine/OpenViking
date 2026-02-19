@@ -149,7 +149,7 @@ async def client(test_data_dir: Path) -> AsyncGenerator[AsyncOpenViking, None]:
     """Create initialized OpenViking client"""
     await AsyncOpenViking.reset()
 
-    client = AsyncOpenViking(path=str(test_data_dir), user="test_user")
+    client = AsyncOpenViking(path=str(test_data_dir))
     await client.initialize()
 
     yield client
@@ -163,7 +163,7 @@ async def uninitialized_client(test_data_dir: Path) -> AsyncGenerator[AsyncOpenV
     """Create uninitialized OpenViking client (for testing initialization flow)"""
     await AsyncOpenViking.reset()
 
-    client = AsyncOpenViking(path=str(test_data_dir), user="test_user")
+    client = AsyncOpenViking(path=str(test_data_dir))
 
     yield client
 

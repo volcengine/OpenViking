@@ -168,6 +168,9 @@ class Bitmap final {
   // Access data
   void get_set_list(std::vector<uint32_t>& result) const;
 
+  uint32_t get_range_list(std::vector<uint32_t>& result, uint32_t limit,
+                          uint32_t offset = 0);
+
   size_t get_estimate_bytes();
 
  private:

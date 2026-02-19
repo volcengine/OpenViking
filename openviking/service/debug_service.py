@@ -1,4 +1,3 @@
-
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 """
@@ -9,9 +8,15 @@ from dataclasses import dataclass
 from typing import Dict, List, Optional
 
 from openviking.storage import VikingDBManager
-from openviking.storage.observers import QueueObserver, VikingDBObserver, VLMObserver
+from openviking.storage.observers import (
+    QueueObserver,
+    TransactionObserver,
+    VikingDBObserver,
+    VLMObserver,
+)
 from openviking.storage.queuefs import get_queue_manager
-from openviking.utils.config import OpenVikingConfig
+from openviking.storage.transaction import get_transaction_manager
+from openviking_cli.utils.config import OpenVikingConfig
 
 
 @dataclass
@@ -102,12 +107,32 @@ class ObserverService:
         )
 
     @property
+    def transaction(self) -> ComponentStatus:
+        """Get transaction status."""
+        transaction_manager = get_transaction_manager()
+        if transaction_manager is None:
+            return ComponentStatus(
+                name="transaction",
+                is_healthy=False,
+                has_errors=True,
+                status="Transaction manager not initialized.",
+            )
+        observer = TransactionObserver(transaction_manager)
+        return ComponentStatus(
+            name="transaction",
+            is_healthy=observer.is_healthy(),
+            has_errors=observer.has_errors(),
+            status=observer.get_status_table(),
+        )
+
+    @property
     def system(self) -> SystemStatus:
         """Get system overall status."""
         components = {
             "queue": self.queue,
             "vikingdb": self.vikingdb,
             "vlm": self.vlm,
+            "transaction": self.transaction,
         }
         errors = [f"{c.name} has errors" for c in components.values() if c.has_errors]
         return SystemStatus(

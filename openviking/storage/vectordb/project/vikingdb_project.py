@@ -8,7 +8,7 @@ from openviking.storage.vectordb.collection.vikingdb_clients import (
     VikingDBClient,
 )
 from openviking.storage.vectordb.collection.vikingdb_collection import VikingDBCollection
-from openviking.utils.logger import default_logger as logger
+from openviking_cli.utils.logger import default_logger as logger
 
 
 def get_or_create_vikingdb_project(

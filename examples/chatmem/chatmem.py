@@ -25,7 +25,7 @@ from rich.spinner import Spinner
 
 from openviking import SyncOpenViking
 from openviking.message import TextPart
-from openviking.utils.config.open_viking_config import OpenVikingConfig
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 
 console = Console()
 PANEL_WIDTH = 78
@@ -336,7 +336,7 @@ class ChatREPL:
                 config_dict = json.load(f)
             config = OpenVikingConfig.from_dict(config_dict)
 
-            self.client = SyncOpenViking(path=self.data_path, config=config, user="default")
+            self.client = SyncOpenViking(path=self.data_path, config=config)
             self.client.initialize()
 
             # Create/load session

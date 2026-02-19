@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from openviking.utils.config import OpenVikingConfig
+from openviking_cli.utils.config import OpenVikingConfig
 
 
 @dataclass
@@ -18,7 +18,6 @@ class MemexConfig:
     # OpenViking settings
     data_path: str = "./memex_data"
     config_path: str = "./ov.conf"
-    user: str = "default"
 
     # LLM settings (for RAG, read from ov.conf)
     llm_temperature: float = 0.7
@@ -45,7 +44,6 @@ class MemexConfig:
         return cls(
             data_path=os.getenv("MEMEX_DATA_PATH", "./memex_data"),
             config_path=os.getenv("MEMEX_CONFIG_PATH", "./ov.conf"),
-            user=os.getenv("MEMEX_USER", "default"),
             llm_temperature=float(os.getenv("MEMEX_LLM_TEMPERATURE", "0.7")),
             llm_max_tokens=int(os.getenv("MEMEX_LLM_MAX_TOKENS", "2048")),
             search_top_k=int(os.getenv("MEMEX_SEARCH_TOP_K", "5")),

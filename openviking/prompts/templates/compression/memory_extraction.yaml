@@ -25,11 +25,18 @@ variables:
     description: "User feedback"
     required: false
     default: ""
+  - name: "output_language"
+    type: "string"
+    description: "Target language for extracted memory fields (abstract, overview, content)"
+    required: false
+    default: "auto"
 
 template: |
   Analyze the following session context and extract memories worth long-term preservation.
 
   User: {{ user }}
+
+  Target Output Language: {{ output_language }} ("auto" means detect from recent messages)
 
   {% if summary %}
   ## Session History Summary
@@ -218,6 +225,7 @@ template: |
   }
 
   Notes:
+  - The values of "abstract", "overview", and "content" MUST be written in {{ output_language }} (if output_language is "auto", use the dominant language in recent_messages).
   - Only extract truly valuable personalized information
   - If nothing worth recording, return {"memories": []}
   - Preferences should be aggregated by topic, similar preferences should be merged into one memory

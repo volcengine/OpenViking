@@ -12,7 +12,7 @@ on:
         description: 'JSON string of Python versions'
         required: false
         type: string
-        default: '["3.9", "3.10", "3.11", "3.12"]'
+        default: '["3.10", "3.11", "3.12", "3.13"]'
       build_sdist:
         description: 'Whether to build source distribution'
         required: false
@@ -42,7 +42,7 @@ on:
       python_json:
         description: 'JSON string of Python versions'
         required: false
-        default: '["3.9", "3.10", "3.11", "3.12"]'
+        default: '["3.10", "3.11", "3.12", "3.13"]'
 
 jobs:
   build-sdist:
@@ -74,8 +74,29 @@ jobs:
     - name: Install build dependencies
       run: uv pip install build setuptools_scm
 
+    - name: Clean workspace (force ignore dirty)
+      shell: bash
+      run: |
+        git reset --hard HEAD
+        git clean -fd
+        rm -rf openviking/_version.py openviking.egg-info
+        # Ignore uv.lock changes to avoid dirty state in setuptools_scm
+        git update-index --assume-unchanged uv.lock || true
+
+    - name: Debug Git and SCM
+      shell: bash
+      run: |
+        echo "=== Git Describe ==="
+        git describe --tags --long --dirty --always
+        echo "=== Setuptools SCM Version ==="
+        uv run --frozen python -m setuptools_scm
+        echo "=== Git Status (Ignored included) ==="
+        git status --ignored
+        echo "=== Check openviking/_version.py ==="
+        if [ -f openviking/_version.py ]; then cat openviking/_version.py; else echo "Not found"; fi
+
     - name: Build sdist
-      run: uv run python -m build --sdist
+      run: uv run --frozen python -m build --sdist
 
     - name: Store the distribution packages
       uses: actions/upload-artifact@v6
@@ -138,6 +159,7 @@ jobs:
           "3.10") PYTHON_FULL="3.10.13" ;;
           "3.11") PYTHON_FULL="3.11.8" ;;
           "3.12") PYTHON_FULL="3.12.2" ;;
+          "3.13") PYTHON_FULL="3.13.2" ;;
           *)
             echo "Error: Unknown python version $PYTHON_VERSION"
             exit 1
@@ -183,8 +205,29 @@ jobs:
     - name: Install build dependencies
       run: uv pip install setuptools setuptools_scm pybind11 cmake wheel build
 
+    - name: Clean workspace (force ignore dirty)
+      shell: bash
+      run: |
+        git reset --hard HEAD
+        git clean -fd
+        rm -rf openviking/_version.py openviking.egg-info
+        # Ignore uv.lock changes to avoid dirty state in setuptools_scm
+        git update-index --assume-unchanged uv.lock || true
+
+    - name: Debug Git and SCM
+      shell: bash
+      run: |
+        echo "=== Git Describe ==="
+        git describe --tags --long --dirty --always
+        echo "=== Setuptools SCM Version ==="
+        uv run --frozen python -m setuptools_scm
+        echo "=== Git Status (Ignored included) ==="
+        git status --ignored
+        echo "=== Check openviking/_version.py ==="
+        if [ -f openviking/_version.py ]; then cat openviking/_version.py; else echo "Not found"; fi
+
     - name: Build package (Wheel Only)
-      run: uv run python -m build --wheel
+      run: uv run --frozen python -m build --wheel
 
     - name: Install patchelf (Linux)
       run: |
@@ -276,8 +319,29 @@ jobs:
     - name: Install build dependencies
       run: uv pip install setuptools setuptools_scm pybind11 cmake wheel build
 
+    - name: Clean workspace (force ignore dirty)
+      shell: bash
+      run: |
+        git reset --hard HEAD
+        git clean -fd
+        rm -rf openviking/_version.py openviking.egg-info
+        # Ignore uv.lock changes to avoid dirty state in setuptools_scm
+        git update-index --assume-unchanged uv.lock || true
+
+    - name: Debug Git and SCM
+      shell: bash
+      run: |
+        echo "=== Git Describe ==="
+        git describe --tags --long --dirty --always
+        echo "=== Setuptools SCM Version ==="
+        uv run --frozen python -m setuptools_scm
+        echo "=== Git Status (Ignored included) ==="
+        git status --ignored
+        echo "=== Check openviking/_version.py ==="
+        if [ -f openviking/_version.py ]; then cat openviking/_version.py; else echo "Not found"; fi
+
     - name: Build package (Wheel Only)
-      run: uv run python -m build --wheel
+      run: uv run --frozen python -m build --wheel
 
     - name: Store the distribution packages
       uses: actions/upload-artifact@v6

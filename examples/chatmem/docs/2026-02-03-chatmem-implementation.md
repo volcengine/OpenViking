@@ -161,7 +161,7 @@ Add after existing imports at top of `chat.py`:
 import json
 from openviking import SyncOpenViking
 from openviking.message import TextPart
-from openviking.utils.config.open_viking_config import OpenVikingConfig
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 ```
 
 **Step 2: Remove ChatSession class**
@@ -282,7 +282,6 @@ def run(self):
 
         # Create/load session
         self.session = self.client.session(
-            user="default",
             session_id=self.session_id
         )
         self.session.load()
@@ -419,11 +418,11 @@ Create a simple test script `test_messages.py`:
 """Test message recording"""
 from openviking import SyncOpenViking
 from openviking.message import TextPart
-from openviking.utils.config.open_viking_config import OpenVikingConfig
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 import json
 
 # Load config
-with open('ov.conf', 'r') as f:
+with open('./ov.conf', 'r') as f:
     config_dict = json.load(f)
 config = OpenVikingConfig.from_dict(config_dict)
 
@@ -432,7 +431,7 @@ client = SyncOpenViking(path='./data', config=config)
 client.initialize()
 
 # Create session
-session = client.session(user="test", session_id="test-123")
+session = client.session(session_id="test-123")
 
 # Add messages
 session.add_message("user", [TextPart("Hello")])
@@ -834,7 +833,7 @@ OV_DEBUG=1 uv run chat.py
 
 ## Configuration
 
-Edit `ov.conf`:
+Edit `./ov.conf`:
 
 ```json
 {
@@ -1070,7 +1069,7 @@ self.session = None
 # In run()
 self.client = SyncOpenViking(path=data_path, config=config)
 self.client.initialize()
-self.session = self.client.session(user="default", session_id=session_id)
+self.session = self.client.session(session_id=session_id)
 self.session.load()
 
 # Recording messages

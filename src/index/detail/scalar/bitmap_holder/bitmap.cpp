@@ -206,4 +206,25 @@ void Bitmap::get_set_list(std::vector<uint32_t>& result) const {
   }
 }
 
+uint32_t Bitmap::get_range_list(std::vector<uint32_t>& result, uint32_t limit,
+                                uint32_t offset) {
+  uint32_t max_num = get_cached_nbit();
+  uint32_t real_limit = std::min<uint32_t>(max_num - offset, limit);
+  if (max_num <= offset || real_limit <= 0) {
+    return 0;
+  }
+
+  if (result.size() != (size_t)real_limit) {
+    result.resize(real_limit, 0);
+  }
+  if (is_roaring_) {
+    roaring_.rangeUint32Array(result.data(), offset, real_limit);
+  } else {
+    auto iter = set_.begin();
+    std::advance(iter, offset);
+    std::copy_n(iter, real_limit, result.begin());
+  }
+  return static_cast<uint32_t>(result.size());
+}
+
 }  // namespace vectordb

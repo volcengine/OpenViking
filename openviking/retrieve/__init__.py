@@ -7,7 +7,7 @@ Provides intent-driven hierarchical context retrieval.
 """
 
 from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
-from openviking.retrieve.types import (
+from openviking_cli.retrieve.types import (
     ContextType,
     FindResult,
     MatchedContext,

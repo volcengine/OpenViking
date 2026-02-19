@@ -6,14 +6,13 @@ VikingDB Manager class that extends VikingVectorIndexBackend with queue manageme
 
 from typing import Optional
 
-from openviking.storage.collection_schemas import TextEmbeddingHandler
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.queuefs.embedding_queue import EmbeddingQueue
-from openviking.storage.queuefs.queue_manager import init_queue_manager
+from openviking.storage.queuefs.queue_manager import QueueManager
 from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
-from openviking.utils import get_logger
-from openviking.utils.config.agfs_config import AGFSConfig
-from openviking.utils.config.vectordb_config import VectorDBBackendConfig
+from openviking_cli.utils import get_logger
+from openviking_cli.utils.config.agfs_config import AGFSConfig
+from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 
 logger = get_logger(__name__)
 
@@ -23,29 +22,26 @@ class VikingDBManager(VikingVectorIndexBackend):
     VikingDB Manager that extends VikingVectorIndexBackend with queue management capabilities.
 
     This class provides all the functionality of VikingVectorIndexBackend plus:
-    - Queue manager initialization and management
+    - Queue manager integration (via injection)
     - Embedding queue integration
     - Background processing capabilities
 
     Usage:
         # In-memory mode with queue management
-        manager = VikingDBManager()
-
-        # Local persistent storage with queue management
-        manager = VikingDBManager(path="./data/vikingdb", agfs_url="http://localhost:8080")
+        manager = VikingDBManager(vectordb_config=..., queue_manager=qm)
     """
 
     def __init__(
         self,
         vectordb_config: VectorDBBackendConfig,
-        agfs_config: AGFSConfig,
+        queue_manager: Optional[QueueManager] = None,
     ):
         """
         Initialize VikingDB Manager.
 
         Args:
             vectordb_config: Configuration object for VectorDB backend.
-            agfs_config: Configuration object for AGFS (Agent Global File System).
+            queue_manager: QueueManager instance.
         """
         # Initialize the base VikingVectorIndexBackend without queue management
         super().__init__(
@@ -53,79 +49,26 @@ class VikingDBManager(VikingVectorIndexBackend):
         )
 
         # Queue management specific attributes
-        self.agfs_url = agfs_config.url
-        self.agfs_timeout = agfs_config.timeout
-        self._queue_manager = None
-        self._embedding_handler = None
-        self._semantic_processor = None
-
-        # Initialize queue manager if AGFS URL is provided
-        self._init_queue_manager()
-        if self._queue_manager:
-            self._init_embedding_queue()
-            self._init_semantic_queue()
-            self._queue_manager.start()
-
-    def _init_queue_manager(self):
-        """Initialize queue manager for background processing."""
-        if not self.agfs_url:
-            logger.warning("AGFS URL not configured, skipping queue manager initialization")
-            return
-        self._queue_manager = init_queue_manager(
-            agfs_url=self.agfs_url,
-            timeout=self.agfs_timeout,
-        )
-
-    def _init_embedding_queue(self):
-        """Initialize embedding queue with TextEmbeddingHandler."""
-        if not self._queue_manager:
-            logger.warning("Queue manager not initialized, skipping embedding queue setup")
-            return
-
-        # Create TextEmbeddingHandler instance with self (VikingDBInterface)
-        self._embedding_handler = TextEmbeddingHandler(self)
-
-        # Get embedding queue with the handler, allow creation if not exists
-        self._queue_manager.get_queue(
-            self._queue_manager.EMBEDDING,
-            dequeue_handler=self._embedding_handler,
-            allow_create=True,
-        )
-        logger.info("Embedding queue initialized with TextEmbeddingHandler")
-
-    def _init_semantic_queue(self):
-        """Initialize semantic queue with SemanticProcessor, semantic queue is used to get abstract and summary of context data."""
-        if not self._queue_manager:
-            logger.warning("Queue manager not initialized, skipping semantic queue setup")
-            return
-
-        from openviking.storage.queuefs import SemanticProcessor
-
-        # Create SemanticProcessor instance
-        self._semantic_processor = SemanticProcessor()
-
-        # Get semantic queue with the handler, allow creation if not exists
-        self._queue_manager.get_queue(
-            self._queue_manager.SEMANTIC,
-            dequeue_handler=self._semantic_processor,
-            allow_create=True,
-        )
-        logger.info("Semantic queue initialized with SemanticProcessor")
+        self._queue_manager = queue_manager
+        self._closing = False
 
     async def close(self) -> None:
-        """Close storage connection and release resources, including queue manager."""
+        """Close storage connection and release resources."""
+        self._closing = True
         try:
-            # First stop the queue manager to prevent new operations
-            if self._queue_manager:
-                self._queue_manager.stop()
-                self._queue_manager = None
-                logger.info("Queue manager stopped")
+            # We do NOT stop the queue manager here as it is an injected dependency
+            # and should be managed by the creator (OpenVikingService).
 
             # Then close the base backend
             await super().close()
 
         except Exception as e:
             logger.error(f"Error closing VikingDB manager: {e}")
+
+    @property
+    def is_closing(self) -> bool:
+        """Whether the manager is in shutdown flow."""
+        return self._closing
 
     # =========================================================================
     # Queue Management Properties
@@ -207,7 +150,7 @@ class VikingDBManager(VikingVectorIndexBackend):
             Embedder instance or None if not configured
         """
         try:
-            from openviking.utils.config import get_openviking_config
+            from openviking_cli.utils.config import get_openviking_config
 
             config = get_openviking_config()
             return config.embedding.get_embedder()

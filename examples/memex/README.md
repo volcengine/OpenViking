@@ -167,7 +167,7 @@ Memex uses a modular RAG (Retrieval-Augmented Generation) architecture:
 
 | Variable | Description |
 |----------|-------------|
-| `OPENVIKING_CONFIG_FILE` | Path to OpenViking config file |
+| `OPENVIKING_CONFIG_FILE` | Path to OpenViking config file, default to `~/.openviking/ov.conf` |
 | `FEISHU_APP_ID` | Feishu app ID (optional) |
 | `FEISHU_APP_SECRET` | Feishu app secret (optional) |
 

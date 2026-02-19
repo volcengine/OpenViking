@@ -15,7 +15,6 @@ class TestClientInitialization:
         """Test normal initialization"""
         await uninitialized_client.initialize()
         assert uninitialized_client._initialized is True
-        assert uninitialized_client._viking_fs is not None
 
     async def test_initialize_idempotent(self, client: AsyncOpenViking):
         """Test repeated initialization is idempotent"""
@@ -23,10 +22,10 @@ class TestClientInitialization:
         await client.initialize()
         assert client._initialized is True
 
-    async def test_initialize_creates_viking_fs(self, uninitialized_client: AsyncOpenViking):
-        """Test initialization creates VikingFS"""
+    async def test_initialize_creates_client(self, uninitialized_client: AsyncOpenViking):
+        """Test initialization creates client"""
         await uninitialized_client.initialize()
-        assert uninitialized_client._viking_fs is not None
+        assert uninitialized_client._client is not None
 
 
 class TestClientClose:
@@ -35,18 +34,18 @@ class TestClientClose:
     async def test_close_success(self, test_data_dir: Path):
         """Test normal close"""
         await AsyncOpenViking.reset()
-        client = AsyncOpenViking(path=str(test_data_dir), user="test")
+        client = AsyncOpenViking(path=str(test_data_dir))
         await client.initialize()
 
         await client.close()
-        assert client._vikingdb_manager is None
+        assert client._initialized is False
 
         await AsyncOpenViking.reset()
 
     async def test_close_idempotent(self, test_data_dir: Path):
         """Test repeated close is safe"""
         await AsyncOpenViking.reset()
-        client = AsyncOpenViking(path=str(test_data_dir), user="test")
+        client = AsyncOpenViking(path=str(test_data_dir))
         await client.initialize()
 
         await client.close()
@@ -62,12 +61,12 @@ class TestClientReset:
         """Test reset clears singleton"""
         await AsyncOpenViking.reset()
 
-        client1 = AsyncOpenViking(path=str(test_data_dir), user="test")
+        client1 = AsyncOpenViking(path=str(test_data_dir))
         await client1.initialize()
 
         await AsyncOpenViking.reset()
 
-        client2 = AsyncOpenViking(path=str(test_data_dir), user="test")
+        client2 = AsyncOpenViking(path=str(test_data_dir))
         # Should be new instance after reset
         assert client1 is not client2
 
@@ -81,8 +80,8 @@ class TestClientSingleton:
         """Test embedded mode uses singleton"""
         await AsyncOpenViking.reset()
 
-        client1 = AsyncOpenViking(path=str(test_data_dir), user="test")
-        client2 = AsyncOpenViking(path=str(test_data_dir), user="test")
+        client1 = AsyncOpenViking(path=str(test_data_dir))
+        client2 = AsyncOpenViking(path=str(test_data_dir))
 
         assert client1 is client2
 

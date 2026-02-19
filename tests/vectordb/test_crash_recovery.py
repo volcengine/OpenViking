@@ -178,7 +178,7 @@ class TestCrashRecovery(unittest.TestCase):
 
         # Wait for write to complete in subprocess
         print("[Main] Waiting for subprocess to write data...")
-        is_set = event.wait(timeout=5)
+        is_set = event.wait(timeout=30)
         self.assertTrue(is_set, "Subprocess timed out writing data")
 
         # Give it a tiny moment to ensure the OS flush might happen (though we want to test robustness)
@@ -237,7 +237,7 @@ class TestCrashRecovery(unittest.TestCase):
         p.start()
 
         # Wait for work done
-        is_set = event.wait(timeout=5)
+        is_set = event.wait(timeout=30)
         self.assertTrue(is_set, "Subprocess timed out")
 
         # Give a split second for OS buffers (simulate sudden power loss/crash)

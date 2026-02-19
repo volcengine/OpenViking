@@ -6,13 +6,13 @@ QueueObserver: Queue system observability tool.
 Provides methods to observe and report queue status in various formats.
 """
 
-from typing import Dict
+from typing import Dict, Optional
 
 from openviking.storage.observers.base_observer import BaseObserver
 from openviking.storage.queuefs.named_queue import QueueStatus
 from openviking.storage.queuefs.queue_manager import QueueManager
-from openviking.utils import run_async
-from openviking.utils.logger import get_logger
+from openviking_cli.utils import run_async
+from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -29,7 +29,8 @@ class QueueObserver(BaseObserver):
 
     async def get_status_table_async(self) -> str:
         statuses = await self._queue_manager.check_status()
-        return self._format_status_as_table(statuses)
+        dag_stats = self._get_semantic_dag_stats()
+        return self._format_status_as_table(statuses, dag_stats)
 
     def get_status_table(self) -> str:
         return run_async(self.get_status_table_async())
@@ -37,9 +38,11 @@ class QueueObserver(BaseObserver):
     def __str__(self) -> str:
         return self.get_status_table()
 
-    def _format_status_as_table(self, statuses: Dict[str, QueueStatus]) -> str:
+    def _format_status_as_table(
+        self, statuses: Dict[str, QueueStatus], dag_stats: Optional[object]
+    ) -> str:
         """
-        Format queue statuses as a string table.
+        Format queue statuses as a table using tabulate.
 
         Args:
             statuses: Dict mapping queue names to QueueStatus
@@ -47,6 +50,8 @@ class QueueObserver(BaseObserver):
         Returns:
             Formatted table string
         """
+        from tabulate import tabulate
+
         if not statuses:
             return "No queue status data available."
 
@@ -61,11 +66,11 @@ class QueueObserver(BaseObserver):
             data.append(
                 {
                     "Queue": queue_name,
-                    "Pending": str(status.pending),
-                    "In Progress": str(status.in_progress),
-                    "Processed": str(status.processed),
-                    "Errors": str(status.error_count),
-                    "Total": str(total),
+                    "Pending": status.pending,
+                    "In Progress": status.in_progress,
+                    "Processed": status.processed,
+                    "Errors": status.error_count,
+                    "Total": total,
                 }
             )
             total_pending += status.pending
@@ -73,56 +78,40 @@ class QueueObserver(BaseObserver):
             total_processed += status.processed
             total_errors += status.error_count
 
+        data.append(
+            {
+                "Queue": "Semantic-Nodes",
+                "Pending": getattr(dag_stats, "pending_nodes", 0) if dag_stats else 0,
+                "In Progress": getattr(dag_stats, "in_progress_nodes", 0) if dag_stats else 0,
+                "Processed": getattr(dag_stats, "done_nodes", 0) if dag_stats else 0,
+                "Errors": 0,
+                "Total": getattr(dag_stats, "total_nodes", 0) if dag_stats else 0,
+            }
+        )
+
         # Add total row
         total_total = total_pending + total_in_progress + total_processed
         data.append(
             {
                 "Queue": "TOTAL",
-                "Pending": str(total_pending),
-                "In Progress": str(total_in_progress),
-                "Processed": str(total_processed),
-                "Errors": str(total_errors),
-                "Total": str(total_total),
+                "Pending": total_pending,
+                "In Progress": total_in_progress,
+                "Processed": total_processed,
+                "Errors": total_errors,
+                "Total": total_total,
             }
         )
 
-        # Simple table formatter
-        headers = ["Queue", "Pending", "In Progress", "Processed", "Errors", "Total"]
-        # Default minimum widths similar to previous col_space
-        min_widths = {
-            "Queue": 20,
-            "Pending": 10,
-            "In Progress": 12,
-            "Processed": 10,
-            "Errors": 8,
-            "Total": 10,
-        }
+        return tabulate(data, headers="keys", tablefmt="pretty")
 
-        col_widths = {h: len(h) for h in headers}
-
-        # Calculate max width based on content and min_widths
-        for row in data:
-            for h in headers:
-                content_len = len(str(row.get(h, "")))
-                col_widths[h] = max(col_widths[h], content_len, min_widths.get(h, 0))
-
-        # Add padding
-        for h in headers:
-            col_widths[h] += 2
-
-        # Build string
-        lines = []
-
-        # Header
-        header_line = "".join(h.ljust(col_widths[h]) for h in headers)
-        lines.append(header_line)
-
-        # Rows
-        for row in data:
-            line = "".join(str(row.get(h, "")).ljust(col_widths[h]) for h in headers)
-            lines.append(line)
-
-        return "\n".join(lines)
+    def _get_semantic_dag_stats(self) -> Optional[object]:
+        semantic_queue = self._queue_manager._queues.get(self._queue_manager.SEMANTIC)
+        if not semantic_queue:
+            return None
+        handler = getattr(semantic_queue, "_dequeue_handler", None)
+        if handler and hasattr(handler, "get_dag_stats"):
+            return handler.get_dag_stats()
+        return None
 
     def is_healthy(self) -> bool:
         return not self.has_errors()

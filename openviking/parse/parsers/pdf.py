@@ -25,7 +25,7 @@ from openviking.parse.base import (
     lazy_import,
 )
 from openviking.parse.parsers.base_parser import BaseParser
-from openviking.utils.config.parser_config import PDFConfig
+from openviking_cli.utils.config.parser_config import PDFConfig
 
 logger = logging.getLogger(__name__)
 
@@ -207,7 +207,7 @@ class PDFParser(BaseParser):
 
         # Import storage utilities
         if storage is None:
-            from openviking.utils.storage import get_storage
+            from openviking_cli.utils.storage import get_storage
 
             storage = get_storage()
 

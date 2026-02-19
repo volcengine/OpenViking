@@ -134,6 +134,6 @@ for ctx in results.skills:
 ## 相关文档
 
 - [架构概述](./01-architecture.md) - 系统整体架构
-- [上下文层级](./04-context-layers.md) - L0/L1/L2 模型
-- [Viking URI](./03-viking-uri.md) - URI 规范
+- [上下文层级](./03-context-layers.md) - L0/L1/L2 模型
+- [Viking URI](./04-viking-uri.md) - URI 规范
 - [会话管理](./08-session.md) - 记忆提取机制

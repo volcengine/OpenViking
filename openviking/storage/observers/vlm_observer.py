@@ -8,7 +8,7 @@ Provides methods to observe and report token usage across VLM models and backend
 
 from openviking.models.vlm.base import VLMBase
 from openviking.storage.observers.base_observer import BaseObserver
-from openviking.utils.logger import get_logger
+from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -40,11 +40,13 @@ class VLMObserver(BaseObserver):
 
     def _format_status_as_table(self) -> str:
         """
-        Format token usage status as a string table.
+        Format token usage status as a table using tabulate.
 
         Returns:
             Formatted table string representation of token usage
         """
+        from tabulate import tabulate
+
         usage_data = self._vlm_instance.get_token_usage()
 
         if not usage_data.get("usage_by_model"):
@@ -61,10 +63,10 @@ class VLMObserver(BaseObserver):
                     {
                         "Model": model_name,
                         "Provider": provider_name,
-                        "Prompt": str(provider_data["prompt_tokens"]),
-                        "Completion": str(provider_data["completion_tokens"]),
-                        "Total": str(provider_data["total_tokens"]),
-                        "Last Updated": str(provider_data["last_updated"]),
+                        "Prompt": provider_data["prompt_tokens"],
+                        "Completion": provider_data["completion_tokens"],
+                        "Total": provider_data["total_tokens"],
+                        "Last Updated": provider_data["last_updated"],
                     }
                 )
                 total_prompt += provider_data["prompt_tokens"]
@@ -79,51 +81,14 @@ class VLMObserver(BaseObserver):
             {
                 "Model": "TOTAL",
                 "Provider": "",
-                "Prompt": str(total_prompt),
-                "Completion": str(total_completion),
-                "Total": str(total_all),
+                "Prompt": total_prompt,
+                "Completion": total_completion,
+                "Total": total_all,
                 "Last Updated": "",
             }
         )
 
-        # Simple table formatter
-        headers = ["Model", "Provider", "Prompt", "Completion", "Total", "Last Updated"]
-
-        # Default minimum widths similar to previous col_space
-        min_widths = {
-            "Model": 30,
-            "Provider": 12,
-            "Prompt": 12,
-            "Completion": 12,
-            "Total": 12,
-            "Last Updated": 20,
-        }
-
-        col_widths = {h: len(h) for h in headers}
-
-        # Calculate max width based on content and min_widths
-        for row in data:
-            for h in headers:
-                content_len = len(str(row.get(h, "")))
-                col_widths[h] = max(col_widths[h], content_len, min_widths.get(h, 0))
-
-        # Add padding
-        for h in headers:
-            col_widths[h] += 2
-
-        # Build string
-        lines = []
-
-        # Header
-        header_line = "".join(h.ljust(col_widths[h]) for h in headers)
-        lines.append(header_line)
-
-        # Rows
-        for row in data:
-            line = "".join(str(row.get(h, "")).ljust(col_widths[h]) for h in headers)
-            lines.append(line)
-
-        return "\n".join(lines)
+        return tabulate(data, headers="keys", tablefmt="pretty")
 
     def __str__(self) -> str:
         return self.get_status_table()

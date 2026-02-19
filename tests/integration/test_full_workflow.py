@@ -3,6 +3,7 @@
 
 """Full workflow integration tests"""
 
+import shutil
 from pathlib import Path
 
 import pytest_asyncio
@@ -16,7 +17,11 @@ async def integration_client(test_data_dir: Path):
     """Integration test client"""
     await AsyncOpenViking.reset()
 
-    client = AsyncOpenViking(path=str(test_data_dir), user="integration_test_user")
+    # Clean data directory to avoid AGFS "directory already exists" errors
+    shutil.rmtree(test_data_dir, ignore_errors=True)
+    test_data_dir.mkdir(parents=True, exist_ok=True)
+
+    client = AsyncOpenViking(path=str(test_data_dir))
     await client.initialize()
 
     yield client
@@ -148,6 +153,7 @@ class TestImportExportWorkflow:
             path=str(sample_markdown_file),
             reason="Export test",
         )
+        print(result)
         original_uri = result["root_uri"]
 
         # 2. Read original content

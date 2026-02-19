@@ -13,8 +13,10 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import uuid4
 
 from openviking.message import Message, Part
-from openviking.utils import get_logger, run_async
-from openviking.utils.config import get_openviking_config
+from openviking.utils.time_utils import get_current_timestamp
+from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils import get_logger, run_async
+from openviking_cli.utils.config import get_openviking_config
 
 if TYPE_CHECKING:
     from openviking.session.compressor import SessionCompressor
@@ -56,7 +58,7 @@ class Usage:
     input: str = ""
     output: str = ""
     success: bool = True
-    timestamp: str = field(default_factory=lambda: datetime.now().isoformat())
+    timestamp: str = field(default_factory=get_current_timestamp)
 
 
 class Session:
@@ -67,14 +69,14 @@ class Session:
         viking_fs: "VikingFS",
         vikingdb_manager: Optional["VikingDBManager"] = None,
         session_compressor: Optional["SessionCompressor"] = None,
-        user: str = "default",
+        user: Optional["UserIdentifier"] = None,
         session_id: Optional[str] = None,
         auto_commit_threshold: int = 8000,
     ):
         self._viking_fs = viking_fs
         self._vikingdb_manager = vikingdb_manager
         self._session_compressor = session_compressor
-        self.user = user or "default"
+        self.user = user or UserIdentifier.the_default_user()
         self.session_id = session_id or str(uuid4())
         self.created_at = datetime.now()
         self._auto_commit_threshold = auto_commit_threshold
@@ -94,9 +96,7 @@ class Session:
             return
 
         try:
-            content = run_async(
-                self._viking_fs.read_file(f"{self._session_uri}/messages.jsonl")
-            )
+            content = run_async(self._viking_fs.read_file(f"{self._session_uri}/messages.jsonl"))
             self._messages = [
                 Message.from_dict(json.loads(line))
                 for line in content.strip().split("\n")
@@ -499,7 +499,7 @@ class Session:
             "input": tool_part.tool_input,
             "output": output,
             "status": status,
-            "time": {"created": datetime.now().isoformat()},
+            "time": {"created": get_current_timestamp()},
         }
         run_async(
             self._viking_fs.write_file(

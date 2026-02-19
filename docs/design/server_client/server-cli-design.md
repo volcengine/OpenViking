@@ -200,12 +200,12 @@ OpenViking 提供三种接口，面向不同使用场景：
 | 接口 | 使用者 | 场景 | 特点 |
 |------|--------|------|------|
 | **Python SDK** | Agent 开发者 | Agent 代码中调用 | 对象化 API，支持异步，client 实例维护状态 |
-| **Bash CLI** | Agent / 运维人员 | Agent subprocess 调用、运维脚本 | 非交互式，通过环境变量管理状态 |
+| **Bash CLI** | Agent / 运维人员 | Agent subprocess 调用、运维脚本 | 非交互式，通过 ovcli.conf 配置文件管理连接状态 |
 | **HTTP API** | 任意语言客户端 | 跨语言集成、微服务调用 | RESTful，无状态，每次请求带身份信息 |
 
 **选型建议**：
 - **Agent 开发**：优先使用 Python SDK，可以维护 client 实例状态
-- **Agent 调用外部工具**：使用 Bash CLI，通过环境变量传递身份信息
+- **Agent 调用外部工具**：使用 Bash CLI，通过 ovcli.conf 配置文件传递连接和身份信息
 - **非 Python 环境**：使用 HTTP API
 
 ### 3.1 分层架构
@@ -296,66 +296,99 @@ OpenViking 提供三种接口，面向不同使用场景：
 
 ### 3.3 身份与隔离
 
-支持多租户场景，通过 `user` 和 `agent` 实现数据隔离：
+支持多租户场景，首先通过 account_id 区分不同的应用租户，然后允许通过 `user` 和 `agent` 实现租户内的身份隔离：
 
-| 参数 | 说明 | 作用域 |
-|------|------|--------|
-| `user` | 用户标识 | `viking://user/{user}/memories/` |
-| `agent` | Agent 标识 | `viking://agent/{agent}/memories/` |
+用户或智能体身份标识详见 `from openviking_cli.session.user_id import UserIdentifier`
+
+| 参数 | 说明 | 默认值 |
+|------|------|------|
+| `account_id` | 租户账号标识，区分不同的租户，租户内 user 和 agent id 空间隔离，也就是保证租户之间数据隔离 | `default` |
+| `user_id` | 用户身份标识，用户在租户内的唯一标识符 | `default` |
+| `agent_id` | 智能体身份标识，智能体或应用在租户内的唯一标识符 | `default` |
+
+> 举例说明，如果一个团队部署一个 OpenViking 上下文数据库，让团队成员共享一部分上下文资料，但各自保留独立的记忆数据，团队使用统一的 account_id，每个成员使用不同的 user_id 来区分，成员使用不同的应用（如 OpenCode, OpenClaw 等）则使用不同的 agent_id 来区分。
+> 一般情况下，`account_id` 不会出现在 viking:// uri 中，因为每个租户的用户数据都是隔离的，不需要在 uri 中指定租户。
+
 
 ### 3.4 配置管理
 
-#### Server 配置 (`~/.openviking/server.yaml`)
+#### Server 配置
 
-```yaml
-storage:
-  path: ~/.openviking/data
+服务端配置统一使用 JSON 配置文件，通过 `--config` 或 `OPENVIKING_CONFIG_FILE` 环境变量指定（与 `OpenVikingConfig` 共用同一个文件）：
 
-server:
-  host: 0.0.0.0
-  port: 8000
-  api_key: your-api-key
-
-embedding:
-  provider: openai
-  model: text-embedding-3-small
-  api_key: ${OPENAI_API_KEY}
-
-vlm:
-  provider: openai
-  model: gpt-4o
-  api_key: ${OPENAI_API_KEY}
+```json
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 1933,
+    "api_key": "your-api-key"
+  },
+  "storage": {
+    "path": "~/.openviking/data"
+  },
+  "embedding": {
+    "dense": {
+      "provider": "openai",
+      "model": "text-embedding-3-small"
+    }
+  },
+  "vlm": {
+    "provider": "openai",
+    "model": "gpt-4o"
+  }
+}
 ```
 
-#### Client 配置 (`~/.openviking/client.yaml`)
+#### Client 配置
 
-```yaml
-url: http://localhost:8000
-api_key: your-api-key
-# 注意：user 和 agent 通过环境变量管理，不存配置文件
+客户端 SDK 通过构造函数参数配置：
+
+```python
+# 构造函数参数
+client = SyncHTTPClient(url="http://localhost:1933", api_key="your-api-key")
 ```
+
+SDK 构造函数只接受 `url`、`api_key`、`path` 参数。不支持 `config` 参数，也不支持 `vectordb_url`/`agfs_url` 参数。
+
+#### CLI 配置
+
+CLI 通过 `ovcli.conf` 配置文件管理连接信息，不使用 `--url`、`--api-key` 等全局命令行选项：
+
+```json
+{
+  "url": "http://localhost:1933",
+  "api_key": "sk-xxx",
+  "output": "table"
+}
+```
+
+配置文件路径通过 `OPENVIKING_CLI_CONFIG_FILE` 环境变量指定。
 
 #### 环境变量
 
+只保留 2 个环境变量：
+
 | 环境变量 | 说明 | 示例 |
 |----------|------|------|
-| `OPENVIKING_URL` | Server URL | `http://localhost:8000` |
-| `OPENVIKING_API_KEY` | API Key | `sk-xxx` |
-| `OPENVIKING_USER` | 用户标识 | `alice` |
-| `OPENVIKING_AGENT` | Agent 标识 | `agent-a1` |
-| `OPENVIKING_PATH` | 本地数据路径（嵌入式模式） | `./data` |
+| `OPENVIKING_CONFIG_FILE` | ov.conf 配置文件路径（SDK 嵌入式 + Server） | `~/.openviking/ov.conf` |
+| `OPENVIKING_CLI_CONFIG_FILE` | ovcli.conf 配置文件路径（CLI 连接配置） | `~/.openviking/ovcli.conf` |
 
-**为什么 `user`/`agent` 用环境变量而不是配置文件**：
-1. **进程隔离**：环境变量是进程级的，多个 Agent 进程互不干扰
-2. **无并发冲突**：不会出现多个进程同时写配置文件的问题
-3. **易于设置**：Agent 启动时设置一次，后续调用自动继承
+不再使用单字段环境变量（`OPENVIKING_URL`、`OPENVIKING_API_KEY`、`OPENVIKING_HOST`、`OPENVIKING_PORT`、`OPENVIKING_PATH`、`OPENVIKING_VECTORDB_URL`、`OPENVIKING_AGFS_URL` 均已移除）。
+
+#### 配置文件
+
+系统使用 2 个配置文件：
+
+| 配置文件 | 用途 | 环境变量 |
+|----------|------|----------|
+| `ov.conf` | SDK 嵌入式模式 + Server 配置 | `OPENVIKING_CONFIG_FILE` |
+| `ovcli.conf` | CLI 连接配置（url/api_key/user） | `OPENVIKING_CLI_CONFIG_FILE` |
 
 #### 配置优先级
 
 从高到低：
-1. 命令行参数（`--url`, `--user` 等）
-2. 环境变量（`OPENVIKING_URL`, `OPENVIKING_USER` 等）
-3. 配置文件（`~/.openviking/client.yaml`）
+1. 构造函数参数（SDK）/ 命令行参数（`--config`、`--host`、`--port`）
+2. 配置文件（`ov.conf` 或 `ovcli.conf`）
 
 ---
 
@@ -408,7 +441,7 @@ openviking/
 ├── cli/                         # CLI 模块
 │   ├── __init__.py
 │   ├── main.py                  # CLI 入口
-│   └── output.py                # 输出格式化
+│   └── output.py                # 输出格式化（JSON/table/脚本模式）
 │
 ├── client/                      # Client 层
 │   ├── __init__.py
@@ -423,7 +456,7 @@ openviking/
 
 ```toml
 [project.scripts]
-openviking = "openviking.cli.main:app"
+openviking = "openviking_cli.cli.main:app"
 ```
 
 ### 4.4 新增依赖
@@ -431,7 +464,7 @@ openviking = "openviking.cli.main:app"
 ```toml
 dependencies = [
     # ... 现有依赖
-    "typer>=0.9.0",      # CLI 框架
+    # argparse is used for CLI (part of Python stdlib, no extra dependency needed)
     "rich>=13.0.0",      # CLI 美化输出
 ]
 ```
@@ -475,8 +508,7 @@ dependencies = [
 | 方法 | 参数 | 说明 |
 |------|------|------|
 | `add_message` | `role, content` | 添加消息 |
-| `compress` | - | 压缩会话 |
-| `extract` | - | 提取记忆 |
+| `commit` | - | 提交会话（归档消息、提取记忆） |
 | `delete` | - | 删除会话 |
 
 ### 5.2 统一返回值格式
@@ -619,7 +651,7 @@ class UsageInfo:
 **session**（Python CLI 返回 Session 对象，HTTP API 返回 JSON）
 ```python
 # Python CLI
-session = client.session(user="alice")
+session = client.session()
 session.id          # "session-abc123"
 session.user        # "alice"
 session.created_at  # datetime
@@ -824,28 +856,27 @@ OpenViking 支持多 user、多 agent，CLI 需要处理多进程并发场景：
    └─────────┘   └─────────┘   └─────────┘
 ```
 
-多个 Agent 进程可能同时运行，各自有不同的 user/agent 身份。因此 `user`/`agent` 通过环境变量管理（详见 3.4 配置管理）。
+多个 Agent 进程可能同时运行，各自有不同的 user/agent 身份。各进程通过各自的 `ovcli.conf` 配置文件管理连接信息和身份（详见 3.4 配置管理）。
 
 #### 使用示例
 
 **Agent 调用场景**：
 ```bash
-# Agent 启动时设置环境变量
-export OPENVIKING_URL=http://localhost:8000
-export OPENVIKING_API_KEY=sk-xxx
-export OPENVIKING_USER=alice
-export OPENVIKING_AGENT=agent-a1
+# CLI 连接信息通过 ovcli.conf 配置文件管理
+# 配置文件路径通过 OPENVIKING_CLI_CONFIG_FILE 环境变量指定
+export OPENVIKING_CLI_CONFIG_FILE=~/.openviking/ovcli.conf
 
-# 后续 CLI 调用自动使用环境变量，无需重复指定
+# ovcli.conf 内容示例：
+# {
+#   "url": "http://localhost:1933",
+#   "api_key": "sk-xxx",
+#   "output": "table"
+# }
+
+# 后续 CLI 调用自动读取 ovcli.conf，无需重复指定
 openviking find "how to use openviking"
 openviking ls viking://resources/
 openviking read viking://resources/doc.md
-```
-
-**临时覆盖**：
-```bash
-# 命令行参数覆盖环境变量
-openviking --user bob find "query"
 ```
 
 #### 设计原则
@@ -858,8 +889,7 @@ openviking --user bob find "query"
 
 ```bash
 # 服务管理
-openviking serve --path <dir> [--port 8000] [--host 0.0.0.0]
-openviking serve --port 8000 --agfs-url <url> --vectordb-url <url>
+openviking serve [--config <file>] [--port 1933] [--host 0.0.0.0]
 openviking status
 
 # 资源导入
@@ -894,8 +924,7 @@ openviking relations <uri>
 openviking session new [--user <name>]
 openviking session list
 openviking session get <id>
-openviking session compress <id>
-openviking session extract <id>
+openviking session commit <id>
 
 # 导入导出
 openviking export <uri> <file.ovpack>
@@ -922,40 +951,36 @@ openviking health                         # 快速健康检查
 | `session *` | 会话管理 | 自动压缩、记忆提取 |
 | `status/health` | 调试诊断 | 系统状态查询、健康检查 |
 
-#### 实现 (使用 Typer)
+#### 实现 (使用 argparse)
 
 ```python
-# openviking/cli/main.py
-import typer
-from rich.console import Console
+# openviking/__main__.py
+import argparse
+import sys
 
-app = typer.Typer(name="openviking", help="OpenViking - Context Database for AI Agents")
-console = Console()
 
-# 顶层命令
-@app.command()
-def serve(port: int = 8000, host: str = "0.0.0.0"):
-    """Start OpenViking server."""
-    ...
+def main():
+    """Main CLI entry point."""
+    parser = argparse.ArgumentParser(
+        description="OpenViking - An Agent-native context database",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
-@app.command()
-def ls(uri: str, simple: bool = False, recursive: bool = False):
-    """List directory contents."""
-    ...
+    # serve command
+    serve_parser = subparsers.add_parser("serve", help="Start OpenViking HTTP Server")
+    serve_parser.add_argument("--config", type=str, default=None, help="Config file path (ov.conf)")
+    serve_parser.add_argument("--host", type=str, default=None, help="Host to bind to")
+    serve_parser.add_argument("--port", type=int, default=None, help="Port to bind to")
 
-@app.command()
-def find(query: str, uri: str = "viking://", limit: int = 10):
-    """Semantic search."""
-    ...
+    args = parser.parse_args()
 
-# 子命令组
-session_app = typer.Typer(help="Session management")
-app.add_typer(session_app, name="session")
-
-@session_app.command("new")
-def session_new(user: str = None):
-    """Create new session."""
-    ...
+    if args.command == "serve":
+        from openviking.server.bootstrap import main as serve_main
+        serve_main()
+    else:
+        parser.print_help()
+        sys.exit(1)
 ```
 
 ---
@@ -971,7 +996,7 @@ from openviking import OpenViking
 client = OpenViking(path="./data")
 
 # HTTP 模式
-client = OpenViking(url="http://localhost:8000", api_key="xxx")
+client = OpenViking(url="http://localhost:1933", api_key="xxx")
 ```
 
 #### 完整示例
@@ -980,7 +1005,7 @@ client = OpenViking(url="http://localhost:8000", api_key="xxx")
 from openviking import OpenViking
 
 # 连接
-client = OpenViking(url="http://localhost:8000", api_key="xxx")
+client = OpenViking(url="http://localhost:1933", api_key="xxx")
 
 # 导入资源
 result = client.add_resource("./docs/", target="viking://resources/my-docs/", wait=True)
@@ -997,7 +1022,7 @@ for r in results.data.results:
     print(f"{r.uri}: {r.score:.2f}")
 
 # 会话管理（OOP 模式）
-session = client.session(user="alice")
+session = client.session()
 session.add_message("user", "What is OpenViking?")
 results = client.search("What is OpenViking?", session=session)
 
@@ -1014,7 +1039,7 @@ all_sessions = client.sessions()
 ```python
 class Session:
     """Session 对象，封装会话操作"""
-    def __init__(self, client, session_id: str, user: str):
+    def __init__(self, client, session_id: str, user: UserIdentifier):
         self._client = client
         self.id = session_id
         self.user = user
@@ -1038,16 +1063,16 @@ class OpenViking:
         url: Optional[str] = None,
         api_key: Optional[str] = None,
         user: Optional[str] = None,
-        agent: Optional[str] = None,
+        user: Optional[UserIdentifier] = None
     ):
         if url:
             self._backend = HTTPBackend(url, api_key)
         else:
             self._backend = LocalBackend(path)
         self._user = user
-        self._agent_id = agent
 
-    def session(self, user: str = None) -> Session:
+
+    def session(self, user: UserIdentifier = None) -> Session:
         """创建或获取 Session 对象"""
         ...
 
@@ -1064,9 +1089,9 @@ class OpenViking:
 pip install openviking
 ```
 
-#### 环境变量
+#### 配置文件
 
-详见 3.4 配置管理中的环境变量定义。
+详见 3.4 配置管理中的配置文件定义。
 
 #### viking:// 目录结构
 
@@ -1123,6 +1148,22 @@ viking://
 X-API-Key: your-api-key
 # 或
 Authorization: Bearer your-api-key
+```
+
+**认证策略**：
+- `/health` 端点：永远不需要认证（用于负载均衡器健康检查）
+- 其他 API 端点：
+  - 如果 `config.api_key` 为 `None`（默认）→ 跳过认证（本地开发模式）
+  - 如果 `config.api_key` 有值 → 验证请求中的 Key
+
+**配置方式**：
+```json
+// ~/.openviking/ov.conf
+{
+  "server": {
+    "api_key": "your-secret-key"  // 设置后启用认证，不设置则跳过认证
+  }
+}
 ```
 
 ### 7.3 API 端点设计
@@ -1193,8 +1234,7 @@ GET    /api/v1/sessions                     # session list
 GET    /api/v1/sessions/{id}                # session get
 DELETE /api/v1/sessions/{id}                # session delete
 
-POST   /api/v1/sessions/{id}/compress       # session compress
-POST   /api/v1/sessions/{id}/extract        # session extract
+POST   /api/v1/sessions/{id}/commit        # session commit
 POST   /api/v1/sessions/{id}/messages       # add message
        Body: {"role": "user", "content": "..."}
 ```
@@ -1255,19 +1295,19 @@ async def health():
 
 ### 8.1 任务概览
 
-| 任务 | 描述 | 依赖 | 优先级 | 适合社区开发者 |
-|------|------|------|--------|---------------|
-| T1 | Service 层抽取 | - | P0 | |
-| T2 | HTTP Server | T1 | P1 | |
-| T3 | CLI 基础框架 | T1 | P1 | |
-| T4 | Python SDK | T2 | P2 | |
-| T5 | CLI 完整命令 | T3 | P2 | |
-| T6 | 集成测试 | T4, T5 | P3 | |
-| T7 | 文档更新 | T6 | P3 | |
-| T8 | Docker 部署 | T2 | P1 | ✅ |
-| T9 | MCP Server | T1 | P1 | ✅ |
-| T10 | TypeScript SDK | T2 | P2 | ✅ |
-| T11 | Golang SDK | T2 | P2 | ✅ |
+| 任务 | 描述 | 依赖 | 优先级 | 状态 | 适合社区开发者 |
+|------|------|------|--------|------|---------------|
+| T1 | Service 层抽取 | - | P0 | Done | |
+| T2 | HTTP Server | T1 | P1 | Done | |
+| T3 | CLI 基础框架 | T1 | P1 | | |
+| T4 | Python SDK | T2 | P2 | Done | |
+| T5 | CLI 完整命令 | T3 | P2 | | |
+| T6 | 集成测试 | T4, T5 | P3 | | |
+| T7 | 文档更新 | T6 | P3 | | |
+| T8 | Docker 部署 | T2 | P1 | | ✅ |
+| T9 | MCP Server | T1 | P1 | | ✅ |
+| T10 | TypeScript SDK | T2 | P2 | | ✅ |
+| T11 | Golang SDK | T2 | P2 | | ✅ |
 
 ### 8.2 依赖关系
 
@@ -1316,13 +1356,13 @@ T1 (Service层)
 **验收标准**：
 ```bash
 # 启动服务
-openviking serve --path ./data --port 8000
+openviking serve --config ./ov.conf --port 1933
 
 # 验证 API
-curl http://localhost:8000/health
-curl -X POST http://localhost:8000/api/v1/resources \
+curl http://localhost:1933/health
+curl -X POST http://localhost:1933/api/v1/resources \
   -H "X-API-Key: test" -d '{"path": "./docs"}'
-curl http://localhost:8000/api/v1/fs/ls?uri=viking://
+curl http://localhost:1933/api/v1/fs/ls?uri=viking://
 ```
 
 ---
@@ -1338,7 +1378,7 @@ curl http://localhost:8000/api/v1/fs/ls?uri=viking://
 
 **验收标准**：
 ```bash
-openviking serve --path ./data --port 8000
+openviking serve --config ./ov.conf --port 1933
 openviking add-resource ./docs/ --wait
 openviking ls viking://resources/
 openviking find "how to use"
@@ -1358,8 +1398,7 @@ openviking find "how to use"
 **验收标准**：
 ```python
 # HTTP 模式
-client = OpenViking(server_url="http://localhost:8000", api_key="test")
-client.initialize()
+client = OpenViking(url="http://localhost:1933", api_key="test")
 results = client.find("how to use")
 ```
 
@@ -1426,8 +1465,8 @@ openviking export viking://resources/docs/ ./backup.ovpack
 **验收标准**：
 ```bash
 docker build -t openviking .
-docker run -p 8000:8000 -e OPENAI_API_KEY=xxx openviking
-curl http://localhost:8000/health
+docker run -p 1933:1933 -e OPENAI_API_KEY=xxx openviking
+curl http://localhost:1933/health
 ```
 
 ---
@@ -1460,7 +1499,7 @@ curl http://localhost:8000/health
 **验收标准**：
 ```typescript
 import { OpenViking } from '@openviking/sdk';
-const client = new OpenViking({ url: 'http://localhost:8000', apiKey: 'xxx' });
+const client = new OpenViking({ url: 'http://localhost:1933', apiKey: 'xxx' });
 const results = await client.find('how to configure');
 ```
 
@@ -1478,7 +1517,7 @@ const results = await client.find('how to configure');
 
 **验收标准**：
 ```go
-client := openviking.NewClient(openviking.Config{URL: "http://localhost:8000", APIKey: "xxx"})
+client := openviking.NewClient(openviking.Config{URL: "http://localhost:1933", APIKey: "xxx"})
 results, _ := client.Find("how to configure", nil)
 ```
 
@@ -1501,7 +1540,7 @@ results, _ := client.Find("how to configure", nil)
 #### Bash CLI 验证
 ```bash
 openviking config init
-openviking serve --port 8000
+openviking serve --port 1933
 openviking add-resource ./docs/ --wait
 openviking ls viking://
 openviking find "how to use"
@@ -1509,17 +1548,17 @@ openviking find "how to use"
 
 #### HTTP API 验证
 ```bash
-curl http://localhost:8000/health
-curl -X POST http://localhost:8000/api/v1/resources \
+curl http://localhost:1933/health
+curl -X POST http://localhost:1933/api/v1/resources \
   -H "X-API-Key: xxx" -d '{"path": "./docs"}'
-curl "http://localhost:8000/api/v1/fs/ls?uri=viking://" \
+curl "http://localhost:1933/api/v1/fs/ls?uri=viking://" \
   -H "X-API-Key: xxx"
 ```
 
 #### Python CLI 验证
 ```python
 from openviking import OpenViking
-client = OpenViking(url="http://localhost:8000", api_key="xxx")
+client = OpenViking(url="http://localhost:1933", api_key="xxx")
 result = client.find("how to use")
 print(result)
 ```

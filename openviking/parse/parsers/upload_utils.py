@@ -16,7 +16,7 @@ from openviking.parse.parsers.constants import (
     TEXT_ENCODINGS,
     UTF8_VARIANTS,
 )
-from openviking.utils.logger import get_logger
+from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -62,10 +62,24 @@ def detect_and_convert_encoding(content: bytes, file_path: Union[str, Path] = ""
         return content
 
     try:
+        # Check for potential binary content (null bytes in first 8KB)
+        # Binary files often contain null bytes which can cause issues
+        sample_size = min(8192, len(content))
+        if b'\x00' in content[:sample_size]:
+            null_count = content[:sample_size].count(b'\x00')
+            # If more than 5% null bytes in sample, likely binary - don't process
+            if null_count / sample_size > 0.05:
+                logger.debug(f"Detected binary content in {file_path} (null bytes: {null_count}), skipping encoding detection")
+                return content
+
         detected_encoding: Optional[str] = None
         for encoding in TEXT_ENCODINGS:
             try:
-                content.decode(encoding)
+                decoded = content.decode(encoding)
+                # Additional validation: check for control characters that suggest binary
+                control_chars = sum(1 for c in decoded[:1000] if ord(c) < 32 and c not in '\t\n\r')
+                if control_chars / min(1000, len(decoded)) > 0.05:  # More than 5% control chars
+                    continue
                 detected_encoding = encoding
                 break
             except UnicodeDecodeError:
@@ -77,6 +91,10 @@ def detect_and_convert_encoding(content: bytes, file_path: Union[str, Path] = ""
 
         if detected_encoding not in UTF8_VARIANTS:
             decoded_content = content.decode(detected_encoding, errors="replace")
+            # Remove null bytes from decoded content as they can cause issues downstream
+            if '\x00' in decoded_content:
+                decoded_content = decoded_content.replace('\x00', '')
+                logger.debug(f"Removed null bytes from decoded content in {file_path}")
             content = decoded_content.encode("utf-8")
             logger.debug(f"Converted {file_path} from {detected_encoding} to UTF-8")
 

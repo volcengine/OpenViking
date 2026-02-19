@@ -8,9 +8,9 @@ Provides semantic search operations: search, find.
 
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
-from openviking.exceptions import NotInitializedError
 from openviking.storage.viking_fs import VikingFS
-from openviking.utils import get_logger
+from openviking_cli.exceptions import NotInitializedError
+from openviking_cli.utils import get_logger
 
 if TYPE_CHECKING:
     from openviking.session import Session

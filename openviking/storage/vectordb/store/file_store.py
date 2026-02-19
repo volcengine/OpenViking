@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 from openviking.storage.vectordb.store.store import IKVStore
-from openviking.utils.logger import default_logger as logger
+from openviking_cli.utils.logger import default_logger as logger
 
 
 class FileStore(IKVStore):

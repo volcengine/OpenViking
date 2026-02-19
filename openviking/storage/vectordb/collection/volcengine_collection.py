@@ -17,7 +17,7 @@ from openviking.storage.vectordb.collection.volcengine_clients import (
     ClientForConsoleApi,
     ClientForDataApi,
 )
-from openviking.utils.logger import default_logger as logger
+from openviking_cli.utils.logger import default_logger as logger
 
 
 def get_or_create_volcengine_collection(config: Dict[str, Any], meta_data: Dict[str, Any]):
@@ -45,6 +45,7 @@ def get_or_create_volcengine_collection(config: Dict[str, Any], meta_data: Dict[
     try:
         params = {"Action": "CreateVikingdbCollection", "Version": VIKING_DB_VERSION}
         response = client.do_req("POST", req_params=params, req_body=meta_data)
+        logger.info(f"Create collection response: {response.text}")
         if response.status_code != 200:
             result = response.json()
             if "AlreadyExists" in result.get("ResponseMetadata", {}).get("Error", {}).get(
@@ -58,6 +59,9 @@ def get_or_create_volcengine_collection(config: Dict[str, Any], meta_data: Dict[
     except Exception as e:
         logger.error(f"Failed to create collection: {e}")
         raise e
+
+    logger.info(f"Collection {collection_name} created successfully")
+    return VolcengineCollection(ak, sk, region, host, meta_data)
 
 
 class VolcengineCollection(ICollection):
@@ -277,7 +281,6 @@ class VolcengineCollection(ICollection):
                 ]
             if "ids_not_exist" in data:
                 result.ids_not_exist = data.get("ids_not_exist", [])
-        # print(result)
         return result
 
     def _parse_search_result(self, data: Dict[str, Any]) -> SearchResult:
@@ -310,14 +313,13 @@ class VolcengineCollection(ICollection):
             "collection_name": self.collection_name,
             "index_name": index_name,
             "dense_vector": dense_vector,
-            "sparse_vector": sparse_vector or {},
             "filter": filters,
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
         }
-        if not data["sparse_vector"]:
-            logger.info(f"[search_by_vector] {data}", stack_info=True)
+        if sparse_vector:
+            data["sparse_vector"] = sparse_vector
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)
 

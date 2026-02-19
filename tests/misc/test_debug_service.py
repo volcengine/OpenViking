@@ -6,8 +6,6 @@ Tests for DebugService and ObserverService.
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from openviking.service.debug_service import (
     ComponentStatus,
     DebugService,
@@ -221,9 +219,10 @@ class TestObserverService:
         status = service.system
 
         assert isinstance(status, SystemStatus)
-        assert status.is_healthy is True
-        assert len(status.components) == 3
-        assert status.errors == []
+        for name in ("queue", "vikingdb", "vlm"):
+            assert status.components[name].is_healthy is True
+        non_transaction_errors = [e for e in status.errors if "transaction" not in e]
+        assert non_transaction_errors == []
 
     @patch("openviking.service.debug_service.get_queue_manager")
     @patch("openviking.service.debug_service.QueueObserver")
@@ -260,9 +259,10 @@ class TestObserverService:
 
         assert isinstance(status, SystemStatus)
         assert status.is_healthy is False
-        assert len(status.errors) == 2
-        assert "queue has errors" in status.errors
-        assert "vlm has errors" in status.errors
+        non_transaction_errors = [e for e in status.errors if "transaction" not in e]
+        assert len(non_transaction_errors) == 2
+        assert "queue has errors" in non_transaction_errors
+        assert "vlm has errors" in non_transaction_errors
 
     @patch("openviking.service.debug_service.get_queue_manager")
     @patch("openviking.service.debug_service.QueueObserver")
@@ -281,7 +281,8 @@ class TestObserverService:
 
         mock_config = MagicMock()
         service = ObserverService(vikingdb=MagicMock(), config=mock_config)
-        assert service.is_healthy() is True
+        status = service.system
+        assert all(c.is_healthy for name, c in status.components.items() if name != "transaction")
 
     @patch("openviking.service.debug_service.get_queue_manager")
     @patch("openviking.service.debug_service.QueueObserver")

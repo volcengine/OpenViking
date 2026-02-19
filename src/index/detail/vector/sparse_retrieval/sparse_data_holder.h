@@ -40,6 +40,11 @@ class SparseDataHolder {
     max_elements_ = max_elements;
   }
 
+  void reserve(size_t max_elements) {
+    max_elements_ = max_elements;
+    sparse_holder_.reserve(max_elements);
+  }
+
   void set_params(const bool index_use_sparse, const bool search_use_sparse,
                   const bool search_use_l2 = false) {
     index_with_sparse_bias_ = index_use_sparse;

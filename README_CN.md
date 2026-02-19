@@ -19,7 +19,7 @@
 
 👋 加入我们的社区讨论
 
-📱 <a href="./docs/zh/about/about-us.md#飞书群">飞书群</a> · <a href="./docs/zh/about/about-us.md#微信群">微信群</a> · <a href="https://discord.com/invite/eHvx8E9XF3">Discord</a> · <a href="https://x.com/openvikingai">X</a>
+📱 <a href="./docs/zh/about/01-about-us.md#飞书群">飞书群</a> · <a href="./docs/zh/about/01-about-us.md#微信群">微信群</a> · <a href="https://discord.com/invite/eHvx8E9XF3">Discord</a> · <a href="https://x.com/openvikingai">X</a>
 
 </div>
 
@@ -76,14 +76,14 @@ OpenViking 需要以下模型能力：
 
 OpenViking 支持多种模型服务：
 - **OpenAI 模型**：支持 GPT-4V 等 VLM 模型和 OpenAI Embedding 模型
-- **火山引擎（豆包模型）**：推荐使用，成本低、性能好，新用户有免费额度。如需购买和开通，请参考：[火山引擎购买指南](./docs/zh/configuration/volcengine-purchase-guide.md)
+- **火山引擎（豆包模型）**：推荐使用，成本低、性能好，新用户有免费额度。如需购买和开通，请参考：[火山引擎购买指南](./docs/zh/guides/02-volcengine-purchase-guide.md)
 - **其他自定义模型服务**：支持兼容 OpenAI API 格式的模型服务
 
 ### 3. 配置环境
 
 #### 配置文件模版
 
-创建配置文件 `ov.conf`：
+创建配置文件 `~/.openviking/ov.conf`：
 
 ```json
 {
@@ -164,7 +164,7 @@ OpenViking 支持多种模型服务：
 创建好配置文件后，设置环境变量指向配置文件（Linux/macOS）：
 
 ```bash
-export OPENVIKING_CONFIG_FILE=ov.conf
+export OPENVIKING_CONFIG_FILE=~/.openviking/ov.conf
 ```
 
 Windows 下可使用以下方式之一：
@@ -172,13 +172,13 @@ Windows 下可使用以下方式之一：
 PowerShell：
 
 ```powershell
-$env:OPENVIKING_CONFIG_FILE = "ov.conf"
+$env:OPENVIKING_CONFIG_FILE = "$HOME/.openviking/ov.conf"
 ```
 
 命令提示符（cmd.exe）：
 
 ```bat
-set OPENVIKING_CONFIG_FILE=ov.conf
+set "OPENVIKING_CONFIG_FILE=%USERPROFILE%\.openviking\ov.conf"
 ```
 
 > 💡 **提示**：你也可以将配置文件放在其他位置，只需在环境变量中指定正确的路径即可。
@@ -271,6 +271,15 @@ Search results:
 
 ---
 
+## 服务端部署
+
+在生产环境中，我们推荐将 OpenViking 作为独立 HTTP 服务运行，以便为您的 AI Agent 提供持久化、高性能的上下文支持。
+
+🚀 **云端部署OpenViking**：
+为了确保存储性能与数据安全，我们推荐使用 **火山引擎云服务器 (ECS)** 结合 veLinux 系统进行部署。我们准备了详细的测试教程，点击下方链接即可快速上手。
+
+👉 **[点击查看：服务端部署与ECS测试文档](./docs/zh/getting-started/03-quickstart-server.md)**
+
 ## 核心理念
 
 在成功运行第一个示例后，让我们深入了解 OpenViking 的设计理念。这五大核心理念与前面提到的解决方案一一对应，共同构建了一个完整的上下文管理体系：
@@ -279,7 +288,7 @@ Search results:
 
 我们不再将上下文视为扁平的文本切片，而是将其统一抽象并组织于一个虚拟文件系统中。无论是记忆、资源还是能力，都会被映射到 `viking://` 协议下的虚拟目录，拥有唯一的 URI。
 
-这种范式赋予了 Agent 前所未有的上下文操控能力，使其能像开发者一样，通过 `ls`、`find` 等标准指令来精确、确定性地定位、浏览和操作信息，让上下文的管理从模糊的语义匹配演变为直观、可追溯的"文件操作"。了解更多：[Viking URI](./docs/zh/concepts/03-viking-uri.md) | [上下文类型](./docs/zh/concepts/02-context-types.md)
+这种范式赋予了 Agent 前所未有的上下文操控能力，使其能像开发者一样，通过 `ls`、`find` 等标准指令来精确、确定性地定位、浏览和操作信息，让上下文的管理从模糊的语义匹配演变为直观、可追溯的"文件操作"。了解更多：[Viking URI](./docs/zh/concepts/04-viking-uri.md) | [上下文类型](./docs/zh/concepts/02-context-types.md)
 
 ```
 viking://
@@ -312,7 +321,7 @@ viking://
 - **L1 (概述)**：包含核心信息和使用场景，供 Agent 在规划阶段进行决策
 - **L2 (详情)**：完整的原始数据，供 Agent 在确有必要时深入读取
 
-了解更多：[上下文分层](./docs/zh/concepts/04-context-layers.md)
+了解更多：[上下文分层](./docs/zh/concepts/03-context-layers.md)
 
 ```
 viking://resources/my_project/
@@ -341,13 +350,13 @@ viking://resources/my_project/
 4. **递归下探**：若目录下仍存在子目录，则逐层递归重复上述二次检索步骤
 5. **结果汇总**：最终拿到最相关上下文返回
 
-这种"先锁定高分目录、再精细探索内容"的策略，不仅能找到语义最匹配的片段，更能理解信息所在的完整语境，从而提升检索的全局性与准确性。了解更多：[检索机制](./docs/zh/concepts/06-retrieval.md)
+这种"先锁定高分目录、再精细探索内容"的策略，不仅能找到语义最匹配的片段，更能理解信息所在的完整语境，从而提升检索的全局性与准确性。了解更多：[检索机制](./docs/zh/concepts/07-retrieval.md)
 
 ### 4. 可视化检索轨迹 → 上下文可观测
 
 OpenViking 的组织方式采用层次化虚拟文件系统结构，所有上下文均以统一格式整合且每个条目对应唯一 URI（如 `viking://` 路径），打破传统扁平黑箱式管理模式，层次分明易于理解。
 
-检索过程采用目录递归策略，每次检索的目录浏览、文件定位轨迹均被完整留存，能够清晰观测问题根源并指导检索逻辑优化。了解更多：[检索机制](./docs/zh/concepts/06-retrieval.md)
+检索过程采用目录递归策略，每次检索的目录浏览、文件定位轨迹均被完整留存，能够清晰观测问题根源并指导检索逻辑优化。了解更多：[检索机制](./docs/zh/concepts/07-retrieval.md)
 
 ### 5. 会话自动管理 → 上下文自迭代
 
@@ -425,7 +434,7 @@ Viking 团队专注于非结构化信息处理和智能检索领域，在上下�
 - **2025 年 10 月**：开源 [MineContext](https://github.com/volcengine/MineContext)，主动式 AI 应用探索
 - **2026 年 1 月**：开源 OpenViking，为 AI Agent 提供底层上下文数据库支撑
 
-更多详细信息请查看：**[关于我们](./docs/zh/about/about-us.md)**
+更多详细信息请查看：**[关于我们](./docs/zh/about/01-about-us.md)**
 
 ---
 
@@ -436,8 +445,8 @@ OpenViking 目前还处于早期阶段，有许多需要完善和探索的地方
 - 为我们点亮一颗宝贵的 **Star**，给予我们前行的动力
 - 访问我们的 [**网站**](https://www.openviking.ai)，了解我们传递的理念，并通过[**文档**](https://www.openviking.ai/docs)使用它，在您的项目中感受它带来的改变，并向我们反馈最真实的体验
 - 加入我们的社区，分享您的洞见，帮助解答他人的疑问，共同营造一个开放、互助的技术氛围：
-  - 📱 **飞书群**：扫描二维码加入 → [查看二维码](./docs/zh/about/about-us.md#飞书群)
-  - 💬 **微信群**：添加小助手微信，备注「OpenViking」→ [查看二维码](./docs/zh/about/about-us.md#微信群)
+  - 📱 **飞书群**：扫描二维码加入 → [查看二维码](./docs/zh/about/01-about-us.md#飞书群)
+  - 💬 **微信群**：添加小助手微信，备注「OpenViking」→ [查看二维码](./docs/zh/about/01-about-us.md#微信群)
   - 🎮 **Discord**：[加入 Discord 服务器](https://discord.com/invite/eHvx8E9XF3)
   - 🐦 **X (Twitter)**：[关注我们的动态](https://x.com/openvikingai)
 - 成为我们的**贡献者**，无论是提交一个 Bug 修复，还是贡献一个新功能，您的每一行代码都将是 OpenViking 成长的重要基石
@@ -448,7 +457,7 @@ OpenViking 目前还处于早期阶段，有许多需要完善和探索的地方
 
 ### Star 趋势
 
-[![Star History Chart](https://api.star-history.com/svg?repos=volcengine/OpenViking&type=Timeline)](https://www.star-history.com/#volcengine/OpenViking&Timeline)
+[![Star History Chart](https://api.star-history.com/svg?repos=volcengine/OpenViking&type=timeline&legend=top-left)](https://www.star-history.com/#volcengine/OpenViking&type=timeline&legend=top-left)
 
 ---
 

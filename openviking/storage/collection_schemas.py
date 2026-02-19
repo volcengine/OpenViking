@@ -13,13 +13,11 @@ from typing import Any, Dict, Optional
 from openviking.models.embedder.base import EmbedResult
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
-from openviking.storage.vikingdb_interface import VikingDBInterface
-from openviking.utils import get_logger
-from openviking.utils.config.open_viking_config import OpenVikingConfig
+from openviking.storage.vikingdb_interface import CollectionNotFoundError, VikingDBInterface
+from openviking_cli.utils import get_logger
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 
 logger = get_logger(__name__)
-
-COLLECTION_NAME = "context"
 
 
 class CollectionSchemas:
@@ -44,20 +42,32 @@ class CollectionSchemas:
             "Description": "Unified context collection",
             "Fields": [
                 {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
-                {"FieldName": "uri", "FieldType": "string"},
+                {"FieldName": "uri", "FieldType": "path"},
                 {"FieldName": "type", "FieldType": "string"},
                 {"FieldName": "context_type", "FieldType": "string"},
                 {"FieldName": "vector", "FieldType": "vector", "Dim": vector_dim},
-                {"FieldName": "sparse_vector", "FieldType": "sparse_vector"},  # Sparse vector field
-                {"FieldName": "created_at", "FieldType": "string"},
-                {"FieldName": "updated_at", "FieldType": "string"},
+                {"FieldName": "sparse_vector", "FieldType": "sparse_vector"},
+                {"FieldName": "created_at", "FieldType": "date_time"},
+                {"FieldName": "updated_at", "FieldType": "date_time"},
                 {"FieldName": "active_count", "FieldType": "int64"},
-                {"FieldName": "parent_uri", "FieldType": "string"},
+                {"FieldName": "parent_uri", "FieldType": "path"},
                 {"FieldName": "is_leaf", "FieldType": "bool"},
                 {"FieldName": "name", "FieldType": "string"},
                 {"FieldName": "description", "FieldType": "string"},
                 {"FieldName": "tags", "FieldType": "string"},
                 {"FieldName": "abstract", "FieldType": "string"},
+            ],
+            "ScalarIndex": [
+                "uri",
+                "type",
+                "context_type",
+                "created_at",
+                "updated_at",
+                "active_count",
+                "parent_uri",
+                "is_leaf",
+                "name",
+                "tags",
             ],
         }
 
@@ -72,7 +82,7 @@ async def init_context_collection(storage) -> bool:
     Returns:
         True if collection was created, False if already exists
     """
-    from openviking.utils.config import get_openviking_config
+    from openviking_cli.utils.config import get_openviking_config
 
     config = get_openviking_config()
     name = config.storage.vectordb.name
@@ -99,7 +109,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
         Args:
             vikingdb: VikingDBInterface instance for writing to vector database
         """
-        from openviking.utils.config import get_openviking_config
+        from openviking_cli.utils.config import get_openviking_config
 
         self._vikingdb = vikingdb
         self._embedder = None
@@ -131,7 +141,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
 
             # Initialize embedder if not already initialized
             if not self._embedder:
-                from openviking.utils.config import get_openviking_config
+                from openviking_cli.utils.config import get_openviking_config
 
                 config = get_openviking_config()
                 self._initialize_embedder(config)
@@ -167,6 +177,15 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     logger.debug(
                         f"Successfully wrote embedding to database: {record_id} abstract {inserted_data['abstract']} vector {inserted_data['vector'][:5]}"
                     )
+            except CollectionNotFoundError as db_err:
+                # During shutdown, queue workers may finish one dequeued item.
+                if getattr(self._vikingdb, "is_closing", False):
+                    logger.debug(f"Skip embedding write during shutdown: {db_err}")
+                    self.report_success()
+                    return None
+                logger.error(f"Failed to write to vector database: {db_err}")
+                self.report_error(str(db_err), data)
+                return None
             except Exception as db_err:
                 logger.error(f"Failed to write to vector database: {db_err}")
                 import traceback

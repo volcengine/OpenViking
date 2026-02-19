@@ -2,10 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 """Unified context class for OpenViking."""
 
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
+
+from openviking.utils.time_utils import format_iso8601
+from openviking_cli.session.user_id import UserIdentifier
 
 
 class ResourceContentType(str, Enum):
@@ -55,7 +58,7 @@ class Context:
         related_uri: Optional[List[str]] = None,
         meta: Optional[Dict[str, Any]] = None,
         session_id: Optional[str] = None,
-        user: Optional[str] = None,
+        user: Optional[UserIdentifier] = None,
         id: Optional[str] = None,
     ):
         """
@@ -68,7 +71,7 @@ class Context:
         self.abstract = abstract
         self.context_type = context_type or self._derive_context_type()
         self.category = category or self._derive_category()
-        self.created_at = created_at or datetime.now()
+        self.created_at = created_at or datetime.now(timezone.utc)
         self.updated_at = updated_at or self.created_at
         self.active_count = active_count
         self.related_uri = related_uri or []
@@ -120,10 +123,13 @@ class Context:
     def update_activity(self):
         """Update activity statistics."""
         self.active_count += 1
-        self.updated_at = datetime.now()
+        self.updated_at = datetime.now(timezone.utc)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert context to dictionary format for storage."""
+        created_at_str = format_iso8601(self.created_at) if self.created_at else None
+        updated_at_str = format_iso8601(self.updated_at) if self.updated_at else None
+
         data = {
             "id": self.id,
             "uri": self.uri,
@@ -132,15 +138,17 @@ class Context:
             "abstract": self.abstract,
             "context_type": self.context_type,
             "category": self.category,
-            "created_at": self.created_at.isoformat(),
-            "updated_at": self.updated_at.isoformat() if self.updated_at else None,
+            "created_at": created_at_str,
+            "updated_at": updated_at_str,
             "active_count": self.active_count,
             "vector": self.vector,
             "meta": self.meta,
             "related_uri": self.related_uri,
             "session_id": self.session_id,
-            "user": self.user,
         }
+
+        if self.user:
+            data["user"] = self.user.to_dict()
 
         # Add skill-specific fields from meta
         if self.context_type == "skill":

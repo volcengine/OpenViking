@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional, Type, TypeVar
 import json_repair
 from pydantic import BaseModel
 
-from openviking.utils.logger import get_logger
+from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 

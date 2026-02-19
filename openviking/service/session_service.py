@@ -3,18 +3,18 @@
 """
 Session Service for OpenViking.
 
-Provides session management operations: session, sessions, add_message, compress, extract, delete.
+Provides session management operations: session, sessions, add_message, commit, delete.
 """
 
 from typing import Any, Dict, List, Optional
 
-from openviking.exceptions import NotFoundError, NotInitializedError
-from openviking.message import Part
 from openviking.session import Session
 from openviking.session.compressor import SessionCompressor
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import VikingFS
-from openviking.utils import get_logger
+from openviking_cli.exceptions import NotFoundError, NotInitializedError
+from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
@@ -27,25 +27,25 @@ class SessionService:
         vikingdb: Optional[VikingDBManager] = None,
         viking_fs: Optional[VikingFS] = None,
         session_compressor: Optional[SessionCompressor] = None,
-        user: str = "default",
+        user: Optional[UserIdentifier] = None,
     ):
         self._vikingdb = vikingdb
         self._viking_fs = viking_fs
         self._session_compressor = session_compressor
-        self._user = user
+        self._user = user or UserIdentifier.the_default_user()
 
     def set_dependencies(
         self,
         vikingdb: VikingDBManager,
         viking_fs: VikingFS,
         session_compressor: SessionCompressor,
-        user: str,
+        user: Optional[UserIdentifier] = None,
     ) -> None:
         """Set dependencies (for deferred initialization)."""
         self._vikingdb = vikingdb
         self._viking_fs = viking_fs
         self._session_compressor = session_compressor
-        self._user = user
+        self._user = user or UserIdentifier.the_default_user()
 
     def _ensure_initialized(self) -> None:
         """Ensure all dependencies are initialized."""
@@ -86,11 +86,13 @@ class SessionService:
                 name = entry.get("name", "")
                 if name in [".", ".."]:
                     continue
-                sessions.append({
-                    "session_id": name,
-                    "uri": f"{session_base_uri}/{name}",
-                    "is_dir": entry.get("isDir", False),
-                })
+                sessions.append(
+                    {
+                        "session_id": name,
+                        "uri": f"{session_base_uri}/{name}",
+                        "is_dir": entry.get("isDir", False),
+                    }
+                )
             return sessions
         except Exception:
             return []
@@ -115,14 +117,14 @@ class SessionService:
             logger.error(f"Failed to delete session {session_id}: {e}")
             raise NotFoundError(session_id, "session")
 
-    async def compress(self, session_id: str) -> Dict[str, Any]:
-        """Compress a session (commit and archive).
+    async def commit(self, session_id: str) -> Dict[str, Any]:
+        """Commit a session (archive messages and extract memories).
 
         Args:
-            session_id: Session ID to compress
+            session_id: Session ID to commit
 
         Returns:
-            Compression result
+            Commit result
         """
         self._ensure_initialized()
         session = self.session(session_id)

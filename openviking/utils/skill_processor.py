@@ -15,8 +15,9 @@ from openviking.core.skill_loader import SkillLoader
 from openviking.storage import VikingDBManager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.viking_fs import VikingFS
-from openviking.utils import get_logger
-from openviking.utils.config import get_openviking_config
+from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils import get_logger
+from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 
@@ -41,7 +42,7 @@ class SkillProcessor:
         self,
         data: Any,
         viking_fs: VikingFS,
-        user: Optional[str] = None,
+        user: Optional[UserIdentifier] = None,
     ) -> Dict[str, Any]:
         """
         Process and store a skill.

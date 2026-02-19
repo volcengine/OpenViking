@@ -69,12 +69,11 @@ pip install openviking
 
 ### How do I configure OpenViking?
 
-Create an `ov.conf` configuration file in your project directory:
+Create an `~/.openviking/ov.conf` configuration file in your project directory:
 
 ```json
 {
-  "user": "default_user",
-    "embedding": {
+  "embedding": {
     "dense": {
       "provider": "volcengine",
       "api_key": "your-api-key",
@@ -101,7 +100,7 @@ Create an `ov.conf` configuration file in your project directory:
 }
 ```
 
-Configuration priority: Constructor parameters > Config object > Config file > Environment variables > Default values
+Config files at the default path `~/.openviking/ov.conf` are loaded automatically; you can also specify a different path via the `OPENVIKING_CONFIG_FILE` environment variable or `--config` flag. See [Configuration Guide](../guides/01-configuration.md) for details.
 
 ### What Embedding providers are supported?
 
@@ -120,16 +119,16 @@ Supports Dense, Sparse, and Hybrid embedding modes.
 ```python
 import openviking as ov
 
-# Async client (recommended)
+# Async client - embedded mode (recommended)
 client = ov.AsyncOpenViking(path="./my_data")
 await client.initialize()
 
-# Or use a config object
-from openviking.utils.config import OpenVikingConfig
-config = OpenVikingConfig(...)
-client = ov.AsyncOpenViking(config=config)
+# Async client - HTTP client mode
+client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 await client.initialize()
 ```
+
+The SDK constructor only accepts `url`, `api_key`, and `path` parameters. Other configuration (embedding, vlm, etc.) is managed through the `ov.conf` config file.
 
 ### What file formats are supported?
 
@@ -282,7 +281,7 @@ This strategy finds semantically matching fragments while understanding the comp
    ```
 
 2. **Embedding model configuration error**
-   - Check if `api_key` in `ov.conf` is correct
+   - Check if `api_key` in `~/.openviking/ov.conf` is correct
    - Confirm model name and endpoint are configured correctly
 
 3. **Unsupported file format**
@@ -348,7 +347,7 @@ This strategy finds semantically matching fragments while understanding the comp
 1. **Batch processing**: Adding multiple resources at once is more efficient than one by one
 2. **Set appropriate `batch_size`**: Adjust batch processing size in Embedding configuration
 3. **Use local storage**: Use `local` backend during development to reduce network latency
-4. **Async operations**: Fully utilize `AsyncOpenViking`'s async capabilities
+4. **Async operations**: Fully utilize `AsyncOpenViking` / `AsyncHTTPClient`'s async capabilities
 
 ## Deployment
 
@@ -363,11 +362,8 @@ This strategy finds semantically matching fragments while understanding the comp
 # Embedded mode
 client = ov.AsyncOpenViking(path="./data")
 
-# Service mode
-client = ov.AsyncOpenViking(
-    vectordb_url="http://vectordb:5000",
-    agfs_url="http://agfs:8080"
-)
+# HTTP client mode (connects to a remote server)
+client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
 ```
 
 ### Is OpenViking open source?
@@ -376,8 +372,8 @@ Yes, OpenViking is fully open source under the Apache 2.0 license.
 
 ## Related Documentation
 
-- [Introduction](../getting-started/introduction.md) - Understand OpenViking's design philosophy
-- [Quick Start](../getting-started/quickstart.md) - 5-minute tutorial
+- [Introduction](../getting-started/01-introduction.md) - Understand OpenViking's design philosophy
+- [Quick Start](../getting-started/02-quickstart.md) - 5-minute tutorial
 - [Architecture Overview](../concepts/01-architecture.md) - Deep dive into system design
-- [Retrieval Mechanism](../concepts/06-retrieval.md) - Detailed retrieval process
-- [Configuration Guide](../configuration/configuration.md) - Complete configuration reference
+- [Retrieval Mechanism](../concepts/07-retrieval.md) - Detailed retrieval process
+- [Configuration Guide](../guides/01-configuration.md) - Complete configuration reference

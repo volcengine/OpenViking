@@ -11,17 +11,17 @@ import heapq
 from typing import Any, Dict, List, Optional, Tuple
 
 from openviking.models.embedder.base import EmbedResult
-from openviking.retrieve.types import (
+from openviking.storage import VikingDBInterface
+from openviking.storage.viking_fs import get_viking_fs
+from openviking_cli.retrieve.types import (
     ContextType,
     MatchedContext,
     QueryResult,
     RelatedContext,
     TypedQuery,
 )
-from openviking.storage import VikingDBInterface
-from openviking.storage.viking_fs import get_viking_fs
-from openviking.utils.config import RerankConfig
-from openviking.utils.logger import get_logger
+from openviking_cli.utils.config import RerankConfig
+from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
@@ -58,7 +58,7 @@ class HierarchicalRetriever:
         self.rerank_config = rerank_config
 
         # Use rerank threshold if available, otherwise use a default
-        self.threshold = rerank_config.threshold if rerank_config else 0.1
+        self.threshold = rerank_config.threshold if rerank_config else 0
 
         # Initialize rerank client only if config is available
         if rerank_config and rerank_config.is_available():
@@ -253,8 +253,6 @@ class HierarchicalRetriever:
 
         def passes_threshold(score: float) -> bool:
             """Check if score passes threshold."""
-            if not self._rerank_client or mode != RetrieverMode.THINKING:
-                return True
             if score_gte:
                 return score >= effective_threshold
             return score > effective_threshold
@@ -325,7 +323,7 @@ class HierarchicalRetriever:
                 if passes_threshold(final_score) and uri not in visited:
                     r["_final_score"] = final_score
                     collected.append(r)
-                    logger.info(
+                    logger.debug(
                         f"[RecursiveSearch] Added URI: {uri} to candidates with score: {final_score}"
                     )
                     if r.get("is_leaf"):
@@ -333,7 +331,7 @@ class HierarchicalRetriever:
                         continue
                     heapq.heappush(dir_queue, (-final_score, uri))
                 else:
-                    logger.info(
+                    logger.debug(
                         f"[RecursiveSearch] URI {uri} score {final_score} did not pass threshold {effective_threshold}"
                     )
 

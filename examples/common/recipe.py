@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 import requests
 
 import openviking as ov
-from openviking.utils.config.open_viking_config import OpenVikingConfig
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 
 
 class Recipe:

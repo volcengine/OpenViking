@@ -15,8 +15,8 @@ from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.result import FetchDataInCollectionResult
 from openviking.storage.vectordb.utils.logging_init import init_cpp_logging
 from openviking.storage.vikingdb_interface import CollectionNotFoundError, VikingDBInterface
-from openviking.utils import get_logger
-from openviking.utils.config.vectordb_config import VectorDBBackendConfig
+from openviking_cli.utils import get_logger
+from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 
 logger = get_logger(__name__)
 
@@ -64,7 +64,7 @@ class VikingVectorIndexBackend(VikingDBInterface):
             backend = VikingVectorIndexBackend(config=config)
 
             # 3. Volcengine VikingDB
-            from openviking.utils.config.storage_config import VolcengineConfig
+            from openviking_cli.utils.config.storage_config import VolcengineConfig
             config = VectorDBBackendConfig(
                 backend="volcengine",
                 volcengine=VolcengineConfig(
@@ -225,8 +225,11 @@ class VikingVectorIndexBackend(VikingDBInterface):
                 logger.debug(f"Collection '{name}' already exists")
                 return False
 
-            # Extract configuration from schema
-            collection_meta = schema
+            collection_meta = schema.copy()
+
+            scalar_index_fields = []
+            if "ScalarIndex" in collection_meta:
+                scalar_index_fields = collection_meta.pop("ScalarIndex")
 
             # Ensure CollectionName is set
             if "CollectionName" not in collection_meta:
@@ -245,27 +248,27 @@ class VikingVectorIndexBackend(VikingDBInterface):
             # Create collection using vectordb project
             collection = self.project.create_collection(name, collection_meta)
 
-            # Build scalar index fields list from Fields
-            scalar_index_fields = []
-            for field in collection_meta.get("Fields", []):
-                field_name = field.get("FieldName")
-                field_type = field.get("FieldType")
-                is_primary_key = field.get("IsPrimaryKey", False)
-                # Index all non-vector, non-primary-key, and non-date_time fields by default
-                # Volcengine VikingDB doesn't support indexing date_time fields
-                if (
-                    field_name
-                    and field_type not in ("vector", "sparse_vector", "date_time")
-                    and not is_primary_key
-                ):
-                    scalar_index_fields.append(field_name)
+            # Filter date_time fields for volcengine and vikingdb backends
+            if self._mode in ["volcengine", "vikingdb"]:
+                date_time_fields = {
+                    field.get("FieldName")
+                    for field in collection_meta.get("Fields", [])
+                    if field.get("FieldType") == "date_time"
+                }
+                scalar_index_fields = [
+                    field for field in scalar_index_fields if field not in date_time_fields
+                ]
 
             # Create default index for the collection
             use_sparse = self.sparse_weight > 0.0
+            index_type = "flat_hybrid" if use_sparse else "flat"
+            if self._mode in ["volcengine", "vikingdb"]:
+                index_type = "hnsw_hybrid" if use_sparse else "hnsw"
+
             index_meta = {
                 "IndexName": self.DEFAULT_INDEX_NAME,
                 "VectorIndex": {
-                    "IndexType": "flat_hybrid" if use_sparse else "flat",
+                    "IndexType": index_type,
                     "Distance": distance,
                     "Quant": "int8",
                 },

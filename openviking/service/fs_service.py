@@ -8,9 +8,9 @@ Provides file system operations: ls, mkdir, rm, mv, tree, stat, read, abstract, 
 
 from typing import Any, Dict, List, Optional
 
-from openviking.exceptions import NotFoundError, NotInitializedError
 from openviking.storage.viking_fs import VikingFS
-from openviking.utils import get_logger
+from openviking_cli.exceptions import NotInitializedError
+from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
@@ -31,20 +31,41 @@ class FSService:
             raise NotInitializedError("VikingFS")
         return self._viking_fs
 
-    async def ls(self, uri: str, recursive: bool = False, simple: bool = False) -> List[Any]:
+    async def ls(
+        self,
+        uri: str,
+        recursive: bool = False,
+        simple: bool = False,
+        output: str = "original",
+        abs_limit: int = 256,
+        show_all_hidden: bool = False,
+        node_limit: int = 1000,
+    ) -> List[Any]:
         """List directory contents.
 
         Args:
             uri: Viking URI
             recursive: List all subdirectories recursively
             simple: Return only relative path list
+            output: str = "original" or "agent"
+            abs_limit: int = 256 if output == "agent" else ignore
+            show_all_hidden: bool = False (list all hidden files, like -a)
+            node_limit: int = 1000 (maximum number of nodes to list)
         """
         viking_fs = self._ensure_initialized()
 
         if recursive:
-            entries = await viking_fs.tree(uri)
+            entries = await viking_fs.tree(
+                uri,
+                output=output,
+                abs_limit=abs_limit,
+                show_all_hidden=show_all_hidden,
+                node_limit=node_limit,
+            )
         else:
-            entries = await viking_fs.ls(uri)
+            entries = await viking_fs.ls(
+                uri, output=output, abs_limit=abs_limit, show_all_hidden=show_all_hidden
+            )
 
         if simple:
             return [e.get("rel_path", e.get("name", "")) for e in entries]
@@ -65,10 +86,23 @@ class FSService:
         viking_fs = self._ensure_initialized()
         await viking_fs.mv(from_uri, to_uri)
 
-    async def tree(self, uri: str) -> List[Dict[str, Any]]:
+    async def tree(
+        self,
+        uri: str,
+        output: str = "original",
+        abs_limit: int = 128,
+        show_all_hidden: bool = False,
+        node_limit: int = 1000,
+    ) -> List[Dict[str, Any]]:
         """Get directory tree."""
         viking_fs = self._ensure_initialized()
-        return await viking_fs.tree(uri)
+        return await viking_fs.tree(
+            uri,
+            output=output,
+            abs_limit=abs_limit,
+            show_all_hidden=show_all_hidden,
+            node_limit=node_limit,
+        )
 
     async def stat(self, uri: str) -> Dict[str, Any]:
         """Get resource status."""

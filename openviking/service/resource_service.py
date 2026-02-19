@@ -8,14 +8,19 @@ Provides resource management operations: add_resource, add_skill, wait_processed
 
 from typing import Any, Dict, Optional
 
-from openviking.exceptions import InvalidArgumentError, NotInitializedError
 from openviking.storage import VikingDBManager
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.viking_fs import VikingFS
-from openviking.utils import get_logger
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking.utils.skill_processor import SkillProcessor
-from openviking.utils.uri import VikingURI
+from openviking_cli.exceptions import (
+    DeadlineExceededError,
+    InvalidArgumentError,
+    NotInitializedError,
+)
+from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils import get_logger
+from openviking_cli.utils.uri import VikingURI
 
 logger = get_logger(__name__)
 
@@ -29,7 +34,7 @@ class ResourceService:
         viking_fs: Optional[VikingFS] = None,
         resource_processor: Optional[ResourceProcessor] = None,
         skill_processor: Optional[SkillProcessor] = None,
-        user: str = "default",
+        user: Optional[UserIdentifier] = None,
     ):
         self._vikingdb = vikingdb
         self._viking_fs = viking_fs
@@ -43,7 +48,7 @@ class ResourceService:
         viking_fs: VikingFS,
         resource_processor: ResourceProcessor,
         skill_processor: SkillProcessor,
-        user: str,
+        user: Optional[UserIdentifier] = None,
     ) -> None:
         """Set dependencies (for deferred initialization)."""
         self._vikingdb = vikingdb
@@ -69,6 +74,7 @@ class ResourceService:
         instruction: str = "",
         wait: bool = False,
         timeout: Optional[float] = None,
+        **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking (only supports resources scope).
 
@@ -79,6 +85,9 @@ class ResourceService:
             instruction: Processing instruction
             wait: Whether to wait for semantic extraction and vectorization to complete
             timeout: Wait timeout in seconds
+            **kwargs: Extra options forwarded to the parser chain, e.g.
+                ``strict``, ``ignore_dirs``, ``include``, ``exclude``
+                (used by ``DirectoryParser``).
 
         Returns:
             Processing result
@@ -99,11 +108,15 @@ class ResourceService:
             instruction=instruction,
             scope="resources",
             target=target,
+            **kwargs,
         )
 
         if wait:
             qm = get_queue_manager()
-            status = await qm.wait_complete(timeout=timeout)
+            try:
+                status = await qm.wait_complete(timeout=timeout)
+            except TimeoutError as exc:
+                raise DeadlineExceededError("queue processing", timeout) from exc
             result["queue_status"] = {
                 name: {
                     "processed": s.processed,
@@ -141,7 +154,10 @@ class ResourceService:
 
         if wait:
             qm = get_queue_manager()
-            status = await qm.wait_complete(timeout=timeout)
+            try:
+                status = await qm.wait_complete(timeout=timeout)
+            except TimeoutError as exc:
+                raise DeadlineExceededError("queue processing", timeout) from exc
             result["queue_status"] = {
                 name: {
                     "processed": s.processed,
@@ -163,7 +179,10 @@ class ResourceService:
             Queue status
         """
         qm = get_queue_manager()
-        status = await qm.wait_complete(timeout=timeout)
+        try:
+            status = await qm.wait_complete(timeout=timeout)
+        except TimeoutError as exc:
+            raise DeadlineExceededError("queue processing", timeout) from exc
         return {
             name: {
                 "processed": s.processed,

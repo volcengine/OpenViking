@@ -27,7 +27,7 @@ OpenViking 是为 AI Agent 设计的上下文数据库，将所有上下文（Me
 │    │ (上下文检索) │          │  (会话管理)  │          │ (上下文提取) │      │
 │    │             │          │             │          │             │      │
 │    │ search/find │          │ add/used    │          │ 文档解析    │      │
-│    │ 意图分析    │          │ compress    │          │ L0/L1/L2    │      │
+│    │ 意图分析    │          │ commit      │          │ L0/L1/L2    │      │
 │    │ Rerank     │          │ commit      │          │ 树构建      │      │
 │    └──────┬──────┘          └──────┬──────┘          └──────┬──────┘      │
 │           │                        │                        │             │
@@ -68,7 +68,7 @@ Service 层将业务逻辑与传输层解耦，便于 HTTP Server 和 CLI 复用
 |---------|------|----------|
 | **FSService** | 文件系统操作 | ls, mkdir, rm, mv, tree, stat, read, abstract, overview, grep, glob |
 | **SearchService** | 语义搜索 | search, find |
-| **SessionService** | 会话管理 | session, sessions, compress, extract, delete |
+| **SessionService** | 会话管理 | session, sessions, commit, delete |
 | **ResourceService** | 资源导入 | add_resource, add_skill, wait_processed |
 | **RelationService** | 关联管理 | relations, link, unlink |
 | **PackService** | 导入导出 | export_ovpack, import_ovpack |
@@ -133,20 +133,26 @@ client = OpenViking(path="./data")
 - 使用本地向量索引
 - 单例模式
 
-### 服务模式
+### HTTP 模式
 
-用于生产环境的分布式部署：
+用于团队共享、生产环境和跨语言集成：
 
 ```python
-client = OpenViking(
-    vectordb_url="http://vectordb:5000",
-    agfs_url="http://agfs:8080"
-)
+# Python SDK 连接 OpenViking Server
+client = SyncHTTPClient(url="http://localhost:1933", api_key="xxx")
 ```
 
-- 连接远程服务
-- 支持多实例并发
-- 可独立扩展
+```bash
+# 或使用 curl / 任意 HTTP 客户端
+curl http://localhost:1933/api/v1/search/find \
+  -H "X-API-Key: xxx" \
+  -d '{"query": "how to use openviking"}'
+```
+
+- Server 作为独立进程运行（`python -m openviking serve`）
+- 客户端通过 HTTP API 连接
+- 支持任何能发起 HTTP 请求的语言
+- 参见 [服务部署](../guides/03-deployment.md) 了解配置方法
 
 ## 设计原则
 
@@ -160,9 +166,9 @@ client = OpenViking(
 ## 相关文档
 
 - [上下文类型](./02-context-types.md) - Resource/Memory/Skill 三种类型
-- [上下文层级](./04-context-layers.md) - L0/L1/L2 模型
-- [Viking URI](./03-viking-uri.md) - 统一资源标识符
+- [上下文层级](./03-context-layers.md) - L0/L1/L2 模型
+- [Viking URI](./04-viking-uri.md) - 统一资源标识符
 - [存储架构](./05-storage.md) - 双层存储详解
-- [检索机制](./06-retrieval.md) - 检索流程详解
-- [上下文提取](./07-extraction.md) - 解析和提取流程
+- [检索机制](./07-retrieval.md) - 检索流程详解
+- [上下文提取](./06-extraction.md) - 解析和提取流程
 - [会话管理](./08-session.md) - 会话和记忆管理

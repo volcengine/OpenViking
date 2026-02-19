@@ -1,0 +1,8 @@
+[workspace]
+members = ["crates/ov_cli"]
+resolver = "2"
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true

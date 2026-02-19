@@ -12,7 +12,8 @@ import openviking.storage.vectordb.engine as engine
 from openviking.storage.vectordb.index.index import IIndex
 from openviking.storage.vectordb.store.data import CandidateData, DeltaRecord
 from openviking.storage.vectordb.utils.constants import IndexFileMarkers
-from openviking.utils.logger import default_logger as logger
+from openviking.storage.vectordb.utils.data_processor import DataProcessor
+from openviking_cli.utils.logger import default_logger as logger
 
 
 def normalize_vector(vector: List[float]) -> List[float]:
@@ -211,6 +212,7 @@ class LocalIndex(IIndex):
             index_path_or_json, normalize_vector_flag
         )
         self.meta = meta
+        self.field_type_converter = DataProcessor(self.meta.collection_meta.fields_dict)
         pass
 
     def update(
@@ -232,11 +234,11 @@ class LocalIndex(IIndex):
 
     def upsert_data(self, delta_list: List[DeltaRecord]):
         if self.engine_proxy:
-            self.engine_proxy.upsert_data(delta_list)
+            self.engine_proxy.upsert_data(self._convert_delta_list_for_index(delta_list))
 
     def delete_data(self, delta_list: List[DeltaRecord]):
         if self.engine_proxy:
-            self.engine_proxy.delete_data(delta_list)
+            self.engine_proxy.delete_data(self._convert_delta_list_for_index(delta_list))
 
     def search(
         self,
@@ -255,6 +257,8 @@ class LocalIndex(IIndex):
             if sparse_values is None:
                 sparse_values = []
 
+            if self.field_type_converter and filters is not None:
+                filters = self.field_type_converter.convert_filter_for_index(filters)
             return self.engine_proxy.search(
                 query_vector, limit, filters, sparse_raw_terms, sparse_values
             )
@@ -274,6 +278,8 @@ class LocalIndex(IIndex):
             req.topk = 1
             if filters is None:
                 filters = {}
+            if self.field_type_converter and filters is not None:
+                filters = self.field_type_converter.convert_filter_for_index(filters)
             req.dsl = json.dumps(filters)
 
             logger.debug(f"aggregate DSL: {filters}")
@@ -325,6 +331,50 @@ class LocalIndex(IIndex):
         if self.engine_proxy:
             return self.engine_proxy.get_data_count()
         return 0
+
+    def _convert_delta_list_for_index(self, delta_list: List[DeltaRecord]) -> List[DeltaRecord]:
+        if not self.field_type_converter:
+            return delta_list
+        converted: List[DeltaRecord] = []
+        for data in delta_list:
+            item = DeltaRecord(type=data.type)
+            item.label = data.label
+            item.vector = list(data.vector) if data.vector else []
+            item.sparse_raw_terms = list(data.sparse_raw_terms) if data.sparse_raw_terms else []
+            item.sparse_values = list(data.sparse_values) if data.sparse_values else []
+            item.fields = (
+                self.field_type_converter.convert_fields_for_index(data.fields)
+                if data.fields
+                else data.fields
+            )
+            item.old_fields = (
+                self.field_type_converter.convert_fields_for_index(data.old_fields)
+                if data.old_fields
+                else data.old_fields
+            )
+            converted.append(item)
+        return converted
+
+    def _convert_candidate_list_for_index(
+        self, cands_list: List[CandidateData]
+    ) -> List[CandidateData]:
+        if not self.field_type_converter:
+            return cands_list
+        converted: List[CandidateData] = []
+        for data in cands_list:
+            item = CandidateData()
+            item.label = data.label
+            item.vector = list(data.vector) if data.vector else []
+            item.sparse_raw_terms = list(data.sparse_raw_terms) if data.sparse_raw_terms else []
+            item.sparse_values = list(data.sparse_values) if data.sparse_values else []
+            item.fields = (
+                self.field_type_converter.convert_fields_for_index(data.fields)
+                if data.fields
+                else data.fields
+            )
+            item.expire_ns_ts = data.expire_ns_ts
+            converted.append(item)
+        return converted
 
 
 class VolatileIndex(LocalIndex):
@@ -379,7 +429,8 @@ class VolatileIndex(LocalIndex):
         # Directly initialize engine_proxy without calling parent __init__
         self.engine_proxy = IndexEngineProxy(index_config_json, normalize_vector_flag)
         self.meta = meta
-        self.engine_proxy.add_data(cands_list)
+        self.field_type_converter = DataProcessor(self.meta.collection_meta.fields_dict)
+        self.engine_proxy.add_data(self._convert_candidate_list_for_index(cands_list))
 
     def need_rebuild(self) -> bool:
         """Determine if rebuild is needed.
@@ -498,6 +549,7 @@ class PersistentIndex(LocalIndex):
         initial_timestamp: Optional[int] = None,
     ):
         """Create a new index from scratch."""
+        self.field_type_converter = DataProcessor(meta.collection_meta.fields_dict)
         # Get the vector normalization flag from meta
         normalize_vector_flag = meta.inner_meta.get("VectorIndex", {}).get("NormalizeVector", False)
 
@@ -511,7 +563,7 @@ class PersistentIndex(LocalIndex):
 
         builder = IndexEngineProxy(index_config_json, normalize_vector_flag)
         build_index_path = os.path.join(self.version_dir, version_str)
-        builder.add_data(cands_list)
+        builder.add_data(self._convert_candidate_list_for_index(cands_list))
 
         dump_version_int = builder.dump(build_index_path)
         if dump_version_int > 0:

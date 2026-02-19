@@ -1,14 +1,13 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 import abc
-import asyncio
 import json
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
-from openviking.utils.logger import get_logger
+from openviking_cli.utils.logger import get_logger
 
 if TYPE_CHECKING:
     from pyagfs import AGFSClient
@@ -177,9 +176,8 @@ class NamedQueue:
     async def _ensure_initialized(self):
         """Ensure queue directory is created in AGFS."""
         if not self._initialized:
-            loop = asyncio.get_event_loop()
             try:
-                await loop.run_in_executor(None, self._agfs.mkdir, self.path)
+                self._agfs.mkdir(self.path)
             except Exception as e:
                 if "exist" not in str(e).lower():
                     logger.warning(f"[NamedQueue] Failed to ensure queue {self.name}: {e}")
@@ -197,10 +195,7 @@ class NamedQueue:
         if isinstance(data, dict):
             data = json.dumps(data)
 
-        loop = asyncio.get_event_loop()
-        msg_id = await loop.run_in_executor(
-            None, self._agfs.write, enqueue_file, data.encode("utf-8")
-        )
+        msg_id = self._agfs.write(enqueue_file, data.encode("utf-8"))
         return msg_id if isinstance(msg_id, str) else str(msg_id)
 
     async def dequeue(self) -> Optional[Dict[str, Any]]:
@@ -208,12 +203,27 @@ class NamedQueue:
         await self._ensure_initialized()
         dequeue_file = f"{self.path}/dequeue"
 
-        loop = asyncio.get_event_loop()
         try:
-            content = await loop.run_in_executor(None, self._agfs.read, dequeue_file)
+            content = self._agfs.read(dequeue_file)
             if not content or content == b"{}":
                 return None
-            data = json.loads(content)
+
+            # Handle different return types from AGFSClient
+            content_bytes = None
+            if isinstance(content, bytes):
+                content_bytes = content
+            elif isinstance(content, str):
+                content_bytes = content.encode("utf-8")
+            elif hasattr(content, "content"):  # Response object
+                content_obj = content.content
+                if content_obj is not None:
+                    content_bytes = content_obj
+            else:
+                content_bytes = str(content).encode("utf-8")
+
+            if content_bytes is None:
+                return None
+            data = json.loads(content_bytes.decode("utf-8"))
 
             # Dequeue success, mark in_progress
             if self._dequeue_handler:
@@ -230,12 +240,16 @@ class NamedQueue:
         await self._ensure_initialized()
         peek_file = f"{self.path}/peek"
 
-        loop = asyncio.get_event_loop()
         try:
-            content = await loop.run_in_executor(None, self._agfs.read, peek_file)
+            content = self._agfs.read(peek_file)
             if not content or content == b"{}":
                 return None
-            return json.loads(content)
+            if isinstance(content, bytes):
+                return json.loads(content.decode("utf-8"))
+            elif isinstance(content, str):
+                return json.loads(content)
+            else:
+                return None
         except Exception as e:
             logger.debug(f"[NamedQueue] Peek failed for {self.name}: {e}")
             return None
@@ -245,12 +259,16 @@ class NamedQueue:
         await self._ensure_initialized()
         size_file = f"{self.path}/size"
 
-        loop = asyncio.get_event_loop()
         try:
-            content = await loop.run_in_executor(None, self._agfs.read, size_file)
+            content = self._agfs.read(size_file)
             if not content:
                 return 0
-            return int(content.decode("utf-8").strip())
+            if isinstance(content, bytes):
+                return int(content.decode("utf-8").strip())
+            elif isinstance(content, str):
+                return int(content.strip())
+            else:
+                return 0
         except Exception as e:
             logger.debug(f"[NamedQueue] Get size failed for {self.name}: {e}")
             return 0
@@ -260,9 +278,8 @@ class NamedQueue:
         await self._ensure_initialized()
         clear_file = f"{self.path}/clear"
 
-        loop = asyncio.get_event_loop()
         try:
-            await loop.run_in_executor(None, self._agfs.write, clear_file, b"")
+            self._agfs.write(clear_file, b"")
             return True
         except Exception as e:
             logger.error(f"[NamedQueue] Clear failed for {self.name}: {e}")

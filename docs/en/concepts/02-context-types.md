@@ -133,6 +133,6 @@ for ctx in results.skills:
 ## Related Documents
 
 - [Architecture Overview](./01-architecture.md) - System architecture
-- [Context Layers](./04-context-layers.md) - L0/L1/L2 model
-- [Viking URI](./03-viking-uri.md) - URI specification
+- [Context Layers](./03-context-layers.md) - L0/L1/L2 model
+- [Viking URI](./04-viking-uri.md) - URI specification
 - [Session Management](./08-session.md) - Memory extraction mechanism

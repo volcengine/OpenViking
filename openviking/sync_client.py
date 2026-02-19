@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from openviking.session import Session
 
 from openviking.async_client import AsyncOpenViking
-from openviking.utils import run_async
+from openviking_cli.utils import run_async
 
 
 class SyncOpenViking:
@@ -32,6 +32,30 @@ class SyncOpenViking:
         """Create new session or load existing session."""
         return self._async_client.session(session_id)
 
+    def create_session(self) -> Dict[str, Any]:
+        """Create a new session."""
+        return run_async(self._async_client.create_session())
+
+    def list_sessions(self) -> List[Any]:
+        """List all sessions."""
+        return run_async(self._async_client.list_sessions())
+
+    def get_session(self, session_id: str) -> Dict[str, Any]:
+        """Get session details."""
+        return run_async(self._async_client.get_session(session_id))
+
+    def delete_session(self, session_id: str) -> None:
+        """Delete a session."""
+        run_async(self._async_client.delete_session(session_id))
+
+    def add_message(self, session_id: str, role: str, content: str) -> Dict[str, Any]:
+        """Add a message to a session."""
+        return run_async(self._async_client.add_message(session_id, role, content))
+
+    def commit_session(self, session_id: str) -> Dict[str, Any]:
+        """Commit a session (archive and extract memories)."""
+        return run_async(self._async_client.commit_session(session_id))
+
     def add_resource(
         self,
         path: str,
@@ -40,10 +64,24 @@ class SyncOpenViking:
         instruction: str = "",
         wait: bool = False,
         timeout: float = None,
+        **kwargs,
     ) -> Dict[str, Any]:
-        """Add resource to OpenViking (resources scope only)"""
+        """Add resource to OpenViking (resources scope only)
+
+        Args:
+            **kwargs: Extra options forwarded to the parser chain, e.g.
+                ``strict``, ``ignore_dirs``, ``include``, ``exclude``.
+        """
         return run_async(
-            self._async_client.add_resource(path, target, reason, instruction, wait, timeout)
+            self._async_client.add_resource(
+                path,
+                target,
+                reason,
+                instruction,
+                wait,
+                timeout,
+                **kwargs,
+            )
         )
 
     def add_skill(
@@ -60,13 +98,16 @@ class SyncOpenViking:
         query: str,
         target_uri: str = "",
         session: Optional["Session"] = None,
+        session_id: Optional[str] = None,
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
     ):
         """Execute complex retrieval (intent analysis, hierarchical retrieval)."""
         return run_async(
-            self._async_client.search(query, target_uri, session, limit, score_threshold, filter)
+            self._async_client.search(
+                query, target_uri, session, session_id, limit, score_threshold, filter
+            )
         )
 
     def find(
@@ -132,7 +173,7 @@ class SyncOpenViking:
         """Delete resource"""
         return run_async(self._async_client.rm(uri, recursive))
 
-    def wait_processed(self, timeout: float = None) -> None:
+    def wait_processed(self, timeout: float = None) -> Dict[str, Any]:
         """Wait for all async operations to complete"""
         return run_async(self._async_client.wait_processed(timeout))
 
@@ -148,9 +189,9 @@ class SyncOpenViking:
         """Move resource"""
         return run_async(self._async_client.mv(from_uri, to_uri))
 
-    def tree(self, uri: str) -> Dict:
+    def tree(self, uri: str, **kwargs) -> Dict:
         """Get directory tree"""
-        return run_async(self._async_client.tree(uri))
+        return run_async(self._async_client.tree(uri, **kwargs))
 
     def stat(self, uri: str) -> Dict:
         """Get resource status"""
@@ -166,6 +207,8 @@ class SyncOpenViking:
         Returns:
             SystemStatus containing health status of all components.
         """
+        if not self._initialized:
+            self.initialize()
         return self._async_client.get_status()
 
     def is_healthy(self) -> bool:
@@ -174,24 +217,16 @@ class SyncOpenViking:
         Returns:
             True if all components are healthy, False otherwise.
         """
+        if not self._initialized:
+            self.initialize()
         return self._async_client.is_healthy()
 
     @property
     def observer(self):
         """Get observer service for component status."""
+        if not self._initialized:
+            self.initialize()
         return self._async_client.observer
-
-    @property
-    def viking_fs(self):
-        return self._async_client.viking_fs
-
-    @property
-    def _vikingdb_manager(self):
-        return self._async_client._vikingdb_manager
-
-    @property
-    def _session_compressor(self):
-        return self._async_client._session_compressor
 
     @classmethod
     def reset(cls) -> None:

@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, Optional
 
+from openviking.utils.time_utils import format_iso8601
+
 
 @dataclass
 class TokenUsage:
@@ -45,7 +47,7 @@ class TokenUsage:
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
             "total_tokens": self.total_tokens,
-            "last_updated": self.last_updated.isoformat(),
+            "last_updated": format_iso8601(self.last_updated),
         }
 
     def __str__(self) -> str:

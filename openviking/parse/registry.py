@@ -12,12 +12,19 @@ from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 
 from openviking.parse.base import ParseResult
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking.parse.parsers.epub import EPubParser
+from openviking.parse.parsers.excel import ExcelParser
 
 # Import will be handled dynamically to avoid dependency issues
 from openviking.parse.parsers.html import HTMLParser
 from openviking.parse.parsers.markdown import MarkdownParser
 from openviking.parse.parsers.pdf import PDFParser
+from openviking.parse.parsers.powerpoint import PowerPointParser
 from openviking.parse.parsers.text import TextParser
+
+# Import markitdown-inspired parsers
+from openviking.parse.parsers.word import WordParser
+from openviking.parse.parsers.zip_parser import ZipParser
 
 if TYPE_CHECKING:
     from openviking.parse.custom import CustomParserProtocol
@@ -49,6 +56,13 @@ class ParserRegistry:
         self.register("pdf", PDFParser())
         self.register("html", HTMLParser())
 
+        # Register markitdown-inspired parsers (built-in)
+        self.register("word", WordParser())
+        self.register("powerpoint", PowerPointParser())
+        self.register("excel", ExcelParser())
+        self.register("epub", EPubParser())
+        self.register("zip", ZipParser())
+
         # Register code parser dynamically
         try:
             from openviking.parse.parsers.code import CodeRepositoryParser
@@ -56,6 +70,14 @@ class ParserRegistry:
             self.register("code", CodeRepositoryParser())
         except ImportError as e:
             logger.warning(f"CodeRepositoryParser not available: {e}")
+
+        # Register directory parser
+        try:
+            from openviking.parse.parsers.directory import DirectoryParser
+
+            self.register("directory", DirectoryParser())
+        except ImportError as e:
+            logger.warning(f"DirectoryParser not available: {e}")
 
         # Register optional media parsers
         if register_optional:
@@ -231,6 +253,15 @@ class ParserRegistry:
         if is_potential_path:
             path = Path(source)
             if path.exists():
+                # Directory → route to DirectoryParser
+                if path.is_dir():
+                    dir_parser = self._parsers.get("directory")
+                    if dir_parser:
+                        return await dir_parser.parse(path, **kwargs)
+                    raise ValueError(
+                        f"Source is a directory but DirectoryParser is not registered: {path}"
+                    )
+
                 parser = self.get_parser_for_file(path)
                 if parser:
                     return await parser.parse(path, **kwargs)

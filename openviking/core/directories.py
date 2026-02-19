@@ -120,16 +120,17 @@ PRESET_DIRECTORIES: Dict[str, DirectoryDefinition] = {
         overview="Globally shared resource storage, organized by project/topic. "
         "No preset subdirectory structure, users create project directories as needed.",
     ),
+    "transactions": DirectoryDefinition(
+        path="",
+        abstract="Transaction scope. Stores transaction records",
+        overview="Per-account transaction storage",
+    ),
 }
-
-
-def get_collection_for_uri(uri: str) -> str:
-    """Determine which collection to store based on URI. Aligns with COLLECTION_NAME"""
-    return "context"
 
 
 def get_context_type_for_uri(uri: str) -> str:
     """Determine context_type based on URI."""
+    uri = uri[:20]
     if "/memories" in uri:
         return ContextType.MEMORY.value
     elif "/resources" in uri:
@@ -152,11 +153,10 @@ class DirectoryInitializer:
 
     async def initialize_all(self) -> int:
         """Initialize all global preset directories (skip user scope)."""
-        from openviking.utils.logger import get_logger
+        from openviking_cli.utils.logger import get_logger
 
         logger = get_logger(__name__)
         count = 0
-
         for scope, root_defn in PRESET_DIRECTORIES.items():
             if scope == "user":
                 logger.info("Skipping user scope (lazy initialization)")
@@ -173,8 +173,6 @@ class DirectoryInitializer:
                 count += 1
 
             count += await self._initialize_children(scope, root_defn.children, root_uri)
-
-        logger.info(f"Initialized {count} global directories")
         return count
 
     async def initialize_user_directories(self) -> int:
@@ -209,16 +207,23 @@ class DirectoryInitializer:
         scope: str,
     ) -> bool:
         """Ensure directory exists, return whether newly created."""
-        collection = get_collection_for_uri(uri)
+        from openviking_cli.utils.logger import get_logger
 
-        if not await self.vikingdb.collection_exists(collection):
-            return False
-
+        logger = get_logger(__name__)
         created = False
+        # 1. Ensure files exist in AGFS
+        if not await self._check_agfs_files_exist(uri):
+            logger.debug(f"[VikingFS] Creating directory: {uri} for scope {scope}")
+            await self._create_agfs_structure(uri, defn.abstract, defn.overview)
+            created = True
+        else:
+            logger.debug(f"[VikingFS] Directory {uri} already exists")
 
-        # 1. Ensure record exists in vector storage
+        # 2. Ensure record exists in vector storage
+        from openviking_cli.utils.config.vectordb_config import COLLECTION_NAME
+
         existing = await self.vikingdb.filter(
-            collection=collection,
+            collection=COLLECTION_NAME,
             filter={"op": "must", "field": "uri", "conds": [uri]},
             limit=1,
         )
@@ -234,11 +239,6 @@ class DirectoryInitializer:
             dir_emb_msg = EmbeddingMsgConverter.from_context(context)
             await self.vikingdb.enqueue_embedding_msg(dir_emb_msg)
             created = True
-
-        # 2. Ensure files exist in AGFS
-        if not await self._check_agfs_files_exist(uri):
-            await self._create_agfs_structure(uri, defn.abstract, defn.overview)
-
         return created
 
     async def _check_agfs_files_exist(self, uri: str) -> bool:

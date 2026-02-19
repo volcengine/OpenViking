@@ -38,13 +38,14 @@ from openviking.storage.vectordb.utils.constants import (
     AggregateKeys,
     SpecialFields,
 )
+from openviking.storage.vectordb.utils.data_processor import DataProcessor
 from openviking.storage.vectordb.utils.dict_utils import ThreadSafeDictManager
 from openviking.storage.vectordb.utils.id_generator import generate_auto_id
 from openviking.storage.vectordb.utils.str_to_uint64 import str_to_uint64
 from openviking.storage.vectordb.vectorize.base import BaseVectorizer
 from openviking.storage.vectordb.vectorize.vectorizer import VectorizerAdapter
 from openviking.storage.vectordb.vectorize.vectorizer_factory import VectorizerFactory
-from openviking.utils.logger import default_logger as logger
+from openviking_cli.utils.logger import default_logger as logger
 
 # Use imported constants, no longer defined here
 AUTO_ID_KEY = SpecialFields.AUTO_ID.value
@@ -145,6 +146,9 @@ class LocalCollection(ICollection):
         )
 
         self.store_mgr: Optional[StoreManager] = store_mgr
+        self.data_processor = DataProcessor(
+            self.meta.fields_dict, collection_name=self.meta.collection_name
+        )
         self.vectorizer_adapter = None
         if meta.vectorize and vectorizer:
             self.vectorizer_adapter = VectorizerAdapter(vectorizer, meta.vectorize)
@@ -166,6 +170,9 @@ class LocalCollection(ICollection):
         if not meta_data:
             return
         self.meta.update(meta_data)
+        self.data_processor = DataProcessor(
+            self.meta.fields_dict, collection_name=self.meta.collection_name
+        )
 
     def get_meta_data(self):
         return self.meta.get_meta_data()
@@ -263,7 +270,7 @@ class LocalCollection(ICollection):
         # Request more results to handle offset
         actual_limit = limit + offset
         label_list, scores_list = index.search(
-            dense_vector or [], actual_limit, filters or {}, sparse_raw_terms, sparse_values
+            dense_vector or [], actual_limit, filters, sparse_raw_terms, sparse_values
         )
 
         # Apply offset by slicing the results
@@ -284,7 +291,23 @@ class LocalCollection(ICollection):
             if not self.store_mgr:
                 raise RuntimeError("Store manager is not initialized")
             cands_list = self.store_mgr.fetch_cands_data(label_list)
+
+            valid_indices = []
+            for i, cand in enumerate(cands_list):
+                if cand is not None:
+                    valid_indices.append(i)
+                else:
+                    logger.warning(
+                        f"Candidate data is None for label index {i} (label: {label_list[i] if i < len(label_list) else 'unknown'}), skipping."
+                    )
+
+            if len(valid_indices) < len(cands_list):
+                cands_list = [cands_list[i] for i in valid_indices]
+                pk_list = [pk_list[i] for i in valid_indices]
+                scores_list = [scores_list[i] for i in valid_indices]
+
             cands_fields = [json.loads(cand.fields) for cand in cands_list]
+
             if self.meta.primary_key:
                 pk_list = [
                     cands_field.get(self.meta.primary_key, "") for cands_field in cands_fields
@@ -314,10 +337,24 @@ class LocalCollection(ICollection):
     ) -> SearchResult:
         if not self.store_mgr:
             raise RuntimeError("Store manager is not initialized")
-        pk = self.meta.primary_key
-        label = str_to_uint64(str(id)) if pk != AUTO_ID_KEY else int(id)
+        
+        # Validate input ID
+        if id is None:
+            return SearchResult()
+        
+        # Handle empty string IDs
+        if isinstance(id, str) and not id.strip():
+            return SearchResult()
+        
+        try:
+            pk = self.meta.primary_key
+            label = str_to_uint64(str(id)) if pk != AUTO_ID_KEY else int(id)
+        except (ValueError, OverflowError) as e:
+            # Invalid ID format - return empty result instead of crashing
+            return SearchResult()
+        
         cands_list: List[CandidateData] = self.store_mgr.fetch_cands_data([label])
-        if not cands_list:
+        if not cands_list or cands_list[0] is None:
             return SearchResult()
         cands = cands_list[0]
         sparse_vector = (
@@ -476,12 +513,20 @@ class LocalCollection(ICollection):
     # data interface
     def upsert_data(self, raw_data_list: List[Dict[str, Any]], ttl=0):
         result = UpsertDataResult()
-        for data in raw_data_list:
-            if not validation.is_valid_fields_data(data, self.meta.fields_dict):
-                return result
-        data_list = [data.copy() for data in raw_data_list]
-        for data in data_list:
-            validation.fix_fields_data(data, self.meta.fields_dict)
+        data_list = []
+
+        for raw_data in raw_data_list:
+            if self.data_processor:
+                try:
+                    data = self.data_processor.validate_and_process(raw_data)
+                except ValueError as e:
+                    logger.error(f"Data validation failed: {e}, raw_data: {raw_data}")
+                    return result
+            else:
+                # Should not happen given init logic, but for safety
+                data = raw_data
+            data_list.append(data)
+
         dense_emb, sparse_emb = (
             self.vectorizer_adapter.vectorize_raw_data(data_list)
             if self.vectorizer_adapter

@@ -11,7 +11,7 @@ from fastapi.responses import JSONResponse
 
 from openviking.storage.vectordb.service import api_fastapi
 from openviking.storage.vectordb.service.api_fastapi import VikingDBException, error_response
-from openviking.utils.logger import default_logger as logger
+from openviking_cli.utils.logger import default_logger as logger
 
 # Active requests counter
 active_requests = 0

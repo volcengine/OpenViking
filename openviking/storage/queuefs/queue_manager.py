@@ -11,7 +11,9 @@ import threading
 import time
 from typing import Any, Dict, Optional, Union
 
-from openviking.utils.logger import get_logger
+from pyagfs import AGFSClient
+
+from openviking_cli.utils.logger import get_logger
 
 from .embedding_queue import EmbeddingQueue
 from .named_queue import DequeueHandlerBase, EnqueueHookBase, NamedQueue, QueueStatus
@@ -69,8 +71,9 @@ class QueueManager:
         self._agfs: Optional[Any] = None
         self._queues: Dict[str, NamedQueue] = {}
         self._started = False
-        self._heartbeat_thread: Optional[threading.Thread] = None
-        self._stop_event = threading.Event()
+        self._queue_threads: Dict[str, threading.Thread] = {}
+        self._queue_stop_events: Dict[str, threading.Event] = {}
+        self._poll_interval = 0.2
 
         atexit.register(self.stop)
         logger.info(
@@ -82,65 +85,114 @@ class QueueManager:
         if self._started:
             return
 
-        try:
-            from pyagfs import AGFSClient
-        except ImportError:
-            raise ImportError(
-                "pyagfs not found. Please install: pip install -e third_party/agfs/agfs-sdk/python"
-            )
-
         self._agfs = AGFSClient(api_base_url=self._agfs_url, timeout=self.timeout)
         self._started = True
 
-        # Start heartbeat thread
-        self._stop_event.clear()
-        self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
-        self._heartbeat_thread.start()
+        # Start queue workers for existing queues
+        for queue in list(self._queues.values()):
+            self._start_queue_worker(queue)
 
         logger.info("[QueueManager] Started")
 
-    def _heartbeat_loop(self) -> None:
-        """Heartbeat thread main loop, reuses the same event loop to avoid httpx client cleanup issues."""
+    def setup_standard_queues(self, vikingdb_interface: Any) -> None:
+        """
+        Setup standard queues (Embedding and Semantic) with their handlers.
+
+        This method initializes the EmbeddingQueue with TextEmbeddingHandler
+        and the SemanticQueue with SemanticProcessor, then ensures the
+        queue manager is started.
+
+        Args:
+            vikingdb_interface: VikingDBInterface instance for handlers to write results.
+        """
+        # Import handlers here to avoid circular dependencies
+        from openviking.storage.collection_schemas import TextEmbeddingHandler
+        from openviking.storage.queuefs import SemanticProcessor
+
+        # Embedding Queue
+        embedding_handler = TextEmbeddingHandler(vikingdb_interface)
+        self.get_queue(
+            self.EMBEDDING,
+            dequeue_handler=embedding_handler,
+            allow_create=True,
+        )
+        logger.info("Embedding queue initialized with TextEmbeddingHandler")
+
+        # Semantic Queue
+        semantic_processor = SemanticProcessor()
+        self.get_queue(
+            self.SEMANTIC,
+            dequeue_handler=semantic_processor,
+            allow_create=True,
+        )
+        logger.info("Semantic queue initialized with SemanticProcessor")
+
+        # Start QueueManager processing
+        self.start()
+
+    def _start_queue_worker(self, queue: NamedQueue) -> None:
+        """Start a dedicated worker thread for a queue if not already running."""
+        if queue.name in self._queue_threads:
+            thread = self._queue_threads[queue.name]
+            if thread.is_alive():
+                return
+
+        stop_event = threading.Event()
+        self._queue_stop_events[queue.name] = stop_event
+        thread = threading.Thread(
+            target=self._queue_worker_loop,
+            args=(queue, stop_event),
+            daemon=True,
+        )
+        self._queue_threads[queue.name] = thread
+        thread.start()
+
+    def _queue_worker_loop(self, queue: NamedQueue, stop_event: threading.Event) -> None:
+        """Worker loop for a single queue, processes items sequentially."""
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            while not self._stop_event.is_set():
+            while not stop_event.is_set():
                 try:
-                    loop.run_until_complete(self.heartbeat())
+                    queue_size = loop.run_until_complete(queue.size())
+                    if queue.has_dequeue_handler() and queue_size > 0:
+                        data = loop.run_until_complete(queue.dequeue())
+                        if data is not None:
+                            logger.debug(
+                                f"[QueueManager] Dequeued message from {queue.name}: {data}"
+                            )
+                    else:
+                        stop_event.wait(self._poll_interval)
                 except Exception as e:
-                    logger.error(f"[QueueManager] Heartbeat error: {e}")
+                    logger.error(f"[QueueManager] Worker error for {queue.name}: {e}")
                     import traceback
 
                     traceback.print_exc()
-
-                # Call every 0.2 seconds, using wait to respond faster to stop signal
-                self._stop_event.wait(0.2)
+                    stop_event.wait(self._poll_interval)
         finally:
             loop.close()
 
-    async def heartbeat(self) -> None:
-        """Async entry point for dequeue and dispatch."""
-        for queue in list(self._queues.values()):
-            queue_size = await queue.size()
-            if queue.has_dequeue_handler() and queue_size > 0:
-                data = await queue.dequeue()
-                if data is not None:
-                    logger.debug(f"[QueueManager] Dequeued message from {queue.name}: {data}")
-
     def stop(self) -> None:
         """Stop QueueManager and release resources."""
+        global _instance
         if not self._started:
             return
 
-        # Stop heartbeat thread
-        self._stop_event.set()
-        if self._heartbeat_thread:
-            self._heartbeat_thread.join()
-            self._heartbeat_thread = None
+        # Stop queue workers
+        for stop_event in self._queue_stop_events.values():
+            stop_event.set()
+        for thread in self._queue_threads.values():
+            thread.join()
+        self._queue_threads.clear()
+        self._queue_stop_events.clear()
 
         self._agfs = None
         self._queues.clear()
         self._started = False
+
+        if _instance is self:
+            _instance = None
+
         logger.info("[QueueManager] Stopped")
 
     def is_running(self) -> bool:
@@ -185,6 +237,11 @@ class QueueManager:
                     enqueue_hook=enqueue_hook,
                     dequeue_handler=dequeue_handler,
                 )
+            if self._started:
+                self._start_queue_worker(self._queues[name])
+        elif self._started:
+            # Ensure existing queue has a worker running
+            self._start_queue_worker(self._queues[name])
         return self._queues[name]
 
     # ========== Compatibility convenience methods ==========
