@@ -17,6 +17,7 @@ The parser handles scenarios:
 5. Oversized sections without subsections → split by paragraphs
 """
 
+import hashlib
 import re
 import time
 from pathlib import Path
@@ -333,14 +334,20 @@ class MarkdownParser(BaseParser):
 
         return parts if parts else [content]
 
-    def _sanitize_for_path(self, text: str) -> str:
+    def _sanitize_for_path(self, text: str, max_length: int = 50) -> str:
         safe = re.sub(
             r"[^\w\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af\u3400-\u4dbf\U00020000-\U0002a6df\s-]",
             "",
             text,
         )
         safe = re.sub(r"\s+", "_", safe)
-        return safe.strip("_")[:50] or "section"
+        safe = safe.strip("_")
+        if not safe:
+            return "section"
+        if len(safe) > max_length:
+            hash_suffix = hashlib.sha256(text.encode()).hexdigest()[:8]
+            return f"{safe[: max_length - 9]}_{hash_suffix}"
+        return safe
 
     # ========== New Parsing Logic (v5.0) ==========
 
@@ -574,25 +581,32 @@ class MarkdownParser(BaseParser):
         Smart merged filename generation, limited to MAX_MERGED_FILENAME_LENGTH characters.
 
         Strategy:
-        - Single section: Use directly (truncated to MAX_MERGED_FILENAME_LENGTH chars)
+        - Single section: Use directly (truncated with hash if needed)
         - Multiple sections: {first_section}_{count}more (e.g., Intro_3more)
         - Total length strictly limited: MAX_MERGED_FILENAME_LENGTH characters
+        - Hash suffix ensures uniqueness when truncation occurs
         """
         if not sections:
             return "merged"
 
         names = [n for n, _, _ in sections]
         count = len(names)
+        max_len = self.MAX_MERGED_FILENAME_LENGTH
 
         if count == 1:
-            name = names[0][: self.MAX_MERGED_FILENAME_LENGTH]
+            name = names[0]
         else:
             suffix = f"_{count}more"
-            max_first_len = self.MAX_MERGED_FILENAME_LENGTH - len(suffix)
+            max_first_len = max_len - len(suffix)
             first_name = names[0][: max(max_first_len, 1)]
             name = f"{first_name}{suffix}"
 
-        name = name[: self.MAX_MERGED_FILENAME_LENGTH].strip("_")
+        if len(name) > max_len:
+            full_key = "_".join(names)
+            hash_suffix = hashlib.sha256(full_key.encode()).hexdigest()[:8]
+            name = f"{name[: max_len - 9]}_{hash_suffix}"
+
+        name = name.strip("_")
         return name or "merged"
 
     async def _save_merged(

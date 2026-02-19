@@ -13,6 +13,7 @@ Responsibilities:
 """
 
 import asyncio
+import hashlib
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -646,12 +647,31 @@ class VikingFS:
 
     # ========== URI Conversion ==========
 
+    # Maximum bytes for a single filename component (filesystem limit is typically 255)
+    _MAX_FILENAME_BYTES = 255
+
+    @staticmethod
+    def _shorten_component(component: str, max_bytes: int = 255) -> str:
+        """Shorten a path component if its UTF-8 encoding exceeds max_bytes."""
+        if len(component.encode("utf-8")) <= max_bytes:
+            return component
+        hash_suffix = hashlib.sha256(component.encode("utf-8")).hexdigest()[:8]
+        # Trim to fit within max_bytes after adding hash suffix
+        prefix = component
+        target = max_bytes - len(f"_{hash_suffix}".encode("utf-8"))
+        while len(prefix.encode("utf-8")) > target and prefix:
+            prefix = prefix[:-1]
+        return f"{prefix}_{hash_suffix}"
+
     def _uri_to_path(self, uri: str) -> str:
         """viking://user/memories/preferences/test -> /local/user/memories/preferences/test"""
         remainder = uri[len("viking://") :].strip("/")
         if not remainder:
             return "/local"
-        return f"/local/{remainder}"
+        # Ensure each path component does not exceed filesystem filename limit
+        parts = remainder.split("/")
+        safe_parts = [self._shorten_component(p, self._MAX_FILENAME_BYTES) for p in parts]
+        return f"/local/{'/'.join(safe_parts)}"
 
     def _path_to_uri(self, path: str) -> str:
         """/local/user/memories/preferences -> viking://user/memories/preferences"""

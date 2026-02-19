@@ -121,7 +121,8 @@ Volcengine supports both model names and endpoint IDs. Using model names is reco
   "vlm": {
     "provider": "volcengine",
     "model": "doubao-seed-1-6-240615",
-    "api_key": "your-api-key"
+    "api_key": "your-api-key",
+    "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
   }
 }
 ```
@@ -133,7 +134,8 @@ You can also use endpoint IDs (found in [Volcengine ARK Console](https://console
   "vlm": {
     "provider": "volcengine",
     "model": "ep-20241220174930-xxxxx",
-    "api_key": "your-api-key"
+    "api_key": "your-api-key",
+    "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
   }
 }
 ```
