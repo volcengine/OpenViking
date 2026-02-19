@@ -262,6 +262,7 @@ enum Commands {
     /// Run content pattern search
     Grep {
         /// Target URI
+        #[arg(short, long, default_value = "viking://")]
         uri: String,
         /// Search pattern
         pattern: String,
