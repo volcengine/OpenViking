@@ -68,7 +68,7 @@ class FSService:
             )
 
         if simple:
-            return [e.get("rel_path", e.get("name", "")) for e in entries]
+            return [e.get("rel_path", e.get("name", e.get("uri", ""))) for e in entries]
         return entries
 
     async def mkdir(self, uri: str) -> None:
