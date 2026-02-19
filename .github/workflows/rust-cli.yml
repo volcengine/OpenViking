@@ -42,7 +42,7 @@ jobs:
             artifact_name: ov-windows-x86_64.exe
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@v1
@@ -137,7 +137,7 @@ jobs:
       contents: write
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
 
     - name: Get version from tag
       id: get_version
