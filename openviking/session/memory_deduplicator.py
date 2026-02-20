@@ -193,7 +193,13 @@ class MemoryDeduplicator:
         # Format existing memories for prompt
         existing_formatted = []
         for i, mem in enumerate(similar_memories[: self.MAX_PROMPT_SIMILAR_MEMORIES]):
-            abstract = getattr(mem, "_abstract_cache", "") or mem.meta.get("abstract", "")
+            # Context.from_dict stores L0 summary on `mem.abstract`.
+            # `_abstract_cache`/`meta["abstract"]` are optional and often empty.
+            abstract = (
+                getattr(mem, "abstract", "")
+                or getattr(mem, "_abstract_cache", "")
+                or (mem.meta or {}).get("abstract", "")
+            )
             facet = self._extract_facet_key(abstract)
             score = mem.meta.get("_dedup_score")
             score_text = "n/a" if score is None else f"{float(score):.4f}"
@@ -214,8 +220,27 @@ class MemoryDeduplicator:
         try:
             from openviking_cli.utils.llm import parse_json_from_response
 
+            request_summary = {
+                "candidate_abstract": candidate.abstract,
+                "candidate_overview_len": len(candidate.overview or ""),
+                "candidate_content_len": len(candidate.content or ""),
+                "similar_count": len(similar_memories),
+                "similar_items": [
+                    {
+                        "uri": mem.uri,
+                        "abstract": getattr(mem, "abstract", "")
+                        or getattr(mem, "_abstract_cache", "")
+                        or (mem.meta or {}).get("abstract", ""),
+                        "score": (mem.meta or {}).get("_dedup_score"),
+                    }
+                    for mem in similar_memories[: self.MAX_PROMPT_SIMILAR_MEMORIES]
+                ],
+            }
+            logger.debug("Dedup LLM request summary: %s", request_summary)
             response = await vlm.get_completion_async(prompt)
+            logger.debug("Dedup LLM raw response: %s", response)
             data = parse_json_from_response(response) or {}
+            logger.debug("Dedup LLM parsed payload: %s", data)
             return self._parse_decision_payload(data, similar_memories, candidate)
 
         except Exception as e:

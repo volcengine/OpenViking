@@ -73,17 +73,26 @@ class SessionCompressor:
         """Merge candidate content into an existing memory file."""
         try:
             existing_content = await viking_fs.read_file(target_memory.uri)
-            merged = await self.extractor._merge_memory(
-                existing_content,
-                candidate.content,
-                candidate.category.value,
+            payload = await self.extractor._merge_memory_bundle(
+                existing_abstract=target_memory.abstract,
+                existing_overview=(target_memory.meta or {}).get("overview") or "",
+                existing_content=existing_content,
+                new_abstract=candidate.abstract,
+                new_overview=candidate.overview,
+                new_content=candidate.content,
+                category=candidate.category.value,
                 output_language=candidate.language,
             )
-            if not merged:
+            if not payload:
                 return False
 
-            await viking_fs.write_file(target_memory.uri, merged)
-            target_memory.set_vectorize(Vectorize(text=merged))
+            await viking_fs.write_file(target_memory.uri, payload.content)
+            target_memory.abstract = payload.abstract
+            target_memory.meta = {**(target_memory.meta or {}), "overview": payload.overview}
+            logger.info(
+                "Merged memory %s with abstract %s", target_memory.uri, target_memory.abstract
+            )
+            target_memory.set_vectorize(Vectorize(text=payload.content))
             await self._index_memory(target_memory)
             return True
         except Exception as e:
@@ -133,6 +142,8 @@ class SessionCompressor:
                     memories.append(memory)
                     stats.created += 1
                     await self._index_memory(memory)
+                else:
+                    stats.skipped += 1
                 continue
 
             # Dedup check for other categories
