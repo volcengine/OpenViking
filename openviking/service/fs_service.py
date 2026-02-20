@@ -54,6 +54,21 @@ class FSService:
         """
         viking_fs = self._ensure_initialized()
 
+        if simple:
+            # Only return URIs — skip expensive abstract fetching to save tokens
+            if recursive:
+                entries = await viking_fs.tree(
+                    uri,
+                    output="original",
+                    show_all_hidden=show_all_hidden,
+                    node_limit=node_limit,
+                )
+            else:
+                entries = await viking_fs.ls(
+                    uri, output="original", show_all_hidden=show_all_hidden
+                )
+            return [e.get("uri", "") for e in entries]
+
         if recursive:
             entries = await viking_fs.tree(
                 uri,
@@ -66,9 +81,6 @@ class FSService:
             entries = await viking_fs.ls(
                 uri, output=output, abs_limit=abs_limit, show_all_hidden=show_all_hidden
             )
-
-        if simple:
-            return [e.get("rel_path", e.get("name", e.get("uri", ""))) for e in entries]
         return entries
 
     async def mkdir(self, uri: str) -> None:

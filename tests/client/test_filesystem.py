@@ -23,7 +23,7 @@ class TestLs:
         assert len(entries) > 0
 
     async def test_ls_simple_mode(self, client_with_resource):
-        """Test simple mode listing"""
+        """Test simple mode listing returns non-empty URI strings (fixes #218)"""
         client, uri = client_with_resource
         parent_uri = "/".join(uri.split("/")[:-1]) + "/"
 
@@ -31,6 +31,7 @@ class TestLs:
 
         assert isinstance(entries, list)
         assert all(isinstance(e, str) for e in entries)
+        assert all(e.startswith("viking://") for e in entries)
 
     async def test_ls_recursive(self, client_with_resource):
         """Test recursive listing"""
