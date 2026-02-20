@@ -76,6 +76,7 @@ class ResourceProcessor:
         scope: str = "resources",
         user: Optional[str] = None,
         target: Optional[str] = None,
+        **kwargs,
     ) -> Dict[str, Any]:
         """
         Process and store a new resource.
@@ -94,17 +95,31 @@ class ResourceProcessor:
         # ============ Phase 1: Parse source (Parser generates L0/L1 and writes to temp) ============
         try:
             media_processor = self._get_media_processor()
-            parse_result = await media_processor.process(source=path, instruction=instruction)
+            parse_result = await media_processor.process(
+                source=path,
+                instruction=instruction,
+                **kwargs,
+            )
             result["source_path"] = parse_result.source_path or path
+            result["meta"] = parse_result.meta
 
-            if not parse_result.success:
+            # Only abort when no temp content was produced at all.
+            # For directory imports partial success (some files failed) is
+            # normal – finalization should still proceed.
+            if not parse_result.temp_dir_path:
                 result["status"] = "error"
-                result["errors"].extend(parse_result.warnings)
+                result["errors"].extend(
+                    parse_result.warnings or ["Parse failed: no content generated"],
+                )
                 return result
+
+            if parse_result.warnings:
+                result["errors"].extend(parse_result.warnings)
 
         except Exception as e:
             result["status"] = "error"
             result["errors"].append(f"Parse error: {e}")
+            logger.error(f"[ResourceProcessor] Parse error: {e}")
             return result
 
         # parse_result contains:

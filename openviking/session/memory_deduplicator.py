@@ -3,12 +3,14 @@
 """
 Memory Deduplicator for OpenViking.
 
-LLM-assisted deduplication with CREATE/MERGE/SKIP decisions
+LLM-assisted deduplication with candidate-level skip/create/none decisions and
+per-existing merge/delete actions.
 """
 
+import re
 from dataclasses import dataclass
 from enum import Enum
-from typing import List
+from typing import Dict, List, Optional
 
 from openviking.core.context import Context
 from openviking.models.embedder.base import EmbedResult
@@ -25,9 +27,25 @@ logger = get_logger(__name__)
 class DedupDecision(str, Enum):
     """Deduplication decision types."""
 
-    CREATE = "create"  # New memory, create directly
-    MERGE = "merge"  # Merge with existing memories
     SKIP = "skip"  # Duplicate, skip
+    CREATE = "create"  # Create candidate memory
+    NONE = "none"  # No candidate creation; resolve existing memories only
+
+
+class MemoryActionDecision(str, Enum):
+    """Decision for each existing memory candidate."""
+
+    MERGE = "merge"  # Merge candidate into existing memory
+    DELETE = "delete"  # Delete conflicting existing memory
+
+
+@dataclass
+class ExistingMemoryAction:
+    """Decision for one existing memory."""
+
+    memory: Context
+    decision: MemoryActionDecision
+    reason: str = ""
 
 
 @dataclass
@@ -37,13 +55,22 @@ class DedupResult:
     decision: DedupDecision
     candidate: CandidateMemory
     similar_memories: List[Context]  # Similar existing memories
+    actions: Optional[List[ExistingMemoryAction]] = None
     reason: str = ""
 
 
 class MemoryDeduplicator:
     """Handles memory deduplication with LLM decision making."""
 
-    SIMILARITY_THRESHOLD = 0.7  # Vector similarity threshold for pre-filtering
+    SIMILARITY_THRESHOLD = 0.0  # Vector similarity threshold for pre-filtering
+    MAX_PROMPT_SIMILAR_MEMORIES = 5  # Number of similar memories sent to LLM
+    CATEGORY_URI_PREFIX = {
+        "preferences": "viking://user/memories/preferences/",
+        "entities": "viking://user/memories/entities/",
+        "events": "viking://user/memories/events/",
+        "cases": "viking://agent/memories/cases/",
+        "patterns": "viking://agent/memories/patterns/",
+    }
 
     def __init__(
         self,
@@ -67,16 +94,18 @@ class MemoryDeduplicator:
                 decision=DedupDecision.CREATE,
                 candidate=candidate,
                 similar_memories=[],
+                actions=[],
                 reason="No similar memories found",
             )
 
         # Step 2: LLM decision
-        decision, reason = await self._llm_decision(candidate, similar_memories)
+        decision, reason, actions = await self._llm_decision(candidate, similar_memories)
 
         return DedupResult(
             decision=decision,
             candidate=candidate,
             similar_memories=similar_memories,
+            actions=None if decision == DedupDecision.SKIP else actions,
             reason=reason,
         )
 
@@ -96,32 +125,54 @@ class MemoryDeduplicator:
         # Determine collection and filter based on category
         collection = "context"
 
-        # Build category filter
-        category_value = candidate.category.value
+        category_uri_prefix = self.CATEGORY_URI_PREFIX.get(candidate.category.value, "")
+
+        # Build filter by memory scope + uri prefix (schema does not have category field yet).
+        filter_conds = [
+            {"field": "context_type", "op": "must", "conds": ["memory"]},
+            {"field": "is_leaf", "op": "must", "conds": [True]},
+        ]
+        if category_uri_prefix:
+            filter_conds.append({"field": "uri", "op": "prefix", "prefix": category_uri_prefix})
+        dedup_filter = {"op": "and", "conds": filter_conds}
+        logger.debug(
+            "Dedup prefilter candidate category=%s filter=%s",
+            candidate.category.value,
+            dedup_filter,
+        )
 
         try:
-            # Search with category filter
+            # Search with memory-scope filter.
             results = await self.vikingdb.search(
                 collection=collection,
                 query_vector=query_vector,
                 limit=5,
-                filter={
-                    "op": "and",
-                    "conds": [
-                        {"field": "category", "op": "must", "conds": [category_value]},
-                        {"field": "is_leaf", "op": "must", "conds": [True]},
-                    ],
-                },
+                filter=dedup_filter,
             )
 
             # Filter by similarity threshold
             similar = []
+            logger.debug(
+                "Dedup prefilter raw hits=%d threshold=%.2f",
+                len(results),
+                self.SIMILARITY_THRESHOLD,
+            )
             for result in results:
-                if result.get("score", 0) >= self.SIMILARITY_THRESHOLD:
+                score = float(result.get("_score", result.get("score", 0)) or 0)
+                logger.debug(
+                    "Dedup hit score=%.4f uri=%s abstract=%s",
+                    score,
+                    result.get("uri", ""),
+                    result.get("abstract", ""),
+                )
+                if score >= self.SIMILARITY_THRESHOLD:
                     # Reconstruct Context object
                     context = Context.from_dict(result)
                     if context:
+                        # Keep retrieval score for later destructive-action guardrails.
+                        context.meta = {**(context.meta or {}), "_dedup_score": score}
                         similar.append(context)
+            logger.debug("Dedup similar memories after threshold=%d", len(similar))
             return similar
 
         except Exception as e:
@@ -132,18 +183,23 @@ class MemoryDeduplicator:
         self,
         candidate: CandidateMemory,
         similar_memories: List[Context],
-    ) -> tuple[DedupDecision, str]:
+    ) -> tuple[DedupDecision, str, List[ExistingMemoryAction]]:
         """Use LLM to decide deduplication action."""
         vlm = get_openviking_config().vlm
         if not vlm or not vlm.is_available():
             # Without LLM, default to CREATE (conservative)
-            return DedupDecision.CREATE, "LLM not available, defaulting to CREATE"
+            return DedupDecision.CREATE, "LLM not available, defaulting to CREATE", []
 
         # Format existing memories for prompt
         existing_formatted = []
-        for i, mem in enumerate(similar_memories[:3]):  # Max 3 for context
-            abstract = mem._abstract_cache or mem.meta.get("abstract", "")
-            existing_formatted.append(f"{i + 1}. {abstract}")
+        for i, mem in enumerate(similar_memories[: self.MAX_PROMPT_SIMILAR_MEMORIES]):
+            abstract = getattr(mem, "_abstract_cache", "") or mem.meta.get("abstract", "")
+            facet = self._extract_facet_key(abstract)
+            score = mem.meta.get("_dedup_score")
+            score_text = "n/a" if score is None else f"{float(score):.4f}"
+            existing_formatted.append(
+                f"{i + 1}. uri={mem.uri}\n   score={score_text}\n   facet={facet}\n   abstract={abstract}"
+            )
 
         prompt = render_prompt(
             "compression.dedup_decision",
@@ -160,23 +216,136 @@ class MemoryDeduplicator:
 
             response = await vlm.get_completion_async(prompt)
             data = parse_json_from_response(response) or {}
-
-            decision_str = data.get("decision", "create").lower()
-            reason = data.get("reason", "")
-
-            # Map to enum
-            decision_map = {
-                "create": DedupDecision.CREATE,
-                "merge": DedupDecision.MERGE,
-                "skip": DedupDecision.SKIP,
-            }
-            decision = decision_map.get(decision_str, DedupDecision.CREATE)
-
-            return decision, reason
+            return self._parse_decision_payload(data, similar_memories, candidate)
 
         except Exception as e:
             logger.warning(f"LLM dedup decision failed: {e}")
-            return DedupDecision.CREATE, f"LLM failed: {e}"
+            return DedupDecision.CREATE, f"LLM failed: {e}", []
+
+    def _parse_decision_payload(
+        self,
+        data: dict,
+        similar_memories: List[Context],
+        candidate: Optional[CandidateMemory] = None,
+    ) -> tuple[DedupDecision, str, List[ExistingMemoryAction]]:
+        """Parse/normalize dedup payload from LLM."""
+        decision_str = str(data.get("decision", "create")).lower().strip()
+        reason = str(data.get("reason", "") or "")
+
+        decision_map = {
+            "skip": DedupDecision.SKIP,
+            "create": DedupDecision.CREATE,
+            "none": DedupDecision.NONE,
+            # Backward compatibility: legacy candidate-level merge maps to none.
+            "merge": DedupDecision.NONE,
+        }
+        decision = decision_map.get(decision_str, DedupDecision.CREATE)
+
+        raw_actions = data.get("list", [])
+        if not isinstance(raw_actions, list):
+            raw_actions = []
+
+        # Legacy response compatibility: {"decision":"merge"}.
+        if decision_str == "merge" and not raw_actions and similar_memories:
+            raw_actions = [
+                {
+                    "uri": similar_memories[0].uri,
+                    "decide": "merge",
+                    "reason": "Legacy candidate merge mapped to none",
+                }
+            ]
+            if not reason:
+                reason = "Legacy candidate merge mapped to none"
+
+        action_map = {
+            "merge": MemoryActionDecision.MERGE,
+            "delete": MemoryActionDecision.DELETE,
+        }
+        similar_by_uri: Dict[str, Context] = {m.uri: m for m in similar_memories}
+        actions: List[ExistingMemoryAction] = []
+        seen: Dict[str, MemoryActionDecision] = {}
+
+        for item in raw_actions:
+            if not isinstance(item, dict):
+                continue
+
+            action_str = str(item.get("decide", "")).lower().strip()
+            action = action_map.get(action_str)
+            if not action:
+                continue
+
+            memory = None
+            uri = item.get("uri")
+            if isinstance(uri, str):
+                memory = similar_by_uri.get(uri)
+
+            # Tolerate index-based responses (1-based preferred, 0-based fallback).
+            if memory is None:
+                index = item.get("index")
+                if isinstance(index, int):
+                    if 1 <= index <= len(similar_memories):
+                        memory = similar_memories[index - 1]
+                    elif 0 <= index < len(similar_memories):
+                        memory = similar_memories[index]
+
+            if memory is None:
+                continue
+
+            previous = seen.get(memory.uri)
+            if previous and previous != action:
+                actions = [a for a in actions if a.memory.uri != memory.uri]
+                seen.pop(memory.uri, None)
+                logger.warning(f"Conflicting actions for memory {memory.uri}, dropping both")
+                continue
+            if previous == action:
+                continue
+
+            seen[memory.uri] = action
+            actions.append(
+                ExistingMemoryAction(
+                    memory=memory,
+                    decision=action,
+                    reason=str(item.get("reason", "") or ""),
+                )
+            )
+
+        # Rule: skip should never carry per-memory actions.
+        if decision == DedupDecision.SKIP:
+            return decision, reason, []
+
+        has_merge_action = any(a.decision == MemoryActionDecision.MERGE for a in actions)
+
+        # Rule: if any merge exists, ignore create and execute as none.
+        if decision == DedupDecision.CREATE and has_merge_action:
+            decision = DedupDecision.NONE
+            reason = f"{reason} | normalized:create+merge->none".strip(" |")
+            return decision, reason, actions
+
+        # Rule: create can only carry delete actions (or empty list).
+        if decision == DedupDecision.CREATE:
+            actions = [a for a in actions if a.decision == MemoryActionDecision.DELETE]
+
+        return decision, reason, actions
+
+    @staticmethod
+    def _extract_facet_key(text: str) -> str:
+        """Extract normalized facet key from memory abstract (before separator)."""
+        if not text:
+            return ""
+
+        normalized = " ".join(str(text).strip().split())
+        # Prefer common separators used by extraction templates.
+        for sep in ("：", ":", "-", "—"):
+            if sep in normalized:
+                left = normalized.split(sep, 1)[0].strip().lower()
+                if left:
+                    return left
+
+        # Fallback: short leading phrase.
+        m = re.match(r"^(.{1,24})\s", normalized.lower())
+        if m:
+            return m.group(1).strip()
+        return normalized[:24].lower().strip()
 
     @staticmethod
     def _cosine_similarity(vec_a: List[float], vec_b: List[float]) -> float:

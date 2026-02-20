@@ -13,6 +13,7 @@ Responsibilities:
 """
 
 import asyncio
+import hashlib
 import json
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -201,9 +202,9 @@ class VikingFS:
         path = self._uri_to_path(uri)
         return self.agfs.stat(path)
 
-    async def glob(self, pattern: str, uri: str = "viking://") -> Dict:
+    async def glob(self, pattern: str, uri: str = "viking://", node_limit: int = 1000) -> Dict:
         """File pattern matching, supports **/*.md recursive."""
-        entries = await self.tree(uri)
+        entries = await self.tree(uri, node_limit=node_limit)
         base_uri = uri.rstrip("/")
         matches = []
         for entry in entries:
@@ -248,6 +249,7 @@ class VikingFS:
         output: str = "original",
         abs_limit: int = 256,
         show_all_hidden: bool = False,
+        node_limit: int = 1000,
     ) -> List[Dict[str, Any]]:
         """
         Recursively list all contents (includes rel_path).
@@ -265,19 +267,25 @@ class VikingFS:
         [{'name': '.abstract.md', 'size': 100, 'modTime': '2026-02-11 16:52:16', 'isDir': False, 'rel_path': '.abstract.md', 'uri': 'viking://resources...', 'abstract': "..."}]
         """
         if output == "original":
-            return await self._tree_original(uri, show_all_hidden)
+            return await self._tree_original(uri, show_all_hidden, node_limit)
         elif output == "agent":
-            return await self._tree_agent(uri, abs_limit, show_all_hidden)
+            return await self._tree_agent(uri, abs_limit, show_all_hidden, node_limit)
         else:
             raise ValueError(f"Invalid output format: {output}")
 
-    async def _tree_original(self, uri: str, show_all_hidden: bool = False) -> List[Dict[str, Any]]:
+    async def _tree_original(
+        self, uri: str, show_all_hidden: bool = False, node_limit: int = 1000
+    ) -> List[Dict[str, Any]]:
         """Recursively list all contents (original format)."""
         path = self._uri_to_path(uri)
         all_entries = []
 
         async def _walk(current_path: str, current_rel: str):
+            if len(all_entries) >= node_limit:
+                return
             for entry in self.agfs.ls(current_path):
+                if len(all_entries) >= node_limit:
+                    break
                 name = entry.get("name", "")
                 if name in [".", ".."]:
                     continue
@@ -297,7 +305,7 @@ class VikingFS:
         return all_entries
 
     async def _tree_agent(
-        self, uri: str, abs_limit: int, show_all_hidden: bool = False
+        self, uri: str, abs_limit: int, show_all_hidden: bool = False, node_limit: int = 1000
     ) -> List[Dict[str, Any]]:
         """Recursively list all contents (agent format with abstracts)."""
         path = self._uri_to_path(uri)
@@ -305,7 +313,11 @@ class VikingFS:
         now = datetime.now()
 
         async def _walk(current_path: str, current_rel: str):
+            if len(all_entries) >= node_limit:
+                return
             for entry in self.agfs.ls(current_path):
+                if len(all_entries) >= node_limit:
+                    break
                 name = entry.get("name", "")
                 if name in [".", ".."]:
                     continue
@@ -635,12 +647,31 @@ class VikingFS:
 
     # ========== URI Conversion ==========
 
+    # Maximum bytes for a single filename component (filesystem limit is typically 255)
+    _MAX_FILENAME_BYTES = 255
+
+    @staticmethod
+    def _shorten_component(component: str, max_bytes: int = 255) -> str:
+        """Shorten a path component if its UTF-8 encoding exceeds max_bytes."""
+        if len(component.encode("utf-8")) <= max_bytes:
+            return component
+        hash_suffix = hashlib.sha256(component.encode("utf-8")).hexdigest()[:8]
+        # Trim to fit within max_bytes after adding hash suffix
+        prefix = component
+        target = max_bytes - len(f"_{hash_suffix}".encode("utf-8"))
+        while len(prefix.encode("utf-8")) > target and prefix:
+            prefix = prefix[:-1]
+        return f"{prefix}_{hash_suffix}"
+
     def _uri_to_path(self, uri: str) -> str:
         """viking://user/memories/preferences/test -> /local/user/memories/preferences/test"""
         remainder = uri[len("viking://") :].strip("/")
         if not remainder:
             return "/local"
-        return f"/local/{remainder}"
+        # Ensure each path component does not exceed filesystem filename limit
+        parts = remainder.split("/")
+        safe_parts = [self._shorten_component(p, self._MAX_FILENAME_BYTES) for p in parts]
+        return f"/local/{'/'.join(safe_parts)}"
 
     def _path_to_uri(self, path: str) -> str:
         """/local/user/memories/preferences -> viking://user/memories/preferences"""

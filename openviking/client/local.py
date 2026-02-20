@@ -58,6 +58,7 @@ class LocalClient(BaseClient):
         instruction: str = "",
         wait: bool = False,
         timeout: Optional[float] = None,
+        **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
         return await self._service.resources.add_resource(
@@ -67,6 +68,7 @@ class LocalClient(BaseClient):
             instruction=instruction,
             wait=wait,
             timeout=timeout,
+            **kwargs,
         )
 
     async def add_skill(
@@ -113,10 +115,15 @@ class LocalClient(BaseClient):
         output: str = "original",
         abs_limit: int = 128,
         show_all_hidden: bool = False,
+        node_limit: int = 1000,
     ) -> List[Dict[str, Any]]:
         """Get directory tree."""
         return await self._service.fs.tree(
-            uri, output=output, abs_limit=abs_limit, show_all_hidden=show_all_hidden
+            uri,
+            output=output,
+            abs_limit=abs_limit,
+            show_all_hidden=show_all_hidden,
+            node_limit=node_limit,
         )
 
     async def stat(self, uri: str) -> Dict[str, Any]:

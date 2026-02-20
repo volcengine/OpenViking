@@ -2,7 +2,7 @@ metadata:
   id: "compression.memory_extraction"
   name: "Memory Extraction (Three-Level)"
   description: "Extract memories from session context using L0/L1/L2 three-level structure"
-  version: "5.0.0"
+  version: "5.1.0"
   language: "en"
   category: "compression"
 
@@ -90,6 +90,15 @@ template: |
   - Characteristics: Changeable choices, styles
   - Test: Can it be described as "User prefers/likes..."
 
+  ### Preference Granularity (Important)
+  - For category `preferences`, each memory item should represent one independently
+    updatable preference unit (single facet).
+  - Do NOT mix unrelated preference facets in one memory item.
+    Examples of different facets: food, commute, schedule, tools, music, study habits.
+  - If the conversation contains multiple facets, output multiple `preferences` items.
+  - This granularity is required so future updates/conflicts can affect only the
+    relevant memory without damaging unrelated preferences.
+
   **entities** - Entities (continuously existing nouns)
   - Core: Describes "current state of something"
   - Characteristics: Entities with lifecycle (person/project/organization)
@@ -166,6 +175,43 @@ template: |
   ```
   ❌ **Bad**: abstract says "Code preferences" (too general) or "No type hints" (too specific, cannot merge other style preferences)
 
+  ## preferences Granularity Example
+  ❌ **Bad (mixed facets in one memory)**:
+  ```json
+  {
+    "category": "preferences",
+    "abstract": "User preferences: likes apples, commutes by bike, uses Obsidian",
+    "overview": "Mixed food/commute/tool preferences",
+    "content": "User likes apples, usually commutes by bike, and prefers Obsidian."
+  }
+  ```
+
+  ✅ **Good (split by independently updatable facets)**:
+  ```json
+  {
+    "memories": [
+      {
+        "category": "preferences",
+        "abstract": "Food preference: Likes apples",
+        "overview": "## Preference Domain\\n- **Domain**: Food\\n\\n## Specific Preference\\n- Likes apples",
+        "content": "User shows a food preference for apples."
+      },
+      {
+        "category": "preferences",
+        "abstract": "Commute preference: Usually rides a bike",
+        "overview": "## Preference Domain\\n- **Domain**: Commute\\n\\n## Specific Preference\\n- Usually rides a bike",
+        "content": "User usually commutes by bike."
+      },
+      {
+        "category": "preferences",
+        "abstract": "Tool preference: Uses Obsidian for notes",
+        "overview": "## Preference Domain\\n- **Domain**: Tools\\n\\n## Specific Preference\\n- Uses Obsidian for notes",
+        "content": "User prefers Obsidian as note-taking software."
+      }
+    ]
+  }
+  ```
+
   ## entities Example (Merge type)
   ✅ **Good**:
   ```json
@@ -228,8 +274,7 @@ template: |
   - The values of "abstract", "overview", and "content" MUST be written in {{ output_language }} (if output_language is "auto", use the dominant language in recent_messages).
   - Only extract truly valuable personalized information
   - If nothing worth recording, return {"memories": []}
-  - Preferences should be aggregated by topic, similar preferences should be merged into one memory
+  - For preferences, keep each memory as one independently updatable facet; do not combine unrelated facets in one memory
 
 llm_config:
   temperature: 0.0
-

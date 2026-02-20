@@ -3,6 +3,7 @@ mod commands;
 mod config;
 mod error;
 mod output;
+mod tui;
 
 use clap::{Parser, Subcommand};
 use config::Config;
@@ -125,6 +126,16 @@ enum Commands {
         #[arg(long)]
         no_vectorize: bool,
     },
+    /// Wait for queued async processing to complete
+    Wait {
+        /// Wait timeout in seconds
+        #[arg(long)]
+        timeout: Option<f64>,
+    },
+    /// Show OpenViking component status
+    Status,
+    /// Quick health check
+    Health,
     /// System utility commands
     System {
         #[command(subcommand)]
@@ -152,11 +163,29 @@ enum Commands {
         /// List all subdirectories recursively
         #[arg(short, long)]
         recursive: bool,
+        /// Abstract content limit (only for agent output)
+        #[arg(long = "abs-limit", short = 'l', default_value = "256")]
+        abs_limit: i32,
+        /// Show all hidden files
+        #[arg(short, long)]
+        all: bool,
+        /// Maximum number of nodes to list
+        #[arg(long = "node-limit", short = 'n', default_value = "1000")]
+        node_limit: i32,
     },
     /// Get directory tree
     Tree {
         /// Viking URI to get tree for
         uri: String,
+        /// Abstract content limit (only for agent output)
+        #[arg(long = "abs-limit", short = 'l', default_value = "128")]
+        abs_limit: i32,
+        /// Show all hidden files
+        #[arg(short, long)]
+        all: bool,
+        /// Maximum number of nodes to list
+        #[arg(long = "node-limit", short = 'n', default_value = "1000")]
+        node_limit: i32,
     },
     /// Create directory
     Mkdir {
@@ -234,6 +263,7 @@ enum Commands {
     /// Run content pattern search
     Grep {
         /// Target URI
+        #[arg(short, long, default_value = "viking://")]
         uri: String,
         /// Search pattern
         pattern: String,
@@ -247,6 +277,19 @@ enum Commands {
         pattern: String,
         /// Search root URI
         #[arg(short, long, default_value = "viking://")]
+        uri: String,
+    },
+    /// Add memory in one shot (creates session, adds messages, commits)
+    AddMemory {
+        /// Content to memorize. Plain string (treated as user message),
+        /// JSON {"role":"...","content":"..."} for a single message,
+        /// or JSON array of such objects for multiple messages.
+        content: String,
+    },
+    /// Interactive TUI file explorer
+    Tui {
+        /// Viking URI to start browsing (default: viking://)
+        #[arg(default_value = "viking://")]
         uri: String,
     },
     /// Configuration management
@@ -363,14 +406,23 @@ async fn main() {
         Commands::Import { file_path, target_uri, force, no_vectorize } => {
             handle_import(file_path, target_uri, force, no_vectorize, ctx).await
         }
+        Commands::Wait { timeout } => {
+            let client = ctx.get_client();
+            commands::system::wait(&client, timeout, ctx.output_format, ctx.compact).await
+        },
+        Commands::Status => {
+            let client = ctx.get_client();
+            commands::observer::system(&client, ctx.output_format, ctx.compact).await
+        },
+        Commands::Health => handle_health(ctx).await,
         Commands::System { action } => handle_system(action, ctx).await,
         Commands::Observer { action } => handle_observer(action, ctx).await,
         Commands::Session { action } => handle_session(action, ctx).await,
-        Commands::Ls { uri, simple, recursive } => {
-            handle_ls(uri, simple, recursive, ctx).await
+        Commands::Ls { uri, simple, recursive, abs_limit, all, node_limit } => {
+            handle_ls(uri, simple, recursive, abs_limit, all, node_limit, ctx).await
         }
-        Commands::Tree { uri } => {
-            handle_tree(uri, ctx).await
+        Commands::Tree { uri, abs_limit, all, node_limit } => {
+            handle_tree(uri, abs_limit, all, node_limit, ctx).await
         }
         Commands::Mkdir { uri } => {
             handle_mkdir(uri, ctx).await
@@ -383,6 +435,12 @@ async fn main() {
         }
         Commands::Stat { uri } => {
             handle_stat(uri, ctx).await
+        }
+        Commands::AddMemory { content } => {
+            handle_add_memory(content, ctx).await
+        }
+        Commands::Tui { uri } => {
+            handle_tui(uri, ctx).await
         }
         Commands::Config { action } => handle_config(action, ctx).await,
         Commands::Version => {
@@ -413,7 +471,7 @@ async fn main() {
 }
 
 async fn handle_add_resource(
-    path: String,
+    mut path: String,
     to: Option<String>,
     reason: String,
     instruction: String,
@@ -421,6 +479,34 @@ async fn handle_add_resource(
     timeout: Option<f64>,
     ctx: CliContext,
 ) -> Result<()> {
+    // Validate path: if it's a local path, check if it exists
+    if !path.starts_with("http://") && !path.starts_with("https://") {
+        use std::path::Path;
+        
+        // Unescape path: replace backslash followed by space with just space
+        let unescaped_path = path.replace("\\ ", " ");
+        let path_obj = Path::new(&unescaped_path);
+        if !path_obj.exists() {
+            eprintln!("Error: Path '{}' does not exist.", path);
+            
+            // Check if there might be unquoted spaces
+            use std::env;
+            let args: Vec<String> = env::args().collect();
+            
+            if let Some(add_resource_pos) = args.iter().position(|s| s == "add-resource" || s == "add") {
+                if args.len() > add_resource_pos + 2 {
+                    let extra_args = &args[add_resource_pos + 2..];
+                    let suggested_path = format!("{} {}", path, extra_args.join(" "));
+                    eprintln!("\nIt looks like you may have forgotten to quote a path with spaces.");
+                    eprintln!("Suggested command: ov add-resource \"{}\"", suggested_path);
+                }
+            }
+            
+            std::process::exit(1);
+        }
+        path = unescaped_path;
+    }
+    
     let client = ctx.get_client();
     commands::resources::add_resource(
         &client, &path, to, reason, instruction, wait, timeout, ctx.output_format, ctx.compact
@@ -549,6 +635,11 @@ async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()> {
     }
 }
 
+async fn handle_add_memory(content: String, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    commands::session::add_memory(&client, &content, ctx.output_format, ctx.compact).await
+}
+
 async fn handle_config(cmd: ConfigCommands, _ctx: CliContext) -> Result<()> {
     match cmd {
         ConfigCommands::Show => {
@@ -612,14 +703,16 @@ async fn handle_search(
     commands::search::search(&client, &query, &uri, session_id, limit, threshold, ctx.output_format, ctx.compact).await
 }
 
-async fn handle_ls(uri: String, simple: bool, recursive: bool, ctx: CliContext) -> Result<()> {
+async fn handle_ls(uri: String, simple: bool, recursive: bool, abs_limit: i32, show_all_hidden: bool, node_limit: i32, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
-    commands::filesystem::ls(&client, &uri, simple, recursive, ctx.output_format, ctx.compact).await
+    let api_output = if ctx.compact { "agent" } else { "original" };
+    commands::filesystem::ls(&client, &uri, simple, recursive, api_output, abs_limit, show_all_hidden, node_limit, ctx.output_format, ctx.compact).await
 }
 
-async fn handle_tree(uri: String, ctx: CliContext) -> Result<()> {
+async fn handle_tree(uri: String, abs_limit: i32, show_all_hidden: bool, node_limit: i32, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
-    commands::filesystem::tree(&client, &uri, ctx.output_format, ctx.compact).await
+    let api_output = if ctx.compact { "agent" } else { "original" };
+    commands::filesystem::tree(&client, &uri, api_output, abs_limit, show_all_hidden, node_limit, ctx.output_format, ctx.compact).await
 }
 
 async fn handle_mkdir(uri: String, ctx: CliContext) -> Result<()> {
@@ -650,4 +743,20 @@ async fn handle_grep(uri: String, pattern: String, ignore_case: bool, ctx: CliCo
 async fn handle_glob(pattern: String, uri: String, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     commands::search::glob(&client, &pattern, &uri, ctx.output_format, ctx.compact).await
+}
+
+async fn handle_health(ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    let system_status: serde_json::Value = client.get("/api/v1/observer/system", &[]).await?;
+    let is_healthy = system_status.get("is_healthy").and_then(|v| v.as_bool()).unwrap_or(false);
+    output::output_success(&serde_json::json!({ "healthy": is_healthy }), ctx.output_format, ctx.compact);
+    if !is_healthy {
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+async fn handle_tui(uri: String, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    tui::run_tui(client, &uri).await
 }

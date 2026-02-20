@@ -26,6 +26,9 @@ def register(app: typer.Typer) -> None:
         ),
         abs_limit: int = typer.Option(256, "--abs-limit", "-l", help="Abstract content limit"),
         show_all_hidden: bool = typer.Option(False, "--all", "-a", help="Show all hidden files"),
+        node_limit: int = typer.Option(
+            1000, "--node-limit", "-n", help="Maximum number of nodes to list"
+        ),
     ) -> None:
         """List directory contents."""
         run(
@@ -37,6 +40,7 @@ def register(app: typer.Typer) -> None:
                 output=output_format,
                 abs_limit=abs_limit,
                 show_all_hidden=show_all_hidden,
+                node_limit=node_limit,
             ),
         )
 
@@ -49,6 +53,9 @@ def register(app: typer.Typer) -> None:
         ),
         abs_limit: int = typer.Option(128, "--abs-limit", "-l", help="Abstract content limit"),
         show_all_hidden: bool = typer.Option(False, "--all", "-a", help="Show all hidden files"),
+        node_limit: int = typer.Option(
+            1000, "--node-limit", "-n", help="Maximum number of nodes to list"
+        ),
     ) -> None:
         """
         Get directory tree info.
@@ -56,7 +63,11 @@ def register(app: typer.Typer) -> None:
         run(
             ctx,
             lambda client: client.tree(
-                uri, output=output_format, abs_limit=abs_limit, show_all_hidden=show_all_hidden
+                uri,
+                output=output_format,
+                abs_limit=abs_limit,
+                show_all_hidden=show_all_hidden,
+                node_limit=node_limit,
             ),
         )
 

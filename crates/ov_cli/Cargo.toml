@@ -1,7 +1,7 @@
 [package]
 name = "ov_cli"
-version = "0.1.0"
-edition = "2021"
+version = "0.2.0"
+edition = "2024"
 authors = ["OpenViking Contributors"]
 description = "Rust CLI client for OpenViking"
 license = "MIT"
@@ -22,3 +22,5 @@ anyhow = "1.0"
 mime_guess = "2.0"
 thiserror = "1.0"
 unicode-width = "0.1"
+ratatui = "0.30"
+crossterm = "0.28"

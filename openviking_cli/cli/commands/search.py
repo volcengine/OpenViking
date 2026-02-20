@@ -69,7 +69,7 @@ def register(app: typer.Typer) -> None:
     @app.command("grep")
     def grep_command(
         ctx: typer.Context,
-        uri: str = typer.Argument(..., help="Target URI"),
+        uri: str = typer.Option("viking://", "--uri", "-u", help="Target URI"),
         pattern: str = typer.Argument(..., help="Search pattern"),
         ignore_case: bool = typer.Option(False, "--ignore-case", "-i", help="Case insensitive"),
     ) -> None:

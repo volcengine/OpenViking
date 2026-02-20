@@ -229,7 +229,7 @@ class ImageConfig(ParserConfig):
     Configuration for image parsing.
 
     Attributes:
-        enable_ocr: Whether to perform OCR text extraction
+        enable_ocr: Whether to perform OCR text extraction, not implemented
         enable_vlm: Whether to use VLM for visual understanding
         ocr_lang: Language for OCR (e.g., "chi_sim", "eng")
         vlm_model: VLM model to use (e.g., "gpt-4-vision")
