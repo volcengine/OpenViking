@@ -22,7 +22,7 @@ def register(app: typer.Typer) -> None:
             help="List all subdirectories recursively",
         ),
         output_format: str = typer.Option(
-            "agent", "--output-format", "-o", help="Output format: agent or original"
+            "agent", "--output-format", "-f", help="Output format: agent or original"
         ),
         abs_limit: int = typer.Option(256, "--abs-limit", "-l", help="Abstract content limit"),
         show_all_hidden: bool = typer.Option(False, "--all", "-a", help="Show all hidden files"),
@@ -49,7 +49,7 @@ def register(app: typer.Typer) -> None:
         ctx: typer.Context,
         uri: str = typer.Argument(..., help="Viking URI"),
         output_format: str = typer.Option(
-            "agent", "--output-format", "-o", help="Output format: agent or original"
+            "agent", "--output-format", "-f", help="Output format: agent or original"
         ),
         abs_limit: int = typer.Option(128, "--abs-limit", "-l", help="Abstract content limit"),
         show_all_hidden: bool = typer.Option(False, "--all", "-a", help="Show all hidden files"),
