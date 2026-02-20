@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Media-related utilities for OpenViking."""
 
+import asyncio
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -61,7 +62,9 @@ def get_media_base_uri(media_type: str) -> str:
     return f"viking://resources/{media_dir}/{date_str}"
 
 
-async def generate_image_summary(image_uri: str, original_filename: str) -> Dict[str, Any]:
+async def generate_image_summary(
+    image_uri: str, original_filename: str, llm_sem: Optional[asyncio.Semaphore] = None
+) -> Dict[str, Any]:
     """
     Generate summary for an image file using VLM.
 
@@ -93,10 +96,11 @@ async def generate_image_summary(image_uri: str, original_filename: str) -> Dict
         )
 
         # Call VLM
-        response = await vlm.get_vision_completion_async(
-            prompt=prompt,
-            images=[image_bytes],
-        )
+        async with llm_sem or asyncio.Semaphore(1):
+            response = await vlm.get_vision_completion_async(
+                prompt=prompt,
+                images=[image_bytes],
+            )
 
         logger.info(
             f"[MediaUtils.generate_image_summary] VLM response received, length: {len(response)}"
@@ -111,7 +115,9 @@ async def generate_image_summary(image_uri: str, original_filename: str) -> Dict
         return {"name": file_name, "summary": "Image summary generation failed"}
 
 
-async def generate_audio_summary(audio_uri: str, original_filename: str) -> Dict[str, Any]:
+async def generate_audio_summary(
+    audio_uri: str, original_filename: str, llm_sem: Optional[asyncio.Semaphore] = None
+) -> Dict[str, Any]:
     """
     Generate summary for an audio file (placeholder).
 
@@ -128,7 +134,9 @@ async def generate_audio_summary(audio_uri: str, original_filename: str) -> Dict
     return {"name": original_filename, "summary": "Audio summary generation not yet implemented"}
 
 
-async def generate_video_summary(video_uri: str, original_filename: str) -> Dict[str, Any]:
+async def generate_video_summary(
+    video_uri: str, original_filename: str, llm_sem: Optional[asyncio.Semaphore] = None
+) -> Dict[str, Any]:
     """
     Generate summary for a video file (placeholder).
 

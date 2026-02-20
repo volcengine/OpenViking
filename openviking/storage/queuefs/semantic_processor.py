@@ -3,6 +3,7 @@
 """SemanticProcessor: Processes messages from SemanticQueue, generates .abstract.md and .overview.md."""
 
 import asyncio
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from openviking.core.context import Context, ResourceContentType, Vectorize
@@ -13,6 +14,12 @@ from openviking.parse.parsers.constants import (
     FILE_TYPE_DOCUMENTATION,
     FILE_TYPE_OTHER,
     IGNORE_EXTENSIONS,
+)
+from openviking.parse.parsers.media.utils import (
+    generate_audio_summary,
+    generate_image_summary,
+    generate_video_summary,
+    get_media_type,
 )
 from openviking.parse.parsers.upload_utils import is_text_file
 from openviking.prompts import render_prompt
@@ -252,11 +259,8 @@ class SemanticProcessor(DequeueHandlerBase):
         if not file_paths:
             return []
 
-        sem = asyncio.Semaphore(self.max_concurrent_llm)
-
         async def generate_one_summary(file_path: str) -> Dict[str, str]:
-            async with sem:
-                summary = await self._generate_single_file_summary(file_path)
+            summary = await self._generate_single_file_summary(file_path)
             if enqueue_files and context_type and parent_uri:
                 try:
                     await self._vectorize_single_file(
@@ -275,6 +279,52 @@ class SemanticProcessor(DequeueHandlerBase):
         tasks = [generate_one_summary(fp) for fp in file_paths]
         return await asyncio.gather(*tasks)
 
+    async def _generate_text_summary(
+        self, file_path: str, file_name: str, llm_sem: asyncio.Semaphore
+    ) -> Dict[str, str]:
+        """Generate summary for a single text file (code, documentation, or other text)."""
+        viking_fs = get_viking_fs()
+        vlm = get_openviking_config().vlm
+
+        # Read file content (limit length)
+        content = await viking_fs.read_file(file_path)
+        if isinstance(content, bytes):
+            # Try to decode with error handling for text files
+            try:
+                content = content.decode("utf-8")
+            except UnicodeDecodeError:
+                logger.warning(f"Failed to decode file as UTF-8, skipping: {file_path}")
+                return {"name": file_name, "summary": ""}
+
+        # Limit content length (about 10000 tokens)
+        max_chars = 30000
+        if len(content) > max_chars:
+            content = content[:max_chars] + "\n...(truncated)"
+
+        # Generate summary
+        if not vlm.is_available():
+            logger.warning("VLM not available, using empty summary")
+            return {"name": file_name, "summary": ""}
+
+        # Detect file type and select appropriate prompt
+        file_type = self._detect_file_type(file_name)
+
+        if file_type == FILE_TYPE_CODE:
+            prompt_id = "semantic.code_summary"
+        elif file_type == FILE_TYPE_DOCUMENTATION:
+            prompt_id = "semantic.document_summary"
+        else:
+            prompt_id = "semantic.file_summary"
+
+        prompt = render_prompt(
+            prompt_id,
+            {"file_name": file_name, "content": content},
+        )
+
+        async with llm_sem:
+            summary = await vlm.get_completion_async(prompt)
+        return {"name": file_name, "summary": summary.strip()}
+
     async def _generate_single_file_summary(
         self, file_path: str, llm_sem: Optional[asyncio.Semaphore] = None
     ) -> Dict[str, str]:
@@ -287,20 +337,12 @@ class SemanticProcessor(DequeueHandlerBase):
             {"name": file_name, "summary": summary_content}
         """
         viking_fs = get_viking_fs()
-        vlm = get_openviking_config().vlm
         file_name = file_path.split("/")[-1]
+
+        llm_sem = llm_sem or asyncio.Semaphore(self.max_concurrent_llm)
 
         try:
             # Check if this is a media file first
-            from pathlib import Path
-
-            from openviking.parse.parsers.media.utils import (
-                generate_audio_summary,
-                generate_image_summary,
-                generate_video_summary,
-                get_media_type,
-            )
-
             p = Path(file_name)
             extension = p.suffix.lower()
 
@@ -324,11 +366,11 @@ class SemanticProcessor(DequeueHandlerBase):
                     original_filename = file_name
 
                 if media_type == "image":
-                    return await generate_image_summary(file_path, original_filename)
+                    return await generate_image_summary(file_path, original_filename, llm_sem)
                 elif media_type == "audio":
-                    return await generate_audio_summary(file_path, original_filename)
+                    return await generate_audio_summary(file_path, original_filename, llm_sem)
                 elif media_type == "video":
-                    return await generate_video_summary(file_path, original_filename)
+                    return await generate_video_summary(file_path, original_filename, llm_sem)
 
             # Check if this is a binary file that should be skipped
             # Skip binary files (using IGNORE_EXTENSIONS as reference)
@@ -336,47 +378,8 @@ class SemanticProcessor(DequeueHandlerBase):
                 logger.debug(f"Skipping binary file for summary generation: {file_path}")
                 return {"name": file_name, "summary": ""}
 
-            # Read file content (limit length)
-            content = await viking_fs.read_file(file_path)
-            if isinstance(content, bytes):
-                # Try to decode with error handling for text files
-                try:
-                    content = content.decode("utf-8")
-                except UnicodeDecodeError:
-                    logger.warning(f"Failed to decode file as UTF-8, skipping: {file_path}")
-                    return {"name": file_name, "summary": ""}
-
-            # Limit content length (about 10000 tokens)
-            max_chars = 30000
-            if len(content) > max_chars:
-                content = content[:max_chars] + "\n...(truncated)"
-
-            # Generate summary
-            if not vlm.is_available():
-                logger.warning("VLM not available, using empty summary")
-                return {"name": file_name, "summary": ""}
-
-            # Detect file type and select appropriate prompt
-            file_type = self._detect_file_type(file_name)
-
-            if file_type == FILE_TYPE_CODE:
-                prompt_id = "semantic.code_summary"
-            elif file_type == FILE_TYPE_DOCUMENTATION:
-                prompt_id = "semantic.document_summary"
-            else:
-                prompt_id = "semantic.file_summary"
-
-            prompt = render_prompt(
-                prompt_id,
-                {"file_name": file_name, "content": content},
-            )
-
-            if llm_sem:
-                async with llm_sem:
-                    summary = await vlm.get_completion_async(prompt)
-            else:
-                summary = await vlm.get_completion_async(prompt)
-            return {"name": file_name, "summary": summary.strip()}
+            # Process text file
+            return await self._generate_text_summary(file_path, file_name, llm_sem)
 
         except Exception as e:
             logger.warning(f"Failed to generate summary for {file_path}: {e}", exc_info=True)
