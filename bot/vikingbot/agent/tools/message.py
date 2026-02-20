@@ -47,40 +47,49 @@ class MessageTool(Tool):
                 },
                 "channel": {
                     "type": "string",
-                    "description": "Optional: target channel (telegram, discord, etc.)"
+                    "description": "Optional: target channel (only use if you need to send to a DIFFERENT channel from the current conversation). Format example: feishu:cli_a1b2c3d4e5f"
                 },
                 "chat_id": {
                     "type": "string",
-                    "description": "Optional: target chat/user ID"
+                    "description": "Optional: target chat/user ID (only use if you need to send to a DIFFERENT chat from the current conversation)"
                 }
             },
             "required": ["content"]
         }
     
-    async def execute(
-        self, 
-        content: str, 
-        channel: str | None = None, 
-        chat_id: str | None = None,
-        **kwargs: Any
-    ) -> str:
-        channel = channel or self._default_channel
-        chat_id = chat_id or self._default_chat_id
+    async def execute(self, **kwargs: Any) -> str:
+        from loguru import logger
         
-        if not channel or not chat_id:
+        content = kwargs.get("content")
+        channel = kwargs.get("channel")
+        chat_id = kwargs.get("chat_id")
+        
+        target_channel = self._default_channel
+        target_chat_id = self._default_chat_id
+        
+        if channel and channel != target_channel:
+            if ":" not in channel and target_channel.startswith(f"{channel}:"):
+                logger.debug(f"Keeping default channel {target_channel} instead of shorthand {channel}")
+            else:
+                target_channel = channel
+        
+        if chat_id and chat_id != target_chat_id:
+            target_chat_id = chat_id
+        
+        if not target_channel or not target_chat_id:
             return "Error: No target channel/chat specified"
         
         if not self._send_callback:
             return "Error: Message sending not configured"
         
         msg = OutboundMessage(
-            channel=channel,
-            chat_id=chat_id,
+            channel=target_channel,
+            chat_id=target_chat_id,
             content=content
         )
         
         try:
             await self._send_callback(msg)
-            return f"Message sent to {channel}:{chat_id}"
+            return f"Message sent to {target_channel}:{target_chat_id}"
         except Exception as e:
             return f"Error sending message: {str(e)}"
