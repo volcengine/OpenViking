@@ -192,14 +192,25 @@ class ChannelManager:
                     timeout=1.0
                 )
                 
+                # Try exact match first
                 channel = self.channels.get(msg.channel)
+                
+                # If no exact match, try matching by channel type (e.g., "feishu" finds "feishu:cli_xxx")
+                if not channel and ":" not in msg.channel:
+                    # Search for channels that start with "{type}:"
+                    for channel_name, channel_obj in self.channels.items():
+                        if channel_name.startswith(f"{msg.channel}:"):
+                            channel = channel_obj
+                            logger.debug(f"Matched channel {msg.channel} to {channel_name}")
+                            break
+                
                 if channel:
                     try:
                         await channel.send(msg)
                     except Exception as e:
                         logger.error(f"Error sending to {msg.channel}: {e}")
                 else:
-                    logger.warning(f"Unknown channel: {msg.channel}")
+                    logger.warning(f"Unknown channel: {msg.channel}. Available: {list(self.channels.keys())}")
                     
             except asyncio.TimeoutError:
                 continue
