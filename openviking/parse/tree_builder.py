@@ -151,7 +151,7 @@ class TreeBuilder:
 
         # 6. Enqueue to SemanticQueue for async semantic generation
         try:
-            await self._enqueue_semantic_generation(final_uri, scope)
+            await self._enqueue_semantic_generation(final_uri, "resource")
             logger.info(f"[TreeBuilder] Enqueued semantic generation for: {final_uri}")
         except Exception as e:
             logger.error(f"[TreeBuilder] Failed to enqueue semantic generation: {e}", exc_info=True)

@@ -81,7 +81,7 @@ async def generate_image_summary(
 
     try:
         # Read image bytes
-        image_bytes = await viking_fs.read_file(image_uri)
+        image_bytes = await viking_fs.read_file_bytes(image_uri)
         if not isinstance(image_bytes, bytes):
             raise ValueError(f"Expected bytes for image file, got {type(image_bytes)}")
 

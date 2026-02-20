@@ -3,7 +3,6 @@
 """SemanticProcessor: Processes messages from SemanticQueue, generates .abstract.md and .overview.md."""
 
 import asyncio
-from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from openviking.core.context import Context, ResourceContentType, Vectorize
@@ -13,7 +12,6 @@ from openviking.parse.parsers.constants import (
     FILE_TYPE_CODE,
     FILE_TYPE_DOCUMENTATION,
     FILE_TYPE_OTHER,
-    IGNORE_EXTENSIONS,
 )
 from openviking.parse.parsers.media.utils import (
     generate_audio_summary,
@@ -21,7 +19,6 @@ from openviking.parse.parsers.media.utils import (
     generate_video_summary,
     get_media_type,
 )
-from openviking.parse.parsers.upload_utils import is_text_file
 from openviking.prompts import render_prompt
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecutor
@@ -336,54 +333,17 @@ class SemanticProcessor(DequeueHandlerBase):
         Returns:
             {"name": file_name, "summary": summary_content}
         """
-        viking_fs = get_viking_fs()
         file_name = file_path.split("/")[-1]
-
         llm_sem = llm_sem or asyncio.Semaphore(self.max_concurrent_llm)
-
-        try:
-            # Check if this is a media file first
-            p = Path(file_name)
-            extension = p.suffix.lower()
-
-            # Check media type
-            media_type = get_media_type(file_name, None)
-            if media_type:
-                logger.info(
-                    f"[SemanticProcessor] Generating media summary for: {file_path}, type: {media_type}"
-                )
-                # Find the original filename by listing the directory (since file_path is like viking://resources/images/xxx/xxx.png)
-                parent_uri = "/".join(file_path.split("/")[:-1])
-                try:
-                    entries = await viking_fs.ls(parent_uri)
-                    original_filename = file_name  # default to file_name
-                    for entry in entries:
-                        name = entry.get("name", "")
-                        if name and not name.startswith(".") and not entry.get("isDir"):
-                            original_filename = name
-                            break
-                except Exception:
-                    original_filename = file_name
-
-                if media_type == "image":
-                    return await generate_image_summary(file_path, original_filename, llm_sem)
-                elif media_type == "audio":
-                    return await generate_audio_summary(file_path, original_filename, llm_sem)
-                elif media_type == "video":
-                    return await generate_video_summary(file_path, original_filename, llm_sem)
-
-            # Check if this is a binary file that should be skipped
-            # Skip binary files (using IGNORE_EXTENSIONS as reference)
-            if extension in IGNORE_EXTENSIONS or not is_text_file(file_name):
-                logger.debug(f"Skipping binary file for summary generation: {file_path}")
-                return {"name": file_name, "summary": ""}
-
-            # Process text file
+        media_type = get_media_type(file_name, None)
+        if media_type == "image":
+            return await generate_image_summary(file_path, file_name, llm_sem)
+        elif media_type == "audio":
+            return await generate_audio_summary(file_path, file_name, llm_sem)
+        elif media_type == "video":
+            return await generate_video_summary(file_path, file_name, llm_sem)
+        else:
             return await self._generate_text_summary(file_path, file_name, llm_sem)
-
-        except Exception as e:
-            logger.warning(f"Failed to generate summary for {file_path}: {e}", exc_info=True)
-            return {"name": file_name, "summary": ""}
 
     def _extract_abstract_from_overview(self, overview_content: str) -> str:
         """Extract abstract from overview.md."""
