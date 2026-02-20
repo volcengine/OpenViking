@@ -126,13 +126,15 @@ class MemexRecipe:
         target_uri = target_uri or self.config.default_resource_uri
         score_threshold = score_threshold or self.config.search_score_threshold
 
-        # Use find() (pure vector search) instead of search() (intent analysis + LLM)
-        # to avoid blocking on the internal IntentAnalyzer LLM call.
-        results = self.client.find(
+        # Use search() without session to get multi-type retrieval (memory + resource + skill)
+        # while avoiding the IntentAnalyzer async deadlock that occurs when session is passed.
+        session = self._session if use_session else None
+        results = self.client.search(
             query=query,
             target_uri=target_uri,
             top_k=top_k,
             score_threshold=score_threshold,
+            session=session,
         )
 
         return self._process_search_results(results, top_k)
