@@ -254,7 +254,7 @@ class ResourceNode:
                 texts.append(child.get_text(include_children=True))
         return "\n".join(texts)
 
-    def get_abstract(self, max_length: int = 200) -> str:
+    def get_abstract(self, max_length: int = 256) -> str:
         """
         Generate L0 abstract for this node.
 
@@ -264,6 +264,8 @@ class ResourceNode:
         Returns:
             Abstract text
         """
+        if "abstract" in self.meta:
+            return self.meta["abstract"]
         if self.title:
             abstract = self.title
         else:
@@ -285,8 +287,10 @@ class ResourceNode:
         Returns:
             Overview text including structure summary
         """
+        if "overview" in self.meta:
+            return self.meta["overview"]
+        # Default overview generation
         parts = []
-
         if self.title:
             parts.append(f"**{self.title}**")
 

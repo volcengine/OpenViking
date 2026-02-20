@@ -55,19 +55,7 @@ class AudioParser(BaseParser):
 
     async def parse(self, source: Union[str, Path], instruction: str = "", **kwargs) -> ParseResult:
         """
-        Parse audio file using three-phase architecture.
-
-        Phase 1: Generate temporary files
-        - Copy original audio to temp_uri/content.{ext}
-        - (Optional) Generate transcript with timestamps
-
-        Phase 2: Generate semantic info
-        - Generate abstract and overview based on description
-        - Overview includes file list and usage instructions
-
-        Phase 3: Build directory structure
-        - Move all files to final URI
-        - Generate .abstract.md, .overview.md
+        Parse audio file - only copy original file and extract basic metadata, no content understanding.
 
         Args:
             source: Audio file path
@@ -140,24 +128,7 @@ class AudioParser(BaseParser):
         channels = 0
         format_str = ext[1:].upper()
 
-        # 1.3 Generate ASR description
-        description = ""
-        if self.config.enable_transcription:
-            description = await self._asr_transcribe(audio_bytes, self.config.asr_model)
-        else:
-            # Fallback: basic description
-            description = f"Audio file: {file_path.name} ({format_str}, {duration}s, {sample_rate}Hz, {channels}ch)"
-
-        # 1.4 Transcript with timestamps (optional)
-        transcript_text = None
-        if self.config.enable_transcription and self.config.enable_timestamps:
-            transcript_text = await self._asr_transcribe_with_timestamps(
-                audio_bytes, self.config.asr_model
-            )
-            if transcript_text:
-                await viking_fs.write_file(f"{root_dir_uri}/transcript.md", transcript_text)
-
-        # Create ResourceNode
+        # Create ResourceNode - metadata only, no content understanding yet
         root_node = ResourceNode(
             type=NodeType.ROOT,
             title=file_path.stem,
@@ -175,11 +146,6 @@ class AudioParser(BaseParser):
                 "semantic_name": file_path.stem,
                 "original_filename": original_filename,
             },
-        )
-
-        # Phase 2: Generate semantic info
-        await self._generate_semantic_info(
-            root_node, description, viking_fs, transcript_text is not None
         )
 
         # Phase 3: Build directory structure (handled by TreeBuilder)

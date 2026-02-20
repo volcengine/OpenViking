@@ -55,20 +55,7 @@ class VideoParser(BaseParser):
 
     async def parse(self, source: Union[str, Path], instruction: str = "", **kwargs) -> ParseResult:
         """
-        Parse video file using three-phase architecture.
-
-        Phase 1: Generate temporary files
-        - Copy original video to temp_uri/content.{ext}
-        - Extract key frames
-        - Extract audio track and transcribe using ASR
-
-        Phase 2: Generate semantic info
-        - Generate abstract and overview based on descriptions
-        - Overview includes file list and usage instructions
-
-        Phase 3: Build directory structure
-        - Move all files to final URI
-        - Generate .abstract.md, .overview.md
+        Parse video file - only copy original file and extract basic metadata, no content understanding.
 
         Args:
             source: Video file path
@@ -142,22 +129,7 @@ class VideoParser(BaseParser):
         fps = 0
         format_str = ext[1:].upper()
 
-        # 1.3 Generate combined description
-        description = ""
-        if self.config.enable_key_frames or self.config.enable_audio_transcription:
-            description = await self._generate_video_description(file_path, self.config)
-        else:
-            # Fallback: basic description
-            description = f"Video file: {file_path.name} ({format_str}, {duration}s, {width}x{height}, {fps}fps)"
-
-        # 1.4 Key frames (optional)
-        key_frames_dir = f"{root_dir_uri}/keyframes"
-        has_key_frames = False
-        if self.config.enable_key_frames:
-            await viking_fs.mkdir(key_frames_dir)
-            has_key_frames = True
-
-        # Create ResourceNode
+        # Create ResourceNode - metadata only, no content understanding yet
         root_node = ResourceNode(
             type=NodeType.ROOT,
             title=file_path.stem,
@@ -177,9 +149,6 @@ class VideoParser(BaseParser):
                 "original_filename": original_filename,
             },
         )
-
-        # Phase 2: Generate semantic info
-        await self._generate_semantic_info(root_node, description, viking_fs, has_key_frames)
 
         # Phase 3: Build directory structure (handled by TreeBuilder)
         return ParseResult(

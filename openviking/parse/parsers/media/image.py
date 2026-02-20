@@ -18,11 +18,14 @@ from PIL import Image
 from openviking.parse.base import NodeType, ParseResult, ResourceNode
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.media.constants import IMAGE_EXTENSIONS
+from openviking.prompts import render_prompt
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.config.parser_config import ImageConfig
 from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
+
+logger = get_logger(__name__)
 
 # =============================================================================
 # Configuration Classes
@@ -71,19 +74,7 @@ class ImageParser(BaseParser):
 
     async def parse(self, source: Union[str, Path], instruction: str = "", **kwargs) -> ParseResult:
         """
-        Parse image file using three-phase architecture.
-
-        Phase 1: Generate temporary files
-        - Copy original image to temp_uri/content.{ext}
-        - (Optional) Generate ocr.md using OCR
-
-        Phase 2: Generate semantic info
-        - Generate abstract and overview based on description
-        - Overview includes file list and usage instructions
-
-        Phase 3: Build directory structure
-        - Move all files to final URI
-        - Generate .abstract.md, .overview.md
+        Parse image file - only copy original file and extract basic metadata, no content understanding.
 
         Args:
             source: Image file path
@@ -96,7 +87,6 @@ class ImageParser(BaseParser):
             FileNotFoundError: If source file does not exist
             IOError: If image processing fails
         """
-
         # Convert to Path object
         file_path = Path(source) if isinstance(source, str) else source
         if not file_path.exists():
@@ -132,22 +122,7 @@ class ImageParser(BaseParser):
         except Exception as e:
             raise ValueError(f"Invalid image file: {file_path}. Error: {e}") from e
 
-        # 1.3 Generate VLM description
-        description = ""
-        if self.config.enable_vlm:
-            description = await self._vlm_describe(image_bytes, self.config.vlm_model)
-        else:
-            # Fallback: basic description
-            description = f"Image file: {file_path.name} ({format_str}, {width}x{height})"
-
-        # 1.4 OCR (optional)
-        ocr_text = None
-        if self.config.enable_ocr:
-            ocr_text = await self._ocr_extract(image_bytes, self.config.ocr_lang)
-            if ocr_text:
-                await viking_fs.write_file(f"{root_dir_uri}/ocr.md", ocr_text)
-
-        # Create ResourceNode
+        # Create ResourceNode - metadata only, no content understanding yet
         root_node = ResourceNode(
             type=NodeType.ROOT,
             title=file_path.stem,
@@ -164,11 +139,6 @@ class ImageParser(BaseParser):
                 "semantic_name": file_path.stem,
                 "original_filename": original_filename,
             },
-        )
-
-        # Phase 2: Generate semantic info
-        await self._generate_semantic_info(
-            root_node, description, viking_fs, ocr_text is not None, root_dir_uri
         )
 
         # Phase 3: Build directory structure (handled by TreeBuilder)
@@ -192,10 +162,6 @@ class ImageParser(BaseParser):
         Returns:
             Image description in markdown format
         """
-        from openviking.prompts import render_prompt
-
-        logger = get_logger(__name__)
-
         try:
             vlm = get_openviking_config().vlm
 
@@ -206,17 +172,20 @@ class ImageParser(BaseParser):
                     "context": "No additional context",
                 },
             )
-
-            # Call VLM
             response = await vlm.get_vision_completion_async(
                 prompt=prompt,
                 images=[image_bytes],
+            )
+            logger.info(
+                f"[ImageParser._vlm_describe] VLM response received, length: {len(response)}, content: {response[:256]}"
             )
 
             return response.strip()
 
         except Exception as e:
-            logger.error(f"Error in VLM image description: {e}")
+            logger.error(
+                f"[ImageParser._vlm_describe] Error in VLM image description: {e}", exc_info=True
+            )
             # Fallback to basic description
             return "Image description (VLM integration failed)\n\nThis is an image file."
 
@@ -250,7 +219,7 @@ class ImageParser(BaseParser):
             root_dir_uri: Root directory URI to write semantic files
         """
         # Generate abstract (short summary, < 100 tokens)
-        abstract = description[:200] if len(description) > 200 else description
+        abstract = description[:253] + "..." if len(description) > 256 else description
 
         # Generate overview (content summary + file list + usage instructions)
         overview_parts = [
@@ -294,8 +263,8 @@ class ImageParser(BaseParser):
         node.meta["overview"] = overview
 
         # Write to files in temp directory
-        await viking_fs.write_file(f"{root_dir_uri}/.abstract.md", abstract)
-        await viking_fs.write_file(f"{root_dir_uri}/.overview.md", overview)
+        # await viking_fs.write_file(f"{root_dir_uri}/.abstract.md", abstract)
+        # await viking_fs.write_file(f"{root_dir_uri}/.overview.md", overview)
 
     async def parse_content(
         self, content: str, source_path: Optional[str] = None, instruction: str = "", **kwargs
