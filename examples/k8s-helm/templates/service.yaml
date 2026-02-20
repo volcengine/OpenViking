@@ -4,13 +4,11 @@ metadata:
   name: {{ include "openviking.fullname" . }}
   labels:
     {{- include "openviking.labels" . | nindent 4 }}
-  annotations:
-    {{- include "openviking.serviceAnnotations" . | nindent 4 }}
 spec:
   type: {{ .Values.service.type }}
   ports:
     - port: {{ .Values.service.port }}
-      targetPort: {{ .Values.service.targetPort }}
+      targetPort: http
       protocol: TCP
       name: http
   selector:
