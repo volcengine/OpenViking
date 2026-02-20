@@ -128,7 +128,7 @@ class SessionService:
         """
         self._ensure_initialized()
         session = self.session(session_id)
-        session.load()
+        await session.load()
         return session.commit()
 
     async def extract(self, session_id: str) -> List[Any]:
@@ -145,7 +145,7 @@ class SessionService:
             raise NotInitializedError("SessionCompressor")
 
         session = self.session(session_id)
-        session.load()
+        await session.load()
 
         return await self._session_compressor.extract_long_term_memories(
             messages=session.messages,

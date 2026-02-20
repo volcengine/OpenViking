@@ -52,7 +52,7 @@ class TestSessionLoad:
 
         # Create new session instance and load
         new_session = client.session(session_id=session_id)
-        new_session.load()
+        await new_await session.load()
 
         # Verify messages loaded
         assert len(new_session.messages) > 0
@@ -60,7 +60,7 @@ class TestSessionLoad:
     async def test_load_nonexistent_session(self, client: AsyncOpenViking):
         """Test loading nonexistent session"""
         session = client.session(session_id="nonexistent_session_xyz")
-        session.load()
+        await session.load()
 
         # Nonexistent session should be empty after loading
         assert len(session.messages) == 0

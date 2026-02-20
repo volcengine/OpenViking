@@ -60,7 +60,7 @@ class SearchService:
 
         session_info = None
         if session:
-            session_info = session.get_context_for_search(query)
+            session_info = await session.get_context_for_search(query)
 
         return await viking_fs.search(
             query=query,

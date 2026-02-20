@@ -188,7 +188,7 @@ class LocalClient(BaseClient):
         session = None
         if session_id:
             session = self._service.sessions.session(session_id)
-            session.load()
+            await session.load()
         return await self._service.search.search(
             query=query,
             target_uri=target_uri,
@@ -237,7 +237,7 @@ class LocalClient(BaseClient):
     async def get_session(self, session_id: str) -> Dict[str, Any]:
         """Get session details."""
         session = self._service.sessions.session(session_id)
-        session.load()
+        await session.load()
         return {
             "session_id": session.session_id,
             "user": session.user.to_dict(),
@@ -255,7 +255,7 @@ class LocalClient(BaseClient):
     async def add_message(self, session_id: str, role: str, content: str) -> Dict[str, Any]:
         """Add a message to a session."""
         session = self._service.sessions.session(session_id)
-        session.load()
+        await session.load()
         session.add_message(role, content)
         return {
             "session_id": session_id,

@@ -67,7 +67,7 @@ async def get_session(
     """Get session details."""
     service = get_service()
     session = service.sessions.session(session_id)
-    session.load()
+    await session.load()
     return Response(
         status="ok",
         result={
@@ -120,7 +120,7 @@ async def add_message(
     """Add a message to a session."""
     service = get_service()
     session = service.sessions.session(session_id)
-    session.load()
+    await session.load()
     session.add_message(request.role, [TextPart(text=request.content)])
     return Response(
         status="ok",

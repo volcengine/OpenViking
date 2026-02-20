@@ -82,7 +82,7 @@ async def search(
     session = None
     if request.session_id:
         session = service.sessions.session(request.session_id)
-        session.load()
+        await session.load()
 
     result = await service.search.search(
         query=request.query,

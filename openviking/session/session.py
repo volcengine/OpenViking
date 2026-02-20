@@ -90,13 +90,13 @@ class Session:
 
         logger.info(f"Session created: {self.session_id} for user {self.user}")
 
-    def load(self):
+    async def load(self):
         """Load session data from storage."""
         if self._loaded:
             return
 
         try:
-            content = run_async(self._viking_fs.read_file(f"{self._session_uri}/messages.jsonl"))
+            content = await self._viking_fs.read_file(f"{self._session_uri}/messages.jsonl")
             self._messages = [
                 Message.from_dict(json.loads(line))
                 for line in content.strip().split("\n")
@@ -108,7 +108,7 @@ class Session:
 
         # Restore compression_index (scan history directory)
         try:
-            history_items = run_async(self._viking_fs.ls(f"{self._session_uri}/history"))
+            history_items = await self._viking_fs.ls(f"{self._session_uri}/history")
             archives = [
                 item["name"] for item in history_items if item["name"].startswith("archive_")
             ]
@@ -298,7 +298,7 @@ class Session:
             logger.info(f"Updated active_count for {updated} contexts/skills")
         return updated
 
-    def get_context_for_search(
+    async def get_context_for_search(
         self, query: str, max_archives: int = 3, max_messages: int = 20
     ) -> Dict[str, Any]:
         """Get session context for intent analysis.
@@ -319,7 +319,7 @@ class Session:
         summaries = []
         if self.compression.compression_index > 0:
             try:
-                history_items = run_async(self._viking_fs.ls(f"{self._session_uri}/history"))
+                history_items = await self._viking_fs.ls(f"{self._session_uri}/history")
                 query_lower = query.lower()
 
                 # Collect all archives with relevance scores
@@ -329,7 +329,7 @@ class Session:
                     if name and name.startswith("archive_"):
                         overview_uri = f"{self._session_uri}/history/{name}/.overview.md"
                         try:
-                            overview = run_async(self._viking_fs.read_file(overview_uri))
+                            overview = await self._viking_fs.read_file(overview_uri)
                             # Calculate relevance by keyword matching
                             score = 0
                             if query_lower in overview.lower():
