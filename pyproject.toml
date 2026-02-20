@@ -75,6 +75,9 @@ doc = [
     "sphinx-rtd-theme>=1.3.0",
     "myst-parser>=2.0.0",
 ]
+qdrant = [
+    "qdrant-client>=1.9.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/volcengine/openviking"
@@ -151,3 +154,9 @@ quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = false
 line-ending = "auto"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.4.2",
+    "pytest-asyncio>=1.2.0",
+]

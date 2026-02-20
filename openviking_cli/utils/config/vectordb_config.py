@@ -31,6 +31,29 @@ class VikingDBConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class QdrantConfig(BaseModel):
+    """Configuration for Qdrant vector database."""
+
+    url: Optional[str] = Field(
+        default="http://localhost:6333",
+        description="Qdrant server URL (e.g., 'http://localhost:6333')",
+    )
+    api_key: Optional[str] = Field(
+        default=None, description="Qdrant API key for authentication (optional)"
+    )
+    grpc_port: Optional[int] = Field(
+        default=None, description="Qdrant gRPC port for faster operations (optional)"
+    )
+    prefer_grpc: bool = Field(
+        default=False, description="Whether to prefer gRPC over HTTP"
+    )
+    timeout: Optional[float] = Field(
+        default=None, description="Connection timeout in seconds"
+    )
+
+    model_config = {"extra": "forbid"}
+
+
 class VectorDBBackendConfig(BaseModel):
     """
     Configuration for VectorDB backend.
@@ -41,7 +64,7 @@ class VectorDBBackendConfig(BaseModel):
 
     backend: str = Field(
         default="local",
-        description="VectorDB backend type: 'local' (file-based), 'http' (remote service), or 'volcengine' (VikingDB)",
+        description="VectorDB backend type: 'local' (file-based), 'http' (remote service), 'volcengine' (VikingDB), or 'qdrant' (Qdrant)",
     )
 
     name: Optional[str] = Field(default=COLLECTION_NAME, description="Collection name for VectorDB")
@@ -82,14 +105,19 @@ class VectorDBBackendConfig(BaseModel):
         description="VikingDB private deployment configuration for 'vikingdb' type",
     )
 
+    qdrant: Optional[QdrantConfig] = Field(
+        default_factory=lambda: QdrantConfig(),
+        description="Qdrant configuration for 'qdrant' type",
+    )
+
     model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
     def validate_config(self):
         """Validate configuration completeness and consistency"""
-        if self.backend not in ["local", "http", "volcengine", "vikingdb"]:
+        if self.backend not in ["local", "http", "volcengine", "vikingdb", "qdrant"]:
             raise ValueError(
-                f"Invalid VectorDB backend: '{self.backend}'. Must be one of: 'local', 'http', 'volcengine', 'vikingdb'"
+                f"Invalid VectorDB backend: '{self.backend}'. Must be one of: 'local', 'http', 'volcengine', 'vikingdb', 'qdrant'"
             )
 
         if self.backend == "local":
@@ -109,5 +137,9 @@ class VectorDBBackendConfig(BaseModel):
         elif self.backend == "vikingdb":
             if not self.vikingdb or not self.vikingdb.host:
                 raise ValueError("VectorDB vikingdb backend requires 'host' to be set")
+
+        elif self.backend == "qdrant":
+            if not self.qdrant or not self.qdrant.url:
+                raise ValueError("VectorDB qdrant backend requires 'url' to be set in qdrant config")
 
         return self

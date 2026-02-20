@@ -150,8 +150,29 @@ class VikingVectorIndexBackend(VikingDBInterface):
             project_path = Path(config.path) / self.DEFAULT_PROJECT_NAME if config.path else ""
             self.project = get_or_create_local_project(path=str(project_path))
             logger.info(f"VikingDB backend initialized with local storage: {project_path}")
+        elif config.backend == "qdrant":
+            # Qdrant mode
+            if not config.qdrant or not config.qdrant.url:
+                raise ValueError("Qdrant backend requires URL configuration")
+
+            self._mode = config.backend
+            from openviking.storage.vectordb.project.qdrant_project import (
+                get_or_create_qdrant_project,
+            )
+
+            self.project = get_or_create_qdrant_project(
+                url=config.qdrant.url,
+                api_key=config.qdrant.api_key,
+                grpc_port=config.qdrant.grpc_port,
+                prefer_grpc=config.qdrant.prefer_grpc,
+                timeout=config.qdrant.timeout,
+                project_name=self.DEFAULT_PROJECT_NAME,
+                vector_dim=self.vector_dim,
+                distance_metric=self.distance_metric,
+            )
+            logger.info(f"VikingDB backend initialized with Qdrant: {config.qdrant.url}")
         else:
-            raise ValueError(f"Unsupported VikingDB backend type: {config.type}")
+            raise ValueError(f"Unsupported VikingDB backend type: {config.backend}")
 
         self._collection_configs: Dict[str, Dict[str, Any]] = {}
         # Cache meta_data at collection level to avoid repeated remote calls
@@ -371,10 +392,18 @@ class VikingVectorIndexBackend(VikingDBInterface):
 
         fields = self._get_meta_data(collection, coll).get("Fields", [])
         fields_dict = {item["FieldName"]: item for item in fields}
-        new_data = {}
-        for k in data:
-            if k in fields_dict and data[k] is not None:
-                new_data[k] = data[k]
+
+        # If no Fields metadata, pass all data through (for Qdrant compatibility)
+        if not fields_dict:
+            new_data = {k: v for k, v in data.items() if v is not None}
+        else:
+            new_data = {}
+            # Always include vector fields even if not in schema Fields
+            vector_fields = {"vector", "sparse_vector", "dense_vector"}
+            for k in data:
+                if data[k] is not None:
+                    if k in fields_dict or k in vector_fields:
+                        new_data[k] = data[k]
 
         try:
             coll.upsert_data([new_data])
