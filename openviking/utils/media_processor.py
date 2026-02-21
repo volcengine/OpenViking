@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Unified resource processor with strategy-based routing."""
 
+import tempfile
+import zipfile
 from pathlib import Path
 from typing import TYPE_CHECKING, Optional
 
@@ -103,6 +105,15 @@ class UnifiedResourceProcessor:
         instruction: str,
     ) -> ParseResult:
         """Process file with unified parsing."""
+        # Check if it's a zip file
+        if zipfile.is_zipfile(file_path):
+            temp_dir = Path(tempfile.mkdtemp())
+            try:
+                with zipfile.ZipFile(file_path, "r") as zipf:
+                    zipf.extractall(temp_dir)
+                return await self._process_directory(temp_dir, instruction)
+            finally:
+                pass  # Don't delete temp_dir yet, it will be used by TreeBuilder
         return await parse(
             str(file_path),
             instruction=instruction,

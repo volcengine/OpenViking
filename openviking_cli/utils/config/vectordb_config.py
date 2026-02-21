@@ -46,7 +46,10 @@ class VectorDBBackendConfig(BaseModel):
 
     name: Optional[str] = Field(default=COLLECTION_NAME, description="Collection name for VectorDB")
 
-    path: Optional[str] = Field(default="./data", description="Local storage path for 'local' type")
+    path: Optional[str] = Field(
+        default=None,
+        description="[Deprecated in favor of `storage.workspace`] Local storage path for 'local' type. This will be ignored if `storage.workspace` is set.",
+    )
 
     url: Optional[str] = Field(
         default=None,
@@ -93,8 +96,7 @@ class VectorDBBackendConfig(BaseModel):
             )
 
         if self.backend == "local":
-            if not self.path:
-                raise ValueError("VectorDB local backend requires 'path' to be set")
+            pass
 
         elif self.backend == "http":
             if not self.url:
