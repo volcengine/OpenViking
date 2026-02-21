@@ -14,6 +14,9 @@ A CLI-based personal knowledge assistant powered by OpenViking.
 ## Quick Start
 
 ```bash
+# Navigate to memex directory
+cd examples/memex
+
 # Install dependencies
 uv sync
 
@@ -23,11 +26,42 @@ cp ov.conf.example ov.conf
 
 # Run Memex
 uv run memex
+
+# Or with verbose logging
+uv run memex -v
 ```
 
 ## Configuration
 
 Create `ov.conf` from the example:
+
+```bash
+cp ov.conf.example ov.conf
+```
+
+OpenAI example:
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "api_base": "https://api.openai.com/v1",
+      "api_key": "your-api-key",
+      "provider": "openai",
+      "dimension": 3072,
+      "model": "text-embedding-3-large"
+    }
+  },
+  "vlm": {
+    "api_base": "https://api.openai.com/v1",
+    "api_key": "your-api-key",
+    "provider": "openai",
+    "model": "gpt-4o"
+  }
+}
+```
+
+Volcengine (豆包) example:
 
 ```json
 {
@@ -62,11 +96,13 @@ Create `ov.conf` from the example:
 - `/read <uri>` - Read full content (L2)
 - `/abstract <uri>` - Show summary (L0)
 - `/overview <uri>` - Show overview (L1)
+- `/stat <uri>` - Show resource metadata
 
 ### Search
 - `/find <query>` - Quick semantic search
 - `/search <query>` - Deep search with intent analysis
 - `/grep <pattern>` - Content pattern search
+- `/glob <pattern>` - File pattern matching
 
 ### Q&A
 - `/ask <question>` - Single-turn question
@@ -74,12 +110,36 @@ Create `ov.conf` from the example:
 - `/clear` - Clear chat history
 - Or just type your question directly!
 
+### Session (Memory)
+- `/session` - Show current session info
+- `/commit` - End session and extract memories
+- `/memories` - Show extracted memories
+
 ### Feishu (Optional)
-- `/feishu` - Connect to Feishu
+- `/feishu` - Connect to Feishu MCP server
+- `/feishu-login` - Login with your Feishu account (OAuth)
+- `/feishu-ls [token]` - List files in My Space or folder
+- `/feishu-list <query>` - Search and list documents in Feishu
 - `/feishu-doc <id>` - Import Feishu document
 - `/feishu-search <query>` - Search Feishu documents
+- `/feishu-tools` - List available Feishu tools
 
-Set `FEISHU_APP_ID` and `FEISHU_APP_SECRET` environment variables to enable.
+#### Setup
+
+1. Install [Node.js](https://nodejs.org/) (required for `npx` to run the Feishu MCP server)
+2. Create an app on [Feishu Open Platform](https://open.feishu.cn/app) and grant document-related permissions (e.g. `docx:document:readonly`, `search:docs:read`, `drive:drive:readonly`)
+3. Add `http://localhost:8089/callback` to the Redirect URLs in "Security Settings" (for `/feishu-login`)
+4. Set environment variables:
+
+```bash
+export FEISHU_APP_ID="cli_xxxxxxxxxxxx"
+export FEISHU_APP_SECRET="xxxxxxxxxxxxxxxxxxxxxxxx"
+```
+
+5. Start Memex — the "Feishu integration not available" message should disappear
+6. Use `/feishu` to connect, then `/feishu-list` to browse files, `/feishu-search` to search, or `/feishu-doc <id>` to import
+
+Document ID can be found in the Feishu URL, e.g. `AbCdEfGhIjKl` from `https://xxx.feishu.cn/docx/AbCdEfGhIjKl`.
 
 ### System
 - `/stats` - Show knowledge base statistics
@@ -94,9 +154,9 @@ uv run memex [OPTIONS]
 
 Options:
   --data-path PATH     Data storage path (default: ./memex_data)
+  --config-path PATH   OpenViking config file path (default: ./ov.conf)
   --user USER          User name (default: default)
-  --llm-backend NAME   LLM backend: openai or volcengine (default: openai)
-  --llm-model MODEL    LLM model name (default: gpt-4o-mini)
+  -v, --verbose        Enable verbose logging (default: off)
 ```
 
 ## Data Storage
@@ -143,7 +203,9 @@ Memex uses a modular RAG (Retrieval-Augmented Generation) architecture:
 | **MemexRecipe** | `rag/recipe.py` | RAG orchestration: search → context → LLM |
 | **MemexClient** | `client.py` | OpenViking client wrapper with session support |
 | **MemexConfig** | `config.py` | Configuration management |
+| **CLI** | `cli.py` | Main CLI application and command dispatch |
 | **Commands** | `commands/*.py` | CLI command implementations |
+| **Feishu** | `feishu.py` | Feishu/Lark integration |
 
 ### RAG Flow
 
@@ -167,9 +229,10 @@ Memex uses a modular RAG (Retrieval-Augmented Generation) architecture:
 
 | Variable | Description |
 |----------|-------------|
-| `OPENVIKING_CONFIG_FILE` | Path to OpenViking config file, default to `~/.openviking/ov.conf` |
-| `FEISHU_APP_ID` | Feishu app ID (optional) |
-| `FEISHU_APP_SECRET` | Feishu app secret (optional) |
+| `OPENVIKING_CONFIG_FILE` | Path to OpenViking config file |
+| `FEISHU_APP_ID` | Feishu app ID (optional, also accepts `LARK_APP_ID`) |
+| `FEISHU_APP_SECRET` | Feishu app secret (optional, also accepts `LARK_APP_SECRET`) |
+| `FEISHU_AUTH_MODE` | Auth mode: `tenant` (default), `user`, or `auto` |
 
 ## Development
 
@@ -179,30 +242,32 @@ Memex uses a modular RAG (Retrieval-Augmented Generation) architecture:
 examples/memex/
 ├── __init__.py
 ├── __main__.py          # Entry point
-├── app.py               # Main application
+├── .python-version      # Python version pin (3.11)
+├── cli.py               # Main CLI application
 ├── client.py            # MemexClient wrapper
 ├── config.py            # Configuration
+├── feishu.py            # Feishu integration
 ├── rag/
 │   ├── __init__.py
 │   └── recipe.py        # RAG recipe implementation
 ├── commands/
 │   ├── __init__.py
-│   ├── base.py          # Base command class
 │   ├── browse.py        # Browse commands (/ls, /tree, /read)
-│   ├── feishu.py        # Feishu integration
 │   ├── knowledge.py     # Knowledge management (/add, /rm)
 │   ├── query.py         # Q&A commands (/ask, /chat)
 │   ├── search.py        # Search commands (/find, /search)
-│   └── system.py        # System commands (/stats, /info)
+│   └── stats.py         # Stats commands (/stats, /info)
+├── ov.conf              # Your local config (not committed)
 ├── ov.conf.example      # Example configuration
+├── pyproject.toml
 └── README.md
 ```
 
 ### Running Tests
 
 ```bash
-# From project root
-uv run pytest examples/memex/tests/ -v
+# From memex directory
+uv run pytest -v
 ```
 
 ## License

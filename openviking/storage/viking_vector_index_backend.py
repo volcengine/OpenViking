@@ -475,7 +475,7 @@ class VikingVectorIndexBackend(VikingDBInterface):
                 record = dict(item.fields) if item.fields else {}
                 record["id"] = item.id
                 records.append(record)
-            if len(records) > 0:
+            if len(records) > 1:
                 raise ValueError(f"Duplicate records found for URI: {uri}")
             if len(records) == 0:
                 raise ValueError(f"Record not found for URI: {uri}")
@@ -560,29 +560,25 @@ class VikingVectorIndexBackend(VikingDBInterface):
     async def remove_by_uri(self, collection: str, uri: str) -> int:
         """Remove resource(s) by URI."""
         try:
-            # Find records with matching URI
             target_records = await self.filter(
                 collection=collection,
                 filter={"op": "must", "field": "uri", "conds": [uri]},
-                limit=1,
+                limit=10,
             )
 
             if not target_records:
                 return 0
 
             total_deleted = 0
-            target = target_records[0]
-            is_leaf = target.get("is_leaf", False)
 
-            # If not leaf (i.e., intermediate directory), find and delete all descendants recursively
-            if not is_leaf:
+            # If any record indicates this URI is a directory node, remove descendants first.
+            if any(not r.get("is_leaf", False) for r in target_records):
                 descendant_count = await self._remove_descendants(collection, uri)
                 total_deleted += descendant_count
 
-            # Delete the target itself
-            if "id" in target:
-                await self.delete(collection, [target["id"]])
-                total_deleted += 1
+            ids = [r.get("id") for r in target_records if r.get("id")]
+            if ids:
+                total_deleted += await self.delete(collection, ids)
 
             logger.info(f"Removed {total_deleted} record(s) for URI: {uri}")
             return total_deleted

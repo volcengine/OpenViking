@@ -10,7 +10,7 @@ from rich.tree import Tree
 from rich.table import Table
 from rich.markdown import Markdown
 
-from client import MemexClient
+from ..client import MemexClient
 
 
 class BrowseCommands:

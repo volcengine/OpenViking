@@ -1,0 +1,86 @@
+metadata:
+  id: "compression.memory_merge_bundle"
+  name: "Memory Merge Bundle"
+  description: "Merge memory and return L0/L1/L2 in one structured response"
+  version: "1.0.0"
+  language: "en"
+  category: "compression"
+
+variables:
+  - name: "existing_abstract"
+    type: "string"
+    description: "Existing memory abstract (L0)"
+    required: false
+    default: ""
+  - name: "existing_overview"
+    type: "string"
+    description: "Existing memory overview (L1)"
+    required: false
+    default: ""
+  - name: "existing_content"
+    type: "string"
+    description: "Existing memory content (L2)"
+    required: true
+  - name: "new_abstract"
+    type: "string"
+    description: "New memory abstract (L0)"
+    required: false
+    default: ""
+  - name: "new_overview"
+    type: "string"
+    description: "New memory overview (L1)"
+    required: false
+    default: ""
+  - name: "new_content"
+    type: "string"
+    description: "New memory content (L2)"
+    required: true
+  - name: "category"
+    type: "string"
+    description: "Memory category (profile, preferences, etc.)"
+    required: true
+  - name: "output_language"
+    type: "string"
+    description: "Target output language"
+    required: false
+    default: "auto"
+
+template: |
+  You are merging one existing memory with one new memory update.
+
+  Category: {{ category }}
+  Target Output Language: {{ output_language }}
+
+  Existing memory:
+  - Abstract (L0): {{ existing_abstract }}
+  - Overview (L1): {{ existing_overview }}
+  - Content (L2): {{ existing_content }}
+
+  New memory:
+  - Abstract (L0): {{ new_abstract }}
+  - Overview (L1): {{ new_overview }}
+  - Content (L2): {{ new_content }}
+
+  Requirements:
+  - Merge into a single coherent memory.
+  - Keep non-conflicting details from existing memory.
+  - Update conflicting details to reflect the newer fact.
+  - Output language must be {{ output_language }}.
+  - Return JSON only.
+
+  Output JSON schema:
+  {
+    "decision": "merge",
+    "abstract": "one-line L0 summary",
+    "overview": "structured markdown L1 summary",
+    "content": "full merged L2 content",
+    "reason": "short reason"
+  }
+
+  Constraints:
+  - `abstract` must be concise and specific.
+  - `overview` and `content` must be non-empty.
+  - Do not output any text outside JSON.
+
+llm_config:
+  temperature: 0.0

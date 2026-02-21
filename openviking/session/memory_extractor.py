@@ -51,6 +51,16 @@ class CandidateMemory:
     language: str = "auto"
 
 
+@dataclass
+class MergedMemoryPayload:
+    """Structured merged memory payload returned by one LLM call."""
+
+    abstract: str
+    overview: str
+    content: str
+    reason: str = ""
+
+
 class MemoryExtractor:
     """Extracts memories from session messages with 6-category classification."""
 
@@ -152,8 +162,17 @@ class MemoryExtractor:
         try:
             from openviking_cli.utils.llm import parse_json_from_response
 
+            request_summary = {
+                "user": user._user_id,
+                "output_language": output_language,
+                "recent_messages_len": len(formatted_messages),
+                "recent_messages": formatted_messages,
+            }
+            logger.debug("Memory extraction LLM request summary: %s", request_summary)
             response = await vlm.get_completion_async(prompt)
+            logger.debug("Memory extraction LLM raw response: %s", response)
             data = parse_json_from_response(response) or {}
+            logger.debug("Memory extraction LLM parsed payload: %s", data)
 
             candidates = []
             for mem in data.get("memories", []):
@@ -198,22 +217,22 @@ class MemoryExtractor:
 
         # Special handling for profile: append to profile.md
         if candidate.category == MemoryCategory.PROFILE:
-            await self._append_to_profile(candidate, viking_fs)
+            payload = await self._append_to_profile(candidate, viking_fs)
+            if not payload:
+                return None
             memory_uri = "viking://user/memories/profile.md"
             memory = Context(
                 uri=memory_uri,
                 parent_uri="viking://user/memories",
                 is_leaf=True,
-                abstract=candidate.abstract,
+                abstract=payload.abstract,
                 context_type=ContextType.MEMORY.value,
                 category=candidate.category.value,
                 session_id=session_id,
                 user=user,
             )
-            logger.info(
-                f"uri {memory_uri} abstract: {candidate.abstract} content: {candidate.content}"
-            )
-            memory.set_vectorize(Vectorize(text=candidate.content))
+            logger.info(f"uri {memory_uri} abstract: {payload.abstract} content: {payload.content}")
+            memory.set_vectorize(Vectorize(text=payload.content))
             return memory
 
         # Determine parent URI based on category
@@ -253,7 +272,11 @@ class MemoryExtractor:
         memory.set_vectorize(Vectorize(text=candidate.content))
         return memory
 
-    async def _append_to_profile(self, candidate: CandidateMemory, viking_fs) -> None:
+    async def _append_to_profile(
+        self,
+        candidate: CandidateMemory,
+        viking_fs,
+    ) -> Optional[MergedMemoryPayload]:
         """Update user profile - always merge with existing content."""
         uri = "viking://user/memories/profile.md"
         existing = ""
@@ -265,42 +288,91 @@ class MemoryExtractor:
         if not existing.strip():
             await viking_fs.write_file(uri=uri, content=candidate.content)
             logger.info(f"Created profile at {uri}")
+            return MergedMemoryPayload(
+                abstract=candidate.abstract,
+                overview=candidate.overview,
+                content=candidate.content,
+                reason="created",
+            )
         else:
-            merged = await self._merge_memory(
-                existing,
-                candidate.content,
-                "profile",
+            payload = await self._merge_memory_bundle(
+                existing_abstract="",
+                existing_overview="",
+                existing_content=existing,
+                new_abstract=candidate.abstract,
+                new_overview=candidate.overview,
+                new_content=candidate.content,
+                category="profile",
                 output_language=candidate.language,
             )
-            content = merged if merged else candidate.content
-            await viking_fs.write_file(uri=uri, content=content)
+            if not payload:
+                logger.warning("Profile merge bundle failed; keeping existing profile unchanged")
+                return None
+            await viking_fs.write_file(uri=uri, content=payload.content)
             logger.info(f"Merged profile info to {uri}")
+            return payload
 
-    async def _merge_memory(
+    async def _merge_memory_bundle(
         self,
-        existing: str,
-        new: str,
+        existing_abstract: str,
+        existing_overview: str,
+        existing_content: str,
+        new_abstract: str,
+        new_overview: str,
+        new_content: str,
         category: str,
         output_language: str = "auto",
-    ) -> Optional[str]:
-        """Use LLM to merge existing and new memory content."""
+    ) -> Optional[MergedMemoryPayload]:
+        """Use one LLM call to generate merged L0/L1/L2 payload."""
         vlm = get_openviking_config().vlm
         if not vlm or not vlm.is_available():
             return None
 
         prompt = render_prompt(
-            "compression.memory_merge",
+            "compression.memory_merge_bundle",
             {
-                "existing_content": existing,
-                "new_content": new,
+                "existing_abstract": existing_abstract,
+                "existing_overview": existing_overview,
+                "existing_content": existing_content,
+                "new_abstract": new_abstract,
+                "new_overview": new_overview,
+                "new_content": new_content,
                 "category": category,
                 "output_language": output_language,
             },
         )
 
         try:
-            merged = await vlm.get_completion_async(prompt)
-            return merged.strip() if merged else None
+            from openviking_cli.utils.llm import parse_json_from_response
+
+            response = await vlm.get_completion_async(prompt)
+            data = parse_json_from_response(response) or {}
+            if not isinstance(data, dict):
+                logger.error("Memory merge bundle parse failed: non-dict payload")
+                return None
+
+            abstract = str(data.get("abstract", "") or "").strip()
+            overview = str(data.get("overview", "") or "").strip()
+            content = str(data.get("content", "") or "").strip()
+            reason = str(data.get("reason", "") or "").strip()
+            decision = str(data.get("decision", "") or "").strip().lower()
+
+            if decision and decision != "merge":
+                logger.error("Memory merge bundle invalid decision=%s", decision)
+                return None
+            if not abstract or not content:
+                logger.error(
+                    "Memory merge bundle missing required fields abstract/content: %s",
+                    data,
+                )
+                return None
+
+            return MergedMemoryPayload(
+                abstract=abstract,
+                overview=overview,
+                content=content,
+                reason=reason,
+            )
         except Exception as e:
-            logger.error(f"Memory merge failed: {e}")
+            logger.error(f"Memory merge bundle failed: {e}")
             return None

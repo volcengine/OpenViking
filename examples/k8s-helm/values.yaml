@@ -1,0 +1,37 @@
+image:
+  repository: ghcr.io/astral-sh/uv
+  pullPolicy: IfNotPresent
+  tag: "python3.12-bookworm"
+
+service:
+  type: ClusterIP
+  port: 1933
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 2Gi
+  requests:
+    cpu: 200m
+    memory: 512Mi
+
+server:
+  host: "0.0.0.0"
+  port: 1933
+
+# OpenViking confmap - only embedding and vlm are valid fields
+# Stored as a Secret and mounted into the container
+openviking:
+  config:
+    embedding:
+      dense:
+        model: "doubao-embedding-vision-250615"
+        api_key: null
+        api_base: "https://ark.cn-beijing.volces.com/api/v3"
+        dimension: "1024"
+        backend: "volcengine"
+    vlm:
+      model: "doubao-seed-1-8-251228"
+      api_key: null
+      api_base: "https://ark.cn-beijing.volces.com/api/v3"
+      backend: "volcengine"

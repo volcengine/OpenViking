@@ -1,8 +1,8 @@
 metadata:
   id: "compression.dedup_decision"
   name: "Memory Deduplication Decision"
-  description: "Decide whether new memory should CREATE/MERGE/SKIP"
-  version: "2.0.0"
+  description: "Decide candidate action (skip/create/none) and per-memory actions (merge/delete)"
+  version: "3.3.1"
   language: "en"
   category: "compression"
 
@@ -25,25 +25,79 @@ variables:
     required: true
 
 template: |
-  Determine how to handle this candidate memory.
+  You are deciding how to update long-term memory with:
+  1) one candidate memory (new fact)
+  2) existing similar memories (retrieved from store)
 
-  **Candidate Memory**:
-  Abstract: {{ candidate_abstract }}
-  Overview: {{ candidate_overview }}
-  Content: {{ candidate_content }}
+  Candidate memory:
+  - Abstract: {{ candidate_abstract }}
+  - Overview: {{ candidate_overview }}
+  - Content: {{ candidate_content }}
 
-  **Existing Similar Memories**:
+  Existing similar memories:
   {{ existing_memories }}
 
-  Please decide:
-  - SKIP: Candidate memory duplicates existing memories, no need to save
-  - CREATE: This is completely new information, should be created
-  - MERGE: Candidate memory should be merged with existing memories
+  Goal:
+  Keep memory consistent and useful while minimizing destructive edits.
 
-  Return JSON format:
+  Candidate-level decision:
+  - skip:
+    Use only when candidate adds no useful new information (duplicate, paraphrase,
+    or too weak/uncertain). No memory should change.
+  - create:
+    Use when candidate is a valid new memory that should be stored as a separate item.
+    It may optionally delete fully-invalidated existing memories.
+  - none:
+    Use when candidate itself should not be stored, but existing memories should be
+    reconciled with per-item actions.
+
+  Existing-memory per-item action:
+  - merge:
+    Existing memory and candidate are about the same subject and should be unified.
+    Use for refinement, correction, partial conflict, or complementary details.
+  - delete:
+    Existing memory must be removed only if candidate fully invalidates the entire
+    existing memory (not just one sub-part).
+
+  Critical delete boundary:
+  - If conflict is partial (some statements conflict, others remain valid), DO NOT delete.
+    Use merge instead so non-conflicting information is preserved.
+  - Delete only when the whole existing memory is obsolete/invalidated.
+  - Topic/facet mismatch must never be deleted. If candidate is about one facet
+    (for example any single preference facet), existing memories from other facets
+    must be omitted from list (treated as unchanged).
+
+  Decision guidance:
+  - Prefer skip when candidate is redundant.
+  - Prefer none+merge for same-subject updates and partial contradictions.
+  - Prefer create for clearly new independent memory.
+  - If uncertain, choose non-destructive behavior (skip or merge), not delete.
+
+  Practical checklist before emitting each list item:
+  1) Is existing memory about the same topic/facet as candidate?
+  2) If no, do not include it in list.
+  3) If yes and candidate only updates part of it, use merge.
+  4) Use delete only when candidate explicitly invalidates the whole existing memory.
+
+  Hard constraints:
+  - If decision is "skip", do not return "list".
+  - If any list item uses "merge", decision must be "none".
+  - If decision is "create", list can be empty or contain delete items only.
+  - Use uri exactly from existing memories list.
+  - Omit unchanged existing memories from list.
+  - Return JSON only, no prose.
+
+  Return JSON in this exact structure:
   {
-    "decision": "skip|create|merge",
-    "reason": "Decision reason"
+    "decision": "skip|create|none",
+    "reason": "short reason",
+    "list": [
+      {
+        "uri": "<existing memory uri>",
+        "decide": "merge|delete",
+        "reason": "short reason (for delete, explain full invalidation)"
+      }
+    ]
   }
 
 llm_config:

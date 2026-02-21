@@ -4,9 +4,9 @@ Memex Client - OpenViking client wrapper for Memex.
 
 from typing import Any, Optional
 
-from config import MemexConfig
-
 import openviking as ov
+
+from .config import MemexConfig
 
 
 class MemexClient:

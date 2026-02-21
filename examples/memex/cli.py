@@ -43,16 +43,16 @@ from rich.console import Console
 from rich.panel import Panel
 from rich.markdown import Markdown
 
-from config import MemexConfig
-from client import MemexClient
-from commands import (
+from .config import MemexConfig
+from .client import MemexClient
+from .commands import (
     BrowseCommands,
     KnowledgeCommands,
     SearchCommands,
     QueryCommands,
     StatsCommands,
 )
-from feishu import FeishuCommands
+from .feishu import FeishuCommands
 
 
 BANNER = """
@@ -103,7 +103,10 @@ HELP_TEXT = """
 - `/memories`        Show extracted memories
 
 ## Feishu Integration
-- `/feishu`          Connect to Feishu
+- `/feishu`          Connect to Feishu MCP server
+- `/feishu-login`    Login with your Feishu account (OAuth)
+- `/feishu-ls [token]` List files in My Space or folder
+- `/feishu-list <query>` Search and list documents in Feishu
 - `/feishu-doc <id>` Import Feishu document
 - `/feishu-search <query>` Search Feishu documents
 - `/feishu-tools`    List available Feishu tools
@@ -316,6 +319,17 @@ class MemexCLI:
                 self.console.print(
                     "[red]Feishu not available. Set FEISHU_APP_ID and FEISHU_APP_SECRET.[/red]"
                 )
+        elif command == "/feishu-login":
+            if self.feishu:
+                self.feishu.login()
+            else:
+                self.console.print("[red]Feishu not available.[/red]")
+        elif command == "/feishu-ls":
+            if self.feishu:
+                token = raw_input[len("/feishu-ls") :].strip() or None
+                self.feishu.list_directory(token)
+            else:
+                self.console.print("[red]Feishu not available.[/red]")
         elif command == "/feishu-doc":
             if self.feishu:
                 doc_id = args[0] if args else ""
@@ -332,6 +346,12 @@ class MemexCLI:
         elif command == "/feishu-tools":
             if self.feishu:
                 self.feishu.list_tools()
+            else:
+                self.console.print("[red]Feishu not available.[/red]")
+        elif command == "/feishu-list":
+            if self.feishu:
+                query = raw_input[len("/feishu-list") :].strip() or None
+                self.feishu.list_files(query)
             else:
                 self.console.print("[red]Feishu not available.[/red]")
 
@@ -425,7 +445,29 @@ def main():
         default="./ov.conf",
         help="Path to OpenViking config file (default: ./ov.conf)",
     )
+    parser.add_argument("--user", default="default", help="User name (default: default)")
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="store_true",
+        help="Enable verbose logging (default: off)",
+    )
+
     args = parser.parse_args()
+
+    import logging
+
+    if args.verbose:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        )
+    else:
+        logging.basicConfig(level=logging.WARNING)
+        # Suppress openviking/vikingdb loggers
+        for name, logger in list(logging.Logger.manager.loggerDict.items()):
+            if isinstance(logger, logging.Logger) and name.startswith(("openviking", "vikingdb")):
+                logger.setLevel(logging.WARNING)
 
     config = MemexConfig(
         data_path=args.data_path,
