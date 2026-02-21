@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Resource management commands."""
 
+from pathlib import Path
 from typing import Optional
 
 import typer
@@ -23,10 +24,62 @@ def register(app: typer.Typer) -> None:
         timeout: Optional[float] = typer.Option(600.0, help="Wait timeout in seconds"),
     ) -> None:
         """Add resources into OpenViking."""
+        # Validate path: if it's a local path, check if it exists
+        final_path = path
+        if not (path.startswith("http://") or path.startswith("https://")):
+            unescaped_path = path.replace("\\ ", " ")
+            local_path = Path(unescaped_path)
+            final_path = unescaped_path
+            if not local_path.exists():
+                # Check if there are extra arguments (possible unquoted path with spaces)
+                import sys
+
+                # Find the index of 'add-resource' in sys.argv
+                try:
+                    add_resource_idx = sys.argv.index("add-resource")
+                except ValueError:
+                    add_resource_idx = sys.argv.index("add") if "add" in sys.argv else -1
+
+                if add_resource_idx != -1 and len(sys.argv) > add_resource_idx + 2:
+                    # There are extra positional arguments - likely unquoted path with spaces
+                    extra_args = sys.argv[add_resource_idx + 2 :]
+                    suggested_path = f"{path} {' '.join(extra_args)}"
+                    typer.echo(
+                        typer.style(
+                            f"Error: Path '{path}' does not exist.",
+                            fg=typer.colors.RED,
+                            bold=True,
+                        ),
+                        err=True,
+                    )
+                    typer.echo(
+                        typer.style(
+                            "\nIt looks like you may have forgotten to quote a path with spaces.",
+                            fg=typer.colors.YELLOW,
+                        ),
+                        err=True,
+                    )
+                    typer.echo(
+                        typer.style(
+                            f'Suggested command: ov add-resource "{suggested_path}"',
+                            fg=typer.colors.CYAN,
+                        ),
+                        err=True,
+                    )
+                    raise typer.Exit(code=1)
+                else:
+                    typer.echo(
+                        typer.style(
+                            f"Error: Path '{path}' does not exist.", fg=typer.colors.RED, bold=True
+                        ),
+                        err=True,
+                    )
+                    raise typer.Exit(code=1)
+
         run(
             ctx,
             lambda client: client.add_resource(
-                path=path,
+                path=final_path,
                 target=to,
                 reason=reason,
                 instruction=instruction,

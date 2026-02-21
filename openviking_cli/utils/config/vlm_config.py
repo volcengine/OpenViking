@@ -15,17 +15,16 @@ class VLMConfig(BaseModel):
     max_retries: int = Field(default=2, description="Maximum retry attempts")
 
     provider: Optional[str] = Field(default=None, description="Provider type")
-    backend: Optional[str] = Field(default=None, description="Backend provider (Deprecated, use 'provider' instead)")
+    backend: Optional[str] = Field(
+        default=None, description="Backend provider (Deprecated, use 'provider' instead)"
+    )
 
     providers: Dict[str, Dict[str, Any]] = Field(
         default_factory=dict,
-        description="Multi-provider configuration, e.g. {'deepseek': {'api_key': 'xxx', 'api_base': 'xxx'}}"
+        description="Multi-provider configuration, e.g. {'deepseek': {'api_key': 'xxx', 'api_base': 'xxx'}}",
     )
 
-    default_provider: Optional[str] = Field(
-        default=None,
-        description="Default provider name"
-    )
+    default_provider: Optional[str] = Field(default=None, description="Default provider name")
 
     thinking: bool = Field(default=False, description="Enable thinking mode for VolcEngine models")
 
@@ -141,6 +140,7 @@ class VLMConfig(BaseModel):
         if self._vlm_instance is None:
             config_dict = self._build_vlm_config_dict()
             from openviking.models.vlm import VLMFactory
+
             self._vlm_instance = VLMFactory.create(config_dict)
         return self._vlm_instance
 
@@ -166,13 +166,15 @@ class VLMConfig(BaseModel):
 
         return result
 
-    def get_completion(self, prompt: str) -> str:
+    def get_completion(self, prompt: str, thinking: bool = False) -> str:
         """Get LLM completion."""
-        return self.get_vlm_instance().get_completion(prompt)
+        return self.get_vlm_instance().get_completion(prompt, thinking)
 
-    async def get_completion_async(self, prompt: str, max_retries: int = 0) -> str:
+    async def get_completion_async(
+        self, prompt: str, thinking: bool = False, max_retries: int = 0
+    ) -> str:
         """Get LLM completion asynchronously, max_retries=0 means no retry."""
-        return await self.get_vlm_instance().get_completion_async(prompt, max_retries)
+        return await self.get_vlm_instance().get_completion_async(prompt, thinking, max_retries)
 
     def is_available(self) -> bool:
         """Check if LLM is configured."""
@@ -182,14 +184,16 @@ class VLMConfig(BaseModel):
         self,
         prompt: str,
         images: list,
+        thinking: bool = False,
     ) -> str:
         """Get LLM completion with images."""
-        return self.get_vlm_instance().get_vision_completion(prompt, images)
+        return self.get_vlm_instance().get_vision_completion(prompt, images, thinking)
 
     async def get_vision_completion_async(
         self,
         prompt: str,
         images: list,
+        thinking: bool = False,
     ) -> str:
         """Get LLM completion with images asynchronously."""
-        return await self.get_vlm_instance().get_vision_completion_async(prompt, images)
+        return await self.get_vlm_instance().get_vision_completion_async(prompt, images, thinking)

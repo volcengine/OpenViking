@@ -27,6 +27,7 @@ from openviking.parse.base import (
     create_parse_result,
 )
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking.parse.parsers.media.constants import MEDIA_EXTENSIONS
 from openviking_cli.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -74,7 +75,8 @@ class DirectoryParser(BaseParser):
             source: Path to the directory.
             instruction: Processing instruction (forwarded where applicable).
             **kwargs: Extra options forwarded to ``scan_directory``:
-                ``strict``, ``ignore_dirs``, ``include``, ``exclude``.
+                ``strict``, ``ignore_dirs``, ``include``, ``exclude``,
+                ``directly_upload_media``.
 
         Returns:
             ``ParseResult`` with ``temp_dir_path`` pointing to VikingFS temp.
@@ -103,6 +105,7 @@ class DirectoryParser(BaseParser):
                 include=kwargs.get("include"),
                 exclude=kwargs.get("exclude"),
             )
+            directly_upload_media = kwargs.get("directly_upload_media", True)
             processable_files = scan_result.all_processable_files()
             warnings.extend(scan_result.warnings)
 
@@ -137,13 +140,35 @@ class DirectoryParser(BaseParser):
             for cf in processable_files:
                 file_parser = self._assign_parser(cf, registry)
                 parser_name = type(file_parser).__name__ if file_parser else "direct"
-                ok = await self._process_single_file(
-                    cf,
-                    file_parser,
-                    target_uri,
-                    viking_fs,
-                    warnings,
-                )
+
+                # Check if this is a media parser and we should directly upload
+                is_media_parser = file_parser and parser_name in [
+                    "ImageParser",
+                    "AudioParser",
+                    "VideoParser",
+                ]
+                ext = Path(cf.path).suffix.lower()
+                is_media_file = ext in MEDIA_EXTENSIONS
+
+                if directly_upload_media and is_media_parser and is_media_file:
+                    # Directly upload media file without using media parser
+                    ok = await self._upload_file_directly(
+                        cf,
+                        target_uri,
+                        viking_fs,
+                        warnings,
+                    )
+                    parser_name = "direct_upload"
+                else:
+                    # Normal processing with parser
+                    ok = await self._process_single_file(
+                        cf,
+                        file_parser,
+                        target_uri,
+                        viking_fs,
+                        warnings,
+                    )
+
                 if ok:
                     file_count += 1
                     processed_files.append(
@@ -331,6 +356,32 @@ class DirectoryParser(BaseParser):
             except Exception as exc:
                 warnings.append(f"Failed to upload {rel_path}: {exc}")
                 return False
+
+    @staticmethod
+    async def _upload_file_directly(
+        classified_file: "ClassifiedFile",
+        target_uri: str,
+        viking_fs: Any,
+        warnings: List[str],
+    ) -> bool:
+        """Directly upload a file without using its parser.
+
+        Used for media files when directly_upload_media=True.
+
+        Returns:
+            *True* on success, *False* on failure.
+        """
+        rel_path = classified_file.rel_path
+        src_file = classified_file.path
+
+        try:
+            content = src_file.read_bytes()
+            dst_uri = f"{target_uri}/{rel_path}"
+            await viking_fs.write_file(dst_uri, content)
+            return True
+        except Exception as exc:
+            warnings.append(f"Failed to upload {rel_path}: {exc}")
+            return False
 
     # ------------------------------------------------------------------
     # VikingFS merge helpers

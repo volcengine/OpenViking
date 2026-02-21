@@ -3,7 +3,7 @@ name = "memex"
 version = "0.1.0"
 description = "Personal Knowledge Assistant powered by OpenViking"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.10"
 dependencies = [
     "openviking>=0.1.6",
     "prompt-toolkit>=3.0.52",
@@ -11,12 +11,19 @@ dependencies = [
     "openai>=1.0.0",
 ]
 
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+[tool.uv]
+find-links = []
 
-[tool.hatch.build.targets.wheel]
-packages = ["."]
+[tool.uv.sources]
+openviking = { path = "../..", editable = true }
+
+[build-system]
+requires = ["setuptools"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = [".."]
+include = ["memex*"]
 
 [project.scripts]
-memex = "cli:main"
+memex = "memex.cli:main"

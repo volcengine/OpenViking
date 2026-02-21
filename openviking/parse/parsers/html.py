@@ -602,7 +602,11 @@ class HTMLParser(BaseParser):
 
     def _sanitize_for_path(self, text: str, max_length: int = 50) -> str:
         """Sanitize text for use in file path, hash & shorten if too long."""
-        safe = re.sub(r"[^\w\u4e00-\u9fff\s-]", "", text)
+        safe = re.sub(
+            r"[^\w\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\uac00-\ud7af\u3400-\u4dbf\U00020000-\U0002a6df\s-]",
+            "",
+            text,
+        )
         safe = re.sub(r"\s+", "_", safe)
         safe = safe.strip("_")
         if not safe:

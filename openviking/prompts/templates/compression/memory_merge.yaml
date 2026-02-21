@@ -2,7 +2,7 @@ metadata:
   id: "compression.memory_merge"
   name: "Memory Merge"
   description: "Merge existing memory with new information"
-  version: "1.0.0"
+  version: "1.1.0"
   language: "en"
   category: "compression"
 
@@ -40,6 +40,8 @@ template: |
   Requirements:
   - Remove duplicate information
   - Keep the most up-to-date details
+  - If there is a conflict, update only the conflicting statement with the newer fact
+  - Preserve non-conflicting details from existing content; do not drop unrelated information
   - Maintain a coherent narrative
   - Output ONLY the merged content, no explanation
   - Output MUST be written in **{{ output_language }}** (if output_language is "auto", infer dominant language from inputs)

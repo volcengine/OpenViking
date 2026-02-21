@@ -61,9 +61,6 @@ class OpenAIVLM(VLMBase):
             "temperature": self.temperature,
         }
 
-        if self.provider == "volcengine":
-            kwargs["thinking"] = {"type": "disabled" if not thinking else "enabled"}
-
         response = client.chat.completions.create(**kwargs)
         self._update_token_usage_from_response(response)
         return response.choices[0].message.content or ""
@@ -78,9 +75,6 @@ class OpenAIVLM(VLMBase):
             "messages": [{"role": "user", "content": prompt}],
             "temperature": self.temperature,
         }
-
-        if self.provider == "volcengine":
-            kwargs["thinking"] = {"type": "disabled" if not thinking else "enabled"}
 
         last_error = None
         for attempt in range(max_retries + 1):
@@ -131,6 +125,7 @@ class OpenAIVLM(VLMBase):
         self,
         prompt: str,
         images: List[Union[str, Path, bytes]],
+        thinking: bool = False,
     ) -> str:
         """Get vision completion"""
         client = self.get_client()
@@ -140,11 +135,13 @@ class OpenAIVLM(VLMBase):
             content.append(self._prepare_image(img))
         content.append({"type": "text", "text": prompt})
 
-        response = client.chat.completions.create(
-            model=self.model or "gpt-4o-mini",
-            messages=[{"role": "user", "content": content}],
-            temperature=self.temperature,
-        )
+        kwargs = {
+            "model": self.model or "gpt-4o-mini",
+            "messages": [{"role": "user", "content": content}],
+            "temperature": self.temperature,
+        }
+
+        response = client.chat.completions.create(**kwargs)
         self._update_token_usage_from_response(response)
         return response.choices[0].message.content or ""
 
@@ -152,6 +149,7 @@ class OpenAIVLM(VLMBase):
         self,
         prompt: str,
         images: List[Union[str, Path, bytes]],
+        thinking: bool = False,
     ) -> str:
         """Get vision completion asynchronously"""
         client = self.get_async_client()
@@ -161,10 +159,12 @@ class OpenAIVLM(VLMBase):
             content.append(self._prepare_image(img))
         content.append({"type": "text", "text": prompt})
 
-        response = await client.chat.completions.create(
-            model=self.model or "gpt-4o-mini",
-            messages=[{"role": "user", "content": content}],
-            temperature=self.temperature,
-        )
+        kwargs = {
+            "model": self.model or "gpt-4o-mini",
+            "messages": [{"role": "user", "content": content}],
+            "temperature": self.temperature,
+        }
+
+        response = await client.chat.completions.create(**kwargs)
         self._update_token_usage_from_response(response)
         return response.choices[0].message.content or ""

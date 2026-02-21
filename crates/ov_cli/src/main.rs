@@ -3,6 +3,7 @@ mod commands;
 mod config;
 mod error;
 mod output;
+mod tui;
 
 use clap::{Parser, Subcommand};
 use config::Config;
@@ -267,6 +268,7 @@ enum Commands {
     /// Run content pattern search
     Grep {
         /// Target URI
+        #[arg(short, long, default_value = "viking://")]
         uri: String,
         /// Search pattern
         pattern: String,
@@ -288,6 +290,12 @@ enum Commands {
         /// JSON {"role":"...","content":"..."} for a single message,
         /// or JSON array of such objects for multiple messages.
         content: String,
+    },
+    /// Interactive TUI file explorer
+    Tui {
+        /// Viking URI to start browsing (default: viking://)
+        #[arg(default_value = "viking://")]
+        uri: String,
     },
     /// Configuration management
     Config {
@@ -494,6 +502,9 @@ async fn main() {
         Commands::AddMemory { content } => {
             handle_add_memory(content, ctx).await
         }
+        Commands::Tui { uri } => {
+            handle_tui(uri, ctx).await
+        }
         Commands::Config { action } => handle_config(action, ctx).await,
         Commands::Version => {
             println!("{}", env!("CARGO_PKG_VERSION"));
@@ -523,7 +534,7 @@ async fn main() {
 }
 
 async fn handle_add_resource(
-    path: String,
+    mut path: String,
     to: Option<String>,
     reason: String,
     instruction: String,
@@ -531,6 +542,34 @@ async fn handle_add_resource(
     timeout: Option<f64>,
     ctx: CliContext,
 ) -> Result<()> {
+    // Validate path: if it's a local path, check if it exists
+    if !path.starts_with("http://") && !path.starts_with("https://") {
+        use std::path::Path;
+        
+        // Unescape path: replace backslash followed by space with just space
+        let unescaped_path = path.replace("\\ ", " ");
+        let path_obj = Path::new(&unescaped_path);
+        if !path_obj.exists() {
+            eprintln!("Error: Path '{}' does not exist.", path);
+            
+            // Check if there might be unquoted spaces
+            use std::env;
+            let args: Vec<String> = env::args().collect();
+            
+            if let Some(add_resource_pos) = args.iter().position(|s| s == "add-resource" || s == "add") {
+                if args.len() > add_resource_pos + 2 {
+                    let extra_args = &args[add_resource_pos + 2..];
+                    let suggested_path = format!("{} {}", path, extra_args.join(" "));
+                    eprintln!("\nIt looks like you may have forgotten to quote a path with spaces.");
+                    eprintln!("Suggested command: ov add-resource \"{}\"", suggested_path);
+                }
+            }
+            
+            std::process::exit(1);
+        }
+        path = unescaped_path;
+    }
+    
     let client = ctx.get_client();
     commands::resources::add_resource(
         &client, &path, to, reason, instruction, wait, timeout, ctx.output_format, ctx.compact
@@ -820,4 +859,9 @@ async fn handle_health(ctx: CliContext) -> Result<()> {
         std::process::exit(1);
     }
     Ok(())
+}
+
+async fn handle_tui(uri: String, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    tui::run_tui(client, &uri).await
 }

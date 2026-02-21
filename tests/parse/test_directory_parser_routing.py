@@ -174,8 +174,7 @@ class TestParserSelection:
         for ext in self.TEXT_FALLBACK_EXTENSIONS:
             assert ext in processable_exts, f"{ext} should be processable (text-fallback)"
 
-        # .bmp and .rar are unsupported
-        assert ".bmp" in unsupported_exts
+        # .rar are unsupported
         assert ".rar" in unsupported_exts
 
     def test_each_processable_file_has_a_parser_or_is_text(

@@ -9,8 +9,8 @@ from rich.panel import Panel
 from rich.markdown import Markdown
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
-from client import MemexClient
-from rag.recipe import MemexRecipe
+from ..client import MemexClient
+from ..rag.recipe import MemexRecipe
 
 
 class QueryCommands:

@@ -42,7 +42,7 @@ jobs:
             artifact_name: ov-windows-x86_64.exe
 
     steps:
-    - uses: actions/checkout@v4
+    - uses: actions/checkout@v6
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@v1
@@ -65,7 +65,7 @@ jobs:
         echo "CXX_aarch64_unknown_linux_gnu=aarch64-linux-gnu-g++" >> $GITHUB_ENV
 
     - name: Cache Cargo registry and index
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: |
           ~/.cargo/registry/index
@@ -77,7 +77,7 @@ jobs:
           ${{ runner.os }}-cargo-
 
     - name: Cache build artifacts
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: target
         key: ${{ runner.os }}-target-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}-${{ hashFiles('crates/**/*.rs') }}
@@ -123,7 +123,7 @@ jobs:
         fi
 
     - name: Upload artifacts
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v6
       with:
         name: ${{ matrix.artifact_name }}
         path: artifacts/*
@@ -137,14 +137,14 @@ jobs:
       contents: write
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@v6
 
     - name: Get version from tag
       id: get_version
       run: echo "version=${GITHUB_REF#refs/tags/cli@}" >> $GITHUB_OUTPUT
 
     - name: Download all artifacts
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v7
       with:
         path: artifacts
 

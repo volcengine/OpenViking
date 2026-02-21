@@ -119,6 +119,7 @@ class ResourceProcessor:
         except Exception as e:
             result["status"] = "error"
             result["errors"].append(f"Parse error: {e}")
+            logger.error(f"[ResourceProcessor] Parse error: {e}")
             return result
 
         # parse_result contains:
