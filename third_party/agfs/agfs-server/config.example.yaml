@@ -149,6 +149,7 @@ plugins:
 #        access_key_id: key_id
 #        secret_access_key: secret
 #        prefix: agfs/ # Optional: all keys will be prefixed with "agfs/"
+#        use_path_style: true # Optional: enable path-style addressing (required for MinIO etc.)
 #
 #  # ============================================================================
 #  # HTTPFS - HTTP File Server (Multiple Instances)

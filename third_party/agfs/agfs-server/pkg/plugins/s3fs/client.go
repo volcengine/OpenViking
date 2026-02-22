@@ -34,6 +34,7 @@ type S3Config struct {
 	Endpoint        string // Optional custom endpoint (for S3-compatible services)
 	Prefix          string // Optional prefix for all keys
 	DisableSSL      bool   // For testing with local S3
+	UsePathStyle    bool  // Whether to use path-style addressing (true) or virtual-host-style (false)
 }
 
 // NewS3Client creates a new S3 client
@@ -63,11 +64,13 @@ func NewS3Client(cfg S3Config) (*S3Client, error) {
 	// Create S3 client options
 	clientOpts := []func(*s3.Options){}
 
-	// Set custom endpoint if provided (for MinIO, LocalStack, etc.)
+	// Set custom endpoint if provided (for MinIO, LocalStack, TOS, etc.)
 	if cfg.Endpoint != "" {
 		clientOpts = append(clientOpts, func(o *s3.Options) {
 			o.BaseEndpoint = aws.String(cfg.Endpoint)
-			o.UsePathStyle = true // Required for MinIO and some S3-compatible services
+			// true represent UsePathStyle for MinIO and some S3-compatible services
+			// false represent VirtualHostStyle for TOS  and some S3-compatible services
+			o.UsePathStyle = cfg.UsePathStyle 
 		})
 	}
 
