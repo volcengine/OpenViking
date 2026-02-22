@@ -50,6 +50,5 @@ ENV_INDEX_MAINTENANCE_SECONDS = "VECTORDB_INDEX_MAINTENANCE_SECONDS"
 
 
 # ==================== Other constants ====================
-DEFAULT_PROJECT_NAME = "default"  # Default project name
 DEFAULT_LIMIT = 10  # Default search return result count
 STORAGE_DIR_NAME = "store"  # Storage directory name

@@ -4,9 +4,8 @@ from typing import Dict, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
-from openviking.storage.vectordb.utils.constants import DEFAULT_PROJECT_NAME
-
 COLLECTION_NAME = "context"
+DEFAULT_PROJECT_NAME = "default"
 
 
 class VolcengineConfig(BaseModel):
