@@ -15,15 +15,19 @@ Responsibilities:
 import asyncio
 import hashlib
 import json
+import shutil
+import subprocess
+import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
-from pathlib import PurePath
+from pathlib import Path, PurePath
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from pyagfs import AGFSClient
 
 from openviking.storage.vikingdb_interface import VikingDBInterface
 from openviking.utils.time_utils import format_simplified, get_current_timestamp
+from openviking_cli.exceptions import InvalidArgumentError, ProcessingError, UnavailableError
 from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
 
@@ -31,6 +35,41 @@ if TYPE_CHECKING:
     from openviking_cli.utils.config import RerankConfig
 
 logger = get_logger(__name__)
+
+_SG_LANGUAGE_BY_SUFFIX = {
+    ".py": "python",
+    ".js": "javascript",
+    ".jsx": "jsx",
+    ".ts": "typescript",
+    ".tsx": "tsx",
+    ".go": "go",
+    ".rs": "rust",
+    ".java": "java",
+    ".kt": "kotlin",
+    ".kts": "kotlin",
+    ".c": "c",
+    ".h": "c",
+    ".cc": "cpp",
+    ".cpp": "cpp",
+    ".cxx": "cpp",
+    ".hpp": "cpp",
+    ".cs": "csharp",
+    ".rb": "ruby",
+    ".php": "php",
+    ".swift": "swift",
+    ".scala": "scala",
+    ".lua": "lua",
+    ".json": "json",
+    ".yaml": "yaml",
+    ".yml": "yaml",
+    ".toml": "toml",
+    ".html": "html",
+    ".css": "css",
+    ".scss": "scss",
+    ".vue": "vue",
+    ".svelte": "svelte",
+    ".sql": "sql",
+}
 
 
 # ========== Dataclass ==========
@@ -212,6 +251,337 @@ class VikingFS:
             if PurePath(rel_path).match(pattern):
                 matches.append(f"{base_uri}/{rel_path}")
         return {"matches": matches, "count": len(matches)}
+
+    async def ast_grep(
+        self,
+        uri: str,
+        pattern: Optional[str] = None,
+        rule: Optional[str] = None,
+        language: Optional[str] = None,
+        file_glob: str = "**/*",
+        limit: int = 200,
+        max_file_size_kb: int = 512,
+    ) -> Dict[str, Any]:
+        """Search code structure with ast-grep."""
+        if bool(pattern) == bool(rule):
+            raise InvalidArgumentError("Exactly one of 'pattern' or 'rule' must be provided")
+        if not file_glob:
+            raise InvalidArgumentError("'file_glob' cannot be empty")
+        if limit <= 0:
+            raise InvalidArgumentError("'limit' must be a positive integer")
+        if max_file_size_kb <= 0:
+            raise InvalidArgumentError("'max_file_size_kb' must be a positive integer")
+        if shutil.which("sg") is None:
+            raise UnavailableError("ast-grep", "missing required binary: sg")
+
+        entries = await self.tree(uri, output="original", show_all_hidden=False)
+
+        skipped_files = 0
+        max_file_size_bytes = max_file_size_kb * 1024
+        candidates: List[Dict[str, Any]] = []
+
+        for entry in entries:
+            if entry.get("isDir"):
+                continue
+            rel_path = entry.get("rel_path", "")
+            if not rel_path or not PurePath(rel_path).match(file_glob):
+                continue
+
+            size = int(entry.get("size", 0) or 0)
+            if size > max_file_size_bytes:
+                skipped_files += 1
+                continue
+
+            resolved_language = language or self._infer_sg_language(rel_path)
+            if resolved_language is None:
+                skipped_files += 1
+                continue
+
+            candidates.append(
+                {
+                    "rel_path": rel_path,
+                    "uri": entry.get("uri", str(VikingURI(uri).join(rel_path))),
+                    "language": resolved_language,
+                }
+            )
+
+        if not candidates:
+            return {
+                "matches": [],
+                "count": 0,
+                "scanned_files": 0,
+                "skipped_files": skipped_files,
+                "truncated": False,
+            }
+
+        matches: List[Dict[str, Any]] = []
+        scanned_files_total = 0
+        with tempfile.TemporaryDirectory(prefix="ov_ast_grep_") as tmp_dir:
+            scan_root = Path(tmp_dir) / "scan_root"
+            scan_root.mkdir(parents=True, exist_ok=True)
+            rule_path = self._prepare_ast_rule_file(rule, tmp_dir)
+
+            groups: Dict[str, List[Dict[str, Any]]] = {}
+            for candidate in candidates:
+                candidate_language = language or candidate["language"]
+                groups.setdefault(candidate_language, []).append(candidate)
+
+            for group_language, group_candidates in groups.items():
+                path_map = await self._materialize_ast_grep_files(scan_root, group_candidates)
+                if not path_map:
+                    skipped_files += len(group_candidates)
+                    continue
+
+                scanned_files = len(path_map)
+                scanned_files_total += scanned_files
+                try:
+                    raw_output = await asyncio.to_thread(
+                        self._run_ast_grep_scan,
+                        file_paths=list(path_map.keys()),
+                        pattern=pattern,
+                        rule_path=rule_path,
+                        language=group_language,
+                        cwd=str(scan_root),
+                    )
+                except ProcessingError:
+                    raise
+                except Exception as exc:
+                    raise ProcessingError(f"ast-grep execution failed: {exc}") from exc
+
+                parsed_matches = self._parse_ast_grep_output(raw_output, path_map)
+                matches.extend(parsed_matches)
+                skipped_files += len(group_candidates) - scanned_files
+
+        matches.sort(
+            key=lambda m: (
+                m.get("uri", ""),
+                int(m.get("start_line", 0) or 0),
+                int(m.get("start_col", 0) or 0),
+            )
+        )
+        total_matches = len(matches)
+        truncated = total_matches > limit
+        if truncated:
+            matches = matches[:limit]
+
+        return {
+            "matches": matches,
+            "count": total_matches,
+            "scanned_files": scanned_files_total,
+            "skipped_files": skipped_files,
+            "truncated": truncated,
+        }
+
+    async def _materialize_ast_grep_files(
+        self, scan_root: Path, candidates: List[Dict[str, Any]]
+    ) -> Dict[str, Dict[str, Any]]:
+        path_map: Dict[str, Dict[str, Any]] = {}
+        for candidate in candidates:
+            local_file = (scan_root / candidate["rel_path"]).resolve()
+            local_file.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                content = await self.read_file(candidate["uri"])
+            except Exception:
+                continue
+            local_file.write_text(content, encoding="utf-8")
+            path_map[str(local_file)] = candidate
+            path_map[candidate["rel_path"]] = candidate
+        return path_map
+
+    def _prepare_ast_rule_file(self, rule: Optional[str], tmp_dir: str) -> Optional[str]:
+        if not rule:
+            return None
+        rule_path = Path(rule).expanduser()
+        if rule_path.exists() and rule_path.is_file():
+            return str(rule_path.resolve())
+
+        generated_rule = Path(tmp_dir) / "ast_rule.yml"
+        generated_rule.write_text(rule, encoding="utf-8")
+        return str(generated_rule.resolve())
+
+    def _infer_sg_language(self, rel_path: str) -> Optional[str]:
+        return _SG_LANGUAGE_BY_SUFFIX.get(Path(rel_path).suffix.lower())
+
+    def _run_ast_grep_scan(
+        self,
+        *,
+        file_paths: List[str],
+        pattern: Optional[str],
+        rule_path: Optional[str],
+        language: Optional[str],
+        cwd: Optional[str] = None,
+    ) -> str:
+        commands = self._build_ast_grep_commands(
+            file_paths=file_paths,
+            pattern=pattern,
+            rule_path=rule_path,
+            language=language,
+        )
+        attempted_errors: List[str] = []
+        for command in commands:
+            try:
+                proc = subprocess.run(
+                    command,
+                    cwd=cwd,
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            except FileNotFoundError as exc:
+                raise UnavailableError("ast-grep", "missing required binary: sg") from exc
+
+            if proc.returncode == 0:
+                return proc.stdout
+
+            stderr = (proc.stderr or "").strip()
+            attempted_errors.append(f"{' '.join(command[:4])}: {stderr}")
+
+        details = "; ".join(attempted_errors[-4:])
+        raise ProcessingError(f"ast-grep command failed: {details}")
+
+    def _build_ast_grep_commands(
+        self,
+        *,
+        file_paths: List[str],
+        pattern: Optional[str],
+        rule_path: Optional[str],
+        language: Optional[str],
+    ) -> List[List[str]]:
+        command_variants: List[List[str]] = []
+        base_options = ["--json"]
+        if pattern is not None:
+            base_options.extend(["--pattern", pattern])
+        if rule_path is not None:
+            base_options.extend(["--rule", rule_path])
+
+        language_options: List[List[str]] = [[]]
+        if language:
+            language_options = [["--lang", language], ["-l", language], []]
+
+        for lang_option in language_options:
+            command_variants.append(["sg", "scan", *base_options, *lang_option, *file_paths])
+            command_variants.append(["sg", *base_options, *lang_option, *file_paths])
+
+        return command_variants
+
+    def _parse_ast_grep_output(
+        self, raw_output: str, path_map: Dict[str, Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        payloads = self._decode_ast_grep_payloads(raw_output)
+        results: List[Dict[str, Any]] = []
+
+        for payload in payloads:
+            record = payload
+            if isinstance(payload, dict) and isinstance(payload.get("matches"), list):
+                for match in payload["matches"]:
+                    normalized = self._normalize_ast_match(match, path_map)
+                    if normalized is not None:
+                        results.append(normalized)
+                continue
+            if isinstance(payload, dict) and isinstance(payload.get("results"), list):
+                for match in payload["results"]:
+                    normalized = self._normalize_ast_match(match, path_map)
+                    if normalized is not None:
+                        results.append(normalized)
+                continue
+
+            normalized = self._normalize_ast_match(record, path_map)
+            if normalized is not None:
+                results.append(normalized)
+
+        return results
+
+    def _decode_ast_grep_payloads(self, raw_output: str) -> List[Dict[str, Any]]:
+        text = (raw_output or "").strip()
+        if not text:
+            return []
+
+        try:
+            payload = json.loads(text)
+        except json.JSONDecodeError:
+            payload = None
+
+        if isinstance(payload, list):
+            return [item for item in payload if isinstance(item, dict)]
+        if isinstance(payload, dict):
+            return [payload]
+
+        decoded: List[Dict[str, Any]] = []
+        for line in text.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                item = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(item, dict):
+                decoded.append(item)
+        return decoded
+
+    def _normalize_ast_match(
+        self, match: Dict[str, Any], path_map: Dict[str, Dict[str, Any]]
+    ) -> Optional[Dict[str, Any]]:
+        if not isinstance(match, dict):
+            return None
+
+        file_path = str(match.get("file") or match.get("path") or "")
+        if not file_path:
+            return None
+        normalized_path = str(Path(file_path).resolve())
+
+        meta = path_map.get(file_path) or path_map.get(normalized_path)
+        if meta is None:
+            return None
+
+        range_info = match.get("range", {}) if isinstance(match.get("range"), dict) else {}
+        start = range_info.get("start", {}) if isinstance(range_info.get("start"), dict) else {}
+        end = range_info.get("end", {}) if isinstance(range_info.get("end"), dict) else {}
+
+        start_line = self._extract_position_value(start, "line", default=0, add_one=True)
+        start_col = self._extract_position_value(start, "column", default=0, add_one=True)
+        end_line = self._extract_position_value(end, "line", default=0, add_one=True)
+        end_col = self._extract_position_value(end, "column", default=0, add_one=True)
+
+        if start_line == 0:
+            start_line = self._extract_int(match.get("line"), default=0)
+        if end_line == 0:
+            end_line = start_line
+
+        text = match.get("text", "")
+        if not text:
+            lines = match.get("lines")
+            if isinstance(lines, list):
+                text = "\n".join(str(line) for line in lines)
+            elif isinstance(lines, str):
+                text = lines
+            else:
+                text = str(match.get("content", ""))
+
+        return {
+            "uri": meta["uri"],
+            "language": match.get("language", meta.get("language")),
+            "start_line": start_line,
+            "start_col": start_col,
+            "end_line": end_line,
+            "end_col": end_col,
+            "content": text,
+        }
+
+    def _extract_position_value(
+        self, position: Dict[str, Any], key: str, default: int = 0, add_one: bool = False
+    ) -> int:
+        raw_value = position.get(key)
+        if raw_value is None:
+            return default
+        value = self._extract_int(raw_value, default=default)
+        return value + 1 if add_one else value
+
+    def _extract_int(self, value: Any, default: int = 0) -> int:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return default
 
     async def _batch_fetch_abstracts(
         self,

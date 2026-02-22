@@ -67,7 +67,7 @@ The Service layer decouples business logic from the transport layer, enabling re
 
 | Service | Responsibility | Key Methods |
 |---------|----------------|-------------|
-| **FSService** | File system operations | ls, mkdir, rm, mv, tree, stat, read, abstract, overview, grep, glob |
+| **FSService** | File system operations | ls, mkdir, rm, mv, tree, stat, read, abstract, overview, grep, glob, ast-grep |
 | **SearchService** | Semantic search | search, find |
 | **SessionService** | Session management | session, sessions, commit, delete |
 | **ResourceService** | Resource import | add_resource, add_skill, wait_processed |

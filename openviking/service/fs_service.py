@@ -3,7 +3,7 @@
 """
 File System Service for OpenViking.
 
-Provides file system operations: ls, mkdir, rm, mv, tree, stat, read, abstract, overview, grep, glob.
+Provides file system operations: ls, mkdir, rm, mv, tree, stat, read, abstract, overview, grep, glob, ast-grep.
 """
 
 from typing import Any, Dict, List, Optional
@@ -145,3 +145,25 @@ class FSService:
         """File pattern matching."""
         viking_fs = self._ensure_initialized()
         return await viking_fs.glob(pattern, uri=uri)
+
+    async def ast_grep(
+        self,
+        uri: str,
+        pattern: Optional[str] = None,
+        rule: Optional[str] = None,
+        language: Optional[str] = None,
+        file_glob: str = "**/*",
+        limit: int = 200,
+        max_file_size_kb: int = 512,
+    ) -> Dict[str, Any]:
+        """Code structure search powered by ast-grep."""
+        viking_fs = self._ensure_initialized()
+        return await viking_fs.ast_grep(
+            uri=uri,
+            pattern=pattern,
+            rule=rule,
+            language=language,
+            file_glob=file_glob,
+            limit=limit,
+            max_file_size_kb=max_file_size_kb,
+        )

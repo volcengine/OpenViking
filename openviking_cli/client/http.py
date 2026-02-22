@@ -460,6 +460,31 @@ class AsyncHTTPClient(BaseClient):
         )
         return self._handle_response(response)
 
+    async def ast_grep(
+        self,
+        uri: str,
+        pattern: Optional[str] = None,
+        rule: Optional[str] = None,
+        language: Optional[str] = None,
+        file_glob: str = "**/*",
+        limit: int = 200,
+        max_file_size_kb: int = 512,
+    ) -> Dict[str, Any]:
+        """Code structure search powered by ast-grep."""
+        response = await self._http.post(
+            "/api/v1/search/ast-grep",
+            json={
+                "uri": uri,
+                "pattern": pattern,
+                "rule": rule,
+                "language": language,
+                "file_glob": file_glob,
+                "limit": limit,
+                "max_file_size_kb": max_file_size_kb,
+            },
+        )
+        return self._handle_response(response)
+
     # ============= Relations =============
 
     async def relations(self, uri: str) -> List[Any]:

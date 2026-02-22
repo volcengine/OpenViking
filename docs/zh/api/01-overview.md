@@ -304,6 +304,7 @@ openviking -o json ls viking://resources/
 | POST | `/api/v1/search/search` | 上下文感知搜索 |
 | POST | `/api/v1/search/grep` | 模式搜索 |
 | POST | `/api/v1/search/glob` | 文件模式匹配 |
+| POST | `/api/v1/search/ast-grep` | 基于 AST 的代码搜索 |
 
 ### 关联
 

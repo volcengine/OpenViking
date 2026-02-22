@@ -135,12 +135,12 @@ Tests for the OpenViking HTTP server API and AsyncHTTPClient SDK.
 | `test_api_resources.py` | Resource management | `add_resource()` with/without wait, file not found, custom target URI, `wait_processed()` |
 | `test_api_filesystem.py` | Filesystem endpoints | `ls` root/simple/recursive, `mkdir`, `tree`, `stat`, `rm`, `mv` |
 | `test_api_content.py` | Content endpoints | `read`, `abstract`, `overview` |
-| `test_api_search.py` | Search endpoints | `find` with target_uri/score_threshold, `search` with session, `grep` case-insensitive, `glob` |
+| `test_api_search.py` | Search endpoints | `find` with target_uri/score_threshold, `search` with session, `grep` case-insensitive, `glob`, `ast-grep` |
 | `test_api_sessions.py` | Session endpoints | Create, list, get, delete session; add messages; compress; extract |
 | `test_api_relations.py` | Relations endpoints | Get relations, link single/multiple targets, unlink |
 | `test_api_observer.py` | Observer endpoints | Queue, VikingDB, VLM, system observer status |
 | `test_error_scenarios.py` | Error handling | Invalid JSON, missing fields, not found, wrong content type, invalid URI format |
-| `test_http_client_sdk.py` | AsyncHTTPClient SDK E2E | Health, add resource, wait, ls, mkdir, tree, session lifecycle, find, full workflow (real HTTP server) |
+| `test_http_client_sdk.py` | AsyncHTTPClient SDK E2E | Health, add resource, wait, ls, mkdir, tree, session lifecycle, find, ast-grep, full workflow (real HTTP server) |
 
 ### session/
 

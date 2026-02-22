@@ -121,6 +121,34 @@ async def test_sdk_find(http_client):
     assert hasattr(result, "total")
 
 
+async def test_sdk_ast_grep(http_client):
+    client, svc = http_client
+
+    async def fake_ast_grep(**kwargs):
+        return {
+            "matches": [
+                {
+                    "uri": "viking://resources/sample.py",
+                    "language": "python",
+                    "start_line": 1,
+                    "start_col": 1,
+                    "end_line": 1,
+                    "end_col": 5,
+                    "content": "def x():",
+                }
+            ],
+            "count": 1,
+            "scanned_files": 1,
+            "skipped_files": 0,
+            "truncated": False,
+        }
+
+    svc.fs.ast_grep = fake_ast_grep
+    result = await client.ast_grep(uri="viking://resources/", pattern="def $NAME($$$ARGS):")
+    assert isinstance(result, dict)
+    assert result["count"] == 1
+
+
 # ===================================================================
 # Full workflow
 # ===================================================================

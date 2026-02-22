@@ -74,3 +74,31 @@ class TestSearch:
         result = await client.search(query="sample", target_uri=parent_uri)
 
         assert hasattr(result, "resources")
+
+    async def test_ast_grep(self, client_with_resource_sync, monkeypatch):
+        client, uri = client_with_resource_sync
+
+        async def fake_ast_grep(**kwargs):
+            return {
+                "matches": [
+                    {
+                        "uri": "viking://resources/sample.py",
+                        "language": "python",
+                        "start_line": 1,
+                        "start_col": 1,
+                        "end_line": 1,
+                        "end_col": 5,
+                        "content": "def f():",
+                    }
+                ],
+                "count": 1,
+                "scanned_files": 1,
+                "skipped_files": 0,
+                "truncated": False,
+            }
+
+        monkeypatch.setattr(client._client._service.fs, "ast_grep", fake_ast_grep)
+        parent_uri = "/".join(uri.split("/")[:-1]) + "/"
+        result = await client.ast_grep(uri=parent_uri, pattern="def $NAME($$$ARGS):")
+        assert isinstance(result, dict)
+        assert result["count"] == 1

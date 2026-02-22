@@ -643,6 +643,65 @@ openviking glob "**/*.md" [--uri viking://resources/]
 
 ---
 
+### ast_grep()
+
+使用 [ast-grep](https://ast-grep.github.io/) 做代码结构搜索。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| uri | str | 是 | - | 要搜索的 Viking URI |
+| pattern | str | 否* | - | ast-grep 模式 |
+| rule | str | 否* | - | 规则文件路径或内联 YAML/JSON 规则内容 |
+| language | str | 否 | 按扩展名自动推断 | 语言提示 |
+| file_glob | str | 否 | `"**/*"` | 要扫描的文件 glob |
+| limit | int | 否 | 200 | 最多返回匹配数 |
+| max_file_size_kb | int | 否 | 512 | 跳过超过该大小的文件 |
+
+\* `pattern` 和 `rule` 必须且只能提供一个。
+
+**Python SDK (Embedded / HTTP)**
+
+```python
+results = client.ast_grep(
+    uri="viking://resources/",
+    pattern="def $NAME($$$ARGS):",
+    language="python",
+    file_glob="**/*.py",
+)
+```
+
+**HTTP API**
+
+```
+POST /api/v1/search/ast-grep
+```
+
+```bash
+curl -X POST http://localhost:1933/api/v1/search/ast-grep \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "uri": "viking://resources/",
+    "pattern": "def $NAME($$$ARGS):",
+    "language": "python",
+    "file_glob": "**/*.py"
+  }'
+```
+
+**CLI**
+
+```bash
+openviking ast-grep viking://resources/ "def $NAME($$$ARGS):" \
+  --language python \
+  --file-glob "**/*.py"
+```
+
+完整响应示例见：[检索 API](06-retrieval.md#ast_grep)。
+
+---
+
 ### link()
 
 创建资源之间的关联。

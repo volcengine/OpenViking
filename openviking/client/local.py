@@ -206,6 +206,27 @@ class LocalClient(BaseClient):
         """File pattern matching."""
         return await self._service.fs.glob(pattern, uri=uri)
 
+    async def ast_grep(
+        self,
+        uri: str,
+        pattern: Optional[str] = None,
+        rule: Optional[str] = None,
+        language: Optional[str] = None,
+        file_glob: str = "**/*",
+        limit: int = 200,
+        max_file_size_kb: int = 512,
+    ) -> Dict[str, Any]:
+        """Code structure search powered by ast-grep."""
+        return await self._service.fs.ast_grep(
+            uri=uri,
+            pattern=pattern,
+            rule=rule,
+            language=language,
+            file_glob=file_glob,
+            limit=limit,
+            max_file_size_kb=max_file_size_kb,
+        )
+
     # ============= Relations =============
 
     async def relations(self, uri: str) -> List[Any]:

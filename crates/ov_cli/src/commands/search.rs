@@ -55,3 +55,22 @@ pub async fn glob(
     output_success(&result, output_format, compact);
     Ok(())
 }
+
+pub async fn ast_grep(
+    client: &HttpClient,
+    uri: &str,
+    pattern: Option<&str>,
+    rule: Option<&str>,
+    language: Option<&str>,
+    file_glob: &str,
+    limit: i32,
+    max_file_size_kb: i32,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let result = client
+        .ast_grep(uri, pattern, rule, language, file_glob, limit, max_file_size_kb)
+        .await?;
+    output_success(&result, output_format, compact);
+    Ok(())
+}

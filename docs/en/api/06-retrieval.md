@@ -424,6 +424,97 @@ openviking glob "**/*.md" [--uri viking://resources/]
 
 ---
 
+### ast_grep()
+
+Search code structure using [ast-grep](https://ast-grep.github.io/).
+
+**Parameters**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| uri | str | Yes | - | Viking URI to search in |
+| pattern | str | No* | - | ast-grep pattern |
+| rule | str | No* | - | Rule file path or inline YAML/JSON rule content |
+| language | str | No | auto by extension | Language hint for parser |
+| file_glob | str | No | `"**/*"` | File glob to scan |
+| limit | int | No | 200 | Max returned matches |
+| max_file_size_kb | int | No | 512 | Skip files larger than this size |
+
+\* Exactly one of `pattern` or `rule` is required.
+
+**Python SDK (Embedded / HTTP)**
+
+```python
+results = client.ast_grep(
+    uri="viking://resources/",
+    pattern="def $NAME($$$ARGS):",
+    language="python",
+    file_glob="**/*.py",
+    limit=100,
+)
+
+print(f"Found {results['count']} matches")
+for match in results["matches"]:
+    print(f"{match['uri']}:{match['start_line']}:{match['start_col']}")
+    print(match["content"])
+```
+
+**HTTP API**
+
+```
+POST /api/v1/search/ast-grep
+```
+
+```bash
+curl -X POST http://localhost:1933/api/v1/search/ast-grep \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "uri": "viking://resources/",
+    "pattern": "def $NAME($$$ARGS):",
+    "language": "python",
+    "file_glob": "**/*.py",
+    "limit": 100
+  }'
+```
+
+**CLI**
+
+```bash
+openviking ast-grep viking://resources/ "def $NAME($$$ARGS):" \
+  --language python \
+  --file-glob "**/*.py" \
+  --limit 100
+```
+
+**Response**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "matches": [
+      {
+        "uri": "viking://resources/app/main.py",
+        "language": "python",
+        "start_line": 10,
+        "start_col": 1,
+        "end_line": 12,
+        "end_col": 1,
+        "content": "def hello(name):\n    return f\"Hello {name}\""
+      }
+    ],
+    "count": 1,
+    "scanned_files": 3,
+    "skipped_files": 0,
+    "truncated": false
+  },
+  "time": 0.1
+}
+```
+
+---
+
 ## Retrieval Pipeline
 
 ```

@@ -279,6 +279,28 @@ enum Commands {
         #[arg(short, long, default_value = "viking://")]
         uri: String,
     },
+    /// Run AST-based code search
+    AstGrep {
+        /// Target URI
+        uri: String,
+        /// ast-grep pattern (required when --rule is not set)
+        pattern: Option<String>,
+        /// Rule file path or inline YAML/JSON content
+        #[arg(long)]
+        rule: Option<String>,
+        /// Language hint
+        #[arg(short, long)]
+        language: Option<String>,
+        /// File glob to scan
+        #[arg(long, default_value = "**/*")]
+        file_glob: String,
+        /// Maximum number of matches to return
+        #[arg(short = 'n', long, default_value = "200")]
+        limit: i32,
+        /// Skip files larger than this size (KB)
+        #[arg(long, default_value = "512")]
+        max_file_size_kb: i32,
+    },
     /// Add memory in one shot (creates session, adds messages, commits)
     AddMemory {
         /// Content to memorize. Plain string (treated as user message),
@@ -461,6 +483,9 @@ async fn main() {
         }
         Commands::Glob { pattern, uri } => {
             handle_glob(pattern, uri, ctx).await
+        }
+        Commands::AstGrep { uri, pattern, rule, language, file_glob, limit, max_file_size_kb } => {
+            handle_ast_grep(uri, pattern, rule, language, file_glob, limit, max_file_size_kb, ctx).await
         }
     };
 
@@ -743,6 +768,37 @@ async fn handle_grep(uri: String, pattern: String, ignore_case: bool, ctx: CliCo
 async fn handle_glob(pattern: String, uri: String, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     commands::search::glob(&client, &pattern, &uri, ctx.output_format, ctx.compact).await
+}
+
+async fn handle_ast_grep(
+    uri: String,
+    pattern: Option<String>,
+    rule: Option<String>,
+    language: Option<String>,
+    file_glob: String,
+    limit: i32,
+    max_file_size_kb: i32,
+    ctx: CliContext,
+) -> Result<()> {
+    if pattern.is_some() == rule.is_some() {
+        return Err(crate::error::Error::Client(
+            "Exactly one of pattern or --rule must be provided".to_string(),
+        ));
+    }
+    let client = ctx.get_client();
+    commands::search::ast_grep(
+        &client,
+        &uri,
+        pattern.as_deref(),
+        rule.as_deref(),
+        language.as_deref(),
+        &file_glob,
+        limit,
+        max_file_size_kb,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
 }
 
 async fn handle_health(ctx: CliContext) -> Result<()> {

@@ -150,6 +150,29 @@ class SyncHTTPClient:
         """File pattern matching."""
         return run_async(self._async_client.glob(pattern, uri))
 
+    def ast_grep(
+        self,
+        uri: str,
+        pattern: Optional[str] = None,
+        rule: Optional[str] = None,
+        language: Optional[str] = None,
+        file_glob: str = "**/*",
+        limit: int = 200,
+        max_file_size_kb: int = 512,
+    ) -> Dict:
+        """Code structure search powered by ast-grep."""
+        return run_async(
+            self._async_client.ast_grep(
+                uri=uri,
+                pattern=pattern,
+                rule=rule,
+                language=language,
+                file_glob=file_glob,
+                limit=limit,
+                max_file_size_kb=max_file_size_kb,
+            )
+        )
+
     # ============= File System =============
 
     def ls(

@@ -106,6 +106,7 @@ def test_cli_help_smoke():
         ["search", "--help"],
         ["grep", "--help"],
         ["glob", "--help"],
+        ["ast-grep", "--help"],
         # serve
         ["serve", "--help"],
         # system

@@ -66,7 +66,7 @@ Service 层将业务逻辑与传输层解耦，便于 HTTP Server 和 CLI 复用
 
 | Service | 职责 | 主要方法 |
 |---------|------|----------|
-| **FSService** | 文件系统操作 | ls, mkdir, rm, mv, tree, stat, read, abstract, overview, grep, glob |
+| **FSService** | 文件系统操作 | ls, mkdir, rm, mv, tree, stat, read, abstract, overview, grep, glob, ast-grep |
 | **SearchService** | 语义搜索 | search, find |
 | **SessionService** | 会话管理 | session, sessions, commit, delete |
 | **ResourceService** | 资源导入 | add_resource, add_skill, wait_processed |

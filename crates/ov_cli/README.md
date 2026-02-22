@@ -77,6 +77,7 @@ ov read viking://resources/...
 - `search` - Context-aware retrieval
 - `grep` - Content pattern search
 - `glob` - File glob pattern
+- `ast-grep` - AST-based code search
 
 ### System
 - `system wait` - Wait for async processing

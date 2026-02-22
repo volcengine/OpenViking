@@ -297,6 +297,28 @@ impl HttpClient {
         self.post("/api/v1/search/glob", &body).await
     }
 
+    pub async fn ast_grep(
+        &self,
+        uri: &str,
+        pattern: Option<&str>,
+        rule: Option<&str>,
+        language: Option<&str>,
+        file_glob: &str,
+        limit: i32,
+        max_file_size_kb: i32,
+    ) -> Result<serde_json::Value> {
+        let body = serde_json::json!({
+            "uri": uri,
+            "pattern": pattern,
+            "rule": rule,
+            "language": language,
+            "file_glob": file_glob,
+            "limit": limit,
+            "max_file_size_kb": max_file_size_kb,
+        });
+        self.post("/api/v1/search/ast-grep", &body).await
+    }
+
     // ============ Resource Methods ============
 
     pub async fn add_resource(

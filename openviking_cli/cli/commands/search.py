@@ -84,3 +84,34 @@ def register(app: typer.Typer) -> None:
     ) -> None:
         """Run file glob pattern search."""
         run(ctx, lambda client: client.glob(pattern, uri=uri))
+
+    @app.command("ast-grep")
+    def ast_grep_command(
+        ctx: typer.Context,
+        uri: str = typer.Argument(..., help="Target URI"),
+        pattern: Optional[str] = typer.Argument(None, help="ast-grep pattern"),
+        rule: Optional[str] = typer.Option(
+            None, "--rule", help="Rule file path or inline YAML/JSON rule content"
+        ),
+        language: Optional[str] = typer.Option(None, "--language", "-l", help="Language hint"),
+        file_glob: str = typer.Option("**/*", "--file-glob", help="File glob to scan"),
+        limit: int = typer.Option(200, "--limit", "-n", help="Maximum number of matches"),
+        max_file_size_kb: int = typer.Option(
+            512,
+            "--max-file-size-kb",
+            help="Skip files larger than this size (KB)",
+        ),
+    ) -> None:
+        """Run AST-based code search with ast-grep."""
+        run(
+            ctx,
+            lambda client: client.ast_grep(
+                uri=uri,
+                pattern=pattern,
+                rule=rule,
+                language=language,
+                file_glob=file_glob,
+                limit=limit,
+                max_file_size_kb=max_file_size_kb,
+            ),
+        )

@@ -643,6 +643,65 @@ openviking glob "**/*.md" [--uri viking://resources/]
 
 ---
 
+### ast_grep()
+
+Search code structure using [ast-grep](https://ast-grep.github.io/).
+
+**Parameters**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| uri | str | Yes | - | Viking URI to search in |
+| pattern | str | No* | - | ast-grep pattern |
+| rule | str | No* | - | Rule file path or inline YAML/JSON rule content |
+| language | str | No | auto by extension | Language hint for parser |
+| file_glob | str | No | `"**/*"` | File glob to scan |
+| limit | int | No | 200 | Max returned matches |
+| max_file_size_kb | int | No | 512 | Skip files larger than this size |
+
+\* Exactly one of `pattern` or `rule` is required.
+
+**Python SDK (Embedded / HTTP)**
+
+```python
+results = client.ast_grep(
+    uri="viking://resources/",
+    pattern="def $NAME($$$ARGS):",
+    language="python",
+    file_glob="**/*.py",
+)
+```
+
+**HTTP API**
+
+```
+POST /api/v1/search/ast-grep
+```
+
+```bash
+curl -X POST http://localhost:1933/api/v1/search/ast-grep \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "uri": "viking://resources/",
+    "pattern": "def $NAME($$$ARGS):",
+    "language": "python",
+    "file_glob": "**/*.py"
+  }'
+```
+
+**CLI**
+
+```bash
+openviking ast-grep viking://resources/ "def $NAME($$$ARGS):" \
+  --language python \
+  --file-glob "**/*.py"
+```
+
+For full response examples, see [Retrieval API](06-retrieval.md#ast_grep).
+
+---
+
 ### link()
 
 Create relations between resources.

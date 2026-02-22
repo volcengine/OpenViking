@@ -50,6 +50,18 @@ class GlobRequest(BaseModel):
     uri: str = "viking://"
 
 
+class AstGrepRequest(BaseModel):
+    """Request model for ast-grep."""
+
+    uri: str
+    pattern: Optional[str] = None
+    rule: Optional[str] = None
+    language: Optional[str] = None
+    file_glob: str = "**/*"
+    limit: int = 200
+    max_file_size_kb: int = 512
+
+
 @router.post("/find")
 async def find(
     request: FindRequest,
@@ -121,4 +133,23 @@ async def glob(
     """File pattern matching."""
     service = get_service()
     result = await service.fs.glob(request.pattern, uri=request.uri)
+    return Response(status="ok", result=result)
+
+
+@router.post("/ast-grep")
+async def ast_grep(
+    request: AstGrepRequest,
+    _: bool = Depends(verify_api_key),
+):
+    """Code structure search via ast-grep."""
+    service = get_service()
+    result = await service.fs.ast_grep(
+        uri=request.uri,
+        pattern=request.pattern,
+        rule=request.rule,
+        language=request.language,
+        file_glob=request.file_glob,
+        limit=request.limit,
+        max_file_size_kb=request.max_file_size_kb,
+    )
     return Response(status="ok", result=result)

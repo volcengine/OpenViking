@@ -303,6 +303,7 @@ Compact JSON with status wrapper, suitable for scripting. Overrides `--output`:
 | POST | `/api/v1/search/search` | Context-aware search |
 | POST | `/api/v1/search/grep` | Pattern search |
 | POST | `/api/v1/search/glob` | File pattern matching |
+| POST | `/api/v1/search/ast-grep` | AST-based code search |
 
 ### Relations
 

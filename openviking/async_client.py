@@ -299,6 +299,28 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         return await self._client.glob(pattern, uri=uri)
 
+    async def ast_grep(
+        self,
+        uri: str,
+        pattern: Optional[str] = None,
+        rule: Optional[str] = None,
+        language: Optional[str] = None,
+        file_glob: str = "**/*",
+        limit: int = 200,
+        max_file_size_kb: int = 512,
+    ) -> Dict:
+        """Code structure search powered by ast-grep."""
+        await self._ensure_initialized()
+        return await self._client.ast_grep(
+            uri=uri,
+            pattern=pattern,
+            rule=rule,
+            language=language,
+            file_glob=file_glob,
+            limit=limit,
+            max_file_size_kb=max_file_size_kb,
+        )
+
     async def mv(self, from_uri: str, to_uri: str) -> None:
         """Move resource"""
         await self._ensure_initialized()

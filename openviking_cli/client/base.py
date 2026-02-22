@@ -159,6 +159,20 @@ class BaseClient(ABC):
         """File pattern matching."""
         ...
 
+    @abstractmethod
+    async def ast_grep(
+        self,
+        uri: str,
+        pattern: Optional[str] = None,
+        rule: Optional[str] = None,
+        language: Optional[str] = None,
+        file_glob: str = "**/*",
+        limit: int = 200,
+        max_file_size_kb: int = 512,
+    ) -> Dict[str, Any]:
+        """Code structure search powered by ast-grep."""
+        ...
+
     # ============= Relations =============
 
     @abstractmethod
