@@ -1004,11 +1004,19 @@ class VikingFS:
         all_entries = []
         for entry in entries:
             name = entry.get("name", "")
+            # 修改后：通过截断字符串来兼容 7 位或更多位的微秒
+            raw_time = entry.get("modTime", "")
+            if raw_time and len(raw_time) > 26 and "+" in raw_time:
+                # 处理像 2026-02-21T13:20:23.1470042+08:00 这样的字符串
+                # 截断为 2026-02-21T13:20:23.147004+08:00
+                parts = raw_time.split("+")
+                # 保持时间部分最多 26 位 (YYYY-MM-DDTHH:MM:SS.mmmmmm)
+                raw_time = parts[0][:26] + "+" + parts[1]
             new_entry = {
                 "uri": str(VikingURI(uri).join(name)),
                 "size": entry.get("size", 0),
                 "isDir": entry.get("isDir", False),
-                "modTime": format_simplified(datetime.fromisoformat(entry.get("modTime", "")), now),
+                "modTime": format_simplified(datetime.fromisoformat(raw_time), now),
             }
             if entry.get("isDir"):
                 all_entries.append(new_entry)
