@@ -7,7 +7,7 @@ For HTTP mode, use AsyncHTTPClient or SyncHTTPClient.
 """
 
 import threading
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 from openviking.client import LocalClient, Session
 from openviking.service.debug_service import SystemStatus
@@ -164,10 +164,23 @@ class AsyncOpenViking:
             **kwargs,
         )
 
-    async def wait_processed(self, timeout: float = None) -> Dict[str, Any]:
-        """Wait for all queued processing to complete."""
+    async def wait_processed(
+        self,
+        timeout: float = None,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ) -> Dict[str, Any]:
+        """Wait for all queued processing to complete.
+
+        Args:
+            timeout: Wait timeout in seconds.
+            progress_callback: Optional callback invoked each poll iteration with
+                queue status dicts containing ``pending``, ``in_progress``,
+                ``processed``, ``error_count``, and ``total`` fields.
+        """
         await self._ensure_initialized()
-        return await self._client.wait_processed(timeout=timeout)
+        return await self._client.wait_processed(
+            timeout=timeout, progress_callback=progress_callback
+        )
 
     async def add_skill(
         self,

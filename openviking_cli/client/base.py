@@ -6,7 +6,7 @@ Defines the abstract base class that both LocalClient and AsyncHTTPClient implem
 """
 
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 
 class BaseClient(ABC):
@@ -53,8 +53,18 @@ class BaseClient(ABC):
         ...
 
     @abstractmethod
-    async def wait_processed(self, timeout: Optional[float] = None) -> Dict[str, Any]:
-        """Wait for all processing to complete."""
+    async def wait_processed(
+        self,
+        timeout: Optional[float] = None,
+        progress_callback: Optional[Callable[[Dict[str, Any]], None]] = None,
+    ) -> Dict[str, Any]:
+        """Wait for all processing to complete.
+
+        Args:
+            timeout: Wait timeout in seconds.
+            progress_callback: Optional callback invoked each poll iteration with
+                queue status dicts.
+        """
         ...
 
     # ============= File System =============

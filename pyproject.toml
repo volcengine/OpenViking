@@ -117,6 +117,7 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
 addopts = "-v --cov=openviking --cov-report=term-missing"
+cache_dir = ".pytest_cache_local"
 
 [tool.ruff]
 line-length = 100

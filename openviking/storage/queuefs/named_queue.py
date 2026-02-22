@@ -42,6 +42,11 @@ class QueueStatus:
     def is_complete(self) -> bool:
         return self.pending == 0 and self.in_progress == 0
 
+    @property
+    def total(self) -> int:
+        """Total number of items across all states."""
+        return self.processed + self.error_count + self.pending + self.in_progress
+
 
 class EnqueueHookBase(abc.ABC):
     """Enqueue hook base class.
