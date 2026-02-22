@@ -138,7 +138,7 @@ class OpenVikingConfig(BaseModel):
 
         # Remove sections managed by other loaders (e.g. server config)
         config_copy.pop("server", None)
-        
+
         # Handle parser configurations from nested "parsers" section
         parser_configs = {}
         if "parsers" in config_copy:
@@ -316,7 +316,7 @@ def initialize_openviking_config(
 
     Args:
         user: UserIdentifier for session management
-        path: Local storage path for embedded mode
+        path: Local storage path (workspace) for embedded mode
 
     Returns:
         Configured OpenVikingConfig instance
@@ -337,9 +337,8 @@ def initialize_openviking_config(
     if path:
         # Embedded mode: local storage
         config.storage.agfs.backend = config.storage.agfs.backend or "local"
-        config.storage.agfs.path = path
         config.storage.vectordb.backend = config.storage.vectordb.backend or "local"
-        config.storage.vectordb.path = path
+        config.storage.workspace = path
 
     # Ensure vector dimension is synced if not set in storage
     if config.storage.vectordb.dimension == 0:

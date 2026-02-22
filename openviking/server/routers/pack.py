@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Pack endpoints for OpenViking HTTP Server."""
 
+from typing import Optional
+
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
@@ -22,7 +24,8 @@ class ExportRequest(BaseModel):
 class ImportRequest(BaseModel):
     """Request model for import."""
 
-    file_path: str
+    file_path: Optional[str] = None
+    temp_path: Optional[str] = None
     parent: str
     force: bool = False
     vectorize: bool = True
@@ -46,8 +49,13 @@ async def import_ovpack(
 ):
     """Import .ovpack file."""
     service = get_service()
+
+    file_path = request.file_path
+    if request.temp_path:
+        file_path = request.temp_path
+
     result = await service.pack.import_ovpack(
-        request.file_path,
+        file_path,
         request.parent,
         force=request.force,
         vectorize=request.vectorize,
