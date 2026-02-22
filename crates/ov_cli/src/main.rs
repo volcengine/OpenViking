@@ -470,6 +470,18 @@ async fn main() {
     }
 }
 
+/// Resolve a relative local path to absolute. Pass through URLs and raw content unchanged.
+fn resolve_path(s: String) -> String {
+    let p = std::path::Path::new(&s);
+    if p.exists() {
+        std::fs::canonicalize(p)
+            .map(|abs| abs.to_string_lossy().into_owned())
+            .unwrap_or(s)
+    } else {
+        s
+    }
+}
+
 async fn handle_add_resource(
     mut path: String,
     to: Option<String>,
@@ -509,7 +521,7 @@ async fn handle_add_resource(
     
     let client = ctx.get_client();
     commands::resources::add_resource(
-        &client, &path, to, reason, instruction, wait, timeout, ctx.output_format, ctx.compact
+        &client, &resolve_path(path), to, reason, instruction, wait, timeout, ctx.output_format, ctx.compact
     ).await
 }
 
@@ -521,7 +533,7 @@ async fn handle_add_skill(
 ) -> Result<()> {
     let client = ctx.get_client();
     commands::resources::add_skill(
-        &client, &data, wait, timeout, ctx.output_format, ctx.compact
+        &client, &resolve_path(data), wait, timeout, ctx.output_format, ctx.compact
     ).await
 }
 
@@ -556,7 +568,7 @@ async fn handle_unlink(
 
 async fn handle_export(uri: String, to: String, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
-    commands::pack::export(&client, &uri, &to, ctx.output_format, ctx.compact
+    commands::pack::export(&client, &uri, &resolve_path(to), ctx.output_format, ctx.compact
     ).await
 }
 
@@ -569,7 +581,7 @@ async fn handle_import(
 ) -> Result<()> {
     let client = ctx.get_client();
     commands::pack::import(
-        &client, &file_path, &target_uri, force, no_vectorize, ctx.output_format, ctx.compact
+        &client, &resolve_path(file_path), &target_uri, force, no_vectorize, ctx.output_format, ctx.compact
     ).await
 }
 

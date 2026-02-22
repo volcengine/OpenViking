@@ -10,6 +10,14 @@ import typer
 from openviking_cli.cli.errors import run
 
 
+def _resolve_path(value: str) -> str:
+    """Resolve a relative local path to absolute. Pass through URLs and raw content."""
+    p = Path(value)
+    if p.exists():
+        return str(p.resolve())
+    return value
+
+
 def register(app: typer.Typer) -> None:
     """Register resource commands."""
 
@@ -79,7 +87,7 @@ def register(app: typer.Typer) -> None:
         run(
             ctx,
             lambda client: client.add_resource(
-                path=final_path,
+                path=_resolve_path(final_path),
                 target=to,
                 reason=reason,
                 instruction=instruction,
@@ -99,7 +107,7 @@ def register(app: typer.Typer) -> None:
         run(
             ctx,
             lambda client: client.add_skill(
-                data=data,
+                data=_resolve_path(data),
                 wait=wait,
                 timeout=timeout,
             ),

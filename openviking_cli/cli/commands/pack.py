@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Import/export pack commands."""
 
+from pathlib import Path
+
 import typer
 
 from openviking_cli.cli.errors import run
@@ -17,7 +19,8 @@ def register(app: typer.Typer) -> None:
         to: str = typer.Argument(..., help="Output .ovpack file path"),
     ) -> None:
         """Export context as .ovpack."""
-        run(ctx, lambda client: {"file": client.export_ovpack(uri, to)})
+        abs_to = str(Path(to).resolve())
+        run(ctx, lambda client: {"file": client.export_ovpack(uri, abs_to)})
 
     @app.command("import")
     def import_command(
@@ -32,11 +35,12 @@ def register(app: typer.Typer) -> None:
         ),
     ) -> None:
         """Import .ovpack into target URI."""
+        abs_file_path = str(Path(file_path).resolve())
         run(
             ctx,
             lambda client: {
                 "uri": client.import_ovpack(
-                    file_path=file_path,
+                    file_path=abs_file_path,
                     target=target_uri,
                     force=force,
                     vectorize=not no_vectorize,
