@@ -1,12 +1,16 @@
 ---
-name: adding-resource
-description: Add resources to OpenViking, aka. ov. Use when an agent needs to add files, URLs, or external knowledge during interactions. Trigger this tool when 1. sees keyword "ovr"; 2. is explicitly requested adding files or knowledge; 3. identifies valuable resources worth importing
+name: ovr
+description: Add resources to OpenViking. Trigger when user says "ovr", asks to import files/URLs, or when valuable external knowledge should be saved.
+user-invocable: true
+command-dispatch: tool
+command-tool: exec
+command-arg-mode: raw
 compatibility: CLI configured at `~/.openviking/ovcli.conf`
 ---
 
-# OpenViking (OV) `add-resource`
+# OpenViking (`/ovr`) — Add Resource
 
-The `ov add-resource` command imports external resources into OpenViking's context database — supporting local files, directories, URLs, and remote repositories. Resources are automatically processed with semantic analysis and organized under the `viking://resources/` namespace.
+The `ov add-resource` command (or `/ovr` slash command) imports external resources into OpenViking's context database — supporting local files, directories, URLs, and remote repositories.
 
 ## When to Use
 
@@ -14,6 +18,18 @@ The `ov add-resource` command imports external resources into OpenViking's conte
 - Adding web pages, articles, or online resources for future retrieval
 - Building a knowledge base from external sources
 - When an agent encounters valuable content that should persist across sessions
+
+## Usage
+
+### As a slash command:
+```
+/ovr https://raw.githubusercontent.com/volcengine/OpenViking/main/README.md
+```
+
+### Via model/tool invocation:
+```bash
+ov add-resource https://raw.githubusercontent.com/volcengine/OpenViking/main/README.md
+```
 
 ## Input Options
 
@@ -41,10 +57,10 @@ Add metadata to guide processing:
 ov add-resource ./api-docs.md --reason "REST API documentation for v2 endpoints"
 
 # Add processing instructions
-ov add-resource ./large-repo --instruction "Focus on authentication and authorization patterns"
+ov add-resource ./large-repo --instruction "Focus on authentication patterns"
 
 # Combine reason and instruction
-ov add-resource https://example.com/guide --reason "User guide" --instruction "Extract best practices and examples"
+ov add-resource https://example.com/guide --reason "User guide" --instruction "Extract best practices"
 ```
 
 ### Async Processing Control

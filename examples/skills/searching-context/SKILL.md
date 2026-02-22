@@ -1,31 +1,16 @@
 ---
-name: searching-context
-description: Search memories and resource context from OpenViking, aka. ov. Trigger this tool when 1. sees keyword "ovs"; 2. is explicitly requested searching files or knowledge; 3. sees `search context` request
+name: ovs
+description: Search OpenViking context. Trigger when user says "ovs", asks to search files/knowledge, or when context retrieval is needed.
+user-invocable: true
+command-dispatch: tool
+command-tool: exec
+command-arg-mode: raw
 compatibility: CLI configured at `~/.openviking/ovcli.conf`
 ---
-# OpenViking (OV) context searching
-The `ov search` command performs context-aware retrieval across all memories and resources in OpenViking — combining semantic understanding with directory recursive retrieval to find the most relevant context for any query.
 
-## Table of Content
-- When to Use
-- Search Modes
-  - Context-Aware Search (`ov search`)
-  - Content Pattern Search (`ov grep`)
-  - File Glob Search (`ov glob`)
-- Search Options
-  - Result Control
-  - Scope Control
-  - Session-Aware Search
-- Output
-- Other Utilities
-  - List Contents (`ov ls`)
-  - Tree View (`ov tree`)
-  - Read File Content (`ov read`)
-- Agent Best Practices
-  - Choosing Search Methods
-  - Query Formulation
-  - Combining with Other Commands
-- Prerequisite
+# OpenViking (`/ovs`) — Search Context
+
+The `ov search` command (or `/ovs` slash command) performs context-aware retrieval across all memories and resources in OpenViking — combining semantic understanding with directory recursive retrieval.
 
 ## When to Use
 
@@ -35,6 +20,18 @@ The `ov search` command performs context-aware retrieval across all memories and
 - When an agent needs to reference previously stored knowledge
 
 > note: cli command can be outdated, when sees error, use `--help` to get latest usage
+
+## Usage
+
+### As a slash command:
+```
+/ovs "how to handle API rate limits"
+```
+
+### Via model/tool invocation:
+```bash
+ov search "how to handle API rate limits"
+```
 
 ## Search Modes
 
@@ -105,7 +102,7 @@ ov search "user habits" --uri "viking://user/memories"
 ### Session-Aware Search
 
 ```bash
-# Search with session context (uses conversation history for better retrieval)
+# Search with session context
 ov search "previous decision" --session-id "session-abc123"
 ```
 
@@ -136,17 +133,8 @@ ov ls
 # List specific directory
 ov ls viking://resources/my-project
 
-# Simple path output (for scripts)
-ov ls viking://resources --simple
-
 # Recursive listing
 ov ls viking://resources --recursive
-
-# Show hidden files
-ov ls viking://resources --all
-
-# Control output limits
-ov ls viking://resources --node-limit 50 --abs-limit 128
 ```
 
 ### Tree View (`ov tree`)
@@ -154,36 +142,22 @@ ov ls viking://resources --node-limit 50 --abs-limit 128
 Visualize directory hierarchy:
 
 ```bash
-# Show tree structure
 ov tree viking://resources
-
-# Control depth and limits
-ov tree viking://resources --node-limit 100 --abs-limit 128
-
-# Show all files including hidden
-ov tree viking://resources --all
 ```
 
 ### Read File Content (`ov read`)
 
-Retrieve full content (L2 layer):
+Retrieve full content:
 
 ```bash
-# Read full content
 ov read viking://resources/docs/api.md
-
-# Read abstract (L0 - quick summary)
-ov abstract viking://resources/docs/api.md
-
-# Read overview (L1 - key points)
-ov overview viking://resources/docs/api.md
 ```
 
 ## Agent Best Practices
 
 ### Choosing Search Methods
 
-- **`ov search`** — Default choice. Context-aware, combines semantic + directory recursive retrieval
+- **`ov search`** — Default choice. Context-aware, combines semantic + directory retrieval
 - **`ov grep`** — Exact text pattern matching (like `grep` command)
 - **`ov glob`** — File path pattern matching (like shell glob)
 
@@ -200,23 +174,6 @@ ov search "REST API authentication with JWT tokens"
 
 # Even better with scope
 ov search "JWT token refresh flow" --uri "viking://resources/backend"
-```
-
-### Combining with Other Commands
-
-Use search results to guide further actions:
-
-```bash
-ov ls viking://resources/
-
-# Search for relevant files
-ov search "authentication" --uri "viking://resources/xxx"
-
-# Then read specific content
-ov read viking://resources/backend/auth.md
-
-# Or get overview for context
-ov overview viking://resources/backend
 ```
 
 ## Prerequisites
