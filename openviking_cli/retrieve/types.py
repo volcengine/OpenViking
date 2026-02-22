@@ -365,15 +365,15 @@ class FindResult:
     def _context_to_dict(self, ctx: MatchedContext) -> Dict[str, Any]:
         """Convert MatchedContext to dict."""
         return {
-            "uri": ctx.uri,
             "context_type": ctx.context_type.value,
+            "uri": ctx.uri,
             "is_leaf": ctx.is_leaf,
-            "abstract": ctx.abstract,
-            "overview": ctx.overview,
-            "category": ctx.category,
             "score": ctx.score,
+            "category": ctx.category,
             "match_reason": ctx.match_reason,
             "relations": [{"uri": r.uri, "abstract": r.abstract} for r in ctx.relations],
+            "abstract": ctx.abstract,
+            "overview": ctx.overview,
         }
 
     def _query_to_dict(self, q: TypedQuery) -> Dict[str, Any]:

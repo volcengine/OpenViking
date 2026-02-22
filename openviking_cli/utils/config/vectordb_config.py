@@ -19,6 +19,8 @@ class VolcengineConfig(BaseModel):
     )
     host: Optional[str] = Field(default=None, description="Volcengine VikingDB host (optional)")
 
+    model_config = {"extra": "forbid"}
+
 
 class VikingDBConfig(BaseModel):
     """Configuration for VikingDB private deployment."""
@@ -27,6 +29,8 @@ class VikingDBConfig(BaseModel):
     headers: Optional[Dict[str, str]] = Field(
         default_factory=dict, description="Custom headers for requests"
     )
+
+    model_config = {"extra": "forbid"}
 
 
 class VectorDBBackendConfig(BaseModel):
@@ -83,6 +87,8 @@ class VectorDBBackendConfig(BaseModel):
         default_factory=lambda: VikingDBConfig(),
         description="VikingDB private deployment configuration for 'vikingdb' type",
     )
+
+    model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
     def validate_config(self):

@@ -26,6 +26,12 @@ MANIFEST
 openviking.egg-info/
 data/
 
+# Rust
+Cargo.lock
+target/
+**/*.rs.bk
+*.pdb
+
 # PyInstaller
 #  Usually these files are written by a python script from a template
 #  before PyInstaller builds the exe, so as to inject date/other infos into it.
@@ -162,3 +168,4 @@ benchmark_stress_db/
 examples/data/
 third_party/agfs/bin/
 openviking/_version.py
+specs/

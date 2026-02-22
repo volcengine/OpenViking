@@ -21,17 +21,55 @@ def register(app: typer.Typer) -> None:
             "-r",
             help="List all subdirectories recursively",
         ),
+        output_format: str = typer.Option(
+            "agent", "--output-format", "-f", help="Output format: agent or original"
+        ),
+        abs_limit: int = typer.Option(256, "--abs-limit", "-l", help="Abstract content limit"),
+        show_all_hidden: bool = typer.Option(False, "--all", "-a", help="Show all hidden files"),
+        node_limit: int = typer.Option(
+            1000, "--node-limit", "-n", help="Maximum number of nodes to list"
+        ),
     ) -> None:
         """List directory contents."""
-        run(ctx, lambda client: client.ls(uri, simple=simple, recursive=recursive))
+        run(
+            ctx,
+            lambda client: client.ls(
+                uri,
+                simple=simple,
+                recursive=recursive,
+                output=output_format,
+                abs_limit=abs_limit,
+                show_all_hidden=show_all_hidden,
+                node_limit=node_limit,
+            ),
+        )
 
     @app.command("tree")
     def tree_command(
         ctx: typer.Context,
         uri: str = typer.Argument(..., help="Viking URI"),
+        output_format: str = typer.Option(
+            "agent", "--output-format", "-f", help="Output format: agent or original"
+        ),
+        abs_limit: int = typer.Option(128, "--abs-limit", "-l", help="Abstract content limit"),
+        show_all_hidden: bool = typer.Option(False, "--all", "-a", help="Show all hidden files"),
+        node_limit: int = typer.Option(
+            1000, "--node-limit", "-n", help="Maximum number of nodes to list"
+        ),
     ) -> None:
-        """Get directory tree."""
-        run(ctx, lambda client: client.tree(uri))
+        """
+        Get directory tree info.
+        """
+        run(
+            ctx,
+            lambda client: client.tree(
+                uri,
+                output=output_format,
+                abs_limit=abs_limit,
+                show_all_hidden=show_all_hidden,
+                node_limit=node_limit,
+            ),
+        )
 
     @app.command("mkdir")
     def mkdir_command(

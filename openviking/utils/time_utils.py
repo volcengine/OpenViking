@@ -16,6 +16,20 @@ def format_iso8601(dt: datetime) -> str:
     return dt.isoformat(timespec="milliseconds").replace("+00:00", "Z")
 
 
+def format_simplified(dt: datetime, now: datetime) -> str:
+    """
+    Format datetime object to simplified format: yyyy-MM-dd (if not in a day) or HH:mm:ss (if in a day).
+
+    This format is more readable for humans and is used in VikingDB.
+    """
+    dt = dt.replace(tzinfo=None)
+    # if in a day
+    if (now - dt).days < 1:
+        return dt.strftime("%H:%M:%S")
+    else:
+        return dt.strftime("%Y-%m-%d")
+
+
 def get_current_timestamp() -> str:
     """
     Get current timestamp in ISO 8601 format compatible with VikingDB.

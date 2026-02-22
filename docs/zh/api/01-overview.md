@@ -104,13 +104,11 @@ openviking [全局选项] <command> [参数] [命令选项]
 | 选项 | 说明 |
 |------|------|
 | `--output`, `-o` | 输出格式：`table`（默认）、`json` |
-| `--json` | 紧凑 JSON + `{ok, result}` 包装（用于脚本） |
 | `--version` | 显示 CLI 版本 |
 
 示例：
 
 ```bash
-openviking --json ls viking://resources/
 openviking -o json ls viking://resources/
 ```
 
@@ -208,17 +206,18 @@ openviking -o json ls viking://resources/
 }
 ```
 
-### 脚本模式（`--json`）
+### 紧凑模式（`--compact`, `-c`）
 
-紧凑 JSON + 状态包装，适用于脚本。覆盖 `--output`：
+- 当 `--output=json` 时：紧凑 JSON 格式 + `{ok, result}` 包装，适用于脚本
+- 当 `--output=table` 时：对表格输出采取精简表示（如去除空列等）
 
-**成功**
+**JSON 输出 - 成功**
 
 ```json
 {"ok": true, "result": ...}
 ```
 
-**错误**
+**JSON 输出 - 错误**
 
 ```json
 {"ok": false, "error": {"code": "NOT_FOUND", "message": "Resource not found", "details": {}}}

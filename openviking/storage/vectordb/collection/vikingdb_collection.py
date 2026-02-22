@@ -232,12 +232,13 @@ class VikingDBCollection(ICollection):
             "collection_name": self.collection_name,
             "index_name": index_name,
             "dense_vector": dense_vector,
-            "sparse_vector": sparse_vector or {},
             "filter": filters,
             "output_fields": output_fields,
             "limit": limit,
             "offset": offset,
         }
+        if sparse_vector:
+            data["sparse_vector"] = sparse_vector
         resp_data = self._data_post(path, data)
         return self._parse_search_result(resp_data)
 

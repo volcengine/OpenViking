@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-OpenViking is an open-source project initiated and maintained by ByteDance’s Volcano Engine Viking team, dedicated to building robust context engineering infrastructure for the AI Agent ecosystem. As a new-generation context database, OpenViking provides a unified data abstraction layer, an intelligent semantic parsing engine, and a high-performance hybrid retrieval system to deliver reliable backend support for all kinds of AI applications.
+OpenViking is an open-source context database initiated and maintained by ByteDance’s Volcano Engine Viking team, dedicated to building robust context engineering infrastructure for the AI Agent ecosystem. As a new-generation context database, OpenViking provides a unified data abstraction layer, an intelligent semantic parsing engine, and a high-performance hybrid retrieval system to deliver reliable backend support for all kinds of AI applications.
 
 ## Team Introduction
 
@@ -123,7 +123,7 @@ Scan the QR code below to join the Lark group and communicate with the core deve
 
 Scan the QR code below to add the assistant on WeChat, mention "OpenViking" and you will be invited to the WeChat group:
 
-![Join via WeChat QR](/docs/images/wechat-group-qrcode.jpg)
+![Join via WeChat QR](/docs/images/wechat-group-qrcode2.jpeg)
 
 **Discord**
 

@@ -2,10 +2,11 @@
 Stats commands for Memex - knowledge base statistics.
 """
 
-from client import MemexClient
 from rich.console import Console
-from rich.panel import Panel
 from rich.table import Table
+from rich.panel import Panel
+
+from ..client import MemexClient
 
 
 class StatsCommands:

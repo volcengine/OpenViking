@@ -98,11 +98,22 @@ class HierarchicalRetriever:
 
         collection = self._type_to_collection(query.context_type)
 
+        target_dirs = [d for d in (query.target_directories or []) if d]
+
         # Create context_type filter
         type_filter = {"op": "must", "field": "context_type", "conds": [query.context_type.value]}
 
         # Merge all filters
         filters_to_merge = [type_filter]
+        if target_dirs:
+            target_filter = {
+                "op": "or",
+                "conds": [
+                    {"op": "prefix", "field": "uri", "prefix": target_dir}
+                    for target_dir in target_dirs
+                ],
+            }
+            filters_to_merge.append(target_filter)
         if metadata_filter:
             filters_to_merge.append(metadata_filter)
 
@@ -124,8 +135,11 @@ class HierarchicalRetriever:
             query_vector = result.dense_vector
             sparse_query_vector = result.sparse_vector
 
-        # Step 1: Determine starting directories based on context_type
-        root_uris = self._get_root_uris_for_type(query.context_type)
+        # Step 1: Determine starting directories based on target_directories or context_type
+        if target_dirs:
+            root_uris = target_dirs
+        else:
+            root_uris = self._get_root_uris_for_type(query.context_type)
 
         # Step 2: Global vector search to supplement starting points
         global_results = await self._global_vector_search(
@@ -320,20 +334,27 @@ class HierarchicalRetriever:
                     alpha * score + (1 - alpha) * current_score if current_score else score
                 )
 
-                if passes_threshold(final_score) and uri not in visited:
-                    r["_final_score"] = final_score
-                    collected.append(r)
-                    logger.info(
-                        f"[RecursiveSearch] Added URI: {uri} to candidates with score: {final_score}"
-                    )
-                    if r.get("is_leaf"):
-                        visited.add(uri)
-                        continue
-                    heapq.heappush(dir_queue, (-final_score, uri))
-                else:
-                    logger.info(
+                if not passes_threshold(final_score):
+                    logger.debug(
                         f"[RecursiveSearch] URI {uri} score {final_score} did not pass threshold {effective_threshold}"
                     )
+                    continue
+
+                # Always collect results that pass threshold, even if already
+                # visited as a directory starting point. The visited set only
+                # prevents re-entering directories for child search.
+                if not any(c.get("uri") == uri for c in collected):
+                    r["_final_score"] = final_score
+                    collected.append(r)
+                    logger.debug(
+                        f"[RecursiveSearch] Added URI: {uri} to candidates with score: {final_score}"
+                    )
+
+                if uri not in visited:
+                    if r.get("is_leaf"):
+                        visited.add(uri)
+                    else:
+                        heapq.heappush(dir_queue, (-final_score, uri))
 
             # Convergence check
             current_topk = sorted(collected, key=lambda x: x.get("_final_score", 0), reverse=True)[

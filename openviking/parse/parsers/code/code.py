@@ -16,7 +16,8 @@ import stat
 import tempfile
 import time
 from pathlib import Path, PurePosixPath
-from typing import Any, List, Optional, Union
+from typing import Any, List, Optional, Tuple, Union
+from urllib.parse import unquote, urlparse
 
 from openviking.parse.base import (
     NodeType,
@@ -95,6 +96,8 @@ class CodeRepositoryParser(BaseParser):
         start_time = time.time()
         source_str = str(source)
         temp_local_dir = None
+        branch = None
+        commit = None
 
         try:
             # 1. Prepare local temp directory
@@ -104,7 +107,13 @@ class CodeRepositoryParser(BaseParser):
             # 2. Fetch content (Clone or Extract)
             repo_name = "repository"
             if source_str.startswith(("http://", "https://", "git://", "ssh://")):
-                repo_name = await self._git_clone(source_str, temp_local_dir)
+                repo_url, branch, commit = self._parse_repo_source(source_str, **kwargs)
+                repo_name = await self._git_clone(
+                    repo_url,
+                    temp_local_dir,
+                    branch=branch,
+                    commit=commit,
+                )
             elif str(source).endswith(".zip"):
                 repo_name = await self._extract_zip(source_str, temp_local_dir)
             else:
@@ -143,6 +152,10 @@ class CodeRepositoryParser(BaseParser):
             result.temp_dir_path = temp_viking_uri  # Points to parent of repo_name
             result.meta["file_count"] = file_count
             result.meta["repo_name"] = repo_name
+            if branch:
+                result.meta["repo_ref"] = branch
+            if commit:
+                result.meta["repo_commit"] = commit
 
             return result
 
@@ -172,7 +185,103 @@ class CodeRepositoryParser(BaseParser):
         """Not supported for repositories."""
         raise NotImplementedError("CodeRepositoryParser does not support parse_content")
 
-    async def _git_clone(self, url: str, target_dir: str) -> str:
+    def _parse_repo_source(
+        self, source: str, **kwargs
+    ) -> Tuple[str, Optional[str], Optional[str]]:
+        branch = kwargs.get("branch") or kwargs.get("ref")
+        commit = kwargs.get("commit")
+        repo_url = source
+        if source.startswith(("http://", "https://", "git://", "ssh://")):
+            parsed = urlparse(source)
+            repo_url = parsed._replace(query="", fragment="").geturl()
+            if commit is None or branch is None:
+                branch, commit = self._extract_ref_from_url(parsed, branch, commit)
+        repo_url = self._normalize_repo_url(repo_url)
+        return repo_url, branch, commit
+
+    def _extract_ref_from_url(
+        self,
+        parsed: Any,
+        branch: Optional[str],
+        commit: Optional[str],
+    ) -> Tuple[Optional[str], Optional[str]]:
+        if parsed.path:
+            path_branch, path_commit = self._parse_ref_from_path(parsed.path)
+            commit = path_commit or commit
+            # If commit is present in path, ignore branch entirely
+            if commit:
+                branch = None
+            else:
+                branch = branch or path_branch
+        return branch, commit
+
+    def _parse_ref_from_path(self, path: str) -> Tuple[Optional[str], Optional[str]]:
+        parts = [p for p in path.split("/") if p]
+        branch = None
+        commit = None
+        if "commit" in parts:
+            idx = parts.index("commit")
+            if idx + 1 < len(parts):
+                commit = parts[idx + 1]
+        if "tree" in parts:
+            idx = parts.index("tree")
+            if idx + 1 < len(parts):
+                branch = unquote(parts[idx + 1])
+        return branch, commit
+
+    def _normalize_repo_url(self, url: str) -> str:
+        if url.startswith(("http://", "https://", "git://", "ssh://")):
+            parsed = urlparse(url)
+            path_parts = [p for p in parsed.path.split("/") if p]
+            base_parts = path_parts
+            git_index = next((i for i, p in enumerate(path_parts) if p.endswith(".git")), None)
+            if git_index is not None:
+                base_parts = path_parts[: git_index + 1]
+            elif parsed.netloc in ["github.com", "gitlab.com"] and len(path_parts) >= 2:
+                base_parts = path_parts[:2]
+            base_path = "/" + "/".join(base_parts)
+            return parsed._replace(path=base_path, query="", fragment="").geturl()
+        return url
+
+    def _get_repo_name(self, url: str) -> str:
+        name_source = url
+        if url.startswith(("http://", "https://", "git://", "ssh://")):
+            name_source = urlparse(url).path.rstrip("/")
+        elif ":" in url and not url.startswith("file://"):
+            name_source = url.split(":", 1)[1]
+        name = name_source.rstrip("/").split("/")[-1]
+        if name.endswith(".git"):
+            name = name[:-4]
+        name = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
+        return name or "repository"
+
+    async def _run_git(self, args: List[str], cwd: Optional[str] = None) -> str:
+        proc = await asyncio.create_subprocess_exec(
+            *args,
+            cwd=cwd,
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+        )
+        stdout, stderr = await proc.communicate()
+        if proc.returncode != 0:
+            error_msg = stderr.decode().strip()
+            raise RuntimeError(f"Git command failed: {' '.join(args)}: {error_msg}")
+        return stdout.decode().strip()
+
+    async def _has_commit(self, repo_dir: str, commit: str) -> bool:
+        try:
+            await self._run_git(["git", "-C", repo_dir, "rev-parse", "--verify", commit])
+            return True
+        except RuntimeError:
+            return False
+
+    async def _git_clone(
+        self,
+        url: str,
+        target_dir: str,
+        branch: Optional[str] = None,
+        commit: Optional[str] = None,
+    ) -> str:
         """
         Clone git repository.
 
@@ -180,16 +289,7 @@ class CodeRepositoryParser(BaseParser):
             Repository name (e.g. "OpenViking" from "https://.../OpenViking.git")
         """
         # Extract repo name from URL
-        clean_url = url.rstrip("/")
-        if clean_url.endswith(".git"):
-            name = clean_url.split("/")[-1][:-4]
-        else:
-            name = clean_url.split("/")[-1]
-
-        # Sanitize name
-        name = "".join(c if c.isalnum() or c in "-_" else "_" for c in name)
-        if not name:
-            name = "repository"
+        name = self._get_repo_name(url)
 
         # Clone into a subdirectory to keep structure clean
         # But here we clone content directly into target_dir?
@@ -204,23 +304,40 @@ class CodeRepositoryParser(BaseParser):
 
         logger.info(f"Cloning {url} to {target_dir}...")
 
-        proc = await asyncio.create_subprocess_exec(
+        clone_args = [
             "git",
             "clone",
             "--depth",
             "1",
-            "--recursive",  # Also clone submodules? Maybe risky for huge repos
-            url,
-            target_dir,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-
-        stdout, stderr = await proc.communicate()
-
-        if proc.returncode != 0:
-            error_msg = stderr.decode()
-            raise RuntimeError(f"Git clone failed: {error_msg}")
+            "--recursive",
+        ]
+        if branch and not commit:
+            clone_args.extend(["--branch", branch])
+        clone_args.extend([url, target_dir])
+        await self._run_git(clone_args)
+        if commit:
+            try:
+                await self._run_git(["git", "-C", target_dir, "fetch", "origin", commit])
+            except RuntimeError:
+                try:
+                    await self._run_git(["git", "-C", target_dir, "fetch", "--all", "--tags", "--prune"])
+                except RuntimeError:
+                    pass
+                ok = await self._has_commit(target_dir, commit)
+                if not ok:
+                    try:
+                        await self._run_git(["git", "-C", target_dir, "fetch", "--unshallow", "origin"])
+                    except RuntimeError:
+                        pass
+                ok = await self._has_commit(target_dir, commit)
+                if not ok:
+                    await self._run_git(
+                        ["git", "-C", target_dir, "fetch", "origin", "+refs/heads/*:refs/remotes/origin/*"]
+                    )
+                    ok = await self._has_commit(target_dir, commit)
+                    if not ok:
+                        raise RuntimeError(f"Failed to fetch commit {commit} from {url}")
+            await self._run_git(["git", "-C", target_dir, "checkout", commit])
 
         return name
 

@@ -1,0 +1,26 @@
+[package]
+name = "ov_cli"
+version = "0.2.0"
+edition = "2024"
+authors = ["OpenViking Contributors"]
+description = "Rust CLI client for OpenViking"
+license = "MIT"
+
+[[bin]]
+name = "ov"
+path = "src/main.rs"
+
+[dependencies]
+clap = { version = "4.5", features = ["derive", "env"] }
+reqwest = { version = "0.12", features = ["json", "multipart", "rustls-tls"], default-features = false }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = { version = "1.0", features = ["preserve_order"] }
+tokio = { version = "1.38", features = ["full"] }
+colored = "2.1"
+dirs = "5.0"
+anyhow = "1.0"
+mime_guess = "2.0"
+thiserror = "1.0"
+unicode-width = "0.1"
+ratatui = "0.30"
+crossterm = "0.28"

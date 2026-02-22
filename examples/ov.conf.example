@@ -51,7 +51,8 @@
     "api_base": "https://ark.cn-beijing.volces.com/api/v3",
     "temperature": 0.0,
     "max_retries": 2,
-    "provider": "volcengine"
+    "provider": "volcengine",
+    "thinking": false
   },
   "rerank": {
     "ak": null,
@@ -59,8 +60,7 @@
     "host": "api-vikingdb.vikingdb.cn-beijing.volces.com",
     "model_name": "doubao-seed-rerank",
     "model_version": "251028",
-    "threshold": 0.1,
-    "return_directories": false
+    "threshold": 0.1
   },
   "auto_generate_l0": true,
   "auto_generate_l1": true,

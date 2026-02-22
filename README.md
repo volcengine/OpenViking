@@ -65,8 +65,22 @@ Before starting with OpenViking, please ensure your environment meets the follow
 
 ### 1. Installation
 
+#### Python Package
+
 ```bash
 pip install openviking
+```
+
+#### Rust CLI (Optional)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/crates/ov_cli/install.sh | bash
+```
+
+Or build from source:
+
+```bash
+cargo install --git https://github.com/volcengine/OpenViking ov_cli
 ```
 
 ### 2. Model Preparation
@@ -75,10 +89,117 @@ OpenViking requires the following model capabilities:
 - **VLM Model**: For image and content understanding
 - **Embedding Model**: For vectorization and semantic retrieval
 
-OpenViking supports various model services:
-- **OpenAI Models**: Supports GPT-4V and other VLM models, and OpenAI Embedding models.
-- **Volcengine (Doubao Models)**: Recommended for low cost and high performance, with free quotas for new users. For purchase and activation, please refer to: [Volcengine Purchase Guide](./docs/en/guides/02-volcengine-purchase-guide.md).
-- **Other Custom Model Services**: Supports model services compatible with the OpenAI API format.
+#### Supported VLM Providers
+
+OpenViking supports multiple VLM providers:
+
+| Provider | Model | Get API Key |
+|----------|-------|-------------|
+| `volcengine` | doubao | [Volcengine Console](https://console.volcengine.com/ark) |
+| `openai` | gpt | [OpenAI Platform](https://platform.openai.com) |
+| `anthropic` | claude | [Anthropic Console](https://console.anthropic.com) |
+| `deepseek` | deepseek | [DeepSeek Platform](https://platform.deepseek.com) |
+| `gemini` | gemini | [Google AI Studio](https://aistudio.google.com) |
+| `moonshot` | kimi | [Moonshot Platform](https://platform.moonshot.cn) |
+| `zhipu` | glm | [Zhipu Open Platform](https://open.bigmodel.cn) |
+| `dashscope` | qwen | [DashScope Console](https://dashscope.console.aliyun.com) |
+| `minimax` | minimax | [MiniMax Platform](https://platform.minimax.io) |
+| `openrouter` | (any model) | [OpenRouter](https://openrouter.ai) |
+| `vllm` | (local model) | — |
+
+> 💡 **Tip**: OpenViking uses a **Provider Registry** for unified model access. The system automatically detects the provider based on model name keywords, so you can switch between providers seamlessly.
+
+#### Provider-Specific Notes
+
+<details>
+<summary><b>Volcengine (Doubao)</b></summary>
+
+Volcengine supports both model names and endpoint IDs. Using model names is recommended for simplicity:
+
+```json
+{
+  "vlm": {
+    "provider": "volcengine",
+    "model": "doubao-seed-1-6-240615",
+    "api_key": "your-api-key",
+    "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
+  }
+}
+```
+
+You can also use endpoint IDs (found in [Volcengine ARK Console](https://console.volcengine.com/ark)):
+
+```json
+{
+  "vlm": {
+    "provider": "volcengine",
+    "model": "ep-20241220174930-xxxxx",
+    "api_key": "your-api-key",
+    "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><b>Zhipu AI (智谱)</b></summary>
+
+If you're on Zhipu's coding plan, use the coding API endpoint:
+
+```json
+{
+  "vlm": {
+    "provider": "zhipu",
+    "model": "glm-4-plus",
+    "api_key": "your-api-key",
+    "api_base": "https://open.bigmodel.cn/api/coding/paas/v4"
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><b>MiniMax (中国大陆)</b></summary>
+
+For MiniMax's mainland China platform (minimaxi.com), specify the API base:
+
+```json
+{
+  "vlm": {
+    "provider": "minimax",
+    "model": "abab6.5s-chat",
+    "api_key": "your-api-key",
+    "api_base": "https://api.minimaxi.com/v1"
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><b>Local Models (vLLM)</b></summary>
+
+Run OpenViking with your own local models using vLLM:
+
+```bash
+# Start vLLM server
+vllm serve meta-llama/Llama-3.1-8B-Instruct --port 8000
+```
+
+```json
+{
+  "vlm": {
+    "provider": "vllm",
+    "model": "meta-llama/Llama-3.1-8B-Instruct",
+    "api_key": "dummy",
+    "api_base": "http://localhost:8000/v1"
+  }
+}
+```
+
+</details>
 
 ### 3. Environment Configuration
 
@@ -92,7 +213,7 @@ Create a configuration file `~/.openviking/ov.conf`:
     "dense": {
       "api_base" : "<api-endpoint>",   // API endpoint address
       "api_key"  : "<your-api-key>",   // Model service API Key
-      "provider" : "<provider-type>",  // Provider type (volcengine or openai)
+      "provider" : "<provider-type>",  // Provider type: "volcengine" or "openai" (currently supported)
       "dimension": 1024,               // Vector dimension
       "model"    : "<model-name>"      // Embedding model name (e.g., doubao-embedding-vision-250615 or text-embedding-3-large)
     }
@@ -100,11 +221,13 @@ Create a configuration file `~/.openviking/ov.conf`:
   "vlm": {
     "api_base" : "<api-endpoint>",     // API endpoint address
     "api_key"  : "<your-api-key>",     // Model service API Key
-    "provider" : "<provider-type>",    // Provider type (volcengine or openai)
+    "provider" : "<provider-type>",    // Provider type (volcengine, openai, deepseek, anthropic, etc.)
     "model"    : "<model-name>"        // VLM model name (e.g., doubao-seed-1-8-251228 or gpt-4-vision-preview)
   }
 }
 ```
+
+> **Note**: For embedding models, currently only `volcengine` (Doubao) and `openai` providers are supported. For VLM models, we support multiple providers including volcengine, openai, deepseek, anthropic, gemini, moonshot, zhipu, dashscope, minimax, and more.
 
 #### Configuration Examples
 
@@ -272,6 +395,17 @@ Congratulations! You have successfully run OpenViking 🎉
 
 ---
 
+## Server Deployment
+
+For production environments, we recommend running OpenViking as a standalone HTTP service to provide persistent, high-performance context support for your AI Agents.
+
+🚀 **Deploy OpenViking on Cloud**:
+To ensure optimal storage performance and data security, we recommend deploying on **Volcengine Elastic Compute Service (ECS)** using the **veLinux** operating system. We have prepared a detailed step-by-step guide to get you started quickly.
+
+👉 **[View: Server Deployment & ECS Setup Guide](./docs/en/getting-started/03-quickstart-server.md)**
+
+---
+
 ## Core Concepts
 
 After running the first example, let's dive into the design philosophy of OpenViking. These five core concepts correspond one-to-one with the solutions mentioned earlier, together building a complete context management system:
@@ -415,7 +549,7 @@ For more details, please visit our [Full Documentation](./docs/en/).
 
 ### About Us
 
-OpenViking is an open-source project initiated and maintained by the **ByteDance Volcengine Viking Team**.
+OpenViking is an open-source context database initiated and maintained by the **ByteDance Volcengine Viking Team**.
 
 The Viking team focuses on unstructured information processing and intelligent retrieval, accumulating rich commercial practical experience in context engineering technology:
 
@@ -449,7 +583,7 @@ Let's work together to define and build the future of AI Agent context managemen
 
 ### Star Trend
 
-[![Star History Chart](https://api.star-history.com/svg?repos=volcengine/OpenViking&type=Timeline)](https://www.star-history.com/#volcengine/OpenViking&Timeline)
+[![Star History Chart](https://api.star-history.com/svg?repos=volcengine/OpenViking&type=timeline&legend=top-left)](https://www.star-history.com/#volcengine/OpenViking&type=timeline&legend=top-left)
 
 ---
 

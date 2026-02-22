@@ -27,6 +27,8 @@ class EmbeddingModelConfig(BaseModel):
     region: Optional[str] = Field(default=None, description="Region for VikingDB API")
     host: Optional[str] = Field(default=None, description="Host for VikingDB API")
 
+    model_config = {"extra": "forbid"}
+
     @model_validator(mode="before")
     @classmethod
     def sync_provider_backend(cls, data: Any) -> Any:
@@ -96,6 +98,8 @@ class EmbeddingConfig(BaseModel):
     dense: Optional[EmbeddingModelConfig] = Field(default=None)
     sparse: Optional[EmbeddingModelConfig] = Field(default=None)
     hybrid: Optional[EmbeddingModelConfig] = Field(default=None)
+
+    model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
     def validate_config(self):

@@ -64,10 +64,24 @@ class SyncOpenViking:
         instruction: str = "",
         wait: bool = False,
         timeout: float = None,
+        **kwargs,
     ) -> Dict[str, Any]:
-        """Add resource to OpenViking (resources scope only)"""
+        """Add resource to OpenViking (resources scope only)
+
+        Args:
+            **kwargs: Extra options forwarded to the parser chain, e.g.
+                ``strict``, ``ignore_dirs``, ``include``, ``exclude``.
+        """
         return run_async(
-            self._async_client.add_resource(path, target, reason, instruction, wait, timeout)
+            self._async_client.add_resource(
+                path,
+                target,
+                reason,
+                instruction,
+                wait,
+                timeout,
+                **kwargs,
+            )
         )
 
     def add_skill(
@@ -175,9 +189,9 @@ class SyncOpenViking:
         """Move resource"""
         return run_async(self._async_client.mv(from_uri, to_uri))
 
-    def tree(self, uri: str) -> Dict:
+    def tree(self, uri: str, **kwargs) -> Dict:
         """Get directory tree"""
-        return run_async(self._async_client.tree(uri))
+        return run_async(self._async_client.tree(uri, **kwargs))
 
     def stat(self, uri: str) -> Dict:
         """Get resource status"""

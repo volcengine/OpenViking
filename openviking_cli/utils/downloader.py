@@ -7,6 +7,7 @@ Provides basic file download functionality.
 For URL content parsing, use HTMLParser instead.
 """
 
+import hashlib
 import re
 from pathlib import Path
 from typing import Optional, Tuple
@@ -92,8 +93,8 @@ async def download_file(
         return None, str(e)
 
 
-def _generate_filename(url: str) -> str:
-    """Generate filename from URL."""
+def _generate_filename(url: str, max_length: int = 50) -> str:
+    """Generate filename from URL, hash & shorten if too long."""
     from urllib.parse import urlparse
 
     parsed = urlparse(url)
@@ -103,7 +104,17 @@ def _generate_filename(url: str) -> str:
         name = Path(path).stem
         name = re.sub(r"[^a-zA-Z0-9_\-\u4e00-\u9fff]", "_", name)
         name = re.sub(r"_+", "_", name)
-        return name[:50] if name else "download"
+        if not name:
+            return "download"
+        if len(name) > max_length:
+            hash_suffix = hashlib.sha256(url.encode()).hexdigest()[:8]
+            return f"{name[: max_length - 9]}_{hash_suffix}"
+        return name
 
     host = parsed.netloc.replace(".", "_")
-    return host[:50] if host else "download"
+    if not host:
+        return "download"
+    if len(host) > max_length:
+        hash_suffix = hashlib.sha256(url.encode()).hexdigest()[:8]
+        return f"{host[: max_length - 9]}_{hash_suffix}"
+    return host

@@ -4,9 +4,16 @@ Memex Configuration Management
 
 import json
 import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
+
+# openviking_cli is a bare package in the monorepo root (not pip-installable).
+# Add the monorepo root to sys.path so we can import it.
+_MONOREPO_ROOT = str(Path(__file__).resolve().parents[2])
+if _MONOREPO_ROOT not in sys.path:
+    sys.path.insert(0, _MONOREPO_ROOT)
 
 from openviking_cli.utils.config import OpenVikingConfig
 
@@ -71,9 +78,10 @@ class MemexConfig:
     def get_vlm_config(self) -> dict:
         """Get VLM config for RAG recipe."""
         ov_config = self.get_openviking_config()
+        backend = ov_config.vlm.backend or getattr(ov_config.vlm, "provider", None) or "openai"
         return {
             "api_base": ov_config.vlm.api_base,
             "api_key": ov_config.vlm.api_key,
             "model": ov_config.vlm.model,
-            "backend": ov_config.vlm.backend,
+            "backend": backend,
         }

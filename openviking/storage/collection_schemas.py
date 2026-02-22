@@ -7,6 +7,7 @@ Provides centralized schema definitions and factory functions for creating colle
 similar to how init_viking_fs encapsulates VikingFS initialization.
 """
 
+import hashlib
 import json
 from typing import Any, Dict, Optional
 
@@ -172,6 +173,11 @@ class TextEmbeddingHandler(DequeueHandlerBase):
 
             # Write to vector database
             try:
+                # Ensure vector DB has at most one record per URI.
+                uri = inserted_data.get("uri")
+                if uri:
+                    inserted_data["id"] = hashlib.md5(uri.encode("utf-8")).hexdigest()
+
                 record_id = await self._vikingdb.insert(self._collection_name, inserted_data)
                 if record_id:
                     logger.debug(

@@ -1,0 +1,31 @@
+metadata:
+  id: "parsing.image_summary"
+  name: "Image Summary"
+  description: "Generate concise image summary for semantic parsing"
+  version: "1.0.0"
+  language: "en"
+  category: "parsing"
+
+variables:
+  - name: "context"
+    type: "string"
+    description: "Additional context for image understanding"
+    default: "No additional context"
+    required: false
+
+template: |
+  Please analyze this image and generate a concise summary for semantic indexing.
+
+  Context: {{ context }}
+
+  Generate a comprehensive description that includes:
+  1. What is in the image (main subjects, objects)
+  2. What is happening or what the image depicts
+  3. Any text visible in the image
+  4. Key visual elements and their relationships
+
+  Keep the description clear and detailed, suitable for semantic search and understanding.
+
+llm_config:
+  temperature: 0.0
+  supports_vision: true

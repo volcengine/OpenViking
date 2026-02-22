@@ -12,12 +12,22 @@ from typing import TYPE_CHECKING, Callable, Dict, List, Optional, Union
 
 from openviking.parse.base import ParseResult
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking.parse.parsers.code import CodeRepositoryParser
+from openviking.parse.parsers.directory import DirectoryParser
+from openviking.parse.parsers.epub import EPubParser
+from openviking.parse.parsers.excel import ExcelParser
 
 # Import will be handled dynamically to avoid dependency issues
 from openviking.parse.parsers.html import HTMLParser
 from openviking.parse.parsers.markdown import MarkdownParser
+from openviking.parse.parsers.media import AudioParser, ImageParser, VideoParser
 from openviking.parse.parsers.pdf import PDFParser
+from openviking.parse.parsers.powerpoint import PowerPointParser
 from openviking.parse.parsers.text import TextParser
+
+# Import markitdown-inspired parsers
+from openviking.parse.parsers.word import WordParser
+from openviking.parse.parsers.zip_parser import ZipParser
 
 if TYPE_CHECKING:
     from openviking.parse.custom import CustomParserProtocol
@@ -27,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 class ParserRegistry:
     """
-    Registry for document parsers.
+    Registry for document parsers, which is a singleton.
 
     Automatically selects appropriate parser based on file extension.
     """
@@ -39,6 +49,7 @@ class ParserRegistry:
         Args:
             register_optional: Whether to register optional parsers
                               that require extra dependencies
+            parser_configs: Dictionary of parser configurations (from load_parser_configs_from_dict)
         """
         self._parsers: Dict[str, BaseParser] = {}
         self._extension_map: Dict[str, str] = {}
@@ -47,25 +58,20 @@ class ParserRegistry:
         self.register("text", TextParser())
         self.register("markdown", MarkdownParser())
         self.register("pdf", PDFParser())
-        self.register("html", HTMLParser())
+        self.register("html", HTMLParser())  # HTMLParser doesn't accept config yet
 
-        # Register code parser dynamically
-        try:
-            from openviking.parse.parsers.code import CodeRepositoryParser
+        # Register markitdown-inspired parsers (built-in)
+        self.register("word", WordParser())
+        self.register("powerpoint", PowerPointParser())
+        self.register("excel", ExcelParser())
+        self.register("epub", EPubParser())
+        self.register("zip", ZipParser())
+        self.register("code", CodeRepositoryParser())
+        self.register("directory", DirectoryParser())
 
-            self.register("code", CodeRepositoryParser())
-        except ImportError as e:
-            logger.warning(f"CodeRepositoryParser not available: {e}")
-
-        # Register optional media parsers
-        if register_optional:
-            try:
-                from openviking.parse.parsers.media import ImageParser
-
-                self.register("image", ImageParser())
-                logger.info("Registered ImageParser for image formats")
-            except ImportError as e:
-                logger.debug(f"ImageParser not registered: {e}")
+        self.register("image", ImageParser())
+        self.register("audio", AudioParser())
+        self.register("video", VideoParser())
 
     def register(self, name: str, parser: BaseParser) -> None:
         """
@@ -231,6 +237,15 @@ class ParserRegistry:
         if is_potential_path:
             path = Path(source)
             if path.exists():
+                # Directory → route to DirectoryParser
+                if path.is_dir():
+                    dir_parser = self._parsers.get("directory")
+                    if dir_parser:
+                        return await dir_parser.parse(path, **kwargs)
+                    raise ValueError(
+                        f"Source is a directory but DirectoryParser is not registered: {path}"
+                    )
+
                 parser = self.get_parser_for_file(path)
                 if parser:
                     return await parser.parse(path, **kwargs)

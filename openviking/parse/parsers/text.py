@@ -37,4 +37,5 @@ class TextParser(BaseParser):
         """Parse text content - delegates to MarkdownParser."""
         result = await self._md_parser.parse_content(content, source_path, **kwargs)
         result.source_format = "text"
+        result.parser_name = "TextParser"
         return result

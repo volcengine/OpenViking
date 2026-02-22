@@ -74,6 +74,7 @@ class ResourceService:
         instruction: str = "",
         wait: bool = False,
         timeout: Optional[float] = None,
+        **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking (only supports resources scope).
 
@@ -84,6 +85,9 @@ class ResourceService:
             instruction: Processing instruction
             wait: Whether to wait for semantic extraction and vectorization to complete
             timeout: Wait timeout in seconds
+            **kwargs: Extra options forwarded to the parser chain, e.g.
+                ``strict``, ``ignore_dirs``, ``include``, ``exclude``
+                (used by ``DirectoryParser``).
 
         Returns:
             Processing result
@@ -104,6 +108,7 @@ class ResourceService:
             instruction=instruction,
             scope="resources",
             target=target,
+            **kwargs,
         )
 
         if wait:

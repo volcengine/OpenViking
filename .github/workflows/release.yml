@@ -43,6 +43,8 @@ permissions:
 
 jobs:
   build:
+    # Skip this workflow for CLI releases (tags starting with cli-)
+    if: "!startsWith(github.event.release.tag_name, 'cli-')"
     uses: ./.github/workflows/_build.yml
     with:
       os_json: ${{ inputs.os_json || '["ubuntu-latest", "macos-latest", "macos-15-intel", "windows-latest"]' }}

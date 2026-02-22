@@ -38,6 +38,10 @@ dependencies = [
     "markdownify>=0.11.0",
     "openai>=1.0.0",
     "requests>=2.28.0",
+    "python-docx>=1.0.0",
+    "python-pptx>=1.0.0",
+    "openpyxl>=3.0.0",
+    "ebooklib>=0.18.0",
     "json-repair>=0.25.0",
     "apscheduler>=3.11.0",
     "volcengine>=1.0.216",
@@ -47,12 +51,12 @@ dependencies = [
     "uvicorn>=0.39.0",
     "xxhash>=3.0.0",
     "jinja2>=3.1.6",
-    "nest-asyncio>=1.5.0",
     "tabulate>=0.9.0",
     "urllib3>=2.6.3",
     "protobuf>=6.33.5",
     "pdfminer-six>=20251230",
     "typer>=0.12.0",
+    "litellm>=1.0.0",
 ]
 
 [project.optional-dependencies]

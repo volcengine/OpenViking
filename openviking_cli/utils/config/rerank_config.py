@@ -19,6 +19,8 @@ class RerankConfig(BaseModel):
         default=0.1, description="Relevance threshold (score > threshold is relevant)"
     )
 
+    model_config = {"extra": "forbid"}
+
     def is_available(self) -> bool:
         """Check if rerank is configured."""
         return self.ak is not None and self.sk is not None

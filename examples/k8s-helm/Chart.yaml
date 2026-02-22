@@ -1,0 +1,17 @@
+apiVersion: v2
+name: openviking
+description: A Helm chart for OpenViking - RAG and semantic search via OpenViking Context Database MCP server
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+keywords:
+  - openviking
+  - rag
+  - semantic-search
+  - mcp
+  - knowledge-base
+home: https://github.com/volcengine/OpenViking
+sources:
+  - https://github.com/volcengine/OpenViking
+maintainers:
+  - name: OpenViking Contributors

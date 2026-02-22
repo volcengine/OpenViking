@@ -271,6 +271,15 @@ Search results:
 
 ---
 
+## 服务端部署
+
+在生产环境中，我们推荐将 OpenViking 作为独立 HTTP 服务运行，以便为您的 AI Agent 提供持久化、高性能的上下文支持。
+
+🚀 **云端部署OpenViking**：
+为了确保存储性能与数据安全，我们推荐使用 **火山引擎云服务器 (ECS)** 结合 veLinux 系统进行部署。我们准备了详细的测试教程，点击下方链接即可快速上手。
+
+👉 **[点击查看：服务端部署与ECS测试文档](./docs/zh/getting-started/03-quickstart-server.md)**
+
 ## 核心理念
 
 在成功运行第一个示例后，让我们深入了解 OpenViking 的设计理念。这五大核心理念与前面提到的解决方案一一对应，共同构建了一个完整的上下文管理体系：
@@ -448,7 +457,7 @@ OpenViking 目前还处于早期阶段，有许多需要完善和探索的地方
 
 ### Star 趋势
 
-[![Star History Chart](https://api.star-history.com/svg?repos=volcengine/OpenViking&type=Timeline)](https://www.star-history.com/#volcengine/OpenViking&Timeline)
+[![Star History Chart](https://api.star-history.com/svg?repos=volcengine/OpenViking&type=timeline&legend=top-left)](https://www.star-history.com/#volcengine/OpenViking&type=timeline&legend=top-left)
 
 ---
 

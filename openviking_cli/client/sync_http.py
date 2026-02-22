@@ -152,13 +152,47 @@ class SyncHTTPClient:
 
     # ============= File System =============
 
-    def ls(self, uri: str, simple: bool = False, recursive: bool = False) -> List[Any]:
+    def ls(
+        self,
+        uri: str,
+        simple: bool = False,
+        recursive: bool = False,
+        output: str = "original",
+        abs_limit: int = 256,
+        show_all_hidden: bool = False,
+        node_limit: int = 1000,
+    ) -> List[Any]:
         """List directory contents."""
-        return run_async(self._async_client.ls(uri, simple=simple, recursive=recursive))
+        return run_async(
+            self._async_client.ls(
+                uri,
+                simple=simple,
+                recursive=recursive,
+                output=output,
+                abs_limit=abs_limit,
+                show_all_hidden=show_all_hidden,
+                node_limit=node_limit,
+            )
+        )
 
-    def tree(self, uri: str) -> Dict:
+    def tree(
+        self,
+        uri: str,
+        output: str = "original",
+        abs_limit: int = 128,
+        show_all_hidden: bool = False,
+        node_limit: int = 1000,
+    ) -> List[Dict[str, Any]]:
         """Get directory tree."""
-        return run_async(self._async_client.tree(uri))
+        return run_async(
+            self._async_client.tree(
+                uri,
+                output=output,
+                abs_limit=abs_limit,
+                show_all_hidden=show_all_hidden,
+                node_limit=node_limit,
+            )
+        )
 
     def stat(self, uri: str) -> Dict:
         """Get resource status."""
