@@ -38,40 +38,25 @@ class StorageConfig(BaseModel):
 
     @model_validator(mode="after")
     def resolve_paths(self):
-        """Resolve path conflicts between workspace and individual path configs.
+        if self.agfs.path is not None:
+            logger.warning(
+                f"StorageConfig: 'agfs.path' is deprecated and will be ignored. "
+                f"Using '{self.workspace}' from workspace instead of '{self.agfs.path}'"
+            )
 
-        When workspace is set:
-        - Ignore agfs.path and vectordb.path
-        - Set agfs.path to {workspace}/.agfs
-        - Set vectordb.path to {workspace}/vectordb
-        - Warn if agfs.path or vectordb.path were explicitly set to different values
-        """
-        workspace_path = Path(self.workspace).resolve()
-
-        # Check for AGFS path conflict
-        if self.agfs.path is not None:  # User explicitly set agfs.path
-            agfs_path = Path(self.agfs.path).resolve()
-            expected_agfs_path = workspace_path / ".agfs"
-            if agfs_path != expected_agfs_path:
-                logger.warning(
-                    f"StorageConfig: 'agfs.path' is deprecated and will be ignored. "
-                    f"Using '{expected_agfs_path}' from workspace instead of '{agfs_path}'"
-                )
-
-        # Check for VectorDB path conflict
-        if self.vectordb.path is not None:  # User explicitly set vectordb.path
-            vectordb_path = Path(self.vectordb.path).resolve()
-            expected_vectordb_path = workspace_path / "vectordb"
-            if vectordb_path != expected_vectordb_path:
-                logger.warning(
-                    f"StorageConfig: 'vectordb.path' is deprecated and will be ignored. "
-                    f"Using '{expected_vectordb_path}' from workspace instead of '{vectordb_path}'"
-                )
+        if self.vectordb.path is not None:
+            logger.warning(
+                f"StorageConfig: 'vectordb.path' is deprecated and will be ignored. "
+                f"Using '{self.workspace}' from workspace instead of '{self.vectordb.path}'"
+            )
 
         # Update paths to use workspace
-        self.agfs.path = str(workspace_path / ".agfs")
-        self.vectordb.path = str(workspace_path / "vectordb")
-
+        workspace_path = Path(self.workspace).resolve()
+        workspace_path.mkdir(parents=True, exist_ok=True)
+        self.workspace = str(workspace_path)
+        self.agfs.path = self.workspace
+        self.vectordb.path = self.workspace
+        # logger.info(f"StorageConfig: Using workspace '{self.workspace}' for storage")
         return self
 
     def get_upload_temp_dir(self) -> Path:
