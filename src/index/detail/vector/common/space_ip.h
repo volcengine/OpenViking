@@ -108,10 +108,27 @@ static float inner_product_sse(const void* v1, const void* v2,
 }
 #endif
 
+#if defined(OV_SIMD_NEON)
+#include "krl.h"
+
+// ARM NEON optimized inner product using KRL library
+static float inner_product_neon(const void* v1, const void* v2,
+                                const void* params) {
+  const float* pv1 = static_cast<const float*>(v1);
+  const float* pv2 = static_cast<const float*>(v2);
+  size_t dim = *static_cast<const size_t*>(params);
+  float dis = 0;
+  krl_ipdis(pv1, pv2, dim, &dis, 1);
+  return dis;
+}
+#endif
+
 class InnerProductSpace : public VectorSpace<float> {
  public:
   explicit InnerProductSpace(size_t dim) : dim_(dim) {
-#if defined(OV_SIMD_AVX512)
+#if defined(OV_SIMD_NEON)
+    metric_func_ = inner_product_neon;
+#elif defined(OV_SIMD_AVX512)
     metric_func_ = inner_product_avx512;
 #elif defined(OV_SIMD_AVX)
     metric_func_ = inner_product_avx;

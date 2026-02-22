@@ -121,12 +121,28 @@ static float l2_sqr_sse(const void* v1, const void* v2, const void* params) {
 }
 #endif
 
+#if defined(OV_SIMD_NEON)
+#include "krl.h"
+
+// ARM NEON optimized L2 squared distance using KRL library
+static float l2_sqr_neon(const void* v1, const void* v2, const void* params) {
+  const float* pv1 = static_cast<const float*>(v1);
+  const float* pv2 = static_cast<const float*>(v2);
+  size_t dim = *static_cast<const size_t*>(params);
+  float dis = 0;
+  krl_L2sqr(pv1, pv2, dim, &dis, 1);
+  return 1.0f - dis;
+}
+#endif
+
 class L2Space : public VectorSpace<float> {
  public:
   explicit L2Space(size_t dim) : dim_(dim) {
     // Select best implementation at runtime based on compile-time flags
     // In a real scenario, we might want dynamic dispatch based on CPUID
-#if defined(OV_SIMD_AVX512)
+#if defined(OV_SIMD_NEON)
+    metric_func_ = l2_sqr_neon;
+#elif defined(OV_SIMD_AVX512)
     metric_func_ = l2_sqr_avx512;
 #elif defined(OV_SIMD_AVX)
     metric_func_ = l2_sqr_avx;
