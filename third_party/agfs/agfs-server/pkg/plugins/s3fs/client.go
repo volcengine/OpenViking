@@ -390,12 +390,24 @@ func (c *S3Client) ObjectExists(ctx context.Context, path string) (bool, error) 
 // DirectoryExists checks if a directory exists (has objects with the prefix)
 // Optimized to use a single ListObjectsV2 call
 func (c *S3Client) DirectoryExists(ctx context.Context, path string) (bool, error) {
-	prefix := c.buildKey(path)
-	if prefix != "" && !strings.HasSuffix(prefix, "/") {
-		prefix += "/"
+	// First check if directory marker exists
+	dirKey := c.buildKey(path)
+	if !strings.HasSuffix(dirKey, "/") {
+		dirKey += "/"
 	}
-
-	// Single ListObjectsV2 call to check both directory marker and children
+	
+	// Try HeadObject to check if directory marker exists
+	_, err := c.client.HeadObject(ctx, &s3.HeadObjectInput{
+		Bucket: aws.String(c.bucket),
+		Key:    aws.String(dirKey),
+	})
+	if err == nil {
+		// Directory marker exists
+		return true, nil
+	}
+	
+	// If directory marker doesn't exist, check if there are any objects with this prefix
+	prefix := dirKey
 	result, err := c.client.ListObjectsV2(ctx, &s3.ListObjectsV2Input{
 		Bucket:    aws.String(c.bucket),
 		Prefix:    aws.String(prefix),
