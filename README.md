@@ -227,7 +227,7 @@ Create a configuration file `~/.openviking/ov.conf`:
 }
 ```
 
-> **Note**: For embedding models, currently only `volcengine` (Doubao) and `openai` providers are supported. For VLM models, we support multiple providers including volcengine, openai, deepseek, anthropic, gemini, moonshot, zhipu, dashscope, minimax, and more.
+> **Note**: For embedding models, currently `volcengine` (Doubao), `openai`, and `jina` providers are supported. For VLM models, we support multiple providers including volcengine, openai, deepseek, anthropic, gemini, moonshot, zhipu, dashscope, minimax, and more.
 
 #### Configuration Examples
 
