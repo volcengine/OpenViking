@@ -9,6 +9,7 @@
 #   if no transcript → exit
 #   parse transcript → keep user/assistant text messages only
 #   if no messages → exit
+#   if last msg is not assistant → sleep + re-read (race condition)
 #   ov session new → get session_id
 #   if no session_id → exit (ov server likely down)
 #   for each message → log + ov session add-message (content truncated in log)
@@ -19,6 +20,8 @@
 #   reason=clear              — user ran /clear; session wiped intentionally
 #   reason=logout             — user logged out of Claude Code
 #   reason=prompt_input_exit  — Ctrl+C or natural exit
+#   race condition            — SessionEnd fires before the final assistant response is
+#                               flushed; retry once after brief sleep
 #   failed session new        — ov server is down; skip gracefully
 #   nohup background          — session process exits before LLM extraction finishes
 
@@ -57,6 +60,28 @@ COUNT=$(echo "$MESSAGES" | jq 'length')
 if [ "$COUNT" -eq 0 ]; then
   _log "SessionEnd: no messages (reason=$REASON)"
   exit 0
+fi
+
+# Race condition: SessionEnd fires before the final assistant response is flushed to disk.
+# Retry once after a brief wait if the last captured entry is not from the assistant.
+LAST_ROLE=$(echo "$MESSAGES" | jq -r '.[-1].role // empty')
+if [ "$LAST_ROLE" != "assistant" ]; then
+  sleep 0.5
+  MESSAGES=$(jq -sc '
+    map(select(.type == "user" or .type == "assistant"))
+    | map({
+        role: .message.role,
+        content: (
+          .message.content
+          | if type == "string" then .
+            elif type == "array" then (map(select(.type == "text") | .text) | join("\n"))
+            else ""
+            end
+        )
+      })
+    | map(select(.content != "" and .content != null))
+  ' "$TRANSCRIPT")
+  COUNT=$(echo "$MESSAGES" | jq 'length')
 fi
 
 _logcmd "ov session new -o json -c"

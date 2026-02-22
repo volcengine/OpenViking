@@ -9,13 +9,16 @@
 #   if no transcript → exit
 #   parse transcript → keep user/assistant text messages only
 #   if no messages → exit
+#   if trigger=manual and last msg is not assistant → sleep + re-read (race condition)
 #   write messages to tmpfile
 #   log: ov add-memory (content truncated)
 #   background: ov add-memory <tmpfile> → log result → rm tmpfile
 #
 # SPECIAL CASES:
-#   trigger=auto   — context limit reached, Claude triggered compaction itself
-#   trigger=manual — user ran /compact explicitly
+#   trigger=auto     — fires BEFORE Claude responds (context full); last role=user is
+#                      expected, not a race condition — no retry needed
+#   trigger=manual   — fires AFTER Claude's last response; last role should be assistant;
+#                      if not, retry once after brief sleep (race condition fix)
 #   nohup background — compaction may proceed before ov finishes; that's fine
 
 LOG=/tmp/ov.log
@@ -53,6 +56,31 @@ COUNT=$(echo "$MESSAGES" | jq 'length')
 if [ "$COUNT" -eq 0 ]; then
   _log "PreCompact: nothing to snapshot (trigger=$TRIGGER)"
   exit 0
+fi
+
+# Race condition: for manual compaction, PreCompact fires after Claude's last response,
+# but the assistant message may not be flushed yet. Retry once after a brief wait.
+# (For auto compaction, last role=user is expected — Claude hasn't responded yet.)
+if [ "$TRIGGER" = "manual" ]; then
+  LAST_ROLE=$(echo "$MESSAGES" | jq -r '.[-1].role // empty')
+  if [ "$LAST_ROLE" != "assistant" ]; then
+    sleep 0.5
+    MESSAGES=$(jq -sc '
+      map(select(.type == "user" or .type == "assistant"))
+      | map({
+          role: .message.role,
+          content: (
+            .message.content
+            | if type == "string" then .
+              elif type == "array" then (map(select(.type == "text") | .text) | join("\n"))
+              else ""
+              end
+          )
+        })
+      | map(select(.content != "" and .content != null))
+    ' "$TRANSCRIPT")
+    COUNT=$(echo "$MESSAGES" | jq 'length')
+  fi
 fi
 
 TMPFILE=$(mktemp /tmp/ov-hook-XXXXXX.json)
