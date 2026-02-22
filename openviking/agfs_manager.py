@@ -163,6 +163,7 @@ class AGFSManager:
                     "endpoint": self.s3_config.endpoint,
                     "prefix": self.s3_config.prefix,
                     "disable_ssl": not self.s3_config.use_ssl,
+                    "use_path_style": self.s3_config.use_path_style,
                 },
             }
         elif self.backend == "memory":
