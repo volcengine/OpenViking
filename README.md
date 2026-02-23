@@ -205,10 +205,17 @@ vllm serve meta-llama/Llama-3.1-8B-Instruct --port 8000
 
 #### Configuration Template
 
-Create a configuration file `~/.openviking/ov.conf`:
+Create a configuration file `~/.openviking/ov.conf`, remove the comments before copy:
 
 ```json
 {
+  "storage": {
+    "workspace": "/home/your-name/openviking_workspace"
+  },
+  "log": {
+    "level": "INFO",
+    "output": "stdout"                 // Log output: "stdout" or "file"
+  },
   "embedding": {
     "dense": {
       "api_base" : "<api-endpoint>",   // API endpoint address
@@ -238,6 +245,13 @@ Create a configuration file `~/.openviking/ov.conf`:
 
 ```json
 {
+  "storage": {
+    "workspace": "/home/your-name/openviking_workspace"
+  },
+  "log": {
+    "level": "INFO",
+    "output": "stdout"                 // Log output: "stdout" or "file"
+  },
   "embedding": {
     "dense": {
       "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
@@ -263,6 +277,13 @@ Create a configuration file `~/.openviking/ov.conf`:
 
 ```json
 {
+  "storage": {
+    "workspace": "/home/your-name/openviking_workspace"
+  },
+  "log": {
+    "level": "INFO",
+    "output": "stdout"                 // Log output: "stdout" or "file"
+  },
   "embedding": {
     "dense": {
       "api_base" : "https://api.openai.com/v1",

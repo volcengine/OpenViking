@@ -94,6 +94,59 @@ python -m openviking serve
 python -m openviking serve
 ```
 
+## 使用 Systemd 部署服务（推荐）
+
+对于 Linux 系统，可以使用 Systemd 服务来管理 OpenViking，实现自动重启、开机自启等功能。首先，你应该已经成功安装并配置了 OpenViking 服务器，确保它可以正常运行，再进行服务化部署。
+
+### 创建 Systemd 服务文件
+
+创建 `/etc/systemd/system/openviking.service` 文件：
+
+```ini
+[Unit]
+Description=OpenViking HTTP Server
+After=network.target
+
+[Service]
+Type=simple
+# 替换为运行 OpenViking 的用户
+User=your-username
+# 替换为用户组
+Group=your-group
+# 替换为工作目录
+WorkingDirectory=/home/your-username/openviking_workspace
+# 以下两种启动方式二选一
+ExecStart=/path/to/your/python/bin/openviking-server
+Restart=always
+RestartSec=5
+# 配置文件路径
+Environment="OPENVIKING_CONFIG_FILE=/home/your-username/.openviking/ov.conf"
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### 管理服务
+
+创建好服务文件后，使用以下命令管理 OpenViking 服务：
+
+```bash
+# 重载 systemd 配置
+sudo systemctl daemon-reload
+
+# 启动服务
+sudo systemctl start openviking.service
+
+# 设置开机自启
+sudo systemctl enable openviking.service
+
+# 查看服务状态
+sudo systemctl status openviking.service
+
+# 查看服务日志
+sudo journalctl -u openviking.service -f
+```
+
 ## 连接客户端
 
 ### Python SDK

@@ -87,6 +87,13 @@ OpenViking 支持多种模型服务：
 
 ```json
 {
+  "storage": {
+    "workspace": "/home/your-name/openviking_workspace"
+  },
+  "log": {
+    "level": "INFO",
+    "output": "stdout"                 // 可配置为 "stdout" or "file"
+  },
   "embedding": {
     "dense": {
       "api_base" : "<api-endpoint>",   // API 服务端点地址
@@ -114,6 +121,13 @@ OpenViking 支持多种模型服务：
 
 ```json
 {
+  "storage": {
+    "workspace": "/home/your-name/openviking_workspace"
+  },
+  "log": {
+    "level": "INFO",
+    "output": "stdout"                 // 可配置为 "stdout" or "file"
+  },
   "embedding": {
     "dense": {
       "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
@@ -139,6 +153,13 @@ OpenViking 支持多种模型服务：
 
 ```json
 {
+  "storage": {
+    "workspace": "/home/your-name/openviking_workspace"
+  },
+  "log": {
+    "level": "INFO",
+    "output": "stdout"                 // 可配置为 "stdout" or "file"
+  },
   "embedding": {
     "dense": {
       "api_base" : "https://api.openai.com/v1",

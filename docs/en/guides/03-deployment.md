@@ -94,6 +94,59 @@ Server connects to remote AGFS and VectorDB services. Configure remote URLs in `
 python -m openviking serve
 ```
 
+## Deploying with Systemd (Recommended)
+
+For Linux systems, you can use Systemd to manage OpenViking as a service, enabling automatic restart and startup on boot. Firstly, you should tried to install and configure openviking on your own.
+
+### Create Systemd Service File
+
+Create `/etc/systemd/system/openviking.service` file:
+
+```ini
+[Unit]
+Description=OpenViking HTTP Server
+After=network.target
+
+[Service]
+Type=simple
+# Replace with the user running OpenViking
+User=your-username
+# Replace with the user group
+Group=your-group
+# Replace with your working directory
+WorkingDirectory=/home/your-username/openviking_workspace
+# Choose one of the following start methods
+ExecStart=/path/to/your/python/bin/openviking-server
+Restart=always
+RestartSec=5
+# Path to config file
+Environment="OPENVIKING_CONFIG_FILE=/home/your-username/.openviking/ov.conf"
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Manage the Service
+
+After creating the service file, use the following commands to manage the OpenViking service:
+
+```bash
+# Reload systemd configuration
+sudo systemctl daemon-reload
+
+# Start the service
+sudo systemctl start openviking.service
+
+# Enable service on boot
+sudo systemctl enable openviking.service
+
+# Check service status
+sudo systemctl status openviking.service
+
+# View service logs
+sudo journalctl -u openviking.service -f
+```
+
 ## Connecting Clients
 
 ### Python SDK
