@@ -95,9 +95,12 @@ class ResourceProcessor:
         # ============ Phase 1: Parse source (Parser generates L0/L1 and writes to temp) ============
         try:
             media_processor = self._get_media_processor()
+            # Use reason as instruction fallback so it influences L0/L1
+            # generation and improves search relevance as documented.
+            effective_instruction = instruction or reason
             parse_result = await media_processor.process(
                 source=path,
-                instruction=instruction,
+                instruction=effective_instruction,
                 **kwargs,
             )
             result["source_path"] = parse_result.source_path or path
