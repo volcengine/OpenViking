@@ -1,0 +1,22 @@
+version: "3.8"
+
+services:
+  openviking:
+    image: ghcr.io/volcengine/openviking:main
+    container_name: openviking
+    ports:
+      - "1933:1933"
+    volumes:
+      # Mount the configuration and data directory to persist state
+      - /var/lib/openviking/ov.conf:/app/ov.conf
+      - /var/lib/openviking/data:/app/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:1933/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    restart: unless-stopped
+    # If you need to override the default command (which runs openviking-server),
+    # you can do so here. For example, to run the CLI:
+    # command: ["openviking", "--help"]

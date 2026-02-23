@@ -35,7 +35,7 @@ export OPENVIKING_CONFIG_FILE=/path/to/ov.conf
     "dense": {
       "api_base": "<api-endpoint>",
       "api_key": "<your-api-key>",
-      "provider": "<volcengine|openai>",
+      "provider": "<volcengine|openai|jina>",
       "dimension": 1024,
       "model": "<model-name>"
     }
@@ -43,7 +43,7 @@ export OPENVIKING_CONFIG_FILE=/path/to/ov.conf
   "vlm": {
     "api_base": "<api-endpoint>",
     "api_key": "<your-api-key>",
-    "provider": "<volcengine|openai>",
+    "provider": "<volcengine|openai|jina>",
     "model": "<model-name>"
   }
 }

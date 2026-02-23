@@ -519,7 +519,7 @@ func (p *S3FSPlugin) Validate(cfg map[string]interface{}) error {
 	// Check for unknown parameters
 	allowedKeys := []string{
 		"bucket", "region", "access_key_id", "secret_access_key", "endpoint", "prefix", "disable_ssl", "mount_path",
-		"cache_enabled", "cache_ttl", "stat_cache_ttl", "cache_max_size",
+		"cache_enabled", "cache_ttl", "stat_cache_ttl", "cache_max_size", "use_path_style",
 	}
 	if err := config.ValidateOnlyKnownKeys(cfg, allowedKeys); err != nil {
 		return err
@@ -539,6 +539,11 @@ func (p *S3FSPlugin) Validate(cfg map[string]interface{}) error {
 
 	// Validate disable_ssl (optional boolean)
 	if err := config.ValidateBoolType(cfg, "disable_ssl"); err != nil {
+		return err
+	}
+
+	// Validate use_path_style (optional boolean)
+	if err := config.ValidateBoolType(cfg, "use_path_style"); err != nil {
 		return err
 	}
 
@@ -562,6 +567,7 @@ func (p *S3FSPlugin) Initialize(config map[string]interface{}) error {
 		Endpoint:        getStringConfig(config, "endpoint", ""),
 		Prefix:          getStringConfig(config, "prefix", ""),
 		DisableSSL:      getBoolConfig(config, "disable_ssl", false),
+		UsePathStyle:    getBoolConfig(config, "use_path_style", true),
 	}
 
 	if cfg.Bucket == "" {
@@ -645,6 +651,13 @@ func (p *S3FSPlugin) GetConfigParams() []plugin.ConfigParameter {
 			Required:    false,
 			Default:     "false",
 			Description: "Disable SSL for S3 connections",
+		},
+		{
+			Name:        "use_path_style",
+			Type:        "bool",
+			Required:    false,
+			Default:     "true",
+			Description: "Whether to use path-style addressing (true) or virtual-host-style (false). Defaults to false for TOS, true for other services.",
 		},
 		{
 			Name:        "cache_enabled",

@@ -35,8 +35,8 @@ class VikingVectorIndexBackend(VikingDBInterface):
     """
 
     # Default project and index names
-    DEFAULT_PROJECT_NAME = "vectordb"
     DEFAULT_INDEX_NAME = "default"
+    DEFAULT_LOCAL_PROJECT_NAME = "vectordb"
 
     def __init__(
         self,
@@ -104,7 +104,7 @@ class VikingVectorIndexBackend(VikingDBInterface):
             )
 
             self.project = get_or_create_volcengine_project(
-                project_name=self.DEFAULT_PROJECT_NAME, config=volc_config
+                project_name=config.project_name, config=volc_config
             )
             logger.info(
                 f"VectorDB backend initialized in Volcengine mode: region={volc_config['Region']}"
@@ -124,7 +124,7 @@ class VikingVectorIndexBackend(VikingDBInterface):
             )
 
             self.project = get_or_create_vikingdb_project(
-                project_name=self.DEFAULT_PROJECT_NAME, config=viking_config
+                project_name=config.project_name, config=viking_config
             )
             logger.info(f"VikingDB backend initialized in private mode: {config.vikingdb.host}")
         elif config.backend == "http":
@@ -137,7 +137,7 @@ class VikingVectorIndexBackend(VikingDBInterface):
             from openviking.storage.vectordb.project.http_project import get_or_create_http_project
 
             self.project = get_or_create_http_project(
-                host=self.host, port=self.port, project_name=self.DEFAULT_PROJECT_NAME
+                host=self.host, port=self.port, project_name=config.project_name
             )
             logger.info(f"VikingDB backend initialized in remote mode: {config.url}")
         elif config.backend == "local":
@@ -147,7 +147,9 @@ class VikingVectorIndexBackend(VikingDBInterface):
                 get_or_create_local_project,
             )
 
-            project_path = Path(config.path) / self.DEFAULT_PROJECT_NAME if config.path else ""
+            project_path = (
+                Path(config.path) / self.DEFAULT_LOCAL_PROJECT_NAME if config.path else ""
+            )
             self.project = get_or_create_local_project(path=str(project_path))
             logger.info(f"VikingDB backend initialized with local storage: {project_path}")
         else:

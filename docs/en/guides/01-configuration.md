@@ -30,10 +30,6 @@ Create `~/.openviking/ov.conf` in your project directory:
     "agfs": {
       "backend": "local",
       "path": "./data"
-    },
-    "vectordb": {
-      "backend": "local",
-      "path": "./data"
     }
   }
 }
@@ -118,7 +114,7 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `provider` | str | `"volcengine"`, `"openai"`, or `"vikingdb"` |
+| `provider` | str | `"volcengine"`, `"openai"`, `"vikingdb"`, or `"jina"` |
 | `api_key` | str | API key |
 | `model` | str | Model name |
 | `dimension` | int | Vector dimension |
@@ -138,6 +134,7 @@ With `input: "multimodal"`, OpenViking can embed text, images (PNG, JPG, etc.), 
 - `openai`: OpenAI Embedding API
 - `volcengine`: Volcengine Embedding API
 - `vikingdb`: VikingDB Embedding API
+- `jina`: Jina AI Embedding API
 
 **vikingdb provider example:**
 
@@ -151,6 +148,43 @@ With `input: "multimodal"`, OpenViking can embed text, images (PNG, JPG, etc.), 
       "sk": "your-secret-key",
       "region": "cn-beijing",
       "dimension": 1024
+    }
+  }
+}
+```
+
+**jina provider example:**
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "jina",
+      "api_key": "jina_xxx",
+      "model": "jina-embeddings-v5-text-small",
+      "dimension": 1024
+    }
+  }
+}
+```
+
+Available Jina models:
+- `jina-embeddings-v5-text-small`: 677M params, 1024 dim, max seq 32768 (default)
+- `jina-embeddings-v5-text-nano`: 239M params, 768 dim, max seq 8192
+
+Get your API key at https://jina.ai
+
+**Local deployment (GGUF/MLX):** Jina embedding models are open-weight and available in GGUF and MLX formats on [Hugging Face](https://huggingface.co/jinaai). You can run them locally with any OpenAI-compatible server (e.g. llama.cpp, MLX, vLLM) and point the `api_base` to your local endpoint:
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "jina",
+      "api_key": "local",
+      "api_base": "http://localhost:8080/v1",
+      "model": "jina-embeddings-v5-text-nano",
+      "dimension": 768
     }
   }
 }
@@ -391,7 +425,8 @@ For startup and deployment details see [Deployment](./03-deployment.md), for aut
     "vectordb": {
       "backend": "local|remote",
       "path": "string",
-      "url": "string"
+      "url": "string",
+      "project": "string"
     }
   },
   "server": {

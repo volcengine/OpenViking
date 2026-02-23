@@ -91,7 +91,7 @@ OpenViking 支持多种模型服务：
     "dense": {
       "api_base" : "<api-endpoint>",   // API 服务端点地址
       "api_key"  : "<your-api-key>",   // 模型服务的 API 密钥
-      "provider" : "<provider-type>",  // 提供商类型（volcengine 或 openai）
+      "provider" : "<provider-type>",  // 提供商类型（volcengine、openai 或 jina）
       "dimension": 1024,               // 向量维度
       "model"    : "<model-name>"      // Embedding 模型名称（如 doubao-embedding-vision-250615 或 text-embedding-3-large）
     }
@@ -99,7 +99,7 @@ OpenViking 支持多种模型服务：
   "vlm": {
     "api_base" : "<api-endpoint>",     // API 服务端点地址
     "api_key"  : "<your-api-key>",     // 模型服务的 API 密钥
-    "provider" : "<provider-type>",    // 提供商类型（volcengine 或 openai）
+    "provider" : "<provider-type>",    // 提供商类型（volcengine、openai 或 jina）
     "model"    : "<model-name>"        // VLM 模型名称（如 doubao-seed-1-8-251228 或 gpt-4-vision-preview）
   }
 }

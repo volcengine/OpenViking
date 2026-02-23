@@ -128,7 +128,7 @@ class TestSessionWorkflow:
 
         # 2. Reload session
         session2 = client.session(session_id=session_id)
-        session2.load()
+        await session2.load()
 
         # 3. Continue conversation
         session2.add_message("user", [TextPart("Second message")])

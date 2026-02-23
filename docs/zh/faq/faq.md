@@ -109,6 +109,7 @@ pip install openviking
 | `volcengine` | 火山引擎 Embedding API（推荐） |
 | `openai` | OpenAI Embedding API |
 | `vikingdb` | VikingDB Embedding API |
+| `jina` | Jina AI Embedding API |
 
 支持 Dense、Sparse 和 Hybrid 三种 Embedding 模式。
 

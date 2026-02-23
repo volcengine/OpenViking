@@ -109,6 +109,7 @@ Config files at the default path `~/.openviking/ov.conf` are loaded automaticall
 | `volcengine` | Volcengine Embedding API (Recommended) |
 | `openai` | OpenAI Embedding API |
 | `vikingdb` | VikingDB Embedding API |
+| `jina` | Jina AI Embedding API |
 
 Supports Dense, Sparse, and Hybrid embedding modes.
 

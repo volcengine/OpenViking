@@ -115,7 +115,7 @@ async def test_add_message_persistence_regression(
 
     # Verify stored message content survives load/decode.
     session = service.sessions.session(session_id)
-    session.load()
+    await session.load()
     assert len(session.messages) == 2
     assert session.messages[0].content == "Message A"
     assert session.messages[1].content == "Message B"

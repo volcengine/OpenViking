@@ -59,8 +59,7 @@ impl TreeState {
     }
 
     /// Known root-level scopes in OpenViking
-    const ROOT_SCOPES: &'static [&'static str] =
-        &["resources", "memories", "skills", "temp", "agent", "queue", "user", "session"];
+    const ROOT_SCOPES: &'static [&'static str] = &["agent", "resources", "session", "user"];
 
     pub async fn load_root(&mut self, client: &HttpClient, uri: &str) {
         let is_root = uri == "viking://" || uri == "viking:///";

@@ -13,14 +13,14 @@ class TestGetContextForSearch:
 
     async def test_get_context_basic(self, session_with_messages: Session):
         """Test basic context retrieval"""
-        context = session_with_messages.get_context_for_search(query="testing help")
+        context = await session_with_messages.get_context_for_search(query="testing help")
 
         assert isinstance(context, dict)
         assert "summaries" in context or "recent_messages" in context
 
     async def test_get_context_with_max_messages(self, session_with_messages: Session):
         """Test limiting max messages"""
-        context = session_with_messages.get_context_for_search(query="test", max_messages=2)
+        context = await session_with_messages.get_context_for_search(query="test", max_messages=2)
 
         assert isinstance(context, dict)
         if "recent_messages" in context:
@@ -38,13 +38,13 @@ class TestGetContextForSearch:
         # Add more messages
         session.add_message("user", [TextPart("Second message")])
 
-        context = session.get_context_for_search(query="test", max_archives=1)
+        context = await session.get_context_for_search(query="test", max_archives=1)
 
         assert isinstance(context, dict)
 
     async def test_get_context_empty_session(self, session: Session):
         """Test getting context from empty session"""
-        context = session.get_context_for_search(query="test")
+        context = await session.get_context_for_search(query="test")
 
         assert isinstance(context, dict)
 
@@ -63,6 +63,6 @@ class TestGetContextForSearch:
         session.add_message("user", [TextPart("New message after commit")])
 
         # Getting context should include archive summary
-        context = session.get_context_for_search(query="test")
+        context = await session.get_context_for_search(query="test")
 
         assert isinstance(context, dict)

@@ -5,6 +5,7 @@ from typing import Dict, Optional
 from pydantic import BaseModel, Field, model_validator
 
 COLLECTION_NAME = "context"
+DEFAULT_PROJECT_NAME = "default"
 
 
 class VolcengineConfig(BaseModel):
@@ -54,6 +55,10 @@ class VectorDBBackendConfig(BaseModel):
     url: Optional[str] = Field(
         default=None,
         description="Remote service URL for 'http' type (e.g., 'http://localhost:5000')",
+    )
+
+    project_name: Optional[str] = Field(
+        default=DEFAULT_PROJECT_NAME, description="project name", alias="project"
     )
 
     distance_metric: str = Field(

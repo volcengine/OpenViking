@@ -1,0 +1,5 @@
+{
+  "name": "openviking-memory",
+  "version": "0.1.0",
+  "description": "Persistent memory for Claude Code powered by OpenViking sessions"
+}
