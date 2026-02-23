@@ -55,12 +55,21 @@ def init_cpp_logging():
 
             config = get_openviking_config()
 
-            log_level = config.log_level.upper() if config.log_level else "INFO"
-            log_output = config.log_output if config.log_output else "stdout"
+            log_level = config.log.level.upper() if config.log.level else "INFO"
+            log_output = config.log.output if config.log.output else "stdout"
+
+            # If log_output is "file", convert it to the actual file path
+            if log_output == "file":
+                from pathlib import Path
+
+                workspace_path = Path(config.storage.workspace).resolve()
+                log_dir = workspace_path / "log"
+                log_dir.mkdir(parents=True, exist_ok=True)
+                log_output = str(log_dir / "openviking.log")
 
             py_log_format = (
-                config.log_format
-                if config.log_format
+                config.log.format
+                if config.log.format
                 else "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
             )
             spd_log_format = _convert_python_format_to_spdlog(py_log_format)

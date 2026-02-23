@@ -15,6 +15,7 @@ from .config_loader import (
     resolve_config_path,
 )
 from .embedding_config import EmbeddingConfig
+from .log_config import LogConfig
 from .parser_config import (
     AudioConfig,
     CodeConfig,
@@ -115,18 +116,7 @@ class OpenVikingConfig(BaseModel):
         ),
     )
 
-    log_level: str = Field(
-        default="WARNING", description="Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL"
-    )
-
-    log_format: str = Field(
-        default="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        description="Log format string",
-    )
-
-    log_output: str = Field(
-        default="stdout", description="Log output: stdout, stderr, or file path"
-    )
+    log: LogConfig = Field(default_factory=lambda: LogConfig(), description="Logging configuration")
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid"}
 
@@ -143,14 +133,19 @@ class OpenVikingConfig(BaseModel):
         parser_configs = {}
         if "parsers" in config_copy:
             parser_configs = config_copy.pop("parsers")
-
-        # Also check for individual parser configs at root level
         parser_types = ["pdf", "code", "image", "audio", "video", "markdown", "html", "text"]
         for parser_type in parser_types:
             if parser_type in config_copy:
                 parser_configs[parser_type] = config_copy.pop(parser_type)
+        # Handle log configuration from nested "log" section
+        log_config_data = None
+        if "log" in config_copy:
+            log_config_data = config_copy.pop("log")
 
         instance = cls(**config_copy)
+        # Apply log configuration
+        if log_config_data is not None:
+            instance.log = LogConfig.from_dict(log_config_data)
 
         # Apply parser configurations
         for parser_type, parser_data in parser_configs.items():

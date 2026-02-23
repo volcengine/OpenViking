@@ -67,9 +67,14 @@
   "default_search_limit": 3,
   "enable_memory_decay": true,
   "memory_decay_check_interval": 3600,
-  "log_level": "INFO",
-  "log_format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-  "log_output": "stdout",
+  "log": {
+    "level": "INFO",
+    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    "output": "stdout",
+    "rotation": true,
+    "rotation_days": 3,
+    "rotation_interval": "midnight"
+  },
   "parsers": {
     "pdf": {
       "strategy": "auto",
