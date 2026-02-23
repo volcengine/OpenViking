@@ -1,4 +1,18 @@
+import re
 from datetime import datetime, timezone
+
+# Matches fractional seconds with more than 6 digits (e.g. .1470042)
+_EXCESS_FRAC_RE = re.compile(r"(\.\d{6})\d+")
+
+
+def parse_iso_datetime(value: str) -> datetime:
+    """Parse an ISO 8601 datetime string, tolerating >6-digit fractional seconds.
+
+    Windows may produce timestamps like ``2026-02-21T13:20:23.1470042+08:00``
+    where the fractional seconds exceed Python's 6-digit microsecond limit.
+    This helper truncates the excess digits before parsing.
+    """
+    return datetime.fromisoformat(_EXCESS_FRAC_RE.sub(r"\1", value))
 
 
 def format_iso8601(dt: datetime) -> str:

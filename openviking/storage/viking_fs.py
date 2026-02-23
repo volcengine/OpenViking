@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 from pyagfs import AGFSClient
 
 from openviking.storage.vikingdb_interface import VikingDBInterface
-from openviking.utils.time_utils import format_simplified, get_current_timestamp
+from openviking.utils.time_utils import format_simplified, get_current_timestamp, parse_iso_datetime
 from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
 
@@ -327,7 +327,7 @@ class VikingFS:
                     "size": entry.get("size", 0),
                     "isDir": entry.get("isDir", False),
                     "modTime": format_simplified(
-                        datetime.fromisoformat(entry.get("modTime", "")), now
+                        parse_iso_datetime(entry.get("modTime", "")), now
                     ),
                 }
                 if entry.get("isDir"):
@@ -1016,7 +1016,7 @@ class VikingFS:
                 "uri": str(VikingURI(uri).join(name)),
                 "size": entry.get("size", 0),
                 "isDir": entry.get("isDir", False),
-                "modTime": format_simplified(datetime.fromisoformat(raw_time), now),
+                "modTime": format_simplified(parse_iso_datetime(raw_time), now),
             }
             if entry.get("isDir"):
                 all_entries.append(new_entry)
