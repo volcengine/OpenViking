@@ -26,3 +26,13 @@ __all__ = [
     "LocalCollection",
     "get_or_create_local_collection",
 ]
+
+# Optional Qdrant support (requires qdrant-client)
+try:
+    from openviking.storage.vectordb.collection.qdrant_collection import (
+        QdrantCollection,
+        get_or_create_qdrant_collection,
+    )
+    __all__.extend(["QdrantCollection", "get_or_create_qdrant_collection"])
+except ImportError:
+    pass  # qdrant-client not installed
