@@ -12,10 +12,12 @@ from .config_loader import (
     resolve_config_path,
 )
 from .embedding_config import EmbeddingConfig
+from .log_config import LogConfig
 from .open_viking_config import (
     OpenVikingConfig,
     OpenVikingConfigSingleton,
     get_openviking_config,
+    initialize_openviking_config,
     is_valid_openviking_config,
     set_openviking_config,
 )
@@ -44,6 +46,7 @@ __all__ = [
     "DEFAULT_OV_CONF",
     "DEFAULT_OVCLI_CONF",
     "EmbeddingConfig",
+    "LogConfig",
     "OPENVIKING_CLI_CONFIG_ENV",
     "OPENVIKING_CONFIG_ENV",
     "OpenVikingConfig",
@@ -65,6 +68,7 @@ __all__ = [
     "load_parser_configs_from_dict",
     "PARSER_CONFIG_REGISTRY",
     "get_openviking_config",
+    "initialize_openviking_config",
     "load_json_config",
     "require_config",
     "resolve_config_path",

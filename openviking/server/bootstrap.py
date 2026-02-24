@@ -9,6 +9,7 @@ import uvicorn
 
 from openviking.server.app import create_app
 from openviking.server.config import load_server_config
+from openviking_cli.utils.logger import configure_uvicorn_logging
 
 
 def main():
@@ -52,9 +53,12 @@ def main():
     if args.port is not None:
         config.port = args.port
 
+    # Configure logging for Uvicorn
+    configure_uvicorn_logging()
+
     # Create and run app
     app = create_app(config)
-    uvicorn.run(app, host=config.host, port=config.port)
+    uvicorn.run(app, host=config.host, port=config.port, log_config=None)
 
 
 if __name__ == "__main__":
