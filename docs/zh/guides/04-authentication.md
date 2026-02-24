@@ -1,70 +1,107 @@
 # 认证
 
-OpenViking Server 支持 API Key 认证以保护访问安全。
+OpenViking Server 支持多租户 API Key 认证和基于角色的访问控制。
 
-## API Key 认证
+## 概述
 
-### 设置（服务端）
+OpenViking 使用两层 API Key 体系：
 
-在 `ov.conf` 配置文件中设置 `server.api_key`：
+| Key 类型 | 创建方式 | 角色 | 用途 |
+|----------|---------|------|------|
+| Root Key | 服务端配置（`root_api_key`） | ROOT | 全部操作 + 管理操作 |
+| User Key | Admin API | ADMIN 或 USER | 按 account 访问 |
+
+所有 API Key 均为纯随机 token，不携带身份信息。服务端通过先比对 root key、再查 user key 索引的方式确定身份。
+
+## 服务端配置
+
+在 `ov.conf` 的 `server` 段配置 root API key：
 
 ```json
 {
   "server": {
-    "api_key": "your-secret-key"
+    "root_api_key": "your-secret-root-key"
   }
 }
 ```
 
-启动服务时通过 `--config` 指定配置文件：
+启动服务：
 
 ```bash
 python -m openviking serve
 ```
 
-### 使用 API Key（客户端）
+## 管理账户和用户
 
-OpenViking 通过以下两种请求头接受 API Key：
+使用 root key 通过 Admin API 创建工作区和用户：
+
+```bash
+# 创建工作区 + 首个 admin
+curl -X POST http://localhost:1933/api/v1/admin/accounts \
+  -H "X-API-Key: your-secret-root-key" \
+  -H "Content-Type: application/json" \
+  -d '{"account_id": "acme", "admin_user_id": "alice"}'
+# 返回: {"result": {"account_id": "acme", "admin_user_id": "alice", "user_key": "..."}}
+
+# 注册普通用户（ROOT 或 ADMIN 均可）
+curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users \
+  -H "X-API-Key: your-secret-root-key" \
+  -H "Content-Type: application/json" \
+  -d '{"user_id": "bob", "role": "user"}'
+# 返回: {"result": {"account_id": "acme", "user_id": "bob", "user_key": "..."}}
+```
+
+## 客户端使用
+
+OpenViking 支持两种方式传递 API Key：
 
 **X-API-Key 请求头**
 
 ```bash
 curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
-  -H "X-API-Key: your-secret-key"
+  -H "X-API-Key: <user-key>"
 ```
 
 **Authorization: Bearer 请求头**
 
 ```bash
 curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
-  -H "Authorization: Bearer your-secret-key"
+  -H "Authorization: Bearer <user-key>"
 ```
 
-**Python SDK (HTTP)**
+**Python SDK（HTTP）**
 
 ```python
 import openviking as ov
 
 client = ov.SyncHTTPClient(
     url="http://localhost:1933",
-    api_key="your-secret-key"
+    api_key="<user-key>",
+    agent_id="my-agent"
 )
 ```
 
-**CLI**
-
-CLI 从 `ovcli.conf` 配置文件读取连接信息。在 `~/.openviking/ovcli.conf` 中配置 `api_key`：
+**CLI（通过 ovcli.conf）**
 
 ```json
 {
   "url": "http://localhost:1933",
-  "api_key": "your-secret-key"
+  "api_key": "<user-key>",
+  "agent_id": "my-agent"
 }
 ```
 
+## 角色与权限
+
+| 角色 | 作用域 | 能力 |
+|------|--------|------|
+| ROOT | 全局 | 全部操作 + Admin API（创建/删除工作区、管理用户） |
+| ADMIN | 所属 account | 常规操作 + 管理所属 account 的用户 |
+| USER | 所属 account | 常规操作（ls、read、find、sessions 等） |
+
 ## 开发模式
 
-当 `ov.conf` 中未配置 `server.api_key` 时，认证功能将被禁用。所有请求无需凭证即可被接受。
+不配置 `root_api_key` 时，认证禁用。所有请求以 ROOT 身份访问 default account。
 
 ```json
 {
@@ -75,21 +112,29 @@ CLI 从 `ovcli.conf` 配置文件读取连接信息。在 `~/.openviking/ovcli.c
 }
 ```
 
-```bash
-# 未配置 api_key = 禁用认证
-python -m openviking serve
-```
-
 ## 无需认证的端点
 
-`/health` 端点无论配置如何，都不需要认证。这允许负载均衡器和监控工具检查服务器健康状态。
+`/health` 端点始终不需要认证，用于负载均衡器和监控工具检查服务健康状态。
 
 ```bash
 curl http://localhost:1933/health
-# 始终可用，无需 API Key
 ```
+
+## Admin API 参考
+
+| 方法 | 端点 | 角色 | 说明 |
+|------|------|------|------|
+| POST | `/api/v1/admin/accounts` | ROOT | 创建工作区 + 首个 admin |
+| GET | `/api/v1/admin/accounts` | ROOT | 列出所有工作区 |
+| DELETE | `/api/v1/admin/accounts/{id}` | ROOT | 删除工作区 |
+| POST | `/api/v1/admin/accounts/{id}/users` | ROOT, ADMIN | 注册用户 |
+| GET | `/api/v1/admin/accounts/{id}/users` | ROOT, ADMIN | 列出用户 |
+| DELETE | `/api/v1/admin/accounts/{id}/users/{uid}` | ROOT, ADMIN | 移除用户 |
+| PUT | `/api/v1/admin/accounts/{id}/users/{uid}/role` | ROOT | 修改用户角色 |
+| POST | `/api/v1/admin/accounts/{id}/users/{uid}/key` | ROOT, ADMIN | 重新生成 user key |
 
 ## 相关文档
 
-- [部署](03-deployment.md) - 服务器设置
+- [配置](01-configuration.md) - 配置文件说明
+- [服务部署](03-deployment.md) - 服务部署
 - [API 概览](../api/01-overview.md) - API 参考

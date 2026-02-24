@@ -5,6 +5,7 @@
 import typer
 
 from openviking_cli.cli.commands import (
+    admin,
     content,
     debug,
     filesystem,
@@ -22,6 +23,7 @@ from openviking_cli.cli.commands import (
 def register_commands(app: typer.Typer) -> None:
     """Register all supported commands into the root CLI app."""
     serve.register(app)
+    admin.register(app)
     resources.register(app)
     filesystem.register(app)
     content.register(app)

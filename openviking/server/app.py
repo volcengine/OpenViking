@@ -10,10 +10,12 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+from openviking.server.api_keys import APIKeyManager
 from openviking.server.config import ServerConfig, load_server_config
 from openviking.server.dependencies import set_service
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
 from openviking.server.routers import (
+    admin_router,
     content_router,
     debug_router,
     filesystem_router,
@@ -53,12 +55,25 @@ def create_app(
         """Application lifespan handler."""
         nonlocal service
         if service is None:
-            # Create and initialize service (reads config from ov.conf singleton)
             service = OpenVikingService()
             await service.initialize()
             logger.info("OpenVikingService initialized")
 
         set_service(service)
+
+        # Initialize APIKeyManager after service (needs AGFS)
+        if config.root_api_key:
+            api_key_manager = APIKeyManager(
+                root_key=config.root_api_key,
+                agfs_url=service._agfs_url,
+            )
+            await api_key_manager.load()
+            app.state.api_key_manager = api_key_manager
+            logger.info("APIKeyManager initialized")
+        else:
+            app.state.api_key_manager = None
+            logger.info("Dev mode: no root_api_key configured, authentication disabled")
+
         yield
 
         # Cleanup
@@ -73,8 +88,6 @@ def create_app(
         lifespan=lifespan,
     )
 
-    # Store API key in app state for authentication
-    app.state.api_key = config.api_key
     app.state.config = config
 
     # Add CORS middleware
@@ -128,6 +141,7 @@ def create_app(
 
     # Register routers
     app.include_router(system_router)
+    app.include_router(admin_router)
     app.include_router(resources_router)
     app.include_router(filesystem_router)
     app.include_router(content_router)

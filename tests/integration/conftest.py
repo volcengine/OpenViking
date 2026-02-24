@@ -51,7 +51,7 @@ def server_url(temp_dir):
     )
     loop.run_until_complete(svc.initialize())
 
-    config = ServerConfig(api_key=None)
+    config = ServerConfig()
     fastapi_app = create_app(config=config, service=svc)
 
     # Find a free port

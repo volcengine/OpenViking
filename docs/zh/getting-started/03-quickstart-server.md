@@ -43,12 +43,12 @@ import openviking as ov
 client = ov.SyncHTTPClient(url="http://localhost:1933")
 ```
 
-如果服务端启用了认证，需要传入 `api_key`：
+如果服务端启用了认证，需要传入 `api_key`，可选传入 `agent_id`：
 
 ```python
 import openviking as ov
 
-client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key", agent_id="my-agent")
 ```
 
 **完整示例：**

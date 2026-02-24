@@ -15,7 +15,8 @@ class EmbeddingModelConfig(BaseModel):
     batch_size: int = Field(default=32, description="Batch size for embedding generation")
     input: str = Field(default="multimodal", description="Input type: 'text' or 'multimodal'")
     provider: Optional[str] = Field(
-        default="volcengine", description="Provider type: 'openai', 'volcengine', 'vikingdb', 'jina'"
+        default="volcengine",
+        description="Provider type: 'openai', 'volcengine', 'vikingdb', 'jina'",
     )
     backend: Optional[str] = Field(
         default="volcengine",
@@ -102,6 +103,10 @@ class EmbeddingConfig(BaseModel):
     dense: Optional[EmbeddingModelConfig] = Field(default=None)
     sparse: Optional[EmbeddingModelConfig] = Field(default=None)
     hybrid: Optional[EmbeddingModelConfig] = Field(default=None)
+
+    max_concurrent: int = Field(
+        default=1, description="Maximum number of concurrent embedding requests"
+    )
 
     model_config = {"extra": "forbid"}
 

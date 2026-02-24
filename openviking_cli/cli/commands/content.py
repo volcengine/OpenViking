@@ -14,9 +14,11 @@ def register(app: typer.Typer) -> None:
     def read_command(
         ctx: typer.Context,
         uri: str = typer.Argument(..., help="Viking URI"),
+        offset: int = typer.Option(0, "--offset", "-s", help="Starting line number (0-indexed)"),
+        limit: int = typer.Option(-1, "--limit", "-n", help="Number of lines to read (-1 = all)"),
     ) -> None:
         """Read full file content (L2)."""
-        run(ctx, lambda client: client.read(uri))
+        run(ctx, lambda client: client.read(uri, offset=offset, limit=limit))
 
     @app.command("abstract")
     def abstract_command(

@@ -151,6 +151,11 @@ enum Commands {
         #[command(subcommand)]
         action: SessionCommands,
     },
+    /// Account and user management commands (multi-tenant)
+    Admin {
+        #[command(subcommand)]
+        action: AdminCommands,
+    },
     /// List directory contents
     #[command(alias = "list")]
     Ls {
@@ -362,6 +367,63 @@ enum SessionCommands {
 }
 
 #[derive(Subcommand)]
+enum AdminCommands {
+    /// Create a new account with its first admin user
+    CreateAccount {
+        /// Account ID to create
+        account_id: String,
+        /// First admin user ID
+        #[arg(long = "admin")]
+        admin_user_id: String,
+    },
+    /// List all accounts (ROOT only)
+    ListAccounts,
+    /// Delete an account and all associated users (ROOT only)
+    DeleteAccount {
+        /// Account ID to delete
+        account_id: String,
+    },
+    /// Register a new user in an account
+    RegisterUser {
+        /// Account ID
+        account_id: String,
+        /// User ID to register
+        user_id: String,
+        /// Role: admin or user
+        #[arg(long, default_value = "user")]
+        role: String,
+    },
+    /// List all users in an account
+    ListUsers {
+        /// Account ID
+        account_id: String,
+    },
+    /// Remove a user from an account
+    RemoveUser {
+        /// Account ID
+        account_id: String,
+        /// User ID to remove
+        user_id: String,
+    },
+    /// Change a user's role (ROOT only)
+    SetRole {
+        /// Account ID
+        account_id: String,
+        /// User ID
+        user_id: String,
+        /// New role: admin or user
+        role: String,
+    },
+    /// Regenerate a user's API key (old key immediately invalidated)
+    RegenerateKey {
+        /// Account ID
+        account_id: String,
+        /// User ID
+        user_id: String,
+    },
+}
+
+#[derive(Subcommand)]
 enum ConfigCommands {
     /// Show current configuration
     Show,
@@ -418,6 +480,7 @@ async fn main() {
         Commands::System { action } => handle_system(action, ctx).await,
         Commands::Observer { action } => handle_observer(action, ctx).await,
         Commands::Session { action } => handle_session(action, ctx).await,
+        Commands::Admin { action } => handle_admin(action, ctx).await,
         Commands::Ls { uri, simple, recursive, abs_limit, all, node_limit } => {
             handle_ls(uri, simple, recursive, abs_limit, all, node_limit, ctx).await
         }
@@ -630,6 +693,50 @@ async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()> {
         }
         SessionCommands::Commit { session_id } => {
             commands::session::commit_session(&client, &session_id, ctx.output_format, ctx.compact
+            ).await
+        }
+    }
+}
+
+async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    match cmd {
+        AdminCommands::CreateAccount { account_id, admin_user_id } => {
+            commands::admin::create_account(
+                &client, &account_id, &admin_user_id, ctx.output_format, ctx.compact,
+            ).await
+        }
+        AdminCommands::ListAccounts => {
+            commands::admin::list_accounts(&client, ctx.output_format, ctx.compact).await
+        }
+        AdminCommands::DeleteAccount { account_id } => {
+            commands::admin::delete_account(
+                &client, &account_id, ctx.output_format, ctx.compact,
+            ).await
+        }
+        AdminCommands::RegisterUser { account_id, user_id, role } => {
+            commands::admin::register_user(
+                &client, &account_id, &user_id, &role, ctx.output_format, ctx.compact,
+            ).await
+        }
+        AdminCommands::ListUsers { account_id } => {
+            commands::admin::list_users(
+                &client, &account_id, ctx.output_format, ctx.compact,
+            ).await
+        }
+        AdminCommands::RemoveUser { account_id, user_id } => {
+            commands::admin::remove_user(
+                &client, &account_id, &user_id, ctx.output_format, ctx.compact,
+            ).await
+        }
+        AdminCommands::SetRole { account_id, user_id, role } => {
+            commands::admin::set_role(
+                &client, &account_id, &user_id, &role, ctx.output_format, ctx.compact,
+            ).await
+        }
+        AdminCommands::RegenerateKey { account_id, user_id } => {
+            commands::admin::regenerate_key(
+                &client, &account_id, &user_id, ctx.output_format, ctx.compact,
             ).await
         }
     }

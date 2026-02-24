@@ -54,6 +54,7 @@ coverage.xml
 .ruff_cache/
 cover/
 test_data/
+test_data_sync/
 
 # Virtual environments
 .env

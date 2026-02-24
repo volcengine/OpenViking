@@ -26,12 +26,14 @@
 #        {
 #          "url": "http://localhost:1933",
 #          "api_key": null,
+#          "agent_id": null,
 #          "output": "table"
 #        }
 #
 #      Fields:
 #        url      - Server address (required)
 #        api_key  - API key for authentication (null = no auth)
+#        agent_id - Agent identifier (null = not set)
 #        output   - Default output format: "table" or "json" (default: "table")
 #
 # Usage:
@@ -48,12 +50,10 @@ section() { printf '\n\033[1;36m── %s ──\033[0m\n' "$1"; }
 # ============================================================================
 #
 #   --output, -o   Output format: table (default) or json
-#   --json         Compact JSON with {"ok": true, "result": ...} wrapper
 #   --version      Show version and exit
 #
 # Global options MUST be placed before the subcommand:
 #   openviking -o json ls viking://       ✓
-#   openviking --json find "query"        ✓
 #   openviking ls viking:// -o json       ✗ (won't work)
 
 printf '\033[1m=== OpenViking CLI Usage Examples ===\033[0m\n'
@@ -66,8 +66,7 @@ openviking --version
 
 section "1.1 Health Check"
 openviking health                          # table: {"healthy": true}
-# openviking -o json health                # json:  {"healthy": true}
-# openviking --json health                 # script: {"ok": true, "result": {"healthy": true}}
+# openviking -o json health                # json:  {"ok": true, "result": {"healthy": true}}
 
 section "1.2 System Status"
 openviking status                          # table: component status with ASCII tables
@@ -83,8 +82,8 @@ openviking observer queue                  # queue processor status
 # ============================================================================
 
 section "2.1 Add Resource"
-# Add from URL (use --json to capture root_uri for later commands)
-ROOT_URI=$(openviking --json add-resource \
+# Add from URL (use -o json to capture root_uri for later commands)
+ROOT_URI=$(openviking -o json add-resource \
   "https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md" \
   | python3 -c "import sys,json; print(json.load(sys.stdin)['result']['root_uri'])")
 echo "  root_uri: $ROOT_URI"
@@ -174,7 +173,7 @@ section "6.2 Link / Unlink"
 # ============================================================================
 
 section "7.1 Create Session"
-SESSION_ID=$(openviking --json session new | python3 -c "
+SESSION_ID=$(openviking -o json session new | python3 -c "
 import sys, json; print(json.load(sys.stdin)['result']['session_id'])
 ")
 echo "  session_id: $SESSION_ID"
@@ -224,7 +223,7 @@ openviking ls viking://resources/
 section "Output: json"
 openviking -o json ls viking://resources/
 
-section "Output: --json (for scripts)"
-openviking --json ls viking://resources/
+section "Output: -o json (for scripts)"
+openviking -o json ls viking://resources/
 
 printf '\n\033[1m=== Done ===\033[0m\n'

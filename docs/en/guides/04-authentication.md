@@ -1,28 +1,57 @@
 # Authentication
 
-OpenViking Server supports API key authentication to secure access.
+OpenViking Server supports multi-tenant API key authentication with role-based access control.
 
-## API Key Authentication
+## Overview
 
-### Setting Up (Server Side)
+OpenViking uses a two-layer API key system:
 
-Configure the API key in the `server` section of `ov.conf` (`~/.openviking/ov.conf`):
+| Key Type | Created By | Role | Purpose |
+|----------|-----------|------|---------|
+| Root Key | Server config (`root_api_key`) | ROOT | Full access + admin operations |
+| User Key | Admin API | ADMIN or USER | Per-account access |
+
+All API keys are plain random tokens with no embedded identity. The server resolves identity by first comparing against the root key, then looking up the user key index.
+
+## Setting Up (Server Side)
+
+Configure the root API key in the `server` section of `ov.conf`:
 
 ```json
 {
   "server": {
-    "api_key": "your-secret-key"
+    "root_api_key": "your-secret-root-key"
   }
 }
 ```
 
-Then start the server:
+Start the server:
 
 ```bash
 python -m openviking serve
 ```
 
-### Using API Key (Client Side)
+## Managing Accounts and Users
+
+Use the root key to create accounts (workspaces) and users via the Admin API:
+
+```bash
+# Create account with first admin
+curl -X POST http://localhost:1933/api/v1/admin/accounts \
+  -H "X-API-Key: your-secret-root-key" \
+  -H "Content-Type: application/json" \
+  -d '{"account_id": "acme", "admin_user_id": "alice"}'
+# Returns: {"result": {"account_id": "acme", "admin_user_id": "alice", "user_key": "..."}}
+
+# Register a regular user (as ROOT or ADMIN)
+curl -X POST http://localhost:1933/api/v1/admin/accounts/acme/users \
+  -H "X-API-Key: your-secret-root-key" \
+  -H "Content-Type: application/json" \
+  -d '{"user_id": "bob", "role": "user"}'
+# Returns: {"result": {"account_id": "acme", "user_id": "bob", "user_key": "..."}}
+```
+
+## Using API Keys (Client Side)
 
 OpenViking accepts API keys via two headers:
 
@@ -30,14 +59,14 @@ OpenViking accepts API keys via two headers:
 
 ```bash
 curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
-  -H "X-API-Key: your-secret-key"
+  -H "X-API-Key: <user-key>"
 ```
 
 **Authorization: Bearer header**
 
 ```bash
 curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
-  -H "Authorization: Bearer your-secret-key"
+  -H "Authorization: Bearer <user-key>"
 ```
 
 **Python SDK (HTTP)**
@@ -47,24 +76,32 @@ import openviking as ov
 
 client = ov.SyncHTTPClient(
     url="http://localhost:1933",
-    api_key="your-secret-key"
+    api_key="<user-key>",
+    agent_id="my-agent"
 )
 ```
 
 **CLI (via ovcli.conf)**
 
-Configure the API key in `~/.openviking/ovcli.conf`:
-
 ```json
 {
   "url": "http://localhost:1933",
-  "api_key": "your-secret-key"
+  "api_key": "<user-key>",
+  "agent_id": "my-agent"
 }
 ```
 
+## Roles and Permissions
+
+| Role | Scope | Capabilities |
+|------|-------|-------------|
+| ROOT | Global | All operations + Admin API (create/delete accounts, manage users) |
+| ADMIN | Own account | Regular operations + manage users in own account |
+| USER | Own account | Regular operations (ls, read, find, sessions, etc.) |
+
 ## Development Mode
 
-When no API key is configured in `ov.conf`, authentication is disabled. All requests are accepted without credentials.
+When no `root_api_key` is configured, authentication is disabled. All requests are accepted as ROOT with the default account.
 
 ```json
 {
@@ -75,21 +112,29 @@ When no API key is configured in `ov.conf`, authentication is disabled. All requ
 }
 ```
 
-```bash
-# No api_key in ov.conf = auth disabled
-python -m openviking serve
-```
-
 ## Unauthenticated Endpoints
 
-The `/health` endpoint never requires authentication, regardless of configuration. This allows load balancers and monitoring tools to check server health.
+The `/health` endpoint never requires authentication. This allows load balancers and monitoring tools to check server health.
 
 ```bash
 curl http://localhost:1933/health
-# Always works, no API key needed
 ```
+
+## Admin API Reference
+
+| Method | Endpoint | Role | Description |
+|--------|----------|------|-------------|
+| POST | `/api/v1/admin/accounts` | ROOT | Create account with first admin |
+| GET | `/api/v1/admin/accounts` | ROOT | List all accounts |
+| DELETE | `/api/v1/admin/accounts/{id}` | ROOT | Delete account |
+| POST | `/api/v1/admin/accounts/{id}/users` | ROOT, ADMIN | Register user |
+| GET | `/api/v1/admin/accounts/{id}/users` | ROOT, ADMIN | List users |
+| DELETE | `/api/v1/admin/accounts/{id}/users/{uid}` | ROOT, ADMIN | Remove user |
+| PUT | `/api/v1/admin/accounts/{id}/users/{uid}/role` | ROOT | Change user role |
+| POST | `/api/v1/admin/accounts/{id}/users/{uid}/key` | ROOT, ADMIN | Regenerate user key |
 
 ## Related Documentation
 
+- [Configuration](01-configuration.md) - Config file reference
 - [Deployment](03-deployment.md) - Server setup
 - [API Overview](../api/01-overview.md) - API reference

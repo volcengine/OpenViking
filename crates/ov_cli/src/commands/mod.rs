@@ -1,3 +1,4 @@
+pub mod admin;
 pub mod content;
 pub mod search;
 pub mod filesystem;

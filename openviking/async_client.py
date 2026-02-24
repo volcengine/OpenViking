@@ -255,10 +255,10 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         return await self._client.overview(uri)
 
-    async def read(self, uri: str) -> str:
+    async def read(self, uri: str, offset: int = 0, limit: int = -1) -> str:
         """Read file content"""
         await self._ensure_initialized()
-        return await self._client.read(uri)
+        return await self._client.read(uri, offset=offset, limit=limit)
 
     async def ls(self, uri: str, **kwargs) -> List[Any]:
         """

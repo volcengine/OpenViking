@@ -81,7 +81,7 @@ async def app(service: OpenVikingService):
     """Create FastAPI app with pre-initialized service (no auth)."""
     from openviking.server.dependencies import set_service
 
-    config = ServerConfig(api_key=None)
+    config = ServerConfig()
     fastapi_app = create_app(config=config, service=service)
     # ASGITransport doesn't trigger lifespan, so wire up the service manually
     set_service(service)
@@ -122,7 +122,7 @@ async def running_server(temp_dir: Path):
     )
     await svc.initialize()
 
-    config = ServerConfig(api_key=None)
+    config = ServerConfig()
     fastapi_app = create_app(config=config, service=svc)
 
     # Find a free port

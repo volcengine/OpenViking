@@ -121,10 +121,10 @@ class FSService:
         viking_fs = self._ensure_initialized()
         return await viking_fs.stat(uri)
 
-    async def read(self, uri: str) -> str:
+    async def read(self, uri: str, offset: int = 0, limit: int = -1) -> str:
         """Read file content."""
         viking_fs = self._ensure_initialized()
-        return await viking_fs.read_file(uri)
+        return await viking_fs.read_file(uri, offset=offset, limit=limit)
 
     async def abstract(self, uri: str) -> str:
         """Read L0 abstract (.abstract.md)."""

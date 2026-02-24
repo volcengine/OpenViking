@@ -39,7 +39,7 @@ def _run_cli(args, server_url, env=None, expected_exit_code=0):
         merged_env = {"OPENVIKING_CLI_CONFIG_FILE": conf_path}
         if env:
             merged_env.update(env)
-        result = runner.invoke(app, ["--json", *args], env=merged_env)
+        result = runner.invoke(app, ["-o", "json", *args], env=merged_env)
     assert result.exit_code == expected_exit_code, (
         f"Expected exit_code={expected_exit_code}, got {result.exit_code}\n"
         f"args={args}\n{result.output}"
@@ -137,7 +137,7 @@ def test_cli_connection_refused():
         conf_path = _make_ovcli_conf("http://127.0.0.1:19999", tmp_dir)
         result = runner.invoke(
             app,
-            ["--json", "health"],
+            ["-o", "json", "health"],
             env={"OPENVIKING_CLI_CONFIG_FILE": conf_path},
         )
     assert result.exit_code == 3

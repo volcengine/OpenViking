@@ -210,7 +210,7 @@ async def export_ovpack(viking_fs, uri: str, to: str) -> str:
 
     ensure_dir_exists(to)
 
-    entries = await viking_fs.tree(uri)
+    entries = await viking_fs.tree(uri, show_all_hidden=True)
 
     with zipfile.ZipFile(to, "w", zipfile.ZIP_DEFLATED, allowZip64=True) as zf:
         # Write root directory entry

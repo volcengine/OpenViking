@@ -7,6 +7,7 @@ Provides intent-driven hierarchical context retrieval.
 """
 
 from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
+from openviking.retrieve.intent_analyzer import IntentAnalyzer
 from openviking_cli.retrieve.types import (
     ContextType,
     FindResult,
@@ -28,4 +29,5 @@ __all__ = [
     "FindResult",
     # Retriever
     "HierarchicalRetriever",
+    "IntentAnalyzer",
 ]

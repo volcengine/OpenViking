@@ -20,7 +20,7 @@ OpenViking 已定义了 `UserIdentifier(account_id, user_id, agent_id)` 三元�
 Request
   │
   ▼
-[Auth Middleware] ── 提取 API Key，按前缀分派：root 比对 / acct 查表 / user 解签名 → (account_id, user_id, role)
+[Auth Middleware] ── 提取 API Key，先比对 root key，再查 user key 表 → (account_id, user_id, role)
   │
   ▼
 [RBAC Guard] ── 按角色检查操作权限
@@ -48,135 +48,77 @@ Request
 
 ## 二、API Key 管理
 
-### 2.1 三层 Key 结构
+### 2.1 两层 Key 结构
 
 | 类型 | 格式 | 解析结果 | 存储位置 |
 |------|------|----------|----------|
-| Root Key | `ovk_root_{random_hex_32}` | role=ROOT | `ov.conf` server 段 |
-| Account Key | `ovk_acct_{random_hex_32}` | (account_id, role=ACCOUNT_ADMIN) | AGFS `/_system/keys.json` 内存缓存 |
-| User Key | `ovk_user_...`（格式取决于选型，见 2.2） | (account_id, user_id, role=USER) | 取决于选型（见 2.2） |
+| Root Key | `secrets.token_hex(32)` | role=ROOT | `ov.conf` server 段 |
+| User Key | `secrets.token_hex(32)` | (account_id, user_id, role) | per-account `/{account_id}/_system/users.json` |
 
-### 2.2 User Key 方案（待评审选型）
+所有 API Key 均为纯随机 token，不带前缀，不携带任何身份信息。Key 本身不区分 root 还是 user —— 服务端通过查表确定身份：先比对 root key，不匹配则查 user key 索引。
 
-User Key 有两种候选方案，需要在设计评审中确定。
+用户的角色（ADMIN / USER）不由 key 决定，而是存储在 account 内的用户注册表中。
 
-**共同点**：两个方案的 key 格式都是 `ovk_user_...`，对外 API 完全一致，差异仅在内部生成和验证机制。
+### 2.2 User Key 机制
 
-#### 方案 A：加密式 token（确定性推导，适用用 user 过多，存储同步压力大）
+注册用户时生成随机 key，存入对应 account 的 `users.json`。验证时查表匹配。
 
-**核心思路**：把 `account_id:user_id` 用 AES-GCM 加密生成 key。服务端解密即可还原身份，key 本身不需要存储。
-
-**生成**：`AES_GCM_Encrypt(private_key, "acme:alice")` → `ovk_user_Ek3xJ9fQm2...`
-**验证**：`AES_GCM_Decrypt(private_key, key)` → `"acme:alice"` → 查注册表确认用户存在
-
-**特征**：同一个 `(account_id, user_id)` 永远推导出同一个 key（确定性）。
+**生成**：`secrets.token_hex(32)` → `7f3a9c1e...`（存入 users.json）
+**验证**：先比对 root key → 不匹配 → 在内存索引中查找 → 得到 `(account_id, user_id, role)`
 
 **完整场景**：
 
 ```
-1. 管理员注册 alice，获取 key
-   POST /api/v1/admin/accounts/acme/users         {"user_id": "alice"}  → 注册成功
-   GET  /api/v1/admin/accounts/acme/users/alice/key                     → ovk_user_Ek3x...
+1. Root 创建工作区 acme，指定 alice 为首个 admin
+   POST /api/v1/admin/accounts  {"account_id": "acme", "admin_user_id": "alice"}
+   → 创建工作区 + 注册 alice(role=admin) + 返回 alice 的 key: 7f3a9c1e...
 
-2. 再次获取 alice 的 key（幂等，返回同一个值）
-   GET  /api/v1/admin/accounts/acme/users/alice/key                     → ovk_user_Ek3x...（和上次完全一样）
+2. alice 用 key 访问 API
+   GET /api/v1/fs/ls?uri=viking://  -H "X-API-Key: 7f3a9c1e..."   → 200 OK
 
-3. alice 用 key 访问 API
-   GET /api/v1/fs/ls?uri=viking://  -H "X-API-Key: ovk_user_Ek3x..."   → 200 OK
+3. alice（admin）注册普通用户 bob
+   POST /api/v1/admin/accounts/acme/users  {"user_id": "bob"}      → 注册成功 + 返回 key: d91f5b2a...
 
-4. alice 丢了 key，管理员重新获取（无感恢复，key 不变）
-   GET  /api/v1/admin/accounts/acme/users/alice/key                     → ovk_user_Ek3x...（还是同一个）
+4. bob 丢了 key，alice 重新生成（旧 key 立即失效）
+   POST /api/v1/admin/accounts/acme/users/bob/key                  → e82d4e0f...（新 key）
+   bob 用旧的 d91f5b2a... 访问 → 401（已失效）
 
-5. alice 的 key 泄露，想换一个 → 无法单独换，必须轮转 private_key（全部用户的 key 都会变）
+5. bob 的 key 泄露 → 重新生成即可，只影响 bob
 
-6. 管理员移除 alice
-   DELETE /api/v1/admin/accounts/acme/users/alice                       → 注册表删除 alice
-   alice 再用 key 访问 → 解密成功但注册表找不到 → 401
+6. alice 移除 bob
+   DELETE /api/v1/admin/accounts/acme/users/bob                    → 注册表和 key 一起删除
+   bob 再用 key 访问 → 查表找不到 → 401
 ```
 
-**存储**：keys.json 只存注册列表，不存 key。`ov.conf` 需要 `private_key` 字段。
+### 2.3 Key 存储
+
+- **Root Key**：`ov.conf` 的 `server` 段（静态配置）
+- **全局工作区列表**：AGFS `/_system/accounts.json`
+- **Per-account 用户注册表**：AGFS `/{account_id}/_system/users.json`
+
+存储结构示例：
 
 ```json
-{ "accounts": { "acme": { "users": ["alice", "bob"] } } }
-```
-
-#### 方案 B：随机 key + 查表（每个 user key 都存储）
-
-**核心思路**：注册用户时生成随机 key，存入 keys.json。验证时查表匹配。
-
-**生成**：`secrets.token_hex(32)` → `ovk_user_7f3a...`（存入 keys.json）
-**验证**：在 keys.json 中查找 key → 得到 `account_id` 和 `user_id`
-
-**特征**：每次获取 key 都生成新的随机值，旧 key 立即失效。
-
-**完整场景**：
-
-```
-1. 管理员注册 alice，获取 key
-   POST /api/v1/admin/accounts/acme/users         {"user_id": "alice"}  → 注册成功
-   GET  /api/v1/admin/accounts/acme/users/alice/key                     → ovk_user_7f3a...
-
-2. 再次获取 alice 的 key（生成新 key，旧 key 立即失效）
-   GET  /api/v1/admin/accounts/acme/users/alice/key                     → ovk_user_b82d...（新 key）
-   alice 用旧的 ovk_user_7f3a... 访问 → 401（已失效）
-
-3. alice 用新 key 访问 API
-   GET /api/v1/fs/ls?uri=viking://  -H "X-API-Key: ovk_user_b82d..."   → 200 OK
-
-4. alice 丢了 key，管理员重新获取（生成新 key，alice 需要更新）
-   GET  /api/v1/admin/accounts/acme/users/alice/key                     → ovk_user_c93f...（又一个新 key）
-
-5. alice 的 key 泄露，想换一个 → 重新获取即可，只影响 alice，不影响 bob
-
-6. 管理员移除 alice
-   DELETE /api/v1/admin/accounts/acme/users/alice                       → 注册表和 key 一起删除
-   alice 再用 key 访问 → 查表找不到 → 401
-```
-
-**存储**：keys.json 存注册列表 + 所有 user key。`ov.conf` 不需要 `private_key`。
-
-```json
+// /_system/accounts.json —— 全局工作区列表
 {
-    "accounts": { "acme": { "users": ["alice", "bob"] } },
-    "user_keys": {
-        "ovk_user_c93f...": { "account_id": "acme", "user_id": "alice" },
-        "ovk_user_d91f...": { "account_id": "acme", "user_id": "bob" }
+    "accounts": {
+        "default": { "created_at": "2026-02-13T00:00:00Z" },
+        "acme": { "created_at": "2026-02-13T10:00:00Z" }
+    }
+}
+
+// /acme/_system/users.json —— acme 工作区的用户注册表
+{
+    "users": {
+        "alice": { "role": "admin", "key": "7f3a9c1e..." },
+        "bob":   { "role": "user",  "key": "d91f5b2a..." }
     }
 }
 ```
 
-#### 方案对比
+启动时加载所有 account 的 `users.json` 到内存，构建全局 key → (account_id, user_id, role) 索引。写操作持久化到对应 account 目录。
 
-| 维度 | 方案 A（加密式 token） | 方案 B（随机 key + 查表） |
-|------|----------------------|------------------------|
-| key 可读性 | 不可读（AES 密文） | 不可读（随机 hex） |
-| 信息泄露 | 无 | 无 |
-| 存储 | 只存注册列表 | 存每个 key + 身份映射 |
-| `ov.conf` | 需要 `private_key` | 不需要 |
-| 密码学依赖 | AES-GCM | 无（`secrets.token_hex`） |
-| key 丢失恢复 | 重新推导同一个 key | 重新生成新 key，旧的失效 |
-| 单用户换 key | 不支持（需轮转 private_key） | 支持 |
-| 验证方式 | 解密 + 查注册表 | 查 key 表 |
-
-### 2.3 Key 存储
-
-- **Root Key**：`ov.conf` 的 `server` 段
-- **Private Key**（仅方案 A）：`ov.conf` 的 `server` 段
-- **Account Keys + User Keys/注册列表**：AGFS `/_system/keys.json`，启动时加载到内存，写操作同步持久化
-- `_system` 路径与租户 URI 自然隔离（合法 scope 为 resources/user/agent/session/queue/transactions）
-
-**为什么 Account/User Key 存 AGFS 而不是本地文件**：
-
-`root_api_key` 是静态配置（部署时手动写入 ov.conf），但 account key 和 user key 是运行时通过 Admin API 动态增删的，不能放 ov.conf。动态存储有两个选择：
-
-| | 本地文件 | AGFS |
-|---|---|---|
-| 单节点 | 可以 | 可以 |
-| 多节点部署 | 各节点各自一份，需自行解决同步 | 共享存储，天然一致 |
-| 已有依赖 | 需新增本地文件路径管理 | 复用现有 AGFS 基础设施 |
-| 启动依赖 | 无 | 需要 AGFS 先启动 |
-
-选择 AGFS 的核心理由是**多节点一致性**：生产环境可能多个 OpenViking server 共享同一个 AGFS 后端，存 AGFS 则所有节点读同一份数据，一个节点创建的 account 其他节点立即可见。启动依赖不是问题——APIKeyManager 在 `service.initialize()` 之后才初始化（见 T5）。
+**为什么存 AGFS**：User key 是运行时通过 Admin API 动态增删的，不能放 ov.conf。选择 AGFS 的核心理由是多节点一致性——多个 server 共享同一个 AGFS 后端时，一个节点创建的用户其他节点立即可见。
 
 ### 2.4 新模块 `openviking/server/api_keys.py`
 
@@ -184,15 +126,16 @@ User Key 有两种候选方案，需要在设计评审中确定。
 class APIKeyManager:
     """API Key 生命周期管理与解析"""
 
-    def __init__(self, root_key: Optional[str], private_key: Optional[bytes], agfs_url: str)
-    async def load()                                     # 从 AGFS 加载 keys.json 到内存
-    async def save()                                     # 持久化到 AGFS
-    def resolve(api_key: str) -> ResolvedIdentity        # Key → 身份 + 角色（含注册检查）
-    def create_account(account_id: str) -> str           # 创建账户，返回 account key
-    def delete_account(account_id: str)                  # 删除账户（清理 key 和用户列表）
-    def derive_user_key(account_id, user_id) -> str      # 推导用户 key
-    def register_user(account_id, user_id)               # 注册用户到账户
+    def __init__(self, root_key: Optional[str], agfs_url: str)
+    async def load()                                     # 加载所有 account 的 users.json 到内存
+    async def save_account(account_id: str)              # 持久化指定 account 的 users.json
+    def resolve(api_key: str) -> ResolvedIdentity        # Key → 身份 + 角色
+    def create_account(account_id: str, admin_user_id: str) -> str  # 创建工作区 + 首个 admin，返回 admin 的 user key
+    def delete_account(account_id: str)                  # 删除工作区
+    def register_user(account_id, user_id, role) -> str  # 注册用户，返回 user key
     def remove_user(account_id, user_id)                 # 移除用户
+    def regenerate_key(account_id, user_id) -> str       # 重新生成 user key（旧 key 失效）
+    def set_role(account_id, user_id, role)              # 修改用户角色（仅 ROOT）
 ```
 
 ---
@@ -206,7 +149,7 @@ class APIKeyManager:
 ```python
 class Role(str, Enum):
     ROOT = "root"
-    ACCOUNT_ADMIN = "account_admin"
+    ADMIN = "admin"          # account 内的管理员（用户属性，非 key 类型）
     USER = "user"
 
 @dataclass
@@ -225,11 +168,11 @@ class RequestContext:
 ### 3.2 认证流程
 
 1. 从 `X-API-Key` 或 `Authorization: Bearer` 提取 Key
-2. 若未配置 `root_api_key`，进入**本地开发模式**：返回 `(role=ROOT, account_id="default", user_id="default")`
-3. 按前缀分派：
-   - `ovk_root_` → HMAC 比对 root key
-   - `ovk_acct_` → 查内存 account_keys dict
-   - `ovk_user_` → 解析身份（方式取决于 2.2 选型）+ 注册检查
+2. 若未配置 `root_api_key`，进入 **dev 模式**：返回 `(role=ROOT, account_id="default", user_id="default")`
+3. 顺序匹配（Key 无前缀，纯随机 token）：
+   - HMAC 比对 root key → 匹配则 role=ROOT
+   - 查 user key 内存索引 → 匹配则得到 (account_id, user_id, role)，role 为 ADMIN 或 USER
+   - 均不匹配 → 401 Unauthorized
 4. 从 `X-OpenViking-Agent` header 读取 `agent_id`（默认 `"default"`）
 5. 构造 `RequestContext(UserIdentifier(account_id, user_id, agent_id), role)`
 
@@ -249,63 +192,40 @@ def get_request_context(identity) -> RequestContext  # 构造 RequestContext
 
 ## 四、RBAC 模型
 
-### 4.1 为什么是三层角色
+### 4.1 三层角色
 
-采用 ROOT / ACCOUNT_ADMIN / USER 三层角色，而非 ROOT + USER 两层，理由如下：
+采用 ROOT / ADMIN / USER 三层角色。ADMIN 是用户在 account 内的角色属性，不由 key 类型决定。两层 key（root/user）+ 角色属性的设计：
 
-1. **与三层 Key 结构自然对应**：root key → ROOT，account key → ACCOUNT_ADMIN，user key → USER。角色和 key 一一映射，认证解析逻辑简单直接。
-2. **委托式管理链路**：ROOT 创建 account 并下发 account key → 租户管理员自行注册用户并下发 user key。如果只有两层，所有用户管理都必须经过 ROOT，ROOT 成为运营瓶颈。
-3. **权限最小化**：user key 泄露只影响单个用户数据；account key 泄露影响该租户但不波及其他租户；root key 影响全局。三层划分使得每层 key 的爆炸半径最小。
-4. **数据访问边界**：ACCOUNT_ADMIN 可访问本 account 下所有用户数据（管理审计需要），USER 只能访问自己的隔离空间。这个区分在两层模型中无法表达。
-5. **增量成本低**：实现上只是 Role 枚举多一个值 + Admin API 多几个权限检查，不会增加架构复杂度。
+1. **委托式管理链路**：ROOT 创建 account 并指定首个 admin → admin 自行注册用户并下发 user key。ROOT 不需要介入日常用户管理。
+2. **灵活的 admin 管理**：一个 account 可以有多个 admin，ROOT 可以随时提升/降低用户角色。
+3. **权限最小化**：user key 泄露只影响单个用户数据；admin 泄露影响该 account 但不波及其他 account；root key 影响全局。
+4. **数据访问边界**：ADMIN 可访问本 account 下所有用户数据（管理审计需要），USER 只能访问自己的隔离空间。
 
 ### 4.2 角色与权限
 
 | 角色 | 身份 | 能力 |
 |------|------|------|
-| ROOT | 系统管理员 | 一切：创建/删除账户、生成 Account Key、跨租户访问 |
-| ACCOUNT_ADMIN | 账户管理员 | 管理本账户用户、下发 User Key、账户内全量数据访问 |
-| USER | 普通用户 | 访问自己的 user/agent/session/resources scope |
+| ROOT | 系统管理员 | 一切：创建/删除工作区、指定 admin、跨租户访问 |
+| ADMIN | 工作区管理员 | 管理本 account 用户、下发 User Key、账户内全量数据访问 |
+| USER | 普通用户 | 访问自己的 user/agent/session scope + account 内共享 resources |
 
 权限矩阵：
 
-| 操作 | ROOT | ACCOUNT_ADMIN | USER |
-|------|------|---------------|------|
-| 创建/删除账户 | Y | N | N |
-| 生成 Account Key | Y | N | N |
-| 注册/移除用户 | Y | Y (本账户) | N |
-| 下发 User Key | Y | Y (本账户) | N |
+| 操作 | ROOT | ADMIN | USER |
+|------|------|-------|------|
+| 创建/删除工作区 | Y | N | N |
+| 提升用户为 admin | Y | N | N |
+| 注册/移除用户 | Y | Y (本 account) | N |
+| 下发/重置 User Key | Y | Y (本 account) | N |
 | FS 读写 (own scope) | Y | Y | Y |
-| 跨账户访问 | Y | N | N |
-| VectorDB 搜索 | Y (全局) | Y (本账户) | Y (本账户) |
-| Session 管理 | Y | Y (本账户所有) | Y (仅自己的) |
+| 跨 account 访问 | Y | N | N |
+| VectorDB 搜索 | Y (全局) | Y (本 account) | Y (本 account) |
+| Session 管理 | Y | Y (本 account 所有) | Y (仅自己的) |
 | 系统状态 | Y | Y | N |
 
-### 4.3 Agent 归属（待评审）
+### 4.3 Agent 归属
 
-Agent 通过 User 的 API Key 认证（继承用户身份）。但 Agent 的数据目录（记忆/技能/指令）有两种归属方式：
-
-#### 方案 A：Agent 目录按 agent_id 共享（跨用户共享）
-
-目录仅由 `agent_id` 决定。多个用户使用同一 `agent_id` 时，访问同一份 agent 数据。
-
-```
-/{account_id}/agent/{md5(agent_id)[:12]}/memories/cases/
-/{account_id}/agent/{md5(agent_id)[:12]}/skills/
-/{account_id}/agent/{md5(agent_id)[:12]}/instructions/
-```
-
-场景：团队共用编程助手 agent，alice 教它的技能 bob 也能用。
-
-| 维度 | 说明 |
-|------|------|
-| 优势 | agent 知识多用户协作累积；目录结构简单 |
-| 劣势 | 无用户间隔离——alice 对 agent 说的话 bob 也能看到 |
-| 适用 | 团队共享工具型 agent |
-
-#### 方案 B：Agent 目录按 user_id + agent_id 隔离（每用户独立）
-
-目录由 `user_id + agent_id` 共同决定。每个用户与 agent 的组合有独立数据空间。
+Agent 目录由 `user_id + agent_id` 共同决定，每个用户与 agent 的组合有独立数据空间：
 
 ```
 /{account_id}/agent/{md5(user_id + agent_id)[:12]}/memories/cases/
@@ -313,38 +233,20 @@ Agent 通过 User 的 API Key 认证（继承用户身份）。但 Agent 的数�
 /{account_id}/agent/{md5(user_id + agent_id)[:12]}/instructions/
 ```
 
-场景：alice 和 bob 各自使用同一 agent，但各自有独立的记忆和技能空间。
-
-| 维度 | 说明 |
-|------|------|
-| 优势 | 用户间 agent 数据完全隔离；与现有 `unique_space_name()` 兼容 |
-| 劣势 | agent 知识无法跨用户累积；存储开销 = 用户数 × agent 数 |
-| 适用 | 个人助手类 agent |
-
-#### 方案对比
-
-| 维度 | 方案 A（共享） | 方案 B（隔离） |
-|------|--------------|--------------|
-| 目录路径 | `agent/{hash(agent_id)}/...` | `agent/{hash(user+agent)}/...` |
-| agent 知识 | 多用户共同累积 | 每用户独立累积 |
-| 隐私 | 无用户间隔离 | 完全隔离 |
-| 存储开销 | 低 | 高 |
-| 后续扩展 | 可加"用户私有记忆层" | 可加"共享知识库" |
-
-**讨论要点**：产品形态偏向团队协作共享 agent 还是个人私有 agent？是否需要混合模式？
+alice 和 bob 使用同一 agent_id 时，各自有独立的记忆和技能空间，互不可见。如果后续需要团队共享 agent 知识，可通过 ACL 机制（见 5.7）扩展。
 
 ### 4.4 Admin API
 
 新增 Router: `openviking/server/routers/admin.py`
 
 ```
-POST   /api/v1/admin/accounts                              创建账户 (ROOT)
-GET    /api/v1/admin/accounts                              列出账户 (ROOT)
-DELETE /api/v1/admin/accounts/{account_id}                 删除账户 (ROOT)，级联清理数据
-POST   /api/v1/admin/accounts/{account_id}/users           注册用户 (ROOT, ACCOUNT_ADMIN)
-DELETE /api/v1/admin/accounts/{account_id}/users/{uid}     移除用户 (ROOT, ACCOUNT_ADMIN)
-POST   /api/v1/admin/accounts/{account_id}/key             生成 Account Key (ROOT)
-GET    /api/v1/admin/accounts/{account_id}/users/{uid}/key 下发 User Key (ROOT, ACCOUNT_ADMIN)
+POST   /api/v1/admin/accounts                              创建工作区 + 首个 admin (ROOT)
+GET    /api/v1/admin/accounts                              列出工作区 (ROOT)
+DELETE /api/v1/admin/accounts/{account_id}                 删除工作区 (ROOT)，级联清理数据
+POST   /api/v1/admin/accounts/{account_id}/users           注册用户 (ROOT, ADMIN)
+DELETE /api/v1/admin/accounts/{account_id}/users/{uid}     移除用户 (ROOT, ADMIN)
+GET    /api/v1/admin/accounts/{account_id}/users/{uid}/key 重新生成 User Key (ROOT, ADMIN)
+PUT    /api/v1/admin/accounts/{account_id}/users/{uid}/role 修改用户角色 (ROOT)
 ```
 
 ---
@@ -357,7 +259,7 @@ GET    /api/v1/admin/accounts/{account_id}/users/{uid}/key 下发 User Key (ROOT
 
 - **account**：顶层隔离，不同租户之间完全不可见
 - **user**：同一 account 内，不同用户的私有数据互不可见。用户记忆、资源、session 属于用户本人
-- **agent**：同一 account 内，不同 agent 的数据互不可见。agent 的学习记忆、技能、指令属于 agent 本身。agent 目录归属方式（跨用户共享 vs 每用户独立）见 4.3 节待评审
+- **agent**：同一 account 内，agent 目录由 user_id + agent_id 共同决定，每用户独立（见 4.3）
 
 **Space 标识符**：`UserIdentifier` 新增两个方法，拆分现有的 `unique_space_name()`：
 
@@ -367,9 +269,8 @@ def user_space_name(self) -> str:
     return f"{self._account_id}_{hashlib.md5(self._user_id.encode()).hexdigest()[:8]}"
 
 def agent_space_name(self) -> str:
-    """Agent 级 space，实现取决于 4.3 节选型"""
-    # 方案 A: md5(agent_id)  方案 B: md5(user_id + agent_id)
-    return hashlib.md5(self._agent_id.encode()).hexdigest()[:12]  # 方案 A 示例
+    """Agent 级 space，由 user_id + agent_id 共同决定"""
+    return hashlib.md5((self._user_id + self._agent_id).encode()).hexdigest()[:12]
 ```
 
 ### 5.2 各 Scope 的隔离方式
@@ -377,13 +278,14 @@ def agent_space_name(self) -> str:
 | scope | AGFS 路径 | 隔离维度 | 说明 |
 |-------|-----------|----------|------|
 | `user/memories` | `/{account_id}/user/{user_space}/memories/` | account + user | 用户偏好、实体、事件属于用户本人 |
-| `agent/memories` | `/{account_id}/agent/{agent_space}/memories/` | account + agent | agent 的学习记忆（归属方式见 4.3） |
-| `agent/skills` | `/{account_id}/agent/{agent_space}/skills/` | account + agent | agent 的能力集（归属方式见 4.3） |
-| `agent/instructions` | `/{account_id}/agent/{agent_space}/instructions/` | account + agent | agent 的行为规则（归属方式见 4.3） |
-| `resources/` | `/{account_id}/resources/{user_space}/` | account + user | 用户的知识资源 |
+| `agent/memories` | `/{account_id}/agent/{agent_space}/memories/` | account + user + agent | agent 的学习记忆，每用户独立 |
+| `agent/skills` | `/{account_id}/agent/{agent_space}/skills/` | account + user + agent | agent 的能力集，每用户独立 |
+| `agent/instructions` | `/{account_id}/agent/{agent_space}/instructions/` | account + user + agent | agent 的行为规则，每用户独立 |
+| `resources/` | `/{account_id}/resources/` | account | account 内共享的知识资源 |
 | `session/` | `/{account_id}/session/{user_space}/{session_id}/` | account + user | 用户的对话记录 |
 | `transactions/` | `/{account_id}/transactions/` | account | 账户级事务记录 |
-| `_system/` | `/_system/` | 系统级 | 不属于任何 account |
+| `_system/`（全局） | `/_system/` | 系统级 | 全局工作区列表 |
+| `_system/`（per-account） | `/{account_id}/_system/` | account | 用户注册表 |
 
 ### 5.3 AGFS 文件系统隔离
 
@@ -442,12 +344,13 @@ user/agent 级隔离通过**逐层遍历时过滤**实现。用户可以从公�
 
 ```
 # alice（USER 角色）
-ls viking://resources           → 只看到 {alice_user_space}/
+ls viking://resources           → 看到 account 内共享的 resources（无 user 隔离）
 ls viking://agent/memories      → 只看到 alice 当前 agent 的 {agent_space}/
 ls viking://user/memories       → 只看到 {alice_user_space}/
 
-# admin（ACCOUNT_ADMIN 角色）
-ls viking://resources           → 看到所有用户的 space 目录
+# admin（ADMIN 角色）
+ls viking://resources           → 同上，resources 在 account 内共享
+ls viking://user/memories       → 看到所有用户的 space 目录
 ```
 
 **实现**：VikingFS 新增 `_is_accessible()` 方法：
@@ -455,7 +358,7 @@ ls viking://resources           → 看到所有用户的 space 目录
 ```python
 def _is_accessible(self, uri: str, ctx: RequestContext) -> bool:
     """判断当前用户是否能访问该 URI"""
-    if ctx.role in (Role.ROOT, Role.ACCOUNT_ADMIN):
+    if ctx.role in (Role.ROOT, Role.ADMIN):
         return True
 
     # 结构性目录（不含 space，如 viking://user/memories）→ 允许遍历
@@ -488,7 +391,7 @@ def _is_accessible(self, uri: str, ctx: RequestContext) -> bool:
 | 角色 | 过滤条件 |
 |------|---------|
 | ROOT | 无 |
-| ACCOUNT_ADMIN | `account_id` = ctx.account_id |
+| ADMIN | `account_id` = ctx.account_id |
 | USER | `account_id` = ctx.account_id AND `owner_space` IN (ctx.user.user_space_name(), ctx.user.agent_space_name()) |
 
 写入时，`Context` 对象携带 `account_id` 和 `owner_space`，通过 `EmbeddingMsgConverter` 透传到 VectorDB。`owner_space` 始终只存原始所有者，不因共享而修改。
@@ -548,8 +451,7 @@ _is_accessible 检查: owner_space 匹配 OR space in shared_spaces
   "server": {
     "host": "0.0.0.0",
     "port": 1933,
-    "root_api_key": "ovk_root_...",
-    "private_key": "hex-encoded-32-byte-secret",
+    "root_api_key": "your-secret-root-key",
     "cors_origins": ["*"]
   }
 }
@@ -563,12 +465,11 @@ class ServerConfig:
     host: str = "0.0.0.0"
     port: int = 1933
     root_api_key: Optional[str] = None   # 替代原 api_key
-    private_key: Optional[str] = None    # 仅 User Key 方案 A 需要，见 2.2 节
     cors_origins: List[str] = field(default_factory=lambda: ["*"])
 ```
 
-- `root_api_key`：替代原有的 `api_key`，用于 ROOT 身份认证。为 None 时进入本地开发模式（跳过认证），等同当前行为。
-- `private_key`：hex 编码的 32 字节密钥，用于 User Key 方案 A（加密式 token）中 AES 加密/解密 user key payload。如果最终选型为方案 B（随机 key + 查表），此字段不需要，可移除。见 2.2 节 User Key 方案选型。
+- `root_api_key`：替代原有的 `api_key`，用于 ROOT 身份认证。为 None 时进入本地开发模式（跳过认证）。
+- 已移除 `private_key`（User Key 采用随机存储方案，不需要加密密钥）和 `multi_tenant`（统一多租户，不区分部署模式）。
 
 ---
 
@@ -591,7 +492,7 @@ class ServerConfig:
 # 多租户后：身份由服务端从 api_key 解析
 client = ov.SyncHTTPClient(
     url="http://localhost:1933",
-    api_key="ovk_user_7f3a9c1e...",   # 服务端解析出 account_id + user_id
+    api_key="7f3a9c1e...",             # 服务端查表解析出 account_id + user_id
     agent_id="coding-agent",           # 可选，默认 "default"
 )
 ```
@@ -605,7 +506,7 @@ client = ov.SyncHTTPClient(
 ```json
 {
   "url": "http://localhost:1933",
-  "api_key": "ovk_user_7f3a9c1e...",
+  "api_key": "7f3a9c1e...",
   "agent_id": "coding-agent",
   "output": "table"
 }
@@ -613,111 +514,89 @@ client = ov.SyncHTTPClient(
 
 CLI 发起请求时通过 `X-OpenViking-Agent` header 携带 agent_id。不再需要配置 `account_id` 和 `user_id`。
 
-### 7.3 嵌入模式（不做多租户）
+### 7.3 嵌入模式
 
-嵌入模式直接调用 Service 层，内部构造固定默认 RequestContext，不涉及 API Key 和 RBAC：
+嵌入模式支持多租户，通过构造参数传入 `UserIdentifier`。无 API Key 认证，身份由调用方直接声明（嵌入模式的调用方是可信代码）。
 
 ```python
+# 默认（单用户，使用 default 工作区）
 client = ov.Client(path="/data/openviking")
-# 内部等价于 RequestContext(user=default, role=ROOT)
+
+# 多租户（指定身份）
+from openviking_cli.session.user_id import UserIdentifier
+user = UserIdentifier("acme", "alice", "coding-agent")
+client = ov.Client(path="/data/openviking", user=user)
 ```
+
+内部将 `UserIdentifier` 转为 `RequestContext` 传给 Service 层，路径隔离和权限过滤逻辑与 HTTP 模式一致。
 
 ---
 
-## 八、部署模式与单租户兼容（待评审）
+## 八、部署模式
 
-### 8.1 背景
+多租户为**破坏性改造**，不保留单租户模式。所有部署统一走多租户路径结构。
 
-多租户改变了存储路径结构（新增 `{account_id}` 前缀和 `{user_space}` 子目录层）和 VectorDB schema（新增 `account_id`/`owner_space` 字段）。现有单租户部署只使用 `root_api_key`，不涉及 account/user/agent 概念，存储路径是扁平的。需要决定是否兼容这类部署。
+### 8.1 统一路径结构
 
-### 8.2 方案 A：双模式共存（配置开关）
+所有 account（包括 default）使用层级路径：
 
-通过 `ov.conf` 的 `multi_tenant` 字段区分两种互斥的部署模式，启动时确定，运行期不可切换。
-
-**单租户模式**（`multi_tenant` 不设或 `false`，默认）：
-
-与当前行为完全一致，升级无影响：
-
-- 不配置 `root_api_key` → dev 模式，跳过认证
-- 配置 `root_api_key` → 简单 HMAC 比对，通过即可访问全部数据
-- 存储路径不变：`viking://resources/doc.md` → `/local/resources/doc.md`
-- VectorDB 记录不含租户字段，查询不注入租户过滤
-- Admin API 端点不注册，访问返回 404
-
-**多租户模式**（`multi_tenant: true`）：
-
-```json
-{
-  "server": {
-    "multi_tenant": true,
-    "root_api_key": "ovk_root_...",
-    "cors_origins": ["*"]
-  }
-}
+```
+/local/{account_id}/resources/...
+/local/{account_id}/user/{user_space}/memories/...
+/local/{account_id}/agent/{agent_space}/memories/...
 ```
 
-- 必须配置 `root_api_key`
-- 启动时初始化 APIKeyManager，加载 keys.json，注册 Admin API 端点
-- 存储路径带 account_id 前缀和 space 目录层
-- VectorDB 写入携带 `account_id` + `owner_space`，查询按角色注入过滤
-- 完整 RBAC（ROOT / ACCOUNT_ADMIN / USER）
+原有扁平路径 `/local/resources/...` 不再使用，现有数据需重新导入。
 
-**两种模式对比**：
+### 8.2 运行模式
 
-| 维度 | 单租户模式 | 多租户模式 |
-|------|-----------|-----------|
-| 配置 | `multi_tenant` 不设或 `false` | `multi_tenant: true` |
-| 认证 | 可选 `root_api_key`，单一密钥 | 三层 Key（root / account / user） |
-| 存储路径 | 扁平：`/local/resources/...` | 隔离：`/local/{account_id}/resources/{user_space}/...` |
-| VectorDB | 无租户字段 | 写入和查询携带租户字段 |
-| Admin API | 不注册 | 注册 |
-| RBAC | 无 | ROOT / ACCOUNT_ADMIN / USER |
+| 配置 | 行为 |
+|------|------|
+| 不配置 `root_api_key` | Dev 模式：跳过认证，使用 default account + default user + ROOT 角色 |
+| 配置 `root_api_key` | 生产模式：强制 API Key 认证，支持多 account 和多用户 |
 
-**启动时分派**：
+两种配置使用**完全相同的路径结构和 VectorDB schema**，区别仅在认证层：
+- Dev 模式不验证 Key，自动填充默认身份
+- 生产模式从 Key 解析身份
 
-```python
-if config.multi_tenant:
-    api_key_manager = APIKeyManager(root_key=config.root_api_key, ...)
-    await api_key_manager.load()
-    app.state.api_key_manager = api_key_manager
-    app.include_router(admin_router)        # 注册 Admin API
-    viking_fs.set_multi_tenant(True)        # VikingFS 使用隔离路径
-else:
-    app.state.api_key_manager = None        # 单租户，无 key 管理
-    viking_fs.set_multi_tenant(False)       # VikingFS 使用扁平路径
+代码无分支逻辑，VikingFS 和 VectorDB 只有一套实现。
+
+### 8.3 升级与数据迁移
+
+旧版（单租户）升级到多租户后，存储结构变化：
+
+| 影响 | 旧结构 | 新结构 |
+|------|--------|--------|
+| resources | `/local/resources/...` | `/local/default/resources/...` |
+| user memories | `/local/user/memories/...` | `/local/default/user/{default_space}/memories/...` |
+| agent data | `/local/agent/memories/...` | `/local/default/agent/{default_space}/memories/...` |
+| session | `/local/session/...` | `/local/default/session/{default_space}/...` |
+| VectorDB | 无 `account_id` 字段 | 需补 `account_id="default"` + `owner_space` |
+
+迁移目标始终是 `default` account + `default` user，映射关系完全确定。
+
+提供 CLI 迁移命令（Phase 2 实现）：
+
+```bash
+python -m openviking migrate
 ```
 
-**约束**：
+迁移逻辑：
+1. 检测旧结构（`/local/resources/` 存在但 `/local/default/` 不存在）
+2. 创建 default account 目录结构
+3. 搬迁 AGFS 文件到新路径
+4. Batch update VectorDB 记录，补充 `account_id` 和 `owner_space` 字段
+5. 输出迁移报告（搬迁文件数、更新记录数）
 
-- 同一份数据不能跨模式使用（路径结构和 VectorDB schema 不同）
-- 嵌入模式始终为单租户，不受 `multi_tenant` 配置影响
-
-| 维度 | 说明 |
-|------|------|
-| 优势 | 现有单租户部署零成本升级；多租户是增量能力，不影响已有用户 |
-| 劣势 | 代码需按模式分派路径逻辑和认证逻辑，增加分支；VikingFS、认证中间件、VectorDB 写入/查询均需判断模式 |
-
-### 8.3 方案 B：仅多租户
-
-不保留单租户模式，所有部署统一走多租户路径结构。现有单租户部署升级后需要重新导入数据。
-
-- 不配置 `root_api_key` → dev 模式，跳过认证，使用默认 account/user
-- 配置 `root_api_key` → ROOT 角色，account_id="default"，user_id="default"
-- 存储路径统一：`viking://resources/doc.md` → `/local/default/resources/{default_user_space}/doc.md`
-- VectorDB 记录统一携带 `account_id`/`owner_space` 字段
-
-| 维度 | 说明 |
-|------|------|
-| 优势 | 代码无分支，路径逻辑和认证逻辑统一；VikingFS、VectorDB 只有一套实现 |
-| 劣势 | 现有单租户部署升级后路径变化，已有数据不可见，需重新导入 |
+用户升级流程：停服 → 备份 → 执行 `migrate` → 验证 → 启动新版
 
 ---
 
 ## 九、实施分期与任务拆解
 
-### Phase 1：API 层多租户能力定义（已完成）
+### Phase 1：API 层多租户能力定义
 
-实施顺序：`T1 → T3 → T2 → T4 → T5 → T10/T11 并行 → T12`
+实施顺序：`T1 → T3 → T2 → T4 → T5 → T10/T11 并行 → T12 → T16-P1 → T17-P1 → T14-P1`
 
 ---
 
@@ -735,7 +614,7 @@ from openviking.session.user_id import UserIdentifier
 
 class Role(str, Enum):
     ROOT = "root"
-    ACCOUNT_ADMIN = "account_admin"
+    ADMIN = "admin"          # account 内的管理员（用户属性，非 key 类型）
     USER = "user"
 
 @dataclass
@@ -743,7 +622,7 @@ class ResolvedIdentity:
     """认证中间件的输出：从 API Key 解析出的原始身份信息"""
     role: Role
     account_id: Optional[str] = None   # ROOT 可能无 account_id
-    user_id: Optional[str] = None      # ROOT/ACCOUNT_ADMIN 可能无 user_id
+    user_id: Optional[str] = None      # ROOT 可能无 user_id
     agent_id: Optional[str] = None     # 来自 X-OpenViking-Agent header
 
 @dataclass
@@ -782,8 +661,6 @@ class ServerConfig:
     host: str = "0.0.0.0"
     port: int = 1933
     root_api_key: Optional[str] = None                     # ← 替代 api_key
-    multi_tenant: bool = False                             # ← 新增，见第 8 节
-    private_key: Optional[str] = None                      # ← 新增，仅 User Key 方案 A
     cors_origins: List[str] = field(default_factory=lambda: ["*"])
 ```
 
@@ -793,8 +670,6 @@ config = ServerConfig(
     host=server_data.get("host", "0.0.0.0"),
     port=server_data.get("port", 1933),
     root_api_key=server_data.get("root_api_key"),          # ← 改
-    multi_tenant=server_data.get("multi_tenant", False),   # ← 新增
-    private_key=server_data.get("private_key"),             # ← 新增
     cors_origins=server_data.get("cors_origins", ["*"]),
 )
 ```
@@ -805,88 +680,96 @@ config = ServerConfig(
 
 **新建** `openviking/server/api_keys.py`，依赖：T1
 
-##### 内存数据结构
+##### 存储结构
+
+Per-account 存储，两级文件：
 
 ```python
-# keys.json 在 AGFS 中的结构
+# /_system/accounts.json — 全局工作区列表
 {
-    "account_keys": {
-        "ovk_acct_abc123...": {
-            "account_id": "acme_corp",
-            "created_at": "2026-02-12T10:00:00Z"
-        }
-    },
     "accounts": {
-        "acme_corp": {
-            "created_at": "2026-02-12T10:00:00Z",
-            "users": ["alice", "bob"]
-        }
+        "default": {"created_at": "2026-02-12T10:00:00Z"},
+        "acme": {"created_at": "2026-02-13T08:00:00Z"}
+    }
+}
+
+# /{account_id}/_system/users.json — 该 account 的用户注册表
+{
+    "users": {
+        "alice": {"role": "admin", "key": "7f3a9c1e..."},
+        "bob": {"role": "user", "key": "d91f5b2a..."}
     }
 }
 ```
 
-对应内存结构：
+内存索引（启动时从所有 account 加载）：
 ```python
-self._account_keys: Dict[str, str] = {}       # {key_str -> account_id}
-self._accounts: Dict[str, AccountInfo] = {}    # {account_id -> AccountInfo}
-# AccountInfo = dataclass(created_at, users: Set[str])
+self._user_keys: Dict[str, UserKeyEntry] = {}   # {key_str -> (account_id, user_id, role)}
+self._accounts: Dict[str, AccountInfo] = {}      # {account_id -> AccountInfo(users)}
 ```
 
 ##### 方法逻辑
 
-**`__init__(root_key, private_key, agfs_url)`**：
-- 存储 root_key, private_key
-- 创建 pyagfs.AGFSClient(agfs_url) 用于读写 `/_system/keys.json`
+**`__init__(root_key, agfs_url)`**：
+- 存储 root_key
+- 创建 pyagfs.AGFSClient(agfs_url) 用于读写 AGFS 文件
 
 **`async load()`**：
-- 从 AGFS 读取 `/_system/keys.json`
-- 若文件不存在，初始化空结构并写入
-- 解析 JSON 填充 `_account_keys` 和 `_accounts`
+- 从 AGFS 读取 `/_system/accounts.json`，若不存在则创建 default account
+- 遍历每个 account，读取 `/{account_id}/_system/users.json`
+- 构建全局 key → (account_id, user_id, role) 索引
 
-**`async save()`**：
-- 将内存数据序列化为 JSON，写回 AGFS `/_system/keys.json`
+**`async save_account(account_id)`**：
+- 将指定 account 的用户数据写回 `/{account_id}/_system/users.json`
+- 同时更新 `/_system/accounts.json`（若 account 列表有变化）
 
 **`resolve(api_key) -> ResolvedIdentity`**：
 ```
-if key.startswith("ovk_root_"):
-    hmac.compare_digest(key, self._root_key) → ResolvedIdentity(role=ROOT)
-elif key.startswith("ovk_acct_"):
-    account_id = self._account_keys.get(key) → ResolvedIdentity(role=ACCOUNT_ADMIN, account_id)
-elif key.startswith("ovk_user_"):
-    account_id, user_id = 解析身份（方式取决于 2.2 选型）
-    检查 account_id 在 _accounts 中存在
-    检查 user_id 在 _accounts[account_id].users 中存在
-    → ResolvedIdentity(role=USER, account_id, user_id)
-else:
-    raise UnauthenticatedError
+# Key 无前缀，顺序匹配
+if hmac.compare_digest(key, self._root_key):
+    → ResolvedIdentity(role=ROOT)
+entry = self._user_keys.get(key)
+if entry:
+    → ResolvedIdentity(role=entry.role, account_id=entry.account_id, user_id=entry.user_id)
+raise UnauthenticatedError
 ```
 
-**`create_account(account_id) -> str`**：
-- 验证 account_id 格式（复用 UserIdentifier 的验证正则）
+**`create_account(account_id, admin_user_id) -> str`**：
+- 验证 account_id 格式
 - 检查 account_id 不重复
-- 生成 `ovk_acct_{secrets.token_hex(32)}`
-- 写入 _account_keys 和 _accounts
-- 调用 save() 持久化
-- 返回 account key
+- 创建 account 记录到 `_accounts`
+- 注册首个 admin 用户，生成 `secrets.token_hex(32)` 作为 key
+- 持久化 `/_system/accounts.json` 和 `/{account_id}/_system/users.json`
+- 返回 admin 的 user key
 
 **`delete_account(account_id)`**：
-- 从 _accounts 删除
-- 从 _account_keys 中删除对应的 key
-- 调用 save() 持久化
-- **注意**：AGFS 数据和 VectorDB 数据的级联清理不在 APIKeyManager 内完成，由 Admin Router 的调用方负责
+- 从 `_accounts` 删除
+- 从 `_user_keys` 中删除该 account 的所有 key
+- 删除 `/_system/accounts.json` 中的记录
+- **注意**：AGFS 数据和 VectorDB 数据的级联清理由 Admin Router 调用方负责
 
-**`derive_user_key(account_id, user_id) -> str`**：
-- 检查 account_id 和 user_id 已注册
-- 调用 `derive_user_key(self._private_key, account_id, user_id)` 返回
-
-**`register_user(account_id, user_id)`**：
+**`register_user(account_id, user_id, role="user") -> str`**：
 - 检查 account_id 存在
-- 将 user_id 加入 `_accounts[account_id].users`
-- 调用 save()
+- 生成 `secrets.token_hex(32)` 作为 key
+- 写入 account 用户表和全局索引
+- 调用 `save_account(account_id)`
+- 返回 user key
 
 **`remove_user(account_id, user_id)`**：
-- 从 `_accounts[account_id].users` 中移除
-- 调用 save()
+- 从 account 用户表和全局索引中移除
+- 调用 `save_account(account_id)`
+
+**`regenerate_key(account_id, user_id) -> str`**：
+- 删除旧 key 的全局索引
+- 生成新随机 key
+- 更新用户表和全局索引
+- 调用 `save_account(account_id)`
+- 返回新 key
+
+**`set_role(account_id, user_id, role)`**：
+- 更新用户角色（仅 ROOT 可调用）
+- 更新全局索引中的 role
+- 调用 `save_account(account_id)`
 
 ---
 
@@ -899,10 +782,13 @@ else:
 **`resolve_identity(request, x_api_key, authorization, x_openviking_agent) -> ResolvedIdentity`**：
 ```
 1. api_key_manager = request.app.state.api_key_manager
-2. 若 api_key_manager 为 None（本地开发模式）：
+2. 若 api_key_manager 为 None（dev 模式，未配置 root_api_key）：
    返回 ResolvedIdentity(role=ROOT, account_id="default", user_id="default", agent_id="default")
 3. 提取 key（同现有逻辑：X-API-Key 或 Bearer）
 4. identity = api_key_manager.resolve(key)
+   - 先 HMAC 比对 root key → 匹配则 role=ROOT
+   - 再查 user key 索引 → 匹配则得到 account_id, user_id, role(ADMIN/USER)
+   - 均不匹配 → 401
 5. identity.agent_id = x_openviking_agent or "default"
 6. 返回 identity
 ```
@@ -940,18 +826,21 @@ def require_role(*allowed_roles: Role):
 # 改前
 app.state.api_key = config.api_key
 
-# 改后（按 multi_tenant 配置分派，见第 8 节）
-if config.multi_tenant:
+# 改后
+if config.root_api_key:
+    # 生产模式：初始化 APIKeyManager
     api_key_manager = APIKeyManager(
         root_key=config.root_api_key,
         agfs_url=service._agfs_url,
     )
     await api_key_manager.load()
     app.state.api_key_manager = api_key_manager
-    app.include_router(admin_router)        # 注册 Admin API
-    viking_fs.set_multi_tenant(True)        # VikingFS 使用隔离路径
 else:
-    app.state.api_key_manager = None        # 单租户模式
+    # Dev 模式：跳过认证，使用默认身份
+    app.state.api_key_manager = None
+
+# Admin API 始终注册（dev 模式下通过 role 守卫限制访问）
+app.include_router(admin_router)
 ```
 
 删除 `app.state.api_key`。
@@ -959,7 +848,7 @@ else:
 **注意**：APIKeyManager 初始化必须在 service.initialize() 之后，因为需要 AGFS URL。时序是：
 1. `service = OpenVikingService()` → 启动 AGFS
 2. `await service.initialize()` → 初始化 VikingFS/VectorDB
-3. `api_key_manager = APIKeyManager(agfs_url=service._agfs_url)` → 用 AGFS 读 keys.json
+3. `api_key_manager = APIKeyManager(agfs_url=service._agfs_url)` → 用 AGFS 读 accounts.json + users.json
 4. `await api_key_manager.load()`
 
 ---
@@ -968,7 +857,7 @@ else:
 
 **修改文件**：`server/routers/` 下所有 router，依赖：T4
 
-##### Phase 1 改动（已完成）
+##### Phase 1 改动
 
 所有 router 的依赖从 `verify_api_key` 迁移到 `get_request_context`，但 **service 调用不变**（ctx 仅接收，不向下传递）：
 
@@ -1023,24 +912,24 @@ async def ls(uri: str, ctx: RequestContext = Depends(get_request_context)):
 
 ##### 端点逻辑
 
-**POST /api/v1/admin/accounts** — 创建账户
+**POST /api/v1/admin/accounts** — 创建工作区 + 首个 admin
 ```
 权限：require_role(ROOT)
-入参：{"account_id": "acme_corp"}
+入参：{"account_id": "acme_corp", "admin_user_id": "alice"}
 逻辑：
-  1. api_key_manager.create_account(account_id) → account_key
+  1. api_key_manager.create_account(account_id, admin_user_id) → admin_user_key
   2. 为新账户初始化 AGFS 目录结构（调用 DirectoryInitializer）
-返回：{"account_id": "acme_corp", "account_key": "ovk_acct_..."}
+返回：{"account_id": "acme_corp", "admin_user_id": "alice", "user_key": "<random_token>"}
 ```
 
-**GET /api/v1/admin/accounts** — 列出账户
+**GET /api/v1/admin/accounts** — 列出工作区
 ```
 权限：require_role(ROOT)
 逻辑：遍历 api_key_manager._accounts
 返回：[{"account_id": "acme_corp", "created_at": "...", "user_count": 2}, ...]
 ```
 
-**DELETE /api/v1/admin/accounts/{account_id}** — 删除账户
+**DELETE /api/v1/admin/accounts/{account_id}** — 删除工作区
 ```
 权限：require_role(ROOT)
 逻辑：
@@ -1052,32 +941,35 @@ async def ls(uri: str, ctx: RequestContext = Depends(get_request_context)):
 
 **POST /api/v1/admin/accounts/{account_id}/users** — 注册用户
 ```
-权限：require_role(ROOT, ACCOUNT_ADMIN)
-额外检查：ACCOUNT_ADMIN 只能操作自己的 account
-入参：{"user_id": "alice"}
-逻辑：api_key_manager.register_user(account_id, user_id)
-返回：{"account_id": "acme_corp", "user_id": "alice"}
+权限：require_role(ROOT, ADMIN)
+额外检查：ADMIN 只能操作自己的 account
+入参：{"user_id": "bob", "role": "user"}
+逻辑：api_key_manager.register_user(account_id, user_id, role) → user_key
+返回：{"account_id": "acme_corp", "user_id": "bob", "user_key": "<random_token>"}
 ```
 
 **DELETE /api/v1/admin/accounts/{account_id}/users/{uid}** — 移除用户
 ```
-权限：require_role(ROOT, ACCOUNT_ADMIN)
+权限：require_role(ROOT, ADMIN)
+额外检查：ADMIN 只能操作自己的 account
 逻辑：api_key_manager.remove_user(account_id, uid)
 返回：{"deleted": true}
 ```
 
-**POST /api/v1/admin/accounts/{account_id}/key** — 生成新 Account Key
+**PUT /api/v1/admin/accounts/{account_id}/users/{uid}/role** — 修改用户角色
 ```
 权限：require_role(ROOT)
-逻辑：生成新 key，替换旧 key（一个 account 只有一个 key）
-返回：{"account_key": "ovk_acct_..."}
+入参：{"role": "admin"}
+逻辑：api_key_manager.set_role(account_id, uid, role)
+返回：{"account_id": "acme_corp", "user_id": "bob", "role": "admin"}
 ```
 
-**GET /api/v1/admin/accounts/{account_id}/users/{uid}/key** — 下发 User Key
+**POST /api/v1/admin/accounts/{account_id}/users/{uid}/key** — 重新生成 User Key
 ```
-权限：require_role(ROOT, ACCOUNT_ADMIN)
-逻辑：api_key_manager.derive_user_key(account_id, uid)
-返回：{"user_key": "ovk_user_..."}
+权限：require_role(ROOT, ADMIN)
+额外检查：ADMIN 只能操作自己的 account
+逻辑：api_key_manager.regenerate_key(account_id, uid) → new_key（旧 key 立即失效）
+返回：{"user_key": "<random_token>"}
 ```
 
 注册到 `server/routers/__init__.py` 和 `server/app.py`。
@@ -1086,7 +978,7 @@ async def ls(uri: str, ctx: RequestContext = Depends(get_request_context)):
 
 #### T12: 客户端 SDK 更新
 
-##### Phase 1 改动（已完成）：HTTP 客户端
+##### Phase 1 改动：HTTP 客户端
 
 **修改文件**：`openviking_cli/client/http.py`, `openviking_cli/client/sync_http.py`，依赖：T4
 
@@ -1110,36 +1002,93 @@ if self._agent_id:
 
 **修改文件**：`openviking/client/local.py`，依赖：T9
 
-嵌入模式不做多租户。Service 层 ctx 适配完成后，LocalClient 构造固定默认 ctx 传给 service 方法：
+嵌入模式支持多租户，通过构造参数传入 `UserIdentifier`，无 API Key 认证：
 
 ```python
-def __init__(self, path=None):
+def __init__(self, path=None, user: UserIdentifier = None):
     self._service = OpenVikingService(path=path)
     self._ctx = RequestContext(
-        user=UserIdentifier.the_default_user(),
-        role=Role.ROOT,
+        user=user or UserIdentifier.the_default_user(),
+        role=Role.ROOT,  # 嵌入模式无 RBAC，默认 ROOT 权限
     )
 
 async def ls(self, uri, ...):
     return await self._service.fs.ls(uri, ctx=self._ctx)
 ```
 
-嵌入模式不涉及 API Key、RBAC、多租户隔离。
+嵌入模式不涉及 API Key 认证，但使用与服务模式相同的多租户路径结构（按 account_id 隔离）。
 
 ---
 
-#### T14-P1: 认证与管理测试（已完成）
+#### T16-P1: 用户文档更新（Phase 1）
+
+**修改文件**：`docs/en/` + `docs/zh/` 对应文件，依赖：T4, T11, T12
+
+Phase 1 涉及认证和 API 层变更，需同步更新以下文档（中英文各一份）：
+
+| 文档 | 改动 |
+|------|------|
+| `guides/01-configuration.md` | server 段 `api_key` → `root_api_key`；ovcli.conf 新增 `agent_id` 字段说明 |
+| `guides/04-authentication.md` | 重写：多租户认证机制（root key / user key）、RBAC 三层角色、Admin API 管理 key 的流程 |
+| `guides/03-deployment.md` | 配置示例改用 `root_api_key`；客户端连接示例加 `agent_id`；新增多租户部署说明 |
+| `api/01-overview.md` | 客户端示例加 `agent_id`；认证说明扩展为多租户；新增 Admin API 端点文档 |
+| `getting-started/03-quickstart-server.md` | 示例更新 `root_api_key` + `agent_id` |
+
+---
+
+#### T17-P1: 示例更新（Phase 1）
+
+**修改文件**：`examples/` 目录，依赖：T4, T11, T12
+
+Phase 1 涉及认证体系和客户端接口变更，需同步更新示例：
+
+| 文件 | 改动 |
+|------|------|
+| `examples/ov.conf.example` | `api_key` → `root_api_key` |
+| `examples/server_client/ov.conf.example` | 同上 |
+| `examples/server_client/client_sync.py` | 新增 `--agent-id` 参数 |
+| `examples/server_client/client_async.py` | 新增 `agent_id` 参数 |
+| `examples/server_client/client_cli.sh` | 添加 `X-OpenViking-Agent` header 示例 |
+| `examples/server_client/ovcli.conf.example` | 新增 `agent_id` 字段 |
+
+新增多租户管理示例 `examples/multi_tenant/`：
+
+```
+examples/multi_tenant/
+├── README.md                  # 多租户管理流程说明
+├── ov.conf.example            # 启用 root_api_key 的配置示例
+├── admin_workflow.py          # ROOT 创建 account → 注册 admin → admin 注册 user
+├── admin_workflow.sh          # 等效的 curl 命令版本
+└── user_workflow.py           # user key 日常操作（ls、add_resource、find）
+```
+
+`admin_workflow.py` 覆盖：
+- ROOT 创建工作区（含首个 admin）
+- Admin 注册普通 user 并获取 user key
+- 列出所有账户和用户
+- 删除用户和账户
+
+`user_workflow.py` 覆盖：
+- 使用 user key 连接 server
+- 执行常规操作（ls, add_resource, find, session）
+- 验证无权限访问 admin API 时返回 403
+
+---
+
+#### T14-P1: 认证与管理测试
 
 **T14a: APIKeyManager 单元测试**
 - root key 验证（正确/错误）
-- account key 生成和解析
-- user key 推导和验证（正确签名/错误签名/未注册用户）
+- user key 注册、生成、解析（含角色：admin/user）
 - 用户注册/移除后 key 有效性变化
-- keys.json 持久化和加载
+- key 重新生成后旧 key 失效
+- per-account users.json 持久化和加载
+- create_account 同时创建首个 admin
 
 **T14b: 认证中间件测试**
-- 三种 key 类型的 resolve_identity 流程
-- 本地开发模式（无 root_api_key）
+- resolve_identity 流程：root key 匹配 → ROOT，user key 查表 → ADMIN/USER
+- user key 解析出 ADMIN 或 USER 角色（取决于用户注册表中的 role）
+- dev 模式（无 root_api_key）
 - require_role 守卫
 - 无效 key / 缺失 key 的错误码
 
@@ -1150,7 +1099,7 @@ async def ls(self, uri, ...):
 
 ### Phase 2：存储层隔离实现（后续）
 
-实施顺序：`T6/T7 并行 → T8 → T9 → T13 → T14-P2`
+实施顺序：`T6/T7 并行 → T8 → T9 → T13 → T15 → T16-P2 → T17-P2 → T14-P2`
 
 ---
 
@@ -1192,16 +1141,12 @@ VikingFS 有以下公开方法需要加 `ctx: RequestContext` 参数：
 
 ##### 核心改动
 
-VikingFS 新增 `_multi_tenant: bool` 标志，启动时由 app 设置（见 T5、第 8 节）。
-
-`_uri_to_path` 和 `_path_to_uri` 行为取决于模式：
-- 单租户（`_multi_tenant=False`）：忽略 account_id，保持旧扁平路径
-- 多租户（`_multi_tenant=True`）：加 account_id 前缀
+统一多租户路径，`_uri_to_path` 和 `_path_to_uri` 始终按 account_id 前缀处理：
 
 ```python
 def _uri_to_path(self, uri: str, account_id: str = "") -> str:
     remainder = uri[len("viking://"):].strip("/")
-    if self._multi_tenant and account_id:
+    if account_id:
         return f"/local/{account_id}/{remainder}" if remainder else f"/local/{account_id}"
     return f"/local/{remainder}" if remainder else "/local"
 
@@ -1210,7 +1155,7 @@ def _path_to_uri(self, path: str, account_id: str = "") -> str:
         return path
     elif path.startswith("/local/"):
         inner = path[7:]  # 去掉 /local/
-        if self._multi_tenant and account_id and inner.startswith(account_id + "/"):
+        if account_id and inner.startswith(account_id + "/"):
             inner = inner[len(account_id) + 1:]  # 去掉 account_id 前缀
         return f"viking://{inner}"
     ...
@@ -1269,7 +1214,7 @@ owner_space: str = ""     # 所有者的 user_space_name() 或 agent_space_name(
 ```python
 async def retrieve(self, query: TypedQuery, ctx: RequestContext, ...) -> QueryResult:
     filters = []
-    if ctx.role == Role.ACCOUNT_ADMIN:
+    if ctx.role == Role.ADMIN:
         filters.append({"op": "must", "field": "account_id", "conds": [ctx.account_id]})
     elif ctx.role == Role.USER:
         filters.append({"op": "must", "field": "account_id", "conds": [ctx.account_id]})
@@ -1331,8 +1276,8 @@ class XXXService:
 
 **ResourceService**（`service/resource_service.py`）：
 - 当前：`add_resource(...)`, `add_skill(...)` 使用 `self._user`
-- 改为：加 `ctx`，构造 Context 时填入 `account_id=ctx.account_id`, `owner_space=ctx.user.user_space_name()`（resources scope）或 `ctx.user.agent_space_name()`（agent scope）
-- 资源路径使用 `viking://resources/{ctx.user.user_space_name()}/...`，技能路径使用 `viking://agent/skills/{ctx.user.agent_space_name()}/...`
+- 改为：加 `ctx`，构造 Context 时填入 `account_id=ctx.account_id`, `owner_space=ctx.user.agent_space_name()`（agent scope）
+- 资源路径使用 `viking://resources/...`（account 内共享，无 user_space），技能路径使用 `viking://agent/skills/{ctx.user.agent_space_name()}/...`
 
 **RelationService**（`service/relation_service.py`）：
 - 当前：`relations(uri)`, `link(from, to)`, `unlink(from, to)`
@@ -1382,20 +1327,86 @@ async def initialize_agent_directories(self, ctx: RequestContext) -> int:
 
 ---
 
+#### T15: 数据迁移脚本
+
+**新建** `openviking/cli/migrate.py`，依赖：T6, T7
+
+提供 `python -m openviking migrate` 命令，将旧版单租户数据迁移到多租户路径结构。
+
+##### 迁移逻辑
+
+1. **检测**：检查旧结构是否存在（`/local/resources/` 存在但 `/local/default/` 不存在）
+2. **AGFS 搬迁**：
+   - `/local/resources/...` → `/local/default/resources/...`
+   - `/local/user/...` → `/local/default/user/{default_user_space}/...`
+   - `/local/agent/...` → `/local/default/agent/{default_agent_space}/...`
+   - `/local/session/...` → `/local/default/session/{default_space}/...`
+3. **VectorDB 更新**：batch update 所有记录，补充 `account_id="default"` 和 `owner_space={default_space}`
+4. **报告**：输出搬迁文件数、更新记录数、耗时
+
+##### 安全措施
+
+- 迁移前检查目标路径不存在，避免覆盖
+- 迁移失败时回滚已搬迁的文件
+- 支持 `--dry-run` 预览迁移计划
+
+---
+
+#### T16-P2: 用户文档更新（Phase 2）
+
+**修改文件**：`docs/en/` + `docs/zh/` 对应文件，依赖：T6, T8, T15
+
+Phase 2 涉及存储隔离和路径变更，需同步更新以下文档（中英文各一份）：
+
+| 文档 | 改动 |
+|------|------|
+| `concepts/01-architecture.md` | 新增多租户架构说明、身份解析流程、数据隔离层次 |
+| `concepts/05-storage.md` | URI → AGFS 路径映射加 account_id 前缀；多租户存储布局图 |
+| `concepts/04-viking-uri.md` | URI 在多租户下的 account 作用域说明 |
+| `about/02-changelog.md` | 多租户版本变更说明 |
+
+---
+
+#### T17-P2: 示例更新（Phase 2）
+
+**修改文件**：`examples/` 目录，依赖：T6, T9
+
+Phase 2 涉及存储隔离，需新增隔离相关示例：
+
+| 文件 | 改动 |
+|------|------|
+| `examples/multi_tenant/isolation_demo.py` | **新增**：演示不同 account/user 间的数据隔离 |
+| `examples/multi_tenant/agent_sharing_demo.py` | **新增**：演示同 account 下不同用户共享 agent 数据 |
+| `examples/quick_start.py` | 嵌入模式加 `UserIdentifier` 参数说明 |
+
+`isolation_demo.py` 覆盖：
+- ROOT 创建两个 account
+- 每个 account 的 user 分别写入 resources 和 memories
+- 验证 account A 的 user 看不到 account B 的数据
+- 验证同 account 内不同 user 的 memories 互相隔离
+- 验证 resources 在同 account 内共享可见
+
+`agent_sharing_demo.py` 覆盖：
+- 同一 account 下两个 user 使用同一 agent_id
+- 验证 agent memories/skills 在两个 user 间共享
+- 验证 user memories 仍然互相隔离
+
+---
+
 #### T14-P2: 隔离与可见性测试
 
 **T14c: 存储隔离测试**
 - `_uri_to_path` 加 account_id 前缀正确性
 - `_path_to_uri` 反向转换正确性
-- `_is_accessible` 对 USER/ACCOUNT_ADMIN/ROOT 的行为
+- `_is_accessible` 对 USER/ADMIN/ROOT 的行为
 - VectorDB 查询带 account_id + owner_space 多级过滤
 - 同 account 下不同 user 无法互相访问 resources 和 memories
-- 同 account 下共用同一 agent 的用户能访问该 agent 的数据
+- 同 account 下同一用户不同 agent 的数据互相隔离
 
 **T14d: 端到端集成测试**
-- Root Key 创建 account → Account Key 注册 user → User Key 写数据 → 另一 account 查不到
+- Root Key 创建 account（含首个 admin）→ Admin 注册 user → User Key 写数据 → 另一 account 查不到
 - 同 account 两个 user 写 resources → 互相查不到
-- 同 account 两个 user 使用同一 agent → agent 数据共享
+- 同 account 同一 user 不同 agent → agent 数据隔离
 - 删除用户后旧 key 认证失败
 - 删除 account 后数据清理
 
@@ -1403,52 +1414,99 @@ async def initialize_agent_directories(self, ctx: RequestContext) -> int:
 
 ## 九、关键文件清单
 
-| 文件 | 改动类型 | 说明 |
-|------|----------|------|
-| `openviking/server/identity.py` | **新建** | Role, ResolvedIdentity, RequestContext |
-| `openviking/server/api_keys.py` | **新建** | APIKeyManager |
-| `openviking/server/routers/admin.py` | **新建** | Admin 管理端点 |
-| `openviking/server/auth.py` | 重写 | verify_api_key → resolve_identity + require_role + get_request_context |
-| `openviking/server/config.py` | 修改 | api_key → root_api_key + multi_tenant + private_key |
-| `openviking/server/app.py` | 修改 | 初始化 APIKeyManager |
-| `openviking/storage/viking_fs.py` | 修改 | 方法加 ctx 参数，_uri_to_path 加 account_id 前缀 |
-| `openviking/storage/collection_schemas.py` | 修改 | context collection 加 account_id + owner_space 字段 |
-| `openviking/retrieve/hierarchical_retriever.py` | 修改 | 查询注入 account_id + owner_space 多级过滤 |
-| `openviking/service/core.py` | 修改 | 去除单例 _user，传递 RequestContext |
-| `openviking/service/*.py` | 修改 | 各 sub-service 接受 RequestContext |
-| `openviking/server/routers/*.py` | 修改 | 迁移到 get_request_context 依赖 |
-| `openviking/core/directories.py` | 修改 | 按 account 初始化目录 |
-| `openviking/client/http.py` | 修改 | 新增 agent_id 参数 |
-| `openviking/session/user_id.py` | 修改 | 新增 user_space_name() 和 agent_space_name() 方法 |
+| 文件 | 改动类型 | 阶段 | 说明 |
+|------|----------|------|------|
+| `openviking/server/identity.py` | **新建** | P1 | Role(ROOT/ADMIN/USER), ResolvedIdentity, RequestContext |
+| `openviking/server/api_keys.py` | **新建** | P1 | APIKeyManager（per-account 存储，全局索引） |
+| `openviking/server/routers/admin.py` | **新建** | P1 | Admin 管理端点（account/user CRUD、角色管理） |
+| `openviking/server/auth.py` | 重写 | P1 | verify_api_key → resolve_identity + require_role + get_request_context |
+| `openviking/server/config.py` | 修改 | P1 | api_key → root_api_key |
+| `openviking/server/app.py` | 修改 | P1 | 初始化 APIKeyManager，注册 Admin Router |
+| `openviking_cli/client/http.py` | 修改 | P1 | 新增 agent_id 参数 |
+| `openviking_cli/client/sync_http.py` | 修改 | P1 | 新增 agent_id 参数 |
+| `openviking/server/routers/*.py` | 修改 | P1+P2 | P1: 迁移到 get_request_context；P2: ctx 传递给 service |
+| `openviking/storage/viking_fs.py` | 修改 | P2 | 方法加 ctx 参数，_uri_to_path 加 account_id 前缀 |
+| `openviking/storage/collection_schemas.py` | 修改 | P2 | context collection 加 account_id + owner_space 字段 |
+| `openviking/retrieve/hierarchical_retriever.py` | 修改 | P2 | 查询注入 account_id + owner_space 多级过滤 |
+| `openviking/service/core.py` | 修改 | P2 | 去除单例 _user，传递 RequestContext |
+| `openviking/service/*.py` | 修改 | P2 | 各 sub-service 接受 RequestContext |
+| `openviking/core/directories.py` | 修改 | P2 | 按 account 初始化目录 |
+| `openviking/core/context.py` | 修改 | P2 | 新增 account_id、owner_space 字段 |
+| `openviking/client/local.py` | 修改 | P2 | 支持 UserIdentifier 参数（嵌入模式多租户） |
+| `openviking_cli/session/user_id.py` | 修改 | P2 | 新增 user_space_name() 和 agent_space_name() 方法 |
+| `openviking/cli/migrate.py` | **新建** | P2 | 数据迁移脚本 |
+| `docs/en/guides/*.md` + `docs/zh/guides/*.md` | 修改 | P1 | 配置、认证、部署文档更新 |
+| `docs/en/api/01-overview.md` + `docs/zh/api/01-overview.md` | 修改 | P1 | API 概览加 Admin API、agent_id |
+| `docs/en/concepts/*.md` + `docs/zh/concepts/*.md` | 修改 | P2 | 架构、存储、URI 文档更新 |
+| `docs/en/about/02-changelog.md` + `docs/zh/about/02-changelog.md` | 修改 | P2 | 版本变更说明 |
+| `examples/ov.conf.example` | 修改 | P1 | `api_key` → `root_api_key` |
+| `examples/server_client/ov.conf.example` | 修改 | P1 | 同上 |
+| `examples/server_client/client_sync.py` | 修改 | P1 | 新增 `agent_id` 参数 |
+| `examples/server_client/client_async.py` | 修改 | P1 | 新增 `agent_id` 参数 |
+| `examples/multi_tenant/` | **新建** | P1 | 多租户管理工作流示例（admin_workflow + user_workflow） |
+| `examples/multi_tenant/isolation_demo.py` | **新建** | P2 | 数据隔离验证示例 |
+| `examples/multi_tenant/agent_sharing_demo.py` | **新建** | P2 | agent 共享验证示例 |
 
 ---
 
 ## 十、验证方案
 
-1. **单元测试**：APIKeyManager 的 key 生成、推导、验证、注册检查
+1. **单元测试**：
+   - APIKeyManager 的 key 生成、注册、验证、角色解析
+   - per-account 存储的持久化和加载
+   - create_account 同时创建首个 admin 用户
+   - key 重新生成后旧 key 失效
 2. **集成测试**：Account A 无法看到 Account B 的数据（AGFS + VectorDB）
 3. **端到端测试**：
-   - Root Key 创建账户 → Account Key 注册用户 → User Key 操作数据 → 验证隔离
+   - Root Key 创建工作区（含首个 admin）→ Admin 注册 user → User Key 操作数据 → 验证隔离
    - 删除用户后旧 user key 失败
-   - 删除账户后级联清理数据
-   - 本地开发模式（无 Key）正常工作
-4. **单租户模式测试**（若采用第 8 节方案 A）：
-   - `multi_tenant=false` 时存储路径为旧扁平结构
-   - Admin API 返回 404
-   - `root_api_key` 认证行为与多租户前一致
-5. **回归测试**：现有测试适配新认证流程（使用 dev mode）
+   - 删除 account 后级联清理数据
+   - Dev 模式（无 root_api_key）正常工作，使用 default account
+4. **回归测试**：现有测试适配新认证流程（使用 dev mode）
 
 ---
 
 ## 待评审决策项（TODO）
 
-以下设计点需要在评审中讨论确定：
+以下设计点在 V2 评审中已全部确定：
 
-1. **User Key 方案选型**（见 2.2 节）：方案 A（加密式 token，确定性推导，不存储 key）vs 方案 B（随机 key + 查表，无密码学依赖）。选型影响 `ov.conf` 是否需要 `private_key` 字段、APIKeyManager 的实现逻辑、keys.json 的存储结构。
+1. ~~**User Key 方案选型**（见 2.2 节）~~ —— 已确定：方案 B（随机 key + 查表），不需要 `private_key`。
+2. ~~**Agent 目录归属模型**（见 4.3 节）~~ —— 已确定：方案 B（按 user_id + agent_id 隔离）。
+3. ~~**单租户兼容**（见 8 节）~~ —— 已确定：破坏性改造，不保留单租户模式。
 
-2. **Agent 目录归属模型**（见 4.3 节）：方案 A（按 agent_id 共享，跨用户）vs 方案 B（按 user_id + agent_id 隔离，每用户独立）。选型影响 agent 记忆/技能/指令的可见范围和 `agent_space_name()` 实现。
+所有待评审项已解决，无遗留决策。
 
-3. **单租户兼容**（见 8 节）：
-   - **方案 A：支持双模式**——通过 `multi_tenant` 配置开关区分单租户/多租户。单租户保持当前扁平路径，行为不变；两种模式互斥、不可切换。代码需按模式分派路径逻辑和认证逻辑。
-   - **方案 B：仅多租户**——所有部署统一走多租户路径结构，不保留单租户模式。现有数据需要迁移或重新导入。代码无分支，路径逻辑统一。
+---
+
+## 评审记录
+
+### 2026-02-13
+
+#### 设计决策确定
+
+1. **去掉 Account Key**：三层 Key（root/account/user）简化为两层（root/user）。ADMIN 不再由 key 类型决定，而是用户在 account 内的角色属性，存储在 `users.json` 中。一个 account 可以有多个 admin。
+2. **Account = 工作区**：Account 是由 ROOT 创建的工作区（workspace）。`/_system/accounts.json` 维护全局工作区列表，每个工作区有独立的用户注册表 `/{account_id}/_system/users.json`。系统启动时自动创建 default 工作区。
+3. **User Key 方案 B**：随机 key + 查表存储。不需要 `private_key` 配置，不需要加密库。key 丢失后重新生成，旧 key 立即失效。
+4. **Agent 目录方案 B**：按 user_id + agent_id 隔离。`agent_space_name()` = `md5(user_id + agent_id)[:12]`，每个用户与 agent 的组合有独立数据空间。
+5. **破坏性改造**：不保留单租户模式，统一多租户路径结构。所有 account（含 default）使用 `/{account_id}/...` 层级路径。
+6. **嵌入模式支持多租户**：通过构造参数传入 `UserIdentifier`，默认使用 default 工作区 + default 用户。
+7. **API Key 无前缀**：所有 key 为纯随机 token（`secrets.token_hex(32)`），不携带身份信息。服务端通过先比对 root key、再查 user key 索引的方式确定身份。
+8. **Resources account 级共享**：resources 在 account 内共享，不按 user_space 隔离。路径为 `/{account_id}/resources/...`。
+9. **ROOT 支持全部功能**：ROOT 权限为超集，既能做管理操作也能使用常规产品功能。dev 模式默认 ROOT 角色。
+10. **配置简化**：`ov.conf` server 段移除 `private_key` 和 `multi_tenant`，仅保留 `root_api_key` 和 `cors_origins`。
+11. **创建 account 同时指定首个 admin**：`POST /admin/accounts` 一步完成工作区创建 + 首个 admin 注册 + 返回 user key。
+12. **队列/Observer account 级可见性**：底层单例，查询时按 account_id 过滤。放在 Phase 2。
+
+#### 新增任务
+
+- **T15**：数据迁移脚本（`python -m openviking migrate`），将旧版单租户数据迁移到多租户路径结构，Phase 2 实现
+- **T16-P1**：Phase 1 用户文档更新（配置、认证、部署、API 概览、快速开始）
+- **T16-P2**：Phase 2 用户文档更新（架构、存储、URI、变更日志）
+- **T17-P1**：Phase 1 示例更新（config 文件 + 多租户管理工作流示例）
+- **T17-P2**：Phase 2 示例更新（数据隔离验证 + agent 共享验证示例）
+
+#### Key 存储方案
+
+评审讨论了 key 存储结构的三种方案（user_id 做主键 / key 做主键 / 双索引），确定采用方案 A（user_id 做主键）。文件结构用于持久化和人工排查，运行时认证全走内存索引（`dict[key] → identity`），O(1) 查找。
+
 

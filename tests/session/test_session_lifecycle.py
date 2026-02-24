@@ -52,7 +52,7 @@ class TestSessionLoad:
 
         # Create new session instance and load
         new_session = client.session(session_id=session_id)
-        await new_await session.load()
+        await new_session.load()
 
         # Verify messages loaded
         assert len(new_session.messages) > 0

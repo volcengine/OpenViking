@@ -152,8 +152,7 @@ openviking find "search query"
 
 # 输出格式（全局选项，须放在子命令之前）
 openviking -o table find "query"         # 表格输出（默认）
-openviking -o json find "query"          # 格式化 JSON 输出
-openviking --json find "query"           # 紧凑 JSON + {"ok":true} 包装（脚本用）
+openviking -o json find "query"          # 紧凑 JSON + {"ok":true} 包装（脚本用）
 
 # Session 操作
 openviking session new

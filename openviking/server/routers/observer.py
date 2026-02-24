@@ -12,8 +12,9 @@ Mirrors the SDK's client.observer API:
 
 from fastapi import APIRouter, Depends
 
-from openviking.server.auth import verify_api_key
+from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
+from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.service.debug_service import ComponentStatus, SystemStatus
 
@@ -43,7 +44,7 @@ def _system_to_dict(status: SystemStatus) -> dict:
 
 @router.get("/queue")
 async def observer_queue(
-    _: bool = Depends(verify_api_key),
+    _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get queue system status."""
     service = get_service()
@@ -53,7 +54,7 @@ async def observer_queue(
 
 @router.get("/vikingdb")
 async def observer_vikingdb(
-    _: bool = Depends(verify_api_key),
+    _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get VikingDB status."""
     service = get_service()
@@ -63,7 +64,7 @@ async def observer_vikingdb(
 
 @router.get("/vlm")
 async def observer_vlm(
-    _: bool = Depends(verify_api_key),
+    _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get VLM (Vision Language Model) token usage status."""
     service = get_service()
@@ -73,7 +74,7 @@ async def observer_vlm(
 
 @router.get("/transaction")
 async def observer_transaction(
-    _: bool = Depends(verify_api_key),
+    _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get transaction system status."""
     service = get_service()
@@ -83,7 +84,7 @@ async def observer_transaction(
 
 @router.get("/system")
 async def observer_system(
-    _: bool = Depends(verify_api_key),
+    _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get system overall status (includes all components)."""
     service = get_service()

@@ -79,6 +79,25 @@ impl HttpClient {
         self.handle_response(response).await
     }
 
+    /// Make a PUT request
+    pub async fn put<B: serde::Serialize, T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: &B,
+    ) -> Result<T> {
+        let url = format!("{}{}", self.base_url, path);
+        let response = self
+            .http
+            .put(&url)
+            .headers(self.build_headers())
+            .json(body)
+            .send()
+            .await
+            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+
+        self.handle_response(response).await
+    }
+
     /// Make a DELETE request
     pub async fn delete<T: DeserializeOwned>(
         &self,
@@ -386,5 +405,78 @@ impl HttpClient {
             "vectorize": vectorize,
         });
         self.post("/api/v1/pack/import", &body).await
+    }
+
+    // ============ Admin Methods ============
+
+    pub async fn admin_create_account(
+        &self,
+        account_id: &str,
+        admin_user_id: &str,
+    ) -> Result<Value> {
+        let body = serde_json::json!({
+            "account_id": account_id,
+            "admin_user_id": admin_user_id,
+        });
+        self.post("/api/v1/admin/accounts", &body).await
+    }
+
+    pub async fn admin_list_accounts(&self) -> Result<Value> {
+        self.get("/api/v1/admin/accounts", &[]).await
+    }
+
+    pub async fn admin_delete_account(&self, account_id: &str) -> Result<Value> {
+        let path = format!("/api/v1/admin/accounts/{}", account_id);
+        self.delete(&path, &[]).await
+    }
+
+    pub async fn admin_register_user(
+        &self,
+        account_id: &str,
+        user_id: &str,
+        role: &str,
+    ) -> Result<Value> {
+        let path = format!("/api/v1/admin/accounts/{}/users", account_id);
+        let body = serde_json::json!({
+            "user_id": user_id,
+            "role": role,
+        });
+        self.post(&path, &body).await
+    }
+
+    pub async fn admin_list_users(&self, account_id: &str) -> Result<Value> {
+        let path = format!("/api/v1/admin/accounts/{}/users", account_id);
+        self.get(&path, &[]).await
+    }
+
+    pub async fn admin_remove_user(&self, account_id: &str, user_id: &str) -> Result<Value> {
+        let path = format!("/api/v1/admin/accounts/{}/users/{}", account_id, user_id);
+        self.delete(&path, &[]).await
+    }
+
+    pub async fn admin_set_role(
+        &self,
+        account_id: &str,
+        user_id: &str,
+        role: &str,
+    ) -> Result<Value> {
+        let path = format!(
+            "/api/v1/admin/accounts/{}/users/{}/role",
+            account_id, user_id
+        );
+        let body = serde_json::json!({ "role": role });
+        self.put(&path, &body).await
+    }
+
+    pub async fn admin_regenerate_key(
+        &self,
+        account_id: &str,
+        user_id: &str,
+    ) -> Result<Value> {
+        let path = format!(
+            "/api/v1/admin/accounts/{}/users/{}/key",
+            account_id, user_id
+        );
+        self.post(&path, &serde_json::json!({})).await
     }
 }

@@ -21,6 +21,15 @@
 #endif
 #endif
 
+// ARM Platform Detection
+#if defined(__aarch64__) || defined(_M_ARM64)
+#define OV_PLATFORM_ARM
+#define OV_SIMD_NEON
+#if defined(__ARM_FEATURE_SVE)
+#define OV_SIMD_SVE
+#endif
+#endif
+
 // Memory Alignment Macros
 #if defined(_MSC_VER)
 #define OV_ALIGN_32 __declspec(align(32))

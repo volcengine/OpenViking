@@ -57,6 +57,7 @@ export OPENVIKING_CONFIG_FILE=/path/to/ov.conf
 client = ov.SyncHTTPClient(
     url="http://localhost:1933",
     api_key="your-key",
+    agent_id="my-agent",
 )
 client.initialize()
 ```
@@ -70,7 +71,8 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 ```json
 {
   "url": "http://localhost:1933",
-  "api_key": "your-key"
+  "api_key": "your-key",
+  "agent_id": "my-agent"
 }
 ```
 
@@ -78,6 +80,7 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 |------|------|--------|
 | `url` | 服务端地址 | （必填） |
 | `api_key` | API Key | `null`（无认证） |
+| `agent_id` | Agent 标识符 | `null` |
 | `output` | 默认输出格式：`"table"` 或 `"json"` | `"table"` |
 
 详见 [配置指南](../guides/01-configuration.md#ovcliconf)。
@@ -334,6 +337,19 @@ openviking -o json ls viking://resources/
 | GET | `/api/v1/observer/system` | 系统状态 |
 | GET | `/api/v1/debug/health` | 快速健康检查 |
 
+### 管理员（多租户）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| POST | `/api/v1/admin/accounts` | 创建工作区 + 首个 admin（ROOT） |
+| GET | `/api/v1/admin/accounts` | 列出工作区（ROOT） |
+| DELETE | `/api/v1/admin/accounts/{account_id}` | 删除工作区（ROOT） |
+| POST | `/api/v1/admin/accounts/{account_id}/users` | 注册用户（ROOT, ADMIN） |
+| GET | `/api/v1/admin/accounts/{account_id}/users` | 列出用户（ROOT, ADMIN） |
+| DELETE | `/api/v1/admin/accounts/{account_id}/users/{user_id}` | 移除用户（ROOT, ADMIN） |
+| PUT | `/api/v1/admin/accounts/{account_id}/users/{user_id}/role` | 修改用户角色（ROOT） |
+| POST | `/api/v1/admin/accounts/{account_id}/users/{user_id}/key` | 重新生成 User Key（ROOT, ADMIN） |
+
 ## 相关文档
 
 - [资源管理](02-resources.md) - 资源管理 API
@@ -342,3 +358,4 @@ openviking -o json ls viking://resources/
 - [会话管理](05-sessions.md) - 会话管理
 - [技能](04-skills.md) - 技能管理
 - [系统](07-system.md) - 系统和监控 API
+- [管理员](08-admin.md) - 多租户管理 API

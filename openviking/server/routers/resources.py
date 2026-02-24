@@ -10,8 +10,9 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, File, UploadFile
 from pydantic import BaseModel
 
-from openviking.server.auth import verify_api_key
+from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
+from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking_cli.utils.config.open_viking_config import get_openviking_config
 
@@ -56,7 +57,7 @@ def _cleanup_temp_files(temp_dir: Path, max_age_hours: int = 1):
 @router.post("/resources/temp_upload")
 async def temp_upload(
     file: UploadFile = File(...),
-    _: bool = Depends(verify_api_key),
+    _ctx: RequestContext = Depends(get_request_context),
 ):
     """Upload a temporary file for add_resource or import_ovpack."""
     config = get_openviking_config()
@@ -79,7 +80,7 @@ async def temp_upload(
 @router.post("/resources")
 async def add_resource(
     request: AddResourceRequest,
-    _: bool = Depends(verify_api_key),
+    _ctx: RequestContext = Depends(get_request_context),
 ):
     """Add resource to OpenViking."""
     service = get_service()
@@ -102,7 +103,7 @@ async def add_resource(
 @router.post("/skills")
 async def add_skill(
     request: AddSkillRequest,
-    _: bool = Depends(verify_api_key),
+    _ctx: RequestContext = Depends(get_request_context),
 ):
     """Add skill to OpenViking."""
     service = get_service()

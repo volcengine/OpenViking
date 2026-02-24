@@ -39,6 +39,12 @@ set(Python3_ARCH_INCLUDE_DIR "/usr/include/${CMAKE_SYSTEM_PROCESSOR}-linux-gnu/"
 
 find_package(Python3 COMPONENTS Interpreter Development REQUIRED)
 
+# On Linux, pybind11 modules don't need to link against libpython
+# This prevents issues with static libpython that wasn't built with -fPIC
+if(UNIX AND NOT APPLE)
+    set(Python3_LIBRARIES "")
+endif()
+
 find_package(pybind11 REQUIRED)
 find_package(Threads REQUIRED)
 
@@ -59,10 +65,23 @@ endif()
 
 add_subdirectory(../third_party/spdlog-1.14.1 ${CMAKE_BINARY_DIR}/spdlog_build)
 
+# ARM platform detection and KRL integration
+set(OV_PLATFORM_ARM OFF)
+if(CMAKE_SYSTEM_PROCESSOR MATCHES "aarch64|ARM64|arm64")
+    set(OV_PLATFORM_ARM ON)
+    message(STATUS "Building for ARM platform with KRL support")
+    add_subdirectory(../third_party/krl ${CMAKE_BINARY_DIR}/krl_build)
+endif()
+
 include_directories(.)
 include_directories(../third_party/)
 include_directories(../third_party/leveldb-1.23/include/)
 include_directories(../third_party/spdlog-1.14.1/include/)
+
+# Add KRL include directory for ARM platform
+if(OV_PLATFORM_ARM)
+    include_directories(../third_party/krl/include/)
+endif()
 
 if(NOT DEFINED Python3_INCLUDE_DIRS)
     set(Python3_INCLUDE_DIRS 
@@ -87,6 +106,11 @@ target_link_libraries(engine_impl PRIVATE
     Threads::Threads
     leveldb
 )
+
+# Link KRL library for ARM platform
+if(OV_PLATFORM_ARM)
+    target_link_libraries(engine_impl PRIVATE krl)
+endif()
 
 if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
     if(CMAKE_CXX_COMPILER_VERSION VERSION_LESS "9.0")

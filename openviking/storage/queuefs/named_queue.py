@@ -198,42 +198,57 @@ class NamedQueue:
         msg_id = self._agfs.write(enqueue_file, data.encode("utf-8"))
         return msg_id if isinstance(msg_id, str) else str(msg_id)
 
+    def _read_queue_message(self) -> Optional[Dict[str, Any]]:
+        """Read and remove one message from the AGFS queue; return parsed dict or None.
+
+        Normalises the various return types AGFSClient.read() may produce.
+        """
+        content = self._agfs.read(f"{self.path}/dequeue")
+        if not content or content == b"{}":
+            return None
+        if isinstance(content, bytes):
+            raw = content
+        elif isinstance(content, str):
+            raw = content.encode("utf-8")
+        elif hasattr(content, "content") and content.content is not None:
+            raw = content.content
+        else:
+            raw = str(content).encode("utf-8")
+        return json.loads(raw.decode("utf-8"))
+
     async def dequeue(self) -> Optional[Dict[str, Any]]:
-        """Get and remove message from queue (dequeue)."""
+        """Get and remove message from queue, then invoke the dequeue handler."""
         await self._ensure_initialized()
-        dequeue_file = f"{self.path}/dequeue"
-
         try:
-            content = self._agfs.read(dequeue_file)
-            if not content or content == b"{}":
+            data = self._read_queue_message()
+            if data is None:
                 return None
-
-            # Handle different return types from AGFSClient
-            content_bytes = None
-            if isinstance(content, bytes):
-                content_bytes = content
-            elif isinstance(content, str):
-                content_bytes = content.encode("utf-8")
-            elif hasattr(content, "content"):  # Response object
-                content_obj = content.content
-                if content_obj is not None:
-                    content_bytes = content_obj
-            else:
-                content_bytes = str(content).encode("utf-8")
-
-            if content_bytes is None:
-                return None
-            data = json.loads(content_bytes.decode("utf-8"))
-
-            # Dequeue success, mark in_progress
             if self._dequeue_handler:
                 self._on_dequeue_start()
                 data = await self._dequeue_handler.on_dequeue(data)
-
             return data
         except Exception as e:
             logger.debug(f"[NamedQueue] Dequeue failed for {self.name}: {e}")
             return None
+
+    async def dequeue_raw(self) -> Optional[Dict[str, Any]]:
+        """Get and remove message from queue without invoking the handler."""
+        await self._ensure_initialized()
+        try:
+            return self._read_queue_message()
+        except Exception as e:
+            logger.debug(f"[NamedQueue] Dequeue raw failed for {self.name}: {e}")
+            return None
+
+    async def process_dequeued(self, data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """Invoke the dequeue handler on already-fetched raw data.
+
+        NOTE: caller must call _on_dequeue_start() before invoking this method
+        so that in_progress is incremented atomically with the dequeue.
+        """
+        if self._dequeue_handler:
+            return await self._dequeue_handler.on_dequeue(data)
+        return data
 
     async def peek(self) -> Optional[Dict[str, Any]]:
         """Peek at head message without removing."""

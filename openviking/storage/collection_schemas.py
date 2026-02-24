@@ -7,6 +7,7 @@ Provides centralized schema definitions and factory functions for creating colle
 similar to how init_viking_fs encapsulates VikingFS initialization.
 """
 
+import asyncio
 import hashlib
 import json
 from typing import Any, Dict, Optional
@@ -149,7 +150,11 @@ class TextEmbeddingHandler(DequeueHandlerBase):
 
             # Generate embedding vector(s)
             if self._embedder:
-                result: EmbedResult = self._embedder.embed(embedding_msg.message)
+                # embed() is a blocking HTTP call; offload to thread pool to avoid
+                # blocking the event loop and allow real concurrency.
+                result: EmbedResult = await asyncio.to_thread(
+                    self._embedder.embed, embedding_msg.message
+                )
 
                 # Add dense vector
                 if result.dense_vector:

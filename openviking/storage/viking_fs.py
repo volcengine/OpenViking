@@ -69,6 +69,7 @@ def init_viking_fs(
     rerank_config: Optional["RerankConfig"] = None,
     vector_store: Optional["VikingDBInterface"] = None,
     timeout: int = 10,
+    enable_recorder: bool = False,
 ) -> "VikingFS":
     """Initialize VikingFS singleton.
 
@@ -78,6 +79,7 @@ def init_viking_fs(
         rerank_config: Rerank configuration
         vector_store: Vector store instance
         timeout: Request timeout in seconds
+        enable_recorder: Whether to enable IO recording
     """
     global _instance
     _instance = VikingFS(
@@ -87,7 +89,47 @@ def init_viking_fs(
         vector_store=vector_store,
         timeout=timeout,
     )
+
+    if enable_recorder:
+        _enable_viking_fs_recorder(_instance)
+
     return _instance
+
+
+def _enable_viking_fs_recorder(viking_fs: "VikingFS") -> None:
+    """
+    Enable recorder for a VikingFS instance.
+
+    This wraps the VikingFS instance with recording capabilities.
+    Called automatically when enable_recorder=True in init_viking_fs.
+
+    Args:
+        viking_fs: VikingFS instance to enable recording for
+    """
+    from openviking.eval.recorder import RecordingVikingFS, get_recorder
+
+    recorder = get_recorder()
+    if not recorder.enabled:
+        from openviking.eval.recorder import init_recorder
+
+        init_recorder(enabled=True)
+
+    global _instance
+    _instance = RecordingVikingFS(viking_fs)
+    logger.info("[VikingFS] IO Recorder enabled")
+
+
+def enable_viking_fs_recorder() -> None:
+    """
+    Enable recorder for the global VikingFS singleton.
+
+    This function wraps the existing VikingFS's AGFS client with recording.
+    Must be called after init_viking_fs().
+    """
+    global _instance
+    if _instance is None:
+        raise RuntimeError("VikingFS not initialized. Call init_viking_fs() first.")
+    _enable_viking_fs_recorder(_instance)
 
 
 def get_viking_fs() -> "VikingFS":
@@ -283,7 +325,7 @@ class VikingFS:
         async def _walk(current_path: str, current_rel: str):
             if len(all_entries) >= node_limit:
                 return
-            for entry in self.agfs.ls(current_path):
+            for entry in self._ls_entries(current_path):
                 if len(all_entries) >= node_limit:
                     break
                 name = entry.get("name", "")
@@ -315,7 +357,7 @@ class VikingFS:
         async def _walk(current_path: str, current_rel: str):
             if len(all_entries) >= node_limit:
                 return
-            for entry in self.agfs.ls(current_path):
+            for entry in self._ls_entries(current_path):
                 if len(all_entries) >= node_limit:
                     break
                 name = entry.get("name", "")
@@ -323,12 +365,10 @@ class VikingFS:
                     continue
                 rel_path = f"{current_rel}/{name}" if current_rel else name
                 new_entry = {
-                    "uri": str(VikingURI(uri).join(rel_path)),
+                    "uri": self._path_to_uri(f"{current_path}/{name}"),
                     "size": entry.get("size", 0),
                     "isDir": entry.get("isDir", False),
-                    "modTime": format_simplified(
-                        parse_iso_datetime(entry.get("modTime", "")), now
-                    ),
+                    "modTime": format_simplified(parse_iso_datetime(entry.get("modTime", "")), now),
                 }
                 if entry.get("isDir"):
                     all_entries.append(new_entry)
@@ -673,6 +713,20 @@ class VikingFS:
         safe_parts = [self._shorten_component(p, self._MAX_FILENAME_BYTES) for p in parts]
         return f"/local/{'/'.join(safe_parts)}"
 
+    _INTERNAL_DIRS = {"_system"}
+    _ROOT_PATH = "/local"
+
+    def _ls_entries(self, path: str) -> List[Dict[str, Any]]:
+        """List directory entries, filtering out internal directories.
+
+        At root level (/local), uses VALID_SCOPES whitelist.
+        At other levels, uses _INTERNAL_DIRS blacklist.
+        """
+        entries = self.agfs.ls(path)
+        if path == self._ROOT_PATH:
+            return [e for e in entries if e.get("name") in VikingURI.VALID_SCOPES]
+        return [e for e in entries if e.get("name") not in self._INTERNAL_DIRS]
+
     def _path_to_uri(self, path: str) -> str:
         """/local/user/memories/preferences -> viking://user/memories/preferences"""
         if path.startswith("viking://"):
@@ -732,7 +786,7 @@ class VikingFS:
 
         async def _collect(p: str):
             try:
-                for entry in self.agfs.ls(p):
+                for entry in self._ls_entries(p):
                     name = entry.get("name", "")
                     if name in [".", ".."]:
                         continue
@@ -911,11 +965,24 @@ class VikingFS:
     async def read_file(
         self,
         uri: str,
+        offset: int = 0,
+        limit: int = -1,
     ) -> str:
-        """Read single file."""
+        """Read single file, optionally sliced by line range.
+
+        Args:
+            uri: Viking URI
+            offset: Starting line number (0-indexed). Default 0.
+            limit: Number of lines to read. -1 means read to end. Default -1.
+        """
         path = self._uri_to_path(uri)
         content = self.agfs.read(path)
-        return self._handle_agfs_content(content)
+        text = self._handle_agfs_content(content)
+        if offset == 0 and limit == -1:
+            return text
+        lines = text.splitlines(keepends=True)
+        sliced = lines[offset:] if limit == -1 else lines[offset : offset + limit]
+        return "".join(sliced)
 
     async def read_file_bytes(
         self,
@@ -996,7 +1063,7 @@ class VikingFS:
         """List directory contents (URI version)."""
         path = self._uri_to_path(uri)
         try:
-            entries = self.agfs.ls(path)
+            entries = self._ls_entries(path)
         except Exception as e:
             raise FileNotFoundError(f"Failed to list {uri}: {e}")
         # basic info
@@ -1013,7 +1080,7 @@ class VikingFS:
                 # 保持时间部分最多 26 位 (YYYY-MM-DDTHH:MM:SS.mmmmmm)
                 raw_time = parts[0][:26] + "+" + parts[1]
             new_entry = {
-                "uri": str(VikingURI(uri).join(name)),
+                "uri": self._path_to_uri(f"{path}/{name}"),
                 "size": entry.get("size", 0),
                 "isDir": entry.get("isDir", False),
                 "modTime": format_simplified(parse_iso_datetime(raw_time), now),
@@ -1032,13 +1099,13 @@ class VikingFS:
         """List directory contents (URI version)."""
         path = self._uri_to_path(uri)
         try:
-            entries = self.agfs.ls(path)
+            entries = self._ls_entries(path)
             # AGFS returns read-only structure, need to create new dict
             all_entries = []
             for entry in entries:
                 name = entry.get("name", "")
                 new_entry = dict(entry)  # Copy original data
-                new_entry["uri"] = str(VikingURI(uri).join(name))
+                new_entry["uri"] = self._path_to_uri(f"{path}/{name}")
                 if entry.get("isDir"):
                     all_entries.append(new_entry)
                 elif not name.startswith("."):
@@ -1072,7 +1139,7 @@ class VikingFS:
         """Delete temp directory and its contents."""
         path = self._uri_to_path(temp_uri)
         try:
-            for entry in self.agfs.ls(path):
+            for entry in self._ls_entries(path):
                 name = entry.get("name", "")
                 if name in [".", ".."]:
                     continue

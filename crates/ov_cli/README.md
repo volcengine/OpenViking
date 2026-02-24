@@ -105,7 +105,7 @@ ov read viking://resources/...
 ```bash
 ov --output json ls
 ov --output table ls
-ov --json ls  # Compact JSON wrapper for scripts
+ov -o json ls  # Compact JSON wrapper for scripts
 ```
 
 ## Examples
@@ -124,7 +124,7 @@ ov ls viking://resources --recursive
 ov glob "**/*.md" --uri viking://resources
 
 # Session workflow
-SESSION=$(ov session new --json | jq -r '.result.session_id')
+SESSION=$(ov -o json session new | jq -r '.result.session_id')
 ov session add-message --session-id $SESSION --role user --content "Hello"
 ov session commit --session-id $SESSION
 ```
