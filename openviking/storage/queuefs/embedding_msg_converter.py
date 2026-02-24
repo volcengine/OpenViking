@@ -7,7 +7,7 @@ This module provides a unified interface for converting Context objects
 to EmbeddingMsg objects for asynchronous vector processing.
 """
 
-from openviking.core.context import Context
+from openviking.core.context import Context, ContextLevel
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking_cli.utils import get_logger
 
@@ -26,9 +26,20 @@ class EmbeddingMsgConverter:
         if not vectorization_text:
             return None
 
+        context_dict = context.to_dict()
+
+        # 根据 URI 判断 level 字段（用于向量索引）
+        uri = context_dict.get("uri", "")
+        if uri.endswith("/.abstract.md"):
+            context_dict["level"] = ContextLevel.ABSTRACT
+        elif uri.endswith("/.overview.md"):
+            context_dict["level"] = ContextLevel.OVERVIEW
+        else:
+            context_dict["level"] = ContextLevel.DETAIL
+
         embedding_msg = EmbeddingMsg(
             message=vectorization_text,
-            context_data=context.to_dict(),
+            context_data=context_dict,
         )
 
         # Set any additional fields from kwargs

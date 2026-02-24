@@ -29,6 +29,14 @@ class ContextType(str, Enum):
     RESOURCE = "resource"
 
 
+class ContextLevel(int, Enum):
+    """Context level (L0/L1/L2) for vector indexing"""
+
+    ABSTRACT = 0  # L0: abstract
+    OVERVIEW = 1  # L1: overview
+    DETAIL = 2  # L2: detail/content
+
+
 class Vectorize:
     text: str = ""
     # image: str = ""

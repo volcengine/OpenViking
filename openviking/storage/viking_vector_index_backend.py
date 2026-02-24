@@ -574,7 +574,7 @@ class VikingVectorIndexBackend(VikingDBInterface):
             total_deleted = 0
 
             # If any record indicates this URI is a directory node, remove descendants first.
-            if any(not r.get("is_leaf", False) for r in target_records):
+            if any(r.get("level") in [0, 1] for r in target_records):
                 descendant_count = await self._remove_descendants(collection, uri)
                 total_deleted += descendant_count
 
@@ -602,10 +602,10 @@ class VikingVectorIndexBackend(VikingDBInterface):
 
         for child in children:
             child_uri = child.get("uri")
-            is_leaf = child.get("is_leaf", False)
+            level = child.get("level", 2)
 
             # Recursively delete if child is also an intermediate directory
-            if not is_leaf and child_uri:
+            if level in [0, 1] and child_uri:
                 descendant_count = await self._remove_descendants(collection, child_uri)
                 total_deleted += descendant_count
 

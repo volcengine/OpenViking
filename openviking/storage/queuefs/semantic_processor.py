@@ -441,21 +441,36 @@ class SemanticProcessor(DequeueHandlerBase):
         from openviking.storage.queuefs import get_queue_manager
         from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 
-        parent_uri = VikingURI(uri).parent.uri
-        context = Context(
-            uri=uri,
-            parent_uri=parent_uri,
+        queue_manager = get_queue_manager()
+        embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING)
+
+        # Vectorize L0: .abstract.md (abstract), level=0
+        abstract_uri = f"{uri}/.abstract.md"
+        context_abstract = Context(
+            uri=abstract_uri,
+            parent_uri=uri,
             is_leaf=False,
             abstract=abstract,
             context_type=context_type,
         )
-        context.set_vectorize(Vectorize(text=overview))
+        context_abstract.set_vectorize(Vectorize(text=abstract))
+        embedding_msg_abstract = EmbeddingMsgConverter.from_context(context_abstract)
+        await embedding_queue.enqueue(embedding_msg_abstract)  # type: ignore
+        logger.debug(f"Enqueued directory L0 (abstract) for vectorization: {abstract_uri}")
 
-        embedding_msg = EmbeddingMsgConverter.from_context(context)
-        queue_manager = get_queue_manager()
-        embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING)
-        await embedding_queue.enqueue(embedding_msg)  # type: ignore
-        logger.debug(f"Enqueued directory for vectorization: {uri}")
+        # Vectorize L1: .overview.md (overview), level=1
+        overview_uri = f"{uri}/.overview.md"
+        context_overview = Context(
+            uri=overview_uri,
+            parent_uri=uri,
+            is_leaf=False,
+            abstract=abstract,
+            context_type=context_type,
+        )
+        context_overview.set_vectorize(Vectorize(text=overview))
+        embedding_msg_overview = EmbeddingMsgConverter.from_context(context_overview)
+        await embedding_queue.enqueue(embedding_msg_overview)  # type: ignore
+        logger.debug(f"Enqueued directory L1 (overview) for vectorization: {overview_uri}")
 
     async def _vectorize_files(
         self,

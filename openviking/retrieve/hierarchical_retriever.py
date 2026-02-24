@@ -191,7 +191,7 @@ class HierarchicalRetriever:
 
         global_filter = {
             "op": "and",
-            "conds": [filter, {"op": "must", "field": "is_leaf", "conds": [False]}],
+            "conds": [filter, {"op": "must", "field": "level", "conds": [0, 1]}],
         }
         results = await self.storage.search(
             collection=collection,
@@ -351,7 +351,7 @@ class HierarchicalRetriever:
                     )
 
                 if uri not in visited:
-                    if r.get("is_leaf"):
+                    if r.get("level") == 2:
                         visited.add(uri)
                     else:
                         heapq.heappush(dir_queue, (-final_score, uri))
@@ -400,7 +400,7 @@ class HierarchicalRetriever:
                 MatchedContext(
                     uri=c.get("uri", ""),
                     context_type=context_type,
-                    is_leaf=c.get("is_leaf", False),
+                    level=c.get("level", 2),
                     abstract=c.get("abstract", ""),
                     category=c.get("category", ""),
                     score=c.get("_final_score", c.get("_score", 0.0)),
