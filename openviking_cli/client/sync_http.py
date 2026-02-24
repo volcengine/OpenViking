@@ -213,9 +213,9 @@ class SyncHTTPClient:
 
     # ============= Content =============
 
-    def read(self, uri: str) -> str:
+    def read(self, uri: str, offset: int = 0, limit: int = -1) -> str:
         """Read file content."""
-        return run_async(self._async_client.read(uri))
+        return run_async(self._async_client.read(uri, offset=offset, limit=limit))
 
     def abstract(self, uri: str) -> str:
         """Read L0 abstract."""

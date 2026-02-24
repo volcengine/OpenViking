@@ -22,12 +22,31 @@ from openviking.parse.parsers.upload_utils import (
 # ---------------------------------------------------------------------------
 
 
+class FakeAGFS:
+    """Minimal AGFS mock that stores files and directories by path key."""
+
+    def __init__(self, storage: Dict[str, bytes]) -> None:
+        self._storage = storage
+        self.dirs: List[str] = []
+
+    def mkdir(self, path: str) -> None:
+        self.dirs.append(path)
+
+    def write(self, path: str, content: bytes) -> None:
+        self._storage[path] = content
+
+
 class FakeVikingFS:
     """Minimal VikingFS mock for testing upload functions."""
 
     def __init__(self) -> None:
         self.files: Dict[str, bytes] = {}
         self.dirs: List[str] = []
+        self.agfs = FakeAGFS(self.files)
+
+    def _uri_to_path(self, uri: str) -> str:
+        # Simplified: use the URI itself as the storage key so test assertions work.
+        return uri
 
     async def write_file_bytes(self, uri: str, content: bytes) -> None:
         self.files[uri] = content
@@ -328,7 +347,9 @@ class TestUploadDirectory:
     @pytest.mark.asyncio
     async def test_creates_root_dir(self, tmp_dir: Path, viking_fs: FakeVikingFS) -> None:
         await upload_directory(tmp_dir, "viking://temp/root", viking_fs)
-        assert "viking://temp/root" in viking_fs.dirs
+        # _mkdir_with_parents strips leading slash then re-adds it, so the stored agfs
+        # path is the _uri_to_path() result with a "/" prefix.
+        assert any("temp/root" in d for d in viking_fs.agfs.dirs)
 
     @pytest.mark.asyncio
     async def test_custom_ignore_dirs(self, tmp_dir: Path, viking_fs: FakeVikingFS) -> None:
@@ -477,9 +498,18 @@ class TestUploadTextFilesEdgeCases:
 class TestUploadDirectoryEdgeCases:
     @pytest.mark.asyncio
     async def test_write_failure_produces_warning(self, tmp_path: Path) -> None:
-        class FailingWriteFS:
-            async def write_file_bytes(self, uri: str, content: bytes) -> None:
+        class FailingAGFS:
+            def mkdir(self, path: str) -> None:
+                pass
+
+            def write(self, path: str, content: bytes) -> None:
                 raise IOError("write error")
+
+        class FailingWriteFS:
+            agfs = FailingAGFS()
+
+            def _uri_to_path(self, uri: str) -> str:
+                return uri
 
             async def mkdir(self, uri: str, exist_ok: bool = False) -> None:
                 pass

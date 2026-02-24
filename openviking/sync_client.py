@@ -128,9 +128,9 @@ class SyncOpenViking:
         """Read L1 overview"""
         return run_async(self._async_client.overview(uri))
 
-    def read(self, uri: str) -> str:
+    def read(self, uri: str, offset: int = 0, limit: int = -1) -> str:
         """Read file"""
-        return run_async(self._async_client.read(uri))
+        return run_async(self._async_client.read(uri, offset=offset, limit=limit))
 
     def ls(self, uri: str, **kwargs) -> List[Any]:
         """

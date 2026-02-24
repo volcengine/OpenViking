@@ -89,7 +89,7 @@ class OpenVikingService:
         self._initialized = False
 
         # Initialize storage
-        self._init_storage(config.storage)
+        self._init_storage(config.storage, config.embedding.max_concurrent)
 
         # Initialize embedder
         self._embedder = config.embedding.get_embedder()
@@ -97,7 +97,7 @@ class OpenVikingService:
             f"Initialized embedder (dim {config.embedding.dimension}, sparse {self._embedder.is_sparse})"
         )
 
-    def _init_storage(self, config: StorageConfig) -> None:
+    def _init_storage(self, config: StorageConfig, max_concurrent_embedding: int = 1) -> None:
         """Initialize storage resources."""
         if config.agfs.backend == "local":
             self._agfs_manager = AGFSManager(config=config.agfs)
@@ -112,6 +112,7 @@ class OpenVikingService:
             self._queue_manager = init_queue_manager(
                 agfs_url=self._agfs_url,
                 timeout=config.agfs.timeout,
+                max_concurrent_embedding=max_concurrent_embedding,
             )
         else:
             logger.warning("AGFS URL not configured, skipping queue manager initialization")
@@ -195,7 +196,7 @@ class OpenVikingService:
             return
 
         if self._vikingdb_manager is None:
-            self._init_storage(self._config.storage)
+            self._init_storage(self._config.storage, self._config.embedding.max_concurrent)
 
         if self._embedder is None:
             self._embedder = self._config.embedding.get_embedder()
@@ -204,10 +205,10 @@ class OpenVikingService:
 
         # Initialize VikingFS and VikingDB with recorder if enabled
         enable_recorder = os.environ.get("OPENVIKING_ENABLE_RECORDER", "").lower() == "true"
-        
+
         # Create context collection
         await init_context_collection(self._vikingdb_manager)
-        
+
         self._viking_fs = init_viking_fs(
             agfs_url=self._agfs_url or "http://localhost:8080",
             query_embedder=self._embedder,

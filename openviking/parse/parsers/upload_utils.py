@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Shared upload utilities for directory and file uploading to VikingFS."""
 
+import asyncio
 import os
 import re
 from pathlib import Path
@@ -65,11 +66,13 @@ def detect_and_convert_encoding(content: bytes, file_path: Union[str, Path] = ""
         # Check for potential binary content (null bytes in first 8KB)
         # Binary files often contain null bytes which can cause issues
         sample_size = min(8192, len(content))
-        if b'\x00' in content[:sample_size]:
-            null_count = content[:sample_size].count(b'\x00')
+        if b"\x00" in content[:sample_size]:
+            null_count = content[:sample_size].count(b"\x00")
             # If more than 5% null bytes in sample, likely binary - don't process
             if null_count / sample_size > 0.05:
-                logger.debug(f"Detected binary content in {file_path} (null bytes: {null_count}), skipping encoding detection")
+                logger.debug(
+                    f"Detected binary content in {file_path} (null bytes: {null_count}), skipping encoding detection"
+                )
                 return content
 
         detected_encoding: Optional[str] = None
@@ -77,7 +80,7 @@ def detect_and_convert_encoding(content: bytes, file_path: Union[str, Path] = ""
             try:
                 decoded = content.decode(encoding)
                 # Additional validation: check for control characters that suggest binary
-                control_chars = sum(1 for c in decoded[:1000] if ord(c) < 32 and c not in '\t\n\r')
+                control_chars = sum(1 for c in decoded[:1000] if ord(c) < 32 and c not in "\t\n\r")
                 if control_chars / min(1000, len(decoded)) > 0.05:  # More than 5% control chars
                     continue
                 detected_encoding = encoding
@@ -92,8 +95,8 @@ def detect_and_convert_encoding(content: bytes, file_path: Union[str, Path] = ""
         if detected_encoding not in UTF8_VARIANTS:
             decoded_content = content.decode(detected_encoding, errors="replace")
             # Remove null bytes from decoded content as they can cause issues downstream
-            if '\x00' in decoded_content:
-                decoded_content = decoded_content.replace('\x00', '')
+            if "\x00" in decoded_content:
+                decoded_content = decoded_content.replace("\x00", "")
                 logger.debug(f"Removed null bytes from decoded content in {file_path}")
             content = decoded_content.encode("utf-8")
             logger.debug(f"Converted {file_path} from {detected_encoding} to UTF-8")
@@ -195,6 +198,9 @@ async def upload_text_files(
     return uploaded_count, warnings
 
 
+_UPLOAD_CONCURRENCY = 8
+
+
 async def upload_directory(
     local_dir: Path,
     viking_uri_base: str,
@@ -203,24 +209,26 @@ async def upload_directory(
     ignore_extensions: Optional[Set[str]] = None,
     max_file_size: int = 10 * 1024 * 1024,
 ) -> Tuple[int, List[str]]:
-    """Upload an entire directory recursively and return uploaded count with warnings."""
+    """Upload an entire directory recursively and return uploaded count with warnings.
+
+    Optimized: collects all files in one pass, pre-creates directories upfront,
+    then uploads all files concurrently (up to _UPLOAD_CONCURRENCY at a time).
+    """
     effective_ignore_dirs = ignore_dirs if ignore_dirs is not None else IGNORE_DIRS
     effective_ignore_extensions = (
         ignore_extensions if ignore_extensions is not None else IGNORE_EXTENSIONS
     )
 
-    uploaded_count = 0
     warnings: List[str] = []
 
-    await viking_fs.mkdir(viking_uri_base, exist_ok=True)
+    # --- Phase 1: Collect files and unique parent directory URIs in one pass ---
+    files_to_upload: List[Tuple[Path, str]] = []  # (local_path, target_uri)
+    parent_uris: Set[str] = {viking_uri_base}
 
     for root, dirs, files in os.walk(local_dir):
         dirs[:] = [
-            dir_name
-            for dir_name in dirs
-            if not should_skip_directory(dir_name, ignore_dirs=effective_ignore_dirs)
+            d for d in dirs if not should_skip_directory(d, ignore_dirs=effective_ignore_dirs)
         ]
-
         for file_name in files:
             file_path = Path(root) / file_name
             should_skip, _ = should_skip_file(
@@ -230,18 +238,69 @@ async def upload_directory(
             )
             if should_skip:
                 continue
-
             rel_path_str = str(file_path.relative_to(local_dir)).replace(os.sep, "/")
             try:
                 safe_rel = _sanitize_rel_path(rel_path_str)
-                target_uri = f"{viking_uri_base}/{safe_rel}"
-                content = file_path.read_bytes()
-                content = detect_and_convert_encoding(content, file_path)
-                await viking_fs.write_file_bytes(target_uri, content)
-                uploaded_count += 1
-            except Exception as exc:
-                warning = f"Failed to upload {file_path}: {exc}"
+            except ValueError as exc:
+                warning = f"Skipping {file_path}: {exc}"
                 warnings.append(warning)
                 logger.warning(warning)
+                continue
+            target_uri = f"{viking_uri_base}/{safe_rel}"
+            files_to_upload.append((file_path, target_uri))
+            parent_uris.add(target_uri.rsplit("/", 1)[0])
 
+    # --- Phase 2: Pre-create all directories ---
+    # Memoized mkdir: each unique agfs path is created at most once.
+    # This is equivalent to _ensure_parent_dirs but avoids redundant HTTP calls
+    # by tracking already-processed paths across all directories.
+    _created: Set[str] = set()
+
+    def _mkdir_with_parents(agfs_path: str) -> None:
+        parts = agfs_path.lstrip("/").split("/")
+        for i in range(1, len(parts) + 1):
+            p = "/" + "/".join(parts[:i])
+            if p in _created:
+                continue
+            try:
+                viking_fs.agfs.mkdir(p)
+                _created.add(p)
+            except Exception as e:
+                if "already" in str(e).lower():
+                    _created.add(p)
+                else:
+                    logger.warning(f"Failed to create directory {p}: {e}")
+
+    def _create_all_dirs() -> None:
+        for dir_uri in sorted(parent_uris):
+            _mkdir_with_parents(viking_fs._uri_to_path(dir_uri))
+
+    await asyncio.to_thread(_create_all_dirs)
+
+    # --- Phase 3: Upload files concurrently ---
+    sem = asyncio.Semaphore(_UPLOAD_CONCURRENCY)
+    errors: List[Optional[str]] = [None] * len(files_to_upload)
+
+    async def _upload_one(idx: int, file_path: Path, target_uri: str) -> None:
+        async with sem:
+
+            def _do() -> None:
+                content = file_path.read_bytes()
+                encoded = detect_and_convert_encoding(content, file_path)
+                agfs_path = viking_fs._uri_to_path(target_uri)
+                viking_fs.agfs.write(agfs_path, encoded)
+
+            try:
+                await asyncio.to_thread(_do)
+            except Exception as exc:
+                errors[idx] = f"Failed to upload {file_path}: {exc}"
+
+    await asyncio.gather(*[_upload_one(i, fp, uri) for i, (fp, uri) in enumerate(files_to_upload)])
+
+    for err in errors:
+        if err:
+            warnings.append(err)
+            logger.warning(err)
+
+    uploaded_count = sum(1 for e in errors if e is None)
     return uploaded_count, warnings

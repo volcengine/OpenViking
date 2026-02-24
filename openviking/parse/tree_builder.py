@@ -20,6 +20,7 @@ IMPORTANT (v5.0 Architecture):
 - Content splitting is handled by Parser, not TreeBuilder
 """
 
+import asyncio
 import logging
 from typing import TYPE_CHECKING, Optional
 
@@ -139,7 +140,7 @@ class TreeBuilder:
             logger.info(f"[TreeBuilder] Finalizing from temp: {final_uri}")
 
         # 4. Move directory tree from temp to final location in AGFS
-        await self._move_directory_in_agfs(temp_doc_uri, final_uri)
+        await self._move_temp_to_dest(viking_fs, temp_doc_uri, final_uri)
         logger.info(f"[TreeBuilder] Moved temp tree: {temp_doc_uri} -> {final_uri}")
 
         # 5. Cleanup temporary root directory
@@ -191,39 +192,15 @@ class TreeBuilder:
 
         raise FileExistsError(f"Cannot resolve unique name for {uri} after {max_attempts} attempts")
 
-    async def _move_directory_in_agfs(self, src_uri: str, dst_uri: str) -> None:
-        """Recursively move AGFS directory tree (copy + delete)."""
-        viking_fs = get_viking_fs()
+    async def _move_temp_to_dest(self, viking_fs, src_uri: str, dst_uri: str) -> None:
+        """Move temp directory to final destination using a single native AGFS mv call.
 
-        # 1. Ensure parent directories exist
+        Temp files have no vector records yet, so no vector index update is needed.
+        """
+        src_path = viking_fs._uri_to_path(src_uri)
+        dst_path = viking_fs._uri_to_path(dst_uri)
         await self._ensure_parent_dirs(dst_uri)
-
-        # 2. Create target directory
-        await viking_fs.mkdir(dst_uri)
-
-        # 3. List source directory contents
-        entries = await viking_fs.ls(src_uri)
-
-        for entry in entries:
-            name = entry.get("name", "")
-            if not name or name in [".", ".."]:
-                continue
-
-            src_item = f"{src_uri}/{name}"
-            dst_item = f"{dst_uri}/{name}"
-
-            if entry.get("isDir"):
-                # Recursively move subdirectory
-                await self._move_directory_in_agfs(src_item, dst_item)
-            else:
-                # Move file
-                await viking_fs.move_file(src_item, dst_item)
-
-        # 4. Delete source directory (should be empty now)
-        try:
-            await viking_fs.rm(src_uri)
-        except Exception:
-            pass  # Ignore error when deleting empty directory
+        await asyncio.to_thread(viking_fs.agfs.mv, src_path, dst_path)
 
     async def _ensure_parent_dirs(self, uri: str) -> None:
         """Recursively create parent directories."""

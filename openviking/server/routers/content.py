@@ -15,11 +15,13 @@ router = APIRouter(prefix="/api/v1/content", tags=["content"])
 @router.get("/read")
 async def read(
     uri: str = Query(..., description="Viking URI"),
+    offset: int = Query(0, description="Starting line number (0-indexed)"),
+    limit: int = Query(-1, description="Number of lines to read, -1 means read to end"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Read file content (L2)."""
     service = get_service()
-    result = await service.fs.read(uri)
+    result = await service.fs.read(uri, offset=offset, limit=limit)
     return Response(status="ok", result=result)
 
 

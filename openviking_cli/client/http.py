@@ -417,12 +417,12 @@ class AsyncHTTPClient(BaseClient):
 
     # ============= Content Reading =============
 
-    async def read(self, uri: str) -> str:
+    async def read(self, uri: str, offset: int = 0, limit: int = -1) -> str:
         """Read file content."""
         uri = VikingURI.normalize(uri)
         response = await self._http.get(
             "/api/v1/content/read",
-            params={"uri": uri},
+            params={"uri": uri, "offset": offset, "limit": limit},
         )
         return self._handle_response(response)
 

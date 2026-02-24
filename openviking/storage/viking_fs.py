@@ -111,6 +111,7 @@ def _enable_viking_fs_recorder(viking_fs: "VikingFS") -> None:
     recorder = get_recorder()
     if not recorder.enabled:
         from openviking.eval.recorder import init_recorder
+
         init_recorder(enabled=True)
 
     global _instance
@@ -964,11 +965,24 @@ class VikingFS:
     async def read_file(
         self,
         uri: str,
+        offset: int = 0,
+        limit: int = -1,
     ) -> str:
-        """Read single file."""
+        """Read single file, optionally sliced by line range.
+
+        Args:
+            uri: Viking URI
+            offset: Starting line number (0-indexed). Default 0.
+            limit: Number of lines to read. -1 means read to end. Default -1.
+        """
         path = self._uri_to_path(uri)
         content = self.agfs.read(path)
-        return self._handle_agfs_content(content)
+        text = self._handle_agfs_content(content)
+        if offset == 0 and limit == -1:
+            return text
+        lines = text.splitlines(keepends=True)
+        sliced = lines[offset:] if limit == -1 else lines[offset : offset + limit]
+        return "".join(sliced)
 
     async def read_file_bytes(
         self,

@@ -144,9 +144,9 @@ class LocalClient(BaseClient):
 
     # ============= Content Reading =============
 
-    async def read(self, uri: str) -> str:
+    async def read(self, uri: str, offset: int = 0, limit: int = -1) -> str:
         """Read file content."""
-        return await self._service.fs.read(uri)
+        return await self._service.fs.read(uri, offset=offset, limit=limit)
 
     async def abstract(self, uri: str) -> str:
         """Read L0 abstract."""

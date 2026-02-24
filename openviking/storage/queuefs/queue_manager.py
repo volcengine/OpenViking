@@ -9,7 +9,8 @@ import asyncio
 import atexit
 import threading
 import time
-from typing import Any, Dict, Optional, Union
+import traceback
+from typing import Any, Dict, Optional, Set, Union
 
 from pyagfs import AGFSClient
 
@@ -29,6 +30,7 @@ def init_queue_manager(
     agfs_url: str = "http://localhost:8080",
     timeout: int = 10,
     mount_point: str = "/queue",
+    max_concurrent_embedding: int = 1,
 ) -> "QueueManager":
     """Initialize QueueManager singleton."""
     global _instance
@@ -36,6 +38,7 @@ def init_queue_manager(
         agfs_url=agfs_url,
         timeout=timeout,
         mount_point=mount_point,
+        max_concurrent_embedding=max_concurrent_embedding,
     )
     return _instance
 
@@ -63,11 +66,13 @@ class QueueManager:
         agfs_url: str = "http://localhost:8080",
         timeout: int = 10,
         mount_point: str = "/queue",
+        max_concurrent_embedding: int = 1,
     ):
         """Initialize QueueManager."""
         self._agfs_url = agfs_url
         self.timeout = timeout
         self.mount_point = mount_point
+        self._max_concurrent_embedding = max_concurrent_embedding
         self._agfs: Optional[Any] = None
         self._queues: Dict[str, NamedQueue] = {}
         self._started = False
@@ -137,40 +142,100 @@ class QueueManager:
             if thread.is_alive():
                 return
 
+        max_concurrent = self._max_concurrent_embedding if queue.name == self.EMBEDDING else 1
         stop_event = threading.Event()
         self._queue_stop_events[queue.name] = stop_event
         thread = threading.Thread(
             target=self._queue_worker_loop,
-            args=(queue, stop_event),
+            args=(queue, stop_event, max_concurrent),
             daemon=True,
         )
         self._queue_threads[queue.name] = thread
         thread.start()
 
-    def _queue_worker_loop(self, queue: NamedQueue, stop_event: threading.Event) -> None:
-        """Worker loop for a single queue, processes items sequentially."""
+    def _queue_worker_loop(
+        self, queue: NamedQueue, stop_event: threading.Event, max_concurrent: int = 1
+    ) -> None:
+        """Worker loop for a single queue.
+
+        When max_concurrent > 1, items are fetched and processed in parallel
+        (up to max_concurrent at a time). Otherwise items are processed one by one.
+        """
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         try:
-            while not stop_event.is_set():
-                try:
-                    queue_size = loop.run_until_complete(queue.size())
-                    if queue.has_dequeue_handler() and queue_size > 0:
-                        data = loop.run_until_complete(queue.dequeue())
-                        if data is not None:
-                            logger.debug(
-                                f"[QueueManager] Dequeued message from {queue.name}: {data}"
-                            )
-                    else:
+            if max_concurrent > 1:
+                loop.run_until_complete(
+                    self._worker_async_concurrent(queue, stop_event, max_concurrent)
+                )
+            else:
+                while not stop_event.is_set():
+                    try:
+                        queue_size = loop.run_until_complete(queue.size())
+                        if queue.has_dequeue_handler() and queue_size > 0:
+                            data = loop.run_until_complete(queue.dequeue())
+                            if data is not None:
+                                logger.debug(
+                                    f"[QueueManager] Dequeued message from {queue.name}: {data}"
+                                )
+                        else:
+                            stop_event.wait(self._poll_interval)
+                    except Exception as e:
+                        logger.error(f"[QueueManager] Worker error for {queue.name}: {e}")
+                        traceback.print_exc()
                         stop_event.wait(self._poll_interval)
-                except Exception as e:
-                    logger.error(f"[QueueManager] Worker error for {queue.name}: {e}")
-                    import traceback
-
-                    traceback.print_exc()
-                    stop_event.wait(self._poll_interval)
         finally:
             loop.close()
+
+    async def _worker_async_concurrent(
+        self, queue: NamedQueue, stop_event: threading.Event, max_concurrent: int
+    ) -> None:
+        """Concurrent worker: drains the queue and processes items in parallel.
+
+        A Semaphore caps inflight tasks at max_concurrent.
+        """
+        sem = asyncio.Semaphore(max_concurrent)
+        active_tasks: Set[asyncio.Task] = set()
+
+        async def process_one(data: Dict[str, Any]) -> None:
+            async with sem:
+                try:
+                    await queue.process_dequeued(data)
+                except Exception as e:
+                    # Handler did not call report_error; decrement in_progress manually.
+                    queue._on_process_error(str(e), data)
+                    logger.error(f"[QueueManager] Concurrent worker error for {queue.name}: {e}")
+
+        while not stop_event.is_set():
+            # Prune completed tasks
+            active_tasks = {t for t in active_tasks if not t.done()}
+
+            # While capacity remains, keep draining the queue
+            while len(active_tasks) < max_concurrent:
+                try:
+                    queue_size = await queue.size()
+                except Exception:
+                    break
+                if not queue.has_dequeue_handler() or queue_size == 0:
+                    break
+                data = await queue.dequeue_raw()
+                if data is None:
+                    break
+                # Increment before task creation to close the race window where
+                # size=0 and in_progress=0 between dequeue_raw() and task execution.
+                queue._on_dequeue_start()
+                task = asyncio.create_task(process_one(data))
+                active_tasks.add(task)
+                logger.debug(
+                    f"[QueueManager] Dispatched concurrent task for {queue.name} "
+                    f"(active={len(active_tasks)})"
+                )
+
+            await asyncio.sleep(self._poll_interval)
+
+        # Drain remaining in-flight tasks on shutdown
+        if active_tasks:
+            await asyncio.gather(*active_tasks, return_exceptions=True)
 
     def stop(self) -> None:
         """Stop QueueManager and release resources."""

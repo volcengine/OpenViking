@@ -15,6 +15,8 @@ import shutil
 import stat
 import tempfile
 import time
+import urllib.request
+import zipfile
 from pathlib import Path, PurePosixPath
 from typing import Any, List, Optional, Tuple, Union
 from urllib.parse import unquote, urlparse
@@ -106,14 +108,22 @@ class CodeRepositoryParser(BaseParser):
 
             # 2. Fetch content (Clone or Extract)
             repo_name = "repository"
+            local_dir = Path(temp_local_dir)
             if source_str.startswith(("http://", "https://", "git://", "ssh://")):
                 repo_url, branch, commit = self._parse_repo_source(source_str, **kwargs)
-                repo_name = await self._git_clone(
-                    repo_url,
-                    temp_local_dir,
-                    branch=branch,
-                    commit=commit,
-                )
+                if self._is_github_url(repo_url) and not commit:
+                    # Use GitHub ZIP API: single HTTPS download, no git history, much faster
+                    local_dir, repo_name = await self._github_zip_download(
+                        repo_url, branch, temp_local_dir
+                    )
+                else:
+                    # Non-GitHub URL or specific commit: fall back to git clone
+                    repo_name = await self._git_clone(
+                        repo_url,
+                        temp_local_dir,
+                        branch=branch,
+                        commit=commit,
+                    )
             elif str(source).endswith(".zip"):
                 repo_name = await self._extract_zip(source_str, temp_local_dir)
             else:
@@ -128,9 +138,7 @@ class CodeRepositoryParser(BaseParser):
             logger.info(f"Uploading to VikingFS: {target_root_uri}")
 
             # 4. Upload to VikingFS (filtering on the fly)
-            file_count = await self._upload_directory(
-                Path(temp_local_dir), target_root_uri, viking_fs
-            )
+            file_count = await self._upload_directory(local_dir, target_root_uri, viking_fs)
 
             logger.info(f"Uploaded {file_count} files to {target_root_uri}")
 
@@ -185,9 +193,7 @@ class CodeRepositoryParser(BaseParser):
         """Not supported for repositories."""
         raise NotImplementedError("CodeRepositoryParser does not support parse_content")
 
-    def _parse_repo_source(
-        self, source: str, **kwargs
-    ) -> Tuple[str, Optional[str], Optional[str]]:
+    def _parse_repo_source(self, source: str, **kwargs) -> Tuple[str, Optional[str], Optional[str]]:
         branch = kwargs.get("branch") or kwargs.get("ref")
         commit = kwargs.get("commit")
         repo_url = source
@@ -275,6 +281,91 @@ class CodeRepositoryParser(BaseParser):
         except RuntimeError:
             return False
 
+    @staticmethod
+    def _is_github_url(url: str) -> bool:
+        """Return True for github.com URLs (supports ZIP archive API)."""
+        return urlparse(url).netloc in ("github.com", "www.github.com")
+
+    async def _github_zip_download(
+        self,
+        repo_url: str,
+        branch: Optional[str],
+        target_dir: str,
+    ) -> Tuple[Path, str]:
+        """Download a GitHub repo as a ZIP archive and extract it.
+
+        Uses the GitHub archive API (single HTTPS GET, no git history).
+
+        Returns:
+            (content_dir, repo_name) — content_dir is the extracted repo root.
+        """
+        repo_name = self._get_repo_name(repo_url)
+
+        # Build archive URL from owner/repo path components.
+        parsed = urlparse(repo_url)
+        path_parts = [p for p in parsed.path.split("/") if p]
+        owner = path_parts[0]
+        repo_raw = path_parts[1]
+        # Strip .git suffix for the archive URL (git clone keeps it, ZIP API does not).
+        repo_slug = repo_raw[:-4] if repo_raw.endswith(".git") else repo_raw
+
+        if branch:
+            zip_url = f"https://github.com/{owner}/{repo_slug}/archive/refs/heads/{branch}.zip"
+        else:
+            zip_url = f"https://github.com/{owner}/{repo_slug}/archive/HEAD.zip"
+
+        logger.info(f"Downloading GitHub ZIP: {zip_url}")
+
+        zip_path = os.path.join(target_dir, "_archive.zip")
+        extract_dir = os.path.join(target_dir, "_extracted")
+        os.makedirs(extract_dir, exist_ok=True)
+
+        # Download (blocking HTTP; run in thread pool to avoid stalling event loop).
+        def _download() -> None:
+            req = urllib.request.Request(zip_url, headers={"User-Agent": "OpenViking"})
+            with urllib.request.urlopen(req) as resp, open(zip_path, "wb") as f:
+                shutil.copyfileobj(resp, f)
+
+        try:
+            await asyncio.to_thread(_download)
+        except Exception as exc:
+            raise RuntimeError(f"Failed to download GitHub ZIP {zip_url}: {exc}")
+
+        # Safe extraction with Zip Slip validation (mirrors _extract_zip logic).
+        target = Path(extract_dir).resolve()
+        with zipfile.ZipFile(zip_path, "r") as zf:
+            for info in zf.infolist():
+                mode = info.external_attr >> 16
+                if info.is_dir() or stat.S_ISDIR(mode):
+                    continue
+                if stat.S_ISLNK(mode):
+                    logger.warning(f"Skipping symlink entry in GitHub ZIP: {info.filename}")
+                    continue
+                raw = info.filename.replace("\\", "/")
+                raw_parts = [p for p in raw.split("/") if p]
+                if ".." in raw_parts:
+                    raise ValueError(f"Zip Slip detected in GitHub archive: {info.filename!r}")
+                if PurePosixPath(raw).is_absolute():
+                    raise ValueError(f"Zip Slip detected in GitHub archive: {info.filename!r}")
+                extracted = Path(zf.extract(info, extract_dir)).resolve()
+                if not extracted.is_relative_to(target):
+                    extracted.unlink(missing_ok=True)
+                    raise ValueError(f"Zip Slip detected in GitHub archive: {info.filename!r}")
+
+        # Remove downloaded archive to free disk space.
+        try:
+            os.unlink(zip_path)
+        except OSError:
+            pass
+
+        # GitHub ZIPs have a single top-level directory: {repo}-{branch}/ or {repo}-{sha}/.
+        # Return that directory as the content root so callers see bare repo files.
+        top_level = [d for d in Path(extract_dir).iterdir() if d.is_dir()]
+        content_dir = top_level[0] if len(top_level) == 1 else Path(extract_dir)
+
+        logger.info(f"GitHub ZIP extracted to {content_dir} ({repo_name})")
+        return content_dir, repo_name
+
     async def _git_clone(
         self,
         url: str,
@@ -282,26 +373,15 @@ class CodeRepositoryParser(BaseParser):
         branch: Optional[str] = None,
         commit: Optional[str] = None,
     ) -> str:
-        """
-        Clone git repository.
+        """Clone a git repository into target_dir; return the repo name.
+
+        Uses --depth 1 for speed. If a specific commit is requested, it is
+        fetched and checked out after the shallow clone.
 
         Returns:
-            Repository name (e.g. "OpenViking" from "https://.../OpenViking.git")
+            Repository name derived from the URL (e.g. "OpenViking").
         """
-        # Extract repo name from URL
         name = self._get_repo_name(url)
-
-        # Clone into a subdirectory to keep structure clean
-        # But here we clone content directly into target_dir?
-        # Actually, git clone <url> <dir> clones INTO <dir>.
-        # But if we want the repo name directory to exist in VikingFS, we should clone into target_dir/name?
-        # No, parse logic says:
-        # temp_local_dir contains the files (e.g. .git, src, README)
-        # We upload temp_local_dir content to viking://temp/{uuid}/{repo_name}/
-
-        # So we clone current content directly into temp_local_dir
-        # git clone --depth 1 url target_dir
-
         logger.info(f"Cloning {url} to {target_dir}...")
 
         clone_args = [
@@ -320,19 +400,30 @@ class CodeRepositoryParser(BaseParser):
                 await self._run_git(["git", "-C", target_dir, "fetch", "origin", commit])
             except RuntimeError:
                 try:
-                    await self._run_git(["git", "-C", target_dir, "fetch", "--all", "--tags", "--prune"])
+                    await self._run_git(
+                        ["git", "-C", target_dir, "fetch", "--all", "--tags", "--prune"]
+                    )
                 except RuntimeError:
                     pass
                 ok = await self._has_commit(target_dir, commit)
                 if not ok:
                     try:
-                        await self._run_git(["git", "-C", target_dir, "fetch", "--unshallow", "origin"])
+                        await self._run_git(
+                            ["git", "-C", target_dir, "fetch", "--unshallow", "origin"]
+                        )
                     except RuntimeError:
                         pass
                 ok = await self._has_commit(target_dir, commit)
                 if not ok:
                     await self._run_git(
-                        ["git", "-C", target_dir, "fetch", "origin", "+refs/heads/*:refs/remotes/origin/*"]
+                        [
+                            "git",
+                            "-C",
+                            target_dir,
+                            "fetch",
+                            "origin",
+                            "+refs/heads/*:refs/remotes/origin/*",
+                        ]
                     )
                     ok = await self._has_commit(target_dir, commit)
                     if not ok:
@@ -342,17 +433,7 @@ class CodeRepositoryParser(BaseParser):
         return name
 
     async def _extract_zip(self, zip_path: str, target_dir: str) -> str:
-        """Extract zip file."""
-        import zipfile
-
-        # We assume it's a local path if passed here?
-        # Actually logic in parse() handles local path check before calling here?
-        # Or if it's a URL ending in zip, HTMLParser might have downloaded it?
-        # Wait, HTMLParser handles download. If we are here, source IS a path or URL.
-        # If it's a URL, we need to download it first?
-        # CodeRepositoryParser is designed to handle "source" which can be URL.
-        # So I need to download zip if it is a URL.
-
+        """Extract a local zip file into target_dir; return the archive stem as the repo name."""
         if zip_path.startswith(("http://", "https://")):
             # TODO: implement download logic or rely on caller?
             # For now, assume it's implemented if needed, but raise error as strictly we only support git URL for now as per plan
