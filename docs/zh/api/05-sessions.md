@@ -207,8 +207,14 @@ openviking session delete a1b2c3d4
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | role | str | 是 | - | 消息角色："user" 或 "assistant" |
-| parts | List[Part] | 是 | - | 消息部分列表（SDK） |
-| content | str | 是 | - | 消息文本内容（HTTP API） |
+| parts | List[Part] | 条件必填 | - | 消息部分列表（Python SDK 必填；HTTP API 可选，与 content 二选一） |
+| content | str | 条件必填 | - | 消息文本内容（HTTP API 简单模式，与 parts 二选一） |
+
+> **注意**：HTTP API 支持两种模式：
+> 1. **简单模式**：使用 `content` 字符串（向后兼容）
+> 2. **Parts 模式**：使用 `parts` 数组（完整 Part 支持）
+>
+> 如果同时提供 `content` 和 `parts`，`parts` 优先。
 
 **Part 类型（Python SDK）**
 
@@ -260,6 +266,8 @@ session.add_message("assistant", [
 POST /api/v1/sessions/{session_id}/messages
 ```
 
+**简单模式（向后兼容）**
+
 ```bash
 # 添加用户消息
 curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages \
@@ -269,14 +277,33 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages \
     "role": "user",
     "content": "How do I authenticate users?"
   }'
+```
 
-# 添加助手消息
+**Parts 模式（完整 Part 支持）**
+
+```bash
+# 添加带有上下文引用的助手消息
 curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
   -d '{
     "role": "assistant",
-    "content": "You can use OAuth 2.0 for authentication..."
+    "parts": [
+      {"type": "text", "text": "Based on the authentication guide..."},
+      {"type": "context", "uri": "viking://resources/docs/auth/", "context_type": "resource", "abstract": "Auth guide"}
+    ]
+  }'
+
+# 添加带有工具调用的助手消息
+curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "role": "assistant",
+    "parts": [
+      {"type": "text", "text": "Let me search for that..."},
+      {"type": "tool", "tool_id": "call_123", "tool_name": "search_web", "tool_input": {"query": "OAuth"}, "tool_status": "completed", "tool_output": "Results..."}
+    ]
   }'
 ```
 

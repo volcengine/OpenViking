@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """Sessions endpoints for OpenViking HTTP Server."""
 
-from typing import Any
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, Path
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
-from openviking.message.part import TextPart
+from openviking.message.part import ContextPart, Part, TextPart, ToolPart
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
@@ -16,11 +16,82 @@ from openviking.server.models import Response
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
 
 
+class TextPartRequest(BaseModel):
+    """Text part request model."""
+
+    type: Literal["text"] = "text"
+    text: str
+
+
+class ContextPartRequest(BaseModel):
+    """Context part request model."""
+
+    type: Literal["context"] = "context"
+    uri: str = ""
+    context_type: Literal["memory", "resource", "skill"] = "memory"
+    abstract: str = ""
+
+
+class ToolPartRequest(BaseModel):
+    """Tool part request model."""
+
+    type: Literal["tool"] = "tool"
+    tool_id: str = ""
+    tool_name: str = ""
+    tool_uri: str = ""
+    skill_uri: str = ""
+    tool_input: Optional[Dict[str, Any]] = None
+    tool_output: str = ""
+    tool_status: str = "pending"
+
+
+PartRequest = TextPartRequest | ContextPartRequest | ToolPartRequest
+
+
+def _part_request_to_part(part_req: Dict[str, Any]) -> Part:
+    """Convert a part request dict to a Part object."""
+    part_type = part_req.get("type", "text")
+    if part_type == "text":
+        return TextPart(text=part_req.get("text", ""))
+    elif part_type == "context":
+        return ContextPart(
+            uri=part_req.get("uri", ""),
+            context_type=part_req.get("context_type", "memory"),
+            abstract=part_req.get("abstract", ""),
+        )
+    elif part_type == "tool":
+        return ToolPart(
+            tool_id=part_req.get("tool_id", ""),
+            tool_name=part_req.get("tool_name", ""),
+            tool_uri=part_req.get("tool_uri", ""),
+            skill_uri=part_req.get("skill_uri", ""),
+            tool_input=part_req.get("tool_input"),
+            tool_output=part_req.get("tool_output", ""),
+            tool_status=part_req.get("tool_status", "pending"),
+        )
+    else:
+        return TextPart(text=str(part_req))
+
+
 class AddMessageRequest(BaseModel):
-    """Request model for adding a message."""
+    """Request model for adding a message.
+
+    Supports two modes:
+    1. Simple mode: provide `content` string (backward compatible)
+    2. Parts mode: provide `parts` array for full Part support
+
+    If both are provided, `parts` takes precedence.
+    """
 
     role: str
-    content: str
+    content: Optional[str] = None
+    parts: Optional[List[Dict[str, Any]]] = None
+
+    @model_validator(mode="after")
+    def validate_content_or_parts(self) -> "AddMessageRequest":
+        if self.content is None and self.parts is None:
+            raise ValueError("Either 'content' or 'parts' must be provided")
+        return self
 
 
 def _to_jsonable(value: Any) -> Any:
@@ -119,11 +190,30 @@ async def add_message(
     session_id: str = Path(..., description="Session ID"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Add a message to a session."""
+    """Add a message to a session.
+
+    Supports two modes:
+    1. Simple mode: provide `content` string (backward compatible)
+       Example: {"role": "user", "content": "Hello"}
+
+    2. Parts mode: provide `parts` array for full Part support
+       Example: {"role": "assistant", "parts": [
+           {"type": "text", "text": "Here's the answer"},
+           {"type": "context", "uri": "viking://resources/doc.md", "abstract": "..."}
+       ]}
+
+    If both `content` and `parts` are provided, `parts` takes precedence.
+    """
     service = get_service()
     session = service.sessions.session(session_id)
     await session.load()
-    session.add_message(request.role, [TextPart(text=request.content)])
+
+    if request.parts is not None:
+        parts = [_part_request_to_part(p) for p in request.parts]
+    else:
+        parts = [TextPart(text=request.content or "")]
+
+    session.add_message(request.role, parts)
     return Response(
         status="ok",
         result={

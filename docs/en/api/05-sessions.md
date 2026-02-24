@@ -207,8 +207,14 @@ Add a message to the session.
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | role | str | Yes | - | Message role: "user" or "assistant" |
-| parts | List[Part] | Yes | - | List of message parts (SDK) |
-| content | str | Yes | - | Message text content (HTTP API) |
+| parts | List[Part] | Conditional | - | List of message parts (Required for Python SDK; Optional for HTTP API, mutually exclusive with content) |
+| content | str | Conditional | - | Message text content (HTTP API simple mode, mutually exclusive with parts) |
+
+> **Note**: HTTP API supports two modes:
+> 1. **Simple mode**: Use `content` string (backward compatible)
+> 2. **Parts mode**: Use `parts` array (full Part support)
+>
+> If both `content` and `parts` are provided, `parts` takes precedence.
 
 **Part Types (Python SDK)**
 
@@ -260,6 +266,8 @@ session.add_message("assistant", [
 POST /api/v1/sessions/{session_id}/messages
 ```
 
+**Simple Mode (Backward Compatible)**
+
 ```bash
 # Add user message
 curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages \
@@ -269,14 +277,33 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages \
     "role": "user",
     "content": "How do I authenticate users?"
   }'
+```
 
-# Add assistant message
+**Parts Mode (Full Part Support)**
+
+```bash
+# Add assistant message with context reference
 curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
   -d '{
     "role": "assistant",
-    "content": "You can use OAuth 2.0 for authentication..."
+    "parts": [
+      {"type": "text", "text": "Based on the authentication guide..."},
+      {"type": "context", "uri": "viking://resources/docs/auth/", "context_type": "resource", "abstract": "Auth guide"}
+    ]
+  }'
+
+# Add assistant message with tool call
+curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "role": "assistant",
+    "parts": [
+      {"type": "text", "text": "Let me search for that..."},
+      {"type": "tool", "tool_id": "call_123", "tool_name": "search_web", "tool_input": {"query": "OAuth"}, "tool_status": "completed", "tool_output": "Results..."}
+    ]
   }'
 ```
 

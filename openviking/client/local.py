@@ -6,7 +6,7 @@ Implements BaseClient interface using direct service calls (embedded mode).
 """
 
 from typing import Any, Dict, List, Optional, Union
-from openviking.message.part import TextPart
+
 from openviking.service import OpenVikingService
 from openviking_cli.client.base import BaseClient
 from openviking_cli.session.user_id import UserIdentifier
@@ -144,9 +144,9 @@ class LocalClient(BaseClient):
 
     # ============= Content Reading =============
 
-    async def read(self, uri: str, offset: int = 0, limit: int = -1) -> str:
+    async def read(self, uri: str) -> str:
         """Read file content."""
-        return await self._service.fs.read(uri, offset=offset, limit=limit)
+        return await self._service.fs.read(uri)
 
     async def abstract(self, uri: str) -> str:
         """Read L0 abstract."""
@@ -252,11 +252,63 @@ class LocalClient(BaseClient):
         """Commit a session (archive and extract memories)."""
         return await self._service.sessions.commit(session_id)
 
-    async def add_message(self, session_id: str, role: str, content: str) -> Dict[str, Any]:
-        """Add a message to a session."""
+    async def add_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str | None = None,
+        parts: list[dict] | None = None,
+    ) -> Dict[str, Any]:
+        """Add a message to a session.
+
+        Args:
+            session_id: Session ID
+            role: Message role ("user" or "assistant")
+            content: Text content (simple mode, backward compatible)
+            parts: Parts array (full Part support mode)
+
+        If both content and parts are provided, parts takes precedence.
+        """
+        from openviking.message.part import ContextPart, Part, TextPart, ToolPart
+
         session = self._service.sessions.session(session_id)
         await session.load()
-        session.add_message(role, [TextPart(text=content)])
+
+        message_parts: list[Part]
+        if parts is not None:
+            message_parts = []
+            for p in parts:
+                part_type = p.get("type", "text")
+                if part_type == "text":
+                    message_parts.append(TextPart(text=p.get("text", "")))
+                elif part_type == "context":
+                    message_parts.append(
+                        ContextPart(
+                            uri=p.get("uri", ""),
+                            context_type=p.get("context_type", "memory"),
+                            abstract=p.get("abstract", ""),
+                        )
+                    )
+                elif part_type == "tool":
+                    message_parts.append(
+                        ToolPart(
+                            tool_id=p.get("tool_id", ""),
+                            tool_name=p.get("tool_name", ""),
+                            tool_uri=p.get("tool_uri", ""),
+                            skill_uri=p.get("skill_uri", ""),
+                            tool_input=p.get("tool_input"),
+                            tool_output=p.get("tool_output", ""),
+                            tool_status=p.get("tool_status", "pending"),
+                        )
+                    )
+                else:
+                    message_parts.append(TextPart(text=str(p)))
+        elif content is not None:
+            message_parts = [TextPart(text=content)]
+        else:
+            raise ValueError("Either content or parts must be provided")
+
+        session.add_message(role, message_parts)
         return {
             "session_id": session_id,
             "message_count": len(session.messages),
