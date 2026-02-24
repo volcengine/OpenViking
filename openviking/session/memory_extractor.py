@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from openviking.core.context import Context, ContextType, Vectorize
 from openviking.prompts import render_prompt
+from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
@@ -208,6 +209,7 @@ class MemoryExtractor:
         candidate: CandidateMemory,
         user: str,
         session_id: str,
+        ctx: RequestContext,
     ) -> Optional[Context]:
         """Create Context object from candidate and persist to AGFS as .md file."""
         viking_fs = get_viking_fs()
@@ -217,7 +219,7 @@ class MemoryExtractor:
 
         # Special handling for profile: append to profile.md
         if candidate.category == MemoryCategory.PROFILE:
-            payload = await self._append_to_profile(candidate, viking_fs)
+            payload = await self._append_to_profile(candidate, viking_fs, ctx=ctx)
             if not payload:
                 return None
             memory_uri = "viking://user/memories/profile.md"
@@ -230,6 +232,8 @@ class MemoryExtractor:
                 category=candidate.category.value,
                 session_id=session_id,
                 user=user,
+                account_id=ctx.account_id,
+                owner_space=ctx.user.user_space_name(),
             )
             logger.info(f"uri {memory_uri} abstract: {payload.abstract} content: {payload.content}")
             memory.set_vectorize(Vectorize(text=payload.content))
@@ -251,7 +255,7 @@ class MemoryExtractor:
 
         # Write to AGFS as single .md file
         try:
-            await viking_fs.write_file(memory_uri, candidate.content)
+            await viking_fs.write_file(memory_uri, candidate.content, ctx=ctx)
             logger.info(f"Created memory file: {memory_uri}")
         except Exception as e:
             logger.error(f"Failed to write memory to AGFS: {e}")
@@ -267,6 +271,12 @@ class MemoryExtractor:
             category=candidate.category.value,
             session_id=session_id,
             user=user,
+            account_id=ctx.account_id,
+            owner_space=(
+                ctx.user.agent_space_name()
+                if memory_uri.startswith("viking://agent/")
+                else ctx.user.user_space_name()
+            ),
         )
         logger.info(f"uri {memory_uri} abstract: {candidate.abstract} content: {candidate.content}")
         memory.set_vectorize(Vectorize(text=candidate.content))
@@ -276,17 +286,18 @@ class MemoryExtractor:
         self,
         candidate: CandidateMemory,
         viking_fs,
+        ctx: RequestContext,
     ) -> Optional[MergedMemoryPayload]:
         """Update user profile - always merge with existing content."""
         uri = "viking://user/memories/profile.md"
         existing = ""
         try:
-            existing = await viking_fs.read_file(uri) or ""
+            existing = await viking_fs.read_file(uri, ctx=ctx) or ""
         except Exception:
             pass
 
         if not existing.strip():
-            await viking_fs.write_file(uri=uri, content=candidate.content)
+            await viking_fs.write_file(uri=uri, content=candidate.content, ctx=ctx)
             logger.info(f"Created profile at {uri}")
             return MergedMemoryPayload(
                 abstract=candidate.abstract,
@@ -308,7 +319,7 @@ class MemoryExtractor:
             if not payload:
                 logger.warning("Profile merge bundle failed; keeping existing profile unchanged")
                 return None
-            await viking_fs.write_file(uri=uri, content=payload.content)
+            await viking_fs.write_file(uri=uri, content=payload.content, ctx=ctx)
             logger.info(f"Merged profile info to {uri}")
             return payload
 

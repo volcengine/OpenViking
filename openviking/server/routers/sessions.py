@@ -41,7 +41,7 @@ async def create_session(
 ):
     """Create a new session."""
     service = get_service()
-    session = service.sessions.session()
+    session = service.sessions.session(_ctx)
     return Response(
         status="ok",
         result={
@@ -57,7 +57,7 @@ async def list_sessions(
 ):
     """List all sessions."""
     service = get_service()
-    result = await service.sessions.sessions()
+    result = await service.sessions.sessions(_ctx)
     return Response(status="ok", result=result)
 
 
@@ -68,7 +68,7 @@ async def get_session(
 ):
     """Get session details."""
     service = get_service()
-    session = service.sessions.session(session_id)
+    session = service.sessions.session(_ctx, session_id)
     await session.load()
     return Response(
         status="ok",
@@ -87,7 +87,7 @@ async def delete_session(
 ):
     """Delete a session."""
     service = get_service()
-    await service.sessions.delete(session_id)
+    await service.sessions.delete(session_id, _ctx)
     return Response(status="ok", result={"session_id": session_id})
 
 
@@ -98,7 +98,7 @@ async def commit_session(
 ):
     """Commit a session (archive and extract memories)."""
     service = get_service()
-    result = await service.sessions.commit(session_id)
+    result = await service.sessions.commit(session_id, _ctx)
     return Response(status="ok", result=result)
 
 
@@ -109,7 +109,7 @@ async def extract_session(
 ):
     """Extract memories from a session."""
     service = get_service()
-    result = await service.sessions.extract(session_id)
+    result = await service.sessions.extract(session_id, _ctx)
     return Response(status="ok", result=_to_jsonable(result))
 
 
@@ -121,7 +121,7 @@ async def add_message(
 ):
     """Add a message to a session."""
     service = get_service()
-    session = service.sessions.session(session_id)
+    session = service.sessions.session(_ctx, session_id)
     await session.load()
     session.add_message(request.role, [TextPart(text=request.content)])
     return Response(

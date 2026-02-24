@@ -6,9 +6,11 @@ from fastapi import APIRouter, Path, Request
 from pydantic import BaseModel
 
 from openviking.server.auth import require_role
+from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
 from openviking_cli.exceptions import PermissionDeniedError
+from openviking_cli.session.user_id import UserIdentifier
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
@@ -53,6 +55,14 @@ async def create_account(
     """Create a new account (workspace) with its first admin user."""
     manager = _get_api_key_manager(request)
     user_key = await manager.create_account(body.account_id, body.admin_user_id)
+    service = get_service()
+    account_ctx = RequestContext(
+        user=UserIdentifier(body.account_id, body.admin_user_id, "default"),
+        role=Role.ADMIN,
+    )
+    await service.initialize_account_directories(account_ctx)
+    await service.initialize_user_directories(account_ctx)
+    await service.initialize_agent_directories(account_ctx)
     return Response(
         status="ok",
         result={
@@ -100,6 +110,13 @@ async def register_user(
     _check_account_access(ctx, account_id)
     manager = _get_api_key_manager(request)
     user_key = await manager.register_user(account_id, body.user_id, body.role)
+    service = get_service()
+    user_ctx = RequestContext(
+        user=UserIdentifier(account_id, body.user_id, "default"),
+        role=Role.USER,
+    )
+    await service.initialize_user_directories(user_ctx)
+    await service.initialize_agent_directories(user_ctx)
     return Response(
         status="ok",
         result={

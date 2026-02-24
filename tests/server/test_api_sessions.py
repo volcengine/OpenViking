@@ -5,11 +5,12 @@
 
 import httpx
 
+from openviking.server.identity import RequestContext, Role
+from openviking_cli.session.user_id import UserIdentifier
+
 
 async def test_create_session(client: httpx.AsyncClient):
-    resp = await client.post(
-        "/api/v1/sessions", json={}
-    )
+    resp = await client.post("/api/v1/sessions", json={})
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
@@ -27,9 +28,7 @@ async def test_list_sessions(client: httpx.AsyncClient):
 
 
 async def test_get_session(client: httpx.AsyncClient):
-    create_resp = await client.post(
-        "/api/v1/sessions", json={}
-    )
+    create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]
 
     resp = await client.get(f"/api/v1/sessions/{session_id}")
@@ -40,9 +39,7 @@ async def test_get_session(client: httpx.AsyncClient):
 
 
 async def test_add_message(client: httpx.AsyncClient):
-    create_resp = await client.post(
-        "/api/v1/sessions", json={}
-    )
+    create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]
 
     resp = await client.post(
@@ -56,9 +53,7 @@ async def test_add_message(client: httpx.AsyncClient):
 
 
 async def test_add_multiple_messages(client: httpx.AsyncClient):
-    create_resp = await client.post(
-        "/api/v1/sessions", json={}
-    )
+    create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]
 
     # Add messages one by one; each add_message call should see
@@ -85,13 +80,9 @@ async def test_add_multiple_messages(client: httpx.AsyncClient):
     assert count3 >= count2
 
 
-async def test_add_message_persistence_regression(
-    client: httpx.AsyncClient, service
-):
+async def test_add_message_persistence_regression(client: httpx.AsyncClient, service):
     """Regression: message payload must persist as valid parts across loads."""
-    create_resp = await client.post(
-        "/api/v1/sessions", json={"user": "test"}
-    )
+    create_resp = await client.post("/api/v1/sessions", json={"user": "test"})
     session_id = create_resp.json()["result"]["session_id"]
 
     resp1 = await client.post(
@@ -114,7 +105,8 @@ async def test_add_message_persistence_regression(
     assert get_resp.json()["result"]["message_count"] == 2
 
     # Verify stored message content survives load/decode.
-    session = service.sessions.session(session_id)
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    session = service.sessions.session(ctx, session_id)
     await session.load()
     assert len(session.messages) == 2
     assert session.messages[0].content == "Message A"
@@ -122,9 +114,7 @@ async def test_add_message_persistence_regression(
 
 
 async def test_delete_session(client: httpx.AsyncClient):
-    create_resp = await client.post(
-        "/api/v1/sessions", json={}
-    )
+    create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]
 
     # Add a message so the session file exists in storage
@@ -141,9 +131,7 @@ async def test_delete_session(client: httpx.AsyncClient):
 
 
 async def test_compress_session(client: httpx.AsyncClient):
-    create_resp = await client.post(
-        "/api/v1/sessions", json={}
-    )
+    create_resp = await client.post("/api/v1/sessions", json={})
     session_id = create_resp.json()["result"]["session_id"]
 
     # Add some messages before committing
@@ -152,16 +140,12 @@ async def test_compress_session(client: httpx.AsyncClient):
         json={"role": "user", "content": "Hello"},
     )
 
-    resp = await client.post(
-        f"/api/v1/sessions/{session_id}/commit"
-    )
+    resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
 
 
-async def test_extract_session_jsonable_regression(
-    client: httpx.AsyncClient, service, monkeypatch
-):
+async def test_extract_session_jsonable_regression(client: httpx.AsyncClient, service, monkeypatch):
     """Regression: extract endpoint should serialize internal objects."""
 
     class FakeMemory:
@@ -173,14 +157,12 @@ async def test_extract_session_jsonable_regression(
         def to_dict(self):
             return {"uri": self.uri}
 
-    async def fake_extract(_session_id: str):
+    async def fake_extract(_session_id: str, _ctx):
         return [FakeMemory("viking://user/memories/mock.md")]
 
     monkeypatch.setattr(service.sessions, "extract", fake_extract)
 
-    create_resp = await client.post(
-        "/api/v1/sessions", json={"user": "test"}
-    )
+    create_resp = await client.post("/api/v1/sessions", json={"user": "test"})
     session_id = create_resp.json()["result"]["session_id"]
 
     resp = await client.post(f"/api/v1/sessions/{session_id}/extract")

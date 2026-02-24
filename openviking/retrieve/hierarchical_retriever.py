@@ -11,6 +11,7 @@ import heapq
 from typing import Any, Dict, List, Optional, Tuple
 
 from openviking.models.embedder.base import EmbedResult
+from openviking.server.identity import RequestContext, Role
 from openviking.storage import VikingDBInterface
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.retrieve.types import (
@@ -76,6 +77,7 @@ class HierarchicalRetriever:
     async def retrieve(
         self,
         query: TypedQuery,
+        ctx: RequestContext,
         limit: int = 5,
         mode: RetrieverMode = RetrieverMode.THINKING,
         score_threshold: Optional[float] = None,
@@ -105,6 +107,9 @@ class HierarchicalRetriever:
 
         # Merge all filters
         filters_to_merge = [type_filter]
+        tenant_filter = self._build_tenant_filter(ctx)
+        if tenant_filter:
+            filters_to_merge.append(tenant_filter)
         if target_dirs:
             target_filter = {
                 "op": "or",
@@ -168,13 +173,32 @@ class HierarchicalRetriever:
         )
 
         # Step 6: Convert results
-        matched = await self._convert_to_matched_contexts(candidates, query.context_type)
+        matched = await self._convert_to_matched_contexts(candidates, query.context_type, ctx=ctx)
 
         return QueryResult(
             query=query,
             matched_contexts=matched[:limit],
             searched_directories=root_uris,
         )
+
+    def _build_tenant_filter(self, ctx: RequestContext) -> Optional[Dict[str, Any]]:
+        """Build tenant visibility filter by role."""
+        if ctx.role == Role.ROOT:
+            return None
+        if ctx.role == Role.ADMIN:
+            return {"op": "must", "field": "account_id", "conds": [ctx.account_id]}
+
+        return {
+            "op": "and",
+            "conds": [
+                {"op": "must", "field": "account_id", "conds": [ctx.account_id]},
+                {
+                    "op": "must",
+                    "field": "owner_space",
+                    "conds": [ctx.user.user_space_name(), ctx.user.agent_space_name()],
+                },
+            ],
+        }
 
     async def _global_vector_search(
         self,
@@ -378,6 +402,7 @@ class HierarchicalRetriever:
         self,
         candidates: List[Dict[str, Any]],
         context_type: ContextType,
+        ctx: RequestContext,
     ) -> List[MatchedContext]:
         """Convert candidate results to MatchedContext list."""
         results = []
@@ -386,10 +411,10 @@ class HierarchicalRetriever:
             # Read related contexts and get summaries
             relations = []
             if get_viking_fs():
-                related_uris = await get_viking_fs().get_relations(c.get("uri", ""))
+                related_uris = await get_viking_fs().get_relations(c.get("uri", ""), ctx=ctx)
                 if related_uris:
                     related_abstracts = await get_viking_fs().read_batch(
-                        related_uris[: self.MAX_RELATIONS], level="l0"
+                        related_uris[: self.MAX_RELATIONS], level="l0", ctx=ctx
                     )
                     for uri in related_uris[: self.MAX_RELATIONS]:
                         abstract = related_abstracts.get(uri, "")

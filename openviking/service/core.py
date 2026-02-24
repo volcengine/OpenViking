@@ -11,6 +11,7 @@ from typing import Any, Optional
 
 from openviking.agfs_manager import AGFSManager
 from openviking.core.directories import DirectoryInitializer
+from openviking.server.identity import RequestContext, Role
 from openviking.service.debug_service import DebugService
 from openviking.service.fs_service import FSService
 from openviking.service.pack_service import PackService
@@ -75,6 +76,7 @@ class OpenVikingService:
         self._skill_processor: Optional[SkillProcessor] = None
         self._session_compressor: Optional[SessionCompressor] = None
         self._transaction_manager: Optional[TransactionManager] = None
+        self._directory_initializer: Optional[DirectoryInitializer] = None
 
         # Sub-services
         self._fs_service = FSService()
@@ -222,9 +224,17 @@ class OpenVikingService:
 
         # Initialize directories
         directory_initializer = DirectoryInitializer(vikingdb=self._vikingdb_manager)
-        await directory_initializer.initialize_all()
-        count = await directory_initializer.initialize_user_directories()
-        logger.info(f"Initialized {count} directories for user scope")
+        self._directory_initializer = directory_initializer
+        default_ctx = RequestContext(user=self._user, role=Role.ROOT)
+        account_count = await directory_initializer.initialize_account_directories(default_ctx)
+        user_count = await directory_initializer.initialize_user_directories(default_ctx)
+        agent_count = await directory_initializer.initialize_agent_directories(default_ctx)
+        logger.info(
+            "Initialized preset directories account=%d user=%d agent=%d",
+            account_count,
+            user_count,
+            agent_count,
+        )
 
         # Initialize processors
         self._resource_processor = ResourceProcessor(vikingdb=self._vikingdb_manager)
@@ -246,13 +256,11 @@ class OpenVikingService:
             viking_fs=self._viking_fs,
             resource_processor=self._resource_processor,
             skill_processor=self._skill_processor,
-            user=self.user,
         )
         self._session_service.set_dependencies(
             vikingdb=self._vikingdb_manager,
             viking_fs=self._viking_fs,
             session_compressor=self._session_compressor,
-            user=self.user,
         )
         self._debug_service.set_dependencies(
             vikingdb=self._vikingdb_manager,
@@ -285,6 +293,7 @@ class OpenVikingService:
         self._resource_processor = None
         self._skill_processor = None
         self._session_compressor = None
+        self._directory_initializer = None
         self._initialized = False
 
         logger.info("OpenVikingService closed")
@@ -293,3 +302,24 @@ class OpenVikingService:
         """Ensure service is initialized."""
         if not self._initialized:
             raise NotInitializedError("OpenVikingService")
+
+    async def initialize_account_directories(self, ctx: RequestContext) -> int:
+        """Initialize account-shared preset roots."""
+        self._ensure_initialized()
+        if not self._directory_initializer:
+            return 0
+        return await self._directory_initializer.initialize_account_directories(ctx)
+
+    async def initialize_user_directories(self, ctx: RequestContext) -> int:
+        """Initialize current user's directory tree."""
+        self._ensure_initialized()
+        if not self._directory_initializer:
+            return 0
+        return await self._directory_initializer.initialize_user_directories(ctx)
+
+    async def initialize_agent_directories(self, ctx: RequestContext) -> int:
+        """Initialize current user's current-agent directory tree."""
+        self._ensure_initialized()
+        if not self._directory_initializer:
+            return 0
+        return await self._directory_initializer.initialize_agent_directories(ctx)

@@ -12,6 +12,7 @@ from typing import Dict, List, Optional
 
 from openviking.core.context import Context, Vectorize
 from openviking.message import Message
+from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.session.user_id import UserIdentifier
@@ -69,10 +70,11 @@ class SessionCompressor:
         candidate: CandidateMemory,
         target_memory: Context,
         viking_fs,
+        ctx: RequestContext,
     ) -> bool:
         """Merge candidate content into an existing memory file."""
         try:
-            existing_content = await viking_fs.read_file(target_memory.uri)
+            existing_content = await viking_fs.read_file(target_memory.uri, ctx=ctx)
             payload = await self.extractor._merge_memory_bundle(
                 existing_abstract=target_memory.abstract,
                 existing_overview=(target_memory.meta or {}).get("overview") or "",
@@ -86,7 +88,7 @@ class SessionCompressor:
             if not payload:
                 return False
 
-            await viking_fs.write_file(target_memory.uri, payload.content)
+            await viking_fs.write_file(target_memory.uri, payload.content, ctx=ctx)
             target_memory.abstract = payload.abstract
             target_memory.meta = {**(target_memory.meta or {}), "overview": payload.overview}
             logger.info(
@@ -99,10 +101,12 @@ class SessionCompressor:
             logger.error(f"Failed to merge memory {target_memory.uri}: {e}")
             return False
 
-    async def _delete_existing_memory(self, memory: Context, viking_fs) -> bool:
+    async def _delete_existing_memory(
+        self, memory: Context, viking_fs, ctx: RequestContext
+    ) -> bool:
         """Hard delete an existing memory file and clean up its vector record."""
         try:
-            await viking_fs.rm(memory.uri, recursive=False)
+            await viking_fs.rm(memory.uri, recursive=False, ctx=ctx)
         except Exception as e:
             logger.error(f"Failed to delete memory file {memory.uri}: {e}")
             return False
@@ -119,12 +123,16 @@ class SessionCompressor:
         messages: List[Message],
         user: Optional["UserIdentifier"] = None,
         session_id: Optional[str] = None,
+        ctx: Optional[RequestContext] = None,
     ) -> List[Context]:
         """Extract long-term memories from messages."""
         if not messages:
             return []
 
         context = {"messages": messages}
+        if not ctx:
+            return []
+
         candidates = await self.extractor.extract(context, user, session_id)
 
         if not candidates:
@@ -137,7 +145,7 @@ class SessionCompressor:
         for candidate in candidates:
             # Profile: skip dedup, always merge
             if candidate.category in ALWAYS_MERGE_CATEGORIES:
-                memory = await self.extractor.create_memory(candidate, user, session_id)
+                memory = await self.extractor.create_memory(candidate, user, session_id, ctx=ctx)
                 if memory:
                     memories.append(memory)
                     stats.created += 1
@@ -173,14 +181,16 @@ class SessionCompressor:
                 for action in actions:
                     if action.decision == MemoryActionDecision.DELETE:
                         if viking_fs and await self._delete_existing_memory(
-                            action.memory, viking_fs
+                            action.memory, viking_fs, ctx=ctx
                         ):
                             stats.deleted += 1
                         else:
                             stats.skipped += 1
                     elif action.decision == MemoryActionDecision.MERGE:
                         if candidate.category in MERGE_SUPPORTED_CATEGORIES and viking_fs:
-                            if await self._merge_into_existing(candidate, action.memory, viking_fs):
+                            if await self._merge_into_existing(
+                                candidate, action.memory, viking_fs, ctx=ctx
+                            ):
                                 stats.merged += 1
                             else:
                                 stats.skipped += 1
@@ -194,13 +204,13 @@ class SessionCompressor:
                 for action in actions:
                     if action.decision == MemoryActionDecision.DELETE:
                         if viking_fs and await self._delete_existing_memory(
-                            action.memory, viking_fs
+                            action.memory, viking_fs, ctx=ctx
                         ):
                             stats.deleted += 1
                         else:
                             stats.skipped += 1
 
-                memory = await self.extractor.create_memory(candidate, user, session_id)
+                memory = await self.extractor.create_memory(candidate, user, session_id, ctx=ctx)
                 if memory:
                     memories.append(memory)
                     stats.created += 1
@@ -211,7 +221,7 @@ class SessionCompressor:
         # Extract URIs used in messages, create relations
         used_uris = self._extract_used_uris(messages)
         if used_uris and memories:
-            await self._create_relations(memories, used_uris)
+            await self._create_relations(memories, used_uris, ctx=ctx)
 
         logger.info(
             f"Memory extraction: created={stats.created}, "
@@ -238,6 +248,7 @@ class SessionCompressor:
         self,
         memories: List[Context],
         used_uris: Dict[str, List[str]],
+        ctx: RequestContext,
     ) -> None:
         """Create bidirectional relations between memories and resources/skills."""
         viking_fs = get_viking_fs()
@@ -256,21 +267,25 @@ class SessionCompressor:
                         memory_uri,
                         resource_uris,
                         reason="Memory extracted from session using these resources",
+                        ctx=ctx,
                     )
                 if skill_uris:
                     await viking_fs.link(
                         memory_uri,
                         skill_uris,
                         reason="Memory extracted from session calling these skills",
+                        ctx=ctx,
                     )
 
             # Resources/skills -> memories (reverse)
             for resource_uri in resource_uris:
                 await viking_fs.link(
-                    resource_uri, memory_uris, reason="Referenced by these memories"
+                    resource_uri, memory_uris, reason="Referenced by these memories", ctx=ctx
                 )
             for skill_uri in skill_uris:
-                await viking_fs.link(skill_uri, memory_uris, reason="Called by these memories")
+                await viking_fs.link(
+                    skill_uri, memory_uris, reason="Called by these memories", ctx=ctx
+                )
 
             logger.info(f"Created bidirectional relations for {len(memories)} memories")
         except Exception as e:

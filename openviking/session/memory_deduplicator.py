@@ -132,6 +132,16 @@ class MemoryDeduplicator:
             {"field": "context_type", "op": "must", "conds": ["memory"]},
             {"field": "is_leaf", "op": "must", "conds": [True]},
         ]
+        owner = candidate.user
+        if hasattr(owner, "account_id"):
+            filter_conds.append({"field": "account_id", "op": "must", "conds": [owner.account_id]})
+        if owner and hasattr(owner, "user_space_name"):
+            owner_space = (
+                owner.agent_space_name()
+                if candidate.category.value in {"cases", "patterns"}
+                else owner.user_space_name()
+            )
+            filter_conds.append({"field": "owner_space", "op": "must", "conds": [owner_space]})
         if category_uri_prefix:
             filter_conds.append({"field": "uri", "op": "prefix", "prefix": category_uri_prefix})
         dedup_filter = {"op": "and", "conds": filter_conds}

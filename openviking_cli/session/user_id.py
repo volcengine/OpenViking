@@ -37,6 +37,23 @@ class UserIdentifier(object):
     def account_id(self) -> str:
         return self._account_id
 
+    @property
+    def user_id(self) -> str:
+        return self._user_id
+
+    @property
+    def agent_id(self) -> str:
+        return self._agent_id
+
+    def user_space_name(self) -> str:
+        """User-level space name (account + user)."""
+        user_hash = hashlib.md5(self._user_id.encode()).hexdigest()[:8]
+        return f"{self._account_id}_{user_hash}"
+
+    def agent_space_name(self) -> str:
+        """Agent-level space name (user + agent)."""
+        return hashlib.md5((self._user_id + self._agent_id).encode()).hexdigest()[:12]
+
     def unique_space_name(self, short: bool = True) -> str:
         # 匿名化，只保留 {account_id}_{md5 of user and agent id}
         hash = hashlib.md5((self._user_id + self._agent_id).encode()).hexdigest()
