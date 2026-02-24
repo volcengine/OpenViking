@@ -974,9 +974,15 @@ class VikingFS:
             uri: Viking URI
             offset: Starting line number (0-indexed). Default 0.
             limit: Number of lines to read. -1 means read to end. Default -1.
+
+        Raises:
+            FileNotFoundError: If the file does not exist.
         """
         path = self._uri_to_path(uri)
-        content = self.agfs.read(path)
+        try:
+            content = self.agfs.read(path)
+        except Exception as e:
+            raise FileNotFoundError(f"Failed to read {uri}: {e}")
         text = self._handle_agfs_content(content)
         if offset == 0 and limit == -1:
             return text
