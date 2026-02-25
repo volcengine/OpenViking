@@ -135,7 +135,7 @@ class MemoryDeduplicator:
         # Build filter by memory scope + uri prefix (schema does not have category field yet).
         filter_conds = [
             {"field": "context_type", "op": "must", "conds": ["memory"]},
-            {"field": "is_leaf", "op": "must", "conds": [True]},
+            {"field": "level", "op": "must", "conds": [2]},
         ]
         owner = candidate.user
         if hasattr(owner, "account_id"):

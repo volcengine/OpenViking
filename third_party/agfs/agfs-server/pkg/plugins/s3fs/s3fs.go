@@ -428,40 +428,85 @@ func (fs *S3FS) Rename(oldPath, newPath string) error {
 	fs.mu.Lock()
 	defer fs.mu.Unlock()
 
-	// Check if old path exists
-	exists, err := fs.client.ObjectExists(ctx, oldPath)
+	// Try as file first
+	fileExists, err := fs.client.ObjectExists(ctx, oldPath)
 	if err != nil {
 		return fmt.Errorf("failed to check source: %w", err)
 	}
-	if !exists {
+
+	if fileExists {
+		return fs.renameSingleObject(ctx, oldPath, newPath)
+	}
+
+	// Try as directory
+	dirExists, err := fs.client.DirectoryExists(ctx, oldPath)
+	if err != nil {
+		return fmt.Errorf("failed to check source directory: %w", err)
+	}
+	if !dirExists {
 		return filesystem.ErrNotFound
 	}
 
-	// Get the object
-	data, err := fs.client.GetObject(ctx, oldPath)
-	if err != nil {
-		return fmt.Errorf("failed to read source: %w", err)
+	return fs.renameDirectory(ctx, oldPath, newPath)
+}
+
+// renameSingleObject moves a single S3 object via copy + delete.
+func (fs *S3FS) renameSingleObject(ctx context.Context, oldPath, newPath string) error {
+	if err := fs.client.CopyObject(ctx, oldPath, newPath); err != nil {
+		return fmt.Errorf("failed to copy source: %w", err)
 	}
 
-	// Put to new location
-	err = fs.client.PutObject(ctx, newPath, data)
-	if err != nil {
-		return fmt.Errorf("failed to write destination: %w", err)
-	}
-
-	// Delete old object
-	err = fs.client.DeleteObject(ctx, oldPath)
-	if err != nil {
+	if err := fs.client.DeleteObject(ctx, oldPath); err != nil {
 		return fmt.Errorf("failed to delete source: %w", err)
 	}
 
-	// Invalidate caches
 	oldParent := getParentPath(oldPath)
 	newParent := getParentPath(newPath)
 	fs.dirCache.Invalidate(oldParent)
 	fs.dirCache.Invalidate(newParent)
 	fs.statCache.Invalidate(oldPath)
 	fs.statCache.Invalidate(newPath)
+
+	return nil
+}
+
+// renameDirectory moves an entire directory subtree by copying every object
+// under oldPath to newPath and then deleting the originals.
+func (fs *S3FS) renameDirectory(ctx context.Context, oldPath, newPath string) error {
+	// List every object (recursively) under oldPath
+	objects, err := fs.client.ListAllObjects(ctx, oldPath)
+	if err != nil {
+		return fmt.Errorf("failed to list source directory: %w", err)
+	}
+
+	// Copy each object to the new prefix
+	for _, obj := range objects {
+		srcRel := obj.Key // relative to oldPath
+		if err := fs.client.CopyObject(ctx, oldPath+"/"+srcRel, newPath+"/"+srcRel); err != nil {
+			return fmt.Errorf("failed to copy %s: %w", srcRel, err)
+		}
+	}
+
+	// Create the new directory marker
+	if err := fs.client.CreateDirectory(ctx, newPath); err != nil {
+		// Ignore if already exists (implicit from copied children)
+		log.Debugf("[s3fs] CreateDirectory %s (may already exist): %v", newPath, err)
+	}
+
+	// Delete old directory tree (marker + all children)
+	if err := fs.client.DeleteDirectory(ctx, oldPath); err != nil {
+		return fmt.Errorf("failed to delete source directory: %w", err)
+	}
+
+	// Invalidate caches broadly
+	oldParent := getParentPath(oldPath)
+	newParent := getParentPath(newPath)
+	fs.dirCache.Invalidate(oldParent)
+	fs.dirCache.Invalidate(newParent)
+	fs.dirCache.InvalidatePrefix(oldPath)
+	fs.dirCache.InvalidatePrefix(newPath)
+	fs.statCache.InvalidatePrefix(oldPath)
+	fs.statCache.InvalidatePrefix(newPath)
 
 	return nil
 }
