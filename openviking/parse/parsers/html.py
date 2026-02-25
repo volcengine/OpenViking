@@ -28,6 +28,7 @@ from openviking.parse.base import (
     lazy_import,
 )
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking_cli.utils.config import get_openviking_config
 
 
 class URLType(Enum):
@@ -141,13 +142,27 @@ class URLTypeDetector:
         """
         import re
 
-        # Repository URL patterns (from README)
-        repo_patterns = [
-            r"^https?://github\.com/[^/]+/[^/]+/?$",
-            r"^https?://gitlab\.com/[^/]+/[^/]+/?$",
-            r"^.*\.git$",
-            r"^git@",
-        ]
+        config = get_openviking_config()
+        github_domains = list(set(config.html.github_domains + config.code.github_domains))
+        gitlab_domains = list(set(config.html.gitlab_domains + config.code.gitlab_domains))
+        # Build repository URL patterns from config
+        repo_patterns = []
+
+        # Add patterns for GitHub domains
+        for domain in github_domains:
+            repo_patterns.append(rf"^https?://{re.escape(domain)}/[^/]+/[^/]+/?$")
+
+        # Add patterns for GitLab domains
+        for domain in gitlab_domains:
+            repo_patterns.append(rf"^https?://{re.escape(domain)}/[^/]+/[^/]+/?$")
+
+        # Add other patterns
+        repo_patterns.extend(
+            [
+                r"^.*\.git$",
+                r"^git@",
+            ]
+        )
 
         # Check for URL patterns
         for pattern in repo_patterns:
@@ -478,15 +493,19 @@ class HTMLParser(BaseParser):
     def _convert_to_raw_url(self, url: str) -> str:
         """Convert GitHub/GitLab blob URL to raw URL."""
         parsed = urlparse(url)
+        config = get_openviking_config()
+        github_domains = config.html.github_domains
+        gitlab_domains = config.html.gitlab_domains
+        github_raw_domain = config.code.github_raw_domain
 
-        if parsed.netloc == "github.com":
+        if parsed.netloc in github_domains:
             path_parts = parsed.path.strip("/").split("/")
             if len(path_parts) >= 4 and path_parts[2] == "blob":
                 # Remove 'blob'
                 new_path = "/".join(path_parts[:2] + path_parts[3:])
-                return f"https://raw.githubusercontent.com/{new_path}"
+                return f"https://{github_raw_domain}/{new_path}"
 
-        if parsed.netloc == "gitlab.com" and "/blob/" in parsed.path:
+        if parsed.netloc in gitlab_domains and "/blob/" in parsed.path:
             return url.replace("/blob/", "/raw/")
 
         return url

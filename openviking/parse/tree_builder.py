@@ -28,6 +28,7 @@ from openviking.core.building_tree import BuildingTree
 from openviking.parse.parsers.media.utils import get_media_base_uri, get_media_type
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.viking_fs import get_viking_fs
+from openviking.utils import parse_code_hosting_url
 from openviking_cli.utils.uri import VikingURI
 
 if TYPE_CHECKING:
@@ -127,12 +128,39 @@ class TreeBuilder:
         doc_name = VikingURI.sanitize_segment(doc_dirs[0]["name"])
         temp_doc_uri = f"{temp_uri}/{doc_name}"
 
-        # 2. Determine base_uri
+        # 2. Determine base_uri and final document name with org/repo for GitHub/GitLab
         if base_uri is None:
             base_uri = self._get_base_uri(scope, source_path, source_format)
 
-        # 3. Build final URI, auto-renaming on conflict (e.g. doc_1, doc_2, ...)
-        candidate_uri = VikingURI(base_uri).join(doc_name).uri
+        # Check if source_path is a GitHub/GitLab URL and extract org/repo
+        final_doc_name = doc_name
+        if source_path and source_format == "repository":
+            parsed_org_repo = parse_code_hosting_url(source_path)
+            if parsed_org_repo:
+                final_doc_name = parsed_org_repo
+
+        # 3. Check if base_uri exists - if it does, use it as parent directory
+        try:
+            await viking_fs.stat(base_uri)
+            base_exists = True
+        except Exception:
+            base_exists = False
+
+        if base_exists:
+            if "/" in final_doc_name:
+                repo_name_only = final_doc_name.split("/")[-1]
+            else:
+                repo_name_only = final_doc_name
+            candidate_uri = VikingURI(base_uri).join(repo_name_only).uri
+        else:
+            if "/" in final_doc_name:
+                parts = final_doc_name.split("/")
+                sanitized_parts = [VikingURI.sanitize_segment(p) for p in parts if p]
+                base_viking_uri = VikingURI(base_uri)
+                candidate_uri = VikingURI.build(base_viking_uri.scope, *sanitized_parts)
+            else:
+                candidate_uri = VikingURI(base_uri).join(doc_name).uri
+
         final_uri = await self._resolve_unique_uri(candidate_uri)
         if final_uri != candidate_uri:
             logger.info(f"[TreeBuilder] Resolved name conflict: {candidate_uri} -> {final_uri}")

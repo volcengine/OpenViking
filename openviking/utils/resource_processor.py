@@ -123,6 +123,9 @@ class ResourceProcessor:
             result["status"] = "error"
             result["errors"].append(f"Parse error: {e}")
             logger.error(f"[ResourceProcessor] Parse error: {e}")
+            import traceback
+
+            traceback.print_exc()
             return result
 
         # parse_result contains:
