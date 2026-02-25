@@ -28,9 +28,10 @@
         "region": "cn-beijing",
         "access_key": "${VOLCENGINE_AK}",
         "secret_key": "${VOLCENGINE_SK}",
-        "endpoint": "https://tos-cn-beijing.volces.com",
+        "endpoint": "https://tos-s3-cn-beijing.volces.com",
         "prefix": "openviking",
-        "use_ssl": true
+        "use_ssl": true,
+        "use_path_style": false
       }
     }
   },
