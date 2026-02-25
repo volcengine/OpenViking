@@ -48,11 +48,15 @@ class VikingURI:
         """
         Parse Viking URI into components.
 
+        Accepts both full URIs (viking://...) and short-format paths
+        (/resources, resources). Short-format paths are auto-normalized.
+
         Returns:
             Dictionary with URI components
         """
         if not self.uri.startswith(f"{self.SCHEME}://"):
-            raise ValueError(f"URI must start with '{self.SCHEME}://'")
+            # Auto-normalize short-format paths (e.g., "/resources" or "resources")
+            self.uri = self.normalize(self.uri)
 
         # Remove scheme
         path = self.uri[len(f"{self.SCHEME}://") :]

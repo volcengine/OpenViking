@@ -704,8 +704,20 @@ class VikingFS:
         return f"{prefix}_{hash_suffix}"
 
     def _uri_to_path(self, uri: str) -> str:
-        """viking://user/memories/preferences/test -> /local/user/memories/preferences/test"""
-        remainder = uri[len("viking://") :].strip("/")
+        """Convert Viking URI or short-format path to internal AGFS path.
+
+        Supports both full URIs and short-format paths:
+            viking://user/memories/preferences/test -> /local/user/memories/preferences/test
+            /resources -> /local/resources
+            resources -> /local/resources
+        """
+        if uri.startswith("viking://"):
+            remainder = uri[len("viking://"):].strip("/")
+        elif uri.startswith("/"):
+            remainder = uri.lstrip("/")
+        else:
+            remainder = uri.strip("/")
+
         if not remainder:
             return "/local"
         # Ensure each path component does not exceed filesystem filename limit
