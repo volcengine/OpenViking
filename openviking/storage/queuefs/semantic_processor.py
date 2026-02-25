@@ -482,9 +482,9 @@ class SemanticProcessor(DequeueHandlerBase):
         from openviking.storage.queuefs import get_queue_manager
         from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 
+        active_ctx = ctx or self._current_ctx
         queue_manager = get_queue_manager()
         embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING)
-        active_ctx = ctx or self._current_ctx
 
         # Vectorize L0: .abstract.md (abstract), level=0
         abstract_uri = f"{uri}/.abstract.md"
@@ -511,6 +511,15 @@ class SemanticProcessor(DequeueHandlerBase):
             is_leaf=False,
             abstract=abstract,
             context_type=context_type,
+            user=active_ctx.user,
+            account_id=active_ctx.account_id,
+            owner_space=(
+                active_ctx.user.agent_space_name()
+                if uri.startswith("viking://agent/")
+                else active_ctx.user.user_space_name()
+                if uri.startswith("viking://user/") or uri.startswith("viking://session/")
+                else ""
+            ),
         )
         context_overview.set_vectorize(Vectorize(text=overview))
         embedding_msg_overview = EmbeddingMsgConverter.from_context(context_overview)

@@ -54,6 +54,13 @@ class UserIdentifier(object):
         """Agent-level space name (user + agent)."""
         return hashlib.md5((self._user_id + self._agent_id).encode()).hexdigest()[:12]
 
+    def unique_space_name(self, short: bool = True) -> str:
+        # 匿名化，只保留 {account_id}_{md5 of user and agent id}
+        hash = hashlib.md5((self._user_id + self._agent_id).encode()).hexdigest()
+        if short:
+            return f"{self._account_id}_{hash[:8]}"
+        return f"{self._account_id}_{hash}"
+
     def memory_space_uri(self) -> str:
         return f"viking://agent/{self.agent_space_name()}/memories"
 

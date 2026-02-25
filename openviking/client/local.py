@@ -151,7 +151,13 @@ class LocalClient(BaseClient):
     # ============= Content Reading =============
 
     async def read(self, uri: str, offset: int = 0, limit: int = -1) -> str:
-        """Read file content."""
+        """Read file content.
+
+        Args:
+            uri: Viking URI
+            offset: Starting line number (0-indexed). Default 0.
+            limit: Number of lines to read. -1 means read to end. Default -1.
+        """
         return await self._service.fs.read(uri, ctx=self._ctx, offset=offset, limit=limit)
 
     async def abstract(self, uri: str) -> str:
@@ -266,8 +272,8 @@ class LocalClient(BaseClient):
         self,
         session_id: str,
         role: str,
-        content: str | None = None,
-        parts: list[dict] | None = None,
+        content: Optional[str] = None,
+        parts: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 

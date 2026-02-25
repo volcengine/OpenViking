@@ -28,14 +28,6 @@ class EmbeddingMsgConverter:
 
         context_data = context.to_dict()
 
-        uri = context_data.get("uri", "")
-        if uri.endswith("/.abstract.md"):
-            context_data["level"] = ContextLevel.ABSTRACT
-        elif uri.endswith("/.overview.md"):
-            context_data["level"] = ContextLevel.OVERVIEW
-        else:
-            context_data["level"] = ContextLevel.DETAIL
-
         # Backfill tenant fields for legacy writers that only set user/uri.
         if not context_data.get("account_id"):
             user = context_data.get("user") or {}
@@ -55,6 +47,15 @@ class EmbeddingMsgConverter:
                 context_data["owner_space"] = owner_user.user_space_name()
             else:
                 context_data["owner_space"] = ""
+
+        # Derive level field from URI for hierarchical retrieval.
+        uri = context_data.get("uri", "")
+        if uri.endswith("/.abstract.md"):
+            context_data["level"] = ContextLevel.ABSTRACT
+        elif uri.endswith("/.overview.md"):
+            context_data["level"] = ContextLevel.OVERVIEW
+        else:
+            context_data["level"] = ContextLevel.DETAIL
 
         embedding_msg = EmbeddingMsg(
             message=vectorization_text,

@@ -1256,7 +1256,6 @@ class VikingFS:
         """
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
-        content = ""
         try:
             content = self.agfs.read(path)
         except Exception as e:

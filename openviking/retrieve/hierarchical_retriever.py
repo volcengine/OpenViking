@@ -199,7 +199,6 @@ class HierarchicalRetriever:
         owner_spaces = [ctx.user.user_space_name(), ctx.user.agent_space_name()]
         if context_type == ContextType.RESOURCE:
             owner_spaces.append("")
-
         return {
             "op": "and",
             "conds": [
