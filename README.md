@@ -97,10 +97,11 @@ OpenViking supports three VLM providers:
 |----------|-------------|-------------|
 | `volcengine` | 火山引擎豆包模型 | [Volcengine Console](https://console.volcengine.com/ark) |
 | `openai` | OpenAI 官方 API | [OpenAI Platform](https://platform.openai.com) |
-| `litellm` | 统一调用 100+ 第三方模型 (Anthropic, DeepSeek, Gemini, etc.) | See [LiteLLM Providers](https://docs.litellm.ai/docs/providers) |
+| `litellm` | 统一调用多种第三方模型 (Anthropic, DeepSeek, Gemini, vLLM, Ollama, etc.) | See [LiteLLM Providers](https://docs.litellm.ai/docs/providers) |
 
 > 💡 **Tip**: 
 > - `litellm` 支持通过统一接口调用多种模型，model 字段需遵循 [LiteLLM 格式规范](https://docs.litellm.ai/docs/providers)
+> - 系统自动检测常见模型（如 `claude-*`, `deepseek-*`, `gemini-*`, `hosted_vllm/*`, `ollama/*` 等），其他模型需按 LiteLLM 格式填写完整前缀
 
 #### Provider-Specific Notes
 
@@ -169,7 +170,7 @@ You can also use a custom OpenAI-compatible endpoint:
 <details>
 <summary><b>LiteLLM (Anthropic, DeepSeek, Gemini, vLLM, Ollama, etc.)</b></summary>
 
-LiteLLM provides unified access to 100+ models. The `model` field should follow LiteLLM's naming convention:
+LiteLLM provides unified access to various models. The `model` field should follow LiteLLM's naming convention:
 
 ```json
 {
@@ -248,7 +249,7 @@ Create a configuration file `~/.openviking/ov.conf`, remove the comments before 
 }
 ```
 
-> **Note**: For embedding models, currently `volcengine` (Doubao), `openai`, and `jina` providers are supported. For VLM models, we support three providers: `volcengine`, `openai`, and `litellm`. The `litellm` provider supports 100+ models including Anthropic (Claude), DeepSeek, Gemini, Moonshot, Zhipu, DashScope, MiniMax, vLLM, Ollama, and more.
+> **Note**: For embedding models, currently `volcengine` (Doubao), `openai`, and `jina` providers are supported. For VLM models, we support three providers: `volcengine`, `openai`, and `litellm`. The `litellm` provider supports various models including Anthropic (Claude), DeepSeek, Gemini, Moonshot, Zhipu, DashScope, MiniMax, vLLM, Ollama, and more.
 
 #### Configuration Examples
 
