@@ -125,23 +125,22 @@ class VLMFactory:
             ValueError: If provider is not supported
             ImportError: If related dependencies are not installed
         """
-        provider = config.get("provider") or config.get("backend") or "openai"
+        provider = (config.get("provider") or config.get("backend") or "openai").lower()
 
-        use_litellm = config.get("use_litellm", True)
+        if provider == "volcengine":
+            from .backends.volcengine_vlm import VolcEngineVLM
 
-        if not use_litellm:
-            if provider == "openai":
-                from .backends.openai_vlm import OpenAIVLM
+            return VolcEngineVLM(config)
 
-                return OpenAIVLM(config)
-            elif provider == "volcengine":
-                from .backends.volcengine_vlm import VolcEngineVLM
+        elif provider == "openai":
+            from .backends.openai_vlm import OpenAIVLM
 
-                return VolcEngineVLM(config)
+            return OpenAIVLM(config)
 
-        from .backends.litellm_vlm import LiteLLMVLMProvider
+        else:
+            from .backends.litellm_vlm import LiteLLMVLMProvider
 
-        return LiteLLMVLMProvider(config)
+            return LiteLLMVLMProvider(config)
 
     @staticmethod
     def get_available_providers() -> List[str]:

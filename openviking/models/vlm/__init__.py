@@ -6,14 +6,7 @@ from .backends.litellm_vlm import LiteLLMVLMProvider
 from .backends.openai_vlm import OpenAIVLM
 from .backends.volcengine_vlm import VolcEngineVLM
 from .base import VLMBase, VLMFactory
-from .registry import (
-    PROVIDERS,
-    ProviderSpec,
-    find_by_model,
-    find_by_name,
-    find_gateway,
-    get_all_provider_names,
-)
+from .registry import get_all_provider_names, is_valid_provider
 
 __all__ = [
     "VLMBase",
@@ -21,10 +14,6 @@ __all__ = [
     "OpenAIVLM",
     "VolcEngineVLM",
     "LiteLLMVLMProvider",
-    "ProviderSpec",
-    "PROVIDERS",
-    "find_by_model",
-    "find_by_name",
-    "find_gateway",
     "get_all_provider_names",
+    "is_valid_provider",
 ]

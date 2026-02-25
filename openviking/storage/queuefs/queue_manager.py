@@ -30,7 +30,8 @@ def init_queue_manager(
     agfs_url: str = "http://localhost:8080",
     timeout: int = 10,
     mount_point: str = "/queue",
-    max_concurrent_embedding: int = 1,
+    max_concurrent_embedding: int = 10,
+    max_concurrent_semantic: int = 100,
 ) -> "QueueManager":
     """Initialize QueueManager singleton."""
     global _instance
@@ -39,6 +40,7 @@ def init_queue_manager(
         timeout=timeout,
         mount_point=mount_point,
         max_concurrent_embedding=max_concurrent_embedding,
+        max_concurrent_semantic=max_concurrent_semantic,
     )
     return _instance
 
@@ -66,13 +68,15 @@ class QueueManager:
         agfs_url: str = "http://localhost:8080",
         timeout: int = 10,
         mount_point: str = "/queue",
-        max_concurrent_embedding: int = 1,
+        max_concurrent_embedding: int = 10,
+        max_concurrent_semantic: int = 100,
     ):
         """Initialize QueueManager."""
         self._agfs_url = agfs_url
         self.timeout = timeout
         self.mount_point = mount_point
         self._max_concurrent_embedding = max_concurrent_embedding
+        self._max_concurrent_semantic = max_concurrent_semantic
         self._agfs: Optional[Any] = None
         self._queues: Dict[str, NamedQueue] = {}
         self._started = False
@@ -124,7 +128,7 @@ class QueueManager:
         logger.info("Embedding queue initialized with TextEmbeddingHandler")
 
         # Semantic Queue
-        semantic_processor = SemanticProcessor()
+        semantic_processor = SemanticProcessor(max_concurrent_llm=self._max_concurrent_semantic)
         self.get_queue(
             self.SEMANTIC,
             dequeue_handler=semantic_processor,

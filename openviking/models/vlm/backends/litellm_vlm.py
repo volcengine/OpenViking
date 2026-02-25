@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """LiteLLM VLM Provider implementation with multi-provider support."""
 
+import logging
 import os
 
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -15,16 +16,82 @@ import litellm
 from litellm import acompletion, completion
 
 from ..base import VLMBase
-from ..registry import find_by_model, find_gateway
+
+logger = logging.getLogger(__name__)
+
+PROVIDER_CONFIGS: Dict[str, Dict[str, Any]] = {
+    "openrouter": {
+        "keywords": ("openrouter",),
+        "env_key": "OPENROUTER_API_KEY",
+        "litellm_prefix": "openrouter",
+    },
+    "hosted_vllm": {
+        "keywords": ("hosted_vllm",),
+        "env_key": "HOSTED_VLLM_API_KEY",
+        "litellm_prefix": "hosted_vllm",
+    },
+    "ollama": {
+        "keywords": ("ollama",),
+        "env_key": "OLLAMA_API_KEY",
+        "litellm_prefix": "ollama",
+    },
+    "anthropic": {
+        "keywords": ("claude", "anthropic"),
+        "env_key": "ANTHROPIC_API_KEY",
+        "litellm_prefix": "anthropic",
+    },
+    "deepseek": {
+        "keywords": ("deepseek",),
+        "env_key": "DEEPSEEK_API_KEY",
+        "litellm_prefix": "deepseek",
+    },
+    "gemini": {
+        "keywords": ("gemini",),
+        "env_key": "GEMINI_API_KEY",
+        "litellm_prefix": "gemini",
+    },
+    "openai": {
+        "keywords": ("gpt", "o1", "o3", "o4"),
+        "env_key": "OPENAI_API_KEY",
+        "litellm_prefix": "",
+    },
+    "moonshot": {
+        "keywords": ("moonshot", "kimi"),
+        "env_key": "MOONSHOT_API_KEY",
+        "litellm_prefix": "moonshot",
+    },
+    "zhipu": {
+        "keywords": ("glm", "zhipu"),
+        "env_key": "ZHIPUAI_API_KEY",
+        "litellm_prefix": "zhipu",
+    },
+    "dashscope": {
+        "keywords": ("qwen", "dashscope"),
+        "env_key": "DASHSCOPE_API_KEY",
+        "litellm_prefix": "dashscope",
+    },
+    "minimax": {
+        "keywords": ("minimax",),
+        "env_key": "MINIMAX_API_KEY",
+        "litellm_prefix": "minimax",
+    },
+}
+
+
+def detect_provider_by_model(model: str) -> str | None:
+    """Detect provider by model name."""
+    model_lower = model.lower()
+    for provider, config in PROVIDER_CONFIGS.items():
+        if any(kw in model_lower for kw in config["keywords"]):
+            return provider
+    return None
 
 
 class LiteLLMVLMProvider(VLMBase):
     """
     Multi-provider VLM implementation based on LiteLLM.
 
-    Supports OpenRouter, Anthropic, OpenAI, Gemini, DeepSeek, VolcEngine and many other providers
-    through a unified interface. Provider-specific logic is driven by the registry
-    (see providers/registry.py) — no if-elif chains needed here.
+    Supports various providers through LiteLLM's unified interface.
     """
 
     def __init__(self, config: Dict[str, Any]):
@@ -33,11 +100,10 @@ class LiteLLMVLMProvider(VLMBase):
         self._provider_name = config.get("provider")
         self._extra_headers = config.get("extra_headers") or {}
         self._thinking = config.get("thinking", False)
-
-        self._gateway = find_gateway(self._provider_name, self.api_key, self.api_base)
+        self._detected_provider: str | None = None
 
         if self.api_key:
-            self._setup_env(self.api_key, self.api_base, self.model)
+            self._setup_env(self.api_key, self.model)
 
         if self.api_base:
             litellm.api_base = self.api_base
@@ -45,66 +111,63 @@ class LiteLLMVLMProvider(VLMBase):
         litellm.suppress_debug_info = True
         litellm.drop_params = True
 
-    def _setup_env(self, api_key: str, api_base: str | None, model: str | None) -> None:
+    def _setup_env(self, api_key: str, model: str | None) -> None:
         """Set environment variables based on detected provider."""
-        spec = self._gateway or find_by_model(model or "")
-        if not spec:
-            return
+        provider = self._provider_name
+        if not provider and model:
+            provider = detect_provider_by_model(model)
 
-        if self._gateway:
-            os.environ[spec.env_key] = api_key
+        if provider and provider in PROVIDER_CONFIGS:
+            env_key = PROVIDER_CONFIGS[provider]["env_key"]
+            os.environ[env_key] = api_key
+            self._detected_provider = provider
         else:
-            os.environ.setdefault(spec.env_key, api_key)
-
-        effective_base = api_base or spec.default_api_base
-        for env_name, env_val in spec.env_extras:
-            resolved = env_val.replace("{api_key}", api_key)
-            resolved = resolved.replace("{api_base}", effective_base or "")
-            os.environ.setdefault(env_name, resolved)
+            os.environ["OPENAI_API_KEY"] = api_key
 
     def _resolve_model(self, model: str) -> str:
-        """Resolve model name by applying provider/gateway prefixes."""
-        if self._gateway:
-            if self._gateway.strip_model_prefix:
-                model = model.split("/")[-1]
-            prefix = self._gateway.litellm_prefix
+        """Resolve model name by applying provider prefixes."""
+        provider = self._detected_provider or detect_provider_by_model(model)
+
+        if provider and provider in PROVIDER_CONFIGS:
+            prefix = PROVIDER_CONFIGS[provider]["litellm_prefix"]
             if prefix and not model.startswith(f"{prefix}/"):
-                model = f"{prefix}/{model}"
+                return f"{prefix}/{model}"
             return model
 
-        if self._provider_name == "openai" and self.api_base:
-            from openviking.models.vlm.registry import find_by_name
-            openai_spec = find_by_name("openai")
-            is_openai_official = "api.openai.com" in self.api_base
-            if openai_spec and not is_openai_official and not model.startswith("openai/"):
-                return f"openai/{model}"
+        if self.api_base and not model.startswith(("openai/", "hosted_vllm/", "ollama/")):
+            return f"openai/{model}"
 
-        spec = find_by_model(model)
-        if spec and spec.litellm_prefix:
-            if not any(model.startswith(s) for s in spec.skip_prefixes):
-                model = f"{spec.litellm_prefix}/{model}"
         return model
 
-    def _apply_model_overrides(self, model: str, kwargs: dict[str, Any]) -> None:
-        """Apply model-specific parameter overrides from the registry."""
-        model_lower = model.lower()
-        spec = find_by_model(model)
-        if spec:
-            for pattern, overrides in spec.model_overrides:
-                if pattern in model_lower:
-                    kwargs.update(overrides)
-                    return
+    def _detect_image_format(self, data: bytes) -> str:
+        """Detect image format from magic bytes.
 
-        if self._provider_name == "volcengine":
-            kwargs["thinking"] = {"type": "enabled" if self._thinking else "disabled"}
+        Supported formats: PNG, JPEG, GIF, WebP
+        """
+        if len(data) < 8:
+            logger.warning(f"[LiteLLMVLM] Image data too small: {len(data)} bytes")
+            return "image/png"
+
+        if data[:8] == b"\x89PNG\r\n\x1a\n":
+            return "image/png"
+        elif data[:2] == b"\xff\xd8":
+            return "image/jpeg"
+        elif data[:6] in (b"GIF87a", b"GIF89a"):
+            return "image/gif"
+        elif data[:4] == b"RIFF" and len(data) >= 12 and data[8:12] == b"WEBP":
+            return "image/webp"
+
+        logger.warning(f"[LiteLLMVLM] Unknown image format, magic bytes: {data[:8].hex()}")
+        return "image/png"
 
     def _prepare_image(self, image: Union[str, Path, bytes]) -> Dict[str, Any]:
         """Prepare image data for vision completion."""
         if isinstance(image, bytes):
             b64 = base64.b64encode(image).decode("utf-8")
+            mime_type = self._detect_image_format(image)
             return {
                 "type": "image_url",
-                "image_url": {"url": f"data:image/png;base64,{b64}"},
+                "image_url": {"url": f"data:{mime_type};base64,{b64}"},
             }
         elif isinstance(image, Path) or (
             isinstance(image, str) and not image.startswith(("http://", "https://"))
@@ -119,7 +182,8 @@ class LiteLLMVLMProvider(VLMBase):
                 ".webp": "image/webp",
             }.get(suffix, "image/png")
             with open(path, "rb") as f:
-                b64 = base64.b64encode(f.read()).decode("utf-8")
+                data = f.read()
+            b64 = base64.b64encode(data).decode("utf-8")
             return {
                 "type": "image_url",
                 "image_url": {"url": f"data:{mime_type};base64,{b64}"},
@@ -135,8 +199,6 @@ class LiteLLMVLMProvider(VLMBase):
             "temperature": self.temperature,
         }
 
-        self._apply_model_overrides(model, kwargs)
-
         if self.api_key:
             kwargs["api_key"] = self.api_key
         if self.api_base:
@@ -150,11 +212,7 @@ class LiteLLMVLMProvider(VLMBase):
         """Get text completion synchronously."""
         model = self._resolve_model(self.model or "gpt-4o-mini")
         messages = [{"role": "user", "content": prompt}]
-        original_thinking = self._thinking
-        if thinking:
-            self._thinking = thinking
         kwargs = self._build_kwargs(model, messages)
-        self._thinking = original_thinking
 
         response = completion(**kwargs)
         self._update_token_usage_from_response(response)
@@ -166,11 +224,7 @@ class LiteLLMVLMProvider(VLMBase):
         """Get text completion asynchronously."""
         model = self._resolve_model(self.model or "gpt-4o-mini")
         messages = [{"role": "user", "content": prompt}]
-        original_thinking = self._thinking
-        if thinking:
-            self._thinking = thinking
         kwargs = self._build_kwargs(model, messages)
-        self._thinking = original_thinking
 
         last_error = None
         for attempt in range(max_retries + 1):
@@ -202,11 +256,7 @@ class LiteLLMVLMProvider(VLMBase):
         content.append({"type": "text", "text": prompt})
 
         messages = [{"role": "user", "content": content}]
-        original_thinking = self._thinking
-        if thinking:
-            self._thinking = thinking
         kwargs = self._build_kwargs(model, messages)
-        self._thinking = original_thinking
 
         response = completion(**kwargs)
         self._update_token_usage_from_response(response)
@@ -227,11 +277,7 @@ class LiteLLMVLMProvider(VLMBase):
         content.append({"type": "text", "text": prompt})
 
         messages = [{"role": "user", "content": content}]
-        original_thinking = self._thinking
-        if thinking:
-            self._thinking = thinking
         kwargs = self._build_kwargs(model, messages)
-        self._thinking = original_thinking
 
         response = await acompletion(**kwargs)
         self._update_token_usage_from_response(response)

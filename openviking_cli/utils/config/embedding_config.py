@@ -105,7 +105,7 @@ class EmbeddingConfig(BaseModel):
     hybrid: Optional[EmbeddingModelConfig] = Field(default=None)
 
     max_concurrent: int = Field(
-        default=1, description="Maximum number of concurrent embedding requests"
+        default=10, description="Maximum number of concurrent embedding requests"
     )
 
     model_config = {"extra": "forbid"}

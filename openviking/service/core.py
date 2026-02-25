@@ -91,7 +91,9 @@ class OpenVikingService:
         self._initialized = False
 
         # Initialize storage
-        self._init_storage(config.storage, config.embedding.max_concurrent)
+        self._init_storage(
+            config.storage, config.embedding.max_concurrent, config.vlm.max_concurrent
+        )
 
         # Initialize embedder
         self._embedder = config.embedding.get_embedder()
@@ -99,7 +101,12 @@ class OpenVikingService:
             f"Initialized embedder (dim {config.embedding.dimension}, sparse {self._embedder.is_sparse})"
         )
 
-    def _init_storage(self, config: StorageConfig, max_concurrent_embedding: int = 1) -> None:
+    def _init_storage(
+        self,
+        config: StorageConfig,
+        max_concurrent_embedding: int = 10,
+        max_concurrent_semantic: int = 100,
+    ) -> None:
         """Initialize storage resources."""
         self._agfs_manager = AGFSManager(config=config.agfs)
         self._agfs_manager.start()
@@ -112,6 +119,7 @@ class OpenVikingService:
                 agfs_url=self._agfs_url,
                 timeout=config.agfs.timeout,
                 max_concurrent_embedding=max_concurrent_embedding,
+                max_concurrent_semantic=max_concurrent_semantic,
             )
         else:
             logger.warning("AGFS URL not configured, skipping queue manager initialization")
@@ -195,7 +203,11 @@ class OpenVikingService:
             return
 
         if self._vikingdb_manager is None:
-            self._init_storage(self._config.storage, self._config.embedding.max_concurrent)
+            self._init_storage(
+                self._config.storage,
+                self._config.embedding.max_concurrent,
+                self._config.vlm.max_concurrent,
+            )
 
         if self._embedder is None:
             self._embedder = self._config.embedding.get_embedder()

@@ -20,6 +20,38 @@ from .constants import AUDIO_EXTENSIONS, IMAGE_EXTENSIONS, VIDEO_EXTENSIONS
 logger = get_logger(__name__)
 
 
+def _is_svg(data: bytes) -> bool:
+    """Check if the data is an SVG file."""
+    return data[:4] == b"<svg" or (data[:5] == b"<?xml" and b"<svg" in data[:100])
+
+
+# SVG to PNG conversion (disabled by default)
+# Uncomment and install dependencies if you need SVG support:
+#   Ubuntu/Debian: sudo apt-get install libcairo2 && pip install cairosvg
+#   macOS: brew install cairo && pip install cairosvg
+#   Or use ImageMagick: sudo apt-get install libmagickwand-dev && pip install Wand
+#
+# def _convert_svg_to_png(svg_data: bytes) -> Optional[bytes]:
+#     """Convert SVG to PNG using cairosvg or wand."""
+#     try:
+#         import cairosvg
+#         return cairosvg.svg2png(bytestring=svg_data)
+#     except ImportError:
+#         pass
+#     except OSError:
+#         pass  # libcairo not installed
+#
+#     try:
+#         from wand.image import Image as WandImage
+#         with WandImage(blob=svg_data, format='svg') as img:
+#             img.format = 'png'
+#             return img.make_blob()
+#     except ImportError:
+#         pass
+#
+#     return None
+
+
 def get_media_type(source_path: Optional[str], source_format: Optional[str]) -> Optional[str]:
     """
     Determine media type from source path or format.
@@ -93,6 +125,14 @@ async def generate_image_summary(
         if not isinstance(image_bytes, bytes):
             raise ValueError(f"Expected bytes for image file, got {type(image_bytes)}")
 
+        # Check for unsupported formats (SVG, etc.) by detecting magic bytes
+        # SVG format is not supported by VolcEngine VLM API, skip VLM analysis
+        if _is_svg(image_bytes):
+            logger.info(
+                f"[MediaUtils.generate_image_summary] SVG format detected, skipping VLM analysis: {image_uri}"
+            )
+            return {"name": file_name, "summary": "SVG image (format not supported by VLM)"}
+
         logger.info(
             f"[MediaUtils.generate_image_summary] Generating summary for image: {image_uri}"
         )
@@ -115,6 +155,13 @@ async def generate_image_summary(
         )
         return {"name": file_name, "summary": response.strip()}
 
+    except ValueError as e:
+        if "SVG format" in str(e) or "not supported" in str(e):
+            logger.warning(
+                f"[MediaUtils.generate_image_summary] Unsupported image format for {image_uri}: {e}"
+            )
+            return {"name": file_name, "summary": f"Unsupported image format: {str(e)}"}
+        raise
     except Exception as e:
         logger.error(
             f"[MediaUtils.generate_image_summary] Failed to generate image summary: {e}",
