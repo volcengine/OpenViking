@@ -123,8 +123,8 @@ class VolcengineCollection(ICollection):
             return v
         s = v.strip()
         if s.startswith("viking://"):
-            s = s[len("viking://"):]
-        s = s.strip('/')
+            s = s[len("viking://") :]
+        s = s.strip("/")
         if not s:
             return None
         return f"/{s}/"
@@ -146,7 +146,11 @@ class VolcengineCollection(ICollection):
         """Sanitize dictionary-type payload"""
         # Handle filter DSL: must condition's conds list (for uri/parent_uri fields)
         field_name = obj.get("field")
-        if field_name in ("uri", "parent_uri") and "conds" in obj and isinstance(obj["conds"], list):
+        if (
+            field_name in ("uri", "parent_uri")
+            and "conds" in obj
+            and isinstance(obj["conds"], list)
+        ):
             new_conds = cls._sanitize_filter_conds(obj["conds"])
             if not new_conds:
                 return None
