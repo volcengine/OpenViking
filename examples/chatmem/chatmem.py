@@ -426,7 +426,9 @@ Examples:
         """,
     )
 
-    parser.add_argument("--config", type=str, default="./ov.conf", help="Path to config file")
+    parser.add_argument(
+        "--config", type=str, default="~/.openviking/ov.conf", help="Path to config file"
+    )
     parser.add_argument("--data", type=str, default="./data", help="Path to data directory")
     parser.add_argument(
         "--session-id",

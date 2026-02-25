@@ -247,7 +247,7 @@ class TypedQuery:
     """
 
     query: str
-    context_type: ContextType
+    context_type: Optional[ContextType]
     intent: str
     priority: int = 3
     target_directories: List[str] = field(default_factory=list)

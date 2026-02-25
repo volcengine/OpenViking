@@ -32,7 +32,6 @@ def temp_dir():
     shutil.rmtree(TEST_TMP_DIR, ignore_errors=True)
     TEST_TMP_DIR.mkdir(parents=True, exist_ok=True)
     yield TEST_TMP_DIR
-    shutil.rmtree(TEST_TMP_DIR, ignore_errors=True)
 
 
 @pytest.fixture(scope="session")

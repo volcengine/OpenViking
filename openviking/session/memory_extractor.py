@@ -16,6 +16,7 @@ from uuid import uuid4
 
 from openviking.core.context import Context, ContextType, Vectorize
 from openviking.prompts import render_prompt
+from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
@@ -74,8 +75,33 @@ class MemoryExtractor:
         MemoryCategory.PATTERNS: "memories/patterns",
     }
 
+    # Categories that belong to user space
+    _USER_CATEGORIES = {
+        MemoryCategory.PROFILE,
+        MemoryCategory.PREFERENCES,
+        MemoryCategory.ENTITIES,
+        MemoryCategory.EVENTS,
+    }
+
+    # Categories that belong to agent space
+    _AGENT_CATEGORIES = {
+        MemoryCategory.CASES,
+        MemoryCategory.PATTERNS,
+    }
+
     def __init__(self):
         """Initialize memory extractor."""
+
+    @staticmethod
+    def _get_owner_space(category: MemoryCategory, ctx: RequestContext) -> str:
+        """Derive owner_space from memory category.
+
+        PROFILE / PREFERENCES / ENTITIES / EVENTS → user_space
+        CASES / PATTERNS → agent_space
+        """
+        if category in MemoryExtractor._USER_CATEGORIES:
+            return ctx.user.user_space_name()
+        return ctx.user.agent_space_name()
 
     @staticmethod
     def _detect_output_language(messages: List, fallback_language: str = "en") -> str:
@@ -208,6 +234,7 @@ class MemoryExtractor:
         candidate: CandidateMemory,
         user: str,
         session_id: str,
+        ctx: RequestContext,
     ) -> Optional[Context]:
         """Create Context object from candidate and persist to AGFS as .md file."""
         viking_fs = get_viking_fs()
@@ -215,35 +242,41 @@ class MemoryExtractor:
             logger.warning("VikingFS not available, skipping memory creation")
             return None
 
+        owner_space = self._get_owner_space(candidate.category, ctx)
+
         # Special handling for profile: append to profile.md
         if candidate.category == MemoryCategory.PROFILE:
-            payload = await self._append_to_profile(candidate, viking_fs)
+            payload = await self._append_to_profile(candidate, viking_fs, ctx=ctx)
             if not payload:
                 return None
-            memory_uri = "viking://user/memories/profile.md"
+            user_space = ctx.user.user_space_name()
+            memory_uri = f"viking://user/{user_space}/memories/profile.md"
             memory = Context(
                 uri=memory_uri,
-                parent_uri="viking://user/memories",
+                parent_uri=f"viking://user/{user_space}/memories",
                 is_leaf=True,
                 abstract=payload.abstract,
                 context_type=ContextType.MEMORY.value,
                 category=candidate.category.value,
                 session_id=session_id,
                 user=user,
+                account_id=ctx.account_id,
+                owner_space=owner_space,
             )
             logger.info(f"uri {memory_uri} abstract: {payload.abstract} content: {payload.content}")
             memory.set_vectorize(Vectorize(text=payload.content))
             return memory
 
         # Determine parent URI based on category
+        cat_dir = self.CATEGORY_DIRS[candidate.category]
         if candidate.category in [
             MemoryCategory.PREFERENCES,
             MemoryCategory.ENTITIES,
             MemoryCategory.EVENTS,
         ]:
-            parent_uri = f"viking://user/{self.CATEGORY_DIRS[candidate.category]}"
+            parent_uri = f"viking://user/{ctx.user.user_space_name()}/{cat_dir}"
         else:  # CASES, PATTERNS
-            parent_uri = f"viking://agent/{self.CATEGORY_DIRS[candidate.category]}"
+            parent_uri = f"viking://agent/{ctx.user.agent_space_name()}/{cat_dir}"
 
         # Generate file URI (store directly as .md file, no directory creation)
         memory_id = f"mem_{str(uuid4())}"
@@ -251,7 +284,7 @@ class MemoryExtractor:
 
         # Write to AGFS as single .md file
         try:
-            await viking_fs.write_file(memory_uri, candidate.content)
+            await viking_fs.write_file(memory_uri, candidate.content, ctx=ctx)
             logger.info(f"Created memory file: {memory_uri}")
         except Exception as e:
             logger.error(f"Failed to write memory to AGFS: {e}")
@@ -267,6 +300,8 @@ class MemoryExtractor:
             category=candidate.category.value,
             session_id=session_id,
             user=user,
+            account_id=ctx.account_id,
+            owner_space=owner_space,
         )
         logger.info(f"uri {memory_uri} abstract: {candidate.abstract} content: {candidate.content}")
         memory.set_vectorize(Vectorize(text=candidate.content))
@@ -276,17 +311,18 @@ class MemoryExtractor:
         self,
         candidate: CandidateMemory,
         viking_fs,
+        ctx: RequestContext,
     ) -> Optional[MergedMemoryPayload]:
         """Update user profile - always merge with existing content."""
-        uri = "viking://user/memories/profile.md"
+        uri = f"viking://user/{ctx.user.user_space_name()}/memories/profile.md"
         existing = ""
         try:
-            existing = await viking_fs.read_file(uri) or ""
+            existing = await viking_fs.read_file(uri, ctx=ctx) or ""
         except Exception:
             pass
 
         if not existing.strip():
-            await viking_fs.write_file(uri=uri, content=candidate.content)
+            await viking_fs.write_file(uri=uri, content=candidate.content, ctx=ctx)
             logger.info(f"Created profile at {uri}")
             return MergedMemoryPayload(
                 abstract=candidate.abstract,
@@ -308,7 +344,7 @@ class MemoryExtractor:
             if not payload:
                 logger.warning("Profile merge bundle failed; keeping existing profile unchanged")
                 return None
-            await viking_fs.write_file(uri=uri, content=payload.content)
+            await viking_fs.write_file(uri=uri, content=payload.content, ctx=ctx)
             logger.info(f"Merged profile info to {uri}")
             return payload
 

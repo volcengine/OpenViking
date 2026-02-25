@@ -91,23 +91,17 @@ OpenViking requires the following model capabilities:
 
 #### Supported VLM Providers
 
-OpenViking supports multiple VLM providers:
+OpenViking supports three VLM providers:
 
-| Provider | Model | Get API Key |
-|----------|-------|-------------|
-| `volcengine` | doubao | [Volcengine Console](https://console.volcengine.com/ark) |
-| `openai` | gpt | [OpenAI Platform](https://platform.openai.com) |
-| `anthropic` | claude | [Anthropic Console](https://console.anthropic.com) |
-| `deepseek` | deepseek | [DeepSeek Platform](https://platform.deepseek.com) |
-| `gemini` | gemini | [Google AI Studio](https://aistudio.google.com) |
-| `moonshot` | kimi | [Moonshot Platform](https://platform.moonshot.cn) |
-| `zhipu` | glm | [Zhipu Open Platform](https://open.bigmodel.cn) |
-| `dashscope` | qwen | [DashScope Console](https://dashscope.console.aliyun.com) |
-| `minimax` | minimax | [MiniMax Platform](https://platform.minimax.io) |
-| `openrouter` | (any model) | [OpenRouter](https://openrouter.ai) |
-| `vllm` | (local model) | — |
+| Provider | Description | Get API Key |
+|----------|-------------|-------------|
+| `volcengine` | 火山引擎豆包模型 | [Volcengine Console](https://console.volcengine.com/ark) |
+| `openai` | OpenAI 官方 API | [OpenAI Platform](https://platform.openai.com) |
+| `litellm` | 统一调用多种第三方模型 (Anthropic, DeepSeek, Gemini, vLLM, Ollama, etc.) | See [LiteLLM Providers](https://docs.litellm.ai/docs/providers) |
 
-> 💡 **Tip**: OpenViking uses a **Provider Registry** for unified model access. The system automatically detects the provider based on model name keywords, so you can switch between providers seamlessly.
+> 💡 **Tip**: 
+> - `litellm` 支持通过统一接口调用多种模型，model 字段需遵循 [LiteLLM 格式规范](https://docs.litellm.ai/docs/providers)
+> - 系统自动检测常见模型（如 `claude-*`, `deepseek-*`, `gemini-*`, `hosted_vllm/*`, `ollama/*` 等），其他模型需按 LiteLLM 格式填写完整前缀
 
 #### Provider-Specific Notes
 
@@ -122,7 +116,7 @@ Volcengine supports both model names and endpoint IDs. Using model names is reco
     "provider": "volcengine",
     "model": "doubao-seed-1-6-240615",
     "api_key": "your-api-key",
-    "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
+    "api_base": "https://ark.cn-beijing.volces.com/api/v3"
   }
 }
 ```
@@ -135,7 +129,7 @@ You can also use endpoint IDs (found in [Volcengine ARK Console](https://console
     "provider": "volcengine",
     "model": "ep-20241220174930-xxxxx",
     "api_key": "your-api-key",
-    "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
+    "api_base": "https://ark.cn-beijing.volces.com/api/v3"
   }
 }
 ```
@@ -143,35 +137,30 @@ You can also use endpoint IDs (found in [Volcengine ARK Console](https://console
 </details>
 
 <details>
-<summary><b>Zhipu AI (智谱)</b></summary>
+<summary><b>OpenAI</b></summary>
 
-If you're on Zhipu's coding plan, use the coding API endpoint:
+Use OpenAI's official API:
 
 ```json
 {
   "vlm": {
-    "provider": "zhipu",
-    "model": "glm-4-plus",
+    "provider": "openai",
+    "model": "gpt-4o",
     "api_key": "your-api-key",
-    "api_base": "https://open.bigmodel.cn/api/coding/paas/v4"
+    "api_base": "https://api.openai.com/v1"
   }
 }
 ```
 
-</details>
-
-<details>
-<summary><b>MiniMax (中国大陆)</b></summary>
-
-For MiniMax's mainland China platform (minimaxi.com), specify the API base:
+You can also use a custom OpenAI-compatible endpoint:
 
 ```json
 {
   "vlm": {
-    "provider": "minimax",
-    "model": "abab6.5s-chat",
+    "provider": "openai",
+    "model": "gpt-4o",
     "api_key": "your-api-key",
-    "api_base": "https://api.minimaxi.com/v1"
+    "api_base": "https://your-custom-endpoint.com/v1"
   }
 }
 ```
@@ -179,25 +168,51 @@ For MiniMax's mainland China platform (minimaxi.com), specify the API base:
 </details>
 
 <details>
-<summary><b>Local Models (vLLM)</b></summary>
+<summary><b>LiteLLM (Anthropic, DeepSeek, Gemini, vLLM, Ollama, etc.)</b></summary>
 
-Run OpenViking with your own local models using vLLM:
+LiteLLM provides unified access to various models. The `model` field should follow LiteLLM's naming convention:
+
+```json
+{
+  "vlm": {
+    "provider": "litellm",
+    "model": "claude-3-5-sonnet-20240620",
+    "api_key": "your-anthropic-api-key"
+  }
+}
+```
+
+**Common model formats:**
+
+| Provider | Model Example | Notes |
+|----------|---------------|-------|
+| Anthropic | `claude-3-5-sonnet-20240620` | Auto-detected, uses `ANTHROPIC_API_KEY` |
+| DeepSeek | `deepseek-chat` | Auto-detected, uses `DEEPSEEK_API_KEY` |
+| Gemini | `gemini-pro` | Auto-detected, uses `GEMINI_API_KEY` |
+| OpenRouter | `openrouter/openai/gpt-4o` | Full prefix required |
+| vLLM | `hosted_vllm/llama-3.1-8b` | Set `api_base` to vLLM server |
+| Ollama | `ollama/llama3.1` | Set `api_base` to Ollama server |
+
+**Local Models (vLLM / Ollama):**
 
 ```bash
-# Start vLLM server
-vllm serve meta-llama/Llama-3.1-8B-Instruct --port 8000
+
+# Start Ollama
+ollama serve
 ```
 
 ```json
+// Ollama
 {
   "vlm": {
-    "provider": "vllm",
-    "model": "meta-llama/Llama-3.1-8B-Instruct",
-    "api_key": "dummy",
-    "api_base": "http://localhost:8000/v1"
+    "provider": "litellm",
+    "model": "ollama/llama3.1",
+    "api_base": "http://localhost:11434"
   }
 }
 ```
+
+For complete model support, see [LiteLLM Providers Documentation](https://docs.litellm.ai/docs/providers).
 
 </details>
 
@@ -223,18 +238,20 @@ Create a configuration file `~/.openviking/ov.conf`, remove the comments before 
       "provider" : "<provider-type>",  // Provider type: "volcengine" or "openai" (currently supported)
       "dimension": 1024,               // Vector dimension
       "model"    : "<model-name>"      // Embedding model name (e.g., doubao-embedding-vision-250615 or text-embedding-3-large)
-    }
+    },
+    "max_concurrent": 10               // Max concurrent embedding requests (default: 10)
   },
   "vlm": {
     "api_base" : "<api-endpoint>",     // API endpoint address
     "api_key"  : "<your-api-key>",     // Model service API Key
     "provider" : "<provider-type>",    // Provider type (volcengine, openai, deepseek, anthropic, etc.)
-    "model"    : "<model-name>"        // VLM model name (e.g., doubao-seed-1-8-251228 or gpt-4-vision-preview)
+    "model"    : "<model-name>",       // VLM model name (e.g., doubao-seed-1-8-251228 or gpt-4-vision-preview)
+    "max_concurrent": 100              // Max concurrent LLM calls for semantic processing (default: 100)
   }
 }
 ```
 
-> **Note**: For embedding models, currently `volcengine` (Doubao), `openai`, and `jina` providers are supported. For VLM models, we support multiple providers including volcengine, openai, deepseek, anthropic, gemini, moonshot, zhipu, dashscope, minimax, and more.
+> **Note**: For embedding models, currently `volcengine` (Doubao), `openai`, and `jina` providers are supported. For VLM models, we support three providers: `volcengine`, `openai`, and `litellm`. The `litellm` provider supports various models including Anthropic (Claude), DeepSeek, Gemini, Moonshot, Zhipu, DashScope, MiniMax, vLLM, Ollama, and more.
 
 #### Configuration Examples
 
@@ -259,13 +276,15 @@ Create a configuration file `~/.openviking/ov.conf`, remove the comments before 
       "provider" : "volcengine",
       "dimension": 1024,
       "model"    : "doubao-embedding-vision-250615"
-    }
+    },
+    "max_concurrent": 10
   },
   "vlm": {
     "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
     "api_key"  : "your-volcengine-api-key",
     "provider" : "volcengine",
-    "model"    : "doubao-seed-1-8-251228"
+    "model"    : "doubao-seed-1-8-251228",
+    "max_concurrent": 100
   }
 }
 ```
@@ -291,13 +310,15 @@ Create a configuration file `~/.openviking/ov.conf`, remove the comments before 
       "provider" : "openai",
       "dimension": 3072,
       "model"    : "text-embedding-3-large"
-    }
+    },
+    "max_concurrent": 10
   },
   "vlm": {
     "api_base" : "https://api.openai.com/v1",
     "api_key"  : "your-openai-api-key",
     "provider" : "openai",
-    "model"    : "gpt-4-vision-preview"
+    "model"    : "gpt-4-vision-preview",
+    "max_concurrent": 100
   }
 }
 ```

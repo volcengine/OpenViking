@@ -116,8 +116,121 @@ class VolcengineCollection(ICollection):
         except json.JSONDecodeError:
             return {}
 
+    @staticmethod
+    def _sanitize_uri_value(v: Any) -> Any:
+        """Remove viking:// prefix and normalize to /.../ format; return None for empty values"""
+        if not isinstance(v, str):
+            return v
+        s = v.strip()
+        if s.startswith("viking://"):
+            s = s[len("viking://") :]
+        s = s.strip("/")
+        if not s:
+            return None
+        return f"/{s}/"
+
+    @classmethod
+    def _sanitize_payload(cls, obj: Any) -> Any:
+        """Recursively sanitize URI values in payload (including data and filter DSL), and forcefully add parent_uri if missing"""
+        # Dictionary node
+        if isinstance(obj, dict):
+            return cls._sanitize_dict_payload(obj)
+        # List node: recursively process and filter out None elements
+        if isinstance(obj, list):
+            return cls._sanitize_list_payload(obj)
+        # Other types remain unchanged
+        return obj
+
+    @classmethod
+    def _sanitize_dict_payload(cls, obj: Dict[str, Any]) -> Any:
+        """Sanitize dictionary-type payload"""
+        # Handle filter DSL: must condition's conds list (for uri/parent_uri fields)
+        field_name = obj.get("field")
+        if (
+            field_name in ("uri", "parent_uri")
+            and "conds" in obj
+            and isinstance(obj["conds"], list)
+        ):
+            new_conds = cls._sanitize_filter_conds(obj["conds"])
+            if not new_conds:
+                return None
+            obj["conds"] = new_conds
+
+        # Prefix matching: op=prefix
+        if obj.get("op") == "prefix" and "prefix" in obj:
+            if not cls._sanitize_prefix(obj):
+                return None
+
+        # Recursively process regular keys and directly sanitize uri/parent_uri fields
+        new_obj = cls._sanitize_dict_keys(obj)
+        if not new_obj:
+            return None
+
+        # Forcefully add parent_uri: when the dictionary looks like a data record (contains uri)
+        cls._ensure_parent_uri(new_obj)
+        return new_obj
+
+    @classmethod
+    def _sanitize_filter_conds(cls, conds: List[Any]) -> List[Any]:
+        """Sanitize conds list in filter DSL"""
+        new_conds = []
+        for x in conds:
+            if isinstance(x, str):
+                sv = cls._sanitize_uri_value(x)
+                if sv:
+                    new_conds.append(sv)
+            else:
+                y = cls._sanitize_payload(x)
+                if y is not None:
+                    new_conds.append(y)
+        return new_conds
+
+    @classmethod
+    def _sanitize_prefix(cls, obj: Dict[str, Any]) -> bool:
+        """Sanitize prefix value for prefix matching"""
+        pv = cls._sanitize_uri_value(obj.get("prefix"))
+        if pv is None:
+            return False
+        obj["prefix"] = pv
+        return True
+
+    @classmethod
+    def _sanitize_dict_keys(cls, obj: Dict[str, Any]) -> Dict[str, Any]:
+        """Sanitize regular keys and uri/parent_uri fields in dictionary"""
+        new_obj: Dict[str, Any] = {}
+        for k, v in obj.items():
+            if k in ("uri", "parent_uri"):
+                sv = cls._sanitize_uri_value(v)
+                if sv is not None:
+                    new_obj[k] = sv
+                # Skip the key when sv is None to avoid empty Path
+            else:
+                y = cls._sanitize_payload(v)
+                if y is not None:
+                    new_obj[k] = y
+        return new_obj
+
+    @classmethod
+    def _ensure_parent_uri(cls, obj: Dict[str, Any]) -> None:
+        """Forcefully add parent_uri: when the dictionary looks like a data record (contains uri)"""
+        if "uri" in obj:
+            if "parent_uri" not in obj or not obj.get("parent_uri"):
+                obj["parent_uri"] = "/"
+
+    @classmethod
+    def _sanitize_list_payload(cls, obj: List[Any]) -> List[Any]:
+        """Sanitize list-type payload"""
+        sanitized_list = []
+        for x in obj:
+            y = cls._sanitize_payload(x)
+            if y is not None:
+                sanitized_list.append(y)
+        return sanitized_list
+
     def _data_post(self, path: str, data: Dict[str, Any]):
-        response = self.data_client.do_req("POST", path, req_body=data)
+        # Centralized sanitization at the request exit, covering all data API inputs
+        safe_data = self._sanitize_payload(data)
+        response = self.data_client.do_req("POST", path, req_body=safe_data)
         if response.status_code != 200:
             logger.error(f"Request to {path} failed: {response.text}")
             return {}

@@ -75,6 +75,8 @@ class CollectionSchemas:
                 {"FieldName": "description", "FieldType": "string"},
                 {"FieldName": "tags", "FieldType": "string"},
                 {"FieldName": "abstract", "FieldType": "string"},
+                {"FieldName": "account_id", "FieldType": "string"},
+                {"FieldName": "owner_space", "FieldType": "string"},
             ],
             "ScalarIndex": [
                 "uri",
@@ -87,6 +89,8 @@ class CollectionSchemas:
                 "level",
                 "name",
                 "tags",
+                "account_id",
+                "owner_space",
             ],
         }
 
@@ -198,7 +202,10 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                 # Ensure vector DB has at most one record per URI.
                 uri = inserted_data.get("uri")
                 if uri:
-                    inserted_data["id"] = hashlib.md5(uri.encode("utf-8")).hexdigest()
+                    account_id = inserted_data.get("account_id", "default")
+                    owner_space = inserted_data.get("owner_space", "")
+                    id_seed = f"{account_id}:{owner_space}:{uri}"
+                    inserted_data["id"] = hashlib.md5(id_seed.encode("utf-8")).hexdigest()
 
                 record_id = await self._vikingdb.insert(self._collection_name, inserted_data)
                 if record_id:

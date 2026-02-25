@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import uuid4
 
 from openviking.message import Message, Part
+from openviking.server.identity import RequestContext, Role
 from openviking.utils.time_utils import get_current_timestamp
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger, run_async
@@ -70,6 +71,7 @@ class Session:
         vikingdb_manager: Optional["VikingDBManager"] = None,
         session_compressor: Optional["SessionCompressor"] = None,
         user: Optional["UserIdentifier"] = None,
+        ctx: Optional[RequestContext] = None,
         session_id: Optional[str] = None,
         auto_commit_threshold: int = 8000,
     ):
@@ -77,10 +79,11 @@ class Session:
         self._vikingdb_manager = vikingdb_manager
         self._session_compressor = session_compressor
         self.user = user or UserIdentifier.the_default_user()
+        self.ctx = ctx or RequestContext(user=self.user, role=Role.ROOT)
         self.session_id = session_id or str(uuid4())
         self.created_at = datetime.now()
         self._auto_commit_threshold = auto_commit_threshold
-        self._session_uri = f"viking://session/{self.session_id}"
+        self._session_uri = f"viking://session/{self.user.user_space_name()}/{self.session_id}"
 
         self._messages: List[Message] = []
         self._usage_records: List[Usage] = []
@@ -96,7 +99,9 @@ class Session:
             return
 
         try:
-            content = await self._viking_fs.read_file(f"{self._session_uri}/messages.jsonl")
+            content = await self._viking_fs.read_file(
+                f"{self._session_uri}/messages.jsonl", ctx=self.ctx
+            )
             self._messages = [
                 Message.from_dict(json.loads(line))
                 for line in content.strip().split("\n")
@@ -108,7 +113,7 @@ class Session:
 
         # Restore compression_index (scan history directory)
         try:
-            history_items = await self._viking_fs.ls(f"{self._session_uri}/history")
+            history_items = await self._viking_fs.ls(f"{self._session_uri}/history", ctx=self.ctx)
             archives = [
                 item["name"] for item in history_items if item["name"].startswith("archive_")
             ]
@@ -121,6 +126,21 @@ class Session:
             pass
 
         self._loaded = True
+
+    async def exists(self) -> bool:
+        """Check whether this session already exists in storage."""
+        try:
+            await self._viking_fs.stat(self._session_uri, ctx=self.ctx)
+            return True
+        except Exception:
+            return False
+
+    async def ensure_exists(self) -> None:
+        """Materialize session root and messages file if missing."""
+        if await self.exists():
+            return
+        await self._viking_fs.mkdir(self._session_uri, exist_ok=True, ctx=self.ctx)
+        await self._viking_fs.write_file(f"{self._session_uri}/messages.jsonl", "", ctx=self.ctx)
 
     @property
     def messages(self) -> List[Message]:
@@ -244,6 +264,7 @@ class Session:
                     messages=messages_to_archive,
                     user=self.user,
                     session_id=self.session_id,
+                    ctx=self.ctx,
                 )
             )
             logger.info(f"Extracted {len(memories)} memories")
@@ -319,7 +340,9 @@ class Session:
         summaries = []
         if self.compression.compression_index > 0:
             try:
-                history_items = await self._viking_fs.ls(f"{self._session_uri}/history")
+                history_items = await self._viking_fs.ls(
+                    f"{self._session_uri}/history", ctx=self.ctx
+                )
                 query_lower = query.lower()
 
                 # Collect all archives with relevance scores
@@ -329,7 +352,7 @@ class Session:
                     if name and name.startswith("archive_"):
                         overview_uri = f"{self._session_uri}/history/{name}/.overview.md"
                         try:
-                            overview = await self._viking_fs.read_file(overview_uri)
+                            overview = await self._viking_fs.read_file(overview_uri, ctx=self.ctx)
                             # Calculate relevance by keyword matching
                             score = 0
                             if query_lower in overview.lower():
@@ -409,11 +432,16 @@ class Session:
             viking_fs.write_file(
                 uri=f"{archive_uri}/messages.jsonl",
                 content="\n".join(lines) + "\n",
+                ctx=self.ctx,
             )
         )
 
-        run_async(viking_fs.write_file(uri=f"{archive_uri}/.abstract.md", content=abstract))
-        run_async(viking_fs.write_file(uri=f"{archive_uri}/.overview.md", content=overview))
+        run_async(
+            viking_fs.write_file(uri=f"{archive_uri}/.abstract.md", content=abstract, ctx=self.ctx)
+        )
+        run_async(
+            viking_fs.write_file(uri=f"{archive_uri}/.overview.md", content=overview, ctx=self.ctx)
+        )
 
         logger.debug(f"Written archive: {archive_uri}")
 
@@ -435,6 +463,7 @@ class Session:
             viking_fs.write_file(
                 uri=f"{self._session_uri}/messages.jsonl",
                 content=content,
+                ctx=self.ctx,
             )
         )
 
@@ -443,12 +472,14 @@ class Session:
             viking_fs.write_file(
                 uri=f"{self._session_uri}/.abstract.md",
                 content=abstract,
+                ctx=self.ctx,
             )
         )
         run_async(
             viking_fs.write_file(
                 uri=f"{self._session_uri}/.overview.md",
                 content=overview,
+                ctx=self.ctx,
             )
         )
 
@@ -460,6 +491,7 @@ class Session:
             self._viking_fs.append_file(
                 f"{self._session_uri}/messages.jsonl",
                 msg.to_jsonl() + "\n",
+                ctx=self.ctx,
             )
         )
 
@@ -474,6 +506,7 @@ class Session:
             self._viking_fs.write_file(
                 f"{self._session_uri}/messages.jsonl",
                 content,
+                ctx=self.ctx,
             )
         )
 
@@ -505,6 +538,7 @@ class Session:
             self._viking_fs.write_file(
                 f"{self._session_uri}/tools/{tool_id}/tool.json",
                 json.dumps(tool_data, ensure_ascii=False),
+                ctx=self.ctx,
             )
         )
 
@@ -548,7 +582,7 @@ class Session:
         viking_fs = self._viking_fs
         for usage in self._usage_records:
             try:
-                run_async(viking_fs.link(self._session_uri, usage.uri))
+                run_async(viking_fs.link(self._session_uri, usage.uri, ctx=self.ctx))
                 logger.debug(f"Created relation: {self._session_uri} -> {usage.uri}")
             except Exception as e:
                 logger.warning(f"Failed to create relation to {usage.uri}: {e}")

@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Literal, Optional
 from fastapi import APIRouter, Depends, Path
 from pydantic import BaseModel, model_validator
 
-from openviking.message.part import Part, TextPart, part_from_dict
+from openviking.message.part import TextPart, part_from_dict
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
@@ -87,7 +87,9 @@ async def create_session(
 ):
     """Create a new session."""
     service = get_service()
-    session = service.sessions.session()
+    await service.initialize_user_directories(_ctx)
+    await service.initialize_agent_directories(_ctx)
+    session = await service.sessions.create(_ctx)
     return Response(
         status="ok",
         result={
@@ -103,7 +105,7 @@ async def list_sessions(
 ):
     """List all sessions."""
     service = get_service()
-    result = await service.sessions.sessions()
+    result = await service.sessions.sessions(_ctx)
     return Response(status="ok", result=result)
 
 
@@ -114,8 +116,7 @@ async def get_session(
 ):
     """Get session details."""
     service = get_service()
-    session = service.sessions.session(session_id)
-    await session.load()
+    session = await service.sessions.get(session_id, _ctx)
     return Response(
         status="ok",
         result={
@@ -133,7 +134,7 @@ async def delete_session(
 ):
     """Delete a session."""
     service = get_service()
-    await service.sessions.delete(session_id)
+    await service.sessions.delete(session_id, _ctx)
     return Response(status="ok", result={"session_id": session_id})
 
 
@@ -144,7 +145,7 @@ async def commit_session(
 ):
     """Commit a session (archive and extract memories)."""
     service = get_service()
-    result = await service.sessions.commit(session_id)
+    result = await service.sessions.commit(session_id, _ctx)
     return Response(status="ok", result=result)
 
 
@@ -155,7 +156,7 @@ async def extract_session(
 ):
     """Extract memories from a session."""
     service = get_service()
-    result = await service.sessions.extract(session_id)
+    result = await service.sessions.extract(session_id, _ctx)
     return Response(status="ok", result=_to_jsonable(result))
 
 
@@ -180,7 +181,7 @@ async def add_message(
     If both `content` and `parts` are provided, `parts` takes precedence.
     """
     service = get_service()
-    session = service.sessions.session(session_id)
+    session = service.sessions.session(_ctx, session_id)
     await session.load()
 
     if request.parts is not None:

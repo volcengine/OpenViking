@@ -191,6 +191,105 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
   -H "X-API-Key: your-key"
 ```
 
+## Cloud Deployment
+
+### Docker
+
+```dockerfile
+FROM python:3.11-slim
+WORKDIR /app
+COPY . .
+RUN pip install -e .
+EXPOSE 1933
+CMD ["python", "-m", "openviking", "serve", "--config", "/etc/openviking/ov.conf"]
+```
+
+```bash
+docker build -t openviking .
+docker run -d -p 1933:1933 \
+  -v /path/to/ov.conf:/etc/openviking/ov.conf:ro \
+  -v /data/openviking:/data/openviking \
+  openviking
+```
+
+### Kubernetes
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openviking
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openviking
+  template:
+    metadata:
+      labels:
+        app: openviking
+    spec:
+      containers:
+        - name: openviking
+          image: openviking:latest
+          ports:
+            - containerPort: 1933
+          volumeMounts:
+            - name: config
+              mountPath: /etc/openviking
+              readOnly: true
+            - name: data
+              mountPath: /data/openviking
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 1933
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 1933
+            initialDelaySeconds: 10
+            periodSeconds: 15
+      volumes:
+        - name: config
+          configMap:
+            name: openviking-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: openviking-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openviking
+spec:
+  selector:
+    app: openviking
+  ports:
+    - port: 1933
+      targetPort: 1933
+```
+
+## Health Checks
+
+| Endpoint | Auth | Purpose |
+|----------|------|---------|
+| `GET /health` | No | Liveness probe — returns `{"status": "ok"}` immediately |
+| `GET /ready` | No | Readiness probe — checks AGFS, VectorDB, APIKeyManager |
+
+```bash
+# Liveness
+curl http://localhost:1933/health
+
+# Readiness
+curl http://localhost:1933/ready
+# {"status": "ready", "checks": {"agfs": "ok", "vectordb": "ok", "api_key_manager": "ok"}}
+```
+
+Use `/health` for Kubernetes liveness probes and `/ready` for readiness probes.
+
 ## Related Documentation
 
 - [Authentication](04-authentication.md) - API key setup

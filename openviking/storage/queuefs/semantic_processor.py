@@ -20,10 +20,12 @@ from openviking.parse.parsers.media.utils import (
     get_media_type,
 )
 from openviking.prompts import render_prompt
+from openviking.server.identity import RequestContext, Role
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecutor
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.viking_fs import get_viking_fs
+from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import VikingURI
 from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
@@ -51,6 +53,30 @@ class SemanticProcessor(DequeueHandlerBase):
         """
         self.max_concurrent_llm = max_concurrent_llm
         self._dag_executor: Optional[SemanticDagExecutor] = None
+        self._current_ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+
+    @staticmethod
+    def _owner_space_for_uri(uri: str, ctx: RequestContext) -> str:
+        """Derive owner_space from a URI.
+
+        Resources (viking://resources/...) always get owner_space="" so they
+        are globally visible.  User / agent / session URIs inherit the
+        caller's space name.
+        """
+        if uri.startswith("viking://agent/"):
+            return ctx.user.agent_space_name()
+        if uri.startswith("viking://user/") or uri.startswith("viking://session/"):
+            return ctx.user.user_space_name()
+        # resources and anything else → shared (empty owner_space)
+        return ""
+
+    @staticmethod
+    def _ctx_from_semantic_msg(msg: SemanticMsg) -> RequestContext:
+        role = Role(msg.role) if msg.role in {r.value for r in Role} else Role.ROOT
+        return RequestContext(
+            user=UserIdentifier(msg.account_id, msg.user_id, msg.agent_id),
+            role=role,
+        )
 
     def _detect_file_type(self, file_name: str) -> str:
         """
@@ -97,7 +123,7 @@ class SemanticProcessor(DequeueHandlerBase):
         viking_fs = get_viking_fs()
 
         try:
-            entries = await viking_fs.ls(uri)
+            entries = await viking_fs.ls(uri, ctx=self._current_ctx)
         except Exception as e:
             logger.warning(f"Failed to list directory {uri}: {e}")
             return
@@ -138,6 +164,7 @@ class SemanticProcessor(DequeueHandlerBase):
             # data is guaranteed to be not None at this point
             assert data is not None
             msg = SemanticMsg.from_dict(data)
+            self._current_ctx = self._ctx_from_semantic_msg(msg)
             logger.info(
                 f"Processing semantic generation for: {msg.uri} (recursive={msg.recursive})"
             )
@@ -147,6 +174,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     processor=self,
                     context_type=msg.context_type,
                     max_concurrent_llm=self.max_concurrent_llm,
+                    ctx=self._current_ctx,
                 )
                 self._dag_executor = executor
                 await executor.run(msg.uri)
@@ -161,7 +189,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 # Collect immediate children info only (no recursion)
                 viking_fs = get_viking_fs()
                 try:
-                    entries = await viking_fs.ls(msg.uri)
+                    entries = await viking_fs.ls(msg.uri, ctx=self._current_ctx)
                     for entry in entries:
                         name = entry.get("name", "")
                         if not name or name.startswith(".") or name in [".", ".."]:
@@ -223,8 +251,8 @@ class SemanticProcessor(DequeueHandlerBase):
         abstract = self._extract_abstract_from_overview(overview)
 
         # 5. Write files
-        await viking_fs.write_file(f"{uri}/.overview.md", overview)
-        await viking_fs.write_file(f"{uri}/.abstract.md", abstract)
+        await viking_fs.write_file(f"{uri}/.overview.md", overview, ctx=self._current_ctx)
+        await viking_fs.write_file(f"{uri}/.abstract.md", abstract, ctx=self._current_ctx)
 
         logger.debug(f"Generated overview and abstract for {uri}")
 
@@ -240,7 +268,7 @@ class SemanticProcessor(DequeueHandlerBase):
         results = []
 
         for child_uri in children_uris:
-            abstract = await viking_fs.abstract(child_uri)
+            abstract = await viking_fs.abstract(child_uri, ctx=self._current_ctx)
             dir_name = child_uri.split("/")[-1]
             results.append({"name": dir_name, "abstract": abstract})
         return results
@@ -257,7 +285,7 @@ class SemanticProcessor(DequeueHandlerBase):
             return []
 
         async def generate_one_summary(file_path: str) -> Dict[str, str]:
-            summary = await self._generate_single_file_summary(file_path)
+            summary = await self._generate_single_file_summary(file_path, ctx=self._current_ctx)
             if enqueue_files and context_type and parent_uri:
                 try:
                     await self._vectorize_single_file(
@@ -277,14 +305,19 @@ class SemanticProcessor(DequeueHandlerBase):
         return await asyncio.gather(*tasks)
 
     async def _generate_text_summary(
-        self, file_path: str, file_name: str, llm_sem: asyncio.Semaphore
+        self,
+        file_path: str,
+        file_name: str,
+        llm_sem: asyncio.Semaphore,
+        ctx: Optional[RequestContext] = None,
     ) -> Dict[str, str]:
         """Generate summary for a single text file (code, documentation, or other text)."""
         viking_fs = get_viking_fs()
         vlm = get_openviking_config().vlm
+        active_ctx = ctx or self._current_ctx
 
         # Read file content (limit length)
-        content = await viking_fs.read_file(file_path)
+        content = await viking_fs.read_file(file_path, ctx=active_ctx)
         if isinstance(content, bytes):
             # Try to decode with error handling for text files
             try:
@@ -323,7 +356,10 @@ class SemanticProcessor(DequeueHandlerBase):
         return {"name": file_name, "summary": summary.strip()}
 
     async def _generate_single_file_summary(
-        self, file_path: str, llm_sem: Optional[asyncio.Semaphore] = None
+        self,
+        file_path: str,
+        llm_sem: Optional[asyncio.Semaphore] = None,
+        ctx: Optional[RequestContext] = None,
     ) -> Dict[str, str]:
         """Generate summary for a single file.
 
@@ -337,13 +373,13 @@ class SemanticProcessor(DequeueHandlerBase):
         llm_sem = llm_sem or asyncio.Semaphore(self.max_concurrent_llm)
         media_type = get_media_type(file_name, None)
         if media_type == "image":
-            return await generate_image_summary(file_path, file_name, llm_sem)
+            return await generate_image_summary(file_path, file_name, llm_sem, ctx=ctx)
         elif media_type == "audio":
-            return await generate_audio_summary(file_path, file_name, llm_sem)
+            return await generate_audio_summary(file_path, file_name, llm_sem, ctx=ctx)
         elif media_type == "video":
-            return await generate_video_summary(file_path, file_name, llm_sem)
+            return await generate_video_summary(file_path, file_name, llm_sem, ctx=ctx)
         else:
-            return await self._generate_text_summary(file_path, file_name, llm_sem)
+            return await self._generate_text_summary(file_path, file_name, llm_sem, ctx=ctx)
 
     def _extract_abstract_from_overview(self, overview_content: str) -> str:
         """Extract abstract from overview.md."""
@@ -434,13 +470,19 @@ class SemanticProcessor(DequeueHandlerBase):
             return f"# {dir_uri.split('/')[-1]}\n\nDirectory overview"
 
     async def _vectorize_directory_simple(
-        self, uri: str, context_type: str, abstract: str, overview: str
+        self,
+        uri: str,
+        context_type: str,
+        abstract: str,
+        overview: str,
+        ctx: Optional[RequestContext] = None,
     ) -> None:
         """Create directory Context and enqueue to EmbeddingQueue."""
 
         from openviking.storage.queuefs import get_queue_manager
         from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 
+        active_ctx = ctx or self._current_ctx
         queue_manager = get_queue_manager()
         embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING)
 
@@ -452,6 +494,9 @@ class SemanticProcessor(DequeueHandlerBase):
             is_leaf=False,
             abstract=abstract,
             context_type=context_type,
+            user=active_ctx.user,
+            account_id=active_ctx.account_id,
+            owner_space=self._owner_space_for_uri(uri, active_ctx),
         )
         context_abstract.set_vectorize(Vectorize(text=abstract))
         embedding_msg_abstract = EmbeddingMsgConverter.from_context(context_abstract)
@@ -466,6 +511,15 @@ class SemanticProcessor(DequeueHandlerBase):
             is_leaf=False,
             abstract=abstract,
             context_type=context_type,
+            user=active_ctx.user,
+            account_id=active_ctx.account_id,
+            owner_space=(
+                active_ctx.user.agent_space_name()
+                if uri.startswith("viking://agent/")
+                else active_ctx.user.user_space_name()
+                if uri.startswith("viking://user/") or uri.startswith("viking://session/")
+                else ""
+            ),
         )
         context_overview.set_vectorize(Vectorize(text=overview))
         embedding_msg_overview = EmbeddingMsgConverter.from_context(context_overview)
@@ -478,6 +532,7 @@ class SemanticProcessor(DequeueHandlerBase):
         context_type: str,
         file_paths: List[str],
         file_summaries: List[Dict[str, str]],
+        ctx: Optional[RequestContext] = None,
     ) -> None:
         """Vectorize files in directory."""
         from openviking.storage.queuefs import get_queue_manager
@@ -492,6 +547,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 file_path=file_path,
                 summary_dict=file_summary_dict,
                 embedding_queue=embedding_queue,
+                ctx=ctx,
             )
 
     async def _vectorize_single_file(
@@ -501,6 +557,7 @@ class SemanticProcessor(DequeueHandlerBase):
         file_path: str,
         summary_dict: Dict[str, str],
         embedding_queue: Optional[Any] = None,
+        ctx: Optional[RequestContext] = None,
     ) -> None:
         """Vectorize a single file using its content or summary."""
         from datetime import datetime
@@ -516,6 +573,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 queue_manager = get_queue_manager()
                 embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING)
 
+            active_ctx = ctx or self._current_ctx
             context = Context(
                 uri=file_path,
                 parent_uri=parent_uri,
@@ -523,10 +581,13 @@ class SemanticProcessor(DequeueHandlerBase):
                 abstract=summary,
                 context_type=context_type,
                 created_at=datetime.now(),
+                user=active_ctx.user,
+                account_id=active_ctx.account_id,
+                owner_space=self._owner_space_for_uri(file_path, active_ctx),
             )
 
             if self.get_resource_content_type(file_name) == ResourceContentType.TEXT:
-                content = await get_viking_fs().read_file(file_path)
+                content = await get_viking_fs().read_file(file_path, ctx=active_ctx)
                 context.set_vectorize(Vectorize(text=content))
             elif summary:
                 context.set_vectorize(Vectorize(text=summary))

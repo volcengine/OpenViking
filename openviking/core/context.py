@@ -67,6 +67,8 @@ class Context:
         meta: Optional[Dict[str, Any]] = None,
         session_id: Optional[str] = None,
         user: Optional[UserIdentifier] = None,
+        account_id: Optional[str] = None,
+        owner_space: Optional[str] = None,
         id: Optional[str] = None,
     ):
         """
@@ -86,34 +88,44 @@ class Context:
         self.meta = meta or {}
         self.session_id = session_id
         self.user = user
+        self.account_id = account_id or (user.account_id if user else "default")
+        self.owner_space = owner_space or self._derive_owner_space(user)
         self.vector: Optional[List[float]] = None
         self.vectorize = Vectorize(abstract)
 
+    def _derive_owner_space(self, user: Optional[UserIdentifier]) -> str:
+        """Best-effort owner space derived from URI and user."""
+        if not user:
+            return ""
+        if self.uri.startswith("viking://agent/"):
+            return user.agent_space_name()
+        if self.uri.startswith("viking://user/") or self.uri.startswith("viking://session/"):
+            return user.user_space_name()
+        return ""
+
     def _derive_context_type(self) -> str:
-        """Derive context type from URI prefix."""
-        if self.uri.startswith("viking://agent/skills"):
+        """Derive context type from URI using substring matching."""
+        if "/skills" in self.uri:
             return "skill"
-        elif "memories" in self.uri:
+        elif "/memories" in self.uri:
             return "memory"
         else:
             return "resource"
 
     def _derive_category(self) -> str:
-        """Derive category from URI prefix."""
-        if self.uri.startswith("viking://agent/memories"):
-            if "patterns" in self.uri:
-                return "patterns"
-            elif "cases" in self.uri:
-                return "cases"
-        elif self.uri.startswith("viking://user/memories"):
-            if "profile" in self.uri:
-                return "profile"
-            if "preferences" in self.uri:
-                return "preferences"
-            if "entities" in self.uri:
-                return "entities"
-            elif "events" in self.uri:
-                return "events"
+        """Derive category from URI using substring matching."""
+        if "/patterns" in self.uri:
+            return "patterns"
+        elif "/cases" in self.uri:
+            return "cases"
+        elif "/profile" in self.uri:
+            return "profile"
+        elif "/preferences" in self.uri:
+            return "preferences"
+        elif "/entities" in self.uri:
+            return "entities"
+        elif "/events" in self.uri:
+            return "events"
         return ""
 
     def get_context_type(self) -> str:
@@ -153,6 +165,8 @@ class Context:
             "meta": self.meta,
             "related_uri": self.related_uri,
             "session_id": self.session_id,
+            "account_id": self.account_id,
+            "owner_space": self.owner_space,
         }
 
         if self.user:
@@ -168,6 +182,8 @@ class Context:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Context":
         """Create a context object from dictionary."""
+        user_data = data.get("user")
+        user_obj = UserIdentifier.from_dict(user_data) if isinstance(user_data, dict) else user_data
         obj = cls(
             uri=data["uri"],
             parent_uri=data.get("parent_uri"),
@@ -189,7 +205,9 @@ class Context:
             related_uri=data.get("related_uri", []),
             meta=data.get("meta", {}),
             session_id=data.get("session_id"),
-            user=data.get("user"),
+            user=user_obj,
+            account_id=data.get("account_id"),
+            owner_space=data.get("owner_space"),
         )
         obj.id = data.get("id", obj.id)
         obj.vector = data.get("vector")

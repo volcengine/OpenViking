@@ -8,6 +8,7 @@ Provides semantic search operations: search, find.
 
 from typing import TYPE_CHECKING, Any, Dict, Optional
 
+from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import NotInitializedError
 from openviking_cli.utils import get_logger
@@ -37,6 +38,7 @@ class SearchService:
     async def search(
         self,
         query: str,
+        ctx: RequestContext,
         target_uri: str = "",
         session: Optional["Session"] = None,
         limit: int = 10,
@@ -64,6 +66,7 @@ class SearchService:
 
         return await viking_fs.search(
             query=query,
+            ctx=ctx,
             target_uri=target_uri,
             session_info=session_info,
             limit=limit,
@@ -74,6 +77,7 @@ class SearchService:
     async def find(
         self,
         query: str,
+        ctx: RequestContext,
         target_uri: str = "",
         limit: int = 10,
         score_threshold: Optional[float] = None,
@@ -94,6 +98,7 @@ class SearchService:
         viking_fs = self._ensure_initialized()
         return await viking_fs.find(
             query=query,
+            ctx=ctx,
             target_uri=target_uri,
             limit=limit,
             score_threshold=score_threshold,
