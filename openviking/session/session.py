@@ -5,6 +5,7 @@
 Session as Context: Sessions integrated into L0/L1/L2 system.
 """
 
+import hashlib
 import json
 import re
 from dataclasses import dataclass, field
@@ -283,18 +284,17 @@ class Session:
 
         for usage in self._usage_records:
             try:
-                # Fetch the record first to get its id and current active_count.
-                # storage.update() signature is update(collection, id, data) —
-                # it does NOT accept MongoDB-style filter/update kwargs.
-                record = run_async(storage.fetch_by_uri("context", usage.uri))
-                if not record:
+                # Compute the record ID from the URI directly.
+                # collection_schemas.py assigns id = md5(uri) for every context
+                # record, so storage.get() gives us a precise single-record lookup
+                # without the subtree-matching side-effect of fetch_by_uri() on
+                # path-type fields.
+                record_id = hashlib.md5(usage.uri.encode("utf-8")).hexdigest()
+                records = run_async(storage.get(collection="context", ids=[record_id]))
+                if not records:
                     logger.debug(f"Record not found for URI: {usage.uri}")
                     continue
-                record_id = record.get("id")
-                if not record_id:
-                    logger.debug(f"Record has no id for URI: {usage.uri}")
-                    continue
-                current_count = record.get("active_count") or 0
+                current_count = records[0].get("active_count") or 0
                 run_async(
                     storage.update(
                         collection="context",

@@ -81,23 +81,30 @@ class TestCommit:
     ):
         """Regression test: active_count must actually increment after commit.
 
-        Previously _update_active_counts() had two bugs:
+        Previously _update_active_counts() had three bugs:
         1. Called storage.update() with MongoDB-style kwargs (filter=, update=)
            that don't match the actual signature update(collection, id, data),
            causing a silent TypeError on every commit.
-        2. Used $inc syntax which storage.update() doesn't support.
+        2. Used $inc syntax which storage.update() does not support (merge semantics
+           require a plain value, not an increment operator).
+        3. Used fetch_by_uri() to locate the record, but that method's path-field
+           filter returns the entire subtree (hierarchical match), so any URI that
+           has child records triggers a 'Duplicate records found' error and returns
+           None — leaving active_count un-updated even after fixes 1 and 2.
 
-        Both bugs left active_count permanently stuck at 0.
+        Fix: derive the record id as md5(uri) (the canonical formula used in
+        collection_schemas.py) and call storage.get(ids=[id]) for an exact lookup.
         """
-        client, uri = client_with_resource_sync
+        import hashlib
 
-        # Access vikingdb_manager via the public .service property on LocalClient
+        client, uri = client_with_resource_sync
         vikingdb = client._client.service.vikingdb_manager
 
-        # Read active_count before any usage
-        record_before = await vikingdb.fetch_by_uri("context", uri)
-        assert record_before is not None, f"Resource not found: {uri}"
-        count_before = record_before.get("active_count") or 0
+        # Use storage.get() for exact ID-based lookup (avoids fetch_by_uri subtree issue)
+        record_id = hashlib.md5(uri.encode("utf-8")).hexdigest()
+        records_before = await vikingdb.get("context", [record_id])
+        assert records_before, f"Resource not found by id for URI: {uri}"
+        count_before = records_before[0].get("active_count") or 0
 
         # Mark as used and commit
         session = client.session(session_id="active_count_regression_test")
@@ -109,9 +116,9 @@ class TestCommit:
         assert result.get("active_count_updated") == 1
 
         # Verify the count actually changed in storage
-        record_after = await vikingdb.fetch_by_uri("context", uri)
-        assert record_after is not None
-        count_after = record_after.get("active_count") or 0
+        records_after = await vikingdb.get("context", [record_id])
+        assert records_after, f"Record disappeared after commit for URI: {uri}"
+        count_after = records_after[0].get("active_count") or 0
         assert count_after == count_before + 1, (
             f"active_count not incremented: before={count_before}, after={count_after}"
         )
