@@ -6,7 +6,7 @@ Implements BaseClient interface using direct service calls (embedded mode).
 """
 
 from typing import Any, Dict, List, Optional, Union
-
+from openviking.message.part import TextPart
 from openviking.service import OpenVikingService
 from openviking_cli.client.base import BaseClient
 from openviking_cli.session.user_id import UserIdentifier
@@ -256,7 +256,7 @@ class LocalClient(BaseClient):
         """Add a message to a session."""
         session = self._service.sessions.session(session_id)
         await session.load()
-        session.add_message(role, content)
+        session.add_message(role, [TextPart(text=content)])
         return {
             "session_id": session_id,
             "message_count": len(session.messages),
