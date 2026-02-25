@@ -23,10 +23,15 @@ from openviking_cli.exceptions import UnsupportedDirectoryFilesError
 @pytest.fixture
 def tmp_tree(tmp_path: Path) -> Path:
     """Create a directory tree with mixed file types for scan tests."""
-    # rich (parser exists): .md, .pdf, .html, .txt
+    # rich (parser exists): .md, .pdf, .html, .txt, .docx, .xlsx, .epub, .pptx, .zip
     (tmp_path / "readme.md").write_text("# README", encoding="utf-8")
     (tmp_path / "doc.html").write_text("<html></html>", encoding="utf-8")
     (tmp_path / "note.txt").write_text("plain text", encoding="utf-8")
+    (tmp_path / "report.docx").write_bytes(b"PK\x03\x04")
+    (tmp_path / "data.xlsx").write_bytes(b"PK\x03\x04")
+    (tmp_path / "book.epub").write_bytes(b"PK\x03\x04")
+    (tmp_path / "slides.pptx").write_bytes(b"PK\x03\x04")
+    (tmp_path / "bundle.zip").write_bytes(b"PK\x03\x04")
 
     # text (code/config, no dedicated parser or text parser only): .py, .yaml
     (tmp_path / "main.py").write_text("print(1)", encoding="utf-8")
@@ -118,6 +123,12 @@ class TestScanDirectoryClassification:
         assert "readme.md" in processable_rel
         assert "doc.html" in processable_rel
         assert "note.txt" in processable_rel
+        # Word, Excel, EPub, PowerPoint, Zip parsers
+        assert "report.docx" in processable_rel
+        assert "data.xlsx" in processable_rel
+        assert "book.epub" in processable_rel
+        assert "slides.pptx" in processable_rel
+        assert "bundle.zip" in processable_rel
 
     def test_processable_includes_code_or_config(
         self, tmp_tree: Path, registry: ParserRegistry

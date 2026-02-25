@@ -371,6 +371,212 @@ class TestParserDelegation:
         assert result.meta["file_count"] == 1
         assert len(fake_fs.files) > 0
 
+    @pytest.mark.asyncio
+    async def test_docx_file_goes_through_parser(self, tmp_path: Path, parser, fake_fs) -> None:
+        """Word (.docx) files should be processed by WordParser.parse()."""
+        (tmp_path / "report.docx").write_bytes(b"PK\x03\x04")
+
+        mock_temp = fake_fs.create_temp_uri()
+        doc_dir = f"{mock_temp}/report"
+        await fake_fs.mkdir(mock_temp)
+        await fake_fs.mkdir(doc_dir)
+        await fake_fs.write_file(f"{doc_dir}/report.md", "# Converted Word")
+
+        fake_result = create_parse_result(
+            root=ResourceNode(type=NodeType.ROOT),
+            source_path=str(tmp_path / "report.docx"),
+            source_format="docx",
+            parser_name="WordParser",
+            parse_time=0.1,
+        )
+        fake_result.temp_dir_path = mock_temp
+
+        with patch(
+            "openviking.parse.parsers.directory.DirectoryParser._assign_parser",
+        ) as mock_assign:
+            from openviking.parse.parsers.word import WordParser as _Word
+
+            mock_word = AsyncMock(spec=_Word)
+            mock_word.parse = AsyncMock(return_value=fake_result)
+
+            def assign_side_effect(cf, registry):
+                if cf.path.suffix == ".docx":
+                    return mock_word
+                return registry.get_parser_for_file(cf.path)
+
+            mock_assign.side_effect = assign_side_effect
+            await parser.parse(str(tmp_path))
+
+        dir_name = tmp_path.name
+        found_md = any(
+            uri.endswith("report.md") and f"/{dir_name}/" in uri for uri in fake_fs.files
+        )
+        assert found_md, f"report.md not found. Files: {list(fake_fs.files.keys())}"
+
+    @pytest.mark.asyncio
+    async def test_xlsx_file_goes_through_parser(self, tmp_path: Path, parser, fake_fs) -> None:
+        """Excel (.xlsx) files should be processed by ExcelParser.parse()."""
+        (tmp_path / "data.xlsx").write_bytes(b"PK\x03\x04")
+
+        mock_temp = fake_fs.create_temp_uri()
+        doc_dir = f"{mock_temp}/data"
+        await fake_fs.mkdir(mock_temp)
+        await fake_fs.mkdir(doc_dir)
+        await fake_fs.write_file(f"{doc_dir}/data.md", "# Converted Excel")
+
+        fake_result = create_parse_result(
+            root=ResourceNode(type=NodeType.ROOT),
+            source_path=str(tmp_path / "data.xlsx"),
+            source_format="xlsx",
+            parser_name="ExcelParser",
+            parse_time=0.1,
+        )
+        fake_result.temp_dir_path = mock_temp
+
+        with patch(
+            "openviking.parse.parsers.directory.DirectoryParser._assign_parser",
+        ) as mock_assign:
+            from openviking.parse.parsers.excel import ExcelParser as _Excel
+
+            mock_excel = AsyncMock(spec=_Excel)
+            mock_excel.parse = AsyncMock(return_value=fake_result)
+
+            def assign_side_effect(cf, registry):
+                if cf.path.suffix in {".xlsx", ".xls", ".xlsm"}:
+                    return mock_excel
+                return registry.get_parser_for_file(cf.path)
+
+            mock_assign.side_effect = assign_side_effect
+            await parser.parse(str(tmp_path))
+
+        dir_name = tmp_path.name
+        found_md = any(uri.endswith("data.md") and f"/{dir_name}/" in uri for uri in fake_fs.files)
+        assert found_md, f"data.md not found. Files: {list(fake_fs.files.keys())}"
+
+    @pytest.mark.asyncio
+    async def test_epub_file_goes_through_parser(self, tmp_path: Path, parser, fake_fs) -> None:
+        """EPub (.epub) files should be processed by EPubParser.parse()."""
+        (tmp_path / "book.epub").write_bytes(b"PK\x03\x04")
+
+        mock_temp = fake_fs.create_temp_uri()
+        doc_dir = f"{mock_temp}/book"
+        await fake_fs.mkdir(mock_temp)
+        await fake_fs.mkdir(doc_dir)
+        await fake_fs.write_file(f"{doc_dir}/book.md", "# Converted EPub")
+
+        fake_result = create_parse_result(
+            root=ResourceNode(type=NodeType.ROOT),
+            source_path=str(tmp_path / "book.epub"),
+            source_format="epub",
+            parser_name="EPubParser",
+            parse_time=0.1,
+        )
+        fake_result.temp_dir_path = mock_temp
+
+        with patch(
+            "openviking.parse.parsers.directory.DirectoryParser._assign_parser",
+        ) as mock_assign:
+            from openviking.parse.parsers.epub import EPubParser as _EPub
+
+            mock_epub = AsyncMock(spec=_EPub)
+            mock_epub.parse = AsyncMock(return_value=fake_result)
+
+            def assign_side_effect(cf, registry):
+                if cf.path.suffix == ".epub":
+                    return mock_epub
+                return registry.get_parser_for_file(cf.path)
+
+            mock_assign.side_effect = assign_side_effect
+            await parser.parse(str(tmp_path))
+
+        dir_name = tmp_path.name
+        found_md = any(uri.endswith("book.md") and f"/{dir_name}/" in uri for uri in fake_fs.files)
+        assert found_md, f"book.md not found. Files: {list(fake_fs.files.keys())}"
+
+    @pytest.mark.asyncio
+    async def test_pptx_file_goes_through_parser(self, tmp_path: Path, parser, fake_fs) -> None:
+        """PowerPoint (.pptx) files should be processed by PowerPointParser.parse()."""
+        (tmp_path / "slides.pptx").write_bytes(b"PK\x03\x04")
+
+        mock_temp = fake_fs.create_temp_uri()
+        doc_dir = f"{mock_temp}/slides"
+        await fake_fs.mkdir(mock_temp)
+        await fake_fs.mkdir(doc_dir)
+        await fake_fs.write_file(f"{doc_dir}/slides.md", "# Converted PowerPoint")
+
+        fake_result = create_parse_result(
+            root=ResourceNode(type=NodeType.ROOT),
+            source_path=str(tmp_path / "slides.pptx"),
+            source_format="pptx",
+            parser_name="PowerPointParser",
+            parse_time=0.1,
+        )
+        fake_result.temp_dir_path = mock_temp
+
+        with patch(
+            "openviking.parse.parsers.directory.DirectoryParser._assign_parser",
+        ) as mock_assign:
+            from openviking.parse.parsers.powerpoint import PowerPointParser as _PPT
+
+            mock_ppt = AsyncMock(spec=_PPT)
+            mock_ppt.parse = AsyncMock(return_value=fake_result)
+
+            def assign_side_effect(cf, registry):
+                if cf.path.suffix == ".pptx":
+                    return mock_ppt
+                return registry.get_parser_for_file(cf.path)
+
+            mock_assign.side_effect = assign_side_effect
+            await parser.parse(str(tmp_path))
+
+        dir_name = tmp_path.name
+        found_md = any(
+            uri.endswith("slides.md") and f"/{dir_name}/" in uri for uri in fake_fs.files
+        )
+        assert found_md, f"slides.md not found. Files: {list(fake_fs.files.keys())}"
+
+    @pytest.mark.asyncio
+    async def test_zip_file_goes_through_parser(self, tmp_path: Path, parser, fake_fs) -> None:
+        """ZIP (.zip) files should be processed by ZipParser.parse()."""
+        (tmp_path / "archive.zip").write_bytes(b"PK\x03\x04")
+
+        mock_temp = fake_fs.create_temp_uri()
+        doc_dir = f"{mock_temp}/archive"
+        await fake_fs.mkdir(mock_temp)
+        await fake_fs.mkdir(doc_dir)
+        await fake_fs.write_file(f"{doc_dir}/archive.md", "# Converted ZIP")
+
+        fake_result = create_parse_result(
+            root=ResourceNode(type=NodeType.ROOT),
+            source_path=str(tmp_path / "archive.zip"),
+            source_format="zip",
+            parser_name="ZipParser",
+            parse_time=0.1,
+        )
+        fake_result.temp_dir_path = mock_temp
+
+        with patch(
+            "openviking.parse.parsers.directory.DirectoryParser._assign_parser",
+        ) as mock_assign:
+            from openviking.parse.parsers.zip_parser import ZipParser as _Zip
+
+            mock_zip = AsyncMock(spec=_Zip)
+            mock_zip.parse = AsyncMock(return_value=fake_result)
+
+            def assign_side_effect(cf, registry):
+                if cf.path.suffix == ".zip":
+                    return mock_zip
+                return registry.get_parser_for_file(cf.path)
+
+            mock_assign.side_effect = assign_side_effect
+            await parser.parse(str(tmp_path))
+
+        dir_name = tmp_path.name
+        found_md = any(
+            uri.endswith("archive.md") and f"/{dir_name}/" in uri for uri in fake_fs.files
+        )
+        assert found_md, f"archive.md not found. Files: {list(fake_fs.files.keys())}"
+
 
 # ---------------------------------------------------------------------------
 # Tests: PDF conversion via parser.parse()

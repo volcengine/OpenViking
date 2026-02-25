@@ -27,10 +27,15 @@ from openviking.parse.directory_scan import (
     DirectoryScanResult,
     scan_directory,
 )
+from openviking.parse.parsers.epub import EPubParser
+from openviking.parse.parsers.excel import ExcelParser
 from openviking.parse.parsers.html import HTMLParser
 from openviking.parse.parsers.markdown import MarkdownParser
 from openviking.parse.parsers.pdf import PDFParser
+from openviking.parse.parsers.powerpoint import PowerPointParser
 from openviking.parse.parsers.text import TextParser
+from openviking.parse.parsers.word import WordParser
+from openviking.parse.parsers.zip_parser import ZipParser
 from openviking.parse.registry import ParserRegistry
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -66,6 +71,16 @@ def tmp_all_parsers(tmp_path: Path) -> Path:
             text/
                 notes.txt         -> TextParser
                 log.text          -> TextParser
+            office/
+                report.docx      -> WordParser
+                data.xlsx        -> ExcelParser
+                legacy.xls       -> ExcelParser
+                macro.xlsm       -> ExcelParser
+                slides.pptx      -> PowerPointParser
+            books/
+                book.epub         -> EPubParser
+            archives/
+                bundle.zip       -> ZipParser
             code/
                 app.py            -> text-fallback (is_text_file)
                 main.js           -> text-fallback
@@ -105,6 +120,19 @@ def tmp_all_parsers(tmp_path: Path) -> Path:
     (tmp_path / "config" / "data.json").write_text("{}", encoding="utf-8")
     (tmp_path / "config" / "rules.toml").write_text("[section]", encoding="utf-8")
 
+    (tmp_path / "office").mkdir()
+    (tmp_path / "office" / "report.docx").write_bytes(b"PK\x03\x04")
+    (tmp_path / "office" / "data.xlsx").write_bytes(b"PK\x03\x04")
+    (tmp_path / "office" / "legacy.xls").write_bytes(b"\xd0\xcf\x11\xe0")
+    (tmp_path / "office" / "macro.xlsm").write_bytes(b"PK\x03\x04")
+    (tmp_path / "office" / "slides.pptx").write_bytes(b"PK\x03\x04")
+
+    (tmp_path / "books").mkdir()
+    (tmp_path / "books" / "book.epub").write_bytes(b"PK\x03\x04")
+
+    (tmp_path / "archives").mkdir()
+    (tmp_path / "archives" / "bundle.zip").write_bytes(b"PK\x03\x04")
+
     (tmp_path / "unsupported").mkdir()
     (tmp_path / "unsupported" / "image.bmp").write_bytes(b"BM\x00\x00")
     (tmp_path / "unsupported" / "archive.rar").write_bytes(b"RAR\x00")
@@ -126,6 +154,13 @@ class TestParserSelection:
         ".pdf": PDFParser,
         ".txt": TextParser,
         ".text": TextParser,
+        ".docx": WordParser,
+        ".xlsx": ExcelParser,
+        ".xls": ExcelParser,
+        ".xlsm": ExcelParser,
+        ".epub": EPubParser,
+        ".pptx": PowerPointParser,
+        ".zip": ZipParser,
     }
 
     # Extensions that are *processable* (via is_text_file) but have no
@@ -203,6 +238,11 @@ class TestParserCanParse:
             (HTMLParser, ["page.html", "site.htm"]),
             (PDFParser, ["paper.pdf"]),
             (TextParser, ["notes.txt", "log.text"]),
+            (WordParser, ["report.docx"]),
+            (ExcelParser, ["data.xlsx", "legacy.xls", "book.xlsm"]),
+            (EPubParser, ["book.epub"]),
+            (PowerPointParser, ["slides.pptx"]),
+            (ZipParser, ["archive.zip"]),
         ],
     )
     def test_can_parse_returns_true(self, parser_cls: type, filenames: List[str]) -> None:
@@ -219,6 +259,11 @@ class TestParserCanParse:
             (HTMLParser, ["file.md", "file.pdf", "file.txt"]),
             (PDFParser, ["file.md", "file.txt", "file.html"]),
             (TextParser, ["file.md", "file.html", "file.pdf"]),
+            (WordParser, ["file.pdf", "file.xlsx", "file.txt"]),
+            (ExcelParser, ["file.docx", "file.pdf", "file.txt"]),
+            (EPubParser, ["file.pdf", "file.docx", "file.zip"]),
+            (PowerPointParser, ["file.pdf", "file.docx", "file.txt"]),
+            (ZipParser, ["file.rar", "file.pdf", "file.docx"]),
         ],
     )
     def test_can_parse_returns_false_for_wrong_extension(

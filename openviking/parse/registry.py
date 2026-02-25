@@ -65,8 +65,10 @@ class ParserRegistry:
         self.register("powerpoint", PowerPointParser())
         self.register("excel", ExcelParser())
         self.register("epub", EPubParser())
-        self.register("zip", ZipParser())
+        # CodeRepositoryParser also uses .zip; register it before ZipParser
+        # so that .zip resolves to ZipParser (file) rather than code repo.
         self.register("code", CodeRepositoryParser())
+        self.register("zip", ZipParser())
         self.register("directory", DirectoryParser())
 
         self.register("image", ImageParser())
