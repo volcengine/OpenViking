@@ -64,13 +64,18 @@ class MemoryDeduplicator:
 
     SIMILARITY_THRESHOLD = 0.0  # Vector similarity threshold for pre-filtering
     MAX_PROMPT_SIMILAR_MEMORIES = 5  # Number of similar memories sent to LLM
-    CATEGORY_URI_PREFIX = {
-        "preferences": "viking://user/memories/preferences/",
-        "entities": "viking://user/memories/entities/",
-        "events": "viking://user/memories/events/",
-        "cases": "viking://agent/memories/cases/",
-        "patterns": "viking://agent/memories/patterns/",
-    }
+
+    _USER_CATEGORIES = {"preferences", "entities", "events"}
+    _AGENT_CATEGORIES = {"cases", "patterns"}
+
+    @staticmethod
+    def _category_uri_prefix(category: str, user) -> str:
+        """Build category URI prefix with space segment."""
+        if category in MemoryDeduplicator._USER_CATEGORIES:
+            return f"viking://user/{user.user_space_name()}/memories/{category}/"
+        elif category in MemoryDeduplicator._AGENT_CATEGORIES:
+            return f"viking://agent/{user.agent_space_name()}/memories/{category}/"
+        return ""
 
     def __init__(
         self,
@@ -125,7 +130,7 @@ class MemoryDeduplicator:
         # Determine collection and filter based on category
         collection = "context"
 
-        category_uri_prefix = self.CATEGORY_URI_PREFIX.get(candidate.category.value, "")
+        category_uri_prefix = self._category_uri_prefix(candidate.category.value, candidate.user)
 
         # Build filter by memory scope + uri prefix (schema does not have category field yet).
         filter_conds = [

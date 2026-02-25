@@ -575,8 +575,8 @@ class VikingFS:
             rerank_config=self.rerank_config,
         )
 
-        # Infer context_type
-        context_type = self._infer_context_type(target_uri) if target_uri else ContextType.RESOURCE
+        # Infer context_type (None = search all types)
+        context_type = self._infer_context_type(target_uri) if target_uri else None
 
         typed_query = TypedQuery(
             query=query,
@@ -826,7 +826,11 @@ class VikingFS:
     _AGENT_STRUCTURE_DIRS = {"memories", "skills", "instructions", "workspaces"}
 
     def _uri_to_path(self, uri: str, ctx: Optional[RequestContext] = None) -> str:
-        """Map virtual URI to account-isolated AGFS path."""
+        """Map virtual URI to account-isolated AGFS path.
+
+        Pure prefix replacement: viking://{remainder} -> /local/{account_id}/{remainder}.
+        No implicit space injection — URIs must include space segments explicitly.
+        """
         real_ctx = self._ctx_or_default(ctx)
         account_id = real_ctx.account_id
         remainder = uri[len("viking://") :].strip("/") if uri.startswith("viking://") else uri
@@ -834,40 +838,7 @@ class VikingFS:
             return f"/local/{account_id}"
 
         parts = [p for p in remainder.split("/") if p]
-        scope = parts[0]
-        mapped_parts = parts[:]
-
-        if scope == "user":
-            user_space = real_ctx.user.user_space_name()
-            tail = parts[1:]
-            if real_ctx.role != Role.USER:
-                mapped_parts = parts[:]
-            elif not tail:
-                mapped_parts = ["user", user_space]
-            elif tail[0] in self._USER_STRUCTURE_DIRS:
-                mapped_parts = ["user", user_space, *tail]
-        elif scope == "agent":
-            agent_space = real_ctx.user.agent_space_name()
-            tail = parts[1:]
-            if real_ctx.role != Role.USER:
-                mapped_parts = parts[:]
-            elif not tail:
-                mapped_parts = ["agent", agent_space]
-            elif tail[0] in self._AGENT_STRUCTURE_DIRS:
-                mapped_parts = ["agent", agent_space, *tail]
-        elif scope == "session":
-            user_space = real_ctx.user.user_space_name()
-            tail = parts[1:]
-            if real_ctx.role != Role.USER:
-                mapped_parts = parts[:]
-            elif not tail:
-                mapped_parts = ["session", user_space]
-            elif len(tail) >= 2 and self._looks_like_space(tail[0]):
-                mapped_parts = ["session", *tail]
-            else:
-                mapped_parts = ["session", user_space, *tail]
-
-        safe_parts = [self._shorten_component(p, self._MAX_FILENAME_BYTES) for p in mapped_parts]
+        safe_parts = [self._shorten_component(p, self._MAX_FILENAME_BYTES) for p in parts]
         return f"/local/{account_id}/{'/'.join(safe_parts)}"
 
     _INTERNAL_DIRS = {"_system"}
@@ -886,7 +857,11 @@ class VikingFS:
         return [e for e in entries if e.get("name") not in self._INTERNAL_DIRS]
 
     def _path_to_uri(self, path: str, ctx: Optional[RequestContext] = None) -> str:
-        """/local/{account}/... -> viking://..."""
+        """/local/{account}/... -> viking://...
+
+        Pure prefix replacement: strips /local/{account_id}/ and prepends viking://.
+        No implicit space stripping.
+        """
         if path.startswith("viking://"):
             return path
         elif path.startswith("/local/"):
@@ -899,34 +874,19 @@ class VikingFS:
                 parts = parts[1:]
             if not parts:
                 return "viking://"
-
-            if real_ctx.role == Role.USER and len(parts) >= 2:
-                scope, maybe_space = parts[0], parts[1]
-                if scope == "user" and maybe_space == real_ctx.user.user_space_name():
-                    parts = [scope, *parts[2:]]
-                elif scope == "agent" and maybe_space == real_ctx.user.agent_space_name():
-                    parts = [scope, *parts[2:]]
-                elif scope == "session" and maybe_space == real_ctx.user.user_space_name():
-                    parts = [scope, *parts[2:]]
             return f"viking://{'/'.join(parts)}"
         elif path.startswith("/"):
             return f"viking:/{path}"
         else:
             return f"viking://{path}"
 
-    @staticmethod
-    def _looks_like_space(segment: str) -> bool:
-        """Heuristic check for user/agent space segment."""
-        if not segment:
-            return False
-        if "_" in segment:
-            return True
-        if len(segment) == 12 and all(c in "0123456789abcdef" for c in segment.lower()):
-            return True
-        return False
-
     def _extract_space_from_uri(self, uri: str) -> Optional[str]:
-        """Extract explicit space segment from URI if present."""
+        """Extract space segment from URI if present.
+
+        URIs are WYSIWYG: viking://{scope}/{space}/...
+        For user/agent, the second segment is space unless it's a known structure dir.
+        For session, the second segment is always space (when 3+ parts).
+        """
         if not uri.startswith("viking://"):
             return None
         parts = [p for p in uri[len("viking://") :].strip("/").split("/") if p]
@@ -938,13 +898,13 @@ class VikingFS:
             return second
         if scope == "agent" and second not in self._AGENT_STRUCTURE_DIRS:
             return second
-        if scope == "session" and len(parts) >= 3 and self._looks_like_space(second):
+        if scope == "session" and len(parts) >= 2:
             return second
         return None
 
     def _is_accessible(self, uri: str, ctx: RequestContext) -> bool:
         """Check whether a URI is visible/accessible under current request context."""
-        if ctx.role in (Role.ROOT, Role.ADMIN):
+        if ctx.role == Role.ROOT:
             return True
         if not uri.startswith("viking://"):
             return False
@@ -1000,14 +960,16 @@ class VikingFS:
                 return ""
 
     def _infer_context_type(self, uri: str):
-        """Infer context_type from URI."""
+        """Infer context_type from URI. Returns None when ambiguous."""
         from openviking_cli.retrieve import ContextType
 
         if "/memories" in uri:
             return ContextType.MEMORY
         elif "/skills" in uri:
             return ContextType.SKILL
-        return ContextType.RESOURCE
+        elif "/resources" in uri:
+            return ContextType.RESOURCE
+        return None
 
     # ========== Vector Sync Helper Methods ==========
 

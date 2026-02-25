@@ -66,7 +66,6 @@ async def create_account(
     )
     await service.initialize_account_directories(account_ctx)
     await service.initialize_user_directories(account_ctx)
-    await service.initialize_agent_directories(account_ctx)
     return Response(
         status="ok",
         result={
@@ -156,7 +155,6 @@ async def register_user(
         role=Role.USER,
     )
     await service.initialize_user_directories(user_ctx)
-    await service.initialize_agent_directories(user_ctx)
     return Response(
         status="ok",
         result={

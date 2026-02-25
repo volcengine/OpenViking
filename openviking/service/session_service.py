@@ -86,7 +86,7 @@ class SessionService:
                 sessions.append(
                     {
                         "session_id": name,
-                        "uri": f"viking://session/{name}",
+                        "uri": f"{session_base_uri}/{name}",
                         "is_dir": entry.get("isDir", False),
                     }
                 )

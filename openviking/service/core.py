@@ -101,13 +101,10 @@ class OpenVikingService:
 
     def _init_storage(self, config: StorageConfig, max_concurrent_embedding: int = 1) -> None:
         """Initialize storage resources."""
-        if config.agfs.backend == "local":
-            self._agfs_manager = AGFSManager(config=config.agfs)
-            self._agfs_manager.start()
-            self._agfs_url = self._agfs_manager.url
-            config.agfs.url = self._agfs_url
-        else:
-            self._agfs_url = config.agfs.url
+        self._agfs_manager = AGFSManager(config=config.agfs)
+        self._agfs_manager.start()
+        self._agfs_url = self._agfs_manager.url
+        config.agfs.url = self._agfs_url
 
         # Initialize QueueManager
         if self._agfs_url:
@@ -228,12 +225,10 @@ class OpenVikingService:
         default_ctx = RequestContext(user=self._user, role=Role.ROOT)
         account_count = await directory_initializer.initialize_account_directories(default_ctx)
         user_count = await directory_initializer.initialize_user_directories(default_ctx)
-        agent_count = await directory_initializer.initialize_agent_directories(default_ctx)
         logger.info(
-            "Initialized preset directories account=%d user=%d agent=%d",
+            "Initialized preset directories account=%d user=%d",
             account_count,
             user_count,
-            agent_count,
         )
 
         # Initialize processors

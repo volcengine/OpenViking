@@ -87,6 +87,8 @@ async def create_session(
 ):
     """Create a new session."""
     service = get_service()
+    await service.initialize_user_directories(_ctx)
+    await service.initialize_agent_directories(_ctx)
     session = service.sessions.session(_ctx)
     return Response(
         status="ok",

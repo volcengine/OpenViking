@@ -249,10 +249,11 @@ class MemoryExtractor:
             payload = await self._append_to_profile(candidate, viking_fs, ctx=ctx)
             if not payload:
                 return None
-            memory_uri = "viking://user/memories/profile.md"
+            user_space = ctx.user.user_space_name()
+            memory_uri = f"viking://user/{user_space}/memories/profile.md"
             memory = Context(
                 uri=memory_uri,
-                parent_uri="viking://user/memories",
+                parent_uri=f"viking://user/{user_space}/memories",
                 is_leaf=True,
                 abstract=payload.abstract,
                 context_type=ContextType.MEMORY.value,
@@ -267,14 +268,15 @@ class MemoryExtractor:
             return memory
 
         # Determine parent URI based on category
+        cat_dir = self.CATEGORY_DIRS[candidate.category]
         if candidate.category in [
             MemoryCategory.PREFERENCES,
             MemoryCategory.ENTITIES,
             MemoryCategory.EVENTS,
         ]:
-            parent_uri = f"viking://user/{self.CATEGORY_DIRS[candidate.category]}"
+            parent_uri = f"viking://user/{ctx.user.user_space_name()}/{cat_dir}"
         else:  # CASES, PATTERNS
-            parent_uri = f"viking://agent/{self.CATEGORY_DIRS[candidate.category]}"
+            parent_uri = f"viking://agent/{ctx.user.agent_space_name()}/{cat_dir}"
 
         # Generate file URI (store directly as .md file, no directory creation)
         memory_id = f"mem_{str(uuid4())}"
@@ -312,7 +314,7 @@ class MemoryExtractor:
         ctx: RequestContext,
     ) -> Optional[MergedMemoryPayload]:
         """Update user profile - always merge with existing content."""
-        uri = "viking://user/memories/profile.md"
+        uri = f"viking://user/{ctx.user.user_space_name()}/memories/profile.md"
         existing = ""
         try:
             existing = await viking_fs.read_file(uri, ctx=ctx) or ""
