@@ -58,6 +58,7 @@ def main():
 
     # Create and run app
     app = create_app(config)
+    print(f"OpenViking HTTP Server is running on {config.host}:{config.port}")
     uvicorn.run(app, host=config.host, port=config.port, log_config=None)
 
 
