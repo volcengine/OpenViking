@@ -125,7 +125,7 @@ class VLMFactory:
             ValueError: If provider is not supported
             ImportError: If related dependencies are not installed
         """
-        provider = config.get("provider") or config.get("backend") or "openai"
+        provider = (config.get("provider") or config.get("backend") or "openai").lower()
 
         if provider == "volcengine":
             from .backends.volcengine_vlm import VolcEngineVLM
