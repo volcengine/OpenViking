@@ -11,6 +11,8 @@ from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
+from openviking.server.telemetry import run_operation
+from openviking.telemetry import TelemetryRequest
 
 router = APIRouter(prefix="/api/v1/search", tags=["search"])
 
@@ -24,6 +26,7 @@ class FindRequest(BaseModel):
     node_limit: Optional[int] = None
     score_threshold: Optional[float] = None
     filter: Optional[Dict[str, Any]] = None
+    telemetry: TelemetryRequest = False
 
 
 class SearchRequest(BaseModel):
@@ -36,6 +39,7 @@ class SearchRequest(BaseModel):
     node_limit: Optional[int] = None
     score_threshold: Optional[float] = None
     filter: Optional[Dict[str, Any]] = None
+    telemetry: TelemetryRequest = False
 
 
 class GrepRequest(BaseModel):
@@ -63,18 +67,26 @@ async def find(
     """Semantic search without session context."""
     service = get_service()
     actual_limit = request.node_limit if request.node_limit is not None else request.limit
-    result = await service.search.find(
-        query=request.query,
-        ctx=_ctx,
-        target_uri=request.target_uri,
-        limit=actual_limit,
-        score_threshold=request.score_threshold,
-        filter=request.filter,
+    execution = await run_operation(
+        operation="search.find",
+        telemetry=request.telemetry,
+        fn=lambda: service.search.find(
+            query=request.query,
+            ctx=_ctx,
+            target_uri=request.target_uri,
+            limit=actual_limit,
+            score_threshold=request.score_threshold,
+            filter=request.filter,
+        ),
     )
-    # Convert FindResult to dict if it has to_dict method
+    result = execution.result
     if hasattr(result, "to_dict"):
         result = result.to_dict()
-    return Response(status="ok", result=result)
+    return Response(
+        status="ok",
+        result=result,
+        telemetry=execution.telemetry,
+    ).model_dump(exclude_none=True)
 
 
 @router.post("/search")
@@ -85,26 +97,35 @@ async def search(
     """Semantic search with optional session context."""
     service = get_service()
 
-    # Get session if session_id provided
-    session = None
-    if request.session_id:
-        session = service.sessions.session(_ctx, request.session_id)
-        await session.load()
+    async def _search():
+        session = None
+        if request.session_id:
+            session = service.sessions.session(_ctx, request.session_id)
+            await session.load()
+        actual_limit = request.node_limit if request.node_limit is not None else request.limit
+        return await service.search.search(
+            query=request.query,
+            ctx=_ctx,
+            target_uri=request.target_uri,
+            session=session,
+            limit=actual_limit,
+            score_threshold=request.score_threshold,
+            filter=request.filter,
+        )
 
-    actual_limit = request.node_limit if request.node_limit is not None else request.limit
-    result = await service.search.search(
-        query=request.query,
-        ctx=_ctx,
-        target_uri=request.target_uri,
-        session=session,
-        limit=actual_limit,
-        score_threshold=request.score_threshold,
-        filter=request.filter,
+    execution = await run_operation(
+        operation="search.search",
+        telemetry=request.telemetry,
+        fn=_search,
     )
-    # Convert FindResult to dict if it has to_dict method
+    result = execution.result
     if hasattr(result, "to_dict"):
         result = result.to_dict()
-    return Response(status="ok", result=result)
+    return Response(
+        status="ok",
+        result=result,
+        telemetry=execution.telemetry,
+    ).model_dump(exclude_none=True)
 
 
 @router.post("/grep")

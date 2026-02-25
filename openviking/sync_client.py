@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from openviking.session import Session
 
 from openviking.async_client import AsyncOpenViking
+from openviking.telemetry import TelemetryRequest
 from openviking_cli.utils import run_async
 
 
@@ -73,9 +74,11 @@ class SyncOpenViking:
         """
         return run_async(self._async_client.add_message(session_id, role, content, parts))
 
-    def commit_session(self, session_id: str) -> Dict[str, Any]:
+    def commit_session(
+        self, session_id: str, telemetry: TelemetryRequest = False
+    ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
-        return run_async(self._async_client.commit_session(session_id))
+        return run_async(self._async_client.commit_session(session_id, telemetry=telemetry))
 
     def add_resource(
         self,
@@ -88,6 +91,7 @@ class SyncOpenViking:
         timeout: float = None,
         build_index: bool = True,
         summarize: bool = False,
+        telemetry: TelemetryRequest = False,
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking (resources scope only)
@@ -98,6 +102,8 @@ class SyncOpenViking:
             **kwargs: Extra options forwarded to the parser chain, e.g.
                 ``strict``, ``ignore_dirs``, ``include``, ``exclude``.
         """
+        if to and parent:
+            raise ValueError("Cannot specify both 'to' and 'parent' at the same time.")
         return run_async(
             self._async_client.add_resource(
                 path=path,
@@ -109,6 +115,7 @@ class SyncOpenViking:
                 timeout=timeout,
                 build_index=build_index,
                 summarize=summarize,
+                telemetry=telemetry,
                 **kwargs,
             )
         )
@@ -118,9 +125,12 @@ class SyncOpenViking:
         data: Any,
         wait: bool = False,
         timeout: float = None,
+        telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add skill to OpenViking."""
-        return run_async(self._async_client.add_skill(data, wait=wait, timeout=timeout))
+        return run_async(
+            self._async_client.add_skill(data, wait=wait, timeout=timeout, telemetry=telemetry)
+        )
 
     def search(
         self,
@@ -131,11 +141,12 @@ class SyncOpenViking:
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        telemetry: TelemetryRequest = False,
     ):
         """Execute complex retrieval (intent analysis, hierarchical retrieval)."""
         return run_async(
             self._async_client.search(
-                query, target_uri, session, session_id, limit, score_threshold, filter
+                query, target_uri, session, session_id, limit, score_threshold, filter, telemetry
             )
         )
 
@@ -145,9 +156,20 @@ class SyncOpenViking:
         target_uri: str = "",
         limit: int = 10,
         score_threshold: Optional[float] = None,
+        filter: Optional[Dict] = None,
+        telemetry: TelemetryRequest = False,
     ):
         """Quick retrieval"""
-        return run_async(self._async_client.find(query, target_uri, limit, score_threshold))
+        return run_async(
+            self._async_client.find(
+                query,
+                target_uri,
+                limit,
+                score_threshold,
+                filter,
+                telemetry,
+            )
+        )
 
     def abstract(self, uri: str) -> str:
         """Read L0 abstract"""

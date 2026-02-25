@@ -14,6 +14,7 @@ from openviking.models.embedder.base import (
     exponential_backoff_retry,
     truncate_and_normalize,
 )
+from openviking.telemetry import get_current_telemetry
 from openviking_cli.utils.logger import default_logger as logger
 
 
@@ -125,6 +126,25 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
         except Exception:
             return 2048  # Default dimension
 
+    def _update_telemetry_token_usage(self, response) -> None:
+        usage = getattr(response, "usage", None)
+        if not usage:
+            return
+
+        def _usage_value(key: str, default: int = 0) -> int:
+            if isinstance(usage, dict):
+                return int(usage.get(key, default) or default)
+            return int(getattr(usage, key, default) or default)
+
+        prompt_tokens = _usage_value("prompt_tokens", 0)
+        total_tokens = _usage_value("total_tokens", prompt_tokens)
+        output_tokens = max(total_tokens - prompt_tokens, 0)
+        get_current_telemetry().add_token_usage_by_source(
+            "embedding",
+            prompt_tokens,
+            output_tokens,
+        )
+
     def embed(self, text: str) -> EmbedResult:
         """Perform dense embedding on text
 
@@ -144,10 +164,12 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
                 response = self.client.multimodal_embeddings.create(
                     input=[{"type": "text", "text": text}], model=self.model_name
                 )
+                self._update_telemetry_token_usage(response)
                 vector = response.data.embedding
             else:
                 # Use text embeddings API
                 response = self.client.embeddings.create(input=text, model=self.model_name)
+                self._update_telemetry_token_usage(response)
                 vector = response.data[0].embedding
 
             vector = truncate_and_normalize(vector, self.dimension)
@@ -187,9 +209,11 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
                 response = self.client.multimodal_embeddings.create(
                     input=multimodal_inputs, model=self.model_name
                 )
+                self._update_telemetry_token_usage(response)
                 data = response.data
             else:
                 response = self.client.embeddings.create(input=texts, model=self.model_name)
+                self._update_telemetry_token_usage(response)
                 data = response.data
 
             return [

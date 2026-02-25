@@ -142,7 +142,55 @@ async def test_compress_session(client: httpx.AsyncClient):
 
     resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
     assert resp.status_code == 200
-    assert resp.json()["status"] == "ok"
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert "usage" not in body
+    assert "telemetry" not in body
+
+
+async def test_compress_session_with_telemetry(client: httpx.AsyncClient):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+    await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={"role": "user", "content": "Trace this commit"},
+    )
+
+    resp = await client.post(
+        f"/api/v1/sessions/{session_id}/commit",
+        json={"telemetry": True},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    summary = body["telemetry"]["summary"]
+    assert summary["operation"] == "session.commit"
+    assert {"total", "llm", "embedding"}.issubset(summary["tokens"].keys())
+    assert summary["memory"]["extracted"] is not None
+    assert "semantic_nodes" not in summary
+    assert "usage" not in body
+
+
+async def test_compress_session_with_summary_only_telemetry(client: httpx.AsyncClient):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+    await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={"role": "user", "content": "Summary only telemetry"},
+    )
+
+    resp = await client.post(
+        f"/api/v1/sessions/{session_id}/commit",
+        json={"telemetry": {"summary": True}},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["telemetry"]["summary"]["operation"] == "session.commit"
+    assert "usage" not in body
+    assert "events" not in body["telemetry"]
+    assert "truncated" not in body["telemetry"]
+    assert "dropped" not in body["telemetry"]
 
 
 async def test_extract_session_jsonable_regression(client: httpx.AsyncClient, service, monkeypatch):

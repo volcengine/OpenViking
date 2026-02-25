@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -46,6 +47,36 @@ _ALLOWED_FORWARD_RESPONSE_HEADERS = {
 }
 
 
+def _is_json_content_type(content_type: str) -> bool:
+    value = (content_type or "").lower()
+    return "application/json" in value or "+json" in value
+
+
+def _should_default_telemetry(upstream_path: str) -> bool:
+    if upstream_path in {"/api/v1/search/find", "/api/v1/resources"}:
+        return True
+    return upstream_path.startswith("/api/v1/sessions/") and upstream_path.endswith("/commit")
+
+
+def _with_default_telemetry(request: Request, upstream_path: str, body: bytes) -> bytes:
+    if request.method.upper() != "POST":
+        return body
+    if not _should_default_telemetry(upstream_path):
+        return body
+    if not _is_json_content_type(request.headers.get("content-type", "")):
+        return body
+
+    try:
+        payload = json.loads(body.decode("utf-8")) if body else {}
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return body
+    if not isinstance(payload, dict):
+        return body
+
+    payload.setdefault("telemetry", True)
+    return json.dumps(payload).encode("utf-8")
+
+
 def _error_response(status_code: int, code: str, message: str, details: Optional[dict] = None):
     return JSONResponse(
         status_code=status_code,
@@ -80,6 +111,7 @@ async def _forward_request(request: Request, upstream_path: str) -> Response:
     """Forward the incoming request to OpenViking upstream."""
     client: httpx.AsyncClient = request.app.state.upstream_client
     body = await request.body()
+    body = _with_default_telemetry(request, upstream_path, body)
     try:
         upstream_response = await client.request(
             method=request.method,

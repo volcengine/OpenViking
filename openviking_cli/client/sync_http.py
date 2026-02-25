@@ -7,6 +7,7 @@ Wraps AsyncHTTPClient with synchronous methods.
 
 from typing import Any, Dict, List, Optional, Union
 
+from openviking.telemetry import TelemetryRequest
 from openviking_cli.client.http import AsyncHTTPClient
 from openviking_cli.utils import run_async
 
@@ -105,9 +106,11 @@ class SyncHTTPClient:
         """
         return run_async(self._async_client.add_message(session_id, role, content, parts))
 
-    def commit_session(self, session_id: str) -> Dict[str, Any]:
+    def commit_session(
+        self, session_id: str, telemetry: TelemetryRequest = False
+    ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
-        return run_async(self._async_client.commit_session(session_id))
+        return run_async(self._async_client.commit_session(session_id, telemetry=telemetry))
 
     # ============= Resource =============
 
@@ -125,8 +128,11 @@ class SyncHTTPClient:
         include: Optional[str] = None,
         exclude: Optional[str] = None,
         directly_upload_media: bool = True,
+        telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
+        if to and parent:
+            raise ValueError("Cannot specify both 'to' and 'parent' at the same time.")
         return run_async(
             self._async_client.add_resource(
                 path,
@@ -141,6 +147,7 @@ class SyncHTTPClient:
                 include,
                 exclude,
                 directly_upload_media,
+                telemetry=telemetry,
             )
         )
 
@@ -149,9 +156,12 @@ class SyncHTTPClient:
         data: Any,
         wait: bool = False,
         timeout: Optional[float] = None,
+        telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add skill to OpenViking."""
-        return run_async(self._async_client.add_skill(data, wait=wait, timeout=timeout))
+        return run_async(
+            self._async_client.add_skill(data, wait=wait, timeout=timeout, telemetry=telemetry)
+        )
 
     def wait_processed(self, timeout: Optional[float] = None) -> Dict[str, Any]:
         """Wait for all processing to complete."""
@@ -169,6 +179,7 @@ class SyncHTTPClient:
         node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        telemetry: TelemetryRequest = False,
     ):
         """Semantic search with optional session context."""
         return run_async(
@@ -181,6 +192,7 @@ class SyncHTTPClient:
                 node_limit=node_limit,
                 score_threshold=score_threshold,
                 filter=filter,
+                telemetry=telemetry,
             )
         )
 
@@ -192,10 +204,19 @@ class SyncHTTPClient:
         node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        telemetry: TelemetryRequest = False,
     ):
         """Semantic search without session context."""
         return run_async(
-            self._async_client.find(query, target_uri, limit, node_limit, score_threshold, filter)
+            self._async_client.find(
+                query,
+                target_uri,
+                limit,
+                node_limit,
+                score_threshold,
+                filter,
+                telemetry=telemetry,
+            )
         )
 
     def grep(

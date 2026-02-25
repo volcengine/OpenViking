@@ -14,6 +14,7 @@ from uuid import uuid4
 
 from openviking.message import Message, Part
 from openviking.server.identity import RequestContext, Role
+from openviking.telemetry import get_current_telemetry
 from openviking.utils.time_utils import get_current_timestamp
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger, run_async
@@ -229,6 +230,7 @@ class Session:
             "stats": None,
         }
         if not self._messages:
+            get_current_telemetry().set("memory.extracted", 0)
             return result
 
         # 1. Archive current messages
@@ -270,6 +272,7 @@ class Session:
             logger.info(f"Extracted {len(memories)} memories")
             result["memories_extracted"] = len(memories)
             self._stats.memories_extracted += len(memories)
+            get_current_telemetry().set("memory.extracted", len(memories))
 
         # 3. Write current messages to AGFS
         self._write_to_agfs(self._messages)
@@ -305,6 +308,7 @@ class Session:
             "stats": None,
         }
         if not self._messages:
+            get_current_telemetry().set("memory.extracted", 0)
             return result
 
         # 1. Archive current messages
@@ -344,6 +348,7 @@ class Session:
             logger.info(f"Extracted {len(memories)} memories")
             result["memories_extracted"] = len(memories)
             self._stats.memories_extracted += len(memories)
+            get_current_telemetry().set("memory.extracted", len(memories))
 
         # 3. Write current messages to AGFS
         await self._write_to_agfs_async(self._messages)

@@ -14,6 +14,8 @@ from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
+from openviking.server.telemetry import run_operation
+from openviking.telemetry import TelemetryRequest
 from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils.config.open_viking_config import get_openviking_config
 
@@ -37,6 +39,7 @@ class AddResourceRequest(BaseModel):
     exclude: Optional[str] = None
     directly_upload_media: bool = True
     preserve_structure: Optional[bool] = None
+    telemetry: TelemetryRequest = False
 
     @model_validator(mode="after")
     def check_path_or_temp_path(self):
@@ -52,6 +55,7 @@ class AddSkillRequest(BaseModel):
     temp_path: Optional[str] = None
     wait: bool = False
     timeout: Optional[float] = None
+    telemetry: TelemetryRequest = False
 
 
 def _cleanup_temp_files(temp_dir: Path, max_age_hours: int = 1):
@@ -98,11 +102,9 @@ async def add_resource(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Add resource to OpenViking."""
-    # Validate request: only one of 'to' or 'parent' can be set
+    service = get_service()
     if request.to and request.parent:
         raise InvalidArgumentError("Cannot specify both 'to' and 'parent' at the same time.")
-
-    service = get_service()
 
     path = request.path
     if request.temp_path:
@@ -120,18 +122,26 @@ async def add_resource(
     if request.preserve_structure is not None:
         kwargs["preserve_structure"] = request.preserve_structure
 
-    result = await service.resources.add_resource(
-        path=path,
-        ctx=_ctx,
-        to=request.to,
-        parent=request.parent,
-        reason=request.reason,
-        instruction=request.instruction,
-        wait=request.wait,
-        timeout=request.timeout,
-        **kwargs,
+    execution = await run_operation(
+        operation="resources.add_resource",
+        telemetry=request.telemetry,
+        fn=lambda: service.resources.add_resource(
+            path=path,
+            ctx=_ctx,
+            to=request.to,
+            parent=request.parent,
+            reason=request.reason,
+            instruction=request.instruction,
+            wait=request.wait,
+            timeout=request.timeout,
+            **kwargs,
+        ),
     )
-    return Response(status="ok", result=result)
+    return Response(
+        status="ok",
+        result=execution.result,
+        telemetry=execution.telemetry,
+    ).model_dump(exclude_none=True)
 
 
 @router.post("/skills")
@@ -141,15 +151,22 @@ async def add_skill(
 ):
     """Add skill to OpenViking."""
     service = get_service()
-
     data = request.data
     if request.temp_path:
         data = request.temp_path
 
-    result = await service.resources.add_skill(
-        data=data,
-        ctx=_ctx,
-        wait=request.wait,
-        timeout=request.timeout,
+    execution = await run_operation(
+        operation="resources.add_skill",
+        telemetry=request.telemetry,
+        fn=lambda: service.resources.add_skill(
+            data=data,
+            ctx=_ctx,
+            wait=request.wait,
+            timeout=request.timeout,
+        ),
     )
-    return Response(status="ok", result=result)
+    return Response(
+        status="ok",
+        result=execution.result,
+        telemetry=execution.telemetry,
+    ).model_dump(exclude_none=True)

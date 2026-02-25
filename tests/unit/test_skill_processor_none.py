@@ -43,3 +43,21 @@ class TestParseSkillNoneData:
         processor = SkillProcessor(vikingdb=None)
         with pytest.raises(ValueError, match="Unsupported data type"):
             processor._parse_skill(12345)
+
+    def test_parse_skill_long_raw_content_raises_oserror(self):
+        """Long raw SKILL.md content should still surface path probing errors."""
+        processor = SkillProcessor(vikingdb=None)
+        long_description = "telemetry " * 80
+        raw_skill = (
+            "---\n"
+            "name: telemetry-demo-skill\n"
+            f"description: {long_description}\n"
+            "tags:\n"
+            "  - telemetry\n"
+            "---\n\n"
+            "# Telemetry Demo Skill\n\n"
+            "Use this skill to validate telemetry ingestion.\n"
+        )
+
+        with pytest.raises(OSError, match="File name too long"):
+            processor._parse_skill(raw_skill)

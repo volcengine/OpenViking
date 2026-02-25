@@ -17,6 +17,7 @@ from openviking.models.embedder.base import EmbedResult
 from openviking.prompts import render_prompt
 from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager
+from openviking.telemetry import get_current_telemetry
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
@@ -122,6 +123,7 @@ class MemoryDeduplicator:
         ctx: RequestContext,
     ) -> List[Context]:
         """Find similar existing memories using vector search."""
+        telemetry = get_current_telemetry()
         if not self.embedder:
             return []
 
@@ -156,6 +158,9 @@ class MemoryDeduplicator:
                 limit=5,
                 ctx=ctx,
             )
+            telemetry.count("vector.searches", 1)
+            telemetry.count("vector.scored", len(results))
+            telemetry.count("vector.scanned", len(results))
 
             # Filter by similarity threshold
             similar = []
@@ -173,6 +178,7 @@ class MemoryDeduplicator:
                     result.get("abstract", ""),
                 )
                 if score >= self.SIMILARITY_THRESHOLD:
+                    telemetry.count("vector.passed", 1)
                     # Reconstruct Context object
                     context = Context.from_dict(result)
                     if context:
