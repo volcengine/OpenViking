@@ -25,6 +25,9 @@ pub enum Error {
 
     #[error("Serialization error: {0}")]
     Serialization(#[from] serde_json::Error),
+
+    #[error("Zip error: {0}")]
+    Zip(#[from] zip::result::ZipError),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
@@ -75,6 +78,7 @@ impl From<Error> for CliError {
             Error::Output(msg) => CliError::new(format!("Output error: {}", msg)),
             Error::Io(e) => CliError::new(format!("IO error: {}", e)),
             Error::Serialization(e) => CliError::new(format!("Serialization error: {}", e)),
+            Error::Zip(e) => CliError::new(format!("Zip error: {}", e)),
         }
     }
 }
@@ -84,7 +88,7 @@ impl From<reqwest::Error> for CliError {
         if err.is_connect() || err.is_timeout() {
             CliError::network(format!(
                 "Failed to connect to OpenViking server. \
-                 Check the url in ovcli.conf and ensure the server is running. ({ })",
+                 Check the url in ovcli.conf and ensure the server is running. ({})",
                 err
             ))
         } else {
