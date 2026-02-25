@@ -145,7 +145,8 @@ Use OpenAI's official API:
   "vlm": {
     "provider": "openai",
     "model": "gpt-4o",
-    "api_key": "your-api-key"
+    "api_key": "your-api-key",
+    "api_base": "https://api.openai.com/v1"
   }
 }
 ```
@@ -247,7 +248,7 @@ Create a configuration file `~/.openviking/ov.conf`, remove the comments before 
 }
 ```
 
-> **Note**: For embedding models, currently `volcengine` (Doubao), `openai`, and `jina` providers are supported. For VLM models, we support multiple providers including volcengine, openai, deepseek, anthropic, gemini, moonshot, zhipu, dashscope, minimax, and more.
+> **Note**: For embedding models, currently `volcengine` (Doubao), `openai`, and `jina` providers are supported. For VLM models, we support three providers: `volcengine`, `openai`, and `litellm`. The `litellm` provider supports 100+ models including Anthropic (Claude), DeepSeek, Gemini, Moonshot, Zhipu, DashScope, MiniMax, vLLM, Ollama, and more.
 
 #### Configuration Examples
 

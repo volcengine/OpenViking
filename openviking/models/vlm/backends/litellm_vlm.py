@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """LiteLLM VLM Provider implementation with multi-provider support."""
 
+import logging
 import os
 
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
@@ -15,6 +16,8 @@ import litellm
 from litellm import acompletion, completion
 
 from ..base import VLMBase
+
+logger = logging.getLogger(__name__)
 
 PROVIDER_CONFIGS: Dict[str, Dict[str, Any]] = {
     "openrouter": {
@@ -129,19 +132,42 @@ class LiteLLMVLMProvider(VLMBase):
             prefix = PROVIDER_CONFIGS[provider]["litellm_prefix"]
             if prefix and not model.startswith(f"{prefix}/"):
                 return f"{prefix}/{model}"
+            return model
 
-        if self.api_base and not model.startswith("openai/"):
+        if self.api_base and not model.startswith(("openai/", "hosted_vllm/", "ollama/")):
             return f"openai/{model}"
 
         return model
+
+    def _detect_image_format(self, data: bytes) -> str:
+        """Detect image format from magic bytes.
+
+        Supported formats: PNG, JPEG, GIF, WebP
+        """
+        if len(data) < 8:
+            logger.warning(f"[LiteLLMVLM] Image data too small: {len(data)} bytes")
+            return "image/png"
+
+        if data[:8] == b"\x89PNG\r\n\x1a\n":
+            return "image/png"
+        elif data[:2] == b"\xff\xd8":
+            return "image/jpeg"
+        elif data[:6] in (b"GIF87a", b"GIF89a"):
+            return "image/gif"
+        elif data[:4] == b"RIFF" and len(data) >= 12 and data[8:12] == b"WEBP":
+            return "image/webp"
+
+        logger.warning(f"[LiteLLMVLM] Unknown image format, magic bytes: {data[:8].hex()}")
+        return "image/png"
 
     def _prepare_image(self, image: Union[str, Path, bytes]) -> Dict[str, Any]:
         """Prepare image data for vision completion."""
         if isinstance(image, bytes):
             b64 = base64.b64encode(image).decode("utf-8")
+            mime_type = self._detect_image_format(image)
             return {
                 "type": "image_url",
-                "image_url": {"url": f"data:image/png;base64,{b64}"},
+                "image_url": {"url": f"data:{mime_type};base64,{b64}"},
             }
         elif isinstance(image, Path) or (
             isinstance(image, str) and not image.startswith(("http://", "https://"))
@@ -156,7 +182,8 @@ class LiteLLMVLMProvider(VLMBase):
                 ".webp": "image/webp",
             }.get(suffix, "image/png")
             with open(path, "rb") as f:
-                b64 = base64.b64encode(f.read()).decode("utf-8")
+                data = f.read()
+            b64 = base64.b64encode(data).decode("utf-8")
             return {
                 "type": "image_url",
                 "image_url": {"url": f"data:{mime_type};base64,{b64}"},

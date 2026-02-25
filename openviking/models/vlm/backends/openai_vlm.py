@@ -4,10 +4,13 @@
 
 import asyncio
 import base64
+import logging
 from pathlib import Path
 from typing import Any, Dict, List, Union
 
 from ..base import VLMBase
+
+logger = logging.getLogger(__name__)
 
 
 class OpenAIVLM(VLMBase):
@@ -17,7 +20,6 @@ class OpenAIVLM(VLMBase):
         super().__init__(config)
         self._sync_client = None
         self._async_client = None
-        # Ensure provider type is correct
         self.provider = "openai"
 
     def get_client(self):
@@ -92,13 +94,35 @@ class OpenAIVLM(VLMBase):
         else:
             raise RuntimeError("Unknown error in async completion")
 
+    def _detect_image_format(self, data: bytes) -> str:
+        """Detect image format from magic bytes.
+
+        Supported formats: PNG, JPEG, GIF, WebP
+        """
+        if len(data) < 8:
+            logger.warning(f"[OpenAIVLM] Image data too small: {len(data)} bytes")
+            return "image/png"
+
+        if data[:8] == b"\x89PNG\r\n\x1a\n":
+            return "image/png"
+        elif data[:2] == b"\xff\xd8":
+            return "image/jpeg"
+        elif data[:6] in (b"GIF87a", b"GIF89a"):
+            return "image/gif"
+        elif data[:4] == b"RIFF" and len(data) >= 12 and data[8:12] == b"WEBP":
+            return "image/webp"
+
+        logger.warning(f"[OpenAIVLM] Unknown image format, magic bytes: {data[:8].hex()}")
+        return "image/png"
+
     def _prepare_image(self, image: Union[str, Path, bytes]) -> Dict[str, Any]:
-        """Prepare image data"""
+        """Prepare image data for vision completion."""
         if isinstance(image, bytes):
             b64 = base64.b64encode(image).decode("utf-8")
+            mime_type = self._detect_image_format(image)
             return {
                 "type": "image_url",
-                "image_url": {"url": f"data:image/png;base64,{b64}"},
+                "image_url": {"url": f"data:{mime_type};base64,{b64}"},
             }
         elif isinstance(image, Path) or (
             isinstance(image, str) and not image.startswith(("http://", "https://"))
@@ -113,7 +137,8 @@ class OpenAIVLM(VLMBase):
                 ".webp": "image/webp",
             }.get(suffix, "image/png")
             with open(path, "rb") as f:
-                b64 = base64.b64encode(f.read()).decode("utf-8")
+                data = f.read()
+            b64 = base64.b64encode(data).decode("utf-8")
             return {
                 "type": "image_url",
                 "image_url": {"url": f"data:{mime_type};base64,{b64}"},
