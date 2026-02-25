@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Literal, Optional
 from fastapi import APIRouter, Depends, Path
 from pydantic import BaseModel, model_validator
 
-from openviking.message.part import ContextPart, Part, TextPart, ToolPart
+from openviking.message.part import Part, TextPart, part_from_dict
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
@@ -46,31 +46,6 @@ class ToolPartRequest(BaseModel):
 
 
 PartRequest = TextPartRequest | ContextPartRequest | ToolPartRequest
-
-
-def _part_request_to_part(part_req: Dict[str, Any]) -> Part:
-    """Convert a part request dict to a Part object."""
-    part_type = part_req.get("type", "text")
-    if part_type == "text":
-        return TextPart(text=part_req.get("text", ""))
-    elif part_type == "context":
-        return ContextPart(
-            uri=part_req.get("uri", ""),
-            context_type=part_req.get("context_type", "memory"),
-            abstract=part_req.get("abstract", ""),
-        )
-    elif part_type == "tool":
-        return ToolPart(
-            tool_id=part_req.get("tool_id", ""),
-            tool_name=part_req.get("tool_name", ""),
-            tool_uri=part_req.get("tool_uri", ""),
-            skill_uri=part_req.get("skill_uri", ""),
-            tool_input=part_req.get("tool_input"),
-            tool_output=part_req.get("tool_output", ""),
-            tool_status=part_req.get("tool_status", "pending"),
-        )
-    else:
-        return TextPart(text=str(part_req))
 
 
 class AddMessageRequest(BaseModel):
@@ -209,7 +184,7 @@ async def add_message(
     await session.load()
 
     if request.parts is not None:
-        parts = [_part_request_to_part(p) for p in request.parts]
+        parts = [part_from_dict(p) for p in request.parts]
     else:
         parts = [TextPart(text=request.content or "")]
 

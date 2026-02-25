@@ -144,9 +144,15 @@ class LocalClient(BaseClient):
 
     # ============= Content Reading =============
 
-    async def read(self, uri: str) -> str:
-        """Read file content."""
-        return await self._service.fs.read(uri)
+    async def read(self, uri: str, offset: int = 0, limit: int = -1) -> str:
+        """Read file content.
+
+        Args:
+            uri: Viking URI
+            offset: Starting line number (0-indexed). Default 0.
+            limit: Number of lines to read. -1 means read to end. Default -1.
+        """
+        return await self._service.fs.read(uri, offset=offset, limit=limit)
 
     async def abstract(self, uri: str) -> str:
         """Read L0 abstract."""
@@ -269,40 +275,14 @@ class LocalClient(BaseClient):
 
         If both content and parts are provided, parts takes precedence.
         """
-        from openviking.message.part import ContextPart, Part, TextPart, ToolPart
+        from openviking.message.part import Part, TextPart, part_from_dict
 
         session = self._service.sessions.session(session_id)
         await session.load()
 
         message_parts: list[Part]
         if parts is not None:
-            message_parts = []
-            for p in parts:
-                part_type = p.get("type", "text")
-                if part_type == "text":
-                    message_parts.append(TextPart(text=p.get("text", "")))
-                elif part_type == "context":
-                    message_parts.append(
-                        ContextPart(
-                            uri=p.get("uri", ""),
-                            context_type=p.get("context_type", "memory"),
-                            abstract=p.get("abstract", ""),
-                        )
-                    )
-                elif part_type == "tool":
-                    message_parts.append(
-                        ToolPart(
-                            tool_id=p.get("tool_id", ""),
-                            tool_name=p.get("tool_name", ""),
-                            tool_uri=p.get("tool_uri", ""),
-                            skill_uri=p.get("skill_uri", ""),
-                            tool_input=p.get("tool_input"),
-                            tool_output=p.get("tool_output", ""),
-                            tool_status=p.get("tool_status", "pending"),
-                        )
-                    )
-                else:
-                    message_parts.append(TextPart(text=str(p)))
+            message_parts = [part_from_dict(p) for p in parts]
         elif content is not None:
             message_parts = [TextPart(text=content)]
         else:

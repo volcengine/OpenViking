@@ -48,3 +48,35 @@ class ToolPart:
 
 
 Part = Union[TextPart, ContextPart, ToolPart]
+
+
+def part_from_dict(data: dict) -> Part:
+    """Convert a dict to a Part object.
+
+    Args:
+        data: Dictionary with part data. Must contain 'type' field.
+
+    Returns:
+        Part object (TextPart, ContextPart, or ToolPart)
+    """
+    part_type = data.get("type", "text")
+    if part_type == "text":
+        return TextPart(text=data.get("text", ""))
+    elif part_type == "context":
+        return ContextPart(
+            uri=data.get("uri", ""),
+            context_type=data.get("context_type", "memory"),
+            abstract=data.get("abstract", ""),
+        )
+    elif part_type == "tool":
+        return ToolPart(
+            tool_id=data.get("tool_id", ""),
+            tool_name=data.get("tool_name", ""),
+            tool_uri=data.get("tool_uri", ""),
+            skill_uri=data.get("skill_uri", ""),
+            tool_input=data.get("tool_input"),
+            tool_output=data.get("tool_output", ""),
+            tool_status=data.get("tool_status", "pending"),
+        )
+    else:
+        return TextPart(text=str(data))
