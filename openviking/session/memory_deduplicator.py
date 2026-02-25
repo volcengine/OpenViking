@@ -148,7 +148,7 @@ class MemoryDeduplicator:
             )
             filter_conds.append({"field": "owner_space", "op": "must", "conds": [owner_space]})
         if category_uri_prefix:
-            filter_conds.append({"field": "uri", "op": "prefix", "prefix": category_uri_prefix})
+            filter_conds.append({"field": "uri", "op": "must", "conds": [category_uri_prefix]})
         dedup_filter = {"op": "and", "conds": filter_conds}
         logger.debug(
             "Dedup prefilter candidate category=%s filter=%s",

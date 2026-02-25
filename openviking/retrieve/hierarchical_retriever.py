@@ -118,7 +118,7 @@ class HierarchicalRetriever:
             target_filter = {
                 "op": "or",
                 "conds": [
-                    {"op": "prefix", "field": "uri", "prefix": target_dir}
+                    {"op": "must", "field": "uri", "conds": [target_dir]}
                     for target_dir in target_dirs
                 ],
             }

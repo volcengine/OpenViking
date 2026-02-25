@@ -1017,7 +1017,7 @@ class VikingFS:
                         "op": "or",
                         "conds": [
                             {"op": "must", "field": "uri", "conds": [uri]},
-                            {"op": "prefix", "field": "uri", "prefix": f"{uri}/"},
+                            {"op": "must", "field": "uri", "conds": [f"{uri}/"]},
                         ],
                     },
                 ]
