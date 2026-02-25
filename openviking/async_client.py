@@ -123,10 +123,27 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         await self._client.delete_session(session_id)
 
-    async def add_message(self, session_id: str, role: str, content: str) -> Dict[str, Any]:
-        """Add a message to a session."""
+    async def add_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str | None = None,
+        parts: list[dict] | None = None,
+    ) -> Dict[str, Any]:
+        """Add a message to a session.
+
+        Args:
+            session_id: Session ID
+            role: Message role ("user" or "assistant")
+            content: Text content (simple mode)
+            parts: Parts array (full Part support: TextPart, ContextPart, ToolPart)
+
+        If both content and parts are provided, parts takes precedence.
+        """
         await self._ensure_initialized()
-        return await self._client.add_message(session_id=session_id, role=role, content=content)
+        return await self._client.add_message(
+            session_id=session_id, role=role, content=content, parts=parts
+        )
 
     async def commit_session(self, session_id: str) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""

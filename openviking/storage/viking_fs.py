@@ -999,27 +999,6 @@ class VikingFS:
             except Exception:
                 return ""
 
-    def _convert_agfs_error(self, e: Exception, uri: str) -> Exception:
-        """Convert AGFSClientError to appropriate Python standard exception.
-
-        This preserves the semantic meaning of errors:
-        - "No such file or directory" -> FileNotFoundError
-        - "Permission denied" -> PermissionError
-        - Connection/timeout errors -> IOError
-        - Other errors -> IOError with original message
-        """
-        error_msg = str(e).lower()
-        if "no such file" in error_msg or "not found" in error_msg:
-            return FileNotFoundError(f"File not found: {uri}")
-        elif "permission denied" in error_msg:
-            return PermissionError(f"Permission denied: {uri}")
-        elif "connection refused" in error_msg or "server not running" in error_msg:
-            return IOError(f"AGFS server unavailable: {e}")
-        elif "timeout" in error_msg:
-            return IOError(f"Request timeout: {uri}")
-        else:
-            return IOError(f"Failed to access {uri}: {e}")
-
     def _infer_context_type(self, uri: str):
         """Infer context_type from URI."""
         from openviking_cli.retrieve import ContextType
@@ -1274,8 +1253,6 @@ class VikingFS:
 
         Raises:
             FileNotFoundError: If the file does not exist.
-            PermissionError: If permission denied.
-            IOError: For other I/O related errors (connection, timeout, etc.).
         """
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
@@ -1283,7 +1260,7 @@ class VikingFS:
         try:
             content = self.agfs.read(path)
         except Exception as e:
-            raise self._convert_agfs_error(e, uri) from e
+            raise FileNotFoundError(f"Failed to read {uri}: {e}")
         text = self._handle_agfs_content(content)
         if offset == 0 and limit == -1:
             return text
@@ -1302,7 +1279,7 @@ class VikingFS:
         try:
             return self._handle_agfs_read(self.agfs.read(path))
         except Exception as e:
-            raise self._convert_agfs_error(e, uri) from e
+            raise FileNotFoundError(f"Failed to read {uri}: {e}")
 
     async def write_file_bytes(
         self,
@@ -1385,7 +1362,7 @@ class VikingFS:
         try:
             entries = self._ls_entries(path)
         except Exception as e:
-            raise self._convert_agfs_error(e, uri) from e
+            raise FileNotFoundError(f"Failed to list {uri}: {e}")
         # basic info
         now = datetime.now()
         all_entries = []
@@ -1444,7 +1421,7 @@ class VikingFS:
                     all_entries.append(new_entry)
             return all_entries
         except Exception as e:
-            raise self._convert_agfs_error(e, uri) from e
+            raise FileNotFoundError(f"Failed to list {uri}: {e}")
 
     async def move_file(
         self,
