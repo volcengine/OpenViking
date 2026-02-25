@@ -283,11 +283,23 @@ class Session:
 
         for usage in self._usage_records:
             try:
+                # Fetch the record first to get its id and current active_count.
+                # storage.update() signature is update(collection, id, data) —
+                # it does NOT accept MongoDB-style filter/update kwargs.
+                record = run_async(storage.fetch_by_uri("context", usage.uri))
+                if not record:
+                    logger.debug(f"Record not found for URI: {usage.uri}")
+                    continue
+                record_id = record.get("id")
+                if not record_id:
+                    logger.debug(f"Record has no id for URI: {usage.uri}")
+                    continue
+                current_count = record.get("active_count") or 0
                 run_async(
                     storage.update(
                         collection="context",
-                        filter={"uri": usage.uri},
-                        update={"$inc": {"active_count": 1}},
+                        id=record_id,
+                        data={"active_count": current_count + 1},
                     )
                 )
                 updated += 1

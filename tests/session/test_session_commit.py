@@ -75,3 +75,37 @@ class TestCommit:
 
         assert result.get("status") == "committed"
         assert "active_count_updated" in result
+
+    async def test_active_count_incremented_after_commit(
+        self, client_with_resource_sync: tuple
+    ):
+        """Regression test: active_count must actually increment after commit.
+
+        Previously _update_active_counts() called storage.update() with
+        MongoDB-style kwargs (filter=, update=) that don't match the method
+        signature update(collection, id, data), causing a silent TypeError and
+        leaving active_count permanently at 0.
+        """
+        client, uri = client_with_resource_sync
+
+        # Read active_count before any usage
+        record_before = await client._service.vikingdb_manager.fetch_by_uri("context", uri)
+        assert record_before is not None, f"Resource not found: {uri}"
+        count_before = record_before.get("active_count") or 0
+
+        # Mark as used and commit
+        session = client.session(session_id="active_count_regression_test")
+        session.add_message("user", [TextPart("Query")])
+        session.used(contexts=[uri])
+        session.add_message("assistant", [TextPart("Answer")])
+        result = session.commit()
+
+        assert result.get("active_count_updated") == 1
+
+        # Verify the count actually changed in storage
+        record_after = await client._service.vikingdb_manager.fetch_by_uri("context", uri)
+        assert record_after is not None
+        count_after = record_after.get("active_count") or 0
+        assert count_after == count_before + 1, (
+            f"active_count not incremented: before={count_before}, after={count_after}"
+        )
