@@ -75,8 +75,33 @@ class MemoryExtractor:
         MemoryCategory.PATTERNS: "memories/patterns",
     }
 
+    # Categories that belong to user space
+    _USER_CATEGORIES = {
+        MemoryCategory.PROFILE,
+        MemoryCategory.PREFERENCES,
+        MemoryCategory.ENTITIES,
+        MemoryCategory.EVENTS,
+    }
+
+    # Categories that belong to agent space
+    _AGENT_CATEGORIES = {
+        MemoryCategory.CASES,
+        MemoryCategory.PATTERNS,
+    }
+
     def __init__(self):
         """Initialize memory extractor."""
+
+    @staticmethod
+    def _get_owner_space(category: MemoryCategory, ctx: RequestContext) -> str:
+        """Derive owner_space from memory category.
+
+        PROFILE / PREFERENCES / ENTITIES / EVENTS → user_space
+        CASES / PATTERNS → agent_space
+        """
+        if category in MemoryExtractor._USER_CATEGORIES:
+            return ctx.user.user_space_name()
+        return ctx.user.agent_space_name()
 
     @staticmethod
     def _detect_output_language(messages: List, fallback_language: str = "en") -> str:
@@ -217,6 +242,8 @@ class MemoryExtractor:
             logger.warning("VikingFS not available, skipping memory creation")
             return None
 
+        owner_space = self._get_owner_space(candidate.category, ctx)
+
         # Special handling for profile: append to profile.md
         if candidate.category == MemoryCategory.PROFILE:
             payload = await self._append_to_profile(candidate, viking_fs, ctx=ctx)
@@ -233,7 +260,7 @@ class MemoryExtractor:
                 session_id=session_id,
                 user=user,
                 account_id=ctx.account_id,
-                owner_space=ctx.user.user_space_name(),
+                owner_space=owner_space,
             )
             logger.info(f"uri {memory_uri} abstract: {payload.abstract} content: {payload.content}")
             memory.set_vectorize(Vectorize(text=payload.content))
@@ -272,11 +299,7 @@ class MemoryExtractor:
             session_id=session_id,
             user=user,
             account_id=ctx.account_id,
-            owner_space=(
-                ctx.user.agent_space_name()
-                if memory_uri.startswith("viking://agent/")
-                else ctx.user.user_space_name()
-            ),
+            owner_space=owner_space,
         )
         logger.info(f"uri {memory_uri} abstract: {candidate.abstract} content: {candidate.content}")
         memory.set_vectorize(Vectorize(text=candidate.content))

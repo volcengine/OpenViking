@@ -104,30 +104,28 @@ class Context:
         return ""
 
     def _derive_context_type(self) -> str:
-        """Derive context type from URI prefix."""
-        if self.uri.startswith("viking://agent/skills"):
+        """Derive context type from URI using substring matching."""
+        if "/skills" in self.uri:
             return "skill"
-        elif "memories" in self.uri:
+        elif "/memories" in self.uri:
             return "memory"
         else:
             return "resource"
 
     def _derive_category(self) -> str:
-        """Derive category from URI prefix."""
-        if self.uri.startswith("viking://agent/memories"):
-            if "patterns" in self.uri:
-                return "patterns"
-            elif "cases" in self.uri:
-                return "cases"
-        elif self.uri.startswith("viking://user/memories"):
-            if "profile" in self.uri:
-                return "profile"
-            if "preferences" in self.uri:
-                return "preferences"
-            if "entities" in self.uri:
-                return "entities"
-            elif "events" in self.uri:
-                return "events"
+        """Derive category from URI using substring matching."""
+        if "/patterns" in self.uri:
+            return "patterns"
+        elif "/cases" in self.uri:
+            return "cases"
+        elif "/profile" in self.uri:
+            return "profile"
+        elif "/preferences" in self.uri:
+            return "preferences"
+        elif "/entities" in self.uri:
+            return "entities"
+        elif "/events" in self.uri:
+            return "events"
         return ""
 
     def get_context_type(self) -> str:

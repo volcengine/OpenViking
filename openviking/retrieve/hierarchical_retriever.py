@@ -98,7 +98,7 @@ class HierarchicalRetriever:
         # Use custom threshold or default threshold
         effective_threshold = score_threshold if score_threshold is not None else self.threshold
 
-        collection = self._type_to_collection(query.context_type)
+        collection = "context"
 
         target_dirs = [d for d in (query.target_directories or []) if d]
 
@@ -107,7 +107,7 @@ class HierarchicalRetriever:
 
         # Merge all filters
         filters_to_merge = [type_filter]
-        tenant_filter = self._build_tenant_filter(ctx)
+        tenant_filter = self._build_tenant_filter(ctx, context_type=query.context_type)
         if tenant_filter:
             filters_to_merge.append(tenant_filter)
         if target_dirs:
@@ -144,7 +144,7 @@ class HierarchicalRetriever:
         if target_dirs:
             root_uris = target_dirs
         else:
-            root_uris = self._get_root_uris_for_type(query.context_type)
+            root_uris = self._get_root_uris_for_type(query.context_type, ctx=ctx)
 
         # Step 2: Global vector search to supplement starting points
         global_results = await self._global_vector_search(
@@ -181,12 +181,24 @@ class HierarchicalRetriever:
             searched_directories=root_uris,
         )
 
-    def _build_tenant_filter(self, ctx: RequestContext) -> Optional[Dict[str, Any]]:
-        """Build tenant visibility filter by role."""
+    def _build_tenant_filter(
+        self, ctx: RequestContext, context_type: Optional[ContextType] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Build tenant visibility filter by role.
+
+        Args:
+            ctx: Request context with role and user info.
+            context_type: When RESOURCE, allow owner_space="" so shared
+                          resources are visible to USER role.
+        """
         if ctx.role == Role.ROOT:
             return None
         if ctx.role == Role.ADMIN:
             return {"op": "must", "field": "account_id", "conds": [ctx.account_id]}
+
+        owner_spaces = [ctx.user.user_space_name(), ctx.user.agent_space_name()]
+        if context_type == ContextType.RESOURCE:
+            owner_spaces.append("")
 
         return {
             "op": "and",
@@ -195,7 +207,7 @@ class HierarchicalRetriever:
                 {
                     "op": "must",
                     "field": "owner_space",
-                    "conds": [ctx.user.user_space_name(), ctx.user.agent_space_name()],
+                    "conds": owner_spaces,
                 },
             ],
         }
@@ -435,18 +447,32 @@ class HierarchicalRetriever:
 
         return results
 
-    def _get_root_uris_for_type(self, context_type: ContextType) -> List[str]:
-        """Return starting directory URI list based on context_type."""
-        if context_type == ContextType.MEMORY:
-            return ["viking://user/memories", "viking://agent/memories"]
-        elif context_type == ContextType.RESOURCE:
-            return ["viking://resources"]
-        elif context_type == ContextType.SKILL:
-            return ["viking://agent/skills"]
-        return []
+    def _get_root_uris_for_type(
+        self, context_type: ContextType, ctx: Optional[RequestContext] = None
+    ) -> List[str]:
+        """Return starting directory URI list based on context_type and user context.
 
-    def _type_to_collection(self, context_type: ContextType) -> str:
+        For USER role, URIs include the user's space segment so the search
+        starts within the correct tenant partition.
         """
-        Convert context type to collection name.
-        """
-        return "context"
+        if ctx and ctx.role == Role.USER:
+            user_space = ctx.user.user_space_name()
+            agent_space = ctx.user.agent_space_name()
+            if context_type == ContextType.MEMORY:
+                return [
+                    f"viking://user/{user_space}/memories",
+                    f"viking://agent/{agent_space}/memories",
+                ]
+            elif context_type == ContextType.RESOURCE:
+                return ["viking://resources"]
+            elif context_type == ContextType.SKILL:
+                return [f"viking://agent/{agent_space}/skills"]
+        else:
+            # ADMIN / ROOT rely on global_vector_search; return scope roots
+            if context_type == ContextType.MEMORY:
+                return ["viking://user/memories", "viking://agent/memories"]
+            elif context_type == ContextType.RESOURCE:
+                return ["viking://resources"]
+            elif context_type == ContextType.SKILL:
+                return ["viking://agent/skills"]
+        return []

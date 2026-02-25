@@ -261,7 +261,7 @@ PUT    /api/v1/admin/accounts/{account_id}/users/{uid}/role 修改用户角色 (
 - **user**：同一 account 内，不同用户的私有数据互不可见。用户记忆、资源、session 属于用户本人
 - **agent**：同一 account 内，agent 目录由 user_id + agent_id 共同决定，每用户独立（见 4.3）
 
-**Space 标识符**：`UserIdentifier` 新增两个方法，拆分现有的 `unique_space_name()`：
+**Space 标识符**：`UserIdentifier` 提供两个方法 `user_space_name()` 和 `agent_space_name()`：
 
 ```python
 def user_space_name(self) -> str:

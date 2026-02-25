@@ -120,7 +120,7 @@ viking://
 │       ├── entities/             # Each independent
 │       └── events/               # Each independent
 │
-├── agent/{unique_space_name}/    # unique_space_name see UserIdentifier
+├── agent/{agent_space}/          # agent_space = agent_space_name()
 │   ├── skills/                   # Skill definitions
 │   ├── memories/
 │   │   ├── cases/
@@ -128,7 +128,7 @@ viking://
 │   ├── workspaces/
 │   └── instructions/
 │
-└── session/{unique_space_name}/{session_id}/
+└── session/{user_space}/{session_id}/
     ├── messages/
     ├── tools/
     └── history/

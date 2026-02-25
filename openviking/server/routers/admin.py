@@ -9,8 +9,12 @@ from openviking.server.auth import require_role
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
+from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.exceptions import PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 router = APIRouter(prefix="/api/v1/admin", tags=["admin"])
 
@@ -90,8 +94,44 @@ async def delete_account(
     account_id: str = Path(..., description="Account ID"),
     ctx: RequestContext = require_role(Role.ROOT),
 ):
-    """Delete an account."""
+    """Delete an account and cascade-clean its storage (AGFS + VectorDB)."""
     manager = _get_api_key_manager(request)
+
+    # Build a ROOT-level context scoped to the target account for cleanup
+    cleanup_ctx = RequestContext(
+        user=UserIdentifier(account_id, "system", "system"),
+        role=Role.ROOT,
+    )
+
+    # Cascade: remove AGFS data for the account
+    viking_fs = get_viking_fs()
+    account_prefixes = [
+        "viking://user/",
+        "viking://agent/",
+        "viking://session/",
+        "viking://resources/",
+    ]
+    for prefix in account_prefixes:
+        try:
+            await viking_fs.rm(prefix, recursive=True, ctx=cleanup_ctx)
+        except Exception as e:
+            logger.warning(f"AGFS cleanup for {prefix} in account {account_id}: {e}")
+
+    # Cascade: remove VectorDB records for the account
+    try:
+        storage = viking_fs._get_vector_store()
+        if storage:
+            account_filter = {
+                "op": "must",
+                "field": "account_id",
+                "conds": [account_id],
+            }
+            deleted = await storage.batch_delete("context", account_filter)
+            logger.info(f"VectorDB cascade delete for account {account_id}: {deleted} records")
+    except Exception as e:
+        logger.warning(f"VectorDB cleanup for account {account_id}: {e}")
+
+    # Finally delete the account metadata
     await manager.delete_account(account_id)
     return Response(status="ok", result={"deleted": True})
 

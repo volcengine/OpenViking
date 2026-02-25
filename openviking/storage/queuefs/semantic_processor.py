@@ -56,6 +56,21 @@ class SemanticProcessor(DequeueHandlerBase):
         self._current_ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
 
     @staticmethod
+    def _owner_space_for_uri(uri: str, ctx: RequestContext) -> str:
+        """Derive owner_space from a URI.
+
+        Resources (viking://resources/...) always get owner_space="" so they
+        are globally visible.  User / agent / session URIs inherit the
+        caller's space name.
+        """
+        if uri.startswith("viking://agent/"):
+            return ctx.user.agent_space_name()
+        if uri.startswith("viking://user/") or uri.startswith("viking://session/"):
+            return ctx.user.user_space_name()
+        # resources and anything else → shared (empty owner_space)
+        return ""
+
+    @staticmethod
     def _ctx_from_semantic_msg(msg: SemanticMsg) -> RequestContext:
         role = Role(msg.role) if msg.role in {r.value for r in Role} else Role.ROOT
         return RequestContext(
@@ -358,11 +373,11 @@ class SemanticProcessor(DequeueHandlerBase):
         llm_sem = llm_sem or asyncio.Semaphore(self.max_concurrent_llm)
         media_type = get_media_type(file_name, None)
         if media_type == "image":
-            return await generate_image_summary(file_path, file_name, llm_sem)
+            return await generate_image_summary(file_path, file_name, llm_sem, ctx=ctx)
         elif media_type == "audio":
-            return await generate_audio_summary(file_path, file_name, llm_sem)
+            return await generate_audio_summary(file_path, file_name, llm_sem, ctx=ctx)
         elif media_type == "video":
-            return await generate_video_summary(file_path, file_name, llm_sem)
+            return await generate_video_summary(file_path, file_name, llm_sem, ctx=ctx)
         else:
             return await self._generate_text_summary(file_path, file_name, llm_sem, ctx=ctx)
 
@@ -481,13 +496,7 @@ class SemanticProcessor(DequeueHandlerBase):
             context_type=context_type,
             user=active_ctx.user,
             account_id=active_ctx.account_id,
-            owner_space=(
-                active_ctx.user.agent_space_name()
-                if uri.startswith("viking://agent/")
-                else active_ctx.user.user_space_name()
-                if uri.startswith("viking://user/") or uri.startswith("viking://session/")
-                else ""
-            ),
+            owner_space=self._owner_space_for_uri(uri, active_ctx),
         )
         context_abstract.set_vectorize(Vectorize(text=abstract))
         embedding_msg_abstract = EmbeddingMsgConverter.from_context(context_abstract)
@@ -565,14 +574,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 created_at=datetime.now(),
                 user=active_ctx.user,
                 account_id=active_ctx.account_id,
-                owner_space=(
-                    active_ctx.user.agent_space_name()
-                    if file_path.startswith("viking://agent/")
-                    else active_ctx.user.user_space_name()
-                    if file_path.startswith("viking://user/")
-                    or file_path.startswith("viking://session/")
-                    else ""
-                ),
+                owner_space=self._owner_space_for_uri(file_path, active_ctx),
             )
 
             if self.get_resource_content_type(file_name) == ResourceContentType.TEXT:
