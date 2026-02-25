@@ -266,3 +266,20 @@ def test_cli_mcp_requires_path():
     result = runner.invoke(app, ["mcp"], env={})
     assert result.exit_code != 0
     assert "--path" in result.output
+
+
+def test_cli_mcp_help_mentions_write_toggle():
+    result = runner.invoke(app, ["mcp", "--help"], env={})
+    assert result.exit_code == 0
+    assert "--enable-write" in result.output
+    assert "--readonly" in result.output
+
+
+def test_cli_mcp_rejects_non_stdio():
+    result = runner.invoke(
+        app,
+        ["mcp", "--path", "./data", "--transport", "sse"],
+        env={},
+    )
+    assert result.exit_code == 1
+    assert "Only stdio transport is supported in V1" in result.output

@@ -4,17 +4,22 @@
 
 from __future__ import annotations
 
+import copy
 import json
 from dataclasses import asdict, is_dataclass
 from enum import Enum
-from typing import Any, Dict
+from typing import Any, Dict, List
 
 MAX_READ_LIMIT = 2000
 DEFAULT_READ_LIMIT = 200
 MAX_FIND_LIMIT = 50
 DEFAULT_FIND_LIMIT = 10
+MAX_TREE_ABS_LIMIT = 4096
+DEFAULT_TREE_ABS_LIMIT = 128
+MAX_TREE_NODE_LIMIT = 5000
+DEFAULT_TREE_NODE_LIMIT = 1000
 
-TOOL_DEFINITIONS = [
+READ_TOOL_DEFINITIONS = [
     {
         "name": "openviking_find",
         "description": "Semantic search in OpenViking context database.",
@@ -26,6 +31,37 @@ TOOL_DEFINITIONS = [
                     "type": "string",
                     "description": "Target URI scope. Default is global search.",
                     "default": "",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": f"Max number of results (1-{MAX_FIND_LIMIT}).",
+                    "default": DEFAULT_FIND_LIMIT,
+                    "minimum": 1,
+                    "maximum": MAX_FIND_LIMIT,
+                },
+                "threshold": {
+                    "type": "number",
+                    "description": "Optional score threshold.",
+                },
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "openviking_search",
+        "description": "Context-aware retrieval in OpenViking.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query."},
+                "uri": {
+                    "type": "string",
+                    "description": "Target URI scope. Default is global search.",
+                    "default": "",
+                },
+                "session_id": {
+                    "type": "string",
+                    "description": "Optional session ID for context-aware retrieval.",
                 },
                 "limit": {
                     "type": "integer",
@@ -112,11 +148,159 @@ TOOL_DEFINITIONS = [
             "required": ["uri"],
         },
     },
+    {
+        "name": "openviking_wait_processed",
+        "description": "Wait until queued async processing completes.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "timeout": {
+                    "type": "number",
+                    "description": "Optional timeout in seconds.",
+                }
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "openviking_stat",
+        "description": "Get resource metadata and status.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {"uri": {"type": "string", "description": "Resource URI."}},
+            "required": ["uri"],
+        },
+    },
+    {
+        "name": "openviking_tree",
+        "description": "Get directory tree in agent-friendly format.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "uri": {"type": "string", "description": "Directory URI."},
+                "abs_limit": {
+                    "type": "integer",
+                    "description": f"Abstract content limit (0-{MAX_TREE_ABS_LIMIT}).",
+                    "default": DEFAULT_TREE_ABS_LIMIT,
+                    "minimum": 0,
+                    "maximum": MAX_TREE_ABS_LIMIT,
+                },
+                "show_all_hidden": {
+                    "type": "boolean",
+                    "description": "Whether to include all hidden entries.",
+                    "default": False,
+                },
+                "node_limit": {
+                    "type": "integer",
+                    "description": f"Maximum nodes in output (1-{MAX_TREE_NODE_LIMIT}).",
+                    "default": DEFAULT_TREE_NODE_LIMIT,
+                    "minimum": 1,
+                    "maximum": MAX_TREE_NODE_LIMIT,
+                },
+            },
+            "required": ["uri"],
+        },
+    },
+    {
+        "name": "openviking_grep",
+        "description": "Search text pattern in files under a URI.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string", "description": "Search pattern."},
+                "uri": {
+                    "type": "string",
+                    "description": "Search root URI.",
+                    "default": "viking://",
+                },
+                "ignore_case": {
+                    "type": "boolean",
+                    "description": "Case-insensitive matching.",
+                    "default": False,
+                },
+            },
+            "required": ["pattern"],
+        },
+    },
+    {
+        "name": "openviking_glob",
+        "description": "Search files by glob pattern under a URI.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "pattern": {"type": "string", "description": "Glob pattern."},
+                "uri": {
+                    "type": "string",
+                    "description": "Search root URI.",
+                    "default": "viking://",
+                },
+            },
+            "required": ["pattern"],
+        },
+    },
+    {
+        "name": "openviking_status",
+        "description": "Get OpenViking component status.",
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "openviking_health",
+        "description": "Get quick health check result.",
+        "inputSchema": {"type": "object", "properties": {}, "required": []},
+    },
 ]
+
+WRITE_TOOL_DEFINITIONS = [
+    {
+        "name": "openviking_add_resource",
+        "description": "Add local path or URL as resource into OpenViking.",
+        "inputSchema": {
+            "type": "object",
+            "properties": {
+                "path": {
+                    "type": "string",
+                    "description": "Local path or URL to import.",
+                },
+                "to": {
+                    "type": "string",
+                    "description": "Optional target URI.",
+                },
+                "reason": {
+                    "type": "string",
+                    "description": "Optional import reason.",
+                    "default": "",
+                },
+                "instruction": {
+                    "type": "string",
+                    "description": "Optional additional instruction.",
+                    "default": "",
+                },
+                "wait": {
+                    "type": "boolean",
+                    "description": "Wait until processing completes.",
+                    "default": False,
+                },
+                "timeout": {
+                    "type": "number",
+                    "description": "Optional wait timeout in seconds.",
+                },
+            },
+            "required": ["path"],
+        },
+    }
+]
+
+TOOL_DEFINITIONS = READ_TOOL_DEFINITIONS + WRITE_TOOL_DEFINITIONS
 
 
 class ToolArgumentError(ValueError):
     """Raised when MCP tool arguments are invalid."""
+
+
+def get_tool_definitions(include_write: bool = False) -> List[Dict[str, Any]]:
+    """Return MCP tool definitions, optionally including write tools."""
+    definitions = READ_TOOL_DEFINITIONS + WRITE_TOOL_DEFINITIONS if include_write else READ_TOOL_DEFINITIONS
+    return [copy.deepcopy(tool) for tool in definitions]
 
 
 def _to_jsonable(value: Any) -> Any:
@@ -176,6 +360,17 @@ def _optional_str(arguments: Dict[str, Any], key: str, default: str) -> str:
     return value
 
 
+def _optional_nullable_str(arguments: Dict[str, Any], key: str) -> str | None:
+    if key not in arguments:
+        return None
+    value = arguments.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ToolArgumentError(f"'{key}' must be a string or null")
+    return value
+
+
 def _optional_int(arguments: Dict[str, Any], key: str, default: int) -> int:
     value = arguments.get(key, default)
     if not isinstance(value, int) or isinstance(value, bool):
@@ -191,15 +386,17 @@ def _optional_bool(arguments: Dict[str, Any], key: str, default: bool) -> bool:
 
 
 def _optional_float(arguments: Dict[str, Any], key: str) -> float | None:
+    if key not in arguments:
+        return None
     value = arguments.get(key)
     if value is None:
         return None
-    if not isinstance(value, (int, float)):
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ToolArgumentError(f"'{key}' must be a number")
     return float(value)
 
 
-def dispatch_tool(name: str, arguments: Any, client: Any) -> str:
+def dispatch_tool(name: str, arguments: Any, client: Any, allow_write: bool = False) -> str:
     """Dispatch an MCP tool call and return a JSON payload string."""
     try:
         args = _expect_dict(arguments)
@@ -216,6 +413,25 @@ def dispatch_tool(name: str, arguments: Any, client: Any) -> str:
             result = client.find(
                 query=query,
                 target_uri=target_uri,
+                limit=limit,
+                score_threshold=threshold,
+            )
+            return _json_ok(result)
+
+        if name == "openviking_search":
+            query = _require_str(args, "query")
+            target_uri = _optional_str(args, "uri", "")
+            session_id = _optional_nullable_str(args, "session_id")
+            limit = _optional_int(args, "limit", DEFAULT_FIND_LIMIT)
+            if limit < 1 or limit > MAX_FIND_LIMIT:
+                raise ToolArgumentError(
+                    f"'limit' must be between 1 and {MAX_FIND_LIMIT} for openviking_search"
+                )
+            threshold = _optional_float(args, "threshold")
+            result = client.search(
+                query=query,
+                target_uri=target_uri,
+                session_id=session_id,
                 limit=limit,
                 score_threshold=threshold,
             )
@@ -249,6 +465,81 @@ def dispatch_tool(name: str, arguments: Any, client: Any) -> str:
         if name == "openviking_overview":
             uri = _require_str(args, "uri")
             result = client.overview(uri=uri)
+            return _json_ok(result)
+
+        if name == "openviking_wait_processed":
+            timeout = _optional_float(args, "timeout")
+            result = client.wait_processed(timeout=timeout)
+            return _json_ok(result)
+
+        if name == "openviking_stat":
+            uri = _require_str(args, "uri")
+            result = client.stat(uri=uri)
+            return _json_ok(result)
+
+        if name == "openviking_tree":
+            uri = _require_str(args, "uri")
+            abs_limit = _optional_int(args, "abs_limit", DEFAULT_TREE_ABS_LIMIT)
+            if abs_limit < 0 or abs_limit > MAX_TREE_ABS_LIMIT:
+                raise ToolArgumentError(
+                    f"'abs_limit' must be between 0 and {MAX_TREE_ABS_LIMIT} for openviking_tree"
+                )
+            show_all_hidden = _optional_bool(args, "show_all_hidden", False)
+            node_limit = _optional_int(args, "node_limit", DEFAULT_TREE_NODE_LIMIT)
+            if node_limit < 1 or node_limit > MAX_TREE_NODE_LIMIT:
+                raise ToolArgumentError(
+                    f"'node_limit' must be between 1 and {MAX_TREE_NODE_LIMIT} for openviking_tree"
+                )
+            result = client.tree(
+                uri=uri,
+                output="agent",
+                abs_limit=abs_limit,
+                show_all_hidden=show_all_hidden,
+                node_limit=node_limit,
+            )
+            return _json_ok(result)
+
+        if name == "openviking_grep":
+            pattern = _require_str(args, "pattern")
+            uri = _optional_str(args, "uri", "viking://")
+            ignore_case = _optional_bool(args, "ignore_case", False)
+            result = client.grep(uri=uri, pattern=pattern, case_insensitive=ignore_case)
+            return _json_ok(result)
+
+        if name == "openviking_glob":
+            pattern = _require_str(args, "pattern")
+            uri = _optional_str(args, "uri", "viking://")
+            result = client.glob(pattern=pattern, uri=uri)
+            return _json_ok(result)
+
+        if name == "openviking_status":
+            result = client.get_status()
+            return _json_ok(result)
+
+        if name == "openviking_health":
+            healthy = bool(client.is_healthy())
+            return _json_ok({"healthy": healthy})
+
+        if name == "openviking_add_resource":
+            if not allow_write:
+                return _json_error(
+                    "PERMISSION_DENIED",
+                    "Tool 'openviking_add_resource' is disabled in readonly mode",
+                )
+            path = _require_str(args, "path")
+            to = _optional_nullable_str(args, "to")
+            reason = _optional_str(args, "reason", "")
+            instruction = _optional_str(args, "instruction", "")
+            wait = _optional_bool(args, "wait", False)
+            timeout = _optional_float(args, "timeout")
+            result = client.add_resource(
+                path=path,
+                target=to,
+                reason=reason,
+                instruction=instruction,
+                wait=wait,
+                timeout=timeout,
+            )
             return _json_ok(result)
 
         return _json_error("TOOL_NOT_FOUND", f"Unknown tool: {name}")

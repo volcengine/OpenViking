@@ -292,7 +292,7 @@ Search results:
 
 ---
 
-### 5. MCP Server（MVP）
+### 5. MCP Server（V1）
 
 OpenViking 提供了可嵌入的 MCP Server，便于本地 Agent 工具接入。
 
@@ -302,16 +302,24 @@ OpenViking 提供了可嵌入的 MCP Server，便于本地 Agent 工具接入。
 pip install "openviking[mcp]"
 ```
 
-启动 MCP Server（stdio 传输）：
+启动 MCP Server（stdio 传输，默认只读）：
 
 ```bash
 openviking mcp --path ./data
 ```
 
-当前 MVP 范围：
+需要写入能力时，显式开启写模式：
+
+```bash
+openviking mcp --path ./data --enable-write
+```
+
+当前 V1 范围：
 - 传输协议：仅 `stdio`
 - 运行模式：仅本地嵌入 `--path`
-- 工具集合：`openviking_find`、`openviking_read`、`openviking_ls`、`openviking_abstract`、`openviking_overview`
+- 默认模式：只读（除非设置 `--enable-write`，否则不暴露写工具）
+- 读取工具：`openviking_find`、`openviking_search`、`openviking_read`、`openviking_ls`、`openviking_abstract`、`openviking_overview`、`openviking_wait_processed`、`openviking_stat`、`openviking_tree`、`openviking_grep`、`openviking_glob`、`openviking_status`、`openviking_health`
+- 写入工具（可选）：`openviking_add_resource`
 
 OpenCode 配置示例：
 
@@ -321,6 +329,19 @@ OpenCode 配置示例：
     "openviking": {
       "command": "openviking",
       "args": ["mcp", "--path", "./data"]
+    }
+  }
+}
+```
+
+OpenCode 可写配置示例：
+
+```json
+{
+  "mcp": {
+    "openviking": {
+      "command": "openviking",
+      "args": ["mcp", "--path", "./data", "--enable-write"]
     }
   }
 }
@@ -338,6 +359,23 @@ Codex 配置示例：
   }
 }
 ```
+
+Codex 可写配置示例：
+
+```json
+{
+  "mcpServers": {
+    "openviking": {
+      "command": "openviking",
+      "args": ["mcp", "--path", "./data", "--enable-write"]
+    }
+  }
+}
+```
+
+生产环境建议：
+- 默认使用只读 MCP 实例。
+- 写入实例建议独立部署并做明确访问控制。
 
 ---
 

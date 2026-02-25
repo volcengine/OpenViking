@@ -31,14 +31,24 @@ def register(app: typer.Typer) -> None:
             "--transport",
             help="MCP transport mode. MVP supports only 'stdio'.",
         ),
+        enable_write: bool = typer.Option(
+            False,
+            "--enable-write/--readonly",
+            help="Enable write tools (default is readonly mode).",
+        ),
     ) -> None:
         """Run OpenViking MCP server (stdio, embedded mode)."""
         cli_ctx = get_cli_context(ctx)
         try:
             if transport != "stdio":
-                raise ValueError("Only stdio transport is supported in MVP")
+                raise ValueError("Only stdio transport is supported in V1")
             from openviking.mcp.server import run_stdio_server
 
-            run_stdio_server(path=path, config=config, transport=transport)
+            run_stdio_server(
+                path=path,
+                config=config,
+                transport=transport,
+                enable_write=enable_write,
+            )
         except Exception as exc:  # noqa: BLE001
             handle_command_error(cli_ctx, exc)

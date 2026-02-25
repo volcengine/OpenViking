@@ -3,10 +3,11 @@
 """MCP integration for OpenViking."""
 
 from openviking.mcp.server import OpenVikingMCPAdapter, run_stdio_server
-from openviking.mcp.tools import TOOL_DEFINITIONS, dispatch_tool
+from openviking.mcp.tools import TOOL_DEFINITIONS, dispatch_tool, get_tool_definitions
 
 __all__ = [
     "TOOL_DEFINITIONS",
+    "get_tool_definitions",
     "dispatch_tool",
     "OpenVikingMCPAdapter",
     "run_stdio_server",

@@ -416,7 +416,7 @@ Congratulations! You have successfully run OpenViking 🎉
 
 ---
 
-### 5. MCP Server (MVP)
+### 5. MCP Server (V1)
 
 OpenViking provides an embedded MCP server for local agent integration.
 
@@ -426,16 +426,24 @@ Install MCP dependency:
 pip install "openviking[mcp]"
 ```
 
-Start MCP server (stdio transport):
+Start MCP server (stdio transport, readonly by default):
 
 ```bash
 openviking mcp --path ./data
 ```
 
-Current MVP scope:
+Enable write tools explicitly when needed:
+
+```bash
+openviking mcp --path ./data --enable-write
+```
+
+Current V1 scope:
 - Transport: `stdio` only
 - Runtime mode: embedded local path (`--path`)
-- Tools: `openviking_find`, `openviking_read`, `openviking_ls`, `openviking_abstract`, `openviking_overview`
+- Default mode: readonly (write tools disabled unless `--enable-write` is set)
+- Read tools: `openviking_find`, `openviking_search`, `openviking_read`, `openviking_ls`, `openviking_abstract`, `openviking_overview`, `openviking_wait_processed`, `openviking_stat`, `openviking_tree`, `openviking_grep`, `openviking_glob`, `openviking_status`, `openviking_health`
+- Write tools (optional): `openviking_add_resource`
 
 OpenCode example configuration:
 
@@ -445,6 +453,19 @@ OpenCode example configuration:
     "openviking": {
       "command": "openviking",
       "args": ["mcp", "--path", "./data"]
+    }
+  }
+}
+```
+
+OpenCode writable configuration:
+
+```json
+{
+  "mcp": {
+    "openviking": {
+      "command": "openviking",
+      "args": ["mcp", "--path", "./data", "--enable-write"]
     }
   }
 }
@@ -462,6 +483,23 @@ Codex example configuration:
   }
 }
 ```
+
+Codex writable configuration:
+
+```json
+{
+  "mcpServers": {
+    "openviking": {
+      "command": "openviking",
+      "args": ["mcp", "--path", "./data", "--enable-write"]
+    }
+  }
+}
+```
+
+Production recommendation:
+- Prefer readonly MCP instances by default.
+- Run writable instances separately with explicit access control.
 
 ---
 
