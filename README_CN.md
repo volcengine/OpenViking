@@ -292,6 +292,55 @@ Search results:
 
 ---
 
+### 5. MCP Server（MVP）
+
+OpenViking 提供了可嵌入的 MCP Server，便于本地 Agent 工具接入。
+
+安装 MCP 依赖：
+
+```bash
+pip install "openviking[mcp]"
+```
+
+启动 MCP Server（stdio 传输）：
+
+```bash
+openviking mcp --path ./data
+```
+
+当前 MVP 范围：
+- 传输协议：仅 `stdio`
+- 运行模式：仅本地嵌入 `--path`
+- 工具集合：`openviking_find`、`openviking_read`、`openviking_ls`、`openviking_abstract`、`openviking_overview`
+
+OpenCode 配置示例：
+
+```json
+{
+  "mcp": {
+    "openviking": {
+      "command": "openviking",
+      "args": ["mcp", "--path", "./data"]
+    }
+  }
+}
+```
+
+Codex 配置示例：
+
+```json
+{
+  "mcpServers": {
+    "openviking": {
+      "command": "openviking",
+      "args": ["mcp", "--path", "./data"]
+    }
+  }
+}
+```
+
+---
+
 ## 服务端部署
 
 在生产环境中，我们推荐将 OpenViking 作为独立 HTTP 服务运行，以便为您的 AI Agent 提供持久化、高性能的上下文支持。

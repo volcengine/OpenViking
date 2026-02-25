@@ -416,6 +416,55 @@ Congratulations! You have successfully run OpenViking 🎉
 
 ---
 
+### 5. MCP Server (MVP)
+
+OpenViking provides an embedded MCP server for local agent integration.
+
+Install MCP dependency:
+
+```bash
+pip install "openviking[mcp]"
+```
+
+Start MCP server (stdio transport):
+
+```bash
+openviking mcp --path ./data
+```
+
+Current MVP scope:
+- Transport: `stdio` only
+- Runtime mode: embedded local path (`--path`)
+- Tools: `openviking_find`, `openviking_read`, `openviking_ls`, `openviking_abstract`, `openviking_overview`
+
+OpenCode example configuration:
+
+```json
+{
+  "mcp": {
+    "openviking": {
+      "command": "openviking",
+      "args": ["mcp", "--path", "./data"]
+    }
+  }
+}
+```
+
+Codex example configuration:
+
+```json
+{
+  "mcpServers": {
+    "openviking": {
+      "command": "openviking",
+      "args": ["mcp", "--path", "./data"]
+    }
+  }
+}
+```
+
+---
+
 ## Server Deployment
 
 For production environments, we recommend running OpenViking as a standalone HTTP service to provide persistent, high-performance context support for your AI Agents.
