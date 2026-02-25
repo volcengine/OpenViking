@@ -103,9 +103,9 @@ class VolcEngineVLM(OpenAIVLM):
 
     def _detect_image_format(self, data: bytes) -> str:
         """Detect image format from magic bytes.
-        
+
         Returns the MIME type, or raises ValueError for unsupported formats like SVG.
-        
+
         Supported formats per VolcEngine docs:
         https://www.volcengine.com/docs/82379/1362931
         - JPEG, PNG, GIF, WEBP, BMP, TIFF, ICO, DIB, ICNS, SGI, JPEG2000, HEIC, HEIF
@@ -113,56 +113,56 @@ class VolcEngineVLM(OpenAIVLM):
         if len(data) < 12:
             logger.warning(f"[VolcEngineVLM] Image data too small: {len(data)} bytes")
             return "image/png"
-        
+
         # PNG: 89 50 4E 47 0D 0A 1A 0A
-        if data[:8] == b'\x89PNG\r\n\x1a\n':
+        if data[:8] == b"\x89PNG\r\n\x1a\n":
             return "image/png"
         # JPEG: FF D8
-        elif data[:2] == b'\xff\xd8':
+        elif data[:2] == b"\xff\xd8":
             return "image/jpeg"
         # GIF: GIF87a or GIF89a
-        elif data[:6] in (b'GIF87a', b'GIF89a'):
+        elif data[:6] in (b"GIF87a", b"GIF89a"):
             return "image/gif"
         # WEBP: RIFF....WEBP
-        elif data[:4] == b'RIFF' and len(data) >= 12 and data[8:12] == b'WEBP':
+        elif data[:4] == b"RIFF" and len(data) >= 12 and data[8:12] == b"WEBP":
             return "image/webp"
         # BMP: BM
-        elif data[:2] == b'BM':
+        elif data[:2] == b"BM":
             return "image/bmp"
         # TIFF (little-endian): 49 49 2A 00
         # TIFF (big-endian): 4D 4D 00 2A
-        elif data[:4] == b'II*\x00' or data[:4] == b'MM\x00*':
+        elif data[:4] == b"II*\x00" or data[:4] == b"MM\x00*":
             return "image/tiff"
         # ICO: 00 00 01 00
-        elif data[:4] == b'\x00\x00\x01\x00':
+        elif data[:4] == b"\x00\x00\x01\x00":
             return "image/ico"
         # ICNS: 69 63 6E 73 ("icns")
-        elif data[:4] == b'icns':
+        elif data[:4] == b"icns":
             return "image/icns"
         # SGI: 01 DA
-        elif data[:2] == b'\x01\xda':
+        elif data[:2] == b"\x01\xda":
             return "image/sgi"
         # JPEG2000: 00 00 00 0C 6A 50 20 20 (JP2 signature)
-        elif data[:8] == b'\x00\x00\x00\x0cjP  ' or data[:4] == b'\xff\x4f\xff\x51':
+        elif data[:8] == b"\x00\x00\x00\x0cjP  " or data[:4] == b"\xff\x4f\xff\x51":
             return "image/jp2"
         # HEIC/HEIF: ftyp box with heic/heif brand
         # 00 00 00 XX 66 74 79 70 68 65 69 63 (heic)
         # 00 00 00 XX 66 74 79 70 68 65 69 66 (heif)
-        elif len(data) >= 12 and data[4:8] == b'ftyp':
+        elif len(data) >= 12 and data[4:8] == b"ftyp":
             brand = data[8:12]
-            if brand == b'heic':
+            if brand == b"heic":
                 return "image/heic"
-            elif brand == b'heif':
+            elif brand == b"heif":
                 return "image/heif"
-            elif brand[:3] == b'mif':
+            elif brand[:3] == b"mif":
                 return "image/heif"
         # SVG (not supported)
-        elif data[:4] == b'<svg' or (data[:5] == b'<?xml' and b'<svg' in data[:100]):
+        elif data[:4] == b"<svg" or (data[:5] == b"<?xml" and b"<svg" in data[:100]):
             raise ValueError(
                 "SVG format is not supported by VolcEngine VLM API. "
                 "Supported formats: JPEG, PNG, GIF, WEBP, BMP, TIFF, ICO, ICNS, SGI, JPEG2000, HEIC, HEIF"
             )
-        
+
         # Unknown format - log and default to PNG
         logger.warning(f"[VolcEngineVLM] Unknown image format, magic bytes: {data[:16].hex()}")
         return "image/png"
@@ -172,7 +172,9 @@ class VolcEngineVLM(OpenAIVLM):
         if isinstance(image, bytes):
             b64 = base64.b64encode(image).decode("utf-8")
             mime_type = self._detect_image_format(image)
-            logger.info(f"[VolcEngineVLM] Preparing image from bytes, size={len(image)}, detected mime={mime_type}")
+            logger.info(
+                f"[VolcEngineVLM] Preparing image from bytes, size={len(image)}, detected mime={mime_type}"
+            )
             return {
                 "type": "image_url",
                 "image_url": {"url": f"data:{mime_type};base64,{b64}"},

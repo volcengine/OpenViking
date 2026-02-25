@@ -19,7 +19,7 @@ logger = get_logger(__name__)
 
 def _is_svg(data: bytes) -> bool:
     """Check if the data is an SVG file."""
-    return data[:4] == b'<svg' or (data[:5] == b'<?xml' and b'<svg' in data[:100])
+    return data[:4] == b"<svg" or (data[:5] == b"<?xml" and b"<svg" in data[:100])
 
 
 # SVG to PNG conversion (disabled by default)
@@ -37,7 +37,7 @@ def _is_svg(data: bytes) -> bool:
 #         pass
 #     except OSError:
 #         pass  # libcairo not installed
-#     
+#
 #     try:
 #         from wand.image import Image as WandImage
 #         with WandImage(blob=svg_data, format='svg') as img:
@@ -45,7 +45,7 @@ def _is_svg(data: bytes) -> bool:
 #             return img.make_blob()
 #     except ImportError:
 #         pass
-#     
+#
 #     return None
 
 

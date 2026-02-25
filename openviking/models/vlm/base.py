@@ -133,13 +133,13 @@ class VLMFactory:
             return VolcEngineVLM(config)
 
         elif provider == "openai":
-                from .backends.openai_vlm import OpenAIVLM
+            from .backends.openai_vlm import OpenAIVLM
 
-                return OpenAIVLM(config)
+            return OpenAIVLM(config)
 
         else:
             from .backends.litellm_vlm import LiteLLMVLMProvider
-            
+
             return LiteLLMVLMProvider(config)
 
     @staticmethod
