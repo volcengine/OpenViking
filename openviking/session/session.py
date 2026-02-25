@@ -127,6 +127,21 @@ class Session:
 
         self._loaded = True
 
+    async def exists(self) -> bool:
+        """Check whether this session already exists in storage."""
+        try:
+            await self._viking_fs.stat(self._session_uri, ctx=self.ctx)
+            return True
+        except Exception:
+            return False
+
+    async def ensure_exists(self) -> None:
+        """Materialize session root and messages file if missing."""
+        if await self.exists():
+            return
+        await self._viking_fs.mkdir(self._session_uri, exist_ok=True, ctx=self.ctx)
+        await self._viking_fs.write_file(f"{self._session_uri}/messages.jsonl", "", ctx=self.ctx)
+
     @property
     def messages(self) -> List[Message]:
         """Get message list."""

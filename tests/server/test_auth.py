@@ -167,3 +167,35 @@ async def test_agent_id_header_forwarded(auth_client: httpx.AsyncClient):
         headers={"X-API-Key": ROOT_KEY, "X-OpenViking-Agent": "my-agent"},
     )
     assert resp.status_code == 200
+
+
+async def test_cross_tenant_session_get_returns_not_found(auth_client: httpx.AsyncClient, auth_app):
+    """A user must not access another tenant's session by session_id."""
+    manager = auth_app.state.api_key_manager
+    alice_key = await manager.create_account("acme", "alice")
+    bob_key = await manager.create_account("beta", "bob")
+
+    create_resp = await auth_client.post(
+        "/api/v1/sessions", json={}, headers={"X-API-Key": alice_key}
+    )
+    assert create_resp.status_code == 200
+    session_id = create_resp.json()["result"]["session_id"]
+
+    add_resp = await auth_client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={"role": "user", "content": "hello from alice"},
+        headers={"X-API-Key": alice_key},
+    )
+    assert add_resp.status_code == 200
+
+    own_get = await auth_client.get(
+        f"/api/v1/sessions/{session_id}", headers={"X-API-Key": alice_key}
+    )
+    assert own_get.status_code == 200
+    assert own_get.json()["result"]["message_count"] == 1
+
+    cross_get = await auth_client.get(
+        f"/api/v1/sessions/{session_id}", headers={"X-API-Key": bob_key}
+    )
+    assert cross_get.status_code == 404
+    assert cross_get.json()["error"]["code"] == "NOT_FOUND"

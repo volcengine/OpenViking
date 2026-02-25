@@ -240,7 +240,7 @@ class LocalClient(BaseClient):
 
     async def create_session(self) -> Dict[str, Any]:
         """Create a new session."""
-        session = self._service.sessions.session(self._ctx)
+        session = await self._service.sessions.create(self._ctx)
         return {
             "session_id": session.session_id,
             "user": session.user.to_dict(),
@@ -252,8 +252,7 @@ class LocalClient(BaseClient):
 
     async def get_session(self, session_id: str) -> Dict[str, Any]:
         """Get session details."""
-        session = self._service.sessions.session(self._ctx, session_id)
-        await session.load()
+        session = await self._service.sessions.get(session_id, self._ctx)
         return {
             "session_id": session.session_id,
             "user": session.user.to_dict(),

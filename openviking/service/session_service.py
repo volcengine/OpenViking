@@ -67,6 +67,23 @@ class SessionService:
             session_id=session_id,
         )
 
+    async def create(self, ctx: RequestContext) -> Session:
+        """Create a session and persist its root path."""
+        session = self.session(ctx)
+        await session.ensure_exists()
+        return session
+
+    async def get(self, session_id: str, ctx: RequestContext) -> Session:
+        """Get an existing session.
+
+        Raises NotFoundError when the session does not exist under current user scope.
+        """
+        session = self.session(ctx, session_id)
+        if not await session.exists():
+            raise NotFoundError(session_id, "session")
+        await session.load()
+        return session
+
     async def sessions(self, ctx: RequestContext) -> List[Dict[str, Any]]:
         """Get all sessions for the current user.
 
@@ -124,8 +141,7 @@ class SessionService:
             Commit result
         """
         self._ensure_initialized()
-        session = self.session(ctx, session_id)
-        await session.load()
+        session = await self.get(session_id, ctx)
         return session.commit()
 
     async def extract(self, session_id: str, ctx: RequestContext) -> List[Any]:
@@ -141,8 +157,7 @@ class SessionService:
         if not self._session_compressor:
             raise NotInitializedError("SessionCompressor")
 
-        session = self.session(ctx, session_id)
-        await session.load()
+        session = await self.get(session_id, ctx)
 
         return await self._session_compressor.extract_long_term_memories(
             messages=session.messages,

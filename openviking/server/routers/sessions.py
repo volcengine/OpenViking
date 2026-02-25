@@ -89,7 +89,7 @@ async def create_session(
     service = get_service()
     await service.initialize_user_directories(_ctx)
     await service.initialize_agent_directories(_ctx)
-    session = service.sessions.session(_ctx)
+    session = await service.sessions.create(_ctx)
     return Response(
         status="ok",
         result={
@@ -116,8 +116,7 @@ async def get_session(
 ):
     """Get session details."""
     service = get_service()
-    session = service.sessions.session(_ctx, session_id)
-    await session.load()
+    session = await service.sessions.get(session_id, _ctx)
     return Response(
         status="ok",
         result={
