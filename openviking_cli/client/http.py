@@ -418,7 +418,13 @@ class AsyncHTTPClient(BaseClient):
     # ============= Content Reading =============
 
     async def read(self, uri: str, offset: int = 0, limit: int = -1) -> str:
-        """Read file content."""
+        """Read file content.
+
+        Args:
+            uri: Viking URI
+            offset: Starting line number (0-indexed). Default 0.
+            limit: Number of lines to read. -1 means read to end. Default -1.
+        """
         uri = VikingURI.normalize(uri)
         response = await self._http.get(
             "/api/v1/content/read",
@@ -583,11 +589,34 @@ class AsyncHTTPClient(BaseClient):
         response = await self._http.post(f"/api/v1/sessions/{session_id}/commit")
         return self._handle_response(response)
 
-    async def add_message(self, session_id: str, role: str, content: str) -> Dict[str, Any]:
-        """Add a message to a session."""
+    async def add_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str | None = None,
+        parts: list[dict] | None = None,
+    ) -> Dict[str, Any]:
+        """Add a message to a session.
+
+        Args:
+            session_id: Session ID
+            role: Message role ("user" or "assistant")
+            content: Text content (simple mode, backward compatible)
+            parts: Parts array (full Part support mode)
+
+        If both content and parts are provided, parts takes precedence.
+        """
+        payload: Dict[str, Any] = {"role": role}
+        if parts is not None:
+            payload["parts"] = parts
+        elif content is not None:
+            payload["content"] = content
+        else:
+            raise ValueError("Either content or parts must be provided")
+
         response = await self._http.post(
             f"/api/v1/sessions/{session_id}/messages",
-            json={"role": role, "content": content},
+            json=payload,
         )
         return self._handle_response(response)
 
