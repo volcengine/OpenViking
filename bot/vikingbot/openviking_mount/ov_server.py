@@ -206,22 +206,66 @@ class VikingClient:
 
     async def commit(self, session_id: str, messages: list[dict[str, Any]]):
         """提交会话"""
+        import uuid
+        import re
+        from openviking.message.part import TextPart, ToolPart, Part
+
         session = self.client.session(session_id)
 
         if self.mode == "local":
             for message in messages:
-                # logger.debug(f"message = {message}")
-                session.add_message(role=message.get("role"), parts=[TextPart(text=message.get("content"))])
-            # session.add_message(role="assistant", parts=[TextPart(text="搜索完成！"),ToolPart(
-            #     tool_id="tool_web_search_001",
-            #     tool_name="web_search",
-            #     tool_uri=f"viking://session/{session_id}/tools/tool_web_search_001",
-            #     tool_input={"query": "Python asyncio tutorial", "max_results": 10},
-            #     tool_output="找到 3 篇高质量教程：1. FastAPI官方文档 2. Real Python教程 3. 菜鸟教程",
-            #     tool_status="completed",
-            #     skill_uri="",
-            #     duration_ms=2500,
-            # )])
+                # logger.debug(f"message === {message}")
+                role = message.get("role")
+                content = message.get("content")
+                tools_used = message.get("tools_used", [])
+
+                parts: list[Part] = []
+
+                if content:
+                    parts.append(TextPart(text=content))
+
+                for tool_info in tools_used:
+                    tool_name = tool_info.get("tool_name", "")
+                    # logger.debug(f"tool_name === {tool_name}")
+                    if not tool_name:
+                        continue
+
+                    tool_id = f"{tool_name}_{uuid.uuid4().hex[:8]}"
+                    tool_input = None
+                    try:
+                        import json
+                        args_str = tool_info.get("args", "{}")
+                        tool_input = json.loads(args_str) if args_str else {}
+                    except Exception:
+                        tool_input = {"raw_args": tool_info.get("args", "")}
+
+                    result_str = str(tool_info.get("result", ""))
+
+                    skill_uri = ""
+                    if tool_name == "read_file" and result_str:
+                        match = re.search(r'^---\s*\nname:\s*(.+?)\s*\n', result_str, re.MULTILINE)
+                        if match:
+                            skill_name = match.group(1).strip()
+                            skill_uri = f"viking://agent/skills/{skill_name}"
+                            # logger.debug(f"skill_uri === {skill_uri}")
+
+
+                    parts.append(ToolPart(
+                        tool_id=tool_id,
+                        tool_name=tool_name,
+                        tool_uri=f"viking://session/{session_id}/tools/{tool_id}",
+                        tool_input=tool_input,
+                        tool_output=result_str[:2000],
+                        tool_status="completed",
+                        skill_uri=skill_uri,
+                        duration_ms=tool_info.get("duration_ms"),
+                    ))
+
+                if not parts:
+                    parts = [TextPart(text=content or "")]
+
+                session.add_message(role=role, parts=parts)
+
             result = session.commit()
         else:
             for message in messages:
