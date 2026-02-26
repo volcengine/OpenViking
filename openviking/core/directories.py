@@ -12,7 +12,6 @@ from typing import TYPE_CHECKING, Dict, List, Optional
 
 from openviking.core.context import Context, ContextType, Vectorize
 from openviking.server.identity import RequestContext
-from openviking.storage.context_vector_gateway import ContextVectorGateway
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 
 if TYPE_CHECKING:
@@ -146,7 +145,7 @@ class DirectoryInitializer:
         vikingdb: "VikingDBManager",
     ):
         self.vikingdb = vikingdb
-        self.semantic_gateway = ContextVectorGateway.from_storage(vikingdb)
+        self.semantic_gateway = vikingdb
 
     async def initialize_account_directories(self, ctx: RequestContext) -> int:
         """Initialize account-shared scope roots."""

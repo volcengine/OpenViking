@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from openviking.models.embedder.base import EmbedResult
 from openviking.retrieve.memory_lifecycle import hotness_score
 from openviking.server.identity import RequestContext, Role
-from openviking.storage import ContextVectorGateway, VikingDBInterface
+from openviking.storage import VikingVectorIndexBackend
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.retrieve.types import (
     ContextType,
@@ -46,19 +46,18 @@ class HierarchicalRetriever:
 
     def __init__(
         self,
-        storage: VikingDBInterface,
+        storage: VikingVectorIndexBackend,
         embedder: Optional[Any],
         rerank_config: Optional[RerankConfig] = None,
     ):
         """Initialize hierarchical retriever with rerank_config.
 
         Args:
-            storage: VikingDBInterface instance
+            storage: VikingVectorIndexBackend instance
             embedder: Embedder instance (supports dense/sparse/hybrid)
             rerank_config: Rerank configuration (optional, will fallback to vector search only)
         """
-        self.storage = storage
-        self.semantic_gateway = ContextVectorGateway.from_storage(storage)
+        self.vector_store = storage
         self.embedder = embedder
         self.rerank_config = rerank_config
 
@@ -104,10 +103,10 @@ class HierarchicalRetriever:
 
         target_dirs = [d for d in (query.target_directories or []) if d]
 
-        if not await self.semantic_gateway.collection_exists_bound():
+        if not await self.vector_store.collection_exists_bound():
             logger.warning(
                 "[RecursiveSearch] Collection %s does not exist",
-                self.semantic_gateway.collection_name,
+                self.vector_store.collection_name,
             )
             return QueryResult(
                 query=query,
@@ -179,7 +178,7 @@ class HierarchicalRetriever:
         limit: int,
     ) -> List[Dict[str, Any]]:
         """Global vector search to locate initial directories."""
-        results = await self.semantic_gateway.search_global_roots_in_tenant(
+        results = await self.vector_store.search_global_roots_in_tenant(
             ctx=ctx,
             query_vector=query_vector,
             sparse_query_vector=sparse_query_vector,
@@ -285,7 +284,7 @@ class HierarchicalRetriever:
 
             pre_filter_limit = max(limit * 2, 20)
 
-            results = await self.semantic_gateway.search_children_in_tenant(
+            results = await self.vector_store.search_children_in_tenant(
                 ctx=ctx,
                 parent_uri=current_uri,
                 query_vector=query_vector,

@@ -9,7 +9,6 @@ from openviking.server.auth import require_role
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
-from openviking.storage.context_vector_gateway import ContextVectorGateway
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.exceptions import PermissionDeniedError
 from openviking_cli.session.user_id import UserIdentifier
@@ -121,8 +120,7 @@ async def delete_account(
     try:
         storage = viking_fs._get_vector_store()
         if storage:
-            gateway = ContextVectorGateway.from_storage(storage)
-            deleted = await gateway.delete_account_data(account_id)
+            deleted = await storage.delete_account_data(account_id)
             logger.info(f"VectorDB cascade delete for account {account_id}: {deleted} records")
     except Exception as e:
         logger.warning(f"VectorDB cleanup for account {account_id}: {e}")

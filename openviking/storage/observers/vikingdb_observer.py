@@ -54,7 +54,7 @@ class VikingDBObserver(BaseObserver):
 
                 # Current OpenViking flow uses one managed default index per collection.
                 index_count = 1
-                vector_count = await self._vikingdb_manager.count(name)
+                vector_count = await self._vikingdb_manager.count()
 
                 statuses[name] = {
                     "index_count": index_count,

@@ -105,12 +105,35 @@ class RecordingVikingFS:
         if not callable(original_attr) or name.startswith("_"):
             return original_attr
         # viking_fs文件操作
-        if name not in ("ls", "mkdir", "stat", "rm", "mv", "read", "write", "grep", "glob", "tree",
-                        "abstract", "overview", "relations", "link", "unlink",
-                        "write_file", "read_file", "read_file_bytes", "write_file_bytes", "append_file", "move_file",
-                        "delete_temp", "write_context", "get_relations", "get_relations_with_content",
-                        "find", "search",
-                        ):
+        if name not in (
+            "ls",
+            "mkdir",
+            "stat",
+            "rm",
+            "mv",
+            "read",
+            "write",
+            "grep",
+            "glob",
+            "tree",
+            "abstract",
+            "overview",
+            "relations",
+            "link",
+            "unlink",
+            "write_file",
+            "read_file",
+            "read_file_bytes",
+            "write_file_bytes",
+            "append_file",
+            "move_file",
+            "delete_temp",
+            "write_context",
+            "get_relations",
+            "get_relations_with_content",
+            "find",
+            "search",
+        ):
             return original_attr
 
         async def wrapped_async(*args, **kwargs):
@@ -179,6 +202,7 @@ class RecordingVikingFS:
                 raise
 
         import inspect
+
         if inspect.iscoroutinefunction(original_attr) or name.startswith("_"):
             return wrapped_async
 
@@ -201,6 +225,7 @@ class RecordingVikingFS:
         param_names = []
         try:
             import inspect
+
             original_attr = getattr(self._fs, name, None)
             if original_attr and callable(original_attr):
                 sig = inspect.signature(original_attr)
@@ -223,7 +248,7 @@ class RecordingVikingFS:
 
 class RecordingVikingDB:
     """
-    Wrapper for VikingDBInterface that records all operations.
+    Wrapper for vector store instances that records all operations.
 
     Usage:
         from openviking.eval.recorder import init_recorder
@@ -239,7 +264,7 @@ class RecordingVikingDB:
         Initialize wrapper.
 
         Args:
-            viking_db: VikingDBInterface instance to wrap
+            viking_db: Vector store instance to wrap
             recorder: IORecorder instance (uses global if None)
         """
         self._db = viking_db
@@ -269,7 +294,7 @@ class RecordingVikingDB:
         request = {"collection": collection, "data": data}
         start_time = time.time()
         try:
-            result = await self._db.insert(collection, data)
+            result = await self._db.insert(data)
             latency_ms = (time.time() - start_time) * 1000
             self._record("insert", request, result, latency_ms)
             return result
@@ -283,7 +308,7 @@ class RecordingVikingDB:
         request = {"collection": collection, "id": id, "data": data}
         start_time = time.time()
         try:
-            result = await self._db.update(collection, id, data)
+            result = await self._db.update(id, data)
             latency_ms = (time.time() - start_time) * 1000
             self._record("update", request, result, latency_ms)
             return result
@@ -297,7 +322,7 @@ class RecordingVikingDB:
         request = {"collection": collection, "data": data}
         start_time = time.time()
         try:
-            result = await self._db.upsert(collection, data)
+            result = await self._db.upsert(data)
             latency_ms = (time.time() - start_time) * 1000
             self._record("upsert", request, result, latency_ms)
             return result
@@ -311,7 +336,7 @@ class RecordingVikingDB:
         request = {"collection": collection, "ids": ids}
         start_time = time.time()
         try:
-            result = await self._db.delete(collection, ids)
+            result = await self._db.delete(ids)
             latency_ms = (time.time() - start_time) * 1000
             self._record("delete", request, result, latency_ms)
             return result
@@ -325,7 +350,7 @@ class RecordingVikingDB:
         request = {"collection": collection, "ids": ids}
         start_time = time.time()
         try:
-            result = await self._db.get(collection, ids)
+            result = await self._db.get(ids)
             latency_ms = (time.time() - start_time) * 1000
             self._record("get", request, result, latency_ms)
             return result
@@ -339,7 +364,7 @@ class RecordingVikingDB:
         request = {"collection": collection, "id": id}
         start_time = time.time()
         try:
-            result = await self._db.exists(collection, id)
+            result = await self._db.exists(id)
             latency_ms = (time.time() - start_time) * 1000
             self._record("exists", request, result, latency_ms)
             return result
@@ -359,7 +384,11 @@ class RecordingVikingDB:
         request = {"collection": collection, "vector": vector, "top_k": top_k, "filter": filter}
         start_time = time.time()
         try:
-            result = await self._db.search(collection, vector, top_k, filter)
+            result = await self._db.search(
+                query_vector=vector,
+                filter=filter,
+                limit=top_k,
+            )
             latency_ms = (time.time() - start_time) * 1000
             self._record("search", request, result, latency_ms)
             return result
@@ -379,7 +408,11 @@ class RecordingVikingDB:
         request = {"collection": collection, "filter": filter, "limit": limit, "offset": offset}
         start_time = time.time()
         try:
-            result = await self._db.filter(collection, filter, limit, offset)
+            result = await self._db.filter(
+                filter=filter,
+                limit=limit,
+                offset=offset,
+            )
             latency_ms = (time.time() - start_time) * 1000
             self._record("filter", request, result, latency_ms)
             return result
@@ -447,4 +480,3 @@ class RecordingVikingDB:
     def __getattr__(self, name: str) -> Any:
         """Pass through any other attributes to the wrapped db."""
         return getattr(self._db, name)
-

@@ -14,7 +14,6 @@ from uuid import uuid4
 
 from openviking.message import Message, Part
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.context_vector_gateway import ContextVectorGateway
 from openviking.utils.time_utils import get_current_timestamp
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger, run_async
@@ -78,9 +77,7 @@ class Session:
     ):
         self._viking_fs = viking_fs
         self._vikingdb_manager = vikingdb_manager
-        self._semantic_gateway = (
-            ContextVectorGateway.from_storage(vikingdb_manager) if vikingdb_manager else None
-        )
+        self._semantic_gateway = vikingdb_manager
         self._session_compressor = session_compressor
         self.user = user or UserIdentifier.the_default_user()
         self.ctx = ctx or RequestContext(user=self.user, role=Role.ROOT)

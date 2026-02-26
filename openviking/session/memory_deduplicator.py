@@ -16,7 +16,6 @@ from openviking.core.context import Context
 from openviking.models.embedder.base import EmbedResult
 from openviking.prompts import render_prompt
 from openviking.storage import VikingDBManager
-from openviking.storage.context_vector_gateway import ContextVectorGateway
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
@@ -84,8 +83,7 @@ class MemoryDeduplicator:
     ):
         """Initialize deduplicator."""
         self.vikingdb = vikingdb
-        self.semantic_gateway = ContextVectorGateway.from_storage(vikingdb)
-        self.embedder = vikingdb.get_embedder()
+        self.embedder = self.vikingdb.get_embedder()
 
     async def deduplicate(
         self,
@@ -150,7 +148,7 @@ class MemoryDeduplicator:
 
         try:
             # Search with memory-scope filter.
-            results = await self.semantic_gateway.search_similar_memories(
+            results = await self.vikingdb.search_similar_memories(
                 account_id=account_id,
                 owner_space=owner_space,
                 category_uri_prefix=category_uri_prefix,

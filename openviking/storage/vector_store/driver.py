@@ -55,6 +55,43 @@ class VectorStoreDriver(ABC):
     def close(self) -> None:
         """Release backend resources."""
 
+    def sanitize_scalar_index_fields(
+        self,
+        scalar_index_fields: list[str],
+        fields_meta: list[dict[str, Any]],
+    ) -> list[str]:
+        """Normalize scalar index fields for backend-specific constraints."""
+        return scalar_index_fields
+
+    def build_default_index_meta(
+        self,
+        *,
+        index_name: str,
+        distance: str,
+        use_sparse: bool,
+        sparse_weight: float,
+        scalar_index_fields: list[str],
+    ) -> Dict[str, Any]:
+        """Build default index meta payload for this backend."""
+        index_type = "flat_hybrid" if use_sparse else "flat"
+        index_meta: Dict[str, Any] = {
+            "IndexName": index_name,
+            "VectorIndex": {
+                "IndexType": index_type,
+                "Distance": distance,
+                "Quant": "int8",
+            },
+            "ScalarIndex": scalar_index_fields,
+        }
+        if use_sparse:
+            index_meta["VectorIndex"]["EnableSparse"] = True
+            index_meta["VectorIndex"]["SearchWithSparseLogitAlpha"] = sparse_weight
+        return index_meta
+
+    def normalize_record_for_read(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        """Normalize record fields after reading from backend."""
+        return record
+
     def compile_expr(self, expr: FilterExpr | None) -> Dict[str, Any]:
         """Compile a filter AST node to vectordb DSL."""
         if expr is None:

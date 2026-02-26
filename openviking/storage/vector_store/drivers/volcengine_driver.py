@@ -128,3 +128,46 @@ class VolcengineVectorDriver(VectorStoreDriver):
         if self._collection is not None:
             self._collection.close()
             self._collection = None
+
+    def sanitize_scalar_index_fields(
+        self,
+        scalar_index_fields: list[str],
+        fields_meta: list[dict],
+    ) -> list[str]:
+        date_time_fields = {
+            field.get("FieldName") for field in fields_meta if field.get("FieldType") == "date_time"
+        }
+        return [field for field in scalar_index_fields if field not in date_time_fields]
+
+    def build_default_index_meta(
+        self,
+        *,
+        index_name: str,
+        distance: str,
+        use_sparse: bool,
+        sparse_weight: float,
+        scalar_index_fields: list[str],
+    ) -> dict:
+        index_type = "hnsw_hybrid" if use_sparse else "hnsw"
+        index_meta = {
+            "IndexName": index_name,
+            "VectorIndex": {
+                "IndexType": index_type,
+                "Distance": distance,
+                "Quant": "int8",
+            },
+            "ScalarIndex": scalar_index_fields,
+        }
+        if use_sparse:
+            index_meta["VectorIndex"]["EnableSparse"] = True
+            index_meta["VectorIndex"]["SearchWithSparseLogitAlpha"] = sparse_weight
+        return index_meta
+
+    def normalize_record_for_read(self, record: dict) -> dict:
+        for key in ("uri", "parent_uri"):
+            value = record.get(key)
+            if isinstance(value, str) and not value.startswith("viking://"):
+                stripped = value.strip("/")
+                if stripped:
+                    record[key] = f"viking://{stripped}"
+        return record

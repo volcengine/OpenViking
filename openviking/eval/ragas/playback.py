@@ -415,21 +415,78 @@ class IOPlayback:
             kwargs = request.get("kwargs", {})
 
             if operation == "insert":
-                await self._vector_store.insert(*args, **kwargs)
+                if args:
+                    payload = args[-1]
+                else:
+                    payload = kwargs.get("data", request.get("data", {}))
+                await self._vector_store.insert(payload)
             elif operation == "update":
-                await self._vector_store.update(*args, **kwargs)
+                if len(args) >= 3:
+                    record_id = args[-2]
+                    payload = args[-1]
+                elif len(args) == 2:
+                    record_id = args[0]
+                    payload = args[1]
+                else:
+                    record_id = kwargs.get("id", request.get("id"))
+                    payload = kwargs.get("data", request.get("data", {}))
+                await self._vector_store.update(record_id, payload)
             elif operation == "upsert":
-                await self._vector_store.upsert(*args, **kwargs)
+                if args:
+                    payload = args[-1]
+                else:
+                    payload = kwargs.get("data", request.get("data", {}))
+                await self._vector_store.upsert(payload)
             elif operation == "delete":
-                await self._vector_store.delete(*args, **kwargs)
+                if args:
+                    ids = args[-1]
+                else:
+                    ids = kwargs.get("ids", request.get("ids", []))
+                await self._vector_store.delete(ids)
             elif operation == "get":
-                await self._vector_store.get(*args, **kwargs)
+                if args:
+                    ids = args[-1]
+                else:
+                    ids = kwargs.get("ids", request.get("ids", []))
+                await self._vector_store.get(ids)
             elif operation == "exists":
-                await self._vector_store.exists(*args, **kwargs)
+                if len(args) >= 2:
+                    record_id = args[-1]
+                elif len(args) == 1:
+                    record_id = args[0]
+                else:
+                    record_id = kwargs.get("id", request.get("id"))
+                await self._vector_store.exists(record_id)
             elif operation == "search":
-                await self._vector_store.search(*args, **kwargs)
+                if len(args) >= 4:
+                    query_vector = args[1]
+                    limit = args[2]
+                    where = args[3]
+                elif args:
+                    query_vector = args[0]
+                    limit = kwargs.get("top_k", kwargs.get("limit", 10))
+                    where = kwargs.get("filter")
+                else:
+                    query_vector = kwargs.get("vector", kwargs.get("query_vector"))
+                    limit = kwargs.get("top_k", kwargs.get("limit", request.get("top_k", 10)))
+                    where = kwargs.get("filter", request.get("filter"))
+                await self._vector_store.search(
+                    query_vector=query_vector, filter=where, limit=limit
+                )
             elif operation == "filter":
-                await self._vector_store.filter(*args, **kwargs)
+                if len(args) >= 4:
+                    where = args[1]
+                    limit = args[2]
+                    offset = args[3]
+                elif args:
+                    where = args[0]
+                    limit = kwargs.get("limit", 100)
+                    offset = kwargs.get("offset", 0)
+                else:
+                    where = kwargs.get("filter", request.get("filter", {}))
+                    limit = kwargs.get("limit", request.get("limit", 100))
+                    offset = kwargs.get("offset", request.get("offset", 0))
+                await self._vector_store.filter(filter=where, limit=limit, offset=offset)
             elif operation == "create_collection":
                 await self._vector_store.create_collection(*args, **kwargs)
             elif operation == "drop_collection":

@@ -107,7 +107,7 @@ class QueueManager:
 
         logger.info("[QueueManager] Started")
 
-    def setup_standard_queues(self, vikingdb_interface: Any) -> None:
+    def setup_standard_queues(self, vector_store: Any) -> None:
         """
         Setup standard queues (Embedding and Semantic) with their handlers.
 
@@ -116,14 +116,14 @@ class QueueManager:
         queue manager is started.
 
         Args:
-            vikingdb_interface: VikingDBInterface instance for handlers to write results.
+            vector_store: Vector store instance for handlers to write results.
         """
         # Import handlers here to avoid circular dependencies
         from openviking.storage.collection_schemas import TextEmbeddingHandler
         from openviking.storage.queuefs import SemanticProcessor
 
         # Embedding Queue
-        embedding_handler = TextEmbeddingHandler(vikingdb_interface)
+        embedding_handler = TextEmbeddingHandler(vector_store)
         self.get_queue(
             self.EMBEDDING,
             dequeue_handler=embedding_handler,

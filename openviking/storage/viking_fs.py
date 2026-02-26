@@ -25,14 +25,13 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 from pyagfs.exceptions import AGFSHTTPError
 
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.context_vector_gateway import ContextVectorGateway
-from openviking.storage.vikingdb_interface import VikingDBInterface
 from openviking.utils.time_utils import format_simplified, get_current_timestamp, parse_iso_datetime
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
 
 if TYPE_CHECKING:
+    from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
     from openviking_cli.utils.config import RerankConfig
 
 logger = get_logger(__name__)
@@ -72,7 +71,8 @@ def init_viking_fs(
     agfs: Any,
     query_embedder: Optional[Any] = None,
     rerank_config: Optional["RerankConfig"] = None,
-    vector_store: Optional["VikingDBInterface"] = None,
+    vector_store: Optional["VikingVectorIndexBackend"] = None,
+    timeout: int = 10,
     enable_recorder: bool = False,
 ) -> "VikingFS":
     """Initialize VikingFS singleton.
@@ -163,15 +163,13 @@ class VikingFS:
         agfs: Any,
         query_embedder: Optional[Any] = None,
         rerank_config: Optional["RerankConfig"] = None,
-        vector_store: Optional["VikingDBInterface"] = None,
+        vector_store: Optional["VikingVectorIndexBackend"] = None,
+        timeout: int = 10,
     ):
         self.agfs = agfs
         self.query_embedder = query_embedder
         self.rerank_config = rerank_config
         self.vector_store = vector_store
-        self._context_vector_gateway: Optional[ContextVectorGateway] = (
-            ContextVectorGateway.from_storage(vector_store) if vector_store else None
-        )
         self._bound_ctx: contextvars.ContextVar[Optional[RequestContext]] = contextvars.ContextVar(
             "vikingfs_bound_ctx", default=None
         )
@@ -1049,17 +1047,15 @@ class VikingFS:
     ) -> None:
         """Delete records with specified URIs from vector store.
 
-        Uses semantic gateway to apply tenant-safe URI deletion semantics.
+        Uses tenant-safe URI deletion semantics from vector store.
         """
-        if not self._get_vector_store():
-            return
-        gateway = self._get_context_vector_gateway()
-        if not gateway:
+        vector_store = self._get_vector_store()
+        if not vector_store:
             return
         real_ctx = self._ctx_or_default(ctx)
 
         try:
-            await gateway.delete_uris(real_ctx, uris)
+            await vector_store.delete_uris(real_ctx, uris)
             for uri in uris:
                 logger.info(f"[VikingFS] Deleted from vector store: {uri}")
         except Exception as e:
@@ -1076,10 +1072,8 @@ class VikingFS:
 
         Preserves vector data, only updates uri and parent_uri fields, no need to regenerate embeddings.
         """
-        if not self._get_vector_store():
-            return
-        gateway = self._get_context_vector_gateway()
-        if not gateway:
+        vector_store = self._get_vector_store()
+        if not vector_store:
             return
 
         old_base_uri = self._path_to_uri(old_base, ctx=ctx)
@@ -1087,7 +1081,7 @@ class VikingFS:
 
         for uri in uris:
             try:
-                records = await gateway.get_context_by_uri(
+                records = await vector_store.get_context_by_uri(
                     account_id=self._ctx_or_default(ctx).account_id,
                     uri=uri,
                     limit=1,
@@ -1105,7 +1099,7 @@ class VikingFS:
                     old_parent_uri.replace(old_base_uri, new_base_uri, 1) if old_parent_uri else ""
                 )
 
-                await gateway.update_uri_mapping(
+                await vector_store.update_uri_mapping(
                     ctx=self._ctx_or_default(ctx),
                     uri=uri,
                     new_uri=new_uri,
@@ -1115,19 +1109,9 @@ class VikingFS:
             except Exception as e:
                 logger.warning(f"[VikingFS] Failed to update {uri} in vector store: {e}")
 
-    def _get_vector_store(self) -> Optional["VikingDBInterface"]:
+    def _get_vector_store(self) -> Optional["VikingVectorIndexBackend"]:
         """Get vector store instance."""
         return self.vector_store
-
-    def _get_context_vector_gateway(self) -> Optional[ContextVectorGateway]:
-        """Get semantic vector gateway bound to configured collection."""
-        storage = self._get_vector_store()
-        if not storage:
-            self._context_vector_gateway = None
-            return None
-        if not self._context_vector_gateway:
-            self._context_vector_gateway = ContextVectorGateway.from_storage(storage)
-        return self._context_vector_gateway
 
     def _get_embedder(self) -> Any:
         """Get embedder instance."""
