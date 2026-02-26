@@ -248,7 +248,7 @@ class TreeBuilder:
 
         # Create parent directory (ignore if already exists)
         try:
-            await viking_fs.mkdir(parent_uri, ctx=ctx)
+            await viking_fs.mkdir(parent_uri, exist_ok=True, ctx=ctx)
             logger.debug(f"Created parent directory: {parent_uri}")
         except Exception as e:
             # Directory may already exist, ignore error

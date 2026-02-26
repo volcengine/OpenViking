@@ -94,8 +94,9 @@ Create an `~/.openviking/ov.conf` configuration file in your project directory:
     "model": "doubao-rerank-250615"
   },
   "storage": {
-    "agfs": { "backend": "local", "path": "./data" },
-    "vectordb": { "backend": "local", "path": "./data" }
+    "workspace": "./data",
+    "agfs": { "backend": "local" },
+    "vectordb": { "backend": "local" }
   }
 }
 ```

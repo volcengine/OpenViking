@@ -35,7 +35,7 @@ static float l2_sqr_avx512(const void* v1, const void* v2, const void* params) {
     __m512 a = _mm512_loadu_ps(pv1 + i);
     __m512 b = _mm512_loadu_ps(pv2 + i);
     __m512 diff = _mm512_sub_ps(a, b);
-    sum = _mm512_fmadd_ps(diff, diff, sum);
+    sum = _mm512_add_ps(sum, _mm512_mul_ps(diff, diff));
   }
 
   float res = _mm512_reduce_add_ps(sum);
@@ -64,7 +64,7 @@ static float l2_sqr_avx(const void* v1, const void* v2, const void* params) {
     __m256 a = _mm256_loadu_ps(pv1 + i);
     __m256 b = _mm256_loadu_ps(pv2 + i);
     __m256 diff = _mm256_sub_ps(a, b);
-    sum = _mm256_fmadd_ps(diff, diff, sum);
+    sum = _mm256_add_ps(sum, _mm256_mul_ps(diff, diff));
   }
 
   // Reduce AVX register
@@ -131,7 +131,7 @@ static float l2_sqr_neon(const void* v1, const void* v2, const void* params) {
   size_t dim = *static_cast<const size_t*>(params);
   float dis = 0;
   krl_L2sqr(pv1, pv2, dim, &dis, 1);
-  return 1.0f - dis;
+  return dis;
 }
 #endif
 

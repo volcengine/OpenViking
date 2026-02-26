@@ -91,7 +91,7 @@ class VideoParser(BaseParser):
         ext_no_dot = ext[1:] if ext else ""
         root_dir_name = VikingURI.sanitize_segment(f"{stem}_{ext_no_dot}")
         root_dir_uri = f"{temp_uri}/{root_dir_name}"
-        await viking_fs.mkdir(root_dir_uri)
+        await viking_fs.mkdir(root_dir_uri, exist_ok=True)
 
         # 1.1 Save original video with original filename (sanitized)
         await viking_fs.write_file_bytes(f"{root_dir_uri}/{original_filename}", video_bytes)

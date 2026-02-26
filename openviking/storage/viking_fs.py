@@ -958,7 +958,36 @@ class VikingFS:
             except Exception:
                 return b""
 
+    def _decode_bytes(self, data: bytes) -> str:
+        """Robustly decode bytes to string."""
+        if not data:
+            return ""
+        try:
+            return data.decode("utf-8")
+        except UnicodeDecodeError:
+            try:
+                # Try common encoding for Windows/legacy files in China
+                return data.decode("gbk")
+            except UnicodeDecodeError:
+                try:
+                    return data.decode("latin-1")
+                except UnicodeDecodeError:
+                    return data.decode("utf-8", errors="replace")
+
     def _handle_agfs_content(self, result: Union[bytes, Any, None]) -> str:
+        """Handle AGFSClient content return types consistently."""
+        if isinstance(result, bytes):
+            return self._decode_bytes(result)
+        elif hasattr(result, "content") and result.content is not None:
+            return self._decode_bytes(result.content)
+        elif result is None:
+            return ""
+        else:
+            # Try to convert to string
+            try:
+                return str(result)
+            except Exception:
+                return ""
         """Handle AGFSClient content return types consistently."""
         if isinstance(result, bytes):
             return result.decode("utf-8")
@@ -1282,7 +1311,7 @@ class VikingFS:
             existing = ""
             try:
                 existing_bytes = self._handle_agfs_read(self.agfs.read(path))
-                existing = existing_bytes.decode("utf-8")
+                existing = self._decode_bytes(existing_bytes)
             except Exception:
                 pass
 

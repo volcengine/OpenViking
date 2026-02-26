@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
 from openviking.server.api_keys import APIKeyManager
-from openviking.server.config import ServerConfig, load_server_config
+from openviking.server.config import ServerConfig, load_server_config, validate_server_config
 from openviking.server.dependencies import set_service
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
 from openviking.server.routers import (
@@ -50,6 +50,8 @@ def create_app(
     if config is None:
         config = load_server_config()
 
+    validate_server_config(config)
+
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """Application lifespan handler."""
@@ -72,7 +74,13 @@ def create_app(
             logger.info("APIKeyManager initialized")
         else:
             app.state.api_key_manager = None
-            logger.info("Dev mode: no root_api_key configured, authentication disabled")
+            logger.warning(
+                "Dev mode: no root_api_key configured, authentication disabled. "
+                "This is allowed because the server is bound to localhost (%s). "
+                "Do NOT expose this server to the network without configuring "
+                "server.root_api_key in ov.conf.",
+                config.host,
+            )
 
         yield
 

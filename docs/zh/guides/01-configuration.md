@@ -9,15 +9,14 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 ```json
 {
   "storage": {
+    "workspace": "./data",
     "vectordb": {
       "name": "context",
-      "backend": "local",
-      "path": "./data"
+      "backend": "local"
     },
     "agfs": {
       "port": 1833,
       "log_level": "warn",
-      "path": "./data",
       "backend": "local"
     }
   },
@@ -104,6 +103,7 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 ```json
 {
   "embedding": {
+    "max_concurrent": 10,
     "dense": {
       "provider": "volcengine",
       "api_key": "your-api-key",
@@ -120,6 +120,7 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 
 | 参数 | 类型 | 说明 |
 |------|------|------|
+| `max_concurrent` | int | 最大并发 Embedding 请求数（`embedding.max_concurrent`，默认：`10`） |
 | `provider` | str | `"volcengine"`、`"openai"`、`"vikingdb"` 或 `"jina"` |
 | `api_key` | str | API Key |
 | `model` | str | 模型名称 |
@@ -259,7 +260,7 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
     "provider": "volcengine",
     "api_key": "your-api-key",
     "model": "doubao-seed-1-8-251228",
-    "base_url": "https://ark.cn-beijing.volces.com/api/v3"
+    "api_base": "https://ark.cn-beijing.volces.com/api/v3"
   }
 }
 ```
@@ -270,7 +271,9 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 |------|------|------|
 | `api_key` | str | API Key |
 | `model` | str | 模型名称 |
-| `base_url` | str | API 端点（可选） |
+| `api_base` | str | API 端点（可选） |
+| `thinking` | bool | 启用思考模式（仅对部分火山模型生效，默认：`false`） |
+| `max_concurrent` | int | 语义处理阶段 LLM 最大并发调用数（默认：`100`） |
 
 **可用模型**
 
@@ -315,14 +318,13 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 ```json
 {
   "storage": {
+    "workspace": "./data",
     "agfs": {
       "backend": "local",
-      "path": "./data",
-      "timeout": 30.0
+      "timeout": 10
     },
     "vectordb": {
-      "backend": "local",
-      "path": "./data"
+      "backend": "local"
     }
   }
 }
@@ -407,6 +409,7 @@ HTTP 客户端（`SyncHTTPClient` / `AsyncHTTPClient`）和 CLI 工具连接远�
 ```json
 {
   "embedding": {
+    "max_concurrent": 10,
     "dense": {
       "provider": "volcengine",
       "api_key": "string",
@@ -419,7 +422,9 @@ HTTP 客户端（`SyncHTTPClient` / `AsyncHTTPClient`）和 CLI 工具连接远�
     "provider": "string",
     "api_key": "string",
     "model": "string",
-    "base_url": "string"
+    "api_base": "string",
+    "thinking": false,
+    "max_concurrent": 100
   },
   "rerank": {
     "provider": "volcengine",
@@ -427,15 +432,14 @@ HTTP 客户端（`SyncHTTPClient` / `AsyncHTTPClient`）和 CLI 工具连接远�
     "model": "string"
   },
   "storage": {
+    "workspace": "string",
     "agfs": {
-      "backend": "local|remote",
-      "path": "string",
+      "backend": "local|s3|memory",
       "url": "string",
-      "timeout": 30.0
+      "timeout": 10
     },
     "vectordb": {
       "backend": "local|remote",
-      "path": "string",
       "url": "string",
       "project": "string"
     }

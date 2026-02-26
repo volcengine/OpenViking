@@ -112,7 +112,8 @@ class DirectoryParser(BaseParser):
             viking_fs = self._get_viking_fs()
             temp_uri = self._create_temp_uri()
             target_uri = f"{temp_uri}/{dir_name}"
-            await viking_fs.mkdir(temp_uri)
+            await viking_fs.mkdir(temp_uri, exist_ok=True)
+            await viking_fs.mkdir(target_uri, exist_ok=True)
             await viking_fs.mkdir(target_uri)
 
             if not processable_files:
