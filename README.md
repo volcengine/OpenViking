@@ -353,15 +353,7 @@ set "OPENVIKING_CONFIG_FILE=%USERPROFILE%\.openviking\ov.conf"
 
 For better performance, you can use the Python Binding mode to bypass HTTP overhead by directly calling the AGFS core.
 
-1. **Build the shared library**:
-   ```bash
-   # For macOS
-   make -C third_party/agfs/agfs-server/cmd/pybinding build-macos
-   # For Linux
-   make -C third_party/agfs/agfs-server/cmd/pybinding build-linux
-   ```
-
-2. **Update your `ov.conf`**:
+**Update your `ov.conf`**:
    Add `mode` to the `agfs` section:
    ```json
    {
