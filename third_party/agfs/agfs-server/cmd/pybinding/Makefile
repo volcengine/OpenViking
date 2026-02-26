@@ -1,4 +1,4 @@
-.PHONY: all build-macos build-linux clean install test
+.PHONY: all build-macos build-linux build-windows clean install test
 
 GO=go
 BUILD_DIR=build
@@ -23,11 +23,19 @@ build-linux:
 	@cp $(BUILD_DIR)/$(LIB_NAME).so $(BIN_DIR)/
 	@echo "Build complete: $(BIN_DIR)/$(LIB_NAME).so"
 
+build-windows:
+	@echo "Building shared library for Windows..."
+	@mkdir -p $(BUILD_DIR)
+	@mkdir -p $(BIN_DIR)
+	GOOS=windows GOARCH=amd64 CGO_ENABLED=1 $(GO) build -buildmode=c-shared -o $(BUILD_DIR)/$(LIB_NAME).dll .
+	@cp $(BUILD_DIR)/$(LIB_NAME).dll $(BIN_DIR)/
+	@echo "Build complete: $(BIN_DIR)/$(LIB_NAME).dll"
+
 clean:
 	@echo "Cleaning..."
 	@rm -rf $(BUILD_DIR)
-	@rm -f *.so *.dylib *.h
-	@rm -f $(BIN_DIR)/$(LIB_NAME).so $(BIN_DIR)/$(LIB_NAME).dylib
+	@rm -f *.so *.dylib *.dll *.h
+	@rm -f $(BIN_DIR)/$(LIB_NAME).so $(BIN_DIR)/$(LIB_NAME).dylib $(BIN_DIR)/$(LIB_NAME).dll
 	@echo "Clean complete"
 
 install: build-macos

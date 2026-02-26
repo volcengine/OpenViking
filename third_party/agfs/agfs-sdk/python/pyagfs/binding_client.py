@@ -18,6 +18,8 @@ def _find_library() -> str:
         lib_name = "libagfsbinding.dylib"
     elif system == "Linux":
         lib_name = "libagfsbinding.so"
+    elif system == "Windows":
+        lib_name = "libagfsbinding.dll"
     else:
         raise AGFSClientError(f"Unsupported platform: {system}")
     

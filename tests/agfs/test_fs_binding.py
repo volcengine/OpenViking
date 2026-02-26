@@ -26,7 +26,13 @@ os.makedirs(AGFS_CONF.path, exist_ok=True)
 
 def get_lib_path() -> str:
     """Get the path to AGFS binding shared library."""
-    lib_name = "libagfsbinding.dylib" if platform.system() == "Darwin" else "libagfsbinding.so"
+    system = platform.system()
+    if system == "Darwin":
+        lib_name = "libagfsbinding.dylib"
+    elif system == "Windows":
+        lib_name = "libagfsbinding.dll"
+    else:
+        lib_name = "libagfsbinding.so"
 
     project_root = Path(__file__).parent.parent.parent
     lib_path = project_root / "third_party" / "agfs" / "bin" / lib_name
