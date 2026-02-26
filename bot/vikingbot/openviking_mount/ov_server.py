@@ -173,8 +173,12 @@ class VikingClient:
     ) -> dict[str, list[Any]]:
         """通过上下文消息，检索viking 的user、Agent memory"""
         session = self.client.session(session_id)
-        for message in messages:
-            await session.add_message(role=message.get("role"), content=message.get("content"))
+        if self.mode == "local":
+            for message in messages:
+                session.add_message(role=message.get("role"), parts=[TextPart(text=message.get("content"))])
+        else:
+            for message in messages:
+                await session.add_message(role=message.get("role"), content=message.get("content"))
         user_memory = await self.client.search(
             query=query,
             session=session,
