@@ -12,11 +12,22 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional
 
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.vector_store.expr import (
+    And,
+    Eq,
+    FilterExpr,
+    In,
+    Or,
+    Prefix,
+    RawDSL,
+)
 from openviking.storage.vikingdb_interface import VikingDBInterface
 from openviking_cli.utils.config import get_openviking_config
 
+WhereExpr = FilterExpr | Dict[str, Any]
 
-class ContextSemanticSearchGateway:
+
+class ContextVectorGateway:
     """Semantic methods over the bound context collection."""
 
     def __init__(self, storage: VikingDBInterface, collection_name: str):
@@ -26,7 +37,7 @@ class ContextSemanticSearchGateway:
     @classmethod
     def from_storage(
         cls, storage: VikingDBInterface, collection_name: Optional[str] = None
-    ) -> "ContextSemanticSearchGateway":
+    ) -> "ContextVectorGateway":
         if collection_name:
             bound_collection = collection_name
         else:
@@ -51,7 +62,7 @@ class ContextSemanticSearchGateway:
         sparse_query_vector: Optional[Dict[str, float]] = None,
         context_type: Optional[str] = None,
         target_directories: Optional[List[str]] = None,
-        extra_filter_dsl: Optional[Dict[str, Any]] = None,
+        extra_filter: Optional[WhereExpr] = None,
         limit: int = 10,
         offset: int = 0,
     ) -> List[Dict[str, Any]]:
@@ -59,7 +70,7 @@ class ContextSemanticSearchGateway:
             ctx=ctx,
             context_type=context_type,
             target_directories=target_directories,
-            extra_filter_dsl=extra_filter_dsl,
+            extra_filter=extra_filter,
         )
         return await self._storage.search(
             collection=self._collection_name,
@@ -77,7 +88,7 @@ class ContextSemanticSearchGateway:
         sparse_query_vector: Optional[Dict[str, float]] = None,
         context_type: Optional[str] = None,
         target_directories: Optional[List[str]] = None,
-        extra_filter_dsl: Optional[Dict[str, Any]] = None,
+        extra_filter: Optional[WhereExpr] = None,
         limit: int = 10,
     ) -> List[Dict[str, Any]]:
         if not query_vector:
@@ -88,9 +99,9 @@ class ContextSemanticSearchGateway:
                 ctx=ctx,
                 context_type=context_type,
                 target_directories=target_directories,
-                extra_filter_dsl=extra_filter_dsl,
+                extra_filter=extra_filter,
             ),
-            {"op": "must", "field": "level", "conds": [0, 1]},
+            In("level", [0, 1]),
         )
         return await self._storage.search(
             collection=self._collection_name,
@@ -108,16 +119,16 @@ class ContextSemanticSearchGateway:
         sparse_query_vector: Optional[Dict[str, float]] = None,
         context_type: Optional[str] = None,
         target_directories: Optional[List[str]] = None,
-        extra_filter_dsl: Optional[Dict[str, Any]] = None,
+        extra_filter: Optional[WhereExpr] = None,
         limit: int = 10,
     ) -> List[Dict[str, Any]]:
         merged_filter = self._merge_filters(
-            {"op": "must", "field": "parent_uri", "conds": [parent_uri]},
+            Eq("parent_uri", parent_uri),
             self._build_scope_filter(
                 ctx=ctx,
                 context_type=context_type,
                 target_directories=target_directories,
-                extra_filter_dsl=extra_filter_dsl,
+                extra_filter=extra_filter,
             ),
         )
         return await self._storage.search(
@@ -136,20 +147,20 @@ class ContextSemanticSearchGateway:
         query_vector: List[float],
         limit: int = 5,
     ) -> List[Dict[str, Any]]:
-        conds: List[Dict[str, Any]] = [
-            {"op": "must", "field": "context_type", "conds": ["memory"]},
-            {"op": "must", "field": "level", "conds": [2]},
-            {"op": "must", "field": "account_id", "conds": [account_id]},
+        conds: List[FilterExpr] = [
+            Eq("context_type", "memory"),
+            Eq("level", 2),
+            Eq("account_id", account_id),
         ]
         if owner_space:
-            conds.append({"op": "must", "field": "owner_space", "conds": [owner_space]})
+            conds.append(Eq("owner_space", owner_space))
         if category_uri_prefix:
-            conds.append({"op": "must", "field": "uri", "conds": [category_uri_prefix]})
+            conds.append(Prefix("uri", category_uri_prefix))
 
         return await self._storage.search(
             collection=self._collection_name,
             query_vector=query_vector,
-            filter={"op": "and", "conds": conds},
+            filter=And(conds),
             limit=limit,
         )
 
@@ -160,36 +171,30 @@ class ContextSemanticSearchGateway:
         owner_space: Optional[str] = None,
         limit: int = 1,
     ) -> List[Dict[str, Any]]:
-        conds: List[Dict[str, Any]] = [
-            {"op": "must", "field": "uri", "conds": [uri]},
-            {"op": "must", "field": "account_id", "conds": [account_id]},
+        conds: List[FilterExpr] = [
+            Eq("uri", uri),
+            Eq("account_id", account_id),
         ]
         if owner_space:
-            conds.append({"op": "must", "field": "owner_space", "conds": [owner_space]})
+            conds.append(Eq("owner_space", owner_space))
 
         return await self._storage.filter(
             collection=self._collection_name,
-            filter={"op": "and", "conds": conds},
+            filter=And(conds),
             limit=limit,
         )
 
     async def delete_account_data(self, account_id: str) -> int:
         return await self._storage.batch_delete(
             self._collection_name,
-            {"op": "must", "field": "account_id", "conds": [account_id]},
+            Eq("account_id", account_id),
         )
 
     async def delete_uris(self, ctx: RequestContext, uris: List[str]) -> None:
         for uri in uris:
-            conds: List[Dict[str, Any]] = [
-                {"op": "must", "field": "account_id", "conds": [ctx.account_id]},
-                {
-                    "op": "or",
-                    "conds": [
-                        {"op": "must", "field": "uri", "conds": [uri]},
-                        {"op": "must", "field": "uri", "conds": [f"{uri}/"]},
-                    ],
-                },
+            conds: List[FilterExpr] = [
+                Eq("account_id", ctx.account_id),
+                Or([Eq("uri", uri), Prefix("uri", f"{uri}/")]),
             ]
             if ctx.role == Role.USER and uri.startswith(("viking://user/", "viking://agent/")):
                 owner_space = (
@@ -197,10 +202,10 @@ class ContextSemanticSearchGateway:
                     if uri.startswith("viking://user/")
                     else ctx.user.agent_space_name()
                 )
-                conds.append({"op": "must", "field": "owner_space", "conds": [owner_space]})
+                conds.append(Eq("owner_space", owner_space))
             await self._storage.batch_delete(
                 self._collection_name,
-                {"op": "and", "conds": conds},
+                And(conds),
             )
 
     async def update_uri_mapping(
@@ -212,13 +217,7 @@ class ContextSemanticSearchGateway:
     ) -> bool:
         records = await self._storage.filter(
             collection=self._collection_name,
-            filter={
-                "op": "and",
-                "conds": [
-                    {"op": "must", "field": "uri", "conds": [uri]},
-                    {"op": "must", "field": "account_id", "conds": [ctx.account_id]},
-                ],
-            },
+            filter=And([Eq("uri", uri), Eq("account_id", ctx.account_id)]),
             limit=1,
         )
         if not records or "id" not in records[0]:
@@ -254,11 +253,11 @@ class ContextSemanticSearchGateway:
         ctx: RequestContext,
         context_type: Optional[str],
         target_directories: Optional[List[str]],
-        extra_filter_dsl: Optional[Dict[str, Any]],
-    ) -> Optional[Dict[str, Any]]:
-        filters: List[Dict[str, Any]] = []
+        extra_filter: Optional[WhereExpr],
+    ) -> Optional[FilterExpr]:
+        filters: List[FilterExpr] = []
         if context_type:
-            filters.append({"op": "must", "field": "context_type", "conds": [context_type]})
+            filters.append(Eq("context_type", context_type))
 
         tenant_filter = self._tenant_filter(ctx, context_type=context_type)
         if tenant_filter:
@@ -266,41 +265,36 @@ class ContextSemanticSearchGateway:
 
         if target_directories:
             uri_conds = [
-                {"op": "must", "field": "uri", "conds": [target_dir]}
-                for target_dir in target_directories
-                if target_dir
+                Prefix("uri", target_dir) for target_dir in target_directories if target_dir
             ]
             if uri_conds:
-                filters.append({"op": "or", "conds": uri_conds})
+                filters.append(Or(uri_conds))
 
-        if extra_filter_dsl:
-            filters.append(extra_filter_dsl)
+        if extra_filter:
+            if isinstance(extra_filter, dict):
+                filters.append(RawDSL(extra_filter))
+            else:
+                filters.append(extra_filter)
 
         return self._merge_filters(*filters)
 
     @staticmethod
     def _tenant_filter(
         ctx: RequestContext, context_type: Optional[str] = None
-    ) -> Optional[Dict[str, Any]]:
+    ) -> Optional[FilterExpr]:
         if ctx.role == Role.ROOT:
             return None
 
         owner_spaces = [ctx.user.user_space_name(), ctx.user.agent_space_name()]
         if context_type == "resource":
             owner_spaces.append("")
-        return {
-            "op": "and",
-            "conds": [
-                {"op": "must", "field": "account_id", "conds": [ctx.account_id]},
-                {"op": "must", "field": "owner_space", "conds": owner_spaces},
-            ],
-        }
+        return And([Eq("account_id", ctx.account_id), In("owner_space", owner_spaces)])
 
     @staticmethod
-    def _merge_filters(*filters: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    def _merge_filters(*filters: Optional[FilterExpr]) -> Optional[FilterExpr]:
         non_empty = [f for f in filters if f]
         if not non_empty:
             return None
         if len(non_empty) == 1:
             return non_empty[0]
-        return {"op": "and", "conds": non_empty}
+        return And(non_empty)

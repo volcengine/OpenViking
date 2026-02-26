@@ -6,7 +6,8 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.context_semantic_gateway import ContextSemanticSearchGateway
+from openviking.storage.context_vector_gateway import ContextVectorGateway
+from openviking.storage.vector_store.expr import And
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -18,7 +19,7 @@ def _make_ctx() -> RequestContext:
 async def test_search_in_tenant_uses_bound_collection_and_tenant_scope():
     storage = AsyncMock()
     storage.search.return_value = []
-    gateway = ContextSemanticSearchGateway.from_storage(storage, collection_name="ctx_custom")
+    gateway = ContextVectorGateway.from_storage(storage, collection_name="ctx_custom")
 
     await gateway.search_in_tenant(
         ctx=_make_ctx(),
@@ -30,7 +31,7 @@ async def test_search_in_tenant_uses_bound_collection_and_tenant_scope():
 
     call = storage.search.await_args.kwargs
     assert call["collection"] == "ctx_custom"
-    assert call["filter"]["op"] == "and"
+    assert isinstance(call["filter"], And)
 
 
 @pytest.mark.asyncio
@@ -38,7 +39,7 @@ async def test_increment_active_count_updates_by_uri():
     storage = AsyncMock()
     storage.filter.return_value = [{"id": "r1", "active_count": 3}]
     storage.update.return_value = True
-    gateway = ContextSemanticSearchGateway.from_storage(storage, collection_name="ctx_custom")
+    gateway = ContextVectorGateway.from_storage(storage, collection_name="ctx_custom")
 
     updated = await gateway.increment_active_count(_make_ctx(), ["viking://resources/foo"])
 

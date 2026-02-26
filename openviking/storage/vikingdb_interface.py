@@ -10,6 +10,8 @@ Defines the abstract storage interface inspired by vector database designs
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Tuple
 
+from openviking.storage.vector_store.expr import FilterExpr
+
 
 class VikingDBInterface(ABC):
     """
@@ -240,13 +242,13 @@ class VikingDBInterface(ABC):
         pass
 
     @abstractmethod
-    async def batch_delete(self, collection: str, filter: Dict[str, Any]) -> int:
+    async def batch_delete(self, collection: str, filter: Dict[str, Any] | FilterExpr) -> int:
         """
         Delete records matching filter conditions.
 
         Args:
             collection: Collection name
-            filter: Filter conditions
+            filter: Filter conditions (AST or backend DSL dict)
 
         Returns:
             Number of records deleted
@@ -291,7 +293,7 @@ class VikingDBInterface(ABC):
         collection: str,
         query_vector: Optional[List[float]] = None,
         sparse_query_vector: Optional[Dict[str, float]] = None,
-        filter: Optional[Dict[str, Any]] = None,
+        filter: Optional[Dict[str, Any] | FilterExpr] = None,
         limit: int = 10,
         offset: int = 0,
         output_fields: Optional[List[str]] = None,
@@ -304,7 +306,7 @@ class VikingDBInterface(ABC):
             collection: Collection name
             query_vector: Dense query vector for similarity search (optional)
             sparse_query_vector: Sparse query vector for term matching (optional, Dict[str, float])
-            filter: Scalar filter conditions (optional)
+            filter: Scalar filter conditions (optional, AST or backend DSL dict)
             limit: Maximum number of results
             offset: Offset for pagination
             output_fields: Fields to return (None for all)
@@ -351,7 +353,7 @@ class VikingDBInterface(ABC):
     async def filter(
         self,
         collection: str,
-        filter: Dict[str, Any],
+        filter: Dict[str, Any] | FilterExpr,
         limit: int = 10,
         offset: int = 0,
         output_fields: Optional[List[str]] = None,
@@ -363,7 +365,7 @@ class VikingDBInterface(ABC):
 
         Args:
             collection: Collection name
-            filter: Filter conditions
+            filter: Filter conditions (AST or backend DSL dict)
             limit: Maximum number of results
             offset: Offset for pagination
             output_fields: Fields to return
@@ -379,7 +381,7 @@ class VikingDBInterface(ABC):
     async def scroll(
         self,
         collection: str,
-        filter: Optional[Dict[str, Any]] = None,
+        filter: Optional[Dict[str, Any] | FilterExpr] = None,
         limit: int = 100,
         cursor: Optional[str] = None,
         output_fields: Optional[List[str]] = None,
@@ -389,7 +391,7 @@ class VikingDBInterface(ABC):
 
         Args:
             collection: Collection name
-            filter: Optional filter conditions
+            filter: Optional filter conditions (AST or backend DSL dict)
             limit: Batch size
             cursor: Cursor from previous scroll (None for first batch)
             output_fields: Fields to return
@@ -414,13 +416,15 @@ class VikingDBInterface(ABC):
     # =========================================================================
 
     @abstractmethod
-    async def count(self, collection: str, filter: Optional[Dict[str, Any]] = None) -> int:
+    async def count(
+        self, collection: str, filter: Optional[Dict[str, Any] | FilterExpr] = None
+    ) -> int:
         """
         Count records matching filter.
 
         Args:
             collection: Collection name
-            filter: Optional filter conditions
+            filter: Optional filter conditions (AST or backend DSL dict)
 
         Returns:
             Number of matching records

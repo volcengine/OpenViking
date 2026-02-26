@@ -25,7 +25,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 from pyagfs.exceptions import AGFSHTTPError
 
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.context_semantic_gateway import ContextSemanticSearchGateway
+from openviking.storage.context_vector_gateway import ContextVectorGateway
 from openviking.storage.vikingdb_interface import VikingDBInterface
 from openviking.utils.time_utils import format_simplified, get_current_timestamp, parse_iso_datetime
 from openviking_cli.session.user_id import UserIdentifier
@@ -169,8 +169,8 @@ class VikingFS:
         self.query_embedder = query_embedder
         self.rerank_config = rerank_config
         self.vector_store = vector_store
-        self._context_semantic_gateway: Optional[ContextSemanticSearchGateway] = (
-            ContextSemanticSearchGateway.from_storage(vector_store) if vector_store else None
+        self._context_vector_gateway: Optional[ContextVectorGateway] = (
+            ContextVectorGateway.from_storage(vector_store) if vector_store else None
         )
         self._bound_ctx: contextvars.ContextVar[Optional[RequestContext]] = contextvars.ContextVar(
             "vikingfs_bound_ctx", default=None
@@ -1053,7 +1053,7 @@ class VikingFS:
         """
         if not self._get_vector_store():
             return
-        gateway = self._get_context_semantic_gateway()
+        gateway = self._get_context_vector_gateway()
         if not gateway:
             return
         real_ctx = self._ctx_or_default(ctx)
@@ -1078,7 +1078,7 @@ class VikingFS:
         """
         if not self._get_vector_store():
             return
-        gateway = self._get_context_semantic_gateway()
+        gateway = self._get_context_vector_gateway()
         if not gateway:
             return
 
@@ -1119,15 +1119,15 @@ class VikingFS:
         """Get vector store instance."""
         return self.vector_store
 
-    def _get_context_semantic_gateway(self) -> Optional[ContextSemanticSearchGateway]:
+    def _get_context_vector_gateway(self) -> Optional[ContextVectorGateway]:
         """Get semantic vector gateway bound to configured collection."""
         storage = self._get_vector_store()
         if not storage:
-            self._context_semantic_gateway = None
+            self._context_vector_gateway = None
             return None
-        if not self._context_semantic_gateway:
-            self._context_semantic_gateway = ContextSemanticSearchGateway.from_storage(storage)
-        return self._context_semantic_gateway
+        if not self._context_vector_gateway:
+            self._context_vector_gateway = ContextVectorGateway.from_storage(storage)
+        return self._context_vector_gateway
 
     def _get_embedder(self) -> Any:
         """Get embedder instance."""

@@ -49,19 +49,12 @@ class VikingDBObserver(BaseObserver):
 
         for name in collection_names:
             try:
-                if not self._vikingdb_manager.project.has_collection(name):
+                if not await self._vikingdb_manager.collection_exists(name):
                     continue
 
-                collection = self._vikingdb_manager.project.get_collection(name)
-                if not collection:
-                    continue
-
-                index_count = len(collection.list_indexes())
-
-                count_result = collection.aggregate_data(
-                    index_name=self._vikingdb_manager.DEFAULT_INDEX_NAME, op="count"
-                )
-                vector_count = count_result.agg.get("_total", 0)
+                # Current OpenViking flow uses one managed default index per collection.
+                index_count = 1
+                vector_count = await self._vikingdb_manager.count(name)
 
                 statuses[name] = {
                     "index_count": index_count,

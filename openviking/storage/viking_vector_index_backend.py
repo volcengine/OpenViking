@@ -8,9 +8,10 @@ Supports both in-memory and local persistent storage modes.
 """
 
 import uuid
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
+from openviking.storage.vector_store import FilterExpr, create_driver
+from openviking.storage.vector_store.expr import RawDSL
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.result import FetchDataInCollectionResult
 from openviking.storage.vectordb.utils.logging_init import init_cpp_logging
@@ -34,9 +35,8 @@ class VikingVectorIndexBackend(VikingDBInterface):
     VikingDBManager is derived by VikingVectorIndexBackend.
     """
 
-    # Default project and index names
+    # Default index name
     DEFAULT_INDEX_NAME = "default"
-    DEFAULT_LOCAL_PROJECT_NAME = "vectordb"
 
     def __init__(
         self,
@@ -75,117 +75,44 @@ class VikingVectorIndexBackend(VikingDBInterface):
             )
             backend = VikingVectorIndexBackend(config=config)
         """
+        if config is None:
+            raise ValueError("VectorDB backend config is required")
+
         init_cpp_logging()
 
         self.vector_dim = config.dimension
         self.distance_metric = config.distance_metric
         self.sparse_weight = config.sparse_weight
 
-        if config.backend == "volcengine":
-            if not (
-                config.volcengine
-                and config.volcengine.ak
-                and config.volcengine.sk
-                and config.volcengine.region
-            ):
-                raise ValueError("Volcengine backend requires AK, SK, and Region configuration")
+        # Backend selection is delegated to static driver registry.
+        self._driver = create_driver(config)
+        self._mode = self._driver.mode
 
-            # Volcengine VikingDB mode
-            self._mode = config.backend
-            # Convert lowercase keys to uppercase for consistency with volcengine_collection
-            volc_config = {
-                "AK": config.volcengine.ak,
-                "SK": config.volcengine.sk,
-                "Region": config.volcengine.region,
-            }
-
-            from openviking.storage.vectordb.project.volcengine_project import (
-                get_or_create_volcengine_project,
-            )
-
-            self.project = get_or_create_volcengine_project(
-                project_name=config.project_name, config=volc_config
-            )
-            logger.info(
-                f"VectorDB backend initialized in Volcengine mode: region={volc_config['Region']}"
-            )
-        elif config.backend == "vikingdb":
-            if not config.vikingdb.host:
-                raise ValueError("VikingDB backend requires a valid host")
-            # VikingDB private deployment mode
-            self._mode = config.backend
-            viking_config = {
-                "Host": config.vikingdb.host,
-                "Headers": config.vikingdb.headers,
-            }
-
-            from openviking.storage.vectordb.project.vikingdb_project import (
-                get_or_create_vikingdb_project,
-            )
-
-            self.project = get_or_create_vikingdb_project(
-                project_name=config.project_name, config=viking_config
-            )
-            logger.info(f"VikingDB backend initialized in private mode: {config.vikingdb.host}")
-        elif config.backend == "http":
-            if not config.url:
-                raise ValueError("HTTP backend requires a valid URL")
-            # Remote mode: parse URL and create HTTP project
-            self._mode = config.backend
-            self.host, self.port = self._parse_url(config.url)
-
-            from openviking.storage.vectordb.project.http_project import get_or_create_http_project
-
-            self.project = get_or_create_http_project(
-                host=self.host, port=self.port, project_name=config.project_name
-            )
-            logger.info(f"VikingDB backend initialized in remote mode: {config.url}")
-        elif config.backend == "local":
-            # Local persistent mode
-            self._mode = config.backend
-            from openviking.storage.vectordb.project.local_project import (
-                get_or_create_local_project,
-            )
-
-            project_path = (
-                Path(config.path) / self.DEFAULT_LOCAL_PROJECT_NAME if config.path else ""
-            )
-            self.project = get_or_create_local_project(path=str(project_path))
-            logger.info(f"VikingDB backend initialized with local storage: {project_path}")
-        else:
-            raise ValueError(f"Unsupported VikingDB backend type: {config.type}")
+        logger.info(
+            "VikingDB backend initialized via driver '%s' (mode=%s)",
+            type(self._driver).__name__,
+            self._mode,
+        )
 
         self._collection_configs: Dict[str, Dict[str, Any]] = {}
         # Cache meta_data at collection level to avoid repeated remote calls
         self._meta_data_cache: Dict[str, Dict[str, Any]] = {}
 
-    def _parse_url(self, url: str) -> Tuple[str, int]:
-        """
-        Parse VikingVectorIndex service URL to extract host and port.
-
-        Args:
-            url: Service URL (e.g., "http://localhost:5000" or "localhost:5000")
-
-        Returns:
-            Tuple of (host, port)
-        """
-        from urllib.parse import urlparse
-
-        # Add scheme if not present
-        if not url.startswith(("http://", "https://")):
-            url = f"http://{url}"
-
-        parsed = urlparse(url)
-        host = parsed.hostname or "127.0.0.1"
-        port = parsed.port or 5000
-
-        return host, port
+    def _compile_filter(self, filter_expr: Optional[FilterExpr | Dict[str, Any]]) -> Dict[str, Any]:
+        """Compile AST filters via driver; allow raw DSL passthrough."""
+        if filter_expr is None:
+            return {}
+        if isinstance(filter_expr, dict):
+            return filter_expr
+        if isinstance(filter_expr, RawDSL):
+            return filter_expr.payload
+        return self._driver.compile_expr(filter_expr)
 
     def _get_collection(self, name: str) -> Collection:
         """Get collection object or raise error if not found."""
-        if not self.project.has_collection(name):
+        if not self._driver.has_collection(name):
             raise CollectionNotFoundError(f"Collection '{name}' does not exist")
-        return self.project.get_collection(name)
+        return self._driver.get_collection(name)
 
     def _get_meta_data(self, collection_name: str, coll: Collection) -> Dict[str, Any]:
         """Get meta_data with collection-level caching to avoid repeated remote calls."""
@@ -240,7 +167,7 @@ class VikingVectorIndexBackend(VikingDBInterface):
             True if created successfully, False if already exists
         """
         try:
-            if self.project.has_collection(name):
+            if self._driver.has_collection(name):
                 logger.debug(f"Collection '{name}' already exists")
                 return False
 
@@ -264,8 +191,8 @@ class VikingVectorIndexBackend(VikingDBInterface):
 
             logger.info(f"Creating collection mode={self._mode} with meta: {collection_meta}")
 
-            # Create collection using vectordb project
-            collection = self.project.create_collection(name, collection_meta)
+            # Create collection via backend-specific collection driver
+            collection = self._driver.create_collection(name, collection_meta)
 
             # Filter date_time fields for volcengine and vikingdb backends
             if self._mode in ["volcengine", "vikingdb"]:
@@ -323,11 +250,11 @@ class VikingVectorIndexBackend(VikingDBInterface):
     async def drop_collection(self, name: str) -> bool:
         """Drop a collection."""
         try:
-            if not self.project.has_collection(name):
+            if not self._driver.has_collection(name):
                 logger.warning(f"Collection '{name}' does not exist")
                 return False
 
-            self.project.drop_collection(name)
+            self._driver.drop_collection(name)
             self._collection_configs.pop(name, None)
             # Clear cached meta_data when dropping collection
             self._meta_data_cache.pop(name, None)
@@ -340,16 +267,16 @@ class VikingVectorIndexBackend(VikingDBInterface):
 
     async def collection_exists(self, name: str) -> bool:
         """Check if a collection exists."""
-        return self.project.has_collection(name)
+        return self._driver.has_collection(name)
 
     async def list_collections(self) -> List[str]:
         """List all collection names."""
-        return self.project.list_collections()
+        return self._driver.list_collections()
 
     async def get_collection_info(self, name: str) -> Optional[Dict[str, Any]]:
         """Get collection metadata and statistics."""
         try:
-            if not self.project.has_collection(name):
+            if not self._driver.has_collection(name):
                 return None
 
             config = self._collection_configs.get(name, {})
@@ -563,7 +490,7 @@ class VikingVectorIndexBackend(VikingDBInterface):
             logger.error(f"Error batch upserting records: {e}")
             raise
 
-    async def batch_delete(self, collection: str, filter: Dict[str, Any]) -> int:
+    async def batch_delete(self, collection: str, filter: Dict[str, Any] | FilterExpr) -> int:
         """Delete records matching filter conditions."""
         try:
             # First, find matching records
@@ -645,7 +572,7 @@ class VikingVectorIndexBackend(VikingDBInterface):
         collection: str,
         query_vector: Optional[List[float]] = None,
         sparse_query_vector: Optional[Dict[str, float]] = None,
-        filter: Optional[Dict[str, Any]] = None,
+        filter: Optional[Dict[str, Any] | FilterExpr] = None,
         limit: int = 10,
         offset: int = 0,
         output_fields: Optional[List[str]] = None,
@@ -669,8 +596,7 @@ class VikingVectorIndexBackend(VikingDBInterface):
         coll = self._get_collection(collection)
 
         try:
-            # Filter is already in vectordb DSL format
-            vectordb_filter = filter if filter else {}
+            vectordb_filter = self._compile_filter(filter)
 
             if query_vector or sparse_query_vector:
                 # Vector search (dense, sparse, or hybrid) with optional filtering
@@ -715,7 +641,7 @@ class VikingVectorIndexBackend(VikingDBInterface):
     async def filter(
         self,
         collection: str,
-        filter: Dict[str, Any],
+        filter: Dict[str, Any] | FilterExpr,
         limit: int = 10,
         offset: int = 0,
         output_fields: Optional[List[str]] = None,
@@ -726,8 +652,7 @@ class VikingVectorIndexBackend(VikingDBInterface):
         coll = self._get_collection(collection)
 
         try:
-            # Filter is already in vectordb DSL format
-            vectordb_filter = filter if filter else {}
+            vectordb_filter = self._compile_filter(filter)
 
             if order_by:
                 # Use search_by_scalar for sorting
@@ -770,11 +695,11 @@ class VikingVectorIndexBackend(VikingDBInterface):
     async def scroll(
         self,
         collection: str,
-        filter: Optional[Dict[str, Any]] = None,
+        filter: Optional[Dict[str, Any] | FilterExpr] = None,
         limit: int = 100,
         cursor: Optional[str] = None,
         output_fields: Optional[List[str]] = None,
-    ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+    ) -> tuple[List[Dict[str, Any]], Optional[str]]:
         """Scroll through large result sets efficiently."""
         # vectordb doesn't natively support scroll, so we simulate it
         offset = int(cursor) if cursor else 0
@@ -796,12 +721,16 @@ class VikingVectorIndexBackend(VikingDBInterface):
     # Aggregation Operations
     # =========================================================================
 
-    async def count(self, collection: str, filter: Optional[Dict[str, Any]] = None) -> int:
+    async def count(
+        self, collection: str, filter: Optional[Dict[str, Any] | FilterExpr] = None
+    ) -> int:
         """Count records matching filter."""
         try:
             coll = self._get_collection(collection)
             result = coll.aggregate_data(
-                index_name=self.DEFAULT_INDEX_NAME, op="count", filters=filter
+                index_name=self.DEFAULT_INDEX_NAME,
+                op="count",
+                filters=self._compile_filter(filter),
             )
             return result.agg.get("_total", 0)
         except Exception as e:
@@ -868,8 +797,7 @@ class VikingVectorIndexBackend(VikingDBInterface):
     async def close(self) -> None:
         """Close storage connection and release resources."""
         try:
-            if self.project:
-                self.project.close()
+            self._driver.close()
 
             self._collection_configs.clear()
             logger.info("VikingDB backend closed")
@@ -883,8 +811,8 @@ class VikingVectorIndexBackend(VikingDBInterface):
     async def health_check(self) -> bool:
         """Check if storage backend is healthy and accessible."""
         try:
-            # Simple check: verify we can access the project
-            self.project.list_collections()
+            # Simple check: verify we can access collections metadata.
+            self._driver.list_collections()
             return True
         except Exception:
             return False
@@ -892,7 +820,7 @@ class VikingVectorIndexBackend(VikingDBInterface):
     async def get_stats(self) -> Dict[str, Any]:
         """Get storage statistics."""
         try:
-            collections = self.project.list_collections()
+            collections = self._driver.list_collections()
 
             # Count total records across all collections using aggregate_data
             total_records = 0

@@ -7,6 +7,7 @@ import pytest
 
 from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.vector_store.expr import Prefix
 from openviking_cli.retrieve.types import ContextType, TypedQuery
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -43,6 +44,8 @@ class DummyStorage:
 
 
 def _contains_uri_scope_filter(obj, target_uri: str) -> bool:
+    if isinstance(obj, Prefix):
+        return obj.field == "uri" and obj.prefix == target_uri
     if isinstance(obj, dict):
         if (
             obj.get("op") == "must"
@@ -53,6 +56,8 @@ def _contains_uri_scope_filter(obj, target_uri: str) -> bool:
         return any(_contains_uri_scope_filter(v, target_uri) for v in obj.values())
     if isinstance(obj, list):
         return any(_contains_uri_scope_filter(v, target_uri) for v in obj)
+    if hasattr(obj, "__dict__"):
+        return any(_contains_uri_scope_filter(v, target_uri) for v in vars(obj).values())
     return False
 
 

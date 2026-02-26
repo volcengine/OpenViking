@@ -14,7 +14,7 @@ from openviking.core.context import Context, Vectorize
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager
-from openviking.storage.context_semantic_gateway import ContextSemanticSearchGateway
+from openviking.storage.context_vector_gateway import ContextVectorGateway
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
@@ -54,7 +54,7 @@ class SessionCompressor:
     ):
         """Initialize session compressor."""
         self.vikingdb = vikingdb
-        self.semantic_gateway = ContextSemanticSearchGateway.from_storage(vikingdb)
+        self.semantic_gateway = ContextVectorGateway.from_storage(vikingdb)
         self.extractor = MemoryExtractor()
         self.deduplicator = MemoryDeduplicator(vikingdb=vikingdb)
 

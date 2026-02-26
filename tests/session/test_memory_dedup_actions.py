@@ -22,6 +22,7 @@ from openviking.session.memory_extractor import (
     MemoryExtractor,
     MergedMemoryPayload,
 )
+from openviking.storage.vector_store.expr import And, Eq, Prefix
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -176,22 +177,19 @@ class TestMemoryDeduplicatorPayload:
         assert len(similar) == 1
         assert similar[0].uri == existing.uri
         call = vikingdb.search.await_args.kwargs
-        assert call["filter"]["op"] == "and"
-        assert {"field": "context_type", "op": "must", "conds": ["memory"]} in call["filter"][
-            "conds"
-        ]
-        assert {"field": "level", "op": "must", "conds": [2]} in call["filter"]["conds"]
-        assert {"field": "account_id", "op": "must", "conds": ["acc1"]} in call["filter"]["conds"]
-        assert {
-            "field": "owner_space",
-            "op": "must",
-            "conds": [_make_user().user_space_name()],
-        } in call["filter"]["conds"]
-        assert {
-            "field": "uri",
-            "op": "must",
-            "conds": [f"viking://user/{_make_user().user_space_name()}/memories/preferences/"],
-        } in call["filter"]["conds"]
+        assert isinstance(call["filter"], And)
+        conds = call["filter"].conds
+        assert Eq("context_type", "memory") in conds
+        assert Eq("level", 2) in conds
+        assert Eq("account_id", "acc1") in conds
+        assert Eq("owner_space", _make_user().user_space_name()) in conds
+        assert (
+            Prefix(
+                "uri",
+                f"viking://user/{_make_user().user_space_name()}/memories/preferences/",
+            )
+            in conds
+        )
 
     @pytest.mark.asyncio
     async def test_find_similar_memories_accepts_low_score_when_threshold_is_zero(self):

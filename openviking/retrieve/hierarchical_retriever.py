@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from openviking.models.embedder.base import EmbedResult
 from openviking.retrieve.memory_lifecycle import hotness_score
 from openviking.server.identity import RequestContext, Role
-from openviking.storage import ContextSemanticSearchGateway, VikingDBInterface
+from openviking.storage import ContextVectorGateway, VikingDBInterface
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.retrieve.types import (
     ContextType,
@@ -58,7 +58,7 @@ class HierarchicalRetriever:
             rerank_config: Rerank configuration (optional, will fallback to vector search only)
         """
         self.storage = storage
-        self.semantic_gateway = ContextSemanticSearchGateway.from_storage(storage)
+        self.semantic_gateway = ContextVectorGateway.from_storage(storage)
         self.embedder = embedder
         self.rerank_config = rerank_config
 
@@ -185,7 +185,7 @@ class HierarchicalRetriever:
             sparse_query_vector=sparse_query_vector,
             context_type=context_type,
             target_directories=target_dirs,
-            extra_filter_dsl=scope_dsl,
+            extra_filter=scope_dsl,
             limit=limit,
         )
         return results
@@ -292,7 +292,7 @@ class HierarchicalRetriever:
                 sparse_query_vector=sparse_query_vector,  # Pass sparse vector
                 context_type=context_type,
                 target_directories=target_dirs,
-                extra_filter_dsl=scope_dsl,
+                extra_filter=scope_dsl,
                 limit=pre_filter_limit,
             )
 

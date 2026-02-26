@@ -16,7 +16,7 @@ from openviking.core.context import Context
 from openviking.models.embedder.base import EmbedResult
 from openviking.prompts import render_prompt
 from openviking.storage import VikingDBManager
-from openviking.storage.context_semantic_gateway import ContextSemanticSearchGateway
+from openviking.storage.context_vector_gateway import ContextVectorGateway
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
@@ -84,7 +84,7 @@ class MemoryDeduplicator:
     ):
         """Initialize deduplicator."""
         self.vikingdb = vikingdb
-        self.semantic_gateway = ContextSemanticSearchGateway.from_storage(vikingdb)
+        self.semantic_gateway = ContextVectorGateway.from_storage(vikingdb)
         self.embedder = vikingdb.get_embedder()
 
     async def deduplicate(
