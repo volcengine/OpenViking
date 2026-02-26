@@ -311,15 +311,19 @@ openviking mcp --path ./data
 需要写入能力时，显式开启写模式：
 
 ```bash
-openviking mcp --path ./data --enable-write
+openviking mcp --path ./data --access-level mutate
 ```
 
 当前 V1 范围：
 - 传输协议：仅 `stdio`
 - 运行模式：仅本地嵌入 `--path`
-- 默认模式：只读（除非设置 `--enable-write`，否则不暴露写工具）
-- 读取工具：`openviking_find`、`openviking_search`、`openviking_read`、`openviking_ls`、`openviking_abstract`、`openviking_overview`、`openviking_wait_processed`、`openviking_stat`、`openviking_tree`、`openviking_grep`、`openviking_glob`、`openviking_status`、`openviking_health`
-- 写入工具（可选）：`openviking_add_resource`
+- 访问级别：`readonly`、`ingest`、`mutate`、`admin`
+- 兼容开关：`--enable-write` 等价于 `--access-level mutate`
+- 只读工具：`openviking_find`、`openviking_search`、`openviking_read`、`openviking_ls`、`openviking_abstract`、`openviking_overview`、`openviking_wait_processed`、`openviking_stat`、`openviking_tree`、`openviking_grep`、`openviking_glob`、`openviking_status`、`openviking_health`、`openviking_session_list`、`openviking_session_get`、`openviking_relation_list`
+- ingest 工具：`openviking_session_create`、`openviking_session_add_message`、`openviking_session_commit`、`openviking_resource_add`、`openviking_resource_add_skill`
+- mutate 工具：`openviking_relation_link`、`openviking_relation_unlink`、`openviking_fs_mkdir`、`openviking_fs_mv`
+- admin 工具：`openviking_session_delete`、`openviking_fs_rm`、`openviking_pack_export`、`openviking_pack_import`
+- 兼容别名：`openviking_add_resource` 可作为 `openviking_resource_add` 的别名继续调用
 
 OpenCode 配置示例：
 
@@ -341,7 +345,7 @@ OpenCode 可写配置示例：
   "mcp": {
     "openviking": {
       "command": "openviking",
-      "args": ["mcp", "--path", "./data", "--enable-write"]
+      "args": ["mcp", "--path", "./data", "--access-level", "mutate"]
     }
   }
 }
@@ -367,7 +371,7 @@ Codex 可写配置示例：
   "mcpServers": {
     "openviking": {
       "command": "openviking",
-      "args": ["mcp", "--path", "./data", "--enable-write"]
+      "args": ["mcp", "--path", "./data", "--access-level", "mutate"]
     }
   }
 }
@@ -375,7 +379,9 @@ Codex 可写配置示例：
 
 生产环境建议：
 - 默认使用只读 MCP 实例。
-- 写入实例建议独立部署并做明确访问控制。
+- 内容导入场景建议使用 `ingest` 级别。
+- 需要关系/文件结构变更时再使用 `mutate`。
+- `admin` 仅建议在受信任环境中使用。
 
 ---
 

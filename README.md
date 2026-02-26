@@ -432,18 +432,22 @@ Start MCP server (stdio transport, readonly by default):
 openviking mcp --path ./data
 ```
 
-Enable write tools explicitly when needed:
+Enable access level explicitly when needed:
 
 ```bash
-openviking mcp --path ./data --enable-write
+openviking mcp --path ./data --access-level mutate
 ```
 
 Current V1 scope:
 - Transport: `stdio` only
 - Runtime mode: embedded local path (`--path`)
-- Default mode: readonly (write tools disabled unless `--enable-write` is set)
-- Read tools: `openviking_find`, `openviking_search`, `openviking_read`, `openviking_ls`, `openviking_abstract`, `openviking_overview`, `openviking_wait_processed`, `openviking_stat`, `openviking_tree`, `openviking_grep`, `openviking_glob`, `openviking_status`, `openviking_health`
-- Write tools (optional): `openviking_add_resource`
+- Access levels: `readonly`, `ingest`, `mutate`, `admin`
+- Compatibility: `--enable-write` maps to `--access-level mutate`
+- Readonly tools: `openviking_find`, `openviking_search`, `openviking_read`, `openviking_ls`, `openviking_abstract`, `openviking_overview`, `openviking_wait_processed`, `openviking_stat`, `openviking_tree`, `openviking_grep`, `openviking_glob`, `openviking_status`, `openviking_health`, `openviking_session_list`, `openviking_session_get`, `openviking_relation_list`
+- Ingest tools: `openviking_session_create`, `openviking_session_add_message`, `openviking_session_commit`, `openviking_resource_add`, `openviking_resource_add_skill`
+- Mutate tools: `openviking_relation_link`, `openviking_relation_unlink`, `openviking_fs_mkdir`, `openviking_fs_mv`
+- Admin tools: `openviking_session_delete`, `openviking_fs_rm`, `openviking_pack_export`, `openviking_pack_import`
+- Compatibility alias: `openviking_add_resource` is accepted as alias of `openviking_resource_add`
 
 OpenCode example configuration:
 
@@ -465,7 +469,7 @@ OpenCode writable configuration:
   "mcp": {
     "openviking": {
       "command": "openviking",
-      "args": ["mcp", "--path", "./data", "--enable-write"]
+      "args": ["mcp", "--path", "./data", "--access-level", "mutate"]
     }
   }
 }
@@ -491,7 +495,7 @@ Codex writable configuration:
   "mcpServers": {
     "openviking": {
       "command": "openviking",
-      "args": ["mcp", "--path", "./data", "--enable-write"]
+      "args": ["mcp", "--path", "./data", "--access-level", "mutate"]
     }
   }
 }
@@ -499,7 +503,9 @@ Codex writable configuration:
 
 Production recommendation:
 - Prefer readonly MCP instances by default.
-- Run writable instances separately with explicit access control.
+- Use `ingest` for content ingestion workflows.
+- Use `mutate` only when relation or filesystem mutation is required.
+- Restrict `admin` to trusted environments and operators only.
 
 ---
 

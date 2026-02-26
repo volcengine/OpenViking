@@ -17,7 +17,7 @@ class _StubClient:
     def read(self, uri, offset=0, limit=-1):
         return "hello"
 
-    def ls(self, uri="viking://", simple=False, recursive=False, output="agent"):
+    def ls(self, uri="viking://", simple=False, recursive=False, output="agent", **kwargs):
         return [{"uri": "viking://resources"}]
 
     def abstract(self, uri):
@@ -26,45 +26,91 @@ class _StubClient:
     def overview(self, uri):
         return "ov"
 
-    def add_resource(
-        self,
-        path,
-        target=None,
-        reason="",
-        instruction="",
-        wait=False,
-        timeout=None,
-    ):
+    def wait_processed(self, timeout=None):
+        return {"pending": 0}
+
+    def stat(self, uri):
+        return {"uri": uri}
+
+    def tree(self, uri, output="agent", abs_limit=128, show_all_hidden=False, node_limit=1000):
+        return {"uri": uri, "children": []}
+
+    def grep(self, uri, pattern, case_insensitive=False):
+        return {"matches": []}
+
+    def glob(self, pattern, uri="viking://"):
+        return {"matches": []}
+
+    def get_status(self):
+        return {"healthy": True}
+
+    def is_healthy(self):
+        return True
+
+    def list_sessions(self):
+        return [{"session_id": "s1"}]
+
+    def get_session(self, session_id):
+        return {"session_id": session_id}
+
+    def relations(self, uri):
+        return [{"uri": uri, "reason": "ref"}]
+
+    def create_session(self):
+        return {"session_id": "s1"}
+
+    def add_message(self, session_id, role, content=None, parts=None):
+        return {"session_id": session_id}
+
+    def commit_session(self, session_id):
+        return {"session_id": session_id}
+
+    def add_resource(self, path, target=None, reason="", instruction="", wait=False, timeout=None):
         return {"root_uri": "viking://resources/demo"}
 
+    def add_skill(self, data, wait=False, timeout=None):
+        return {"root_uri": "viking://agent/skills/demo"}
 
-def test_list_tools_returns_v1_read_definitions():
-    adapter = OpenVikingMCPAdapter(_StubClient())
-    tools = adapter.list_tools()
-    names = {tool["name"] for tool in tools}
+    def link(self, from_uri, uris, reason=""):
+        return None
 
-    assert "openviking_find" in names
-    assert "openviking_search" in names
-    assert "openviking_read" in names
-    assert "openviking_ls" in names
-    assert "openviking_abstract" in names
-    assert "openviking_overview" in names
-    assert "openviking_wait_processed" in names
-    assert "openviking_stat" in names
-    assert "openviking_tree" in names
-    assert "openviking_grep" in names
-    assert "openviking_glob" in names
-    assert "openviking_status" in names
-    assert "openviking_health" in names
-    assert "openviking_add_resource" not in names
+    def unlink(self, from_uri, uri):
+        return None
+
+    def mkdir(self, uri):
+        return None
+
+    def mv(self, from_uri, to_uri):
+        return None
+
+    def delete_session(self, session_id):
+        return None
+
+    def rm(self, uri, recursive=False):
+        return None
+
+    def export_ovpack(self, uri, to):
+        return to
+
+    def import_ovpack(self, file_path, target, force=False, vectorize=True):
+        return "viking://resources/imported"
 
 
-def test_list_tools_includes_write_tool_when_enabled():
-    adapter = OpenVikingMCPAdapter(_StubClient(), allow_write=True)
-    tools = adapter.list_tools()
-    names = {tool["name"] for tool in tools}
+def test_list_tools_filters_by_access_level():
+    readonly = OpenVikingMCPAdapter(_StubClient(), access_level="readonly")
+    mutate = OpenVikingMCPAdapter(_StubClient(), access_level="mutate")
+    admin = OpenVikingMCPAdapter(_StubClient(), access_level="admin")
 
-    assert "openviking_add_resource" in names
+    readonly_names = {tool["name"] for tool in readonly.list_tools()}
+    mutate_names = {tool["name"] for tool in mutate.list_tools()}
+    admin_names = {tool["name"] for tool in admin.list_tools()}
+
+    assert "openviking_find" in readonly_names
+    assert "openviking_session_create" not in readonly_names
+    assert "openviking_fs_mkdir" in mutate_names
+    assert "openviking_fs_rm" not in mutate_names
+    assert "openviking_fs_rm" in admin_names
+    assert "openviking_pack_import" in admin_names
 
 
 def test_call_tool_returns_json_text_payload():
@@ -76,9 +122,9 @@ def test_call_tool_returns_json_text_payload():
     assert body["result"] == "hello"
 
 
-def test_call_tool_write_is_denied_in_readonly_mode():
-    adapter = OpenVikingMCPAdapter(_StubClient(), allow_write=False)
-    payload = adapter.call_tool("openviking_add_resource", {"path": "./data"})
+def test_call_tool_write_is_denied_when_permission_insufficient():
+    adapter = OpenVikingMCPAdapter(_StubClient(), access_level="ingest")
+    payload = adapter.call_tool("openviking_fs_rm", {"uri": "viking://resources/x"})
     body = json.loads(payload)
 
     assert body["ok"] is False

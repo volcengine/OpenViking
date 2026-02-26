@@ -6,6 +6,7 @@ from typing import Optional
 
 import typer
 
+from openviking.mcp.permissions import ACCESS_LEVEL_ORDER, access_level_name, parse_access_level
 from openviking_cli.cli.context import get_cli_context
 from openviking_cli.cli.errors import handle_command_error
 
@@ -31,10 +32,19 @@ def register(app: typer.Typer) -> None:
             "--transport",
             help="MCP transport mode. MVP supports only 'stdio'.",
         ),
+        access_level: str = typer.Option(
+            "readonly",
+            "--access-level",
+            help=(
+                "MCP tool access level: "
+                + ", ".join(ACCESS_LEVEL_ORDER)
+                + ". Default is readonly."
+            ),
+        ),
         enable_write: bool = typer.Option(
             False,
             "--enable-write/--readonly",
-            help="Enable write tools (default is readonly mode).",
+            help="Compatibility switch. --enable-write maps to --access-level mutate.",
         ),
     ) -> None:
         """Run OpenViking MCP server (stdio, embedded mode)."""
@@ -42,13 +52,19 @@ def register(app: typer.Typer) -> None:
         try:
             if transport != "stdio":
                 raise ValueError("Only stdio transport is supported in V1")
+            if enable_write and access_level.strip().lower() != "readonly":
+                raise ValueError("Cannot use --enable-write together with --access-level")
+
+            resolved_access_level = "mutate" if enable_write else access_level
+            resolved_access_level = access_level_name(parse_access_level(resolved_access_level))
+
             from openviking.mcp.server import run_stdio_server
 
             run_stdio_server(
                 path=path,
                 config=config,
                 transport=transport,
-                enable_write=enable_write,
+                access_level=resolved_access_level,
             )
         except Exception as exc:  # noqa: BLE001
             handle_command_error(cli_ctx, exc)
