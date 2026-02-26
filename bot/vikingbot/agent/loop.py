@@ -272,6 +272,7 @@ class AgentLoop:
 
                 # Execute tools
                 for tool_call in response.tool_calls:
+                    args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
 
                     # 回调：工具调用
                     if self.thinking_callback:
@@ -305,7 +306,6 @@ class AgentLoop:
                         messages, tool_call.id, tool_call.name, result
                     )
 
-                    args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                     tool_call_dict = {
                         "tool_name": tool_call.name,
                         "args": args_str,
