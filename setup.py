@@ -115,6 +115,7 @@ class CMakeBuildExtension(build_ext):
             f"-Dpybind11_DIR={pybind11.get_cmake_dir()}",
             f"-DCMAKE_C_COMPILER={C_COMPILER_PATH}",
             f"-DCMAKE_CXX_COMPILER={CXX_COMPILER_PATH}",
+            f"-DOV_X86_SIMD_LEVEL={os.environ.get('OV_X86_SIMD_LEVEL', 'AVX2')}",
         ]
 
         if sys.platform == "darwin":

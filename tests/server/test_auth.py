@@ -4,10 +4,11 @@
 """Tests for multi-tenant authentication (openviking/server/auth.py)."""
 
 import httpx
+import pytest
 import pytest_asyncio
 
 from openviking.server.app import create_app
-from openviking.server.config import ServerConfig
+from openviking.server.config import ServerConfig, _is_localhost, validate_server_config
 from openviking.server.dependencies import set_service
 from openviking.service.core import OpenVikingService
 from openviking_cli.session.user_id import UserIdentifier
@@ -199,3 +200,40 @@ async def test_cross_tenant_session_get_returns_not_found(auth_client: httpx.Asy
     )
     assert cross_get.status_code == 404
     assert cross_get.json()["error"]["code"] == "NOT_FOUND"
+
+
+# ---- _is_localhost tests ----
+
+
+@pytest.mark.parametrize("host", ["127.0.0.1", "localhost", "::1"])
+def test_is_localhost_true(host: str):
+    assert _is_localhost(host) is True
+
+
+@pytest.mark.parametrize("host", ["0.0.0.0", "::", "192.168.1.1", "10.0.0.1"])
+def test_is_localhost_false(host: str):
+    assert _is_localhost(host) is False
+
+
+# ---- validate_server_config tests ----
+
+
+def test_validate_no_key_localhost_passes():
+    """No root_api_key + localhost should pass validation."""
+    for host in ("127.0.0.1", "localhost", "::1"):
+        config = ServerConfig(host=host, root_api_key=None)
+        validate_server_config(config)  # should not raise
+
+
+def test_validate_no_key_non_localhost_raises():
+    """No root_api_key + non-localhost should raise SystemExit."""
+    config = ServerConfig(host="0.0.0.0", root_api_key=None)
+    with pytest.raises(SystemExit):
+        validate_server_config(config)
+
+
+def test_validate_with_key_any_host_passes():
+    """With root_api_key set, any host should pass validation."""
+    for host in ("0.0.0.0", "::", "192.168.1.1", "127.0.0.1"):
+        config = ServerConfig(host=host, root_api_key="some-secret-key")
+        validate_server_config(config)  # should not raise

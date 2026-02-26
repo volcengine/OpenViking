@@ -317,7 +317,8 @@ import openviking as ov
 client = ov.SyncHTTPClient(
     url="http://localhost:1933",
     api_key="USER_API_KEY",
-    agent_id="my-agent"
+    agent_id="my-agent",
+    timeout=120.0,  # HTTP request timeout in seconds (default: 60.0)
 )
 client.initialize()
 

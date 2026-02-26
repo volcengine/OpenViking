@@ -8,6 +8,7 @@ and rerank-based relevance scoring.
 """
 
 import heapq
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from openviking.models.embedder.base import EmbedResult
@@ -21,6 +22,7 @@ from openviking_cli.retrieve.types import (
     RelatedContext,
     TypedQuery,
 )
+from openviking.retrieve.memory_lifecycle import hotness_score
 from openviking_cli.utils.config import RerankConfig
 from openviking_cli.utils.logger import get_logger
 
@@ -40,6 +42,7 @@ class HierarchicalRetriever:
     SCORE_PROPAGATION_ALPHA = 0.5  # Score propagation coefficient
     DIRECTORY_DOMINANCE_RATIO = 1.2  # Directory score must exceed max child score
     GLOBAL_SEARCH_TOPK = 3  # Global retrieval count
+    HOTNESS_ALPHA = 0.2  # Weight for hotness score in final ranking (0 = disabled)
 
     def __init__(
         self,
@@ -416,7 +419,13 @@ class HierarchicalRetriever:
         candidates: List[Dict[str, Any]],
         ctx: RequestContext,
     ) -> List[MatchedContext]:
-        """Convert candidate results to MatchedContext list."""
+        """Convert candidate results to MatchedContext list.
+
+        Blends semantic similarity with a hotness score derived from
+        ``active_count`` and ``updated_at`` so that frequently-accessed,
+        recently-updated contexts get a ranking boost.  The blend weight
+        is controlled by ``HOTNESS_ALPHA`` (0 disables the boost).
+        """
         results = []
 
         for c in candidates:
@@ -433,6 +442,28 @@ class HierarchicalRetriever:
                         if abstract:
                             relations.append(RelatedContext(uri=uri, abstract=abstract))
 
+            semantic_score = c.get("_final_score", c.get("_score", 0.0))
+
+            # --- hotness boost ---
+            updated_at_raw = c.get("updated_at")
+            if isinstance(updated_at_raw, str):
+                try:
+                    updated_at_val = datetime.fromisoformat(updated_at_raw)
+                except (ValueError, TypeError):
+                    updated_at_val = None
+            elif isinstance(updated_at_raw, datetime):
+                updated_at_val = updated_at_raw
+            else:
+                updated_at_val = None
+
+            h_score = hotness_score(
+                active_count=c.get("active_count", 0),
+                updated_at=updated_at_val,
+            )
+
+            alpha = self.HOTNESS_ALPHA
+            final_score = (1 - alpha) * semantic_score + alpha * h_score
+
             results.append(
                 MatchedContext(
                     uri=c.get("uri", ""),
@@ -442,11 +473,13 @@ class HierarchicalRetriever:
                     level=c.get("level", 2),
                     abstract=c.get("abstract", ""),
                     category=c.get("category", ""),
-                    score=c.get("_final_score", c.get("_score", 0.0)),
+                    score=final_score,
                     relations=relations,
                 )
             )
 
+        # Re-sort by blended score so hotness boost can change ranking
+        results.sort(key=lambda x: x.score, reverse=True)
         return results
 
     def _get_root_uris_for_type(

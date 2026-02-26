@@ -32,8 +32,11 @@ class SyncHTTPClient:
         url: Optional[str] = None,
         api_key: Optional[str] = None,
         agent_id: Optional[str] = None,
+        timeout: float = 60.0,
     ):
-        self._async_client = AsyncHTTPClient(url=url, api_key=api_key, agent_id=agent_id)
+        self._async_client = AsyncHTTPClient(
+            url=url, api_key=api_key, agent_id=agent_id, timeout=timeout
+        )
         self._initialized = False
 
     # ============= Lifecycle =============

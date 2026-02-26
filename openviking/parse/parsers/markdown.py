@@ -529,7 +529,7 @@ class MarkdownParser(BaseParser):
 
         # Create directory and handle children or split
         section_dir = f"{parent_dir}/{name}"
-        await viking_fs.mkdir(section_dir)
+        await viking_fs.mkdir(section_dir, exist_ok=True)
 
         if has_children:
             await self._process_children(

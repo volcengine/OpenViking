@@ -318,6 +318,10 @@ class SemanticProcessor(DequeueHandlerBase):
 
         # Read file content (limit length)
         content = await viking_fs.read_file(file_path, ctx=active_ctx)
+
+        # Limit content length (about 10000 tokens)
+        max_chars = 30000
+        content = await viking_fs.read_file(file_path, ctx=active_ctx)
         if isinstance(content, bytes):
             # Try to decode with error handling for text files
             try:
