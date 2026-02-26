@@ -208,7 +208,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     id_seed = f"{account_id}:{owner_space}:{uri}"
                     inserted_data["id"] = hashlib.md5(id_seed.encode("utf-8")).hexdigest()
 
-                record_id = await self._vikingdb.insert(inserted_data)
+                record_id = await self._vikingdb.upsert(inserted_data)
                 if record_id:
                     logger.debug(
                         f"Successfully wrote embedding to database: {record_id} abstract {inserted_data['abstract']} vector {inserted_data['vector'][:5]}"

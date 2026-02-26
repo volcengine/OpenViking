@@ -419,7 +419,7 @@ class IOPlayback:
                     payload = args[-1]
                 else:
                     payload = kwargs.get("data", request.get("data", {}))
-                await self._vector_store.insert(payload)
+                await self._vector_store.upsert(payload)
             elif operation == "update":
                 if len(args) >= 3:
                     record_id = args[-2]
@@ -430,7 +430,10 @@ class IOPlayback:
                 else:
                     record_id = kwargs.get("id", request.get("id"))
                     payload = kwargs.get("data", request.get("data", {}))
-                await self._vector_store.update(record_id, payload)
+                existing = await self._vector_store.get([record_id])
+                if existing:
+                    merged = {**existing[0], **payload, "id": record_id}
+                    await self._vector_store.upsert(merged)
             elif operation == "upsert":
                 if args:
                     payload = args[-1]
@@ -490,11 +493,9 @@ class IOPlayback:
             elif operation == "create_collection":
                 await self._vector_store.create_collection(*args, **kwargs)
             elif operation == "drop_collection":
-                await self._vector_store.drop_collection(*args, **kwargs)
+                await self._vector_store.drop_collection()
             elif operation == "collection_exists":
-                await self._vector_store.collection_exists(*args, **kwargs)
-            elif operation == "list_collections":
-                await self._vector_store.list_collections(*args, **kwargs)
+                await self._vector_store.collection_exists()
             else:
                 raise ValueError(f"Unknown VikingDB operation: {operation}")
 

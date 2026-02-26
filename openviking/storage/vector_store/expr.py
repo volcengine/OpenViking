@@ -32,12 +32,6 @@ class In:
 
 
 @dataclass(frozen=True)
-class Prefix:
-    field: str
-    prefix: str
-
-
-@dataclass(frozen=True)
 class Range:
     field: str
     gte: Any | None = None
@@ -53,12 +47,6 @@ class Contains:
 
 
 @dataclass(frozen=True)
-class Regex:
-    field: str
-    pattern: str
-
-
-@dataclass(frozen=True)
 class TimeRange:
     field: str
     start: datetime | str | None = None
@@ -70,4 +58,4 @@ class RawDSL:
     payload: Dict[str, Any]
 
 
-FilterExpr = Union[And, Or, Eq, In, Prefix, Range, Contains, Regex, TimeRange, RawDSL]
+FilterExpr = Union[And, Or, Eq, In, Range, Contains, TimeRange, RawDSL]

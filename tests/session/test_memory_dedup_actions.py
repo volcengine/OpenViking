@@ -22,7 +22,6 @@ from openviking.session.memory_extractor import (
     MemoryExtractor,
     MergedMemoryPayload,
 )
-from openviking.storage.vector_store.expr import And, Eq, Prefix
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -154,7 +153,7 @@ class TestMemoryDeduplicatorPayload:
 
         vikingdb = MagicMock()
         vikingdb.get_embedder.return_value = _DummyEmbedder()
-        vikingdb.search = AsyncMock(
+        vikingdb.search_similar_memories = AsyncMock(
             return_value=[
                 {
                     "id": "uri_pref_hit",
@@ -176,26 +175,19 @@ class TestMemoryDeduplicatorPayload:
 
         assert len(similar) == 1
         assert similar[0].uri == existing.uri
-        call = vikingdb.search.await_args.kwargs
-        assert isinstance(call["filter"], And)
-        conds = call["filter"].conds
-        assert Eq("context_type", "memory") in conds
-        assert Eq("level", 2) in conds
-        assert Eq("account_id", "acc1") in conds
-        assert Eq("owner_space", _make_user().user_space_name()) in conds
-        assert (
-            Prefix(
-                "uri",
-                f"viking://user/{_make_user().user_space_name()}/memories/preferences/",
-            )
-            in conds
+        call = vikingdb.search_similar_memories.await_args.kwargs
+        assert call["account_id"] == "acc1"
+        assert call["owner_space"] == _make_user().user_space_name()
+        assert call["category_uri_prefix"] == (
+            f"viking://user/{_make_user().user_space_name()}/memories/preferences/"
         )
+        assert call["limit"] == 5
 
     @pytest.mark.asyncio
     async def test_find_similar_memories_accepts_low_score_when_threshold_is_zero(self):
         vikingdb = MagicMock()
         vikingdb.get_embedder.return_value = _DummyEmbedder()
-        vikingdb.search = AsyncMock(
+        vikingdb.search_similar_memories = AsyncMock(
             return_value=[
                 {
                     "id": "uri_low",
@@ -380,7 +372,7 @@ class TestSessionCompressorDedupActions:
 
         vikingdb = MagicMock()
         vikingdb.get_embedder.return_value = None
-        vikingdb.batch_delete = AsyncMock(return_value=1)
+        vikingdb.delete_uris = AsyncMock(return_value=None)
         vikingdb.enqueue_embedding_msg = AsyncMock()
 
         compressor = SessionCompressor(vikingdb=vikingdb)
@@ -418,7 +410,7 @@ class TestSessionCompressorDedupActions:
 
         vikingdb = MagicMock()
         vikingdb.get_embedder.return_value = None
-        vikingdb.batch_delete = AsyncMock(return_value=1)
+        vikingdb.delete_uris = AsyncMock(return_value=None)
         vikingdb.enqueue_embedding_msg = AsyncMock()
 
         compressor = SessionCompressor(vikingdb=vikingdb)
@@ -473,7 +465,7 @@ class TestSessionCompressorDedupActions:
 
         vikingdb = MagicMock()
         vikingdb.get_embedder.return_value = None
-        vikingdb.batch_delete = AsyncMock(return_value=1)
+        vikingdb.delete_uris = AsyncMock(return_value=None)
         vikingdb.enqueue_embedding_msg = AsyncMock()
 
         compressor = SessionCompressor(vikingdb=vikingdb)
@@ -519,7 +511,7 @@ class TestSessionCompressorDedupActions:
 
         vikingdb = MagicMock()
         vikingdb.get_embedder.return_value = None
-        vikingdb.batch_delete = AsyncMock(return_value=1)
+        vikingdb.delete_uris = AsyncMock(return_value=None)
         vikingdb.enqueue_embedding_msg = AsyncMock()
 
         compressor = SessionCompressor(vikingdb=vikingdb)
@@ -563,4 +555,4 @@ class TestSessionCompressorDedupActions:
 
         assert [m.uri for m in memories] == [new_memory.uri]
         assert call_order == ["delete", "create"]
-        vikingdb.batch_delete.assert_awaited_once()
+        vikingdb.delete_uris.assert_awaited_once_with(_make_ctx(), [target.uri])
