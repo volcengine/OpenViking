@@ -39,9 +39,9 @@ class VikingURI:
         Initialize URI handler.
 
         Args:
-            uri: URI string
+            uri: URI string (supports both 'viking://resources/...' and '/resources/...' formats)
         """
-        self.uri = uri
+        self.uri = VikingURI.normalize(uri)
         self._parsed = self._parse()
 
     def _parse(self) -> Dict[str, str]:

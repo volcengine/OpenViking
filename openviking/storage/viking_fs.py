@@ -920,6 +920,7 @@ class VikingFS:
         """Check whether a URI is visible/accessible under current request context."""
         if ctx.role == Role.ROOT:
             return True
+        uri = VikingURI.normalize(uri)
         if not uri.startswith("viking://"):
             return False
 
