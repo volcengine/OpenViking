@@ -77,7 +77,6 @@ class Session:
     ):
         self._viking_fs = viking_fs
         self._vikingdb_manager = vikingdb_manager
-        self._semantic_gateway = vikingdb_manager
         self._session_compressor = session_compressor
         self.user = user or UserIdentifier.the_default_user()
         self.ctx = ctx or RequestContext(user=self.user, role=Role.ROOT)
@@ -297,12 +296,12 @@ class Session:
 
     def _update_active_counts(self) -> int:
         """Update active_count for used contexts/skills."""
-        if not self._semantic_gateway:
+        if not self._vikingdb_manager:
             return 0
 
         uris = [usage.uri for usage in self._usage_records if usage.uri]
         try:
-            updated = run_async(self._semantic_gateway.increment_active_count(self.ctx, uris))
+            updated = run_async(self._vikingdb_manager.increment_active_count(self.ctx, uris))
         except Exception as e:
             logger.debug(f"Could not update active_count for usage URIs: {e}")
             updated = 0

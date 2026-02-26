@@ -12,9 +12,9 @@ from openviking_cli.session.user_id import UserIdentifier
 
 
 @pytest.mark.asyncio
-async def test_delete_existing_memory_uses_semantic_gateway():
+async def test_delete_existing_memory_uses_vikingdb_manager():
     compressor = SessionCompressor.__new__(SessionCompressor)
-    compressor.semantic_gateway = AsyncMock()
+    compressor.vikingdb = AsyncMock()
     viking_fs = AsyncMock()
     memory = SimpleNamespace(uri="viking://user/user1/memories/events/e1")
     ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
@@ -23,4 +23,4 @@ async def test_delete_existing_memory_uses_semantic_gateway():
 
     assert ok is True
     viking_fs.rm.assert_awaited_once_with(memory.uri, recursive=False, ctx=ctx)
-    compressor.semantic_gateway.delete_uris.assert_awaited_once_with(ctx, [memory.uri])
+    compressor.vikingdb.delete_uris.assert_awaited_once_with(ctx, [memory.uri])

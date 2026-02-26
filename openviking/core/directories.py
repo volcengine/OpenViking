@@ -145,7 +145,6 @@ class DirectoryInitializer:
         vikingdb: "VikingDBManager",
     ):
         self.vikingdb = vikingdb
-        self.semantic_gateway = vikingdb
 
     async def initialize_account_directories(self, ctx: RequestContext) -> int:
         """Initialize account-shared scope roots."""
@@ -229,7 +228,7 @@ class DirectoryInitializer:
             logger.debug(f"[VikingFS] Directory {uri} already exists")
 
         # 2. Ensure record exists in vector storage
-        existing = await self.semantic_gateway.get_context_by_uri(
+        existing = await self.vikingdb.get_context_by_uri(
             account_id=ctx.account_id,
             uri=uri,
             limit=1,
