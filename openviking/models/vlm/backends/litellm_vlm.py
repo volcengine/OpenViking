@@ -46,7 +46,7 @@ PROVIDER_CONFIGS: Dict[str, Dict[str, Any]] = {
         "litellm_prefix": "deepseek",
     },
     "gemini": {
-        "keywords": ("gemini",),
+        "keywords": ("gemini", "google"),
         "env_key": "GEMINI_API_KEY",
         "litellm_prefix": "gemini",
     },
@@ -105,23 +105,24 @@ class LiteLLMVLMProvider(VLMBase):
         if self.api_key:
             self._setup_env(self.api_key, self.model)
 
-        if self.api_base:
-            litellm.api_base = self.api_base
-
+        # Configure LiteLLM behavior (these are global but safe to re-set)
         litellm.suppress_debug_info = True
         litellm.drop_params = True
 
     def _setup_env(self, api_key: str, model: str | None) -> None:
         """Set environment variables based on detected provider."""
         provider = self._provider_name
-        if not provider and model:
-            provider = detect_provider_by_model(model)
+        if (not provider or provider == "litellm") and model:
+            detected = detect_provider_by_model(model)
+            if detected:
+                provider = detected
 
         if provider and provider in PROVIDER_CONFIGS:
             env_key = PROVIDER_CONFIGS[provider]["env_key"]
             os.environ[env_key] = api_key
             self._detected_provider = provider
         else:
+            # Fallback to OpenAI if provider is unknown or literal litellm
             os.environ["OPENAI_API_KEY"] = api_key
 
     def _resolve_model(self, model: str) -> str:
@@ -202,7 +203,14 @@ class LiteLLMVLMProvider(VLMBase):
         if self.api_key:
             kwargs["api_key"] = self.api_key
         if self.api_base:
-            kwargs["api_base"] = self.api_base
+            # For Gemini, LiteLLM constructs the URL itself. If user provides a full Google endpoint
+            # as api_base, it might break the URL construction in LiteLLM.
+            # We only pass api_base if it doesn't look like a standard Google endpoint versioned URL.
+            is_google_endpoint = "generativelanguage.googleapis.com" in self.api_base and (
+                "/v1" in self.api_base or "/v1beta" in self.api_base
+            )
+            if not is_google_endpoint:
+                kwargs["api_base"] = self.api_base
         if self._extra_headers:
             kwargs["extra_headers"] = self._extra_headers
 
