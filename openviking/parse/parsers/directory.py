@@ -114,7 +114,6 @@ class DirectoryParser(BaseParser):
             target_uri = f"{temp_uri}/{dir_name}"
             await viking_fs.mkdir(temp_uri, exist_ok=True)
             await viking_fs.mkdir(target_uri, exist_ok=True)
-            await viking_fs.mkdir(target_uri)
 
             if not processable_files:
                 root = ResourceNode(
