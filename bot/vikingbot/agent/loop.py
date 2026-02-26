@@ -272,12 +272,6 @@ class AgentLoop:
 
                 # Execute tools
                 for tool_call in response.tool_calls:
-                    args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
-                    tool_call_dict = {
-                        "tool_name": tool_call.name,
-                        "args": args_str
-                    }
-                    tools_used.append(tool_call_dict)
 
                     # 回调：工具调用
                     if self.thinking_callback:
@@ -310,6 +304,14 @@ class AgentLoop:
                     messages = self.context.add_tool_result(
                         messages, tool_call.id, tool_call.name, result
                     )
+
+                    args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
+                    tool_call_dict = {
+                        "tool_name": tool_call.name,
+                        "args": args_str,
+                        "result": result
+                    }
+                    tools_used.append(tool_call_dict)
                 # Interleaved CoT: reflect before next action
                 messages.append({"role": "user", "content": "Reflect on the results and decide next steps."})
             else:
