@@ -6,7 +6,9 @@
 import pytest
 
 from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
+from openviking.server.identity import RequestContext, Role
 from openviking_cli.retrieve.types import ContextType, TypedQuery
+from openviking_cli.session.user_id import UserIdentifier
 
 
 class DummyStorage:
@@ -40,21 +42,26 @@ class DummyStorage:
         return []
 
 
-def _contains_prefix_filter(obj, prefix: str) -> bool:
+def _contains_uri_scope_filter(obj, target_uri: str) -> bool:
     if isinstance(obj, dict):
-        if obj.get("op") == "prefix" and obj.get("field") == "uri" and obj.get("prefix") == prefix:
+        if (
+            obj.get("op") == "must"
+            and obj.get("field") == "uri"
+            and target_uri in obj.get("conds", [])
+        ):
             return True
-        return any(_contains_prefix_filter(v, prefix) for v in obj.values())
+        return any(_contains_uri_scope_filter(v, target_uri) for v in obj.values())
     if isinstance(obj, list):
-        return any(_contains_prefix_filter(v, prefix) for v in obj)
+        return any(_contains_uri_scope_filter(v, target_uri) for v in obj)
     return False
 
 
 @pytest.mark.asyncio
-async def test_retrieve_honors_target_directories_prefix_filter():
+async def test_retrieve_honors_target_directories_scope_filter():
     target_uri = "viking://resources/foo"
     storage = DummyStorage()
     retriever = HierarchicalRetriever(storage=storage, embedder=None, rerank_config=None)
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
 
     query = TypedQuery(
         query="test",
@@ -63,8 +70,8 @@ async def test_retrieve_honors_target_directories_prefix_filter():
         target_directories=[target_uri],
     )
 
-    result = await retriever.retrieve(query, limit=3)
+    result = await retriever.retrieve(query, ctx=ctx, limit=3)
 
     assert result.searched_directories == [target_uri]
     assert storage.search_calls
-    assert _contains_prefix_filter(storage.search_calls[0]["filter"], target_uri)
+    assert _contains_uri_scope_filter(storage.search_calls[0]["filter"], target_uri)

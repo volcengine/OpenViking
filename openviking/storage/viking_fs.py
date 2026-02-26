@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 from pyagfs.exceptions import AGFSHTTPError
 
 from openviking.server.identity import RequestContext, Role
+from openviking.storage.context_semantic_gateway import ContextSemanticSearchGateway
 from openviking.storage.vikingdb_interface import VikingDBInterface
 from openviking.utils.time_utils import format_simplified, get_current_timestamp, parse_iso_datetime
 from openviking_cli.session.user_id import UserIdentifier
@@ -168,6 +169,9 @@ class VikingFS:
         self.query_embedder = query_embedder
         self.rerank_config = rerank_config
         self.vector_store = vector_store
+        self._context_semantic_gateway: Optional[ContextSemanticSearchGateway] = (
+            ContextSemanticSearchGateway.from_storage(vector_store) if vector_store else None
+        )
         self._bound_ctx: contextvars.ContextVar[Optional[RequestContext]] = contextvars.ContextVar(
             "vikingfs_bound_ctx", default=None
         )
@@ -604,7 +608,7 @@ class VikingFS:
             ctx=self._ctx_or_default(ctx),
             limit=limit,
             score_threshold=score_threshold,
-            metadata_filter=filter,
+            scope_dsl=filter,
         )
 
         # Convert QueryResult to FindResult
@@ -721,7 +725,7 @@ class VikingFS:
                 ctx=self._ctx_or_default(ctx),
                 limit=limit,
                 score_threshold=score_threshold,
-                metadata_filter=filter,
+                scope_dsl=filter,
             )
 
         query_results = await asyncio.gather(*[_execute(tq) for tq in typed_queries])
@@ -1045,40 +1049,21 @@ class VikingFS:
     ) -> None:
         """Delete records with specified URIs from vector store.
 
-        Uses storage.remove_by_uri method, which implements recursive deletion of child nodes.
+        Uses semantic gateway to apply tenant-safe URI deletion semantics.
         """
-        storage = self._get_vector_store()
-        if not storage:
+        if not self._get_vector_store():
+            return
+        gateway = self._get_context_semantic_gateway()
+        if not gateway:
             return
         real_ctx = self._ctx_or_default(ctx)
 
-        for uri in uris:
-            try:
-                filter_conds: List[Dict[str, Any]] = [
-                    {"op": "must", "field": "account_id", "conds": [real_ctx.account_id]},
-                    {
-                        "op": "or",
-                        "conds": [
-                            {"op": "must", "field": "uri", "conds": [uri]},
-                            {"op": "must", "field": "uri", "conds": [f"{uri}/"]},
-                        ],
-                    },
-                ]
-                if real_ctx.role == Role.USER and uri.startswith(
-                    ("viking://user/", "viking://agent/")
-                ):
-                    owner_space = (
-                        real_ctx.user.user_space_name()
-                        if uri.startswith("viking://user/")
-                        else real_ctx.user.agent_space_name()
-                    )
-                    filter_conds.append(
-                        {"op": "must", "field": "owner_space", "conds": [owner_space]}
-                    )
-                await storage.batch_delete("context", {"op": "and", "conds": filter_conds})
+        try:
+            await gateway.delete_uris(real_ctx, uris)
+            for uri in uris:
                 logger.info(f"[VikingFS] Deleted from vector store: {uri}")
-            except Exception as e:
-                logger.warning(f"[VikingFS] Failed to delete {uri} from vector store: {e}")
+        except Exception as e:
+            logger.warning(f"[VikingFS] Failed to delete from vector store: {e}")
 
     async def _update_vector_store_uris(
         self,
@@ -1091,8 +1076,10 @@ class VikingFS:
 
         Preserves vector data, only updates uri and parent_uri fields, no need to regenerate embeddings.
         """
-        storage = self._get_vector_store()
-        if not storage:
+        if not self._get_vector_store():
+            return
+        gateway = self._get_context_semantic_gateway()
+        if not gateway:
             return
 
         old_base_uri = self._path_to_uri(old_base, ctx=ctx)
@@ -1100,19 +1087,9 @@ class VikingFS:
 
         for uri in uris:
             try:
-                records = await storage.filter(
-                    collection="context",
-                    filter={
-                        "op": "and",
-                        "conds": [
-                            {"op": "must", "field": "uri", "conds": [uri]},
-                            {
-                                "op": "must",
-                                "field": "account_id",
-                                "conds": [self._ctx_or_default(ctx).account_id],
-                            },
-                        ],
-                    },
+                records = await gateway.get_context_by_uri(
+                    account_id=self._ctx_or_default(ctx).account_id,
+                    uri=uri,
                     limit=1,
                 )
 
@@ -1120,7 +1097,6 @@ class VikingFS:
                     continue
 
                 record = records[0]
-                record_id = record["id"]
 
                 new_uri = uri.replace(old_base_uri, new_base_uri, 1)
 
@@ -1129,13 +1105,11 @@ class VikingFS:
                     old_parent_uri.replace(old_base_uri, new_base_uri, 1) if old_parent_uri else ""
                 )
 
-                await storage.update(
-                    "context",
-                    record_id,
-                    {
-                        "uri": new_uri,
-                        "parent_uri": new_parent_uri,
-                    },
+                await gateway.update_uri_mapping(
+                    ctx=self._ctx_or_default(ctx),
+                    uri=uri,
+                    new_uri=new_uri,
+                    new_parent_uri=new_parent_uri,
                 )
                 logger.info(f"[VikingFS] Updated URI: {uri} -> {new_uri}")
             except Exception as e:
@@ -1144,6 +1118,16 @@ class VikingFS:
     def _get_vector_store(self) -> Optional["VikingDBInterface"]:
         """Get vector store instance."""
         return self.vector_store
+
+    def _get_context_semantic_gateway(self) -> Optional[ContextSemanticSearchGateway]:
+        """Get semantic vector gateway bound to configured collection."""
+        storage = self._get_vector_store()
+        if not storage:
+            self._context_semantic_gateway = None
+            return None
+        if not self._context_semantic_gateway:
+            self._context_semantic_gateway = ContextSemanticSearchGateway.from_storage(storage)
+        return self._context_semantic_gateway
 
     def _get_embedder(self) -> Any:
         """Get embedder instance."""

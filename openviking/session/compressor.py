@@ -14,6 +14,7 @@ from openviking.core.context import Context, Vectorize
 from openviking.message import Message
 from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager
+from openviking.storage.context_semantic_gateway import ContextSemanticSearchGateway
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
@@ -53,6 +54,7 @@ class SessionCompressor:
     ):
         """Initialize session compressor."""
         self.vikingdb = vikingdb
+        self.semantic_gateway = ContextSemanticSearchGateway.from_storage(vikingdb)
         self.extractor = MemoryExtractor()
         self.deduplicator = MemoryDeduplicator(vikingdb=vikingdb)
 
@@ -113,7 +115,7 @@ class SessionCompressor:
 
         try:
             # rm() already syncs vector deletion in most cases; keep this as a safe fallback.
-            await self.vikingdb.remove_by_uri("context", memory.uri)
+            await self.semantic_gateway.delete_uris(ctx, [memory.uri])
         except Exception as e:
             logger.warning(f"Failed to remove vector record for {memory.uri}: {e}")
         return True

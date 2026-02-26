@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Storage layer interfaces and implementations."""
 
+from openviking.storage.context_semantic_gateway import ContextSemanticSearchGateway
 from openviking.storage.observers import BaseObserver, QueueObserver
 from openviking.storage.queuefs import QueueManager, get_queue_manager, init_queue_manager
 from openviking.storage.viking_fs import VikingFS, get_viking_fs, init_viking_fs
@@ -30,6 +31,7 @@ __all__ = [
     # Backend
     "VikingVectorIndexBackend",
     "VikingDBManager",
+    "ContextSemanticSearchGateway",
     # QueueFS
     "QueueManager",
     "init_queue_manager",

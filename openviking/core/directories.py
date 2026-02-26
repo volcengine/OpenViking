@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Dict, List, Optional
 
 from openviking.core.context import Context, ContextType, Vectorize
 from openviking.server.identity import RequestContext
+from openviking.storage.context_semantic_gateway import ContextSemanticSearchGateway
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 
 if TYPE_CHECKING:
@@ -145,6 +146,7 @@ class DirectoryInitializer:
         vikingdb: "VikingDBManager",
     ):
         self.vikingdb = vikingdb
+        self.semantic_gateway = ContextSemanticSearchGateway.from_storage(vikingdb)
 
     async def initialize_account_directories(self, ctx: RequestContext) -> int:
         """Initialize account-shared scope roots."""
@@ -228,13 +230,9 @@ class DirectoryInitializer:
             logger.debug(f"[VikingFS] Directory {uri} already exists")
 
         # 2. Ensure record exists in vector storage
-        from openviking_cli.utils.config import get_openviking_config
-
-        config = get_openviking_config()
-
-        existing = await self.vikingdb.filter(
-            collection=config.storage.vectordb.name,
-            filter={"op": "must", "field": "uri", "conds": [uri]},
+        existing = await self.semantic_gateway.get_context_by_uri(
+            account_id=ctx.account_id,
+            uri=uri,
             limit=1,
         )
         if not existing:
