@@ -127,8 +127,11 @@ class TreeBuilder:
                 f"[TreeBuilder] Expected 1 document directory in {temp_uri}, found {len(doc_dirs)}"
             )
 
-        doc_name = VikingURI.sanitize_segment(doc_dirs[0]["name"])
-        temp_doc_uri = f"{temp_uri}/{doc_name}"
+        original_name = doc_dirs[0]["name"]
+        doc_name = VikingURI.sanitize_segment(original_name)
+        temp_doc_uri = f"{temp_uri}/{original_name}"  # use original name to find temp dir
+        if original_name != doc_name:
+            logger.debug(f"[TreeBuilder] Sanitized doc name: {original_name!r} -> {doc_name!r}")
 
         # 2. Determine base_uri and final document name with org/repo for GitHub/GitLab
         if base_uri is None:
