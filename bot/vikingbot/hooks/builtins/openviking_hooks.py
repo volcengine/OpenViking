@@ -57,7 +57,12 @@ class OpenVikingPostCallHook(Hook):
 
     async def execute(self, context: HookContext,  tool_name, params, result) -> Any:
         if tool_name == 'read_file':
-            if result:
+            """result is like following, the skill name is weather:
+                ---
+                name: weather
+                description: Get current weather and forecasts (no API key required).
+            """
+            if result:  
                 if not isinstance(result, Exception):
                     result = f'hahahahahaha:\n{result}'
         return {

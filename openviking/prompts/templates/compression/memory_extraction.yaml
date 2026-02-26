@@ -2,7 +2,7 @@ metadata:
   id: "compression.memory_extraction"
   name: "Memory Extraction (Three-Level)"
   description: "Extract memories from session context using L0/L1/L2 three-level structure"
-  version: "5.1.0"
+  version: "5.2.0"
   language: "en"
   category: "compression"
 
@@ -14,7 +14,7 @@ variables:
     default: ""
   - name: "recent_messages"
     type: "string"
-    description: "Recent conversation content"
+    description: "Recent conversation content, may include [ToolCall] records with tool/skill usage details. Extract tool/skill memories when tool calls are present."
     required: true
   - name: "user"
     type: "string"
@@ -30,11 +30,6 @@ variables:
     description: "Target language for extracted memory fields (abstract, overview, content)"
     required: false
     default: "auto"
-  - name: "tool_calls"
-    type: "string"
-    description: "Tool/Skill call records from session"
-    required: false
-    default: ""
 
 template: |
   Analyze the following session context and extract memories worth long-term preservation.
@@ -58,21 +53,11 @@ template: |
   - Do not ignore later turns/sentences; extract valid memory signals even when they appear in the latter half.
   - Instruction-like user requests about assistant behavior (language/style/format/tooling) are extraction targets.
   - If such a request implies ongoing behavior, extract it as `preferences`; do not drop it as a mere command.
+  - **Tool/Skill Call Records**: The conversation may contain `[ToolCall]` entries with tool/skill usage details. When present, extract relevant tool/skill memories.
 
   {% if feedback %}
   ## User Feedback
   {{ feedback }}
-  {% endif %}
-
-  {% if tool_calls %}
-  ## Tool/Skill Call Records
-  {{ tool_calls }}
-
-  **Tool/Skill Memory 提取规则**：
-  1. 从 Tool Call 记录中提取有价值的使用经验
-  2. **tool_name 必须从输入复制，不可修改**（避免名称不一致）
-  3. 统计数据需要累加（成功率、耗时、Token）
-  4. 提取 Good/Bad Cases
   {% endif %}
 
   # Memory Extraction Criteria
@@ -154,6 +139,7 @@ template: |
   - Core: Describes "how to best use a specific tool"
   - Characteristics: Parameter optimization, success/failure patterns
   - Test: Does it contain tool-specific usage insights
+  - **Source**: Extracted from [ToolCall] records in the conversation
   - Examples:
     - "web_search works best with specific multi-word queries"
     - "read_file should check file size first for large files"
@@ -161,8 +147,9 @@ template: |
 
   **skills** - Skill execution memories (workflow insights)
   - Core: Describes "how to best execute a specific skill"
-  - Characteristics: Process optimization, context adaptation
+  - Characteristics: Process optimization, context adaptation, multi-step workflows
   - Test: Does it contain skill-specific execution strategies
+  - **Source**: Analyze the full conversation context to identify skill usage patterns. Skills may involve multiple internal tool calls (shell commands, file operations, etc.) that are NOT shown in [ToolCall] records. You must infer skill execution from the conversation flow.
   - Examples:
     - "create_ppt works best when collecting materials first"
     - "analyze_code should start with understanding project structure"
@@ -322,7 +309,7 @@ template: |
   ```json
   {
     "category": "skills",
-    "skill_uri": "viking://agent/skills/create_presentation",
+    "skill_name": "create_presentation",
     "abstract": "create_presentation: Collect materials first for better efficiency",
     "overview": "## Skill Info\\n- **Name**: create_presentation\\n- **Type**: workflow\\n\\n## Statistics\\n- **Success Rate**: 85%\\n- **Avg Time**: 120s\\n\\n## Recommended Flow\\n1. Collect materials\\n2. Generate outline\\n3. Create slides\\n4. Refine content\\n\\n## Key Dependencies\\n- Clear topic\\n- Target audience",
     "content": "## Execution Strategy\\n\\n### Preparation\\n1. Confirm topic and audience\\n2. Collect reference materials\\n\\n## Good Cases\\n- Tech sharing: collected asyncio docs first → 90s, high quality\\n\\n## Bad Cases\\n- 'Make a PPT' without topic → multiple reworks needed"
@@ -339,8 +326,8 @@ template: |
         "abstract": "Merge types use `[Merge key]: [Description]`, independent types use specific description",
         "overview": "Structured Markdown, use different heading templates by category",
         "content": "Free Markdown, complete narrative",
-        "tool_name": "Only for tools category: the tool name from input (must copy exactly)",
-        "skill_uri": "Only for skills category: the skill URI from input (must copy exactly)"
+        "tool_name": "Only for tools category: the tool name from input [ToolCall] record (must copy exactly)",
+        "skill_name": "Only for skills category: inferred from full conversation context (descriptive name for the skill/workflow)"
       }
     ]
   }
@@ -350,8 +337,8 @@ template: |
   - Only extract truly valuable personalized information
   - If nothing worth recording, return {"memories": []}
   - For preferences, keep each memory as one independently updatable facet; do not combine unrelated facets in one memory
-  - For tools category, tool_name MUST be copied from the input Tool Call Records exactly, do NOT modify it
-  - For skills category, skill_uri MUST be copied from the input Tool Call Records exactly, do NOT modify it
+  - For tools category: tool_name MUST be copied from [ToolCall] tool_name field exactly, do NOT modify it
+  - For skills category: skill_name should be inferred from the full conversation context (skill may involve internal tools not shown in [ToolCall]). Use a descriptive name that represents the skill/workflow.
 
 llm_config:
   temperature: 0.0

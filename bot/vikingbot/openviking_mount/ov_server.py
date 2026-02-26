@@ -3,7 +3,7 @@ import os
 from typing import List, Dict, Any, Optional
 
 import openviking as ov
-from openviking.message.part import TextPart
+from openviking.message.part import TextPart, ToolPart
 import tos
 from loguru import logger
 
@@ -210,7 +210,18 @@ class VikingClient:
 
         if self.mode == "local":
             for message in messages:
+                # logger.debug(f"message = {message}")
                 session.add_message(role=message.get("role"), parts=[TextPart(text=message.get("content"))])
+            # session.add_message(role="assistant", parts=[TextPart(text="搜索完成！"),ToolPart(
+            #     tool_id="tool_web_search_001",
+            #     tool_name="web_search",
+            #     tool_uri=f"viking://session/{session_id}/tools/tool_web_search_001",
+            #     tool_input={"query": "Python asyncio tutorial", "max_results": 10},
+            #     tool_output="找到 3 篇高质量教程：1. FastAPI官方文档 2. Real Python教程 3. 菜鸟教程",
+            #     tool_status="completed",
+            #     skill_uri="",
+            #     duration_ms=2500,
+            # )])
             result = session.commit()
         else:
             for message in messages:
@@ -258,8 +269,16 @@ async def main_test():
     # res = await client.list_resources("viking://user/memories/events")
     # res = await client.read_content("viking://user/memories/events", level="overview")
     # res = await client.add_resource("/Users/bytedance/Documents/论文/吉比特年报.pdf", "吉比特年报")
-    res = await client.commit("123", [{"role": "user", "content": "我叫王大锤"}])
+    # res = await client.commit("123", [{"role": "user", "content": "我叫王大锤"}])
+    res = await client.commit("1234", [{"role": "user", "content": "帮我搜索 Python asyncio 教程"}
+                                       ,{"role": "assistant", "content": "我来帮你搜索 Python asyncio 相关的教程。"}])
     print(res)
+
+    print("等待后台处理完成...")
+    await client.client.wait_processed(timeout=60)
+    print("处理完成！")
+
+    client.close()
 
 
 async def account_test():
