@@ -197,82 +197,37 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
 
 ### Docker
 
-```dockerfile
-FROM python:3.11-slim
-WORKDIR /app
-COPY . .
-RUN pip install -e .
-EXPOSE 1933
-CMD ["python", "-m", "openviking", "serve", "--config", "/etc/openviking/ov.conf"]
-```
+OpenViking provides pre-built Docker images published to GitHub Container Registry:
 
 ```bash
-docker build -t openviking .
-docker run -d -p 1933:1933 \
-  -v /path/to/ov.conf:/etc/openviking/ov.conf:ro \
-  -v /data/openviking:/data/openviking \
-  openviking
+docker run -d \
+  --name openviking \
+  -p 1933:1933 \
+  -v ~/.openviking/ov.conf:/app/ov.conf \
+  -v /var/lib/openviking/data:/app/data \
+  --restart unless-stopped \
+  ghcr.io/volcengine/openviking:main
 ```
 
-### Kubernetes
+You can also use Docker Compose with the `docker-compose.yml` provided in the project root:
 
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: openviking
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: openviking
-  template:
-    metadata:
-      labels:
-        app: openviking
-    spec:
-      containers:
-        - name: openviking
-          image: openviking:latest
-          ports:
-            - containerPort: 1933
-          volumeMounts:
-            - name: config
-              mountPath: /etc/openviking
-              readOnly: true
-            - name: data
-              mountPath: /data/openviking
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: 1933
-            initialDelaySeconds: 5
-            periodSeconds: 10
-          readinessProbe:
-            httpGet:
-              path: /ready
-              port: 1933
-            initialDelaySeconds: 10
-            periodSeconds: 15
-      volumes:
-        - name: config
-          configMap:
-            name: openviking-config
-        - name: data
-          persistentVolumeClaim:
-            claimName: openviking-data
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: openviking
-spec:
-  selector:
-    app: openviking
-  ports:
-    - port: 1933
-      targetPort: 1933
+```bash
+docker compose up -d
 ```
+
+To build the image yourself: `docker build -t openviking:latest .`
+
+### Kubernetes + Helm
+
+The project provides a Helm chart located at `examples/k8s-helm/`:
+
+```bash
+helm install openviking ./examples/k8s-helm \
+  --set openviking.config.embedding.dense.api_key="YOUR_API_KEY" \
+  --set openviking.config.vlm.api_key="YOUR_API_KEY"
+```
+
+For a detailed cloud deployment guide (including Volcengine TOS + VikingDB + Ark configuration), see the [Cloud Deployment Guide](../../../examples/cloud/GUIDE.md).
 
 ## Health Checks
 

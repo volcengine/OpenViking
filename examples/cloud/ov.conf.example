@@ -2,7 +2,7 @@
   "server": {
     "host": "0.0.0.0",
     "port": 1933,
-    "root_api_key": "${ROOT_API_KEY}",
+    "root_api_key": "<your-root-api-key>",
     "cors_origins": ["*"]
   },
   "storage": {
@@ -13,8 +13,8 @@
       "project": "default",
       "volcengine": {
         "region": "cn-beijing",
-        "ak": "${VOLCENGINE_AK}",
-        "sk": "${VOLCENGINE_SK}"
+        "ak": "<your-volcengine-ak>",
+        "sk": "<your-volcengine-sk>"
       }
     },
     "agfs": {
@@ -24,10 +24,10 @@
       "timeout": 10,
       "retry_times": 3,
       "s3": {
-        "bucket": "${TOS_BUCKET}",
+        "bucket": "<your-tos-bucket>",
         "region": "cn-beijing",
-        "access_key": "${VOLCENGINE_AK}",
-        "secret_key": "${VOLCENGINE_SK}",
+        "access_key": "<your-volcengine-ak>",
+        "secret_key": "<your-volcengine-sk>",
         "endpoint": "https://tos-s3-cn-beijing.volces.com",
         "prefix": "openviking",
         "use_ssl": true,
@@ -38,7 +38,7 @@
   "embedding": {
     "dense": {
       "model": "doubao-embedding-vision-250615",
-      "api_key": "${ARK_API_KEY}",
+      "api_key": "<your-ark-api-key>",
       "api_base": "https://ark.cn-beijing.volces.com/api/v3",
       "dimension": 1024,
       "provider": "volcengine",
@@ -47,20 +47,12 @@
   },
   "vlm": {
     "model": "doubao-seed-1-8-251228",
-    "api_key": "${ARK_API_KEY}",
+    "api_key": "<your-ark-api-key>",
     "api_base": "https://ark.cn-beijing.volces.com/api/v3",
     "temperature": 0.0,
     "max_retries": 3,
     "provider": "volcengine",
     "thinking": false
-  },
-  "rerank": {
-    "ak": "${VOLCENGINE_AK}",
-    "sk": "${VOLCENGINE_SK}",
-    "host": "api-vikingdb.vikingdb.cn-beijing.volces.com",
-    "model_name": "doubao-seed-rerank",
-    "model_version": "251028",
-    "threshold": 0.1
   },
   "auto_generate_l0": true,
   "auto_generate_l1": true,

@@ -191,82 +191,37 @@ curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
 
 ### Docker
 
-```dockerfile
-FROM python:3.11-slim
-WORKDIR /app
-COPY . .
-RUN pip install -e .
-EXPOSE 1933
-CMD ["python", "-m", "openviking", "serve", "--config", "/etc/openviking/ov.conf"]
-```
+OpenViking 提供预构建的 Docker 镜像，发布在 GitHub Container Registry：
 
 ```bash
-docker build -t openviking .
-docker run -d -p 1933:1933 \
-  -v /path/to/ov.conf:/etc/openviking/ov.conf:ro \
-  -v /data/openviking:/data/openviking \
-  openviking
+docker run -d \
+  --name openviking \
+  -p 1933:1933 \
+  -v ~/.openviking/ov.conf:/app/ov.conf \
+  -v /var/lib/openviking/data:/app/data \
+  --restart unless-stopped \
+  ghcr.io/volcengine/openviking:main
 ```
 
-### Kubernetes
+也可以使用 Docker Compose，项目根目录提供了 `docker-compose.yml`：
 
-```yaml
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: openviking
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: openviking
-  template:
-    metadata:
-      labels:
-        app: openviking
-    spec:
-      containers:
-        - name: openviking
-          image: openviking:latest
-          ports:
-            - containerPort: 1933
-          volumeMounts:
-            - name: config
-              mountPath: /etc/openviking
-              readOnly: true
-            - name: data
-              mountPath: /data/openviking
-          livenessProbe:
-            httpGet:
-              path: /health
-              port: 1933
-            initialDelaySeconds: 5
-            periodSeconds: 10
-          readinessProbe:
-            httpGet:
-              path: /ready
-              port: 1933
-            initialDelaySeconds: 10
-            periodSeconds: 15
-      volumes:
-        - name: config
-          configMap:
-            name: openviking-config
-        - name: data
-          persistentVolumeClaim:
-            claimName: openviking-data
----
-apiVersion: v1
-kind: Service
-metadata:
-  name: openviking
-spec:
-  selector:
-    app: openviking
-  ports:
-    - port: 1933
-      targetPort: 1933
+```bash
+docker compose up -d
 ```
+
+如需自行构建镜像：`docker build -t openviking:latest .`
+
+### Kubernetes + Helm
+
+项目提供了 Helm chart，位于 `examples/k8s-helm/`：
+
+```bash
+helm install openviking ./examples/k8s-helm \
+  --set openviking.config.embedding.dense.api_key="YOUR_API_KEY" \
+  --set openviking.config.vlm.api_key="YOUR_API_KEY"
+```
+
+详细的云上部署指南（包括火山引擎 TOS + VikingDB + 方舟配置）请参考 [云上部署指南](../../../examples/cloud/GUIDE.md)。
 
 ## 健康检查
 
