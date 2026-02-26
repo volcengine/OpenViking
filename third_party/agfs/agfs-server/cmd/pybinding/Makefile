@@ -27,7 +27,7 @@ build-windows:
 	@echo "Building shared library for Windows..."
 	@mkdir -p $(BUILD_DIR)
 	@mkdir -p $(BIN_DIR)
-	GOOS=windows GOARCH=amd64 CGO_ENABLED=1 $(GO) build -buildmode=c-shared -o $(BUILD_DIR)/$(LIB_NAME).dll .
+	CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++ AR=x86_64-w64-mingw32-ar GOOS=windows GOARCH=amd64 CGO_ENABLED=1 $(GO) build -buildmode=c-shared -o $(BUILD_DIR)/$(LIB_NAME).dll .
 	@cp $(BUILD_DIR)/$(LIB_NAME).dll $(BIN_DIR)/
 	@echo "Build complete: $(BIN_DIR)/$(LIB_NAME).dll"
 
