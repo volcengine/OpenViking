@@ -16,13 +16,19 @@ pub struct HttpClient {
     http: ReqwestClient,
     base_url: String,
     api_key: Option<String>,
+    agent_id: Option<String>,
 }
 
 impl HttpClient {
     /// Create a new HTTP client
-    pub fn new(base_url: impl Into<String>, api_key: Option<String>) -> Self {
+    pub fn new(
+        base_url: impl Into<String>,
+        api_key: Option<String>,
+        agent_id: Option<String>,
+        timeout_secs: f64,
+    ) -> Self {
         let http = ReqwestClient::builder()
-            .timeout(std::time::Duration::from_secs(60))
+            .timeout(std::time::Duration::from_secs_f64(timeout_secs))
             .build()
             .expect("Failed to build HTTP client");
 
@@ -30,6 +36,7 @@ impl HttpClient {
             http,
             base_url: base_url.into().trim_end_matches('/').to_string(),
             api_key,
+            agent_id,
         }
     }
 
@@ -118,6 +125,11 @@ impl HttpClient {
         if let Some(api_key) = &self.api_key {
             if let Ok(value) = reqwest::header::HeaderValue::from_str(api_key) {
                 headers.insert("X-API-Key", value);
+            }
+        }
+        if let Some(agent_id) = &self.agent_id {
+            if let Ok(value) = reqwest::header::HeaderValue::from_str(agent_id) {
+                headers.insert("X-OpenViking-Agent", value);
             }
         }
         headers

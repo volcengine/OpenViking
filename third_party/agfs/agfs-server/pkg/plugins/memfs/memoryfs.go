@@ -79,7 +79,7 @@ func (mfs *MemoryFS) getNode(path string) (*Node, error) {
 		}
 		next, exists := current.Children[part]
 		if !exists {
-			return nil, fmt.Errorf("no such file or directory: %s", path)
+			return nil, filesystem.NewNotFoundError("getNode", path)
 		}
 		current = next
 	}
@@ -177,7 +177,7 @@ func (mfs *MemoryFS) Remove(path string) error {
 
 	node, exists := parent.Children[name]
 	if !exists {
-		return fmt.Errorf("no such file or directory: %s", path)
+		return filesystem.NewNotFoundError("remove", path)
 	}
 
 	if node.IsDir && len(node.Children) > 0 {
@@ -205,7 +205,7 @@ func (mfs *MemoryFS) RemoveAll(path string) error {
 	}
 
 	if _, exists := parent.Children[name]; !exists {
-		return fmt.Errorf("no such file or directory: %s", path)
+		return filesystem.NewNotFoundError("remove", path)
 	}
 
 	delete(parent.Children, name)
@@ -377,7 +377,7 @@ func (mfs *MemoryFS) Rename(oldPath, newPath string) error {
 
 	node, exists := oldParent.Children[oldName]
 	if !exists {
-		return fmt.Errorf("no such file or directory: %s", oldPath)
+		return filesystem.NewNotFoundError("rename", oldPath)
 	}
 
 	newParent, newName, err := mfs.getParentNode(newPath)

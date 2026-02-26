@@ -37,18 +37,27 @@ class UserIdentifier(object):
     def account_id(self) -> str:
         return self._account_id
 
-    def unique_space_name(self, short: bool = True) -> str:
-        # 匿名化，只保留 {account_id}_{md5 of user and agent id}
-        hash = hashlib.md5((self._user_id + self._agent_id).encode()).hexdigest()
-        if short:
-            return f"{self._account_id}_{hash[:8]}"
-        return f"{self._account_id}_{hash}"
+    @property
+    def user_id(self) -> str:
+        return self._user_id
+
+    @property
+    def agent_id(self) -> str:
+        return self._agent_id
+
+    def user_space_name(self) -> str:
+        """User-level space name."""
+        return self._user_id
+
+    def agent_space_name(self) -> str:
+        """Agent-level space name (user + agent)."""
+        return hashlib.md5((self._user_id + self._agent_id).encode()).hexdigest()[:12]
 
     def memory_space_uri(self) -> str:
-        return "viking://agent/memories/" + self.unique_space_name()
+        return f"viking://agent/{self.agent_space_name()}/memories"
 
     def work_space_uri(self) -> str:
-        return "viking://agent/workspaces/" + self.unique_space_name()
+        return f"viking://agent/{self.agent_space_name()}/workspaces"
 
     def to_dict(self):
         return {

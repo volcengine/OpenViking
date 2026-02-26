@@ -5,7 +5,7 @@ import time
 from typing import List, Dict, Any, Optional, Union, Iterator, BinaryIO
 from requests.exceptions import ConnectionError, Timeout, RequestException
 
-from .exceptions import AGFSClientError, AGFSNotSupportedError
+from .exceptions import AGFSClientError, AGFSHTTPError, AGFSNotSupportedError
 
 
 class AGFSClient:
@@ -43,7 +43,7 @@ class AGFSClient:
             raise AGFSClientError(f"Request timeout after {self.timeout}s")
         elif isinstance(e, requests.exceptions.HTTPError):
             # Extract useful error information from response
-            if hasattr(e, 'response') and e.response is not None:
+            if hasattr(e, "response") and e.response is not None:
                 status_code = e.response.status_code
 
                 # Special handling for 501 Not Implemented - always raise typed error
@@ -55,35 +55,31 @@ class AGFSClient:
                         error_msg = "Operation not supported"
                     raise AGFSNotSupportedError(error_msg)
 
-                # Try to get error message from JSON response first (priority)
+                # Try to get error message from JSON response first
+                error_msg = None
                 try:
                     error_data = e.response.json()
                     error_msg = error_data.get("error", "")
-                    if error_msg:
-                        # Use the server's detailed error message
-                        raise AGFSClientError(error_msg)
                 except (ValueError, KeyError, TypeError):
-                    # If JSON parsing fails, fall through to generic status code messages
                     pass
-                except AGFSClientError:
-                    # Re-raise our own error
-                    raise
 
-                # Fallback to generic messages based on status codes
-                if status_code == 404:
-                    raise AGFSClientError("No such file or directory")
+                # Always use AGFSHTTPError to preserve status_code
+                if error_msg:
+                    raise AGFSHTTPError(error_msg, status_code)
+                elif status_code == 404:
+                    raise AGFSHTTPError("No such file or directory", status_code)
                 elif status_code == 403:
-                    raise AGFSClientError("Permission denied")
+                    raise AGFSHTTPError("Permission denied", status_code)
                 elif status_code == 409:
-                    raise AGFSClientError("Resource already exists")
+                    raise AGFSHTTPError("Resource already exists", status_code)
                 elif status_code == 500:
-                    raise AGFSClientError("Internal server error")
+                    raise AGFSHTTPError("Internal server error", status_code)
                 elif status_code == 502:
-                    raise AGFSClientError("Bad Gateway - backend service unavailable")
+                    raise AGFSHTTPError("Bad Gateway - backend service unavailable", status_code)
                 else:
-                    raise AGFSClientError(f"HTTP error {status_code}")
+                    raise AGFSHTTPError(f"HTTP error {status_code}", status_code)
             else:
-                raise AGFSClientError("HTTP error")
+                raise AGFSHTTPError("HTTP error", None)
         else:
             # For other exceptions, re-raise with simplified message
             raise AGFSClientError(str(e))
@@ -103,11 +99,11 @@ class AGFSClient:
         """
         try:
             response = self.session.get(f"{self.api_base}/capabilities", timeout=self.timeout)
-            
+
             # If capabilities endpoint doesn't exist (older server), return empty capabilities
             if response.status_code == 404:
                 return {"version": "unknown", "features": []}
-                
+
             response.raise_for_status()
             return response.json()
         except Exception as e:
@@ -121,9 +117,7 @@ class AGFSClient:
         """List directory contents"""
         try:
             response = self.session.get(
-                f"{self.api_base}/directories",
-                params={"path": path},
-                timeout=self.timeout
+                f"{self.api_base}/directories", params={"path": path}, timeout=self.timeout
             )
             response.raise_for_status()
             data = response.json()
@@ -158,7 +152,7 @@ class AGFSClient:
                     f"{self.api_base}/files",
                     params=params,
                     stream=True,
-                    timeout=None  # No timeout for streaming
+                    timeout=None,  # No timeout for streaming
                 )
                 response.raise_for_status()
                 return response
@@ -170,16 +164,16 @@ class AGFSClient:
                     params["size"] = str(size)
 
                 response = self.session.get(
-                    f"{self.api_base}/files",
-                    params=params,
-                    timeout=self.timeout
+                    f"{self.api_base}/files", params=params, timeout=self.timeout
                 )
                 response.raise_for_status()
                 return response.content
         except Exception as e:
             self._handle_request_error(e)
 
-    def write(self, path: str, data: Union[bytes, Iterator[bytes], BinaryIO], max_retries: int = 3) -> str:
+    def write(
+        self, path: str, data: Union[bytes, Iterator[bytes], BinaryIO], max_retries: int = 3
+    ) -> str:
         """Write data to file and return the response message
 
         Args:
@@ -207,7 +201,7 @@ class AGFSClient:
                     f"{self.api_base}/files",
                     params={"path": path},
                     data=data,  # requests supports bytes, iterator, or file-like object
-                    timeout=write_timeout
+                    timeout=write_timeout,
                 )
                 response.raise_for_status()
                 result = response.json()
@@ -224,8 +218,10 @@ class AGFSClient:
 
                 if attempt < max_retries:
                     # Exponential backoff: 1s, 2s, 4s
-                    wait_time = 2 ** attempt
-                    print(f"⚠ Upload failed (attempt {attempt + 1}/{max_retries + 1}): {type(e).__name__}")
+                    wait_time = 2**attempt
+                    print(
+                        f"⚠ Upload failed (attempt {attempt + 1}/{max_retries + 1}): {type(e).__name__}"
+                    )
                     print(f"  Retrying in {wait_time} seconds...")
                     time.sleep(wait_time)
                 else:
@@ -235,7 +231,7 @@ class AGFSClient:
 
             except requests.exceptions.HTTPError as e:
                 # Check if it's a server error (5xx) which might be retryable
-                if hasattr(e, 'response') and e.response is not None:
+                if hasattr(e, "response") and e.response is not None:
                     status_code = e.response.status_code
 
                     # Only retry specific server errors that indicate temporary issues
@@ -247,8 +243,10 @@ class AGFSClient:
                         last_error = e
 
                         if attempt < max_retries:
-                            wait_time = 2 ** attempt
-                            print(f"⚠ Server error {status_code} (attempt {attempt + 1}/{max_retries + 1})")
+                            wait_time = 2**attempt
+                            print(
+                                f"⚠ Server error {status_code} (attempt {attempt + 1}/{max_retries + 1})"
+                            )
                             print(f"  Retrying in {wait_time} seconds...")
                             time.sleep(wait_time)
                         else:
@@ -273,9 +271,7 @@ class AGFSClient:
         """Create a new file"""
         try:
             response = self.session.post(
-                f"{self.api_base}/files",
-                params={"path": path},
-                timeout=self.timeout
+                f"{self.api_base}/files", params={"path": path}, timeout=self.timeout
             )
             response.raise_for_status()
             return response.json()
@@ -288,15 +284,21 @@ class AGFSClient:
             response = self.session.post(
                 f"{self.api_base}/directories",
                 params={"path": path, "mode": mode},
-                timeout=self.timeout
+                timeout=self.timeout,
             )
             response.raise_for_status()
             return response.json()
         except Exception as e:
             self._handle_request_error(e)
 
-    def rm(self, path: str, recursive: bool = False) -> Dict[str, Any]:
-        """Remove a file or directory"""
+    def rm(self, path: str, recursive: bool = False, force: bool = True) -> Dict[str, Any]:
+        """Remove a file or directory.
+
+        Args:
+            path: Path to remove.
+            recursive: Remove directories recursively.
+            force: If True (default), ignore nonexistent files (like rm -f). Idempotent by default.
+        """
         try:
             params = {"path": path}
             if recursive:
@@ -304,10 +306,14 @@ class AGFSClient:
             response = self.session.delete(
                 f"{self.api_base}/files",
                 params=params,
-                timeout=self.timeout
+                timeout=self.timeout,
             )
             response.raise_for_status()
             return response.json()
+        except requests.exceptions.HTTPError as e:
+            if force and e.response is not None and e.response.status_code == 404:
+                return {"message": "deleted"}
+            self._handle_request_error(e)
         except Exception as e:
             self._handle_request_error(e)
 
@@ -315,9 +321,7 @@ class AGFSClient:
         """Get file/directory information"""
         try:
             response = self.session.get(
-                f"{self.api_base}/stat",
-                params={"path": path},
-                timeout=self.timeout
+                f"{self.api_base}/stat", params={"path": path}, timeout=self.timeout
             )
             response.raise_for_status()
             return response.json()
@@ -331,7 +335,7 @@ class AGFSClient:
                 f"{self.api_base}/rename",
                 params={"path": old_path},
                 json={"newPath": new_path},
-                timeout=self.timeout
+                timeout=self.timeout,
             )
             response.raise_for_status()
             return response.json()
@@ -345,7 +349,7 @@ class AGFSClient:
                 f"{self.api_base}/chmod",
                 params={"path": path},
                 json={"mode": mode},
-                timeout=self.timeout
+                timeout=self.timeout,
             )
             response.raise_for_status()
             return response.json()
@@ -356,9 +360,7 @@ class AGFSClient:
         """Touch a file (update timestamp by writing empty content)"""
         try:
             response = self.session.post(
-                f"{self.api_base}/touch",
-                params={"path": path},
-                timeout=self.timeout
+                f"{self.api_base}/touch", params={"path": path}, timeout=self.timeout
             )
             response.raise_for_status()
             return response.json()
@@ -390,7 +392,7 @@ class AGFSClient:
             response = self.session.post(
                 f"{self.api_base}/mount",
                 json={"fstype": fstype, "path": path, "config": config},
-                timeout=self.timeout
+                timeout=self.timeout,
             )
             response.raise_for_status()
             return response.json()
@@ -401,9 +403,7 @@ class AGFSClient:
         """Unmount a plugin"""
         try:
             response = self.session.post(
-                f"{self.api_base}/unmount",
-                json={"path": path},
-                timeout=self.timeout
+                f"{self.api_base}/unmount", json={"path": path}, timeout=self.timeout
             )
             response.raise_for_status()
             return response.json()
@@ -423,7 +423,7 @@ class AGFSClient:
             response = self.session.post(
                 f"{self.api_base}/plugins/load",
                 json={"library_path": library_path},
-                timeout=self.timeout
+                timeout=self.timeout,
             )
             response.raise_for_status()
             return response.json()
@@ -443,7 +443,7 @@ class AGFSClient:
             response = self.session.post(
                 f"{self.api_base}/plugins/unload",
                 json={"library_path": library_path},
-                timeout=self.timeout
+                timeout=self.timeout,
             )
             response.raise_for_status()
             return response.json()
@@ -457,10 +457,7 @@ class AGFSClient:
             List of plugin library paths
         """
         try:
-            response = self.session.get(
-                f"{self.api_base}/plugins",
-                timeout=self.timeout
-            )
+            response = self.session.get(f"{self.api_base}/plugins", timeout=self.timeout)
             response.raise_for_status()
             data = response.json()
 
@@ -471,8 +468,11 @@ class AGFSClient:
             elif "plugins" in data:
                 # New format - extract library paths from external plugins only
                 plugins = data.get("plugins", [])
-                return [p.get("library_path", "") for p in plugins
-                       if p.get("is_external", False) and p.get("library_path")]
+                return [
+                    p.get("library_path", "")
+                    for p in plugins
+                    if p.get("is_external", False) and p.get("library_path")
+                ]
             else:
                 return []
         except Exception as e:
@@ -490,17 +490,21 @@ class AGFSClient:
             - config_params: List of configuration parameters (name, type, required, default, description)
         """
         try:
-            response = self.session.get(
-                f"{self.api_base}/plugins",
-                timeout=self.timeout
-            )
+            response = self.session.get(f"{self.api_base}/plugins", timeout=self.timeout)
             response.raise_for_status()
             data = response.json()
             return data.get("plugins", [])
         except Exception as e:
             self._handle_request_error(e)
 
-    def grep(self, path: str, pattern: str, recursive: bool = False, case_insensitive: bool = False, stream: bool = False):
+    def grep(
+        self,
+        path: str,
+        pattern: str,
+        recursive: bool = False,
+        case_insensitive: bool = False,
+        stream: bool = False,
+    ):
         """Search for a pattern in files using regular expressions
 
         Args:
@@ -534,10 +538,10 @@ class AGFSClient:
                     "pattern": pattern,
                     "recursive": recursive,
                     "case_insensitive": case_insensitive,
-                    "stream": stream
+                    "stream": stream,
                 },
                 timeout=None if stream else self.timeout,
-                stream=stream
+                stream=stream,
             )
             response.raise_for_status()
 
@@ -553,6 +557,7 @@ class AGFSClient:
     def _parse_ndjson_stream(self, response):
         """Parse NDJSON streaming response line by line"""
         import json
+
         for line in response.iter_lines():
             if line:
                 try:
@@ -584,7 +589,7 @@ class AGFSClient:
             response = self.session.post(
                 f"{self.api_base}/digest",
                 json={"algorithm": algorithm, "path": path},
-                timeout=self.timeout
+                timeout=self.timeout,
             )
             response.raise_for_status()
             return response.json()
@@ -595,7 +600,9 @@ class AGFSClient:
     # These APIs provide POSIX-like file handle operations for
     # filesystems that support stateful file access (e.g., seek, pread/pwrite)
 
-    def open_handle(self, path: str, flags: int = 0, mode: int = 0o644, lease: int = 60) -> 'FileHandle':
+    def open_handle(
+        self, path: str, flags: int = 0, mode: int = 0o644, lease: int = 60
+    ) -> "FileHandle":
         """Open a file handle for stateful operations
 
         Args:
@@ -617,7 +624,7 @@ class AGFSClient:
             response = self.session.post(
                 f"{self.api_base}/handles/open",
                 params={"path": path, "flags": str(flags), "mode": str(mode), "lease": str(lease)},
-                timeout=self.timeout
+                timeout=self.timeout,
             )
             response.raise_for_status()
             data = response.json()
@@ -632,10 +639,7 @@ class AGFSClient:
             List of handle info dicts with keys: handle_id, path, flags, lease, expires_at, created_at, last_access
         """
         try:
-            response = self.session.get(
-                f"{self.api_base}/handles",
-                timeout=self.timeout
-            )
+            response = self.session.get(f"{self.api_base}/handles", timeout=self.timeout)
             response.raise_for_status()
             data = response.json()
             return data.get("handles", [])
@@ -653,8 +657,7 @@ class AGFSClient:
         """
         try:
             response = self.session.get(
-                f"{self.api_base}/handles/{handle_id}",
-                timeout=self.timeout
+                f"{self.api_base}/handles/{handle_id}", timeout=self.timeout
             )
             response.raise_for_status()
             return response.json()
@@ -672,8 +675,7 @@ class AGFSClient:
         """
         try:
             response = self.session.delete(
-                f"{self.api_base}/handles/{handle_id}",
-                timeout=self.timeout
+                f"{self.api_base}/handles/{handle_id}", timeout=self.timeout
             )
             response.raise_for_status()
             return response.json()
@@ -696,9 +698,7 @@ class AGFSClient:
             if offset is not None:
                 params["offset"] = str(offset)
             response = self.session.get(
-                f"{self.api_base}/handles/{handle_id}/read",
-                params=params,
-                timeout=self.timeout
+                f"{self.api_base}/handles/{handle_id}/read", params=params, timeout=self.timeout
             )
             response.raise_for_status()
             return response.content
@@ -724,7 +724,7 @@ class AGFSClient:
                 f"{self.api_base}/handles/{handle_id}/write",
                 params=params,
                 data=data,
-                timeout=self.timeout
+                timeout=self.timeout,
             )
             response.raise_for_status()
             result = response.json()
@@ -747,7 +747,7 @@ class AGFSClient:
             response = self.session.post(
                 f"{self.api_base}/handles/{handle_id}/seek",
                 params={"offset": str(offset), "whence": str(whence)},
-                timeout=self.timeout
+                timeout=self.timeout,
             )
             response.raise_for_status()
             result = response.json()
@@ -766,8 +766,7 @@ class AGFSClient:
         """
         try:
             response = self.session.post(
-                f"{self.api_base}/handles/{handle_id}/sync",
-                timeout=self.timeout
+                f"{self.api_base}/handles/{handle_id}/sync", timeout=self.timeout
             )
             response.raise_for_status()
             return response.json()
@@ -785,8 +784,7 @@ class AGFSClient:
         """
         try:
             response = self.session.get(
-                f"{self.api_base}/handles/{handle_id}/stat",
-                timeout=self.timeout
+                f"{self.api_base}/handles/{handle_id}/stat", timeout=self.timeout
             )
             response.raise_for_status()
             return response.json()
@@ -807,7 +805,7 @@ class AGFSClient:
             response = self.session.post(
                 f"{self.api_base}/handles/{handle_id}/renew",
                 params={"lease": str(lease)},
-                timeout=self.timeout
+                timeout=self.timeout,
             )
             response.raise_for_status()
             return response.json()
@@ -989,7 +987,7 @@ class FileHandle:
             self._client.close_handle(self._handle_id)
             self._closed = True
 
-    def __enter__(self) -> 'FileHandle':
+    def __enter__(self) -> "FileHandle":
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:

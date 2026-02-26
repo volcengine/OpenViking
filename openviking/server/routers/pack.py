@@ -39,7 +39,7 @@ async def export_ovpack(
 ):
     """Export context as .ovpack file."""
     service = get_service()
-    result = await service.pack.export_ovpack(request.uri, request.to)
+    result = await service.pack.export_ovpack(request.uri, request.to, ctx=_ctx)
     return Response(status="ok", result={"file": result})
 
 
@@ -58,6 +58,7 @@ async def import_ovpack(
     result = await service.pack.import_ovpack(
         file_path,
         request.parent,
+        ctx=_ctx,
         force=request.force,
         vectorize=request.vectorize,
     )

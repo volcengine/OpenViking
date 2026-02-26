@@ -101,16 +101,18 @@ client = ov.SyncHTTPClient(
 
 ## 开发模式
 
-不配置 `root_api_key` 时，认证禁用。所有请求以 ROOT 身份访问 default account。
+不配置 `root_api_key` 时，认证禁用，所有请求以 ROOT 身份访问 default account。**此模式仅允许在服务器绑定 localhost 时使用**（`127.0.0.1`、`localhost` 或 `::1`）。如果 `host` 设置为非回环地址（如 `0.0.0.0`）且未配置 `root_api_key`，服务器将拒绝启动。
 
 ```json
 {
   "server": {
-    "host": "0.0.0.0",
+    "host": "127.0.0.1",
     "port": 1933
   }
 }
 ```
+
+> **安全提示：** 默认 `host` 为 `127.0.0.1`。如需将服务暴露到网络，**必须**配置 `root_api_key`。
 
 ## 无需认证的端点
 

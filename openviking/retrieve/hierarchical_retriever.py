@@ -8,9 +8,12 @@ and rerank-based relevance scoring.
 """
 
 import heapq
+from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from openviking.models.embedder.base import EmbedResult
+from openviking.retrieve.memory_lifecycle import hotness_score
+from openviking.server.identity import RequestContext, Role
 from openviking.storage import VikingDBInterface
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.retrieve.types import (
@@ -39,6 +42,7 @@ class HierarchicalRetriever:
     SCORE_PROPAGATION_ALPHA = 0.5  # Score propagation coefficient
     DIRECTORY_DOMINANCE_RATIO = 1.2  # Directory score must exceed max child score
     GLOBAL_SEARCH_TOPK = 3  # Global retrieval count
+    HOTNESS_ALPHA = 0.2  # Weight for hotness score in final ranking (0 = disabled)
 
     def __init__(
         self,
@@ -76,6 +80,7 @@ class HierarchicalRetriever:
     async def retrieve(
         self,
         query: TypedQuery,
+        ctx: RequestContext,
         limit: int = 5,
         mode: RetrieverMode = RetrieverMode.THINKING,
         score_threshold: Optional[float] = None,
@@ -96,20 +101,27 @@ class HierarchicalRetriever:
         # Use custom threshold or default threshold
         effective_threshold = score_threshold if score_threshold is not None else self.threshold
 
-        collection = self._type_to_collection(query.context_type)
+        collection = "context"
 
         target_dirs = [d for d in (query.target_directories or []) if d]
 
-        # Create context_type filter
-        type_filter = {"op": "must", "field": "context_type", "conds": [query.context_type.value]}
-
-        # Merge all filters
-        filters_to_merge = [type_filter]
+        # Create context_type filter (skip when context_type is None = search all types)
+        filters_to_merge = []
+        if query.context_type is not None:
+            type_filter = {
+                "op": "must",
+                "field": "context_type",
+                "conds": [query.context_type.value],
+            }
+            filters_to_merge.append(type_filter)
+        tenant_filter = self._build_tenant_filter(ctx, context_type=query.context_type)
+        if tenant_filter:
+            filters_to_merge.append(tenant_filter)
         if target_dirs:
             target_filter = {
                 "op": "or",
                 "conds": [
-                    {"op": "prefix", "field": "uri", "prefix": target_dir}
+                    {"op": "must", "field": "uri", "conds": [target_dir]}
                     for target_dir in target_dirs
                 ],
             }
@@ -139,7 +151,7 @@ class HierarchicalRetriever:
         if target_dirs:
             root_uris = target_dirs
         else:
-            root_uris = self._get_root_uris_for_type(query.context_type)
+            root_uris = self._get_root_uris_for_type(query.context_type, ctx=ctx)
 
         # Step 2: Global vector search to supplement starting points
         global_results = await self._global_vector_search(
@@ -168,13 +180,41 @@ class HierarchicalRetriever:
         )
 
         # Step 6: Convert results
-        matched = await self._convert_to_matched_contexts(candidates, query.context_type)
+        matched = await self._convert_to_matched_contexts(candidates, ctx=ctx)
 
         return QueryResult(
             query=query,
             matched_contexts=matched[:limit],
             searched_directories=root_uris,
         )
+
+    def _build_tenant_filter(
+        self, ctx: RequestContext, context_type: Optional[ContextType] = None
+    ) -> Optional[Dict[str, Any]]:
+        """Build tenant visibility filter by role.
+
+        Args:
+            ctx: Request context with role and user info.
+            context_type: When RESOURCE, allow owner_space="" so shared
+                          resources are visible to USER role.
+        """
+        if ctx.role == Role.ROOT:
+            return None
+
+        owner_spaces = [ctx.user.user_space_name(), ctx.user.agent_space_name()]
+        if context_type == ContextType.RESOURCE:
+            owner_spaces.append("")
+        return {
+            "op": "and",
+            "conds": [
+                {"op": "must", "field": "account_id", "conds": [ctx.account_id]},
+                {
+                    "op": "must",
+                    "field": "owner_space",
+                    "conds": owner_spaces,
+                },
+            ],
+        }
 
     async def _global_vector_search(
         self,
@@ -377,51 +417,98 @@ class HierarchicalRetriever:
     async def _convert_to_matched_contexts(
         self,
         candidates: List[Dict[str, Any]],
-        context_type: ContextType,
+        ctx: RequestContext,
     ) -> List[MatchedContext]:
-        """Convert candidate results to MatchedContext list."""
+        """Convert candidate results to MatchedContext list.
+
+        Blends semantic similarity with a hotness score derived from
+        ``active_count`` and ``updated_at`` so that frequently-accessed,
+        recently-updated contexts get a ranking boost.  The blend weight
+        is controlled by ``HOTNESS_ALPHA`` (0 disables the boost).
+        """
         results = []
 
         for c in candidates:
             # Read related contexts and get summaries
             relations = []
             if get_viking_fs():
-                related_uris = await get_viking_fs().get_relations(c.get("uri", ""))
+                related_uris = await get_viking_fs().get_relations(c.get("uri", ""), ctx=ctx)
                 if related_uris:
                     related_abstracts = await get_viking_fs().read_batch(
-                        related_uris[: self.MAX_RELATIONS], level="l0"
+                        related_uris[: self.MAX_RELATIONS], level="l0", ctx=ctx
                     )
                     for uri in related_uris[: self.MAX_RELATIONS]:
                         abstract = related_abstracts.get(uri, "")
                         if abstract:
                             relations.append(RelatedContext(uri=uri, abstract=abstract))
 
+            semantic_score = c.get("_final_score", c.get("_score", 0.0))
+
+            # --- hotness boost ---
+            updated_at_raw = c.get("updated_at")
+            if isinstance(updated_at_raw, str):
+                try:
+                    updated_at_val = datetime.fromisoformat(updated_at_raw)
+                except (ValueError, TypeError):
+                    updated_at_val = None
+            elif isinstance(updated_at_raw, datetime):
+                updated_at_val = updated_at_raw
+            else:
+                updated_at_val = None
+
+            h_score = hotness_score(
+                active_count=c.get("active_count", 0),
+                updated_at=updated_at_val,
+            )
+
+            alpha = self.HOTNESS_ALPHA
+            final_score = (1 - alpha) * semantic_score + alpha * h_score
+
             results.append(
                 MatchedContext(
                     uri=c.get("uri", ""),
-                    context_type=context_type,
+                    context_type=ContextType(c["context_type"])
+                    if c.get("context_type")
+                    else ContextType.RESOURCE,
                     level=c.get("level", 2),
                     abstract=c.get("abstract", ""),
                     category=c.get("category", ""),
-                    score=c.get("_final_score", c.get("_score", 0.0)),
+                    score=final_score,
                     relations=relations,
                 )
             )
 
+        # Re-sort by blended score so hotness boost can change ranking
+        results.sort(key=lambda x: x.score, reverse=True)
         return results
 
-    def _get_root_uris_for_type(self, context_type: ContextType) -> List[str]:
-        """Return starting directory URI list based on context_type."""
-        if context_type == ContextType.MEMORY:
-            return ["viking://user/memories", "viking://agent/memories"]
+    def _get_root_uris_for_type(
+        self, context_type: Optional[ContextType], ctx: Optional[RequestContext] = None
+    ) -> List[str]:
+        """Return starting directory URI list based on context_type and user context.
+
+        When context_type is None, returns roots for all types.
+        ROOT has no space, relies on global_vector_search without URI prefix filter.
+        """
+        if not ctx or ctx.role == Role.ROOT:
+            return []
+
+        user_space = ctx.user.user_space_name()
+        agent_space = ctx.user.agent_space_name()
+        if context_type is None:
+            return [
+                f"viking://user/{user_space}/memories",
+                f"viking://agent/{agent_space}/memories",
+                "viking://resources",
+                f"viking://agent/{agent_space}/skills",
+            ]
+        elif context_type == ContextType.MEMORY:
+            return [
+                f"viking://user/{user_space}/memories",
+                f"viking://agent/{agent_space}/memories",
+            ]
         elif context_type == ContextType.RESOURCE:
             return ["viking://resources"]
         elif context_type == ContextType.SKILL:
-            return ["viking://agent/skills"]
+            return [f"viking://agent/{agent_space}/skills"]
         return []
-
-    def _type_to_collection(self, context_type: ContextType) -> str:
-        """
-        Convert context type to collection name.
-        """
-        return "context"

@@ -91,6 +91,7 @@ async def add_resource(
 
     result = await service.resources.add_resource(
         path=path,
+        ctx=_ctx,
         target=request.target,
         reason=request.reason,
         instruction=request.instruction,
@@ -109,6 +110,7 @@ async def add_skill(
     service = get_service()
     result = await service.resources.add_skill(
         data=request.data,
+        ctx=_ctx,
         wait=request.wait,
         timeout=request.timeout,
     )

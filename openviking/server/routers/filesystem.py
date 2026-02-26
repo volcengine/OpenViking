@@ -30,6 +30,7 @@ async def ls(
     service = get_service()
     result = await service.fs.ls(
         uri,
+        ctx=_ctx,
         recursive=recursive,
         simple=simple,
         output=output,
@@ -53,6 +54,7 @@ async def tree(
     service = get_service()
     result = await service.fs.tree(
         uri,
+        ctx=_ctx,
         output=output,
         abs_limit=abs_limit,
         show_all_hidden=show_all_hidden,
@@ -69,7 +71,7 @@ async def stat(
     """Get resource status."""
     service = get_service()
     try:
-        result = await service.fs.stat(uri)
+        result = await service.fs.stat(uri, ctx=_ctx)
         return Response(status="ok", result=result)
     except AGFSClientError as e:
         if "no such file or directory" in str(e).lower():
@@ -90,7 +92,7 @@ async def mkdir(
 ):
     """Create directory."""
     service = get_service()
-    await service.fs.mkdir(request.uri)
+    await service.fs.mkdir(request.uri, ctx=_ctx)
     return Response(status="ok", result={"uri": request.uri})
 
 
@@ -102,7 +104,7 @@ async def rm(
 ):
     """Remove resource."""
     service = get_service()
-    await service.fs.rm(uri, recursive=recursive)
+    await service.fs.rm(uri, ctx=_ctx, recursive=recursive)
     return Response(status="ok", result={"uri": uri})
 
 
@@ -120,5 +122,5 @@ async def mv(
 ):
     """Move resource."""
     service = get_service()
-    await service.fs.mv(request.from_uri, request.to_uri)
+    await service.fs.mv(request.from_uri, request.to_uri, ctx=_ctx)
     return Response(status="ok", result={"from": request.from_uri, "to": request.to_uri})

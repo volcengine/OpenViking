@@ -50,7 +50,7 @@ class TestVikingFSLocal:
         vfs = viking_fs_instance
         test_filename = f"local_file_{uuid.uuid4().hex}.txt"
         test_content = "Hello VikingFS Local! " + uuid.uuid4().hex
-        test_uri = f"viking://{test_filename}"
+        test_uri = f"viking://temp/{test_filename}"
 
         # 1. Write file
         await vfs.write(test_uri, test_content)
@@ -61,7 +61,7 @@ class TestVikingFSLocal:
         assert not stat_info["isDir"]
 
         # 3. List directory
-        entries = await vfs.ls("viking://")
+        entries = await vfs.ls("viking://temp/")
         assert any(e["name"] == test_filename for e in entries)
 
         # 4. Read file
@@ -75,7 +75,7 @@ class TestVikingFSLocal:
         """Test VikingFS directory operations: mkdir, rm, ls, stat."""
         vfs = viking_fs_instance
         test_dir = f"local_dir_{uuid.uuid4().hex}"
-        test_dir_uri = f"viking://{test_dir}/"
+        test_dir_uri = f"viking://temp/{test_dir}/"
 
         # 1. Create directory
         await vfs.mkdir(test_dir_uri)
@@ -86,7 +86,7 @@ class TestVikingFSLocal:
         assert stat_info["isDir"]
 
         # 3. List root to see directory
-        root_entries = await vfs.ls("viking://")
+        root_entries = await vfs.ls("viking://temp/")
         assert any(e["name"] == test_dir and e["isDir"] for e in root_entries)
 
         # 4. Write a file inside
@@ -101,22 +101,22 @@ class TestVikingFSLocal:
         await vfs.rm(test_dir_uri, recursive=True)
 
         # 7. Verify deletion
-        root_entries = await vfs.ls("viking://")
+        root_entries = await vfs.ls("viking://temp/")
         assert not any(e["name"] == test_dir for e in root_entries)
 
     async def test_ensure_dirs(self, viking_fs_instance):
         """Test VikingFS ensure_dirs."""
         vfs = viking_fs_instance
         base_dir = f"local_tree_test_{uuid.uuid4().hex}"
-        sub_dir = f"viking://{base_dir}/a/b/"
+        sub_dir = f"viking://temp/{base_dir}/a/b/"
         file_uri = f"{sub_dir}leaf.txt"
 
         await vfs.mkdir(sub_dir)
         await vfs.write(file_uri, "leaf content")
 
         # VikingFS.tree provides recursive listing
-        entries = await vfs.tree(f"viking://{base_dir}/")
+        entries = await vfs.tree(f"viking://temp/{base_dir}/")
         assert any("leaf.txt" in e["uri"] for e in entries)
 
         # Cleanup
-        await vfs.rm(f"viking://{base_dir}/", recursive=True)
+        await vfs.rm(f"viking://temp/{base_dir}/", recursive=True)

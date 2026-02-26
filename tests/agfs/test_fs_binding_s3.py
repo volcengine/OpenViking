@@ -103,7 +103,7 @@ class TestVikingFSBindingS3:
         vfs = viking_fs_binding_s3_instance
         test_filename = f"s3_binding_file_{uuid.uuid4().hex}.txt"
         test_content = "Hello VikingFS S3 Binding! " + uuid.uuid4().hex
-        test_uri = f"viking://{test_filename}"
+        test_uri = f"viking://temp/{test_filename}"
 
         await vfs.write(test_uri, test_content)
 
@@ -111,7 +111,7 @@ class TestVikingFSBindingS3:
         assert stat_info["name"] == test_filename
         assert not stat_info["isDir"]
 
-        entries = await vfs.ls("viking://")
+        entries = await vfs.ls("viking://temp/")
         assert any(e["name"] == test_filename for e in entries)
 
         read_data = await vfs.read(test_uri)
@@ -123,7 +123,7 @@ class TestVikingFSBindingS3:
         """Test VikingFS directory operations on S3: mkdir, rm, ls, stat."""
         vfs = viking_fs_binding_s3_instance
         test_dir = f"s3_binding_dir_{uuid.uuid4().hex}"
-        test_dir_uri = f"viking://{test_dir}/"
+        test_dir_uri = f"viking://temp/{test_dir}/"
 
         await vfs.mkdir(test_dir_uri)
 
@@ -131,7 +131,7 @@ class TestVikingFSBindingS3:
         assert stat_info["name"] == test_dir
         assert stat_info["isDir"]
 
-        root_entries = await vfs.ls("viking://")
+        root_entries = await vfs.ls("viking://temp/")
         assert any(e["name"] == test_dir and e["isDir"] for e in root_entries)
 
         file_uri = f"{test_dir_uri}inner.txt"
@@ -142,30 +142,30 @@ class TestVikingFSBindingS3:
 
         await vfs.rm(test_dir_uri, recursive=True)
 
-        root_entries = await vfs.ls("viking://")
+        root_entries = await vfs.ls("viking://temp/")
         assert not any(e["name"] == test_dir for e in root_entries)
 
     async def test_s3_tree_operations(self, viking_fs_binding_s3_instance):
         """Test VikingFS tree operations on S3."""
         vfs = viking_fs_binding_s3_instance
         base_dir = f"s3_binding_tree_{uuid.uuid4().hex}"
-        sub_dir = f"viking://{base_dir}/a/b/"
+        sub_dir = f"viking://temp/{base_dir}/a/b/"
         file_uri = f"{sub_dir}leaf.txt"
 
         await vfs.mkdir(sub_dir)
         await vfs.write(file_uri, "leaf content in S3")
 
-        entries = await vfs.tree(f"viking://{base_dir}/")
+        entries = await vfs.tree(f"viking://temp/{base_dir}/")
         assert any("leaf.txt" in e["uri"] for e in entries)
 
-        await vfs.rm(f"viking://{base_dir}/", recursive=True)
+        await vfs.rm(f"viking://temp/{base_dir}/", recursive=True)
 
     async def test_s3_binary_operations(self, viking_fs_binding_s3_instance):
         """Test VikingFS binary file operations on S3."""
         vfs = viking_fs_binding_s3_instance
         test_filename = f"s3_binding_binary_{uuid.uuid4().hex}.bin"
         test_content = bytes([i % 256 for i in range(256)])
-        test_uri = f"viking://{test_filename}"
+        test_uri = f"viking://temp/{test_filename}"
 
         await vfs.write(test_uri, test_content)
 

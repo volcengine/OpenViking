@@ -517,7 +517,7 @@ func (qfs *queueFS) Read(path string, offset int64, size int64) ([]byte, error) 
 	}
 
 	if operation == "" {
-		return nil, fmt.Errorf("no such file: %s", path)
+		return nil, filesystem.NewNotFoundError("read", path)
 	}
 
 	var data []byte
@@ -533,7 +533,7 @@ func (qfs *queueFS) Read(path string, offset int64, size int64) ([]byte, error) 
 		// Write-only files
 		return []byte(""), fmt.Errorf("permission denied: %s is write-only", path)
 	default:
-		return nil, fmt.Errorf("no such file: %s", path)
+		return nil, filesystem.NewNotFoundError("read", path)
 	}
 
 	if err != nil {
@@ -823,7 +823,7 @@ func (qfs *queueFS) Stat(p string) (*filesystem.FileInfo, error) {
 			}
 			if !hasChildren {
 				qfs.plugin.mu.RUnlock()
-				return nil, fmt.Errorf("no such file or directory: %s", p)
+				return nil, filesystem.NewNotFoundError("stat", p)
 			}
 		}
 		qfs.plugin.mu.RUnlock()
@@ -840,7 +840,7 @@ func (qfs *queueFS) Stat(p string) (*filesystem.FileInfo, error) {
 
 	// Control file stat
 	if operation == "" {
-		return nil, fmt.Errorf("no such file: %s", p)
+		return nil, filesystem.NewNotFoundError("stat", p)
 	}
 
 	mode := uint32(0644)

@@ -325,7 +325,7 @@ class VikingDBInterface(ABC):
                 "conds": [
                     {"op": "must", "field": "name", "conds": [value]},
                     {"op": "range", "field": "age", "gte": 18, "lt": 65},
-                    {"op": "prefix", "field": "uri", "prefix": "viking://"},
+                    {"op": "must", "field": "uri", "conds": ["viking://"]},
                     {"op": "contains", "field": "desc", "substring": "hello"}
                 ]
             }
@@ -338,7 +338,7 @@ class VikingDBInterface(ABC):
                 filter={
                     "op": "and",
                     "conds": [
-                        {"op": "prefix", "field": "uri", "prefix": "viking://user"},
+                        {"op": "must", "field": "uri", "conds": ["viking://user"]},
                         {"op": "range", "field": "active_count", "gte": 1}
                     ]
                 },

@@ -52,8 +52,9 @@ python -m openviking serve --config /path/to/ov.conf --host 127.0.0.1 --port 800
     "cors_origins": ["*"]
   },
   "storage": {
-    "agfs": { "backend": "local", "path": "/data/openviking" },
-    "vectordb": { "backend": "local", "path": "/data/openviking" }
+    "workspace": "./data",
+    "agfs": { "backend": "local" },
+    "vectordb": { "backend": "local" }
   }
 }
 ```
@@ -67,8 +68,9 @@ python -m openviking serve --config /path/to/ov.conf --host 127.0.0.1 --port 800
 ```json
 {
   "storage": {
-    "agfs": { "backend": "local", "path": "./data" },
-    "vectordb": { "backend": "local", "path": "./data" }
+    "workspace": "./data",
+    "agfs": { "backend": "local" },
+    "vectordb": { "backend": "local" }
   }
 }
 ```
@@ -184,6 +186,105 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
   -H "X-API-Key: your-key"
 ```
+
+## 云上部署
+
+### Docker
+
+```dockerfile
+FROM python:3.11-slim
+WORKDIR /app
+COPY . .
+RUN pip install -e .
+EXPOSE 1933
+CMD ["python", "-m", "openviking", "serve", "--config", "/etc/openviking/ov.conf"]
+```
+
+```bash
+docker build -t openviking .
+docker run -d -p 1933:1933 \
+  -v /path/to/ov.conf:/etc/openviking/ov.conf:ro \
+  -v /data/openviking:/data/openviking \
+  openviking
+```
+
+### Kubernetes
+
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: openviking
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: openviking
+  template:
+    metadata:
+      labels:
+        app: openviking
+    spec:
+      containers:
+        - name: openviking
+          image: openviking:latest
+          ports:
+            - containerPort: 1933
+          volumeMounts:
+            - name: config
+              mountPath: /etc/openviking
+              readOnly: true
+            - name: data
+              mountPath: /data/openviking
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 1933
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 1933
+            initialDelaySeconds: 10
+            periodSeconds: 15
+      volumes:
+        - name: config
+          configMap:
+            name: openviking-config
+        - name: data
+          persistentVolumeClaim:
+            claimName: openviking-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: openviking
+spec:
+  selector:
+    app: openviking
+  ports:
+    - port: 1933
+      targetPort: 1933
+```
+
+## 健康检查
+
+| 端点 | 认证 | 用途 |
+|------|------|------|
+| `GET /health` | 否 | 存活探针 — 立即返回 `{"status": "ok"}` |
+| `GET /ready` | 否 | 就绪探针 — 检查 AGFS、VectorDB、APIKeyManager |
+
+```bash
+# 存活探针
+curl http://localhost:1933/health
+
+# 就绪探针
+curl http://localhost:1933/ready
+# {"status": "ready", "checks": {"agfs": "ok", "vectordb": "ok", "api_key_manager": "ok"}}
+```
+
+在 Kubernetes 中，使用 `/health` 作为存活探针，`/ready` 作为就绪探针。
 
 ## 相关文档
 

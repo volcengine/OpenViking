@@ -60,6 +60,7 @@ async def find(
     service = get_service()
     result = await service.search.find(
         query=request.query,
+        ctx=_ctx,
         target_uri=request.target_uri,
         limit=request.limit,
         score_threshold=request.score_threshold,
@@ -82,11 +83,12 @@ async def search(
     # Get session if session_id provided
     session = None
     if request.session_id:
-        session = service.sessions.session(request.session_id)
+        session = service.sessions.session(_ctx, request.session_id)
         await session.load()
 
     result = await service.search.search(
         query=request.query,
+        ctx=_ctx,
         target_uri=request.target_uri,
         session=session,
         limit=request.limit,
@@ -109,6 +111,7 @@ async def grep(
     result = await service.fs.grep(
         request.uri,
         request.pattern,
+        ctx=_ctx,
         case_insensitive=request.case_insensitive,
     )
     return Response(status="ok", result=result)
@@ -121,5 +124,5 @@ async def glob(
 ):
     """File pattern matching."""
     service = get_service()
-    result = await service.fs.glob(request.pattern, uri=request.uri)
+    result = await service.fs.glob(request.pattern, ctx=_ctx, uri=request.uri)
     return Response(status="ok", result=result)

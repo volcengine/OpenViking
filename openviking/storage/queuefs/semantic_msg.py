@@ -31,17 +31,29 @@ class SemanticMsg:
     status: str = "pending"  # pending/processing/completed
     timestamp: int = int(datetime.now().timestamp())
     recursive: bool = True  # Whether to recursively process subdirectories
+    account_id: str = "default"
+    user_id: str = "default"
+    agent_id: str = "default"
+    role: str = "root"
 
     def __init__(
         self,
         uri: str,
         context_type: str,
         recursive: bool = True,
+        account_id: str = "default",
+        user_id: str = "default",
+        agent_id: str = "default",
+        role: str = "root",
     ):
         self.id = str(uuid4())
         self.uri = uri
         self.context_type = context_type
         self.recursive = recursive
+        self.account_id = account_id
+        self.user_id = user_id
+        self.agent_id = agent_id
+        self.role = role
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert object to dictionary."""
@@ -72,6 +84,10 @@ class SemanticMsg:
             uri=uri,
             context_type=context_type,
             recursive=data.get("recursive", True),
+            account_id=data.get("account_id", "default"),
+            user_id=data.get("user_id", "default"),
+            agent_id=data.get("agent_id", "default"),
+            role=data.get("role", "root"),
         )
         if "id" in data and data["id"]:
             obj.id = data["id"]

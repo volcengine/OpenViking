@@ -135,7 +135,7 @@ class PDFConfig(ParserConfig):
         mineru_endpoint: MinerU API endpoint URL
         mineru_api_key: MinerU API authentication key
         mineru_timeout: MinerU request timeout in seconds
-        mineruparams: Additional MinerU API parameters
+        mineru_params: Additional MinerU API parameters
     """
 
     strategy: str = "auto"  # "local" | "mineru" | "auto"
@@ -171,7 +171,33 @@ class PDFConfig(ParserConfig):
 
 
 @dataclass
-class CodeConfig(ParserConfig):
+class CodeHostingConfig(ParserConfig):
+    """
+    Base configuration for code hosting platform domains.
+
+    Attributes:
+        code_hosting_domains: List of code hosting platform domains (github.com, gitlab.com, etc.)
+        github_domains: List of GitHub domains (github.com, www.github.com)
+        gitlab_domains: List of GitLab domains (gitlab.com, www.gitlab.com)
+    """
+
+    # Code hosting platform configuration
+    code_hosting_domains: list = None
+    github_domains: list = None
+    gitlab_domains: list = None
+
+    def __post_init__(self):
+        """Initialize default values for mutable fields."""
+        if self.code_hosting_domains is None:
+            self.code_hosting_domains = ["github.com", "gitlab.com"]
+        if self.github_domains is None:
+            self.github_domains = ["github.com", "www.github.com"]
+        if self.gitlab_domains is None:
+            self.gitlab_domains = ["gitlab.com", "www.gitlab.com"]
+
+
+@dataclass
+class CodeConfig(CodeHostingConfig):
     """
     Configuration for code parsing.
 
@@ -186,6 +212,7 @@ class CodeConfig(ParserConfig):
         max_token_limit: Maximum tokens to process per file
         truncation_strategy: "head", "tail", or "balanced"
         warn_on_truncation: Whether to warn when truncation occurs
+        github_raw_domain: Domain for GitHub raw content (raw.githubusercontent.com)
     """
 
     enable_ast: bool = True
@@ -198,6 +225,7 @@ class CodeConfig(ParserConfig):
     max_token_limit: int = 50000  # Maximum tokens to process per file
     truncation_strategy: str = "head"  # "head", "tail", or "balanced"
     warn_on_truncation: bool = True
+    github_raw_domain: str = "raw.githubusercontent.com"
 
     def validate(self) -> None:
         """
@@ -359,7 +387,7 @@ class MarkdownConfig(ParserConfig):
 
 
 @dataclass
-class HTMLConfig(ParserConfig):
+class HTMLConfig(CodeHostingConfig):
     """
     Configuration for HTML parsing.
 

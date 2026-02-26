@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
 
+from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.utils import VikingURI
 from openviking_cli.utils.logger import get_logger
@@ -41,10 +42,17 @@ class DagStats:
 class SemanticDagExecutor:
     """Execute semantic generation with DAG-style, event-driven lazy dispatch."""
 
-    def __init__(self, processor: "SemanticProcessor", context_type: str, max_concurrent_llm: int):
+    def __init__(
+        self,
+        processor: "SemanticProcessor",
+        context_type: str,
+        max_concurrent_llm: int,
+        ctx: RequestContext,
+    ):
         self._processor = processor
         self._context_type = context_type
         self._max_concurrent_llm = max_concurrent_llm
+        self._ctx = ctx
         self._llm_sem = asyncio.Semaphore(max_concurrent_llm)
         self._viking_fs = get_viking_fs()
         self._nodes: Dict[str, DirNode] = {}
@@ -112,7 +120,7 @@ class SemanticDagExecutor:
     async def _list_dir(self, uri: str) -> tuple[list[str], list[str]]:
         """List directory entries and return (child_dirs, file_paths)."""
         try:
-            entries = await self._viking_fs.ls(uri)
+            entries = await self._viking_fs.ls(uri, ctx=self._ctx)
         except Exception as e:
             logger.warning(f"Failed to list directory {uri}: {e}")
             return [], []
@@ -138,7 +146,7 @@ class SemanticDagExecutor:
         file_name = file_path.split("/")[-1]
         try:
             summary_dict = await self._processor._generate_single_file_summary(
-                file_path, llm_sem=self._llm_sem
+                file_path, llm_sem=self._llm_sem, ctx=self._ctx
             )
         except Exception as e:
             logger.warning(f"Failed to generate summary for {file_path}: {e}")
@@ -157,6 +165,7 @@ class SemanticDagExecutor:
                     context_type=self._context_type,
                     file_path=file_path,
                     summary_dict=summary_dict,
+                    ctx=self._ctx,
                 )
             )
         except Exception as e:
@@ -245,14 +254,14 @@ class SemanticDagExecutor:
             abstract = self._processor._extract_abstract_from_overview(overview)
 
             try:
-                await self._viking_fs.write_file(f"{dir_uri}/.overview.md", overview)
-                await self._viking_fs.write_file(f"{dir_uri}/.abstract.md", abstract)
+                await self._viking_fs.write_file(f"{dir_uri}/.overview.md", overview, ctx=self._ctx)
+                await self._viking_fs.write_file(f"{dir_uri}/.abstract.md", abstract, ctx=self._ctx)
             except Exception as e:
                 logger.warning(f"Failed to write overview/abstract for {dir_uri}: {e}")
 
             try:
                 await self._processor._vectorize_directory_simple(
-                    dir_uri, self._context_type, abstract, overview
+                    dir_uri, self._context_type, abstract, overview, ctx=self._ctx
                 )
             except Exception as e:
                 logger.error(f"Failed to vectorize directory {dir_uri}: {e}", exc_info=True)

@@ -8,6 +8,7 @@ Provides relation management operations: relations, link, unlink.
 
 from typing import Any, Dict, List, Optional, Union
 
+from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import NotInitializedError
 from openviking_cli.utils import get_logger
@@ -31,12 +32,18 @@ class RelationService:
             raise NotInitializedError("VikingFS")
         return self._viking_fs
 
-    async def relations(self, uri: str) -> List[Dict[str, Any]]:
+    async def relations(self, uri: str, ctx: RequestContext) -> List[Dict[str, Any]]:
         """Get relations (returns [{"uri": "...", "reason": "..."}, ...])."""
         viking_fs = self._ensure_initialized()
-        return await viking_fs.relations(uri)
+        return await viking_fs.relations(uri, ctx=ctx)
 
-    async def link(self, from_uri: str, uris: Union[str, List[str]], reason: str = "") -> None:
+    async def link(
+        self,
+        from_uri: str,
+        uris: Union[str, List[str]],
+        ctx: RequestContext,
+        reason: str = "",
+    ) -> None:
         """Create link (single or multiple).
 
         Args:
@@ -45,9 +52,9 @@ class RelationService:
             reason: Reason for linking
         """
         viking_fs = self._ensure_initialized()
-        await viking_fs.link(from_uri, uris, reason)
+        await viking_fs.link(from_uri, uris, reason, ctx=ctx)
 
-    async def unlink(self, from_uri: str, uri: str) -> None:
+    async def unlink(self, from_uri: str, uri: str, ctx: RequestContext) -> None:
         """Remove link (remove specified URI from uris).
 
         Args:
@@ -55,4 +62,4 @@ class RelationService:
             uri: Target URI to remove
         """
         viking_fs = self._ensure_initialized()
-        await viking_fs.unlink(from_uri, uri)
+        await viking_fs.unlink(from_uri, uri, ctx=ctx)

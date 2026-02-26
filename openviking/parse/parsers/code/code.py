@@ -38,6 +38,8 @@ from openviking.parse.parsers.constants import (
     IGNORE_EXTENSIONS,
 )
 from openviking.parse.parsers.upload_utils import upload_directory
+from openviking.utils import is_github_url, parse_code_hosting_url
+from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -132,8 +134,9 @@ class CodeRepositoryParser(BaseParser):
             # 3. Create VikingFS temp URI
             viking_fs = self._get_viking_fs()
             temp_viking_uri = self._create_temp_uri()
-            # The structure in temp should be: viking://temp/{uuid}/{repo_name}/...
-            target_root_uri = f"{temp_viking_uri}/{repo_name}"
+            # The structure in temp should be: viking://temp/{uuid}/repository/...
+            # Use simple name 'repository' for temp, TreeBuilder will rename it to org/repo later
+            target_root_uri = f"{temp_viking_uri}/repository"
 
             logger.info(f"Uploading to VikingFS: {target_root_uri}")
 
@@ -243,18 +246,36 @@ class CodeRepositoryParser(BaseParser):
             git_index = next((i for i, p in enumerate(path_parts) if p.endswith(".git")), None)
             if git_index is not None:
                 base_parts = path_parts[: git_index + 1]
-            elif parsed.netloc in ["github.com", "gitlab.com"] and len(path_parts) >= 2:
+
+            config = get_openviking_config()
+            if (
+                parsed.netloc in config.code.github_domains + config.code.gitlab_domains
+                and len(path_parts) >= 2
+            ):
                 base_parts = path_parts[:2]
             base_path = "/" + "/".join(base_parts)
             return parsed._replace(path=base_path, query="", fragment="").geturl()
         return url
 
     def _get_repo_name(self, url: str) -> str:
+        """Get repository name with organization for GitHub/GitLab URLs.
+
+        For https://github.com/volcengine/OpenViking, returns "volcengine/OpenViking"
+        For other URLs, falls back to just the repo name.
+        """
+        # First try to parse as code hosting URL
+        parsed_org_repo = parse_code_hosting_url(url)
+        if parsed_org_repo:
+            return parsed_org_repo
+
+        # Fallback for other URLs
         name_source = url
         if url.startswith(("http://", "https://", "git://", "ssh://")):
             name_source = urlparse(url).path.rstrip("/")
         elif ":" in url and not url.startswith("file://"):
             name_source = url.split(":", 1)[1]
+
+        # Original logic for non-GitHub/GitLab URLs
         name = name_source.rstrip("/").split("/")[-1]
         if name.endswith(".git"):
             name = name[:-4]
@@ -284,7 +305,7 @@ class CodeRepositoryParser(BaseParser):
     @staticmethod
     def _is_github_url(url: str) -> bool:
         """Return True for github.com URLs (supports ZIP archive API)."""
-        return urlparse(url).netloc in ("github.com", "www.github.com")
+        return is_github_url(url)
 
     async def _github_zip_download(
         self,
