@@ -2,17 +2,17 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import json
-import pytest
 from pathlib import Path
 
+import pytest
+
 from openviking.eval.ragas import (
-    RagasEvaluator,
-    RagasConfig,
-    EvalSample,
     EvalDataset,
+    EvalSample,
+    RagasConfig,
+    RagasEvaluator,
     _create_ragas_llm_from_config,
 )
-
 
 EVAL_RESULTS_FILE = Path(__file__).parent.parent.parent / "eval_results.json"
 
@@ -233,5 +233,6 @@ def test_ragas_evaluator_no_llm_error(monkeypatch):
         pytest.skip("LLM is configured, skipping no-LLM error test")
 
     import asyncio
+
     with pytest.raises(ValueError, match="RAGAS evaluation requires an LLM"):
         asyncio.run(evaluator.evaluate_dataset(dataset))

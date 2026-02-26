@@ -33,21 +33,31 @@ class CMakeBuildExtension(build_ext):
             os.chmod(str(dst), 0o755)
 
     def build_agfs(self):
-        """Build AGFS server from source."""
+        """Build AGFS server and binding library from source."""
         # Paths
         binary_name = "agfs-server.exe" if sys.platform == "win32" else "agfs-server"
+        if sys.platform == "win32":
+            lib_name = "libagfsbinding.dll"
+        elif sys.platform == "darwin":
+            lib_name = "libagfsbinding.dylib"
+        else:
+            lib_name = "libagfsbinding.so"
+
         agfs_server_dir = Path("third_party/agfs/agfs-server").resolve()
 
         # Target in source tree (for development/install)
         agfs_bin_dir = Path("openviking/bin").resolve()
         agfs_target_binary = agfs_bin_dir / binary_name
+        agfs_target_lib = agfs_bin_dir / lib_name
 
         # 1. Try to build from source
         if agfs_server_dir.exists() and shutil.which("go"):
-            print("Building AGFS server from source...")
+            print("Building AGFS from source...")
             import subprocess
 
+            # Build server
             try:
+                print(f"Building AGFS server: {binary_name}")
                 build_args = (
                     ["go", "build", "-o", f"build/{binary_name}", "cmd/server/main.go"]
                     if sys.platform == "win32"
@@ -71,7 +81,7 @@ class CMakeBuildExtension(build_ext):
                         f"Build succeeded but binary not found at {agfs_built_binary}"
                     )
             except (subprocess.CalledProcessError, Exception) as e:
-                error_msg = f"Failed to build AGFS from source: {e}"
+                error_msg = f"Failed to build AGFS server from source: {e}"
                 if isinstance(e, subprocess.CalledProcessError):
                     if e.stdout:
                         error_msg += (
@@ -81,19 +91,61 @@ class CMakeBuildExtension(build_ext):
                         error_msg += (
                             f"\nBuild stderr:\n{e.stderr.decode('utf-8', errors='replace')}"
                         )
-                raise RuntimeError(error_msg)
+                print(f"[Warning] {error_msg}")
+
+            # Build binding library
+            try:
+                print(f"Building AGFS binding library: {lib_name}")
+                # Use CGO_ENABLED=1 for shared library
+                env = os.environ.copy()
+                env["CGO_ENABLED"] = "1"
+
+                pybinding_dir = agfs_server_dir / "cmd/pybinding"
+                lib_build_args = [
+                    "go",
+                    "build",
+                    "-buildmode=c-shared",
+                    "-o",
+                    f"build/{lib_name}",
+                    ".",
+                ]
+
+                subprocess.run(
+                    lib_build_args,
+                    cwd=str(pybinding_dir),
+                    env=env,
+                    check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+
+                agfs_built_lib = pybinding_dir / "build" / lib_name
+                if agfs_built_lib.exists():
+                    self._copy_binary(agfs_built_lib, agfs_target_lib)
+                    print("[OK] AGFS binding library built successfully")
+                else:
+                    print(f"[Warning] Binding library not found at {agfs_built_lib}")
+            except Exception as e:
+                print(f"[Warning] Failed to build AGFS binding library: {e}")
+                if isinstance(e, subprocess.CalledProcessError):
+                    if e.stdout:
+                        print(f"Build stdout: {e.stdout.decode('utf-8', errors='replace')}")
+                    if e.stderr:
+                        print(f"Build stderr: {e.stderr.decode('utf-8', errors='replace')}")
+
         else:
             if not agfs_server_dir.exists():
                 raise FileNotFoundError(f"AGFS source directory not found at {agfs_server_dir}")
             else:
-                raise RuntimeError("Go compiler not found. Please install Go to build AGFS server.")
+                raise RuntimeError("Go compiler not found. Please install Go to build AGFS.")
 
-        # 2. Ensure AGFS binary is copied to the build directory (where wheel is packaged from)
+        # 2. Ensure binaries are copied to the build directory (where wheel is packaged from)
         if self.build_lib:
             agfs_bin_dir_build = Path(self.build_lib) / "openviking/bin"
-            dst = agfs_bin_dir_build / binary_name
             if agfs_target_binary.exists():
-                self._copy_binary(agfs_target_binary, dst)
+                self._copy_binary(agfs_target_binary, agfs_bin_dir_build / binary_name)
+            if agfs_target_lib.exists():
+                self._copy_binary(agfs_target_lib, agfs_bin_dir_build / lib_name)
 
     def build_extension(self, ext):
         """Build a single C++ extension module using CMake."""
@@ -143,6 +195,9 @@ setup(
         "openviking": [
             "bin/agfs-server",
             "bin/agfs-server.exe",
+            "bin/libagfsbinding.so",
+            "bin/libagfsbinding.dylib",
+            "bin/libagfsbinding.dll",
         ],
     },
     include_package_data=True,

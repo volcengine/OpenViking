@@ -12,8 +12,6 @@ import time
 import traceback
 from typing import Any, Dict, Optional, Set, Union
 
-from pyagfs import AGFSClient
-
 from openviking_cli.utils.logger import get_logger
 
 from .embedding_queue import EmbeddingQueue
@@ -27,16 +25,24 @@ _instance: Optional["QueueManager"] = None
 
 
 def init_queue_manager(
-    agfs_url: str = "http://localhost:8080",
+    agfs: Any,
     timeout: int = 10,
     mount_point: str = "/queue",
     max_concurrent_embedding: int = 10,
     max_concurrent_semantic: int = 100,
 ) -> "QueueManager":
-    """Initialize QueueManager singleton."""
+    """Initialize QueueManager singleton.
+
+    Args:
+        agfs: Pre-initialized AGFS client (HTTP or Binding).
+        timeout: Request timeout in seconds.
+        mount_point: Path where QueueFS is mounted.
+        max_concurrent_embedding: Max concurrent embedding tasks.
+        max_concurrent_semantic: Max concurrent semantic tasks.
+    """
     global _instance
     _instance = QueueManager(
-        agfs_url=agfs_url,
+        agfs=agfs,
         timeout=timeout,
         mount_point=mount_point,
         max_concurrent_embedding=max_concurrent_embedding,
@@ -65,19 +71,18 @@ class QueueManager:
 
     def __init__(
         self,
-        agfs_url: str = "http://localhost:8080",
+        agfs: Any,
         timeout: int = 10,
         mount_point: str = "/queue",
         max_concurrent_embedding: int = 10,
         max_concurrent_semantic: int = 100,
     ):
         """Initialize QueueManager."""
-        self._agfs_url = agfs_url
+        self._agfs = agfs
         self.timeout = timeout
         self.mount_point = mount_point
         self._max_concurrent_embedding = max_concurrent_embedding
         self._max_concurrent_semantic = max_concurrent_semantic
-        self._agfs: Optional[Any] = None
         self._queues: Dict[str, NamedQueue] = {}
         self._started = False
         self._queue_threads: Dict[str, threading.Thread] = {}
@@ -86,15 +91,14 @@ class QueueManager:
 
         atexit.register(self.stop)
         logger.info(
-            f"[QueueManager] Initialized with agfs_url={agfs_url}, mount_point={mount_point}"
+            f"[QueueManager] Initialized with agfs={type(agfs).__name__}, mount_point={mount_point}"
         )
 
     def start(self) -> None:
-        """Start QueueManager, establish connection and ensure queuefs is mounted."""
+        """Start QueueManager workers."""
         if self._started:
             return
 
-        self._agfs = AGFSClient(api_base_url=self._agfs_url, timeout=self.timeout)
         self._started = True
 
         # Start queue workers for existing queues

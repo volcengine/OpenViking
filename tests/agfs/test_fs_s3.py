@@ -72,11 +72,16 @@ def s3_client():
 @pytest.fixture(scope="module")
 async def viking_fs_instance():
     """Initialize AGFS Manager and VikingFS singleton."""
+    from openviking.utils.agfs_utils import create_agfs_client
+
     manager = AGFSManager(config=AGFS_CONF)
     manager.start()
 
-    # Initialize VikingFS with agfs_url (only basic IO needed)
-    vfs = init_viking_fs(agfs_url=AGFS_CONF.url, timeout=AGFS_CONF.timeout)
+    # Create AGFS client
+    agfs_client = create_agfs_client(AGFS_CONF)
+
+    # Initialize VikingFS with client
+    vfs = init_viking_fs(agfs=agfs_client)
 
     yield vfs
 
@@ -97,13 +102,14 @@ class TestVikingFSS3:
 
         test_filename = f"verify_{uuid.uuid4().hex}.txt"
         test_content = "Hello VikingFS S3! " + uuid.uuid4().hex
-        test_uri = f"viking://{test_filename}"
+        test_uri = f"viking://temp/{test_filename}"
 
         # 1. Write via VikingFS
         await vfs.write(test_uri, test_content)
 
         # 2. Verify existence and content via S3 client
-        s3_key = f"{prefix}{test_filename}"
+        # VikingFS maps viking://temp/{test_filename} to /local/default/temp/{test_filename}
+        s3_key = f"{prefix}default/temp/{test_filename}"
         response = s3_client.get_object(Bucket=bucket, Key=s3_key)
         s3_content = response["Body"].read().decode("utf-8")
         assert s3_content == test_content
@@ -114,7 +120,7 @@ class TestVikingFSS3:
         assert not stat_info["isDir"]
 
         # 4. List via VikingFS
-        entries = await vfs.ls("viking://")
+        entries = await vfs.ls("viking://temp/")
         assert any(e["name"] == test_filename for e in entries)
 
         # 5. Read back via VikingFS
@@ -137,7 +143,7 @@ class TestVikingFSS3:
         prefix = s3_conf.prefix or ""
 
         test_dir = f"test_dir_{uuid.uuid4().hex}"
-        test_dir_uri = f"viking://{test_dir}/"
+        test_dir_uri = f"viking://temp/{test_dir}/"
 
         # 1. Create directory via VikingFS
         await vfs.mkdir(test_dir_uri)
@@ -147,12 +153,13 @@ class TestVikingFSS3:
         file_content = "inner content"
         await vfs.write(file_uri, file_content)
 
-        s3_key = f"{prefix}{test_dir}/inner.txt"
+        # VikingFS maps viking://temp/{test_dir}/inner.txt to /local/default/temp/{test_dir}/inner.txt
+        s3_key = f"{prefix}default/temp/{test_dir}/inner.txt"
         response = s3_client.get_object(Bucket=bucket, Key=s3_key)
         assert response["Body"].read().decode("utf-8") == file_content
 
         # 3. List via VikingFS
-        root_entries = await vfs.ls("viking://")
+        root_entries = await vfs.ls("viking://temp/")
         assert any(e["name"] == test_dir and e["isDir"] for e in root_entries)
 
         # 4. Delete directory recursively via VikingFS
@@ -166,15 +173,15 @@ class TestVikingFSS3:
         """Test VikingFS ensure_dirs."""
         vfs = viking_fs_instance
         base_dir = f"tree_test_{uuid.uuid4().hex}"
-        sub_dir = f"viking://{base_dir}/a/b/"
+        sub_dir = f"viking://temp/{base_dir}/a/b/"
         file_uri = f"{sub_dir}leaf.txt"
 
         await vfs.mkdir(sub_dir)
         await vfs.write(file_uri, "leaf content")
 
         # VikingFS.tree provides recursive listing
-        entries = await vfs.tree(f"viking://{base_dir}/")
+        entries = await vfs.tree(f"viking://temp/{base_dir}/")
         assert any("leaf.txt" in e["uri"] for e in entries)
 
         # Cleanup
-        await vfs.rm(f"viking://{base_dir}/", recursive=True)
+        await vfs.rm(f"viking://temp/{base_dir}/", recursive=True)

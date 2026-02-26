@@ -68,6 +68,7 @@ class OpenVikingService:
         # Infrastructure
         self._agfs_manager: Optional[AGFSManager] = None
         self._agfs_url: Optional[str] = None
+        self._agfs_client: Optional[Any] = None
         self._queue_manager: Optional[QueueManager] = None
         self._vikingdb_manager: Optional[VikingDBManager] = None
         self._viking_fs: Optional[VikingFS] = None
@@ -108,21 +109,30 @@ class OpenVikingService:
         max_concurrent_semantic: int = 100,
     ) -> None:
         """Initialize storage resources."""
-        self._agfs_manager = AGFSManager(config=config.agfs)
-        self._agfs_manager.start()
-        self._agfs_url = self._agfs_manager.url
-        config.agfs.url = self._agfs_url
+        from openviking.utils.agfs_utils import create_agfs_client
 
-        # Initialize QueueManager
-        if self._agfs_url:
+        mode = getattr(config.agfs, "mode", "http-client")
+        if mode == "http-client" and config.agfs.backend == "local":
+            self._agfs_manager = AGFSManager(config=config.agfs)
+            self._agfs_manager.start()
+            self._agfs_url = self._agfs_manager.url
+            config.agfs.url = self._agfs_url
+        else:
+            self._agfs_url = config.agfs.url
+
+        # Create AGFS client using utility
+        self._agfs_client = create_agfs_client(config.agfs)
+
+        # Initialize QueueManager with agfs_client
+        if self._agfs_client:
             self._queue_manager = init_queue_manager(
-                agfs_url=self._agfs_url,
+                agfs=self._agfs_client,
                 timeout=config.agfs.timeout,
                 max_concurrent_embedding=max_concurrent_embedding,
                 max_concurrent_semantic=max_concurrent_semantic,
             )
         else:
-            logger.warning("AGFS URL not configured, skipping queue manager initialization")
+            logger.warning("AGFS client not initialized, skipping queue manager")
 
         # Initialize VikingDBManager with QueueManager
         self._vikingdb_manager = VikingDBManager(
@@ -221,11 +231,10 @@ class OpenVikingService:
         await init_context_collection(self._vikingdb_manager)
 
         self._viking_fs = init_viking_fs(
-            agfs_url=self._agfs_url or "http://localhost:8080",
+            agfs=self._agfs_client,
             query_embedder=self._embedder,
             rerank_config=config.rerank,
             vector_store=self._vikingdb_manager,
-            timeout=config.storage.agfs.timeout,
             enable_recorder=enable_recorder,
         )
         if enable_recorder:

@@ -88,9 +88,7 @@ class PlaybackStats:
         )
         agfs_fs_total = self.agfs_fs_success_count + self.agfs_fs_error_count
         agfs_fs_success_rate = (
-            self.agfs_fs_success_count / agfs_fs_total * 100
-            if agfs_fs_total > 0
-            else 0
+            self.agfs_fs_success_count / agfs_fs_total * 100 if agfs_fs_total > 0 else 0
         )
         avg_agfs_calls = (
             self.total_agfs_calls / self.total_viking_fs_operations
@@ -217,29 +215,26 @@ class IOPlayback:
         from openviking.agfs_manager import AGFSManager
         from openviking.storage.viking_fs import init_viking_fs
         from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
+        from openviking.utils.agfs_utils import create_agfs_client
         from openviking_cli.utils.config import get_openviking_config
         from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 
         config = get_openviking_config()
-
-        agfs_url = config.storage.agfs.url
+        agfs_config = config.storage.agfs
         agfs_manager = None
 
-        if config.storage.agfs.backend == "local":
-            agfs_manager = AGFSManager(config=config.storage.agfs)
+        # Determine if we need to start AGFSManager for HTTP mode
+        mode = getattr(agfs_config, "mode", "http-client")
+        if mode == "http-client":
+            agfs_manager = AGFSManager(config=agfs_config)
             agfs_manager.start()
-            agfs_url = agfs_manager.url
-            logger.info(f"[IOPlayback] Started AGFS at {agfs_url}")
-        elif config.storage.agfs.backend in ["s3", "memory"]:
-            agfs_manager = AGFSManager(config=config.storage.agfs)
-            agfs_manager.start()
-            agfs_url = agfs_manager.url
             logger.info(
-                f"[IOPlayback] Started AGFS with {config.storage.agfs.backend} backend at {agfs_url}"
+                f"[IOPlayback] Started AGFS manager in HTTP mode at {agfs_manager.url} "
+                f"with {agfs_config.backend} backend"
             )
-        elif not agfs_url:
-            agfs_url = "http://localhost:8080"
-            logger.warning(f"[IOPlayback] No AGFS URL configured, using default: {agfs_url}")
+
+        # Create AGFS client using utility
+        agfs_client = create_agfs_client(agfs_config)
 
         vector_store = None
         if self.enable_vikingdb:
@@ -255,8 +250,9 @@ class IOPlayback:
             vector_store = VikingVectorIndexBackend(config=backend_config)
 
         if self.enable_fs:
+            # Use init_viking_fs which handles mode (HTTP/Binding) automatically based on agfs_config
             self._viking_fs = init_viking_fs(
-                agfs_url=agfs_url,
+                agfs=agfs_client,
                 vector_store=vector_store,
             )
         self._vector_store = vector_store
@@ -332,7 +328,9 @@ class IOPlayback:
 
         return result
 
-    def _compare_agfs_calls(self, recorded_calls: List[Any], actual_calls: List[Dict[str, Any]]) -> bool:
+    def _compare_agfs_calls(
+        self, recorded_calls: List[Any], actual_calls: List[Dict[str, Any]]
+    ) -> bool:
         """
         Compare recorded AGFS calls with actual AGFS calls.
 
@@ -365,14 +363,10 @@ class IOPlayback:
                 )
                 return False
             if recorded_req != actual_call["request"]:
-                logger.warning(
-                    f"AGFS request mismatch for operation {recorded_op}"
-                )
+                logger.warning(f"AGFS request mismatch for operation {recorded_op}")
                 return False
             if recorded_success != actual_call["success"]:
-                logger.warning(
-                    f"AGFS success status mismatch for operation {recorded_op}"
-                )
+                logger.warning(f"AGFS success status mismatch for operation {recorded_op}")
                 return False
 
         return True

@@ -11,7 +11,6 @@ from openviking.storage.queuefs.embedding_queue import EmbeddingQueue
 from openviking.storage.queuefs.queue_manager import QueueManager
 from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
 from openviking_cli.utils import get_logger
-from openviking_cli.utils.config.agfs_config import AGFSConfig
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 
 logger = get_logger(__name__)

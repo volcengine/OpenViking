@@ -323,6 +323,79 @@ Storage backend configuration.
 }
 ```
 
+#### agfs
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `mode` | str | `"http-client"` or `"binding-client"` | `"http-client"` |
+| `backend` | str | `"local"`, `"s3"`, or `"memory"` | `"local"` |
+| `path` | str | Local directory path for `local` backend | `"./data"` |
+| `url` | str | AGFS service URL for `http-client` mode | `"http://localhost:1833"` |
+| `timeout` | float | Request timeout in seconds | `10.0` |
+
+**Configuration Examples**
+
+<details>
+<summary><b>HTTP Client (Default)</b></summary>
+
+Connects to a remote or local AGFS service via HTTP.
+
+```json
+{
+  "storage": {
+    "agfs": {
+      "mode": "http-client",
+      "url": "http://localhost:1833",
+      "timeout": 10.0
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><b>Binding Client (High Performance)</b></summary>
+
+Directly uses the AGFS Go implementation through a shared library. 
+
+**Config**:
+```json
+{
+  "storage": {
+    "agfs": {
+      "mode": "binding-client",
+      "backend": "local",
+      "path": "./data"
+    }
+  }
+}
+```
+
+</details>
+
+**S3 Backend**
+
+```json
+{
+  "storage": {
+    "agfs": {
+      "backend": "s3",
+      "s3": {
+        "bucket": "my-bucket",
+        "endpoint": "s3.amazonaws.com",
+        "region": "us-east-1",
+        "access_key": "your-ak",
+        "secret_key": "your-sk"
+      }
+    }
+  }
+}
+```
+
+#### vectordb
+
+
 ## Config Files
 
 OpenViking uses two config files:

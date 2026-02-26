@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from openviking.models.embedder.base import EmbedResult
+from openviking.retrieve.memory_lifecycle import hotness_score
 from openviking.server.identity import RequestContext, Role
 from openviking.storage import VikingDBInterface
 from openviking.storage.viking_fs import get_viking_fs
@@ -22,7 +23,6 @@ from openviking_cli.retrieve.types import (
     RelatedContext,
     TypedQuery,
 )
-from openviking.retrieve.memory_lifecycle import hotness_score
 from openviking_cli.utils.config import RerankConfig
 from openviking_cli.utils.logger import get_logger
 
