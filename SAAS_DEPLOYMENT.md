@@ -65,70 +65,76 @@
 
 ---
 
-## 3. 快速启动（Docker Compose）
+## 3. 快速启动
 
-### 第一步：克隆代码并进入项目目录
+> **注意**：`ghcr.io/volcengine/openviking:main` 为私有镜像，无法直接 `docker pull`。
+> 请根据你的场景选择以下两种方式之一。
+
+---
+
+### 方式 A：全 Docker 部署（推荐，首次构建较慢）
+
+**适用场景**：生产/测试环境，一键启动全部服务。
+
+**前置条件**：Docker Desktop（Windows/macOS）或 Docker Engine + Docker Compose（Linux）
+
+#### 第一步：克隆代码
 
 ```bash
 git clone <repo-url>
 cd OpenViking
 ```
 
-### 第二步：创建 SaaS 配置文件
+#### 第二步：创建并编辑配置文件
 
 ```bash
+# Windows PowerShell
+copy ov.conf.saas.example ov.conf.saas
+notepad ov.conf.saas
+
+# macOS / Linux
 cp ov.conf.saas.example ov.conf.saas
-```
-
-### 第三步：编辑配置文件，填入 Embedding API Key
-
-```bash
-# 用你喜欢的编辑器打开
 nano ov.conf.saas
-# 或
-vi ov.conf.saas
 ```
 
-**必须修改的字段：**
+**必须修改的字段**（填入你的 API Key）：
 
 ```json
 {
   "embedding": {
     "dense": {
-      "provider": "openai",
-      "api_base": "https://api.openai.com/v1",
-      "api_key": "sk-xxxxxxxxxxxxxxxx",   ← 替换为你的 OpenAI API Key
-      "model": "text-embedding-3-small",
-      "dimension": 1024
+      "api_key": "sk-xxxxxxxxxxxxxxxx"
     }
   },
   "vlm": {
-    "provider": "openai",
-    "api_base": "https://api.openai.com/v1",
-    "api_key": "sk-xxxxxxxxxxxxxxxx",     ← 同上
-    "model": "gpt-4o"
+    "api_key": "sk-xxxxxxxxxxxxxxxx"
   }
 }
 ```
 
-> **使用国内 API / 代理？** 修改 `api_base` 为你的代理地址，例如：
+> **使用国内代理？** 一并修改 `api_base`：
 > ```json
 > "api_base": "https://api.your-proxy.com/v1"
 > ```
 
-### 第四步：启动所有服务
+#### 第三步：构建并启动（`--build` 触发本地构建）
 
 ```bash
-docker compose -f docker-compose.saas.yml up -d
+docker compose -f docker-compose.saas.yml up -d --build
 ```
 
-启动过程大约需要 30～60 秒，可以观察启动日志：
+**首次构建说明：**
+- 需要下载 Go 工具链 + Python 环境 + 编译 C++ 扩展
+- 耗时约 **10～30 分钟**（取决于网络和机器性能）
+- 后续启动无需重新构建，直接 `docker compose -f docker-compose.saas.yml up -d`
+
+查看构建/启动日志：
 
 ```bash
 docker compose -f docker-compose.saas.yml logs -f
 ```
 
-### 第五步：验证服务状态
+#### 第四步：验证服务状态
 
 ```bash
 docker compose -f docker-compose.saas.yml ps
@@ -143,6 +149,52 @@ openviking-minio         healthy             0.0.0.0:9000-9001->9000-9001/tcp
 openviking-minio-init    exited (0)          —
 openviking-server        healthy             0.0.0.0:1933->1933/tcp
 ```
+
+---
+
+### 方式 B：仅 Docker 启动基础设施 + 宿主机运行服务器（推荐开发调试）
+
+**适用场景**：本地开发、快速调试，跳过镜像构建等待。
+
+**需要**：Python 3.10+、pip
+
+#### 第一步：启动基础设施（PostgreSQL + MinIO）
+
+```bash
+docker compose -f docker-compose.infra.yml up -d
+```
+
+约 20 秒即可就绪。
+
+#### 第二步：安装 OpenViking
+
+```bash
+pip install -e ".[server]"
+# 或使用 uv
+uv sync
+```
+
+#### 第三步：创建本地配置文件
+
+```bash
+# Windows PowerShell
+copy ov.conf.local.example ov.conf.local
+notepad ov.conf.local
+
+# macOS / Linux
+cp ov.conf.local.example ov.conf.local
+nano ov.conf.local
+```
+
+同样需要填入 `api_key`（配置文件中 host 已设为 `localhost`，无需其他修改）。
+
+#### 第四步：启动 OpenViking 服务器
+
+```bash
+openviking-server --config ov.conf.local
+```
+
+服务器启动后访问：`http://localhost:1933/dashboard`
 
 ---
 

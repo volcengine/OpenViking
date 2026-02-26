@@ -1,15 +1,22 @@
 version: "3.8"
 
 # OpenViking SaaS Stack
-# Replaces local file-based storage with:
-#   - PostgreSQL + pgvector  → vector index & metadata
-#   - MinIO (S3-compatible)  → file content storage (AGFS S3 backend)
 #
-# Quick start:
+# 存储层升级：
+#   - PostgreSQL + pgvector  → 向量索引 & 上下文元数据
+#   - MinIO (S3-compatible)  → 文件内容存储 (AGFS S3 后端)
+#
+# 【重要】OpenViking 服务器需要本地构建镜像（私有镜像不可直接拉取）
+#
+# 启动步骤：
 #   1. cp ov.conf.saas.example ov.conf.saas
-#   2. Edit ov.conf.saas (set your embedding API key, etc.)
-#   3. docker compose -f docker-compose.saas.yml up -d
-#   4. Open http://localhost:1933/dashboard
+#   2. 编辑 ov.conf.saas，填入 Embedding API Key
+#   3. docker compose -f docker-compose.saas.yml up -d --build
+#      （首次构建需要 10~30 分钟，依赖网络和机器性能）
+#   4. 访问 http://localhost:1933/dashboard
+#
+# 如果只想快速启动基础设施（PostgreSQL + MinIO），本地运行 OpenViking：
+#   docker compose -f docker-compose.infra.yml up -d
 
 services:
   # ─── PostgreSQL + pgvector ────────────────────────────────────────────────
@@ -68,9 +75,17 @@ services:
       "
     restart: "no"
 
-  # ─── OpenViking Server ────────────────────────────────────────────────────
+  # ─── OpenViking Server（本地源码构建）────────────────────────────────────
+  #
+  # 说明：因 ghcr.io/volcengine/openviking:main 为私有镜像，
+  # 改为 build: . 从本地 Dockerfile 构建。
+  # 首次构建需下载 Go + Python 工具链并编译 C++ 扩展，耗时较长（10~30 分钟）。
+  # 构建完成后再次启动无需重新构建。
   openviking:
-    image: ghcr.io/volcengine/openviking:main
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: openviking:saas-local    # 构建后本地缓存的镜像名
     container_name: openviking-server
     depends_on:
       postgres:
@@ -89,7 +104,7 @@ services:
       interval: 30s
       timeout: 5s
       retries: 3
-      start_period: 30s
+      start_period: 60s
     restart: unless-stopped
 
 volumes:
