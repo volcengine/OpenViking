@@ -187,9 +187,42 @@ class SemanticProcessor(DequeueHandlerBase):
 
         try:
             # Read file content (limit length)
-            content = await viking_fs.read_file(file_path)
-            if isinstance(content, bytes):
-                content = content.decode("utf-8")
+            content_bytes = await viking_fs.read_file(file_path)
+            content = ""
+
+            # Check if it's binary data
+            if isinstance(content_bytes, bytes):
+                try:
+                    content = content_bytes.decode("utf-8")
+                except UnicodeDecodeError:
+                    # It's a binary file (likely image, video, etc.)
+                    # Use VLM to describe it if available
+                    if vlm.is_available():
+                        # Determine prompt based on file type
+                        prompt = "Please describe this file content briefly for summary."
+                        if file_name.lower().endswith((".png", ".jpg", ".jpeg", ".gif", ".webp")):
+                            prompt = "Describe this image in detail for a file summary."
+
+                        try:
+                            # Use the new vision capabilities we added!
+                            # Check if get_vision_completion_async exists (it should now)
+                            if hasattr(vlm.get_vlm_instance(), "get_vision_completion_async"):
+                                summary = await vlm.get_vlm_instance().get_vision_completion_async(
+                                    prompt, [content_bytes]
+                                )
+                                return {"name": file_name, "summary": summary.strip()}
+                            else:
+                                logger.warning("VLM instance does not support vision completion")
+                                return {"name": file_name, "summary": f"[Binary file: {file_name}]"}
+                        except Exception as vlm_err:
+                            logger.warning(
+                                f"VLM vision completion failed for {file_name}: {vlm_err}"
+                            )
+                            return {"name": file_name, "summary": f"[Binary file: {file_name}]"}
+                    else:
+                        return {"name": file_name, "summary": f"[Binary file: {file_name}]"}
+            else:
+                content = content_bytes
 
             # Limit content length (about 10000 tokens)
             max_chars = 30000
