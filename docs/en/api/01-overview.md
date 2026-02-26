@@ -58,6 +58,7 @@ client = ov.SyncHTTPClient(
     url="http://localhost:1933",
     api_key="your-key",
     agent_id="my-agent",
+    timeout=120.0,
 )
 client.initialize()
 ```
@@ -80,6 +81,7 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 |-------|-------------|---------|
 | `url` | Server address | (required) |
 | `api_key` | API key | `null` (no auth) |
+| `timeout` | HTTP request timeout in seconds | `60.0` |
 | `output` | Default output format: `"table"` or `"json"` | `"table"` |
 
 See the [Configuration Guide](../guides/01-configuration.md#ovcliconf) for details.
