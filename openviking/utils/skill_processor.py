@@ -6,6 +6,8 @@ Skill Processor for OpenViking.
 Handles skill parsing, LLM generation, and storage operations.
 """
 
+import tempfile
+import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -116,11 +118,16 @@ class SkillProcessor:
         auxiliary_files = []
         base_path = None
 
-        # Convert string paths to Path objects
         if isinstance(data, str):
             path_obj = Path(data)
             if path_obj.exists():
-                data = path_obj
+                if zipfile.is_zipfile(path_obj):
+                    temp_dir = Path(tempfile.mkdtemp())
+                    with zipfile.ZipFile(path_obj, "r") as zipf:
+                        zipf.extractall(temp_dir)
+                    data = temp_dir
+                else:
+                    data = path_obj
 
         if isinstance(data, Path):
             if data.is_dir():

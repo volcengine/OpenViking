@@ -314,13 +314,28 @@ class AsyncHTTPClient(BaseClient):
         timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Add skill to OpenViking."""
+        request_data = {
+            "wait": wait,
+            "timeout": timeout,
+        }
+
+        if isinstance(data, str):
+            path_obj = Path(data)
+            if path_obj.exists() and path_obj.is_dir() and not self._is_local_server():
+                zip_path = self._zip_directory(data)
+                try:
+                    temp_path = await self._upload_temp_file(zip_path)
+                    request_data["temp_path"] = temp_path
+                finally:
+                    Path(zip_path).unlink(missing_ok=True)
+            else:
+                request_data["data"] = data
+        else:
+            request_data["data"] = data
+
         response = await self._http.post(
             "/api/v1/skills",
-            json={
-                "data": data,
-                "wait": wait,
-                "timeout": timeout,
-            },
+            json=request_data,
         )
         return self._handle_response(response)
 

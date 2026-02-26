@@ -34,7 +34,8 @@ class AddResourceRequest(BaseModel):
 class AddSkillRequest(BaseModel):
     """Request model for add_skill."""
 
-    data: Any
+    data: Any = None
+    temp_path: Optional[str] = None
     wait: bool = False
     timeout: Optional[float] = None
 
@@ -108,8 +109,13 @@ async def add_skill(
 ):
     """Add skill to OpenViking."""
     service = get_service()
+
+    data = request.data
+    if request.temp_path:
+        data = request.temp_path
+
     result = await service.resources.add_skill(
-        data=request.data,
+        data=data,
         ctx=_ctx,
         wait=request.wait,
         timeout=request.timeout,
