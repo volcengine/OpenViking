@@ -166,7 +166,7 @@ class VikingClient:
             else []
         )
 
-    async def search_memory(self, query: str, session_id: str, messages: list[dict[str, Any]]) -> dict[str, list[Any]]:
+    async def search_memory(self, query: str, session_id: str, messages: list[dict[str, Any]], limit: int=10) -> dict[str, list[Any]]:
         """通过上下文消息，检索viking 的user、Agent memory"""
         session = self.client.session(session_id)
         for message in messages:
@@ -175,11 +175,13 @@ class VikingClient:
             query=query,
             session=session,
             target_uri=uri_user_memory,
+            limit=limit,
         )
         agent_memory = await self.client.search(
             query=query,
             session=session,
             target_uri=uri_agent_memory,
+            limit=limit,
         )
         return {
             "user_memory": user_memory.memories if hasattr(user_memory, "memories") else [],
@@ -211,11 +213,11 @@ class VikingClient:
     def _parse_viking_memory(self, result: Any) -> str:
         if result and len(result) > 0:
             user_memories = []
-            for idx, memory in enumerate(result["user_memory"], start=1):
-                user_memories.append(f"{idx}. {getattr(result, "abstract", ""),}; "
-                                     f"uri: {getattr(result, "uri", "")}; "
-                                     f"isDir: {getattr(result, "is_leaf", False)}; "
-                                     f"related score: {getattr(result, "score", 0.0),}")
+            for idx, memory in enumerate(result, start=1):
+                user_memories.append(f"{idx}. {getattr(memory, 'abstract', '')}; "
+                                     f"uri: {getattr(memory, 'uri', '')}; "
+                                     f"isDir: {getattr(memory, 'is_leaf', False)}; "
+                                     f"related score: {getattr(memory, 'score', 0.0)}")
             return "\n".join(user_memories)
         return ""
     async def get_viking_memory_context(self, session_id: str, current_message: str, history: list[dict[str, Any]]) -> str:
@@ -231,13 +233,20 @@ class VikingClient:
 async def main_test():
     client = await VikingClient.create()
     # res = client.list_resources()
-    # res = await client.search("头有点疼", target_uri="viking://agent/memories")
+    res = await client.search("头有点疼", target_uri="")
     res = await client.get_viking_memory_context("123", current_message="头疼", history=[])
     # res = await client.list_resources("viking://user/memories/events")
     # res = await client.read_content("viking://user/memories/events", level="overview")
     # res = await client.add_resource("/Users/bytedance/Documents/论文/吉比特年报.pdf", "吉比特年报")
     print(res)
 
+async def account_test():
+    client = ov.AsyncHTTPClient(url="")
+    await client.initialize()
+    res = await client.search("test", target_uri="viking://memories/")
+    print(res)
+
 
 if __name__ == "__main__":
     asyncio.run(main_test())
+    # asyncio.run(account_test())

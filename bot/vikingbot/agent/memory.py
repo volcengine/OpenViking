@@ -24,11 +24,11 @@ class MemoryStore:
     def _parse_viking_memory(self, result: Any) -> str:
         if result and len(result) > 0:
             user_memories = []
-            for idx, memory in enumerate(result["user_memory"], start=1):
-                user_memories.append(f"{idx}. {getattr(result, "abstract", ""),}; "
-                                     f"uri: {getattr(result, "uri", "")}; "
-                                     f"isDir: {getattr(result, "is_leaf", False)}; "
-                                     f"related score: {getattr(result, "score", 0.0),}")
+            for idx, memory in enumerate(result, start=1):
+                user_memories.append(f"{idx}. {getattr(memory, 'abstract', '')}; "
+                                     f"uri: {getattr(memory, 'uri', '')}; "
+                                     f"isDir: {getattr(memory, 'is_leaf', False)}; "
+                                     f"related score: {getattr(memory, 'score', 0.0)}")
             return "\n".join(user_memories)
         return ""
 
@@ -45,7 +45,7 @@ class MemoryStore:
 
     async def get_viking_memory_context(self, session_id: str, current_message: str, history: list[dict[str, Any]]) -> str:
         client = await VikingClient.create()
-        result = await client.search_memory(current_message, session_id, history)
+        result = await client.search_memory(current_message, session_id, history, limit=5)
         if not result:
             return ""
         user_memory = self._parse_viking_memory(result["user_memory"])
