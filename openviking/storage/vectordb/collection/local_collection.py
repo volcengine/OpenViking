@@ -337,22 +337,22 @@ class LocalCollection(ICollection):
     ) -> SearchResult:
         if not self.store_mgr:
             raise RuntimeError("Store manager is not initialized")
-        
+
         # Validate input ID
         if id is None:
             return SearchResult()
-        
+
         # Handle empty string IDs
         if isinstance(id, str) and not id.strip():
             return SearchResult()
-        
+
         try:
             pk = self.meta.primary_key
             label = str_to_uint64(str(id)) if pk != AUTO_ID_KEY else int(id)
-        except (ValueError, OverflowError) as e:
+        except (ValueError, OverflowError):
             # Invalid ID format - return empty result instead of crashing
             return SearchResult()
-        
+
         cands_list: List[CandidateData] = self.store_mgr.fetch_cands_data([label])
         if not cands_list or cands_list[0] is None:
             return SearchResult()
