@@ -3,6 +3,7 @@ import os
 from typing import List, Dict, Any, Optional
 
 import openviking as ov
+from openviking.message.part import TextPart
 import tos
 from loguru import logger
 
@@ -31,6 +32,7 @@ class VikingClient:
             openviking_config.tos_region,
         )
         self.viking_path = viking_path
+        self.mode = openviking_config.mode
 
     async def _initialize(self):
         """Initialize the client (must be called after construction)"""
@@ -166,7 +168,9 @@ class VikingClient:
             else []
         )
 
-    async def search_memory(self, query: str, session_id: str, messages: list[dict[str, Any]], limit: int=10) -> dict[str, list[Any]]:
+    async def search_memory(
+        self, query: str, session_id: str, messages: list[dict[str, Any]], limit: int = 10
+    ) -> dict[str, list[Any]]:
         """通过上下文消息，检索viking 的user、Agent memory"""
         session = self.client.session(session_id)
         for message in messages:
@@ -188,7 +192,6 @@ class VikingClient:
             "agent_memory": agent_memory.memories if hasattr(agent_memory, "memories") else [],
         }
 
-
     async def grep(self, uri: str, pattern: str, case_insensitive: bool = False) -> Dict[str, Any]:
         """通过模式（正则表达式）搜索内容"""
         return await self.client.grep(uri, pattern, case_insensitive=case_insensitive)
@@ -201,9 +204,14 @@ class VikingClient:
         """提交会话"""
         session = self.client.session(session_id)
 
-        for message in messages:
-            await session.add_message(role=message.get("role"), content=message.get("content"))
-        result = await session.commit()
+        if self.mode == "local":
+            for message in messages:
+                session.add_message(role=message.get("role"), parts=[TextPart(text=message.get("content"))])
+            result = session.commit()
+        else:
+            for message in messages:
+                await session.add_message(role=message.get("role"), content=message.get("content"))
+            result = await session.commit()
         logger.debug(f"Message add ed to OpenViking session {session_id}")
         return {"success": result["status"]}
 
@@ -214,31 +222,41 @@ class VikingClient:
         if result and len(result) > 0:
             user_memories = []
             for idx, memory in enumerate(result, start=1):
-                user_memories.append(f"{idx}. {getattr(memory, 'abstract', '')}; "
-                                     f"uri: {getattr(memory, 'uri', '')}; "
-                                     f"isDir: {getattr(memory, 'is_leaf', False)}; "
-                                     f"related score: {getattr(memory, 'score', 0.0)}")
+                user_memories.append(
+                    f"{idx}. {getattr(memory, 'abstract', '')}; "
+                    f"uri: {getattr(memory, 'uri', '')}; "
+                    f"isDir: {getattr(memory, 'is_leaf', False)}; "
+                    f"related score: {getattr(memory, 'score', 0.0)}"
+                )
             return "\n".join(user_memories)
         return ""
-    async def get_viking_memory_context(self, session_id: str, current_message: str, history: list[dict[str, Any]]) -> str:
+
+    async def get_viking_memory_context(
+        self, session_id: str, current_message: str, history: list[dict[str, Any]]
+    ) -> str:
         result = await self.search_memory(current_message, session_id, history)
         if not result:
             return ""
         user_memory = self._parse_viking_memory(result["user_memory"])
         agent_memory = self._parse_viking_memory(result["agent_memory"])
-        return (f"## Related openviking memories.Using tools to read more details.\n"
-                f"### user memories:\n{user_memory}\n"
-                f"### agent memories:\n{agent_memory}")
+        return (
+            f"## Related openviking memories.Using tools to read more details.\n"
+            f"### user memories:\n{user_memory}\n"
+            f"### agent memories:\n{agent_memory}"
+        )
+
 
 async def main_test():
     client = await VikingClient.create()
     # res = client.list_resources()
-    res = await client.search("头有点疼", target_uri="")
-    res = await client.get_viking_memory_context("123", current_message="头疼", history=[])
+    # res = await client.search("头有点疼", target_uri="viking://user/memories/")
+    # res = await client.get_viking_memory_context("123", current_message="头疼", history=[])
     # res = await client.list_resources("viking://user/memories/events")
     # res = await client.read_content("viking://user/memories/events", level="overview")
     # res = await client.add_resource("/Users/bytedance/Documents/论文/吉比特年报.pdf", "吉比特年报")
+    res = await client.commit("123", [{"role": "user", "content": "我叫王大锤"}])
     print(res)
+
 
 async def account_test():
     client = ov.AsyncHTTPClient(url="")
