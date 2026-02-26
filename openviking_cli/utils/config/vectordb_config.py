@@ -8,6 +8,25 @@ COLLECTION_NAME = "context"
 DEFAULT_PROJECT_NAME = "default"
 
 
+class PostgreSQLConfig(BaseModel):
+    """Configuration for PostgreSQL + pgvector backend (SaaS mode)."""
+
+    host: str = Field(default="localhost", description="PostgreSQL host")
+    port: int = Field(default=5432, description="PostgreSQL port")
+    database: str = Field(default="openviking", description="Database name")
+    user: str = Field(default="postgres", description="Database user")
+    password: str = Field(default="postgres", description="Database password")
+    dsn: Optional[str] = Field(
+        default=None,
+        description=(
+            "Full PostgreSQL DSN (overrides individual host/port/db/user/password). "
+            "Example: postgresql://user:pass@host:5432/dbname"
+        ),
+    )
+
+    model_config = {"extra": "forbid"}
+
+
 class VolcengineConfig(BaseModel):
     """Configuration for Volcengine VikingDB."""
 
@@ -42,7 +61,10 @@ class VectorDBBackendConfig(BaseModel):
 
     backend: str = Field(
         default="local",
-        description="VectorDB backend type: 'local' (file-based), 'http' (remote service), or 'volcengine' (VikingDB)",
+        description=(
+            "VectorDB backend type: 'local' (file-based), 'http' (remote service), "
+            "'volcengine' (VikingDB), 'vikingdb' (private), or 'postgresql' (SaaS)"
+        ),
     )
 
     name: Optional[str] = Field(default=COLLECTION_NAME, description="Collection name for VectorDB")
@@ -90,14 +112,21 @@ class VectorDBBackendConfig(BaseModel):
         description="VikingDB private deployment configuration for 'vikingdb' type",
     )
 
+    # PostgreSQL SaaS mode
+    postgresql: Optional[PostgreSQLConfig] = Field(
+        default=None,
+        description="PostgreSQL + pgvector configuration for 'postgresql' backend (SaaS mode)",
+    )
+
     model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
     def validate_config(self):
         """Validate configuration completeness and consistency"""
-        if self.backend not in ["local", "http", "volcengine", "vikingdb"]:
+        valid_backends = ["local", "http", "volcengine", "vikingdb", "postgresql"]
+        if self.backend not in valid_backends:
             raise ValueError(
-                f"Invalid VectorDB backend: '{self.backend}'. Must be one of: 'local', 'http', 'volcengine', 'vikingdb'"
+                f"Invalid VectorDB backend: '{self.backend}'. Must be one of: {valid_backends}"
             )
 
         if self.backend == "local":
@@ -116,5 +145,10 @@ class VectorDBBackendConfig(BaseModel):
         elif self.backend == "vikingdb":
             if not self.vikingdb or not self.vikingdb.host:
                 raise ValueError("VectorDB vikingdb backend requires 'host' to be set")
+
+        elif self.backend == "postgresql":
+            if self.postgresql is None:
+                # Auto-create with defaults if not specified
+                self.postgresql = PostgreSQLConfig()
 
         return self

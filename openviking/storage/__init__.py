@@ -3,6 +3,8 @@
 """Storage layer interfaces and implementations."""
 
 from openviking.storage.observers import BaseObserver, QueueObserver
+from openviking.storage.postgresql_backend import PostgreSQLBackend
+from openviking.storage.postgresql_manager import PostgreSQLManager
 from openviking.storage.queuefs import QueueManager, get_queue_manager, init_queue_manager
 from openviking.storage.viking_fs import VikingFS, get_viking_fs, init_viking_fs
 from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
@@ -27,9 +29,11 @@ __all__ = [
     "DuplicateKeyError",
     "ConnectionError",
     "SchemaError",
-    # Backend
+    # Backends
     "VikingVectorIndexBackend",
     "VikingDBManager",
+    "PostgreSQLBackend",
+    "PostgreSQLManager",
     # QueueFS
     "QueueManager",
     "init_queue_manager",
