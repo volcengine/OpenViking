@@ -223,7 +223,7 @@ class AgentLoop:
         # Agent loop
         iteration = 0
         final_content = None
-        tools_used: list[str] = []
+        tools_used: list[dict] = []
 
         while iteration < self.max_iterations:
             iteration += 1
@@ -272,8 +272,12 @@ class AgentLoop:
 
                 # Execute tools
                 for tool_call in response.tool_calls:
-                    tools_used.append(tool_call.name)
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
+                    tool_call_dict = {
+                        "tool_name": tool_call.name,
+                        "args": args_str
+                    }
+                    tools_used.append(tool_call_dict)
 
                     # 回调：工具调用
                     if self.thinking_callback:
@@ -453,8 +457,13 @@ class AgentLoop:
         for m in old_messages:
             if not m.get("content"):
                 continue
-            tools = f" [tools: {', '.join(m['tools_used'])}]" if m.get("tools_used") else ""
-            lines.append(f"[{m.get('timestamp', '?')[:16]}] {m['role'].upper()}{tools}: {m['content']}")
+            tools_used = m.get("tools_used", [])
+            if tools_used and isinstance(tools_used, list):
+                tool_names = [tc.get('tool_name', 'unknown') for tc in tools_used if isinstance(tc, dict)]
+                tools_str = f" [tools: {', '.join(tool_names)}]" if tool_names else ""
+            else:
+                tools_str = ""
+            lines.append(f"[{m.get('timestamp', '?')[:16]}] {m['role'].upper()}{tools_str}: {m['content']}")
         conversation = "\n".join(lines)
         current_memory = memory.read_long_term()
 
