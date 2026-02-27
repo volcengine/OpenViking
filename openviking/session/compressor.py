@@ -170,7 +170,8 @@ class SessionCompressor:
             # Tool/Skill Memory: 特殊合并逻辑
             if candidate.category in TOOL_SKILL_CATEGORIES:
                 if isinstance(candidate, ToolSkillCandidateMemory):
-                    tool_name, skill_name = self._get_tool_skill_info(candidate, tool_parts)
+                    tool_name, skill_name, tool_status = self._get_tool_skill_info(candidate, tool_parts)
+                    candidate.tool_status = tool_status
                     if skill_name:
                         memory = await self.extractor._merge_skill_memory(
                             skill_name, candidate, ctx=ctx
@@ -278,20 +279,21 @@ class SessionCompressor:
     def _get_tool_skill_info(
         self, candidate: "ToolSkillCandidateMemory", tool_parts: List
     ) -> tuple:
-        """Get tool_name and skill_name with calibration from ToolPart.
+        """Get tool_name, skill_name and tool_status with calibration from ToolPart.
 
         LLM candidate provides initial guess, ToolPart provides ground truth for calibration.
         For tools: ToolPart.tool_name is authoritative
         For skills: Use similarity matching between candidate.skill_name and ToolPart info
 
         Returns:
-            (tool_name, skill_name) tuple
+            (tool_name, skill_name, tool_status) tuple
         """
         candidate_tool = candidate.tool_name
         candidate_skill = candidate.skill_name
 
         calibrated_tool = ""
         calibrated_skill = ""
+        tool_status = "completed"
 
         for part in tool_parts:
             if part.skill_uri:
@@ -299,29 +301,32 @@ class SessionCompressor:
                 if candidate_skill:
                     if self._is_similar_name(candidate_skill, part_skill_name):
                         calibrated_skill = part_skill_name
+                        tool_status = part.tool_status or "completed"
                     else:
                         calibrated_skill = candidate_skill
                 else:
                     calibrated_skill = part_skill_name
+
             elif part.tool_name:
                 if candidate_tool:
                     if self._is_similar_name(candidate_tool, part.tool_name):
                         calibrated_tool = part.tool_name
+                        tool_status = part.tool_status or "completed"
                     else:
                         calibrated_tool = candidate_tool
                 else:
                     calibrated_tool = part.tool_name
-
+                
 
         if calibrated_skill:
-            return ("", calibrated_skill)
+            return ("", calibrated_skill, tool_status)
         if calibrated_tool:
-            return (calibrated_tool, "")
+            return (calibrated_tool, "", tool_status)
         if candidate_skill:
-            return ("", candidate_skill)
+            return ("", candidate_skill, "completed")
         if candidate_tool:
-            return (candidate_tool, "")
-        return ("", "")
+            return (candidate_tool, "", "completed")
+        return ("", "", "completed")
 
     def _is_similar_name(self, name1: str, name2: str) -> bool:
         """Check if two names are similar enough to be considered the same.

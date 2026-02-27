@@ -130,14 +130,20 @@ class VikingClient:
             uri: Viking URI
             level: 读取级别 ("abstract" - L0摘要, "overview" - L1概览, "read" - L2完整内容)
         """
-        if level == "abstract":
-            return await self.client.abstract(uri)
-        elif level == "overview":
-            return await self.client.overview(uri)
-        elif level == "read":
-            return await self.client.read(uri)
-        else:
-            raise ValueError(f"Unsupported level: {level}")
+        try:
+            if level == "abstract":
+                return await self.client.abstract(uri)
+            elif level == "overview":
+                return await self.client.overview(uri)
+            elif level == "read":
+                return await self.client.read(uri)
+            else:
+                raise ValueError(f"Unsupported level: {level}")
+        except FileNotFoundError:
+            return ""
+        except Exception as e:
+            logger.warning(f"Failed to read content from {uri}: {e}")
+            return ""
 
     async def search(self, query: str, target_uri: Optional[str] = "") -> Dict[str, Any]:
         # session = self.client.session()
@@ -240,6 +246,8 @@ class VikingClient:
                             skill_uri = f"viking://agent/skills/{skill_name}"
                             # logger.debug(f"skill_uri === {skill_uri}")
 
+                    execute_success = tool_info.get("execute_success", True)
+                    tool_status = "completed" if execute_success else "error"
 
                     parts.append(ToolPart(
                         tool_id=tool_id,
@@ -247,9 +255,11 @@ class VikingClient:
                         tool_uri=f"viking://session/{session_id}/tools/{tool_id}",
                         tool_input=tool_input,
                         tool_output=result_str[:2000],
-                        tool_status="completed",
+                        tool_status=tool_status,
                         skill_uri=skill_uri,
-                        # duration_ms=tool_info.get("duration"),
+                        duration_ms=tool_info.get("duration"),
+                        prompt_tokens=tool_info.get("input_token"),
+                        completion_tokens=tool_info.get("output_token")
                     ))
 
                 if not parts:
