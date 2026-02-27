@@ -22,6 +22,7 @@ from vikingbot.config.schema import SessionKey
 from vikingbot.hooks import HookContext
 from vikingbot.hooks.manager import hook_manager
 from vikingbot.providers.base import LLMProvider
+from vikingbot.sandbox.manager import SandboxManager
 from vikingbot.session.manager import SessionManager
 from vikingbot.utils.helpers import cal_str_tokens
 
@@ -69,7 +70,7 @@ class AgentLoop:
         exec_config: "ExecToolConfig | None" = None,
         cron_service: "CronService | None" = None,
         session_manager: SessionManager | None = None,
-        sandbox_manager: "SandboxManager | None" = None,
+        sandbox_manager: SandboxManager | None = None,
         thinking_callback=None,
         config: Config = None,
     ):
@@ -432,7 +433,8 @@ class AgentLoop:
         await hook_manager.execute_hooks(
             context=HookContext(
                 event_type="message.compact",
-                session_id=session.key.safe_name()
+                session_id=session.key.safe_name(),
+                agent_space=self.sandbox_manager.to_sandbox_key(session.key)
             ),
             session=session
         )
