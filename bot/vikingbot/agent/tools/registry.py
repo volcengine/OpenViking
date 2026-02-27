@@ -8,10 +8,7 @@ from vikingbot.config import loader
 from vikingbot.config.schema import SessionKey
 from vikingbot.hooks import HookContext
 from vikingbot.hooks.manager import hook_manager
-
-if TYPE_CHECKING:
-    from vikingbot.sandbox.manager import SandboxManager
-
+from vikingbot.sandbox.manager import SandboxManager
 
 """Tool registry for dynamic tool management."""
 from loguru import logger
@@ -54,7 +51,7 @@ class ToolRegistry:
         """Get all tool definitions in OpenAI format."""
         return [tool.to_schema() for tool in self._tools.values()]
     
-    async def execute(self, name: str, params: dict[str, Any], session_key: SessionKey, sandbox_manager: "SandboxManager | None" = None) -> str:
+    async def execute(self, name: str, params: dict[str, Any], session_key: SessionKey, sandbox_manager: SandboxManager | None = None) -> str:
         """
         Execute a tool by name with given parameters.
         
@@ -92,7 +89,8 @@ class ToolRegistry:
         hook_result  = await hook_manager.execute_hooks(
             context=HookContext(
                 event_type="tool.post_call",
-                session_id=session_key.safe_name()
+                session_id=session_key.safe_name(),
+                sandbox_key=sandbox_manager.to_sandbox_key(session_key)
             ),
             tool_name=name,
             params=params,

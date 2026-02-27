@@ -15,7 +15,7 @@ from datetime import datetime
 class HookContext:
     event_type: str
     session_id: Optional[str] = None
-    agent_space: Optional[str] = None
+    sandbox_key: Optional[str] = None
     metadata: Dict[str, Any] = None
     timestamp: datetime = None
 
