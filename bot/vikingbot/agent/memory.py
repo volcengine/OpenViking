@@ -1,10 +1,10 @@
 """Memory system for persistent agent memory."""
 
+from vikingbot.config.loader import load_config
 from pathlib import Path
 from typing import Any
-from vikingbot.openviking_mount.ov_server import VikingClient
-import asyncio
 
+from vikingbot.openviking_mount.ov_server import VikingClient
 from vikingbot.utils.helpers import ensure_dir
 
 
@@ -56,7 +56,9 @@ class MemoryStore:
 
     async def get_viking_user_profile(self, sandbox_key: str) -> str:
         client = await VikingClient.create(agent_id=sandbox_key)
-        result = await client.read_content(uri="viking://user/memories/profile.md", level="read")
+        config = load_config()
+        ov_config = config.openviking
+        result = await client.read_content(uri=f"viking://user/{ov_config.user_id}/memories/profile.md", level="read")
         if not result:
             return ""
         return f"## User Information\n{result}"

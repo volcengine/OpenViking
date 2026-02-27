@@ -8,7 +8,6 @@ from vikingbot.config.loader import get_data_dir
 from vikingbot.config.loader import load_config
 
 viking_resource_prefix = "viking://resources/"
-uri_user_memory = "viking://user/memories/"
 uri_agent_memory = "viking://agent/memories/"
 
 
@@ -20,12 +19,14 @@ class VikingClient:
             ov_data_path = get_data_dir() / "ov_data"
             ov_data_path.mkdir(parents=True, exist_ok=True)
             self.client = ov.AsyncOpenViking(path=str(ov_data_path))
+            self.user_id = "default"
         else:
             self.client = ov.AsyncHTTPClient(
                 url=openviking_config.server_url,
                 api_key=openviking_config.api_key,
                 agent_id=agent_id,
             )
+            self.user_id = openviking_config.user_id
         self.mode = openviking_config.mode
 
     async def _initialize(self):
@@ -131,6 +132,7 @@ class VikingClient:
         }
 
     async def search_user_memory(self, query: str) -> list[Any]:
+        uri_user_memory = f"viking://user/{self.user_id}/memories/"
         result = await self.client.search(query, target_uri=uri_user_memory)
         return (
             [self._matched_context_to_dict(m) for m in result.memories]
