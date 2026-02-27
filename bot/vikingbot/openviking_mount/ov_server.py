@@ -3,6 +3,7 @@ import os
 from typing import List, Dict, Any, Optional
 
 import openviking as ov
+from openviking.message.part import TextPart, ToolPart
 import tos
 from loguru import logger
 
@@ -11,6 +12,7 @@ from vikingbot.config.loader import load_config
 
 viking_resource_prefix = "viking://resources"
 uri_user_memory = "viking://user/memories/"
+uri_agent_memory = "viking://agent/memories/"
 
 
 class VikingClient:
@@ -30,6 +32,7 @@ class VikingClient:
             openviking_config.tos_region,
         )
         self.viking_path = viking_path
+        self.mode = openviking_config.mode
 
     async def _initialize(self):
         """Initialize the client (must be called after construction)"""
@@ -165,6 +168,34 @@ class VikingClient:
             else []
         )
 
+    async def search_memory(
+        self, query: str, session_id: str, messages: list[dict[str, Any]], limit: int = 10
+    ) -> dict[str, list[Any]]:
+        """通过上下文消息，检索viking 的user、Agent memory"""
+        session = self.client.session(session_id)
+        if self.mode == "local":
+            for message in messages:
+                session.add_message(role=message.get("role"), parts=[TextPart(text=message.get("content"))])
+        else:
+            for message in messages:
+                await session.add_message(role=message.get("role"), content=message.get("content"))
+        user_memory = await self.client.search(
+            query=query,
+            session=session,
+            target_uri=uri_user_memory,
+            limit=limit,
+        )
+        agent_memory = await self.client.search(
+            query=query,
+            session=session,
+            target_uri=uri_agent_memory,
+            limit=limit,
+        )
+        return {
+            "user_memory": user_memory.memories if hasattr(user_memory, "memories") else [],
+            "agent_memory": agent_memory.memories if hasattr(agent_memory, "memories") else [],
+        }
+
     async def grep(self, uri: str, pattern: str, case_insensitive: bool = False) -> Dict[str, Any]:
         """通过模式（正则表达式）搜索内容"""
         return await self.client.grep(uri, pattern, case_insensitive=case_insensitive)
@@ -175,40 +206,132 @@ class VikingClient:
 
     async def commit(self, session_id: str, messages: list[dict[str, Any]]):
         """提交会话"""
+        import uuid
+        import re
+        from openviking.message.part import TextPart, ToolPart, Part
+
         session = self.client.session(session_id)
 
-        for message in messages:
-            await session.add_message(role=message.get("role"), content=message.get("content"))
-        result = await session.commit()
+        if self.mode == "local":
+            for message in messages:
+                # logger.debug(f"message === {message}")
+                role = message.get("role")
+                content = message.get("content")
+                tools_used = message.get("tools_used", [])
+
+                parts: list[Part] = []
+
+                if content:
+                    parts.append(TextPart(text=content))
+
+                for tool_info in tools_used:
+                    tool_name = tool_info.get("tool_name", "")
+                    # logger.debug(f"tool_name === {tool_name}")
+                    if not tool_name:
+                        continue
+
+                    tool_id = f"{tool_name}_{uuid.uuid4().hex[:8]}"
+                    tool_input = None
+                    try:
+                        import json
+                        args_str = tool_info.get("args", "{}")
+                        tool_input = json.loads(args_str) if args_str else {}
+                    except Exception:
+                        tool_input = {"raw_args": tool_info.get("args", "")}
+
+                    result_str = str(tool_info.get("result", ""))
+
+                    skill_uri = ""
+                    if tool_name == "read_file" and result_str:
+                        match = re.search(r'^---\s*\nname:\s*(.+?)\s*\n', result_str, re.MULTILINE)
+                        if match:
+                            skill_name = match.group(1).strip()
+                            skill_uri = f"viking://agent/skills/{skill_name}"
+                            # logger.debug(f"skill_uri === {skill_uri}")
+
+
+                    parts.append(ToolPart(
+                        tool_id=tool_id,
+                        tool_name=tool_name,
+                        tool_uri=f"viking://session/{session_id}/tools/{tool_id}",
+                        tool_input=tool_input,
+                        tool_output=result_str[:2000],
+                        tool_status="completed",
+                        skill_uri=skill_uri,
+                        duration_ms=tool_info.get("duration_ms"),
+                    ))
+
+                if not parts:
+                    parts = [TextPart(text=content or "")]
+
+                session.add_message(role=role, parts=parts)
+
+            result = session.commit()
+        else:
+            for message in messages:
+                await session.add_message(role=message.get("role"), content=message.get("content"))
+            result = await session.commit()
         logger.debug(f"Message add ed to OpenViking session {session_id}")
         return {"success": result["status"]}
 
     def close(self):
         """关闭客户端"""
         self.client.close()
+    def _parse_viking_memory(self, result: Any) -> str:
+        if result and len(result) > 0:
+            user_memories = []
+            for idx, memory in enumerate(result, start=1):
+                user_memories.append(
+                    f"{idx}. {getattr(memory, 'abstract', '')}; "
+                    f"uri: {getattr(memory, 'uri', '')}; "
+                    f"isDir: {getattr(memory, 'is_leaf', False)}; "
+                    f"related score: {getattr(memory, 'score', 0.0)}"
+                )
+            return "\n".join(user_memories)
+        return ""
+
+    async def get_viking_memory_context(
+        self, session_id: str, current_message: str, history: list[dict[str, Any]]
+    ) -> str:
+        result = await self.search_memory(current_message, session_id, history)
+        if not result:
+            return ""
+        user_memory = self._parse_viking_memory(result["user_memory"])
+        agent_memory = self._parse_viking_memory(result["agent_memory"])
+        return (
+            f"## Related openviking memories.Using tools to read more details.\n"
+            f"### user memories:\n{user_memory}\n"
+            f"### agent memories:\n{agent_memory}"
+        )
 
 
 async def main_test():
     client = await VikingClient.create()
     # res = client.list_resources()
-    res = await client.search("头有点疼")
-    # res = client.search_user_memory("头有点疼")
-    # res = client.list_resources()
-    # result = []
-    # for entry in res:
-    #     item = {
-    #         "name": entry["name"],
-    #         "size": entry["uri"],
-    #         "uri": entry["uri"],
-    #         "isDir": entry["isDir"]
-    #     }
-    #     result.append(str(item))
-    # print("\n".join(result))
-    # res = client.read_content("viking://resources/bot_test/dutao/test/")
-    # res = client.add_resource("/Users/bytedance/.openviking/test.py", "一段代码")
+    # res = await client.search("头有点疼", target_uri="viking://user/memories/")
+    # res = await client.get_viking_memory_context("123", current_message="头疼", history=[])
+    # res = await client.list_resources("viking://user/memories/events")
+    # res = await client.read_content("viking://user/memories/events", level="overview")
+    # res = await client.add_resource("/Users/bytedance/Documents/论文/吉比特年报.pdf", "吉比特年报")
+    # res = await client.commit("123", [{"role": "user", "content": "我叫王大锤"}])
+    res = await client.commit("1234", [{"role": "user", "content": "帮我搜索 Python asyncio 教程"}
+                                       ,{"role": "assistant", "content": "我来帮你搜索 Python asyncio 相关的教程。"}])
     print(res)
+
+    print("等待后台处理完成...")
+    await client.client.wait_processed(timeout=60)
+    print("处理完成！")
+
     client.close()
+
+
+async def account_test():
+    client = ov.AsyncHTTPClient(url="")
+    await client.initialize()
+    res = await client.search("test", target_uri="viking://memories/")
+    print(res)
 
 
 if __name__ == "__main__":
     asyncio.run(main_test())
+    # asyncio.run(account_test())

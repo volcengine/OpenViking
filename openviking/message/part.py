@@ -40,8 +40,8 @@ class ToolPart:
     type: Literal["tool"] = "tool"
     tool_id: str = ""
     tool_name: str = ""
-    tool_uri: str = ""  # viking://session/{id}/tools/{tool_id}
-    skill_uri: str = ""  # viking://agent/skills/{skill_name}
+    tool_uri: str = ""  # viking://session/{user_space_name}/{session_id}/tools/{tool_id}
+    skill_uri: str = ""  # viking://agent/{agent_space_name}/skills/{skill_name}
     tool_input: Optional[dict] = None
     tool_output: str = ""
     tool_status: str = "pending"  # pending | running | completed | error

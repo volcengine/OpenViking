@@ -132,6 +132,7 @@ class AsyncHTTPClient(BaseClient):
         url: Optional[str] = None,
         api_key: Optional[str] = None,
         agent_id: Optional[str] = None,
+        timeout: float = 60.0,
     ):
         """Initialize AsyncHTTPClient.
 
@@ -139,6 +140,7 @@ class AsyncHTTPClient(BaseClient):
             url: OpenViking Server URL. If not provided, reads from ovcli.conf.
             api_key: API key for authentication. If not provided, reads from ovcli.conf.
             agent_id: Agent identifier. If not provided, reads from ovcli.conf.
+            timeout: HTTP request timeout in seconds. Default 60.0.
         """
         if url is None:
             config_path = resolve_config_path(None, OPENVIKING_CLI_CONFIG_ENV, DEFAULT_OVCLI_CONF)
@@ -147,6 +149,8 @@ class AsyncHTTPClient(BaseClient):
                 url = cfg.get("url")
                 api_key = api_key or cfg.get("api_key")
                 agent_id = agent_id or cfg.get("agent_id")
+                if timeout == 60.0:  # only override default with config value
+                    timeout = cfg.get("timeout", 60.0)
         if not url:
             raise ValueError(
                 "url is required. Pass it explicitly or configure in "
@@ -156,6 +160,7 @@ class AsyncHTTPClient(BaseClient):
         self._api_key = api_key
         self._agent_id = agent_id
         self._user = UserIdentifier.the_default_user()
+        self._timeout = timeout
         self._http: Optional[httpx.AsyncClient] = None
         self._observer: Optional[_HTTPObserver] = None
 
@@ -171,7 +176,7 @@ class AsyncHTTPClient(BaseClient):
         self._http = httpx.AsyncClient(
             base_url=self._url,
             headers=headers,
-            timeout=60.0,
+            timeout=self._timeout,
         )
         self._observer = _HTTPObserver(self)
 
@@ -321,9 +326,11 @@ class AsyncHTTPClient(BaseClient):
 
     async def wait_processed(self, timeout: Optional[float] = None) -> Dict[str, Any]:
         """Wait for all processing to complete."""
+        http_timeout = timeout if timeout else 600.0
         response = await self._http.post(
             "/api/v1/system/wait",
             json={"timeout": timeout},
+            timeout=http_timeout,
         )
         return self._handle_response(response)
 

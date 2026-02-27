@@ -101,16 +101,18 @@ client = ov.SyncHTTPClient(
 
 ## Development Mode
 
-When no `root_api_key` is configured, authentication is disabled. All requests are accepted as ROOT with the default account.
+When no `root_api_key` is configured, authentication is disabled. All requests are accepted as ROOT with the default account. **This is only allowed when the server binds to localhost** (`127.0.0.1`, `localhost`, or `::1`). If `host` is set to a non-loopback address (e.g. `0.0.0.0`) without a `root_api_key`, the server will refuse to start.
 
 ```json
 {
   "server": {
-    "host": "0.0.0.0",
+    "host": "127.0.0.1",
     "port": 1933
   }
 }
 ```
+
+> **Security note:** The default `host` is `127.0.0.1`. If you need to expose the server on the network, you **must** configure `root_api_key`.
 
 ## Unauthenticated Endpoints
 

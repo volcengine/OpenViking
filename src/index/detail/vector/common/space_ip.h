@@ -33,7 +33,7 @@ static float inner_product_avx512(const void* v1, const void* v2,
   for (; i + 16 <= dim; i += 16) {
     __m512 a = _mm512_loadu_ps(pv1 + i);
     __m512 b = _mm512_loadu_ps(pv2 + i);
-    sum = _mm512_fmadd_ps(a, b, sum);
+    sum = _mm512_add_ps(sum, _mm512_mul_ps(a, b));
   }
 
   float res = _mm512_reduce_add_ps(sum);
@@ -59,7 +59,7 @@ static float inner_product_avx(const void* v1, const void* v2,
   for (; i + 8 <= dim; i += 8) {
     __m256 a = _mm256_loadu_ps(pv1 + i);
     __m256 b = _mm256_loadu_ps(pv2 + i);
-    sum = _mm256_fmadd_ps(a, b, sum);
+    sum = _mm256_add_ps(sum, _mm256_mul_ps(a, b));
   }
 
   __m128 sum_low = _mm256_extractf128_ps(sum, 0);

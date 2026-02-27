@@ -61,7 +61,7 @@ class ToolSkillCandidateMemory(CandidateMemory):
     """Tool/Skill Memory 专用候选，扩展名称字段。"""
 
     tool_name: str = ""  # Tool 名称（用于 tools 类别）
-    skill_uri: str = ""  # Skill URI（用于 skills 类别）
+    skill_name: str = ""  # Skill 名称（用于 skills 类别）
 
 
 @dataclass
@@ -161,31 +161,33 @@ class MemoryExtractor:
 
         return fallback
 
-    def _format_tool_calls_for_prompt(self, messages: List) -> str:
-        """格式化 Tool Call 数据供 LLM 分析"""
+    def _format_message_with_parts(self, msg) -> str:
+        """格式化单条消息，包含文本和工具调用"""
         import json
 
         from openviking.message.part import ToolPart
 
-        tool_calls = []
+        parts = getattr(msg, "parts", [])
+        lines = []
 
-        for msg in messages:
-            for part in getattr(msg, "parts", []):
-                if isinstance(part, ToolPart):
-                    call_data = {
-                        "tool_name": part.tool_name,
-                        "skill_uri": part.skill_uri,
-                        "tool_input": part.tool_input,
-                        "tool_output": part.tool_output[:500] if part.tool_output else "",
-                        "tool_status": part.tool_status,
-                        "duration_ms": part.duration_ms,
-                    }
-                    tool_calls.append(call_data)
+        for part in parts:
+            if hasattr(part, "text") and part.text:
+                lines.append(part.text)
+            elif isinstance(part, ToolPart):
+                tool_info = {
+                    "type": "tool_call",
+                    "tool_name": part.tool_name,
+                    "tool_input": part.tool_input,
+                    "tool_output": part.tool_output[:500] if part.tool_output else "",
+                    "tool_status": part.tool_status,
+                    "duration_ms": part.duration_ms,
+                }
+                if part.skill_uri:
+                    skill_name = part.skill_uri.rstrip("/").split("/")[-1]
+                    tool_info["skill_name"] = skill_name
+                lines.append(f"[ToolCall] {json.dumps(tool_info, ensure_ascii=False)}")
 
-        if not tool_calls:
-            return ""
-
-        return json.dumps(tool_calls, ensure_ascii=False, indent=2)
+        return "\n".join(lines) if lines else ""
 
     async def extract(
         self,
@@ -200,10 +202,16 @@ class MemoryExtractor:
             logger.warning("LLM not available, skipping memory extraction")
             return []
 
-        # Format all messages
+        # Format all messages with parts (including tool calls)
         messages = context["messages"]
 
-        formatted_messages = "\n".join([f"[{m.role}]: {m.content}" for m in messages if m.content])
+        formatted_lines = []
+        for m in messages:
+            msg_content = self._format_message_with_parts(m)
+            if msg_content:
+                formatted_lines.append(f"[{m.role}]: {msg_content}")
+
+        formatted_messages = "\n".join(formatted_lines)
 
         if not formatted_messages:
             return []
@@ -215,7 +223,6 @@ class MemoryExtractor:
         )
 
         # Call LLM to extract memories
-        tool_calls_str = self._format_tool_calls_for_prompt(messages)
         prompt = render_prompt(
             "compression.memory_extraction",
             {
@@ -224,7 +231,6 @@ class MemoryExtractor:
                 "user": user._user_id,
                 "feedback": "",
                 "output_language": output_language,
-                "tool_calls": tool_calls_str,
             },
         )
 
@@ -244,6 +250,7 @@ class MemoryExtractor:
             logger.debug("Memory extraction LLM parsed payload: %s", data)
 
             candidates = []
+            # print(f"memories = {data.get('memories', [])}")
             for mem in data.get("memories", []):
                 category_str = mem.get("category", "patterns")
                 try:
@@ -263,7 +270,7 @@ class MemoryExtractor:
                             user=user,
                             language=output_language,
                             tool_name=mem.get("tool_name", ""),
-                            skill_uri=mem.get("skill_uri", ""),
+                            skill_name=mem.get("skill_name", ""),
                         )
                     )
                 else:

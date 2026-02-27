@@ -33,3 +33,5 @@ build/
 
 # Coverage directory
 coverage/
+
+test/

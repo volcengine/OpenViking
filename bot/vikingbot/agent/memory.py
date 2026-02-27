@@ -1,6 +1,9 @@
 """Memory system for persistent agent memory."""
 
 from pathlib import Path
+from typing import Any
+from vikingbot.openviking_mount.ov_server import VikingClient
+import asyncio
 
 from vikingbot.utils.helpers import ensure_dir
 
@@ -18,6 +21,17 @@ class MemoryStore:
             return self.memory_file.read_text(encoding="utf-8")
         return ""
 
+    def _parse_viking_memory(self, result: Any) -> str:
+        if result and len(result) > 0:
+            user_memories = []
+            for idx, memory in enumerate(result, start=1):
+                user_memories.append(f"{idx}. {getattr(memory, 'abstract', '')}; "
+                                     f"uri: {getattr(memory, 'uri', '')}; "
+                                     f"isDir: {getattr(memory, 'is_leaf', False)}; "
+                                     f"related score: {getattr(memory, 'score', 0.0)}")
+            return "\n".join(user_memories)
+        return ""
+
     def write_long_term(self, content: str) -> None:
         self.memory_file.write_text(content, encoding="utf-8")
 
@@ -28,3 +42,15 @@ class MemoryStore:
     def get_memory_context(self) -> str:
         long_term = self.read_long_term()
         return f"## Long-term Memory\n{long_term}" if long_term else ""
+
+    async def get_viking_memory_context(self, session_id: str, current_message: str, history: list[dict[str, Any]]) -> str:
+        client = await VikingClient.create()
+        result = await client.search_memory(current_message, session_id, history, limit=5)
+        if not result:
+            return ""
+        user_memory = self._parse_viking_memory(result["user_memory"])
+        agent_memory = self._parse_viking_memory(result["agent_memory"])
+        return (f"## Related openviking memories.Using tools to read more details.\n"
+                f"### user memories:\n{user_memory}\n"
+                f"### agent memories:\n{agent_memory}")
+

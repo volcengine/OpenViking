@@ -5,6 +5,7 @@ import mimetypes
 import platform
 from pathlib import Path
 from typing import Any
+from loguru import logger
 
 from vikingbot.agent.memory import MemoryStore
 from vikingbot.agent.skills import SkillsLoader
@@ -50,7 +51,7 @@ class ContextBuilder:
             ensure_workspace_templates(self.workspace)
             self._templates_ensured = True
     
-    async def build_system_prompt(self, session_key: SessionKey, skill_names: list[str] | None = None) -> str:
+    async def build_system_prompt(self, session_key: SessionKey, current_message: str, history: list[dict[str, Any]]) -> str:
         """
         Build the system prompt from bootstrap files, memory, and skills.
         
@@ -83,6 +84,11 @@ class ContextBuilder:
         memory = self.memory.get_memory_context()
         if memory:
             parts.append(f"# Memory\n\n{memory}")
+
+        # Viking memory
+        viking_memory = await self.memory.get_viking_memory_context(session_key.safe_name(), current_message, history)
+        if viking_memory:
+            parts.append(viking_memory)
         
         # Skills - progressive loading
         # 1. Always-loaded skills: include full content
@@ -122,8 +128,10 @@ Skills with available="false" need dependencies installed first - you can try in
         
         return f"""# vikingbot 🐈
 
-You are vikingbot, a helpful AI assistant. You have access to tools that allow you to:
-- Read, search openviking(a context database)'s files
+You are VikingBot, an AI assistant built based on the OpenViking context database.
+When acquiring information, data, and knowledge, you **prioritize using openviking tools to read and search OpenViking (a context database) above all other sources**.
+You have access to tools that allow you to:
+- Read, search, and grep OpenViking files
 - Read, write, and edit local files
 - Execute shell commands
 - Search the web and fetch web pages
@@ -137,18 +145,22 @@ You are vikingbot, a helpful AI assistant. You have access to tools that allow y
 {runtime}
 
 ## Workspace
-Your have tow workspaces: 1. local workspace is at:{workspace_display}; 2. use openviking tools to manage openviking workspace
-- User's memory: using openviking to search user's memory
-- History log: memory/HISTORY.md (grep-searchable)
-- Custom skills: skills/{{skill-name}}/SKILL.md
+You have two workspaces:
+1. Local workspace: {workspace_display}
+2. OpenViking workspace: managed via OpenViking tools
+- Long-term memory: tow types, a. using user_memory_search tool to search memory; b. {workspace_display}/memory/MEMORY.md: 
+- History log: tow types, a. using user_memory_search tool to search history; b. memory/HISTORY.md (grep-searchable)
+- Custom skills: {workspace_display}/skills/{{skill-name}}/SKILL.md
 
 IMPORTANT: When responding to direct questions or conversations, reply directly with your text response.
 Please keep your reply in the same language as the user's message.
 Only use the 'message' tool when you need to send a message to a specific chat channel (like WhatsApp).
 For normal conversation, just respond with text - do not call the message tool.
-
 Always be helpful, accurate, and concise. When using tools, think step by step: what you know, what you need, and why you chose this tool.
-To recall past events, grep memory/HISTORY.md"""
+
+## Memory
+- Remember important facts: write to {workspace_display}/memory/MEMORY.md
+- Recall past events: prioritize using user_memory_search tool to search history, or grep {workspace_display}/memory/HISTORY.md"""
     
     def _load_bootstrap_files(self) -> str:
         """Load all bootstrap files from workspace."""
@@ -187,10 +199,11 @@ To recall past events, grep memory/HISTORY.md"""
         messages = []
 
         # System prompt
-        system_prompt = await self.build_system_prompt(session_key, skill_names)
+        system_prompt = await self.build_system_prompt(session_key, current_message, history)
         if session_key.channel_id and session_key.chat_id:
             system_prompt += f"\n\n## Current Session\nChannel: {session_key.type}:{session_key.channel_id}\nChat ID: {session_key.chat_id}"
         messages.append({"role": "system", "content": system_prompt})
+        # logger.debug(f"system_prompt: {system_prompt}")
 
         # History
         messages.extend(history)

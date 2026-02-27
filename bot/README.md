@@ -10,8 +10,8 @@
 ```bash
 git clone https://github.com/volcengine/OpenViking
 cd OpenViking/bot
-uv pip install -e .
 source .venv/bin/activate
+uv pip install -e .
 ```
 
 ## 🚀 Quick Start
@@ -73,13 +73,14 @@ Talk to your vikingbot through Telegram, Discord, WhatsApp, Feishu, Mochat, Ding
 
 ```json
 {
-  "channels": {
-    "telegram": {
+  "channels": [
+    {
+      "type": "telegram",
       "enabled": true,
       "token": "YOUR_BOT_TOKEN",
       "allowFrom": ["YOUR_USER_ID"]
     }
-  }
+  ]
 }
 ```
 
@@ -129,8 +130,9 @@ If you prefer to configure manually, add the following to `~/.vikingbot/config.j
 
 ```json
 {
-  "channels": {
-    "mochat": {
+  "channels": [
+    {
+      "type": "mochat",
       "enabled": true,
       "base_url": "https://mochat.io",
       "socket_url": "https://mochat.io",
@@ -142,7 +144,7 @@ If you prefer to configure manually, add the following to `~/.vikingbot/config.j
       "reply_delay_mode": "non-mention",
       "reply_delay_ms": 120000
     }
-  }
+  ]
 }
 ```
 
@@ -172,13 +174,14 @@ If you prefer to configure manually, add the following to `~/.vikingbot/config.j
 
 ```json
 {
-  "channels": {
-    "discord": {
+  "channels": [
+    {
+      "type": "discord",
       "enabled": true,
       "token": "YOUR_BOT_TOKEN",
       "allowFrom": ["YOUR_USER_ID"]
     }
-  }
+  ]
 }
 ```
 
@@ -212,12 +215,13 @@ vikingbot channels login
 
 ```json
 {
-  "channels": {
-    "whatsapp": {
+  "channels": [
+    {
+      "type": "whatsapp",
       "enabled": true,
       "allowFrom": ["+1234567890"]
     }
-  }
+  ]
 }
 ```
 
@@ -251,8 +255,9 @@ Uses **WebSocket** long connection — no public IP required.
 
 ```json
 {
-  "channels": {
-    "feishu": {
+  "channels": [
+    {
+      "type": "feishu",
       "enabled": true,
       "appId": "cli_xxx",
       "appSecret": "xxx",
@@ -260,7 +265,7 @@ Uses **WebSocket** long connection — no public IP required.
       "verificationToken": "",
       "allowFrom": []
     }
-  }
+  ]
 }
 ```
 
@@ -300,14 +305,15 @@ Uses **botpy SDK** with WebSocket — no public IP required. Currently supports 
 
 ```json
 {
-  "channels": {
-    "qq": {
+  "channels": [
+    {
+      "type": "qq",
       "enabled": true,
       "appId": "YOUR_APP_ID",
       "secret": "YOUR_APP_SECRET",
       "allowFrom": []
     }
-  }
+  ]
 }
 ```
 
@@ -339,14 +345,15 @@ Uses **Stream Mode** — no public IP required.
 
 ```json
 {
-  "channels": {
-    "dingtalk": {
+  "channels": [
+    {
+      "type": "dingtalk",
       "enabled": true,
       "clientId": "YOUR_APP_KEY",
       "clientSecret": "YOUR_APP_SECRET",
       "allowFrom": []
     }
-  }
+  ]
 }
 ```
 
@@ -380,14 +387,15 @@ Uses **Socket Mode** — no public URL required.
 
 ```json
 {
-  "channels": {
-    "slack": {
+  "channels": [
+    {
+      "type": "slack",
       "enabled": true,
       "botToken": "xoxb-...",
       "appToken": "xapp-...",
       "groupPolicy": "mention"
     }
-  }
+  ]
 }
 ```
 
@@ -424,8 +432,9 @@ Give vikingbot its own email account. It polls **IMAP** for incoming mail and re
 
 ```json
 {
-  "channels": {
-    "email": {
+  "channels": [
+    {
+      "type": "email",
       "enabled": true,
       "consentGranted": true,
       "imapHost": "imap.gmail.com",
@@ -439,7 +448,7 @@ Give vikingbot its own email account. It polls **IMAP** for incoming mail and re
       "fromAddress": "my-vikingbot@gmail.com",
       "allowFrom": ["your-real-email@gmail.com"]
     }
-  }
+  ]
 }
 ```
 

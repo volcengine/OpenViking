@@ -170,9 +170,8 @@ class SessionCompressor:
             # Tool/Skill Memory: 特殊合并逻辑
             if candidate.category in TOOL_SKILL_CATEGORIES:
                 if isinstance(candidate, ToolSkillCandidateMemory):
-                    tool_name, skill_uri = self._get_tool_skill_info(candidate, tool_parts)
-                    if skill_uri:
-                        skill_name = self._extract_skill_name_from_uri(skill_uri)
+                    tool_name, skill_name = self._get_tool_skill_info(candidate, tool_parts)
+                    if skill_name:
                         memory = await self.extractor._merge_skill_memory(
                             skill_name, candidate, ctx=ctx
                         )
@@ -181,7 +180,7 @@ class SessionCompressor:
                             tool_name, candidate, ctx=ctx
                         )
                     else:
-                        logger.warning("No tool_name or skill_uri found, skipping")
+                        logger.warning("No tool_name or skill_name found, skipping")
                         stats.skipped += 1
                         continue
                     if memory:
@@ -279,17 +278,71 @@ class SessionCompressor:
     def _get_tool_skill_info(
         self, candidate: "ToolSkillCandidateMemory", tool_parts: List
     ) -> tuple:
-        """Get tool_name and skill_uri from ToolPart, not from LLM.
+        """Get tool_name and skill_name with calibration from ToolPart.
+
+        LLM candidate provides initial guess, ToolPart provides ground truth for calibration.
+        For tools: ToolPart.tool_name is authoritative
+        For skills: Use similarity matching between candidate.skill_name and ToolPart info
 
         Returns:
-            (tool_name, skill_uri) tuple
+            (tool_name, skill_name) tuple
         """
+        candidate_tool = candidate.tool_name
+        candidate_skill = candidate.skill_name
+
+        calibrated_tool = ""
+        calibrated_skill = ""
+
         for part in tool_parts:
             if part.skill_uri:
-                return ("", part.skill_uri)
-            if part.tool_name:
-                return (part.tool_name, "")
+                part_skill_name = self._extract_skill_name_from_uri(part.skill_uri)
+                if candidate_skill:
+                    if self._is_similar_name(candidate_skill, part_skill_name):
+                        calibrated_skill = part_skill_name
+                    else:
+                        calibrated_skill = candidate_skill
+                else:
+                    calibrated_skill = part_skill_name
+            elif part.tool_name:
+                if candidate_tool:
+                    if self._is_similar_name(candidate_tool, part.tool_name):
+                        calibrated_tool = part.tool_name
+                    else:
+                        calibrated_tool = candidate_tool
+                else:
+                    calibrated_tool = part.tool_name
+
+
+        if calibrated_skill:
+            return ("", calibrated_skill)
+        if calibrated_tool:
+            return (calibrated_tool, "")
+        if candidate_skill:
+            return ("", candidate_skill)
+        if candidate_tool:
+            return (candidate_tool, "")
         return ("", "")
+
+    def _is_similar_name(self, name1: str, name2: str) -> bool:
+        """Check if two names are similar enough to be considered the same.
+
+        Uses simple string similarity for now. Can be extended with LLM-based matching.
+        """
+        if not name1 or not name2:
+            return False
+
+        n1 = name1.lower().strip().replace("_", "").replace("-", "")
+        n2 = name2.lower().strip().replace("_", "").replace("-", "")
+
+        if n1 == n2:
+            return True
+
+        if n1 in n2 or n2 in n1:
+            return True
+
+        from difflib import SequenceMatcher
+        ratio = SequenceMatcher(None, n1, n2).ratio()
+        return ratio >= 0.7
 
     def _extract_skill_name_from_uri(self, skill_uri: str) -> str:
         """从 skill_uri 提取 skill_name
