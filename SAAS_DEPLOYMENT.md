@@ -168,11 +168,23 @@ docker compose -f docker-compose.infra.yml up -d
 
 #### 第二步：安装 OpenViking
 
-```bash
-pip install -e ".[server]"
-# 或使用 uv
-uv sync
+> **Windows 用户注意**：直接运行 `pip install -e .` 会触发 C++ 扩展编译，
+> 需要 MinGW，而 SaaS 模式根本不需要这个扩展。
+> 使用下方环境变量跳过编译即可。
+
+**Windows PowerShell（推荐）：**
+```powershell
+$env:OPENVIKING_NO_CPP_EXT = "1"
+pip install -e .
 ```
+
+**macOS / Linux：**
+```bash
+OPENVIKING_NO_CPP_EXT=1 pip install -e .
+```
+
+`OPENVIKING_NO_CPP_EXT=1` 的作用：跳过本地 C++ VectorDB 扩展编译。
+SaaS 模式使用 PostgreSQL 作为向量存储，该扩展完全不参与运行，跳过编译不影响任何功能。
 
 #### 第三步：创建本地配置文件
 
