@@ -104,7 +104,7 @@ class VikingListTool(OVFileTool):
             for entry in entries:
                 item = {
                     "name": entry["name"],
-                    "size": entry["uri"],
+                    "size": entry["size"],
                     "uri": entry["uri"],
                     "isDir": entry["isDir"],
                 }
