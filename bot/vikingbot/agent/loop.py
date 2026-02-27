@@ -195,9 +195,6 @@ class AgentLoop:
         if len(session.messages) > self.memory_window:
             await self._consolidate_memory(session)
 
-
-
-
         if self.sandbox_manager:
             message_workspace = self.sandbox_manager.get_workspace_path(session_key)
         else:

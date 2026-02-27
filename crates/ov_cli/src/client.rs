@@ -100,9 +100,14 @@ impl HttpClient {
 
         let form = reqwest::multipart::Form::new().part("file", part);
 
+        let mut headers = self.build_headers();
+        // Remove Content-Type: application/json, let reqwest set multipart/form-data automatically
+        headers.remove(reqwest::header::CONTENT_TYPE);
+
         let response = self
             .http
             .post(&url)
+            .headers(headers)
             .multipart(form)
             .send()
             .await
@@ -420,6 +425,11 @@ impl HttpClient {
         instruction: &str,
         wait: bool,
         timeout: Option<f64>,
+        strict: bool,
+        ignore_dirs: Option<String>,
+        include: Option<String>,
+        exclude: Option<String>,
+        directly_upload_media: bool,
     ) -> Result<serde_json::Value> {
         let path_obj = Path::new(path);
         
@@ -436,6 +446,11 @@ impl HttpClient {
                 "instruction": instruction,
                 "wait": wait,
                 "timeout": timeout,
+                "strict": strict,
+                "ignore_dirs": ignore_dirs,
+                "include": include,
+                "exclude": exclude,
+                "directly_upload_media": directly_upload_media,
             });
             
             self.post("/api/v1/resources", &body).await
@@ -448,6 +463,11 @@ impl HttpClient {
                 "instruction": instruction,
                 "wait": wait,
                 "timeout": timeout,
+                "strict": strict,
+                "ignore_dirs": ignore_dirs,
+                "include": include,
+                "exclude": exclude,
+                "directly_upload_media": directly_upload_media,
             });
             
             self.post("/api/v1/resources", &body).await
@@ -460,12 +480,26 @@ impl HttpClient {
         wait: bool,
         timeout: Option<f64>,
     ) -> Result<serde_json::Value> {
-        let body = serde_json::json!({
-            "data": data,
-            "wait": wait,
-            "timeout": timeout,
-        });
-        self.post("/api/v1/skills", &body).await
+        let path_obj = Path::new(data);
+
+        if path_obj.exists() && path_obj.is_dir() && !self.is_local_server() {
+            let zip_file = self.zip_directory(path_obj)?;
+            let temp_path = self.upload_temp_file(zip_file.path()).await?;
+
+            let body = serde_json::json!({
+                "temp_path": temp_path,
+                "wait": wait,
+                "timeout": timeout,
+            });
+            self.post("/api/v1/skills", &body).await
+        } else {
+            let body = serde_json::json!({
+                "data": data,
+                "wait": wait,
+                "timeout": timeout,
+            });
+            self.post("/api/v1/skills", &body).await
+        }
     }
 
     // ============ Relation Methods ============

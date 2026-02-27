@@ -1,920 +1,582 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
-"""
-VikingDB storage backend for OpenViking.
+"""VikingDB storage backend for OpenViking."""
 
-Implements the VikingDBInterface using the custom vectordb implementation.
-Supports both in-memory and local persistent storage modes.
-"""
+from __future__ import annotations
 
 import uuid
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 
+from openviking.server.identity import RequestContext, Role
+from openviking.storage.expr import And, Eq, FilterExpr, In, Or, RawDSL
 from openviking.storage.vectordb.collection.collection import Collection
-from openviking.storage.vectordb.collection.result import FetchDataInCollectionResult
 from openviking.storage.vectordb.utils.logging_init import init_cpp_logging
-from openviking.storage.vikingdb_interface import CollectionNotFoundError, VikingDBInterface
+from openviking.storage.vectordb_adapters import CollectionAdapter, create_collection_adapter
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 
 logger = get_logger(__name__)
 
 
-class VikingVectorIndexBackend(VikingDBInterface):
-    """
-    VikingDB storage backend implementation.
+class VikingVectorIndexBackend:
+    """Single-collection vector backend with adapter-based backend specialization."""
 
-    Features:
-    - Vector similarity search with BruteForce indexing
-    - Scalar filtering with support for multiple operators
-    - Support for local persistent storage, HTTP service, and Volcengine VikingDB
-    - Auto-managed indexes per collection
-
-    VikingDBManager is derived by VikingVectorIndexBackend.
-    """
-
-    # Default project and index names
     DEFAULT_INDEX_NAME = "default"
-    DEFAULT_LOCAL_PROJECT_NAME = "vectordb"
+    ALLOWED_CONTEXT_TYPES = {"resource", "skill", "memory"}
 
-    def __init__(
-        self,
-        config: Optional[VectorDBBackendConfig],
-    ):
-        """
-        Initialize VikingDB backend.
+    def __init__(self, config: Optional[VectorDBBackendConfig]):
+        if config is None:
+            raise ValueError("VectorDB backend config is required")
 
-        Args:
-            config: Configuration object for VectorDB backend.
-
-        Examples:
-            # 1. Local persistent storage
-            config = VectorDBBackendConfig(
-                backend="local",
-                path="./data/vectordb"
-            )
-            backend = VikingVectorIndexBackend(config=config)
-
-            # 2. Remote HTTP service
-            config = VectorDBBackendConfig(
-                backend="http",
-                url="http://localhost:5000"
-            )
-            backend = VikingVectorIndexBackend(config=config)
-
-            # 3. Volcengine VikingDB
-            from openviking_cli.utils.config.storage_config import VolcengineConfig
-            config = VectorDBBackendConfig(
-                backend="volcengine",
-                volcengine=VolcengineConfig(
-                    ak="your-ak",
-                    sk="your-sk",
-                    region="cn-beijing"
-                )
-            )
-            backend = VikingVectorIndexBackend(config=config)
-        """
         init_cpp_logging()
 
         self.vector_dim = config.dimension
         self.distance_metric = config.distance_metric
         self.sparse_weight = config.sparse_weight
+        self._collection_name = config.name or "context"
 
-        if config.backend == "volcengine":
-            if not (
-                config.volcengine
-                and config.volcengine.ak
-                and config.volcengine.sk
-                and config.volcengine.region
-            ):
-                raise ValueError("Volcengine backend requires AK, SK, and Region configuration")
+        self._adapter: CollectionAdapter = create_collection_adapter(config)
+        self._mode = self._adapter.mode
 
-            # Volcengine VikingDB mode
-            self._mode = config.backend
-            # Convert lowercase keys to uppercase for consistency with volcengine_collection
-            volc_config = {
-                "AK": config.volcengine.ak,
-                "SK": config.volcengine.sk,
-                "Region": config.volcengine.region,
-            }
+        logger.info(
+            "VikingDB backend initialized via adapter %s (mode=%s)",
+            type(self._adapter).__name__,
+            self._mode,
+        )
 
-            from openviking.storage.vectordb.project.volcengine_project import (
-                get_or_create_volcengine_project,
-            )
+        self._collection_config: Dict[str, Any] = {}
+        self._meta_data_cache: Dict[str, Any] = {}
 
-            self.project = get_or_create_volcengine_project(
-                project_name=config.project_name, config=volc_config
-            )
-            logger.info(
-                f"VectorDB backend initialized in Volcengine mode: region={volc_config['Region']}"
-            )
-        elif config.backend == "vikingdb":
-            if not config.vikingdb.host:
-                raise ValueError("VikingDB backend requires a valid host")
-            # VikingDB private deployment mode
-            self._mode = config.backend
-            viking_config = {
-                "Host": config.vikingdb.host,
-                "Headers": config.vikingdb.headers,
-            }
+    @property
+    def collection_name(self) -> str:
+        return self._collection_name
 
-            from openviking.storage.vectordb.project.vikingdb_project import (
-                get_or_create_vikingdb_project,
-            )
+    def _get_collection(self) -> Collection:
+        return self._adapter.get_collection()
 
-            self.project = get_or_create_vikingdb_project(
-                project_name=config.project_name, config=viking_config
-            )
-            logger.info(f"VikingDB backend initialized in private mode: {config.vikingdb.host}")
-        elif config.backend == "http":
-            if not config.url:
-                raise ValueError("HTTP backend requires a valid URL")
-            # Remote mode: parse URL and create HTTP project
-            self._mode = config.backend
-            self.host, self.port = self._parse_url(config.url)
+    def _get_meta_data(self, coll: Collection) -> Dict[str, Any]:
+        if not self._meta_data_cache:
+            self._meta_data_cache = coll.get_meta_data() or {}
+        return self._meta_data_cache
 
-            from openviking.storage.vectordb.project.http_project import get_or_create_http_project
+    def _refresh_meta_data(self, coll: Collection) -> None:
+        self._meta_data_cache = coll.get_meta_data() or {}
 
-            self.project = get_or_create_http_project(
-                host=self.host, port=self.port, project_name=config.project_name
-            )
-            logger.info(f"VikingDB backend initialized in remote mode: {config.url}")
-        elif config.backend == "local":
-            # Local persistent mode
-            self._mode = config.backend
-            from openviking.storage.vectordb.project.local_project import (
-                get_or_create_local_project,
-            )
-
-            project_path = (
-                Path(config.path) / self.DEFAULT_LOCAL_PROJECT_NAME if config.path else ""
-            )
-            self.project = get_or_create_local_project(path=str(project_path))
-            logger.info(f"VikingDB backend initialized with local storage: {project_path}")
-        else:
-            raise ValueError(f"Unsupported VikingDB backend type: {config.type}")
-
-        self._collection_configs: Dict[str, Dict[str, Any]] = {}
-        # Cache meta_data at collection level to avoid repeated remote calls
-        self._meta_data_cache: Dict[str, Dict[str, Any]] = {}
-
-    def _parse_url(self, url: str) -> Tuple[str, int]:
-        """
-        Parse VikingVectorIndex service URL to extract host and port.
-
-        Args:
-            url: Service URL (e.g., "http://localhost:5000" or "localhost:5000")
-
-        Returns:
-            Tuple of (host, port)
-        """
-        from urllib.parse import urlparse
-
-        # Add scheme if not present
-        if not url.startswith(("http://", "https://")):
-            url = f"http://{url}"
-
-        parsed = urlparse(url)
-        host = parsed.hostname or "127.0.0.1"
-        port = parsed.port or 5000
-
-        return host, port
-
-    def _get_collection(self, name: str) -> Collection:
-        """Get collection object or raise error if not found."""
-        if not self.project.has_collection(name):
-            raise CollectionNotFoundError(f"Collection '{name}' does not exist")
-        return self.project.get_collection(name)
-
-    def _get_meta_data(self, collection_name: str, coll: Collection) -> Dict[str, Any]:
-        """Get meta_data with collection-level caching to avoid repeated remote calls."""
-        if collection_name not in self._meta_data_cache:
-            self._meta_data_cache[collection_name] = coll.get_meta_data()
-        return self._meta_data_cache[collection_name]
-
-    def _update_meta_data_cache(self, collection_name: str, coll: Collection):
-        """Update the cached meta_data after modifications."""
-        meta_data = coll.get_meta_data()
-        self._meta_data_cache[collection_name] = meta_data
-
-    @staticmethod
-    def _restore_uri_fields(record: Dict[str, Any]) -> Dict[str, Any]:
-        """Restore viking:// prefix on uri/parent_uri fields read from VikingDB.
-
-        The volcengine backend sanitizes URIs to /path/ format on write;
-        this reverses that transformation so the rest of the system sees
-        the canonical viking:// scheme.  Idempotent for values that
-        already carry the prefix (local/http backends).
-        """
-        for key in ("uri", "parent_uri"):
-            val = record.get(key)
-            if isinstance(val, str) and not val.startswith("viking://"):
-                restored = val.strip("/")
-                if restored:
-                    record[key] = f"viking://{restored}"
-        return record
+    def _filter_known_fields(self, data: Dict[str, Any]) -> Dict[str, Any]:
+        try:
+            coll = self._get_collection()
+            fields = self._get_meta_data(coll).get("Fields", [])
+            allowed = {item.get("FieldName") for item in fields}
+            return {k: v for k, v in data.items() if k in allowed and v is not None}
+        except Exception:
+            return data
 
     # =========================================================================
-    # Collection/Table Management
+    # Collection Management (single collection)
     # =========================================================================
 
     async def create_collection(self, name: str, schema: Dict[str, Any]) -> bool:
-        """
-        Create a new collection.
-
-        Args:
-            name: Collection name
-            schema: VikingVectorIndex collection metadata in the format:
-                {
-                    "CollectionName": "name",
-                    "Description": "description",
-                    "Fields": [
-                        {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
-                        {"FieldName": "vector", "FieldType": "vector", "Dim": 128},
-                        ...
-                    ]
-                }
-
-        Returns:
-            True if created successfully, False if already exists
-        """
         try:
-            if self.project.has_collection(name):
-                logger.debug(f"Collection '{name}' already exists")
-                return False
+            collection_meta = dict(schema)
 
-            collection_meta = schema.copy()
-
-            scalar_index_fields = []
-            if "ScalarIndex" in collection_meta:
-                scalar_index_fields = collection_meta.pop("ScalarIndex")
-
-            # Ensure CollectionName is set
-            if "CollectionName" not in collection_meta:
-                collection_meta["CollectionName"] = name
-
-            # Extract distance metric and vector_dim for config tracking
-            distance = self.distance_metric
+            # Track vector dim from schema for info.
             vector_dim = self.vector_dim
             for field in collection_meta.get("Fields", []):
                 if field.get("FieldType") == "vector":
                     vector_dim = field.get("Dim", self.vector_dim)
                     break
 
-            logger.info(f"Creating collection mode={self._mode} with meta: {collection_meta}")
+            created = self._adapter.create_collection(
+                name=name,
+                schema=collection_meta,
+                distance=self.distance_metric,
+                sparse_weight=self.sparse_weight,
+                index_name=self.DEFAULT_INDEX_NAME,
+            )
+            if not created:
+                return False
 
-            # Create collection using vectordb project
-            collection = self.project.create_collection(name, collection_meta)
-
-            # Filter date_time fields for volcengine and vikingdb backends
-            if self._mode in ["volcengine", "vikingdb"]:
-                date_time_fields = {
-                    field.get("FieldName")
-                    for field in collection_meta.get("Fields", [])
-                    if field.get("FieldType") == "date_time"
-                }
-                scalar_index_fields = [
-                    field for field in scalar_index_fields if field not in date_time_fields
-                ]
-
-            # Create default index for the collection
-            use_sparse = self.sparse_weight > 0.0
-            index_type = "flat_hybrid" if use_sparse else "flat"
-            if self._mode in ["volcengine", "vikingdb"]:
-                index_type = "hnsw_hybrid" if use_sparse else "hnsw"
-
-            index_meta = {
-                "IndexName": self.DEFAULT_INDEX_NAME,
-                "VectorIndex": {
-                    "IndexType": index_type,
-                    "Distance": distance,
-                    "Quant": "int8",
-                },
-                "ScalarIndex": scalar_index_fields,
-            }
-            if use_sparse:
-                index_meta["VectorIndex"]["EnableSparse"] = True
-                index_meta["VectorIndex"]["SearchWithSparseLogitAlpha"] = self.sparse_weight
-
-            logger.info(f"Creating index with meta: {index_meta}")
-            collection.create_index(self.DEFAULT_INDEX_NAME, index_meta)
-
-            # Update cached meta_data after creating index
-            self._update_meta_data_cache(name, collection)
-
-            # Store collection config
-            self._collection_configs[name] = {
+            self._collection_name = name
+            self._collection_config = {
                 "vector_dim": vector_dim,
-                "distance": distance,
+                "distance": self.distance_metric,
                 "schema": schema,
             }
-
-            logger.info(f"Created VikingDB collection: {name} (dim={vector_dim})")
-            return True
-
-        except Exception as e:
-            logger.error(f"Error creating collection '{name}': {e}")
-            import traceback
-
-            traceback.print_exc()
-            return False
-
-    async def drop_collection(self, name: str) -> bool:
-        """Drop a collection."""
-        try:
-            if not self.project.has_collection(name):
-                logger.warning(f"Collection '{name}' does not exist")
-                return False
-
-            self.project.drop_collection(name)
-            self._collection_configs.pop(name, None)
-            # Clear cached meta_data when dropping collection
-            self._meta_data_cache.pop(name, None)
-
-            logger.info(f"Dropped collection: {name}")
+            self._refresh_meta_data(self._get_collection())
+            logger.info("Created VikingDB collection: %s (dim=%s)", name, vector_dim)
             return True
         except Exception as e:
-            logger.error(f"Error dropping collection '{name}': {e}")
+            logger.error("Error creating collection %s: %s", name, e)
             return False
 
-    async def collection_exists(self, name: str) -> bool:
-        """Check if a collection exists."""
-        return self.project.has_collection(name)
-
-    async def list_collections(self) -> List[str]:
-        """List all collection names."""
-        return self.project.list_collections()
-
-    async def get_collection_info(self, name: str) -> Optional[Dict[str, Any]]:
-        """Get collection metadata and statistics."""
+    async def drop_collection(self) -> bool:
         try:
-            if not self.project.has_collection(name):
-                return None
-
-            config = self._collection_configs.get(name, {})
-
-            return {
-                "name": name,
-                "vector_dim": config.get("vector_dim", self.vector_dim),
-                "count": 0,  # vectordb doesn't easily expose count
-                "status": "active",
-            }
+            dropped = self._adapter.drop_collection()
+            if dropped:
+                self._collection_config = {}
+                self._meta_data_cache = {}
+            return dropped
         except Exception as e:
-            logger.error(f"Error getting collection info for '{name}': {e}")
+            logger.error("Error dropping collection %s: %s", self._collection_name, e)
+            return False
+
+    async def collection_exists(self) -> bool:
+        return self._adapter.collection_exists()
+
+    async def get_collection_info(self) -> Optional[Dict[str, Any]]:
+        if not await self.collection_exists():
             return None
+        config = self._collection_config
+        return {
+            "name": self._collection_name,
+            "vector_dim": config.get("vector_dim", self.vector_dim),
+            "count": await self.count(),
+            "status": "active",
+        }
+
+    async def collection_exists_bound(self) -> bool:
+        return await self.collection_exists()
 
     # =========================================================================
-    # CRUD Operations - Single Record
+    # Data Operations
     # =========================================================================
 
-    async def insert(self, collection: str, data: Dict[str, Any]) -> str:
-        """Insert a single record."""
-        coll = self._get_collection(collection)
+    async def upsert(self, data: Dict[str, Any]) -> str:
+        payload = dict(data)
+        context_type = payload.get("context_type")
+        if context_type and context_type not in self.ALLOWED_CONTEXT_TYPES:
+            logger.warning(
+                "Invalid context_type: %s. Must be one of %s",
+                context_type,
+                sorted(self.ALLOWED_CONTEXT_TYPES),
+            )
+            return ""
 
-        # Ensure ID exists
-        record_id = data.get("id")
-        if not record_id:
-            record_id = str(uuid.uuid4())
-            data = {**data, "id": record_id}
+        if not payload.get("id"):
+            payload["id"] = str(uuid.uuid4())
 
-        # Validate context_type for context collection
-        if collection == "context":
-            context_type = data.get("context_type")
-            if context_type not in ["resource", "skill", "memory"]:
-                logger.warning(
-                    f"Invalid context_type: {context_type}. "
-                    f"Must be one of ['resource', 'skill', 'memory'], Ignore"
-                )
-                return ""
+        payload = self._filter_known_fields(payload)
+        ids = self._adapter.upsert(payload)
+        return ids[0] if ids else ""
 
-        fields = self._get_meta_data(collection, coll).get("Fields", [])
-        fields_dict = {item["FieldName"]: item for item in fields}
-        new_data = {}
-        for k in data:
-            if k in fields_dict and data[k] is not None:
-                new_data[k] = data[k]
-
+    async def get(self, ids: List[str]) -> List[Dict[str, Any]]:
         try:
-            coll.upsert_data([new_data])
-            return record_id
+            return self._adapter.get(ids)
         except Exception as e:
-            logger.error(f"Error inserting record: {e}")
-            raise
-
-    async def update(self, collection: str, id: str, data: Dict[str, Any]) -> bool:
-        """Update a record by ID."""
-        coll = self._get_collection(collection)
-
-        try:
-            # Fetch existing record
-            existing = await self.get(collection, [id])
-            if not existing:
-                return False
-
-            # Merge data with existing record
-            updated_data = {**existing[0], **data}
-            updated_data["id"] = id
-
-            # Upsert the updated record
-            coll.upsert_data([updated_data])
-            return True
-        except Exception as e:
-            logger.error(f"Error updating record '{id}': {e}")
-            return False
-
-    async def upsert(self, collection: str, data: Dict[str, Any]) -> str:
-        """Insert or update a record."""
-        coll = self._get_collection(collection)
-
-        record_id = data.get("id")
-        if not record_id:
-            record_id = str(uuid.uuid4())
-            data = {**data, "id": record_id}
-
-        try:
-            coll.upsert_data([data])
-            return record_id
-        except Exception as e:
-            logger.error(f"Error upserting record: {e}")
-            raise
-
-    async def delete(self, collection: str, ids: List[str]) -> int:
-        """Delete records by IDs."""
-        coll = self._get_collection(collection)
-
-        try:
-            coll.delete_data(ids)
-            return len(ids)
-        except Exception as e:
-            logger.error(f"Error deleting records: {e}")
-            return 0
-
-    async def get(self, collection: str, ids: List[str]) -> List[Dict[str, Any]]:
-        """Get records by IDs."""
-        coll = self._get_collection(collection)
-
-        try:
-            result = coll.fetch_data(ids)
-
-            if isinstance(result, FetchDataInCollectionResult):
-                records = []
-                for item in result.items:
-                    record = dict(item.fields) if item.fields else {}
-                    record["id"] = item.id
-                    self._restore_uri_fields(record)
-                    records.append(record)
-                return records
-            elif isinstance(result, dict):
-                records = []
-                if "fetch" in result:
-                    for item in result.get("fetch", []):
-                        record = dict(item.get("fields", {})) if item.get("fields") else {}
-                        record["id"] = item.get("id")
-                        if record["id"]:
-                            self._restore_uri_fields(record)
-                            records.append(record)
-                return records
-            else:
-                logger.warning(f"Unexpected return type from fetch_data: {type(result)}")
-                return []
-        except Exception as e:
-            logger.error(f"Error getting records: {e}")
+            logger.error("Error getting records: %s", e)
             return []
 
-    async def fetch_by_uri(self, collection: str, uri: str) -> Optional[Dict[str, Any]]:
-        """Fetch a record by URI."""
-        coll = self._get_collection(collection)
+    async def delete(self, ids: List[str]) -> int:
         try:
-            result = coll.search_by_random(
-                index_name=self.DEFAULT_INDEX_NAME,
-                limit=10,
-                filters={"op": "must", "field": "uri", "conds": [uri]},
-            )
-            records = []
-            for item in result.data:
-                record = dict(item.fields) if item.fields else {}
-                record["id"] = item.id
-                self._restore_uri_fields(record)
-                records.append(record)
-            if len(records) > 1:
-                raise ValueError(f"Duplicate records found for URI: {uri}")
-            if len(records) == 0:
-                raise ValueError(f"Record not found for URI: {uri}")
-            return records[0]
+            return self._adapter.delete(ids=ids)
         except Exception as e:
-            logger.error(f"Error fetching record by URI '{uri}': {e}")
-            return None
+            logger.error("Error deleting records: %s", e)
+            return 0
 
-    async def exists(self, collection: str, id: str) -> bool:
-        """Check if a record exists."""
+    async def exists(self, id: str) -> bool:
         try:
-            results = await self.get(collection, [id])
-            return len(results) > 0
+            return len(await self.get([id])) > 0
         except Exception:
             return False
 
-    # =========================================================================
-    # CRUD Operations - Batch
-    # =========================================================================
-
-    async def batch_insert(self, collection: str, data: List[Dict[str, Any]]) -> List[str]:
-        """Batch insert multiple records."""
-        coll = self._get_collection(collection)
-
-        # Ensure all records have IDs
-        ids = []
-        records_with_ids = []
-        for record in data:
-            if "id" not in record:
-                record_id = str(uuid.uuid4())
-                records_with_ids.append({**record, "id": record_id})
-                ids.append(record_id)
-            else:
-                records_with_ids.append(record)
-                ids.append(record["id"])
-
+    async def fetch_by_uri(self, uri: str) -> Optional[Dict[str, Any]]:
         try:
-            coll.upsert_data(records_with_ids)
-            return ids
-        except Exception as e:
-            logger.error(f"Error batch inserting records: {e}")
-            raise
-
-    async def batch_upsert(self, collection: str, data: List[Dict[str, Any]]) -> List[str]:
-        """Batch insert or update multiple records."""
-        coll = self._get_collection(collection)
-
-        ids = []
-        records_with_ids = []
-        for record in data:
-            if "id" not in record:
-                record_id = str(uuid.uuid4())
-                records_with_ids.append({**record, "id": record_id})
-                ids.append(record_id)
-            else:
-                records_with_ids.append(record)
-                ids.append(record["id"])
-
-        try:
-            coll.upsert_data(records_with_ids)
-            return ids
-        except Exception as e:
-            logger.error(f"Error batch upserting records: {e}")
-            raise
-
-    async def batch_delete(self, collection: str, filter: Dict[str, Any]) -> int:
-        """Delete records matching filter conditions."""
-        try:
-            # First, find matching records
-            matching_records = await self.filter(collection, filter, limit=10000)
-
-            if not matching_records:
-                return 0
-
-            # Extract IDs and delete
-            ids = [record["id"] for record in matching_records if "id" in record]
-            return await self.delete(collection, ids)
-        except Exception as e:
-            logger.error(f"Error batch deleting records: {e}")
-            return 0
-
-    async def remove_by_uri(self, collection: str, uri: str) -> int:
-        """Remove resource(s) by URI."""
-        try:
-            target_records = await self.filter(
-                collection=collection,
+            records = await self.query(
                 filter={"op": "must", "field": "uri", "conds": [uri]},
-                limit=10,
+                limit=2,
             )
-
-            if not target_records:
-                return 0
-
-            total_deleted = 0
-
-            # If any record indicates this URI is a directory node, remove descendants first.
-            if any(r.get("level") in [0, 1] for r in target_records):
-                descendant_count = await self._remove_descendants(collection, uri)
-                total_deleted += descendant_count
-
-            ids = [r.get("id") for r in target_records if r.get("id")]
-            if ids:
-                total_deleted += await self.delete(collection, ids)
-
-            logger.info(f"Removed {total_deleted} record(s) for URI: {uri}")
-            return total_deleted
-
+            if len(records) == 1:
+                return records[0]
+            return None
         except Exception as e:
-            logger.error(f"Error removing URI '{uri}': {e}")
-            return 0
+            logger.error("Error fetching record by URI %s: %s", uri, e)
+            return None
 
-    async def _remove_descendants(self, collection: str, parent_uri: str) -> int:
-        """Recursively remove all descendants of a parent URI."""
-        total_deleted = 0
-
-        # Find direct children
-        children = await self.filter(
-            collection=collection,
-            filter={"op": "must", "field": "parent_uri", "conds": [parent_uri]},
-            limit=10000,
-        )
-
-        for child in children:
-            child_uri = child.get("uri")
-            level = child.get("level", 2)
-
-            # Recursively delete if child is also an intermediate directory
-            if level in [0, 1] and child_uri:
-                descendant_count = await self._remove_descendants(collection, child_uri)
-                total_deleted += descendant_count
-
-            # Delete the child
-            if "id" in child:
-                await self.delete(collection, [child["id"]])
-                total_deleted += 1
-
-        return total_deleted
-
-    # =========================================================================
-    # Search Operations
-    # =========================================================================
+    async def query(
+        self,
+        query_vector: Optional[List[float]] = None,
+        sparse_query_vector: Optional[Dict[str, float]] = None,
+        filter: Optional[Dict[str, Any] | FilterExpr] = None,
+        limit: int = 10,
+        offset: int = 0,
+        output_fields: Optional[List[str]] = None,
+        with_vector: bool = False,
+        order_by: Optional[str] = None,
+        order_desc: bool = False,
+    ) -> List[Dict[str, Any]]:
+        try:
+            return self._adapter.query(
+                query_vector=query_vector,
+                sparse_query_vector=sparse_query_vector,
+                filter=filter,
+                limit=limit,
+                offset=offset,
+                output_fields=output_fields,
+                with_vector=with_vector,
+                order_by=order_by,
+                order_desc=order_desc,
+            )
+        except Exception as e:
+            logger.error("Error querying collection %s: %s", self._collection_name, e)
+            return []
 
     async def search(
         self,
-        collection: str,
         query_vector: Optional[List[float]] = None,
         sparse_query_vector: Optional[Dict[str, float]] = None,
-        filter: Optional[Dict[str, Any]] = None,
+        filter: Optional[Dict[str, Any] | FilterExpr] = None,
         limit: int = 10,
         offset: int = 0,
         output_fields: Optional[List[str]] = None,
         with_vector: bool = False,
     ) -> List[Dict[str, Any]]:
-        """Hybrid search: vector similarity (dense/sparse/hybrid) + scalar filtering.
-
-        Args:
-            collection: Collection name, by default it should be "context"
-            query_vector: Dense query vector (optional)
-            sparse_query_vector: Sparse query vector as {term: weight} dict (optional)
-            filter: Scalar filter conditions
-            limit: Maximum number of results
-            offset: Offset for pagination
-            output_fields: Fields to return
-            with_vector: Whether to include vector field in results
-
-        Returns:
-            List of matching records with scores
-        """
-        coll = self._get_collection(collection)
-
-        try:
-            # Filter is already in vectordb DSL format
-            vectordb_filter = filter if filter else {}
-
-            if query_vector or sparse_query_vector:
-                # Vector search (dense, sparse, or hybrid) with optional filtering
-                result = coll.search_by_vector(
-                    index_name=self.DEFAULT_INDEX_NAME,
-                    dense_vector=query_vector,
-                    sparse_vector=sparse_query_vector,
-                    limit=limit,
-                    offset=offset,
-                    filters=vectordb_filter,
-                    output_fields=output_fields,
-                )
-
-                # Convert results
-                records = []
-                for item in result.data:
-                    record = dict(item.fields) if item.fields else {}
-                    record["id"] = item.id
-                    record["_score"] = item.score if item.score is not None else 0.0
-                    self._restore_uri_fields(record)
-
-                    if not with_vector:
-                        if "vector" in record:
-                            record.pop("vector")
-                        if "sparse_vector" in record:
-                            record.pop("sparse_vector")
-
-                    records.append(record)
-
-                return records
-            else:
-                # Pure filtering without vector search
-                return await self.filter(collection, filter or {}, limit, offset, output_fields)
-
-        except Exception as e:
-            logger.error(f"Error searching collection '{collection}': {e}")
-            import traceback
-
-            traceback.print_exc()
-            return []
+        # Backward-compatible alias for internal call sites.
+        return await self.query(
+            query_vector=query_vector,
+            sparse_query_vector=sparse_query_vector,
+            filter=filter,
+            limit=limit,
+            offset=offset,
+            output_fields=output_fields,
+            with_vector=with_vector,
+        )
 
     async def filter(
         self,
-        collection: str,
-        filter: Dict[str, Any],
+        filter: Dict[str, Any] | FilterExpr,
         limit: int = 10,
         offset: int = 0,
         output_fields: Optional[List[str]] = None,
         order_by: Optional[str] = None,
         order_desc: bool = False,
     ) -> List[Dict[str, Any]]:
-        """Pure scalar filtering without vector search."""
-        coll = self._get_collection(collection)
+        return await self.query(
+            filter=filter,
+            limit=limit,
+            offset=offset,
+            output_fields=output_fields,
+            order_by=order_by,
+            order_desc=order_desc,
+        )
 
+    async def remove_by_uri(self, uri: str) -> int:
         try:
-            # Filter is already in vectordb DSL format
-            vectordb_filter = filter if filter else {}
+            target_records = await self.filter(
+                {"op": "must", "field": "uri", "conds": [uri]},
+                limit=10,
+            )
+            if not target_records:
+                return 0
 
-            if order_by:
-                # Use search_by_scalar for sorting
-                result = coll.search_by_scalar(
-                    index_name=self.DEFAULT_INDEX_NAME,
-                    field=order_by,
-                    order="desc" if order_desc else "asc",
-                    limit=limit,
-                    offset=offset,
-                    filters=vectordb_filter,
-                    output_fields=output_fields,
-                )
-            else:
-                # Use search_by_random for pure filtering
-                result = coll.search_by_random(
-                    index_name=self.DEFAULT_INDEX_NAME,
-                    limit=limit,
-                    offset=offset,
-                    filters=vectordb_filter,
-                    output_fields=output_fields,
-                )
+            total_deleted = 0
+            if any(r.get("level") in [0, 1] for r in target_records):
+                total_deleted += await self._remove_descendants(parent_uri=uri)
 
-            # Convert results
-            records = []
-            for item in result.data:
-                record = dict(item.fields) if item.fields else {}
-                record["id"] = item.id
-                self._restore_uri_fields(record)
-                records.append(record)
-
-            return records
-
+            ids = [r.get("id") for r in target_records if r.get("id")]
+            if ids:
+                total_deleted += await self.delete(ids)
+            return total_deleted
         except Exception as e:
-            logger.error(f"Error filtering collection '{collection}': {e}")
-            import traceback
+            logger.error("Error removing URI %s: %s", uri, e)
+            return 0
 
-            traceback.print_exc()
+    async def _remove_descendants(self, parent_uri: str) -> int:
+        total_deleted = 0
+        children = await self.filter(
+            {"op": "must", "field": "parent_uri", "conds": [parent_uri]},
+            limit=100000,
+        )
+        for child in children:
+            child_uri = child.get("uri")
+            level = child.get("level", 2)
+            if level in [0, 1] and child_uri:
+                total_deleted += await self._remove_descendants(parent_uri=child_uri)
+            child_id = child.get("id")
+            if child_id:
+                await self.delete([child_id])
+                total_deleted += 1
+        return total_deleted
+
+    # =========================================================================
+    # Semantic Context Operations (Tenant-Aware)
+    # =========================================================================
+
+    async def search_in_tenant(
+        self,
+        ctx: RequestContext,
+        query_vector: Optional[List[float]],
+        sparse_query_vector: Optional[Dict[str, float]] = None,
+        context_type: Optional[str] = None,
+        target_directories: Optional[List[str]] = None,
+        extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
+        limit: int = 10,
+        offset: int = 0,
+    ) -> List[Dict[str, Any]]:
+        scope_filter = self._build_scope_filter(
+            ctx=ctx,
+            context_type=context_type,
+            target_directories=target_directories,
+            extra_filter=extra_filter,
+        )
+        return await self.search(
+            query_vector=query_vector,
+            sparse_query_vector=sparse_query_vector,
+            filter=scope_filter,
+            limit=limit,
+            offset=offset,
+        )
+
+    async def search_global_roots_in_tenant(
+        self,
+        ctx: RequestContext,
+        query_vector: Optional[List[float]],
+        sparse_query_vector: Optional[Dict[str, float]] = None,
+        context_type: Optional[str] = None,
+        target_directories: Optional[List[str]] = None,
+        extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
+        limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        if not query_vector:
             return []
+
+        merged_filter = self._merge_filters(
+            self._build_scope_filter(
+                ctx=ctx,
+                context_type=context_type,
+                target_directories=target_directories,
+                extra_filter=extra_filter,
+            ),
+            In("level", [0, 1]),
+        )
+        return await self.search(
+            query_vector=query_vector,
+            sparse_query_vector=sparse_query_vector,
+            filter=merged_filter,
+            limit=limit,
+        )
+
+    async def search_children_in_tenant(
+        self,
+        ctx: RequestContext,
+        parent_uri: str,
+        query_vector: Optional[List[float]],
+        sparse_query_vector: Optional[Dict[str, float]] = None,
+        context_type: Optional[str] = None,
+        target_directories: Optional[List[str]] = None,
+        extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
+        limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        merged_filter = self._merge_filters(
+            Eq("parent_uri", parent_uri),
+            self._build_scope_filter(
+                ctx=ctx,
+                context_type=context_type,
+                target_directories=target_directories,
+                extra_filter=extra_filter,
+            ),
+        )
+        return await self.search(
+            query_vector=query_vector,
+            sparse_query_vector=sparse_query_vector,
+            filter=merged_filter,
+            limit=limit,
+        )
+
+    async def search_similar_memories(
+        self,
+        account_id: str,
+        owner_space: Optional[str],
+        category_uri_prefix: str,
+        query_vector: List[float],
+        limit: int = 5,
+    ) -> List[Dict[str, Any]]:
+        conds: List[FilterExpr] = [
+            Eq("context_type", "memory"),
+            Eq("level", 2),
+            Eq("account_id", account_id),
+        ]
+        if owner_space:
+            conds.append(Eq("owner_space", owner_space))
+        if category_uri_prefix:
+            conds.append(In("uri", [category_uri_prefix]))
+
+        return await self.search(
+            query_vector=query_vector,
+            filter=And(conds),
+            limit=limit,
+        )
+
+    async def get_context_by_uri(
+        self,
+        account_id: str,
+        uri: str,
+        owner_space: Optional[str] = None,
+        limit: int = 1,
+    ) -> List[Dict[str, Any]]:
+        conds: List[FilterExpr] = [Eq("uri", uri), Eq("account_id", account_id)]
+        if owner_space:
+            conds.append(Eq("owner_space", owner_space))
+        return await self.filter(filter=And(conds), limit=limit)
+
+    async def delete_account_data(self, account_id: str) -> int:
+        return self._adapter.delete(filter=Eq("account_id", account_id))
+
+    async def delete_uris(self, ctx: RequestContext, uris: List[str]) -> None:
+        for uri in uris:
+            conds: List[FilterExpr] = [
+                Eq("account_id", ctx.account_id),
+                Or([Eq("uri", uri), In("uri", [f"{uri}/"])]),
+            ]
+            if ctx.role == Role.USER and uri.startswith(("viking://user/", "viking://agent/")):
+                owner_space = (
+                    ctx.user.user_space_name()
+                    if uri.startswith("viking://user/")
+                    else ctx.user.agent_space_name()
+                )
+                conds.append(Eq("owner_space", owner_space))
+            self._adapter.delete(filter=And(conds))
+
+    async def update_uri_mapping(
+        self,
+        ctx: RequestContext,
+        uri: str,
+        new_uri: str,
+        new_parent_uri: str,
+    ) -> bool:
+        records = await self.filter(
+            filter=And([Eq("uri", uri), Eq("account_id", ctx.account_id)]),
+            limit=1,
+        )
+        if not records or "id" not in records[0]:
+            return False
+        updated = {**records[0], "uri": new_uri, "parent_uri": new_parent_uri}
+        return bool(await self.upsert(updated))
+
+    async def increment_active_count(self, ctx: RequestContext, uris: List[str]) -> int:
+        updated = 0
+        for uri in uris:
+            records = await self.get_context_by_uri(account_id=ctx.account_id, uri=uri, limit=1)
+            if not records:
+                continue
+            record = records[0]
+            current = int(record.get("active_count", 0) or 0)
+            record["active_count"] = current + 1
+            if await self.upsert(record):
+                updated += 1
+        return updated
+
+    def _build_scope_filter(
+        self,
+        ctx: RequestContext,
+        context_type: Optional[str],
+        target_directories: Optional[List[str]],
+        extra_filter: Optional[FilterExpr | Dict[str, Any]],
+    ) -> Optional[FilterExpr]:
+        filters: List[FilterExpr] = []
+        if context_type:
+            filters.append(Eq("context_type", context_type))
+
+        tenant_filter = self._tenant_filter(ctx, context_type=context_type)
+        if tenant_filter:
+            filters.append(tenant_filter)
+
+        if target_directories:
+            uri_conds = [In("uri", [target_dir]) for target_dir in target_directories if target_dir]
+            if uri_conds:
+                filters.append(Or(uri_conds))
+
+        if extra_filter:
+            if isinstance(extra_filter, dict):
+                filters.append(RawDSL(extra_filter))
+            else:
+                filters.append(extra_filter)
+
+        return self._merge_filters(*filters)
+
+    @staticmethod
+    def _tenant_filter(
+        ctx: RequestContext, context_type: Optional[str] = None
+    ) -> Optional[FilterExpr]:
+        if ctx.role == Role.ROOT:
+            return None
+
+        owner_spaces = [ctx.user.user_space_name(), ctx.user.agent_space_name()]
+        if context_type == "resource":
+            owner_spaces.append("")
+        return And([Eq("account_id", ctx.account_id), In("owner_space", owner_spaces)])
+
+    @staticmethod
+    def _merge_filters(*filters: Optional[FilterExpr]) -> Optional[FilterExpr]:
+        non_empty = [f for f in filters if f]
+        if not non_empty:
+            return None
+        if len(non_empty) == 1:
+            return non_empty[0]
+        return And(non_empty)
 
     async def scroll(
         self,
-        collection: str,
-        filter: Optional[Dict[str, Any]] = None,
+        filter: Optional[Dict[str, Any] | FilterExpr] = None,
         limit: int = 100,
         cursor: Optional[str] = None,
         output_fields: Optional[List[str]] = None,
-    ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
-        """Scroll through large result sets efficiently."""
-        # vectordb doesn't natively support scroll, so we simulate it
+    ) -> tuple[List[Dict[str, Any]], Optional[str]]:
         offset = int(cursor) if cursor else 0
-
         records = await self.filter(
-            collection=collection,
             filter=filter or {},
             limit=limit,
             offset=offset,
             output_fields=output_fields,
         )
-
-        # Return next cursor if we got a full batch
         next_cursor = str(offset + limit) if len(records) == limit else None
-
         return records, next_cursor
 
-    # =========================================================================
-    # Aggregation Operations
-    # =========================================================================
-
-    async def count(self, collection: str, filter: Optional[Dict[str, Any]] = None) -> int:
-        """Count records matching filter."""
+    async def count(self, filter: Optional[Dict[str, Any] | FilterExpr] = None) -> int:
         try:
-            coll = self._get_collection(collection)
-            result = coll.aggregate_data(
-                index_name=self.DEFAULT_INDEX_NAME, op="count", filters=filter
-            )
-            return result.agg.get("_total", 0)
+            return self._adapter.count(filter=filter)
         except Exception as e:
-            logger.error(f"Error counting records: {e}")
+            logger.error("Error counting records: %s", e)
             return 0
 
-    # =========================================================================
-    # Index Operations
-    # =========================================================================
-
-    async def create_index(
-        self,
-        collection: str,
-        field: str,
-        index_type: str,
-        **kwargs,
-    ) -> bool:
-        """Create an index on a field."""
+    async def clear(self) -> bool:
         try:
-            # vectordb manages indexes at collection level
-            # Indexes are already created with the collection
-            logger.info(f"Index creation requested for field '{field}' (managed by vectordb)")
-            return True
+            return self._adapter.clear()
         except Exception as e:
-            logger.error(f"Error creating index on '{field}': {e}")
+            logger.error("Error clearing collection: %s", e)
             return False
 
-    async def drop_index(self, collection: str, field: str) -> bool:
-        """Drop an index on a field."""
-        try:
-            # vectordb manages indexes internally
-            logger.info(f"Index drop requested for field '{field}' (managed by vectordb)")
-            return True
-        except Exception as e:
-            logger.error(f"Error dropping index on '{field}': {e}")
-            return False
-
-    # =========================================================================
-    # Lifecycle Operations
-    # =========================================================================
-
-    async def clear(self, collection: str) -> bool:
-        """Clear all data in a collection."""
-        coll = self._get_collection(collection)
-
-        try:
-            coll.delete_all_data()
-            logger.info(f"Cleared all data in collection: {collection}")
-            return True
-        except Exception as e:
-            logger.error(f"Error clearing collection: {e}")
-            return False
-
-    async def optimize(self, collection: str) -> bool:
-        """Optimize collection for better performance."""
-        try:
-            # vectordb handles optimization internally via index rebuilding
-            logger.info(f"Optimization requested for collection: {collection}")
-            return True
-        except Exception as e:
-            logger.error(f"Error optimizing collection: {e}")
-            return False
+    async def optimize(self) -> bool:
+        logger.info("Optimization requested for collection: %s", self._collection_name)
+        return True
 
     async def close(self) -> None:
-        """Close storage connection and release resources."""
         try:
-            if self.project:
-                self.project.close()
-
-            self._collection_configs.clear()
+            self._adapter.close()
+            self._collection_config = {}
+            self._meta_data_cache = {}
             logger.info("VikingDB backend closed")
         except Exception as e:
-            logger.error(f"Error closing VikingDB backend: {e}")
-
-    # =========================================================================
-    # Health & Status
-    # =========================================================================
+            logger.error("Error closing VikingDB backend: %s", e)
 
     async def health_check(self) -> bool:
-        """Check if storage backend is healthy and accessible."""
         try:
-            # Simple check: verify we can access the project
-            self.project.list_collections()
+            await self.collection_exists()
             return True
         except Exception:
             return False
 
     async def get_stats(self) -> Dict[str, Any]:
-        """Get storage statistics."""
         try:
-            collections = self.project.list_collections()
-
-            # Count total records across all collections using aggregate_data
-            total_records = 0
-            for collection_name in collections:
-                try:
-                    coll = self._get_collection(collection_name)
-                    result = coll.aggregate_data(
-                        index_name=self.DEFAULT_INDEX_NAME, op="count", filters=None
-                    )
-                    total_records += result.agg.get("_total", 0)
-                except Exception as e:
-                    logger.warning(f"Error counting records in collection '{collection_name}': {e}")
-                    continue
-
+            exists = await self.collection_exists()
+            total_records = await self.count() if exists else 0
             return {
-                "collections": len(collections),
+                "collections": 1 if exists else 0,
                 "total_records": total_records,
                 "backend": "vikingdb",
                 "mode": self._mode,
             }
         except Exception as e:
-            logger.error(f"Error getting stats: {e}")
+            logger.error("Error getting stats: %s", e)
             return {
                 "collections": 0,
                 "total_records": 0,
@@ -924,5 +586,4 @@ class VikingVectorIndexBackend(VikingDBInterface):
 
     @property
     def mode(self) -> str:
-        """Return the current storage mode."""
         return self._mode

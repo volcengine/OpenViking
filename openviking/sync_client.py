@@ -28,9 +28,13 @@ class SyncOpenViking:
         run_async(self._async_client.initialize())
         self._initialized = True
 
-    def session(self, session_id: Optional[str] = None) -> "Session":
+    def session(self, session_id: Optional[str] = None, must_exist: bool = False) -> "Session":
         """Create new session or load existing session."""
-        return self._async_client.session(session_id)
+        return self._async_client.session(session_id, must_exist=must_exist)
+
+    def session_exists(self, session_id: str) -> bool:
+        """Check whether a session exists in storage."""
+        return run_async(self._async_client.session_exists(session_id))
 
     def create_session(self) -> Dict[str, Any]:
         """Create a new session."""

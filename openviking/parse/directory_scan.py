@@ -221,6 +221,17 @@ def scan_directory(
     include_patterns = _parse_patterns(include)
     exclude_patterns = _parse_patterns(exclude)
 
+    # Normalize ignore_dirs:
+    # - If caller passed a comma-separated string (common from CLI/HTTP),
+    #   split it into a set of entries.
+    # - If already a set/list-like, keep as is.
+    ignore_dirs_set: Optional[Set[str]]
+    if isinstance(ignore_dirs, str):
+        entries = _parse_patterns(ignore_dirs)
+        ignore_dirs_set = set(entries) if entries else None
+    else:
+        ignore_dirs_set = ignore_dirs
+
     result = DirectoryScanResult(root=root)
     for dir_path_str, dir_names, file_names in os.walk(root, topdown=True):
         dir_path = Path(dir_path_str)
@@ -229,7 +240,7 @@ def scan_directory(
         kept = []
         for d in dir_names:
             sub = dir_path / d
-            skip, reason = _should_skip_directory(sub, root, ignore_dirs)
+            skip, reason = _should_skip_directory(sub, root, ignore_dirs_set)
             if skip:
                 result.skipped.append(f"{sub.relative_to(root)} ({reason})")
             else:

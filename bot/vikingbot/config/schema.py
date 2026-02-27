@@ -418,11 +418,8 @@ class OpenVikingConfig(BaseModel):
     """Viking tools configuration."""
     mode: str = "local" # local or remote
     server_url: str = ""
-    tos_endpoint: str = ""
-    tos_region: str = ""
-    tos_bucket: str = ""
-    tos_ak: str = ""
-    tos_sk: str = ""
+    user_id: str = ""
+    api_key: str = ""
 
 class WebToolsConfig(BaseModel):
     """Web tools configuration."""

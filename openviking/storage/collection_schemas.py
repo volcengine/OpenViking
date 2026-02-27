@@ -13,9 +13,10 @@ import json
 from typing import Any, Dict, Optional
 
 from openviking.models.embedder.base import EmbedResult
+from openviking.storage.errors import CollectionNotFoundError
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
-from openviking.storage.vikingdb_interface import CollectionNotFoundError, VikingDBInterface
+from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 
@@ -126,11 +127,11 @@ class TextEmbeddingHandler(DequeueHandlerBase):
     Supports both dense and sparse embeddings based on configuration.
     """
 
-    def __init__(self, vikingdb: VikingDBInterface):
+    def __init__(self, vikingdb: VikingVectorIndexBackend):
         """Initialize the text embedding handler.
 
         Args:
-            vikingdb: VikingDBInterface instance for writing to vector database
+            vikingdb: VikingVectorIndexBackend instance for writing to vector database
         """
         from openviking_cli.utils.config import get_openviking_config
 
@@ -207,7 +208,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     id_seed = f"{account_id}:{owner_space}:{uri}"
                     inserted_data["id"] = hashlib.md5(id_seed.encode("utf-8")).hexdigest()
 
-                record_id = await self._vikingdb.insert(self._collection_name, inserted_data)
+                record_id = await self._vikingdb.upsert(inserted_data)
                 if record_id:
                     logger.debug(
                         f"Successfully wrote embedding to database: {record_id} abstract {inserted_data['abstract']} vector {inserted_data['vector'][:5]}"

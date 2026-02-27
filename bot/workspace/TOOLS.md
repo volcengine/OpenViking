@@ -1,32 +1,42 @@
 # Available Tools
 
-This document describes the tools available to vikingbot.
+**IMPORTANT: Always use OpenViking first for knowledge queries and memory storage**
 
-## File Operations
+## OpenViking Knowledge Base (Use First)
 
-### read_file
-Read the contents of a file.
-```
-read_file(path: str) -> str
-```
+When querying information or files, **always use OpenViking tools first** before web search or other methods.
 
-### write_file
-Write content to a file (creates parent directories if needed).
+### Search Resources
 ```
-write_file(path: str, content: str) -> str
+openviking_search(query: str, target_uri: str = None) -> str
 ```
+Search for knowledge, documents, code, and resources in OpenViking. Use this as the first step for any information query.
 
-### edit_file
-Edit a file by replacing specific text.
+### Read Content
 ```
-edit_file(path: str, old_text: str, new_text: str) -> str
+openviking_read(uri: str, level: str = "abstract") -> str
 ```
+Read resource content from OpenViking. Levels: abstract (summary), overview, read (full content).
 
-### list_dir
-List contents of a directory.
+### List Resources
 ```
-list_dir(path: str) -> str
+openviking_list(uri: str, recursive: bool = False) -> str
 ```
+List all resources at a specified path.
+
+### Search User Memories
+```
+user_memory_search(query: str) -> str
+```
+Search for user-related memories and events.
+
+### ⚠️ CRITICAL: Commit Memories and Events
+```
+openviking_memory_commit(session_id: str, messages: list) -> str
+```
+**All important conversations, events, and memories MUST be committed to OpenViking** for future retrieval and context understanding.
+
+---
 
 ## Shell Execution
 

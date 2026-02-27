@@ -74,6 +74,11 @@ class ObserverService:
         self._config = config
 
     @property
+    def _dependencies_ready(self) -> bool:
+        """Check if both vikingdb and config dependencies are set."""
+        return self._vikingdb is not None and self._config is not None
+
+    @property
     def queue(self) -> ComponentStatus:
         """Get queue status."""
         observer = QueueObserver(get_queue_manager())
@@ -87,6 +92,13 @@ class ObserverService:
     @property
     def vikingdb(self) -> ComponentStatus:
         """Get VikingDB status."""
+        if self._vikingdb is None:
+            return ComponentStatus(
+                name="vikingdb",
+                is_healthy=False,
+                has_errors=True,
+                status="Not initialized",
+            )
         observer = VikingDBObserver(self._vikingdb)
         return ComponentStatus(
             name="vikingdb",
@@ -98,6 +110,13 @@ class ObserverService:
     @property
     def vlm(self) -> ComponentStatus:
         """Get VLM status."""
+        if self._config is None:
+            return ComponentStatus(
+                name="vlm",
+                is_healthy=False,
+                has_errors=True,
+                status="Not initialized",
+            )
         observer = VLMObserver(self._config.vlm.get_vlm_instance())
         return ComponentStatus(
             name="vlm",
@@ -143,6 +162,8 @@ class ObserverService:
 
     def is_healthy(self) -> bool:
         """Quick health check."""
+        if not self._dependencies_ready:
+            return False
         return self.system.is_healthy
 
 

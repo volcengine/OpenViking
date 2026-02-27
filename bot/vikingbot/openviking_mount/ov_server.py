@@ -1,37 +1,35 @@
 import asyncio
-import os
 from typing import List, Dict, Any, Optional
-
+import hashlib
 import openviking as ov
-from openviking.message.part import TextPart, ToolPart
-import tos
 from loguru import logger
 
 from vikingbot.config.loader import get_data_dir
 from vikingbot.config.loader import load_config
 
-viking_resource_prefix = "viking://resources"
-uri_user_memory = "viking://user/memories/"
-uri_agent_memory = "viking://agent/memories/"
+viking_resource_prefix = "viking://resources/"
 
 
 class VikingClient:
-    def __init__(self, viking_path: str = "/"):
+    def __init__(self, agent_id: Optional[str] = None):
         config = load_config()
         openviking_config = config.openviking
         if openviking_config.mode == "local":
             ov_data_path = get_data_dir() / "ov_data"
             ov_data_path.mkdir(parents=True, exist_ok=True)
             self.client = ov.AsyncOpenViking(path=str(ov_data_path))
+            self.user_id = "default"
+            self.agent_id = "default"
+            self.agent_space_name = self.client.user.agent_space_name()
         else:
-            self.client = ov.AsyncHTTPClient(url=openviking_config.server_url)
-            self.tos_client = tos.TosClientV2(
-                openviking_config.tos_ak,
-                openviking_config.tos_sk,
-                openviking_config.tos_endpoint,
-                openviking_config.tos_region
+            self.client = ov.AsyncHTTPClient(
+                url=openviking_config.server_url,
+                api_key=openviking_config.api_key,
+                agent_id=agent_id,
             )
-        self.viking_path = viking_path
+            self.agent_id = agent_id
+            self.user_id = openviking_config.user_id
+            self.agent_space_name = hashlib.md5((self.user_id + self.agent_id).encode()).hexdigest()[:12]
         self.mode = openviking_config.mode
 
     async def _initialize(self):
@@ -39,9 +37,9 @@ class VikingClient:
         await self.client.initialize()
 
     @classmethod
-    async def create(cls, viking_path: str = "/"):
+    async def create(cls, agent_id: Optional[str] = None):
         """Factory method to create and initialize a VikingClient instance"""
-        instance = cls(viking_path)
+        instance = cls(agent_id)
         await instance._initialize()
         return instance
 
@@ -80,38 +78,8 @@ class VikingClient:
         self, local_path: str, desc: str, target_path: Optional[str] = None, wait: bool = False
     ) -> Optional[Dict[str, Any]]:
         """添加资源到 Viking"""
-        viking_target = f"{viking_resource_prefix}{self.viking_path}"
-        if target_path:
-            viking_target = f"{viking_resource_prefix}{target_path}"
-
-        file_name = os.path.basename(local_path)
-        object_key = f"{file_name}"
-        config = load_config()
-        openviking_config = config.openviking
-
-        try:
-            self.tos_client.put_object_from_file(
-                openviking_config.tos_bucket, object_key, local_path
-            )
-            self.tos_client.set_object_expires(openviking_config.tos_bucket, object_key, 1)
-        except tos.exceptions.TosClientError as e:
-            print(f"Failed to upload {local_path} to TOS: {e}")
-            return None
-
-        try:
-            pre_signed_url = self.tos_client.pre_signed_url(
-                tos.HttpMethodType.Http_Method_Get,
-                openviking_config.tos_bucket,
-                object_key,
-                expires=300,
-            ).signed_url
-        except tos.exceptions.TosClientError as e:
-            print(f"Failed to generate pre-signed URL for {object_key}: {e}")
-            return None
-
         result = await self.client.add_resource(
-            path=pre_signed_url, target=viking_target, reason=desc, wait=wait
-        )
+            path=local_path, reason=desc, wait=wait)
         return result
 
     async def list_resources(
@@ -119,7 +87,7 @@ class VikingClient:
     ) -> List[Dict[str, Any]]:
         """列出资源"""
         if path is None or path == "":
-            path = f"{viking_resource_prefix}{self.viking_path}"
+            path = viking_resource_prefix
         entries = await self.client.ls(path, recursive=recursive)
         return entries
 
@@ -167,6 +135,7 @@ class VikingClient:
         }
 
     async def search_user_memory(self, query: str) -> list[Any]:
+        uri_user_memory = f"viking://user/{self.user_id}/memories/"
         result = await self.client.search(query, target_uri=uri_user_memory)
         return (
             [self._matched_context_to_dict(m) for m in result.memories]
@@ -178,11 +147,13 @@ class VikingClient:
         self, query: str, limit: int = 10
     ) -> dict[str, list[Any]]:
         """通过上下文消息，检索viking 的user、Agent memory"""
+        uri_user_memory = f"viking://user/{self.user_id}/memories/"
         user_memory = await self.client.find(
             query=query,
             target_uri=uri_user_memory,
             limit=limit,
         )
+        uri_agent_memory = f"viking://agent/{self.agent_space_name}/memories/"
         agent_memory = await self.client.find(
             query=query,
             target_uri=uri_agent_memory,
@@ -307,12 +278,12 @@ class VikingClient:
 
 
 async def main_test():
-    client = await VikingClient.create()
+    client = await VikingClient.create(agent_id="shared")
     # res = client.list_resources()
     # res = await client.search("头有点疼", target_uri="viking://user/memories/")
-    res = await client.get_viking_memory_context("123", current_message="头疼", history=[])
+    # res = await client.get_viking_memory_context("123", current_message="头疼", history=[])
     # res = await client.search_memory("你好")
-    # res = await client.list_resources("viking://user/memories/events")
+    res = await client.list_resources("viking://resources/")
     # res = await client.read_content("viking://user/memories/profile.md", level="read")
     # res = await client.add_resource("/Users/bytedance/Documents/论文/吉比特年报.pdf", "吉比特年报")
     # res = await client.commit("123", [{"role": "user", "content": "我叫王大锤"}])

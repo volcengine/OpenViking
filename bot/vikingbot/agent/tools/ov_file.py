@@ -13,9 +13,9 @@ class OVFileTool(Tool, ABC):
         super().__init__()
         self._client = None
 
-    async def _get_client(self):
+    async def _get_client(self, tool_context: ToolContext):
         if self._client is None:
-            self._client = await VikingClient.create()
+            self._client = await VikingClient.create(tool_context.sandbox_key)
         return self._client
 
 
@@ -50,10 +50,10 @@ class VikingReadTool(OVFileTool):
         }
 
     async def execute(
-        self, tool_context: "ToolContext", uri: str, level: str = "abstract", **kwargs: Any
+        self, tool_context: ToolContext, uri: str, level: str = "abstract", **kwargs: Any
     ) -> str:
         try:
-            client = await self._get_client()
+            client = await self._get_client(tool_context)
             content = await client.read_content(uri, level=level)
             return content
         except Exception as e:
@@ -78,7 +78,7 @@ class VikingListTool(OVFileTool):
             "properties": {
                 "uri": {
                     "type": "string",
-                    "description": "The parent Viking uri to list (e.g., viking://resources/bot_test/dutao/)",
+                    "description": "The parent Viking uri to list (e.g., viking://resources/)",
                 },
                 "recursive": {
                     "type": "boolean",
@@ -86,14 +86,14 @@ class VikingListTool(OVFileTool):
                     "default": False,
                 },
             },
-            "required": [],
+            "required": ["uri"],
         }
 
     async def execute(
         self, tool_context: "ToolContext", uri: str, recursive: bool = False, **kwargs: Any
     ) -> str:
         try:
-            client = await self._get_client()
+            client = await self._get_client(tool_context)
             entries = await client.list_resources(path=uri, recursive=recursive)
 
             if not entries:
@@ -146,7 +146,7 @@ class VikingSearchTool(OVFileTool):
         **kwargs: Any,
     ) -> str:
         try:
-            client = await self._get_client()
+            client = await self._get_client(tool_context)
             results = await client.search(query, target_uri=target_uri)
 
             if not results:
@@ -210,7 +210,7 @@ class VikingAddResourceTool(OVFileTool):
             if not path.is_file():
                 return f"Error: Not a file: {local_path}"
 
-            client = await self._get_client()
+            client = await self._get_client(tool_context)
             result = await client.add_resource(
                 str(path), description, target_path=target_path or None, wait=wait
             )
@@ -266,7 +266,7 @@ class VikingGrepTool(OVFileTool):
         **kwargs: Any,
     ) -> str:
         try:
-            client = await self._get_client()
+            client = await self._get_client(tool_context)
             result = await client.grep(uri, pattern, case_insensitive=case_insensitive)
 
             if isinstance(result, dict):
@@ -330,7 +330,7 @@ class VikingGlobTool(OVFileTool):
         self, tool_context: "ToolContext", pattern: str, uri: str = "", **kwargs: Any
     ) -> str:
         try:
-            client = await self._get_client()
+            client = await self._get_client(tool_context)
             result = await client.glob(pattern, uri=uri or None)
 
             if isinstance(result, dict):
@@ -375,7 +375,7 @@ class VikingSearchUserMemoryTool(OVFileTool):
 
     async def execute(self, tool_context: "ToolContext", query: str, **kwargs: Any) -> str:
         try:
-            client = await self._get_client()
+            client = await self._get_client(tool_context)
             results = await client.search_user_memory(query)
 
             if not results:
@@ -423,7 +423,7 @@ class VikingMemoryCommitTool(OVFileTool):
         **kwargs: Any,
     ) -> str:
         try:
-            client = await self._get_client()
+            client = await self._get_client(tool_context)
             session_id = tool_context.session_key.safe_name()
             await client.commit(session_id, messages)
             return f"Successfully committed to session {session_id}"

@@ -53,9 +53,22 @@ class SyncHTTPClient:
 
     # ============= session =============
 
-    def session(self, session_id: Optional[str] = None) -> Any:
-        """Create new session or load existing session."""
-        return self._async_client.session(session_id)
+    def session(self, session_id: Optional[str] = None, must_exist: bool = False) -> Any:
+        """Create a new session or load an existing one.
+
+        Args:
+            session_id: Session ID, creates a new session if None
+            must_exist: If True and session_id is provided, raises NotFoundError
+                        when the session does not exist.
+
+        Returns:
+            Session object
+        """
+        return self._async_client.session(session_id, must_exist=must_exist)
+
+    def session_exists(self, session_id: str) -> bool:
+        """Check whether a session exists in storage."""
+        return run_async(self._async_client.session_exists(session_id))
 
     def create_session(self) -> Dict[str, Any]:
         """Create a new session."""
@@ -106,10 +119,27 @@ class SyncHTTPClient:
         instruction: str = "",
         wait: bool = False,
         timeout: Optional[float] = None,
+        strict: bool = True,
+        ignore_dirs: Optional[str] = None,
+        include: Optional[str] = None,
+        exclude: Optional[str] = None,
+        directly_upload_media: bool = True,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
         return run_async(
-            self._async_client.add_resource(path, target, reason, instruction, wait, timeout)
+            self._async_client.add_resource(
+                path,
+                target,
+                reason,
+                instruction,
+                wait,
+                timeout,
+                strict,
+                ignore_dirs,
+                include,
+                exclude,
+                directly_upload_media,
+            )
         )
 
     def add_skill(

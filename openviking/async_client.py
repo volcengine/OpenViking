@@ -58,11 +58,13 @@ class AsyncOpenViking:
 
         self.user = UserIdentifier.the_default_user()
         self._initialized = False
-        self._singleton_initialized = True
+        # Mark initialized only after LocalClient is successfully constructed.
+        self._singleton_initialized = False
 
         self._client: BaseClient = LocalClient(
             path=path,
         )
+        self._singleton_initialized = True
 
     # ============= Lifecycle methods =============
 
@@ -78,7 +80,9 @@ class AsyncOpenViking:
 
     async def close(self) -> None:
         """Close OpenViking and release resources."""
-        await self._client.close()
+        client = getattr(self, "_client", None)
+        if client is not None:
+            await client.close()
         self._initialized = False
         self._singleton_initialized = False
 
@@ -88,20 +92,33 @@ class AsyncOpenViking:
         with cls._lock:
             if cls._instance is not None:
                 await cls._instance.close()
-                cls._instance._initialized = False
-                cls._instance._singleton_initialized = False
                 cls._instance = None
 
     # ============= Session methods =============
 
-    def session(self, session_id: Optional[str] = None) -> Session:
+    def session(self, session_id: Optional[str] = None, must_exist: bool = False) -> Session:
         """
         Create a new session or load an existing one.
 
         Args:
             session_id: Session ID, creates a new session (auto-generated ID) if None
+            must_exist: If True and session_id is provided, raises NotFoundError
+                        when the session does not exist.
+                        If session_id is None, must_exist is ignored.
         """
-        return self._client.session(session_id)
+        return self._client.session(session_id, must_exist=must_exist)
+
+    async def session_exists(self, session_id: str) -> bool:
+        """Check whether a session exists in storage.
+
+        Args:
+            session_id: Session ID to check
+
+        Returns:
+            True if the session exists, False otherwise
+        """
+        await self._ensure_initialized()
+        return await self._client.session_exists(session_id)
 
     async def create_session(self) -> Dict[str, Any]:
         """Create a new session."""

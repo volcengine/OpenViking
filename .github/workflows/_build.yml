@@ -182,12 +182,15 @@ jobs:
         echo "LD_LIBRARY_PATH=${PYTHON_PREFIX}/lib:${LD_LIBRARY_PATH}" >> "$GITHUB_ENV"
         export LD_LIBRARY_PATH="${PYTHON_PREFIX}/lib:${LD_LIBRARY_PATH}"
         "$PYTHON_BIN" -V
-
     - name: Set up Go
       uses: actions/setup-go@v6
       with:
         go-version: '1.25.1'
 
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@v1
+      with:
+        toolchain: stable
     - name: Install uv
       uses: astral-sh/setup-uv@v7
       with:
@@ -205,6 +208,14 @@ jobs:
     - name: Install build dependencies
       run: uv pip install setuptools setuptools_scm pybind11 cmake wheel build
 
+    - name: Build Rust CLI (Linux)
+      run: cargo build --release --target x86_64-unknown-linux-gnu -p ov_cli
+
+    - name: Copy Rust CLI binary (Linux)
+      run: |
+        mkdir -p openviking/bin
+        cp target/x86_64-unknown-linux-gnu/release/ov openviking/bin/
+        chmod +x openviking/bin/ov
     - name: Clean workspace (force ignore dirty)
       shell: bash
       run: |
@@ -298,6 +309,10 @@ jobs:
       with:
         go-version: '1.25.1'
 
+    - name: Set up Rust
+      uses: dtolnay/rust-toolchain@v1
+      with:
+        toolchain: stable
     - name: Install uv
       uses: astral-sh/setup-uv@v7
       with:
@@ -319,6 +334,25 @@ jobs:
     - name: Install build dependencies
       run: uv pip install setuptools setuptools_scm pybind11 cmake wheel build
 
+    - name: Build Rust CLI (macOS/Windows)
+      shell: bash
+      run: |
+        if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+          cargo build --release --target x86_64-pc-windows-msvc -p ov_cli
+        else
+          cargo build --release -p ov_cli
+        fi
+
+    - name: Copy Rust CLI binary (macOS/Windows)
+      shell: bash
+      run: |
+        mkdir -p openviking/bin
+        if [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+          cp target/x86_64-pc-windows-msvc/release/ov.exe openviking/bin/
+        else
+          cp target/release/ov openviking/bin/
+          chmod +x openviking/bin/ov
+        fi
     - name: Clean workspace (force ignore dirty)
       shell: bash
       run: |

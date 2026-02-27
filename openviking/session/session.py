@@ -5,7 +5,6 @@
 Session as Context: Sessions integrated into L0/L1/L2 system.
 """
 
-import hashlib
 import json
 import re
 from dataclasses import dataclass, field
@@ -300,32 +299,12 @@ class Session:
         if not self._vikingdb_manager:
             return 0
 
-        updated = 0
-        storage = self._vikingdb_manager
-
-        for usage in self._usage_records:
-            try:
-                # Compute the record ID from the URI directly.
-                # collection_schemas.py assigns id = md5(uri) for every context
-                # record, so storage.get() gives us a precise single-record lookup
-                # without the subtree-matching side-effect of fetch_by_uri() on
-                # path-type fields.
-                record_id = hashlib.md5(usage.uri.encode("utf-8")).hexdigest()
-                records = run_async(storage.get(collection="context", ids=[record_id]))
-                if not records:
-                    logger.debug(f"Record not found for URI: {usage.uri}")
-                    continue
-                current_count = records[0].get("active_count") or 0
-                run_async(
-                    storage.update(
-                        collection="context",
-                        id=record_id,
-                        data={"active_count": current_count + 1},
-                    )
-                )
-                updated += 1
-            except Exception as e:
-                logger.debug(f"Could not update active_count for {usage.uri}: {e}")
+        uris = [usage.uri for usage in self._usage_records if usage.uri]
+        try:
+            updated = run_async(self._vikingdb_manager.increment_active_count(self.ctx, uris))
+        except Exception as e:
+            logger.debug(f"Could not update active_count for usage URIs: {e}")
+            updated = 0
 
         if updated > 0:
             logger.info(f"Updated active_count for {updated} contexts/skills")

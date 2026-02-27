@@ -60,7 +60,7 @@ class UnifiedResourceProcessor:
             if path.exists():
                 if path.is_dir():
                     return await self._process_directory(path, instruction, **kwargs)
-                return await self._process_file(path, instruction)
+                return await self._process_file(path, instruction, **kwargs)
             else:
                 logger.warning(f"Path {path} does not exist")
                 raise FileNotFoundError(f"Path {path} does not exist")
@@ -103,6 +103,7 @@ class UnifiedResourceProcessor:
         self,
         file_path: Path,
         instruction: str,
+        **kwargs,
     ) -> ParseResult:
         """Process file with unified parsing."""
         # Check if it's a zip file
@@ -111,7 +112,7 @@ class UnifiedResourceProcessor:
             try:
                 with zipfile.ZipFile(file_path, "r") as zipf:
                     zipf.extractall(temp_dir)
-                return await self._process_directory(temp_dir, instruction)
+                return await self._process_directory(temp_dir, instruction, **kwargs)
             finally:
                 pass  # Don't delete temp_dir yet, it will be used by TreeBuilder
         return await parse(

@@ -142,11 +142,13 @@ await client.close()
 ### CLI
 
 ```bash
-# CLI 从 ~/.openviking/ovcli.conf 或 $OPENVIKING_CLI_CONFIG_FILE 读取连接配置
+# CLI 从 ~/.openviking/ovcli.conf 或 $s 读取连接配置
 
 # 基本操作
 openviking health
-openviking add-resource ./document.md
+openviking add-resource ./document.md   # 上传文件
+openviking add-resource ./dir --exclude "*.tmp,*.log" --ignore-dirs "subdir-a,subdir-b/subsubdir-c" # 上传文件夹
+
 openviking wait
 openviking find "search query"
 

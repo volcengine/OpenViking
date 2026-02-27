@@ -22,6 +22,21 @@ def register(app: typer.Typer) -> None:
         instruction: str = typer.Option("", help="Additional instruction"),
         wait: bool = typer.Option(False, "--wait", help="Wait until processing is complete"),
         timeout: Optional[float] = typer.Option(600.0, help="Wait timeout in seconds"),
+        no_strict: bool = typer.Option(
+            False, "--no-strict", help="No strict mode for directory scanning"
+        ),
+        ignore_dirs: Optional[str] = typer.Option(
+            None, "--ignore-dirs", help='Ignore directories, e.g. --ignore-dirs "node_modules,dist"'
+        ),
+        include: Optional[str] = typer.Option(
+            None, "--include", help='Include files extensions, e.g. --include "*.pdf,*.md"'
+        ),
+        exclude: Optional[str] = typer.Option(
+            None, "--exclude", help='Exclude files extensions, e.g. --exclude "*.tmp,*.log"'
+        ),
+        no_directly_upload_media: bool = typer.Option(
+            False, "--no-directly-upload-media", help="Do not directly upload media files"
+        ),
     ) -> None:
         """Add resources into OpenViking."""
         # Validate path: if it's a local path, check if it exists
@@ -85,6 +100,11 @@ def register(app: typer.Typer) -> None:
                 instruction=instruction,
                 wait=wait,
                 timeout=timeout,
+                strict=not no_strict,
+                ignore_dirs=ignore_dirs,
+                include=include,
+                exclude=exclude,
+                directly_upload_media=not no_directly_upload_media,
             ),
         )
 

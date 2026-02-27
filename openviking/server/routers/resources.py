@@ -29,12 +29,18 @@ class AddResourceRequest(BaseModel):
     instruction: str = ""
     wait: bool = False
     timeout: Optional[float] = None
+    strict: bool = True
+    ignore_dirs: Optional[str] = None
+    include: Optional[str] = None
+    exclude: Optional[str] = None
+    directly_upload_media: bool = True
 
 
 class AddSkillRequest(BaseModel):
     """Request model for add_skill."""
 
-    data: Any
+    data: Any = None
+    temp_path: Optional[str] = None
     wait: bool = False
     timeout: Optional[float] = None
 
@@ -97,6 +103,11 @@ async def add_resource(
         instruction=request.instruction,
         wait=request.wait,
         timeout=request.timeout,
+        strict=request.strict,
+        ignore_dirs=request.ignore_dirs,
+        include=request.include,
+        exclude=request.exclude,
+        directly_upload_media=request.directly_upload_media,
     )
     return Response(status="ok", result=result)
 
@@ -108,8 +119,13 @@ async def add_skill(
 ):
     """Add skill to OpenViking."""
     service = get_service()
+
+    data = request.data
+    if request.temp_path:
+        data = request.temp_path
+
     result = await service.resources.add_skill(
-        data=request.data,
+        data=data,
         ctx=_ctx,
         wait=request.wait,
         timeout=request.timeout,

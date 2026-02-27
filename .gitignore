@@ -167,6 +167,5 @@ test_db_*/
 test_project_root/
 benchmark_stress_db/
 examples/data/
-third_party/agfs/bin/
 openviking/_version.py
 specs/

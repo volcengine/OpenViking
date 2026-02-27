@@ -330,6 +330,78 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 }
 ```
 
+#### agfs
+
+| 参数 | 类型 | 说明 | 默认值 |
+|------|------|------|--------|
+| `mode` | str | `"http-client"` 或 `"binding-client"` | `"http-client"` |
+| `backend` | str | `"local"`、`"s3"` 或 `"memory"` | `"local"` |
+| `path` | str | `local` 后端的本地目录路径 | `"./data"` |
+| `url` | str | `http-client` 模式下的 AGFS 服务地址 | `"http://localhost:1833"` |
+| `timeout` | float | 请求超时时间（秒） | `10.0` |
+
+**配置示例**
+
+<details>
+<summary><b>HTTP Client（默认）</b></summary>
+
+通过 HTTP 连接到远程或本地的 AGFS 服务。
+
+```json
+{
+  "storage": {
+    "agfs": {
+      "mode": "http-client",
+      "url": "http://localhost:1833",
+      "timeout": 10.0
+    }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary><b>Binding Client（高性能）</b></summary>
+
+通过共享库直接使用 AGFS 的 Go 实现。
+
+**配置**：
+```json
+{
+  "storage": {
+    "agfs": {
+      "mode": "binding-client",
+      "backend": "local",
+      "path": "./data"
+    }
+  }
+}
+```
+
+</details>
+
+**S3 后端**
+
+```json
+{
+  "storage": {
+    "agfs": {
+      "backend": "s3",
+      "s3": {
+        "bucket": "my-bucket",
+        "endpoint": "s3.amazonaws.com",
+        "region": "us-east-1",
+        "access_key": "your-ak",
+        "secret_key": "your-sk"
+      }
+    }
+  }
+}
+```
+
+#### vectordb
+
 ## 配置文件
 
 OpenViking 使用两个配置文件：

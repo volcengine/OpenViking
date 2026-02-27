@@ -1,10 +1,10 @@
 """Memory system for persistent agent memory."""
 
+from vikingbot.config.loader import load_config
 from pathlib import Path
 from typing import Any
-from vikingbot.openviking_mount.ov_server import VikingClient
-import asyncio
 
+from vikingbot.openviking_mount.ov_server import VikingClient
 from vikingbot.utils.helpers import ensure_dir
 
 
@@ -15,6 +15,9 @@ class MemoryStore:
         self.memory_dir = ensure_dir(workspace / "memory")
         self.memory_file = self.memory_dir / "MEMORY.md"
         self.history_file = self.memory_dir / "HISTORY.md"
+        config = load_config()
+        ov_config = config.openviking
+        self.user_id = ov_config.user_id if ov_config.mode == "remote" else "default"
 
     def read_long_term(self) -> str:
         if self.memory_file.exists():
@@ -43,8 +46,8 @@ class MemoryStore:
         long_term = self.read_long_term()
         return f"## Long-term Memory\n{long_term}" if long_term else ""
 
-    async def get_viking_memory_context(self, session_id: str, current_message: str, history: list[dict[str, Any]]) -> str:
-        client = await VikingClient.create()
+    async def get_viking_memory_context(self, current_message: str, sandbox_key: str) -> str:
+        client = await VikingClient.create(agent_id=sandbox_key)
         result = await client.search_memory(current_message, limit=5)
         if not result:
             return ""
@@ -54,9 +57,9 @@ class MemoryStore:
                 f"### user memories:\n{user_memory}\n"
                 f"### agent memories:\n{agent_memory}")
 
-    async def get_viking_user_profile(self, ) -> str:
-        client = await VikingClient.create()
-        result = await client.read_content(uri="viking://user/memories/profile.md", level="read")
+    async def get_viking_user_profile(self, sandbox_key: str) -> str:
+        client = await VikingClient.create(agent_id=sandbox_key)
+        result = await client.read_content(uri=f"viking://user/{self.user_id}/memories/profile.md", level="read")
         if not result:
             return ""
         return f"## User Information\n{result}"
