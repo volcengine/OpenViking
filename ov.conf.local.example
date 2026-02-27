@@ -1,6 +1,4 @@
 {
-  "_comment": "本地开发配置：OpenViking 在宿主机运行，PostgreSQL + MinIO 通过 Docker 启动",
-
   "storage": {
     "workspace": "./data",
 

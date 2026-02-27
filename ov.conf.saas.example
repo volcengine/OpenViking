@@ -1,6 +1,4 @@
 {
-  "_comment": "OpenViking SaaS Configuration - copy to ov.conf.saas and fill in your values",
-
   "storage": {
     "workspace": "/app/data",
 
