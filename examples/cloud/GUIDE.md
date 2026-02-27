@@ -1,6 +1,26 @@
-# OpenViking 上云部署指南
+# OpenViking 云上部署指南（火山引擎）
 
 本文档介绍如何将 OpenViking 部署到火山引擎云上，使用 TOS（对象存储）+ VikingDB（向量数据库）+ 方舟大模型作为后端。
+
+## 概览
+
+云上部署架构：
+
+```
+用户请求 → OpenViking Server (1933)
+                ├── AGFS → TOS (S3 兼容协议，存储文件数据)
+                ├── VectorDB → VikingDB (向量检索)
+                ├── Embedding → 方舟 API (doubao-embedding-vision)
+                └── VLM → 方舟 API (doubao-seed)
+```
+
+> **地域说明**：TOS 和 VikingDB 均需要选择地域（region），不同地域对应不同的服务域名。所有云服务应部署在同一地域以降低网络延迟。目前支持的地域包括 `cn-beijing`、`cn-shanghai`、`cn-guangzhou` 等，本文以 `cn-beijing` 为例。
+
+## 前置条件
+
+- 火山引擎账号（[注册地址](https://console.volcengine.com/)）
+- 已安装 OpenViking（`pip install openviking` 或从源码安装）
+- Python 3.11+
 
 ---
 
@@ -14,19 +34,27 @@ TOS 用于持久化存储 OpenViking 的文件数据（AGFS 后端）。
 2. 进入 **对象存储 TOS** → 开通服务
 3. 创建存储桶：
    - 桶名称：如 `openvikingdata`
-   - 地域：`cn-beijing`（需与其他服务保持一致）
+   - 地域：如 `cn-beijing`（需与 VikingDB 等其他服务保持一致）
    - 存储类型：标准存储
    - 访问权限：私有
-4. 记录桶名称和地域，填入配置文件的 `storage.agfs.s3` 部分
+4. 记录桶名称、地域和 S3 兼容 endpoint，填入配置文件的 `storage.agfs.s3` 部分
+
+> **注意**：AGFS 使用 S3 兼容协议访问 TOS，endpoint 需要使用 S3 兼容域名（带 `tos-s3-` 前缀），而非 TOS 控制台显示的标准域名。不同地域的 endpoint 不同，请查阅 [TOS 地域和访问域名文档](https://www.volcengine.com/docs/6349/107356) 获取你所在地域的 S3 兼容 endpoint。例如：
+>
+> | 地域 | S3 兼容 endpoint |
+> |------|-----------------|
+> | cn-beijing | `https://tos-s3-cn-beijing.volces.com` |
+> | cn-shanghai | `https://tos-s3-cn-shanghai.volces.com` |
+> | cn-guangzhou | `https://tos-s3-cn-guangzhou.volces.com` |
 
 ### 1.2 开通 VikingDB（向量数据库）
 
 VikingDB 用于存储和检索向量嵌入。
 
-1. 进入 [火山引擎控制台](https://console.volcengine.com/) → **智能数据**  → **向量数据库 VikingDB**
-2. 开通服务（按量付费即可）
-3. VikingDB 的 API Host 默认为：`api-vikingdb.vikingdb.cn-beijing.volces.com`
-4. 无需手动创建 Collection，OpenViking 启动后会自动创建
+1. 登陆 [火山引擎控制台](https://console.volcengine.com/) →  [进入 VikingDB 下单开通界面](https://console.volcengine.com/vikingdb/region:vikingdb+cn-beijing/home) -> 选择对应的地域并开通向量数据库
+2. 开通服务（按量付费即可），选择与 TOS 相同的地域
+3. 无需手动创建 Collection，OpenViking 启动后会自动创建
+4. 在配置文件中填写 `storage.vectordb.volcengine.region`，OpenViking 会自动路由到对应地域的 VikingDB 服务
 
 ### 1.3 申请 AK/SK（IAM 访问密钥）
 
@@ -43,7 +71,6 @@ AK/SK 同时用于 TOS 和 VikingDB 的鉴权。
 5. 将 AK/SK 填入配置文件中的以下位置：
    - `storage.vectordb.volcengine.ak` / `sk`
    - `storage.agfs.s3.access_key` / `secret_key`
-   - `rerank.ak` / `sk`（如果使用 rerank）
 
 ### 1.4 申请方舟 API Key
 
@@ -55,94 +82,340 @@ AK/SK 同时用于 TOS 和 VikingDB 的鉴权。
 4. 确认以下模型已开通（在 **模型广场** 中申请）：
    - `doubao-embedding-vision-250615`（多模态 Embedding）
    - `doubao-seed-1-8-251228`（VLM 推理）
-   - `doubao-seed-rerank`（Rerank，可选）
 5. 将 API Key 填入配置文件的 `embedding.dense.api_key` 和 `vlm.api_key`
 
 ---
 
-## 2. 编写配置文件
+## 2. 准备配置文件
 
-参考本目录下的 [ov.conf](./ov.conf)，将上述步骤获取的凭据填入。
+### 2.1 复制示例配置
 
-关键字段说明：
+```bash
+cp examples/cloud/ov.conf.example examples/cloud/ov.conf
+```
+
+### 2.2 编辑配置
+
+打开 `examples/cloud/ov.conf`，将占位符替换为真实值。需要替换的字段如下：
+
+| 占位符 | 替换为 | 说明 |
+|--------|--------|------|
+| `<your-root-api-key>` | 自定义强密码 | 管理员密钥，用于多租户管理 |
+| `<your-volcengine-ak>` | IAM Access Key ID | 火山引擎 AK，用于 TOS / VikingDB |
+| `<your-volcengine-sk>` | IAM Secret Access Key | 火山引擎 SK |
+| `<your-tos-bucket>` | TOS 桶名称 | 如 `openvikingdata` |
+| `<your-ark-api-key>` | 方舟 API Key | 用于 Embedding 和 VLM |
+
+此外，还需根据实际地域修改以下字段（示例中默认为 `cn-beijing`）：
 
 | 字段 | 说明 |
 |------|------|
-| `server.root_api_key` | 管理员密钥，用于多租户管理，设置一个强密码 |
-| `storage.vectordb.backend` | 设置为 `volcengine` 使用云端 VikingDB |
-| `storage.vectordb.volcengine.ak/sk` | IAM 的 AK/SK |
-| `storage.agfs.backend` | 设置为 `s3` 使用 TOS 存储 |
-| `storage.agfs.s3.bucket` | TOS 桶名称 |
-| `storage.agfs.s3.endpoint` | TOS 端点，北京为 `https://tos-cn-beijing.volces.com` |
-| `storage.agfs.s3.access_key/secret_key` | IAM 的 AK/SK |
-| `embedding.dense.api_key` | 方舟 API Key |
-| `vlm.api_key` | 方舟 API Key |
+| `storage.vectordb.volcengine.region` | VikingDB 地域，如 `cn-beijing`、`cn-shanghai`、`cn-guangzhou` |
+| `storage.agfs.s3.region` | TOS 地域，需与桶所在地域一致 |
+| `storage.agfs.s3.endpoint` | TOS 的 S3 兼容 endpoint，需与地域匹配（参考第 1.1 节） |
+
+替换后的配置示例（脱敏）：
+
+```json
+{
+  "server": {
+    "root_api_key": "my-strong-secret-key-2024"
+  },
+  "storage": {
+    "vectordb": {
+      "volcengine": {
+        "region": "cn-beijing",
+        "ak": "AKLTxxxxxxxxxxxx",
+        "sk": "T1dYxxxxxxxxxxxx"
+      }
+    },
+    "agfs": {
+      "s3": {
+        "bucket": "openvikingdata",
+        "region": "cn-beijing",
+        "access_key": "AKLTxxxxxxxxxxxx",
+        "secret_key": "T1dYxxxxxxxxxxxx",
+        "endpoint": "https://tos-s3-cn-beijing.volces.com"
+      }
+    }
+  },
+  "embedding": {
+    "dense": {
+      "api_key": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+    }
+  },
+  "vlm": {
+    "api_key": "xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+  }
+}
+```
+
+> **注意**：`ov.conf` 已被 `.gitignore` 排除，不会被提交到版本库。请妥善保管你的凭据。
 
 ---
 
 ## 3. 启动服务
 
-### 方式一：Docker（推荐）
+| 方式 | 需要容器运行时 | 适合节点数 | 环境隔离 | 弹性伸缩 | 典型场景 |
+|------|:---:|:---:|:---:|:---:|------|
+| **Docker（推荐）** | 是 | 单机 | 容器隔离 | 不支持 | 开发、测试、单机生产，最省事 |
+| systemd | 否 | 单机 | 无 | 不支持 | VM 上不想装 Docker |
+| Kubernetes + Helm | 是 | 暂不支持多节点 | 容器 + 编排 | 支持 | 已有 K8s 集群的团队 |
 
-```bash
-# 构建镜像（如果不使用预构建镜像）
-docker build -t openviking:latest .
+> **开发调试**：如果只是本地快速验证，可以直接运行：
+> ```bash
+> pip install openviking
+>
+> # 方式 A：放到默认路径
+> mkdir -p ~/.openviking && cp examples/cloud/ov.conf ~/.openviking/ov.conf
+> openviking-server
+>
+> # 方式 B：通过环境变量指定
+> OPENVIKING_CONFIG_FILE=examples/cloud/ov.conf openviking-server
+> ```
 
-# 启动
-docker run -d \
-  --name openviking \
-  -p 1933:1933 \
-  -v $(pwd)/examples/cloud/ov.conf:/app/ov.conf \
-  -v /var/lib/openviking/data:/app/data \
-  --restart unless-stopped \
-  openviking:latest
-```
+### 方式一：systemd
 
-### 方式二：Docker Compose
+适合在 VM 上以系统服务方式长期运行。
 
-修改 `docker-compose.yml` 中的配置挂载路径后：
-
-```bash
-docker-compose up -d
-```
-
-### 方式三：Kubernetes + Helm
-
-```bash
-helm install openviking ./examples/k8s-helm \
-  --set openviking.config.embedding.dense.api_key="YOUR_ARK_API_KEY" \
-  --set openviking.config.vlm.api_key="YOUR_ARK_API_KEY" \
-  --set openviking.config.storage.vectordb.volcengine.ak="YOUR_AK" \
-  --set openviking.config.storage.vectordb.volcengine.sk="YOUR_SK"
-```
-
-### 方式四：直接运行
+1. 安装 OpenViking：
 
 ```bash
 pip install openviking
-export OPENVIKING_CONFIG_FILE=$(pwd)/examples/cloud/ov.conf
-openviking-server
 ```
 
-### 验证启动
+2. 将配置文件放到固定路径：
 
 ```bash
-# 健康检查
-curl http://localhost:1933/health
-# 期望返回: {"status":"ok"}
+sudo mkdir -p /etc/openviking
+sudo cp ~/.openviking/ov.conf /etc/openviking/ov.conf
+sudo chmod 600 /etc/openviking/ov.conf
+```
 
-# 就绪检查（验证 AGFS、VikingDB 连接）
-curl http://localhost:1933/ready
-# 期望返回: {"status":"ready","checks":{"agfs":"ok","vectordb":"ok","api_key_manager":"ok"}}
+3. 创建 systemd service 文件：
+
+```bash
+sudo tee /etc/systemd/system/openviking.service > /dev/null << 'EOF'
+[Unit]
+Description=OpenViking Server
+After=network.target
+
+[Service]
+Type=simple
+Environment=OPENVIKING_CONFIG_FILE=/etc/openviking/ov.conf
+ExecStart=/usr/local/bin/openviking-server  # 替换为 which openviking-server 的实际输出
+Restart=on-failure
+RestartSec=5s
+StandardOutput=journal
+StandardError=journal
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+EOF
+```
+
+4. 启动服务：
+
+```bash
+sudo systemctl daemon-reload
+sudo systemctl start openviking
+sudo systemctl status openviking
+```
+
+5. 确认服务正常后，设置开机自启（可选）：
+
+```bash
+sudo systemctl enable openviking
+```
+
+常用管理命令：
+
+```bash
+sudo systemctl stop openviking       # 停止服务
+sudo systemctl restart openviking    # 重启服务
+journalctl -u openviking -f          # 查看实时日志
+```
+
+### 方式二：Docker
+
+单容器场景用 `docker run` 或 `docker compose` 均可，效果相同。
+
+**docker run：**
+
+```bash
+# 假设你的配置文件在 ~/.openviking/ov.conf
+#
+# -p  端口映射，宿主机端口:容器端口，启动后通过 localhost:1933 访问
+# -v  挂载宿主机文件到容器内，格式为 宿主机路径:容器内路径
+#     ov.conf 挂载是必填的，data 目录用于持久化数据（容器删除后不丢失）
+# --restart  进程崩溃或机器重启后自动拉起
+
+docker run -d \
+  --name openviking \
+  -p 1933:1933 \
+  -v ~/.openviking/ov.conf:/app/ov.conf \
+  -v /var/lib/openviking/data:/app/data \
+  --restart unless-stopped \
+  ghcr.io/volcengine/openviking:main
+```
+
+> 将 `~/.openviking/ov.conf` 替换为你实际的配置文件路径。
+
+常用管理命令：
+
+```bash
+docker logs openviking        # 查看日志
+docker logs -f openviking     # 实时跟踪日志
+docker stop openviking        # 停止服务
+docker restart openviking     # 重启服务
+docker rm -f openviking       # 删除容器（重新 docker run 前需要先删除）
+```
+
+**docker compose：**
+
+项目根目录的 `docker-compose.yml` 默认从 `/var/lib/openviking/ov.conf` 读取配置：
+
+```bash
+# 把你的配置文件复制到 docker-compose.yml 期望的路径
+sudo mkdir -p /var/lib/openviking
+sudo cp ~/.openviking/ov.conf /var/lib/openviking/ov.conf
+
+# 在项目根目录下启动（-d 表示后台运行）
+docker compose up -d
+```
+
+> 如果配置文件不在 `/var/lib/openviking/ov.conf`，需要修改 `docker-compose.yml` 中 `volumes` 的挂载路径。
+
+常用管理命令：
+
+```bash
+docker compose stop        # 停止服务
+docker compose restart     # 重启服务
+docker compose logs -f     # 查看实时日志
+```
+
+> 如需自行构建镜像：`docker build -t openviking:latest .`
+
+### 方式三：Kubernetes + Helm
+
+Helm chart 默认的 `values.yaml` 只包含 embedding 和 vlm 配置。云上部署需要补充 storage、server 等字段。
+
+推荐创建自定义 values 文件 `my-values.yaml`：
+
+```yaml
+openviking:
+  config:
+    server:
+      root_api_key: "my-strong-secret-key-2024"
+    storage:
+      workspace: /app/data
+      vectordb:
+        name: context
+        backend: volcengine
+        project: default
+        volcengine:
+          region: cn-beijing
+          ak: "AKLTxxxxxxxxxxxx"
+          sk: "T1dYxxxxxxxxxxxx"
+      agfs:
+        port: 1833
+        log_level: warn
+        backend: s3
+        timeout: 10
+        retry_times: 3
+        s3:
+          bucket: "openvikingdata"
+          region: cn-beijing
+          access_key: "AKLTxxxxxxxxxxxx"
+          secret_key: "T1dYxxxxxxxxxxxx"
+          endpoint: "https://tos-s3-cn-beijing.volces.com"
+          prefix: openviking
+          use_ssl: true
+          use_path_style: false
+    embedding:
+      dense:
+        model: "doubao-embedding-vision-250615"
+        api_key: "your-ark-api-key"
+        api_base: "https://ark.cn-beijing.volces.com/api/v3"
+        dimension: 1024
+        provider: volcengine
+        input: multimodal
+    vlm:
+      model: "doubao-seed-1-8-251228"
+      api_key: "your-ark-api-key"
+      api_base: "https://ark.cn-beijing.volces.com/api/v3"
+      temperature: 0.0
+      max_retries: 3
+      provider: volcengine
+      thinking: false
+    auto_generate_l0: true
+    auto_generate_l1: true
+    default_search_mode: thinking
+    default_search_limit: 3
+    enable_memory_decay: true
+    memory_decay_check_interval: 3600
+```
+
+然后安装：
+
+```bash
+helm install openviking ./examples/k8s-helm -f my-values.yaml
+```
+
+或者通过 `--set` 逐个传参（适合 CI/CD）：
+
+```bash
+helm install openviking ./examples/k8s-helm \
+  --set openviking.config.server.root_api_key="my-strong-secret-key-2024" \
+  --set openviking.config.embedding.dense.api_key="YOUR_ARK_API_KEY" \
+  --set openviking.config.vlm.api_key="YOUR_ARK_API_KEY" \
+  --set openviking.config.storage.vectordb.backend="volcengine" \
+  --set openviking.config.storage.vectordb.volcengine.ak="YOUR_AK" \
+  --set openviking.config.storage.vectordb.volcengine.sk="YOUR_SK" \
+  --set openviking.config.storage.agfs.backend="s3" \
+  --set openviking.config.storage.agfs.s3.bucket="openvikingdata" \
+  --set openviking.config.storage.agfs.s3.access_key="YOUR_AK" \
+  --set openviking.config.storage.agfs.s3.secret_key="YOUR_SK" \
+  --set openviking.config.storage.agfs.s3.endpoint="https://tos-s3-cn-beijing.volces.com"
 ```
 
 ---
 
-## 4. 注册租户和用户
+## 4. 验证
+
+### 4.1 健康检查
+
+```bash
+curl http://localhost:1933/health
+# 期望返回: {"status":"ok"}
+```
+
+### 4.2 就绪检查
+
+就绪接口会检测 AGFS（TOS）和 VikingDB 的连接状态，是验证凭据是否正确的关键步骤：
+
+```bash
+curl http://localhost:1933/ready
+# 期望返回: {"status":"ready","checks":{"agfs":"ok","vectordb":"ok","api_key_manager":"ok"}}
+```
+
+如果某个组件报错，请检查：
+
+| checks 字段 | 失败原因 | 排查方向 |
+|-------------|---------|---------|
+| `agfs` | TOS 连接失败 | 检查 bucket、endpoint、AK/SK 是否正确 |
+| `vectordb` | VikingDB 连接失败 | 检查 region、AK/SK、服务是否已开通 |
+| `api_key_manager` | root_api_key 未配置 | 检查 `server.root_api_key` 字段 |
+
+---
+
+## 5. 多租户管理
 
 OpenViking 支持多租户隔离。配置了 `root_api_key` 后自动启用多租户模式。
 
-### 4.1 创建租户（Account）
+### 5.1 创建租户（Account）
 
 使用 `root_api_key` 创建租户，同时会生成一个管理员用户：
 
@@ -169,7 +442,7 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts \
 }
 ```
 
-### 4.2 注册普通用户
+### 5.2 注册普通用户
 
 租户管理员可以为租户添加用户：
 
@@ -195,7 +468,7 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts/my-team/users \
 }
 ```
 
-### 4.3 查看租户下的用户
+### 5.3 查看租户下的用户
 
 ```bash
 curl http://localhost:1933/api/v1/admin/accounts/my-team/users \
@@ -204,142 +477,65 @@ curl http://localhost:1933/api/v1/admin/accounts/my-team/users \
 
 ---
 
-## 5. 使用
+## 6. 运行示例
 
-以下操作使用用户的 API Key 进行。
+`examples/cloud/` 目录下提供了完整的多租户 demo 脚本，演示从用户创建到数据使用的全流程。
 
-### 5.1 添加资源
+### 6.1 setup_users.py — 初始化租户和用户
 
-```bash
-# 添加一个 URL 资源
-curl -X POST http://localhost:1933/api/v1/resources \
-  -H "X-API-Key: USER_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "path": "https://raw.githubusercontent.com/volcengine/OpenViking/main/README.md",
-    "reason": "项目文档"
-  }'
-
-# 上传本地文件（先上传到临时路径，再添加为资源）
-curl -X POST http://localhost:1933/api/v1/resources/temp_upload \
-  -H "X-API-Key: USER_API_KEY" \
-  -F "file=@./my-document.pdf"
-
-# 然后使用返回的 temp_path 添加资源
-curl -X POST http://localhost:1933/api/v1/resources \
-  -H "X-API-Key: USER_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "temp_path": "/tmp/upload_xyz",
-    "reason": "内部文档"
-  }'
-```
-
-### 5.2 等待处理完成
-
-添加资源后，系统会异步进行解析和向量化。等待处理完成：
+创建租户 `demo-team`，注册 alice（管理员）和 bob（普通用户），并将 API Key 写入 `user_keys.json` 供后续脚本使用。
 
 ```bash
-curl -X POST http://localhost:1933/api/v1/system/wait \
-  -H "X-API-Key: USER_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"timeout": 120}'
+# 确保 server 已启动，且 root_api_key 与 ov.conf 一致
+uv run examples/cloud/setup_users.py --url http://localhost:1933 --root-key <your-root-api-key>
 ```
 
-### 5.3 语义搜索
+### 6.2 alice.py — 技术负责人的使用流程
+
+Alice 演示：添加项目文档 → 语义搜索 → 多轮对话 → 沉淀记忆 → 回顾记忆。
 
 ```bash
-curl -X POST http://localhost:1933/api/v1/search/find \
-  -H "X-API-Key: USER_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "OpenViking 是什么",
-    "limit": 5
-  }'
+uv run examples/cloud/alice.py
 ```
 
-### 5.4 浏览文件系统
+脚本会自动从 `user_keys.json` 读取 API Key。也可以手动指定：
 
 ```bash
-# 列出根目录
-curl "http://localhost:1933/api/v1/fs/ls?uri=viking://" \
-  -H "X-API-Key: USER_API_KEY"
-
-# 查看目录树
-curl "http://localhost:1933/api/v1/fs/tree?uri=viking://&depth=2" \
-  -H "X-API-Key: USER_API_KEY"
+uv run examples/cloud/alice.py --url http://localhost:1933 --api-key <alice_key>
 ```
 
-### 5.5 读取内容
+### 6.3 bob.py — 新入职成员的使用流程
+
+Bob 演示：浏览团队资源 → 回顾团队记忆（Alice 沉淀的决策） → 添加自己的资源 → 对话 → 沉淀记忆 → 带上下文搜索。
+
+建议在 alice.py 执行完毕后运行，这样 Bob 可以看到 Alice 沉淀的团队记忆：
 
 ```bash
-# 读取文件内容
-curl "http://localhost:1933/api/v1/content/read?uri=viking://resources/doc1" \
-  -H "X-API-Key: USER_API_KEY"
-
-# 读取摘要
-curl "http://localhost:1933/api/v1/content/abstract?uri=viking://resources/doc1" \
-  -H "X-API-Key: USER_API_KEY"
+uv run examples/cloud/bob.py
 ```
 
-### 5.6 会话管理（Memory）
+### 完整流程汇总
 
 ```bash
-# 创建会话
-curl -X POST http://localhost:1933/api/v1/sessions \
-  -H "X-API-Key: USER_API_KEY"
+# 1. 启动服务（确保 ~/.openviking/ov.conf 已就位）
+openviking-server &
 
-# 添加对话消息
-curl -X POST http://localhost:1933/api/v1/sessions/{session_id}/messages \
-  -H "X-API-Key: USER_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "role": "user",
-    "content": "帮我分析这个文档的核心观点"
-  }'
+# 2. 等待服务就绪
+curl http://localhost:1933/ready
 
-# 带会话上下文的搜索
-curl -X POST http://localhost:1933/api/v1/search/search \
-  -H "X-API-Key: USER_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "query": "核心观点",
-    "session_id": "SESSION_ID",
-    "limit": 5
-  }'
-```
+# 3. 创建用户
+uv run examples/cloud/setup_users.py --root-key <your-root-api-key>
 
-### 5.7 Python SDK 使用
+# 4. Alice: 添加文档 + 对话 + 沉淀记忆
+uv run examples/cloud/alice.py
 
-```python
-import openviking as ov
-
-client = ov.SyncHTTPClient(
-    url="http://localhost:1933",
-    api_key="USER_API_KEY",
-    agent_id="my-agent",
-    timeout=120.0,  # HTTP request timeout in seconds (default: 60.0)
-)
-client.initialize()
-
-# 添加资源
-client.add_resource(
-    path="https://example.com/doc.pdf",
-    reason="参考文档"
-)
-client.wait_processed(timeout=120)
-
-# 搜索
-results = client.find("OpenViking 架构设计", limit=5)
-for r in results:
-    print(r.uri, r.score)
-
-client.close()
+# 5. Bob: 浏览团队资源和记忆 + 入职学习
+uv run examples/cloud/bob.py
 ```
 
 ---
 
-## 6. 运维
+## 7. 运维
 
 ### 日志
 
@@ -348,6 +544,8 @@ client.close()
 ```bash
 docker logs -f openviking
 ```
+
+配置文件中 `log.level` 可调整日志级别（`DEBUG` / `INFO` / `WARN` / `ERROR`）。
 
 ### 监控
 
@@ -359,3 +557,113 @@ docker logs -f openviking
 
 - **TOS 数据**：通过 TOS 控制台配置跨区域复制或定期备份
 - **本地数据**（如使用 PVC）：定期快照 PersistentVolume
+
+---
+
+## 8. 常见问题
+
+### systemd 启动失败（status=203/EXEC）
+
+`status=203/EXEC` 表示 systemd 找不到 `ExecStart` 指定的可执行文件。常见于使用 venv / conda 环境安装 OpenViking 的情况，`openviking-server` 不在 `/usr/local/bin/` 下。
+
+排查步骤：
+
+```bash
+# 1. 查找实际路径
+which openviking-server
+
+# 2. 将输出路径替换到 service 文件的 ExecStart
+sudo sed -i 's|ExecStart=.*|ExecStart=/实际/路径/openviking-server|' /etc/systemd/system/openviking.service
+
+# 3. 重新加载并启动
+sudo systemctl daemon-reload
+sudo systemctl restart openviking
+sudo systemctl status openviking
+```
+
+### docker: command not found
+
+系统未安装 Docker，请参考 [Docker 官方安装文档](https://docs.docker.com/engine/install/) 选择对应系统的安装方式。安装完成后启动 Docker：
+
+```bash
+sudo systemctl start docker
+```
+
+然后重新运行 `docker run` 命令即可。
+
+### TOS 连接失败（agfs check failed）
+
+- **endpoint 错误**：确认使用 S3 兼容 endpoint（带 `tos-s3-` 前缀），不要用标准 endpoint（`tos-cn-` 前缀）
+- **地域不匹配**：确认 `storage.agfs.s3.region` 和 `storage.agfs.s3.endpoint` 与桶所在地域一致
+- **bucket 不存在**：确认 TOS 控制台中桶已创建，且名称和地域与配置一致
+- **AK/SK 无权限**：确认 IAM 子用户拥有 `TOSFullAccess` 或对应桶的访问策略
+
+### VikingDB 鉴权失败（vectordb check failed）
+
+- **服务未开通**：在火山引擎控制台确认 VikingDB 已开通
+- **地域错误**：确认 `storage.vectordb.volcengine.region` 与开通服务的地域一致
+- **AK/SK 错误**：确认 `storage.vectordb.volcengine.ak/sk` 与 IAM 密钥一致
+- **权限不足**：确认 IAM 子用户拥有 `VikingDBFullAccess` 策略
+
+### Embedding 模型调用失败
+
+- **模型未开通**：在方舟控制台 **模型广场** 中确认 `doubao-embedding-vision-250615` 已申请并通过
+- **API Key 错误**：确认 `embedding.dense.api_key` 填写正确
+- **API Base 错误**：确认为 `https://ark.cn-beijing.volces.com/api/v3`
+
+### helm: command not found
+
+系统未安装 Helm，需要先安装：
+
+```bash
+curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
+```
+
+安装后验证：
+
+```bash
+helm version
+```
+
+### Kubernetes cluster unreachable
+
+```
+Error: INSTALLATION FAILED: Kubernetes cluster unreachable: Get "http://localhost:8080/version": dial tcp [::1]:8080: connect: connection refused
+```
+
+服务器上没有运行 Kubernetes 集群。可以使用 k3s 快速搭建轻量级集群：
+
+```bash
+# 安装 k3s
+curl -sfL https://get.k3s.io | sh -
+
+# 配置 kubeconfig
+export KUBECONFIG=/etc/rancher/k3s/k3s.yaml
+
+# 永久生效
+echo 'export KUBECONFIG=/etc/rancher/k3s/k3s.yaml' >> ~/.bashrc
+
+# 验证集群就绪
+kubectl get nodes
+```
+
+看到节点状态为 `Ready` 后，再执行 `helm install` 命令。
+
+### helm install 时 path not found
+
+```
+Error: INSTALLATION FAILED: path "./examples/k8s-helm" not found
+```
+
+需要在 OpenViking 项目根目录下执行 `helm install` 命令：
+
+```bash
+cd /path/to/OpenViking
+helm install openviking ./examples/k8s-helm -f my-values.yaml
+```
+
+### Helm 安装后 Pod CrashLoopBackOff
+
+- 检查 `kubectl logs <pod-name>`，通常是配置字段缺失
+- 确认 values 文件中包含完整的 storage、embedding、vlm 配置（参考第 3 节 Helm 部分）
+- 确认 `openviking.config` 下的 JSON 结构正确（Helm 会将其序列化为 ov.conf）

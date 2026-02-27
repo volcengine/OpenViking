@@ -153,3 +153,51 @@ jobs:
         VERSION=$(ls dist/*.whl | head -n 1 | xargs basename | cut -d- -f2)
         echo "Successfully published to PyPI with version: $VERSION"
         echo "::notice::Successfully published to PyPI with version: $VERSION"
+
+  docker:
+    name: Build and Push Docker Image
+    needs: [build, permission-check]
+    if: >-
+      needs.permission-check.outputs.allowed == 'true' &&
+      github.event_name == 'release'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ github.repository }}
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            OPENVIKING_VERSION=${{ github.event.release.tag_name }}
