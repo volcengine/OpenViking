@@ -66,7 +66,7 @@ class OpenVikingPostCallHook(Hook):
             if openviking_config.mode == "local":
                 skill_memory_uri = f"viking://agent/ffb1327b18bf/memories/skills/{skill_name}.md"
             else:
-                skill_memory_uri = f"viking://agent/{sandbox_key}/memories/skills/{skill_name}.md"
+                skill_memory_uri = f"viking://agent/{ov_client.agent_space_name}/memories/skills/{skill_name}.md"
             # logger.warning(f"skill_memory_uri={skill_memory_uri}")
             content = await ov_client.read_content(skill_memory_uri, level="read")
             # logger.warning(f"content={content}")
