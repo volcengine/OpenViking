@@ -183,7 +183,10 @@ class AsyncHTTPClient(BaseClient):
     async def close(self) -> None:
         """Close the HTTP client."""
         if self._http:
-            await self._http.aclose()
+            try:
+                await self._http.aclose()
+            except RuntimeError:
+                pass
             self._http = None
 
     # ============= Internal Helpers =============

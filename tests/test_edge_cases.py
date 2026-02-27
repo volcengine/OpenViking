@@ -29,12 +29,11 @@ from openviking.parse.parsers.upload_utils import (  # noqa: I001
     is_text_file,
     upload_directory,
 )
-from openviking.storage.vikingdb_interface import VikingDBInterface
 from openviking.utils.compression import CompressManager
 from openviking_cli.utils.uri import VikingURI
 
 
-class MockVikingDB(VikingDBInterface):
+class MockVikingDB:
     """Mock vector database for testing."""
 
     def __init__(self):

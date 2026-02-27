@@ -204,8 +204,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                 uri = inserted_data.get("uri")
                 if uri:
                     account_id = inserted_data.get("account_id", "default")
-                    owner_space = inserted_data.get("owner_space", "")
-                    id_seed = f"{account_id}:{owner_space}:{uri}"
+                    id_seed = f"{account_id}:{uri}"
                     inserted_data["id"] = hashlib.md5(id_seed.encode("utf-8")).hexdigest()
 
                 record_id = await self._vikingdb.upsert(inserted_data)

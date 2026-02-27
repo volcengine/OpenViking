@@ -9,10 +9,10 @@ import unittest
 
 from openviking.storage.vectordb.collection.local_collection import get_or_create_local_collection
 
-db_path_basic = "./db_test_filters_basic/"
-db_path_complex = "./db_test_filters_complex/"
-db_path_lifecycle = "./db_test_filters_lifecycle/"
-db_path_scale = "./db_test_filters_scale/"
+db_path_basic = "./test_data/db_test_filters_basic/"
+db_path_complex = "./test_data/db_test_filters_complex/"
+db_path_lifecycle = "./test_data/db_test_filters_lifecycle/"
+db_path_scale = "./test_data/db_test_filters_scale/"
 
 
 def clean_dir(path):

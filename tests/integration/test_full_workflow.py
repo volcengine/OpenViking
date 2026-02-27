@@ -67,15 +67,11 @@ class TestResourceToSearchWorkflow:
 
         # 3. Read searched resource
         if search_result.resources:
-            if search_result.resources[0].is_leaf:
-                content = await client.read(search_result.resources[0].uri)
-                assert len(content) > 0
-            else:
-                res = await client.tree(search_result.resources[0].uri)
-                for data in res:
-                    if not data["isDir"]:
-                        content = await client.read(data["uri"])
-                        assert len(content) > 0
+            res = await client.tree(search_result.resources[0].uri)
+            for data in res:
+                if not data["isDir"]:
+                    content = await client.read(data["uri"])
+                    assert len(content) > 0
 
 
 class TestSessionWorkflow:

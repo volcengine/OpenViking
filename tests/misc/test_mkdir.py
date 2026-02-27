@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for VikingFS.mkdir() — verifies the target directory is actually created."""
 
+import contextvars
 import os
 import sys
 from unittest.mock import AsyncMock, MagicMock
@@ -22,6 +23,7 @@ def _make_viking_fs():
     fs.query_embedder = None
     fs.vector_store = None
     fs._uri_prefix = "viking://"
+    fs._bound_ctx = contextvars.ContextVar("vikingfs_bound_ctx", default=None)
     return fs
 
 

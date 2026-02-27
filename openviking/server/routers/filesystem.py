@@ -74,7 +74,8 @@ async def stat(
         result = await service.fs.stat(uri, ctx=_ctx)
         return Response(status="ok", result=result)
     except AGFSClientError as e:
-        if "no such file or directory" in str(e).lower():
+        err_msg = str(e).lower()
+        if "not found" in err_msg or "no such file or directory" in err_msg:
             raise NotFoundError(uri, "file")
         raise
 
