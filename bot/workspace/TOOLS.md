@@ -2,32 +2,6 @@
 
 This document describes the tools available to vikingbot.
 
-## File Operations
-
-### read_file
-Read the contents of a file.
-```
-read_file(path: str) -> str
-```
-
-### write_file
-Write content to a file (creates parent directories if needed).
-```
-write_file(path: str, content: str) -> str
-```
-
-### edit_file
-Edit a file by replacing specific text.
-```
-edit_file(path: str, old_text: str, new_text: str) -> str
-```
-
-### list_dir
-List contents of a directory.
-```
-list_dir(path: str) -> str
-```
-
 ## Shell Execution
 
 ### exec

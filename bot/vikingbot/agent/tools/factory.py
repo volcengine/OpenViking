@@ -2,23 +2,18 @@
 
 from typing import TYPE_CHECKING, Callable
 
-from vikingbot.agent.tools.registry import ToolRegistry
+from vikingbot.agent.tools.cron import CronTool
 from vikingbot.agent.tools.filesystem import ReadFileTool, WriteFileTool, EditFileTool, ListDirTool
+from vikingbot.agent.tools.image import ImageGenerationTool
+from vikingbot.agent.tools.message import MessageTool
+from vikingbot.agent.tools.ov_file import VikingReadTool, VikingListTool, VikingSearchTool, \
+    VikingGrepTool, VikingGlobTool, VikingSearchUserMemoryTool, VikingMemoryCommitTool
+from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.agent.tools.shell import ExecTool
 from vikingbot.agent.tools.web import WebFetchTool
 from vikingbot.agent.tools.websearch import WebSearchTool
-from vikingbot.agent.tools.image import ImageGenerationTool
-from vikingbot.agent.tools.message import MessageTool
-from vikingbot.agent.tools.cron import CronTool
-from vikingbot.agent.tools.ov_file import VikingReadTool, VikingListTool, VikingAddResourceTool, VikingSearchTool, \
-    VikingGrepTool, VikingGlobTool, VikingSearchUserMemoryTool
 
 if TYPE_CHECKING:
-    from pathlib import Path
-    from vikingbot.bus.events import OutboundMessage
-    from vikingbot.agent.subagent import SubagentManager
-    from vikingbot.cron.service import CronService
-    from vikingbot.config.schema import Config, ExecToolConfig
     from vikingbot.agent.tools.spawn import SpawnTool
 
 
@@ -87,6 +82,7 @@ def register_default_tools(
         registry.register(VikingGrepTool())
         registry.register(VikingGlobTool())
         registry.register(VikingSearchUserMemoryTool())
+        registry.register(VikingMemoryCommitTool())
 
     # Image generation tool
     if include_image_tool:
