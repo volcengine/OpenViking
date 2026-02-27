@@ -45,6 +45,58 @@ vikingbot agent -m "What is 2+2?"
 
 That's it! You have a working AI assistant in 2 minutes.
 
+## 🐳 Docker Deployment
+
+You can also deploy vikingbot using Docker for easier setup and isolation.
+### Prerequisites
+
+First, install Docker:
+- **macOS**: Download [Docker Desktop](https://www.docker.com/products/docker-desktop)
+- **Windows**: Download [Docker Desktop](https://www.docker.com/products/docker-desktop)
+- **Linux**: Follow [Docker's official docs](https://docs.docker.com/engine/install/)
+
+Verify Docker installation:
+```bash
+docker --version
+```
+
+### Quick Volcengine Registry Deploy (Recommended)
+### Quick Docker Deploy
+
+```bash
+# 1. Create necessary directories
+mkdir -p ~/.vikingbot/
+
+# 2. Start container and view logs
+docker run -d \
+    --name vikingbot \
+    --restart unless-stopped \
+    --platform linux/amd64 \
+    -v ~/.vikingbot:/root/.vikingbot \
+    -p 18791:18791 \
+    vikingbot-cn-beijing.cr.volces.com/vikingbot/vikingbot:latest \
+    gateway && docker logs --tail 50 -f vikingbot
+```
+
+Press `Ctrl+C` to exit log view, the container continues running in background.
+
+### Local Build and Deploy
+
+If you want to build the Docker image locally:
+
+```bash
+# Build image
+./deploy/docker/build-image.sh
+
+# Deploy
+./deploy/docker/deploy.sh
+
+# Stop
+./deploy/docker/stop.sh
+```
+
+For more Docker deployment options, see [deploy/docker/README.md](deploy/docker/README.md).
+
 ## 💬 Chat Apps
 
 Talk to your vikingbot through Telegram, Discord, WhatsApp, Feishu, Mochat, DingTalk, Slack, Email, or QQ — anytime, anywhere.

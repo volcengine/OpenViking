@@ -1,0 +1,24 @@
+# Vikingbot 镜像上传配置
+# 复制此文件到 ~/.config/vikingbot/image_upload.yaml 并填入你的信息
+
+# 火山引擎镜像仓库配置
+image_registry: vikingbot-cn-beijing.cr.volces.com
+image_namespace: vikingbot
+image_repository: vikingbot
+
+# 镜像标签配置
+# use_timestamp_tag: 是否使用时间戳标签 (true/false)
+#   - true: 自动生成时间戳标签，格式: build-YYYYMMDD-HHMMSS
+#   - false: 使用 image_tag 指定的标签
+use_timestamp_tag: false
+# image_tag: 固定标签 (仅当 use_timestamp_tag: false 时生效)
+#   可以设置为: latest, v1.0.0, build-123 等
+image_tag: latest
+
+# 本地镜像配置
+local_image_name: vikingbot
+local_image_tag: latest
+
+# 镜像仓库登录凭证
+registry_username: ""
+registry_password: ""

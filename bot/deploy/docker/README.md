@@ -2,9 +2,47 @@
 
 本目录提供 Vikingbot 的 Docker 一键部署脚本，支持本地快速部署和多架构支持。
 
+## 前置要求
+
+请先安装 Docker：
+
+- **macOS**: 下载 [Docker Desktop](https://www.docker.com/products/docker-desktop)
+- **Windows**: 下载 [Docker Desktop](https://www.docker.com/products/docker-desktop)
+- **Linux**: 参考 [Docker 官方文档](https://docs.docker.com/engine/install/)
+
+验证 Docker 安装：
+```bash
+docker --version
+```
+
 ## 快速开始
 
-### 一行命令部署
+### 从火山引擎镜像部署（推荐）
+
+如果你已经有推送到火山引擎镜像仓库的镜像，可以直接拉取并部署：
+
+```bash
+# 1. 创建必要的目录结构
+mkdir -p ~/.vikingbot/
+
+# 2. 启动容器并查看日志
+docker run -d \
+    --name vikingbot \
+    --restart unless-stopped \
+    --platform linux/amd64 \
+    -v ~/.vikingbot:/root/.vikingbot \
+    -p 18791:18791 \
+    vikingbot-cn-beijing.cr.volces.com/vikingbot/vikingbot:latest \
+    gateway && docker logs --tail 50 -f vikingbot
+```
+
+按 `Ctrl+C` 退出日志查看，容器继续后台运行。
+
+### 本地代码构建镜像部署
+
+如果你想从本地代码构建镜像并部署：
+
+#### 一行命令部署
 
 ```bash
 ./deploy/docker/deploy.sh
@@ -12,21 +50,21 @@
 
 脚本会自动检测本地架构（arm64/amd64）并构建适配的镜像。
 
-### 分步部署
+#### 分步部署
 
-#### 1. 构建镜像
+##### 1. 构建镜像
 
 ```bash
 ./deploy/docker/build-image.sh
 ```
 
-#### 2. 部署服务
+##### 2. 部署服务
 
 ```bash
 ./deploy/docker/deploy.sh
 ```
 
-#### 3. 停止服务
+##### 3. 停止服务
 
 ```bash
 ./deploy/docker/stop.sh
@@ -80,6 +118,8 @@ PLATFORM=linux/amd64 ./deploy/docker/deploy.sh
 | `build-image.sh` | 一键构建 Docker 镜像（支持多架构） |
 | `deploy.sh` | 一键部署（自动构建镜像+启动容器，自动检测架构） |
 | `stop.sh` | 停止并清理容器 |
+| `image_upload.sh` | 将本地镜像上传到火山引擎镜像仓库 |
+| `image_upload.example.yaml` | 镜像上传配置文件示例 |
 | `README.md` | 本文档 |
 
 ## 使用 Docker Compose

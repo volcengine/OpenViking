@@ -70,7 +70,7 @@ EXPOSE 18791
 
 ENV PYTHONUNBUFFERED=1
 ENV NODE_ENV=production
-
+ENV OPENVIKING_CONFIG_FILE=/root/.vikingbot/ov.conf
 WORKDIR /app
 
 ENTRYPOINT ["docker-entrypoint.sh"]
