@@ -322,13 +322,14 @@ impl HttpClient {
         self.get("/api/v1/fs/ls", &params).await
     }
 
-    pub async fn tree(&self, uri: &str, output: &str, abs_limit: i32, show_all_hidden: bool, node_limit: i32) -> Result<serde_json::Value> {
+    pub async fn tree(&self, uri: &str, output: &str, abs_limit: i32, show_all_hidden: bool, node_limit: i32, level_limit: i32) -> Result<serde_json::Value> {
         let params = vec![
             ("uri".to_string(), uri.to_string()),
             ("output".to_string(), output.to_string()),
             ("abs_limit".to_string(), abs_limit.to_string()),
             ("show_all_hidden".to_string(), show_all_hidden.to_string()),
             ("node_limit".to_string(), node_limit.to_string()),
+            ("level_limit".to_string(), level_limit.to_string()),
         ];
         self.get("/api/v1/fs/tree", &params).await
     }

@@ -26,10 +26,11 @@ pub async fn tree(
     abs_limit: i32,
     show_all_hidden: bool,
     node_limit: i32,
+    level_limit: i32,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let result = client.tree(uri, output, abs_limit, show_all_hidden, node_limit).await?;
+    let result = client.tree(uri, output, abs_limit, show_all_hidden, node_limit, level_limit).await?;
     output_success(&result, output_format, compact);
     Ok(())
 }

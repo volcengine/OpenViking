@@ -195,7 +195,7 @@ enum Commands {
         #[arg(short, long)]
         all: bool,
         /// Maximum number of nodes to list
-        #[arg(long = "node-limit", short = 'n', default_value = "1000")]
+        #[arg(long = "node-limit", short = 'n', default_value = "256")]
         node_limit: i32,
     },
     /// Get directory tree
@@ -209,8 +209,11 @@ enum Commands {
         #[arg(short, long)]
         all: bool,
         /// Maximum number of nodes to list
-        #[arg(long = "node-limit", short = 'n', default_value = "1000")]
+        #[arg(long = "node-limit", short = 'n', default_value = "256")]
         node_limit: i32,
+        /// Maximum depth level to traverse (default: 3)
+        #[arg(short = 'L', long = "level-limit", default_value = "3")]
+        level_limit: i32,
     },
     /// Create directory
     Mkdir {
@@ -530,8 +533,8 @@ async fn main() {
         Commands::Ls { uri, simple, recursive, abs_limit, all, node_limit } => {
             handle_ls(uri, simple, recursive, abs_limit, all, node_limit, ctx).await
         }
-        Commands::Tree { uri, abs_limit, all, node_limit } => {
-            handle_tree(uri, abs_limit, all, node_limit, ctx).await
+        Commands::Tree { uri, abs_limit, all, node_limit, level_limit } => {
+            handle_tree(uri, abs_limit, all, node_limit, level_limit, ctx).await
         }
         Commands::Mkdir { uri } => {
             handle_mkdir(uri, ctx).await
@@ -877,16 +880,42 @@ async fn handle_search(
     commands::search::search(&client, &query, &uri, session_id, limit, threshold, ctx.output_format, ctx.compact).await
 }
 
+/// Print command with specified parameters for debugging
+fn print_command_echo(command: &str, params: &str, echo_enabled: bool) {
+    if echo_enabled {
+        println!("cmd: {} {}", command, params);
+    }
+}
+
 async fn handle_ls(uri: String, simple: bool, recursive: bool, abs_limit: i32, show_all_hidden: bool, node_limit: i32, ctx: CliContext) -> Result<()> {
+    let mut params = vec![
+        uri.clone(),
+        format!("-l {}", abs_limit),
+        format!("-n {}", node_limit),
+    ];
+    if simple { params.push("-s".to_string()); }
+    if recursive { params.push("-r".to_string()); }
+    if show_all_hidden { params.push("-a".to_string()); }
+    print_command_echo("ov ls", &params.join(" "), ctx.config.echo_command);
+
     let client = ctx.get_client();
     let api_output = if ctx.compact { "agent" } else { "original" };
     commands::filesystem::ls(&client, &uri, simple, recursive, api_output, abs_limit, show_all_hidden, node_limit, ctx.output_format, ctx.compact).await
 }
 
-async fn handle_tree(uri: String, abs_limit: i32, show_all_hidden: bool, node_limit: i32, ctx: CliContext) -> Result<()> {
+async fn handle_tree(uri: String, abs_limit: i32, show_all_hidden: bool, node_limit: i32, level_limit: i32, ctx: CliContext) -> Result<()> {
+    let mut params = vec![
+        uri.clone(),
+        format!("-l {}", abs_limit),
+        format!("-n {}", node_limit),
+        format!("-L {}", level_limit),
+    ];
+    if show_all_hidden { params.push("-a".to_string()); }
+    print_command_echo("ov tree", &params.join(" "), ctx.config.echo_command);
+
     let client = ctx.get_client();
     let api_output = if ctx.compact { "agent" } else { "original" };
-    commands::filesystem::tree(&client, &uri, api_output, abs_limit, show_all_hidden, node_limit, ctx.output_format, ctx.compact).await
+    commands::filesystem::tree(&client, &uri, api_output, abs_limit, show_all_hidden, node_limit, level_limit, ctx.output_format, ctx.compact).await
 }
 
 async fn handle_mkdir(uri: String, ctx: CliContext) -> Result<()> {

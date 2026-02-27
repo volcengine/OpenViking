@@ -384,6 +384,7 @@ class VikingFS:
         abs_limit: int = 256,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
+        level_limit: int = 3,
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """
@@ -394,6 +395,8 @@ class VikingFS:
             output: str = "original" or "agent"
             abs_limit: int = 256 (for agent output abstract truncation)
             show_all_hidden: bool = False (list all hidden files, like -a)
+            node_limit: int = 1000 (maximum number of nodes to list)
+            level_limit: int = 3 (maximum depth level to traverse)
 
         output="original"
         [{'name': '.abstract.md', 'size': 100, 'mode': 420, 'modTime': '2026-02-11T16:52:16.256334192+08:00', 'isDir': False, 'meta': {...}, 'rel_path': '.abstract.md', 'uri': 'viking://resources...'}]
@@ -403,9 +406,11 @@ class VikingFS:
         """
         self._ensure_access(uri, ctx)
         if output == "original":
-            return await self._tree_original(uri, show_all_hidden, node_limit, ctx=ctx)
+            return await self._tree_original(uri, show_all_hidden, node_limit, level_limit, ctx=ctx)
         elif output == "agent":
-            return await self._tree_agent(uri, abs_limit, show_all_hidden, node_limit, ctx=ctx)
+            return await self._tree_agent(
+                uri, abs_limit, show_all_hidden, node_limit, level_limit, ctx=ctx
+            )
         else:
             raise ValueError(f"Invalid output format: {output}")
 
@@ -414,6 +419,7 @@ class VikingFS:
         uri: str,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
+        level_limit: int = 3,
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """Recursively list all contents (original format)."""
@@ -421,8 +427,8 @@ class VikingFS:
         all_entries = []
         real_ctx = self._ctx_or_default(ctx)
 
-        async def _walk(current_path: str, current_rel: str):
-            if len(all_entries) >= node_limit:
+        async def _walk(current_path: str, current_rel: str, current_depth: int):
+            if len(all_entries) >= node_limit or current_depth > level_limit:
                 return
             for entry in self._ls_entries(current_path):
                 if len(all_entries) >= node_limit:
@@ -438,13 +444,13 @@ class VikingFS:
                     continue
                 if entry.get("isDir"):
                     all_entries.append(new_entry)
-                    await _walk(f"{current_path}/{name}", rel_path)
+                    await _walk(f"{current_path}/{name}", rel_path, current_depth + 1)
                 elif not name.startswith("."):
                     all_entries.append(new_entry)
                 elif show_all_hidden:
                     all_entries.append(new_entry)
 
-        await _walk(path, "")
+        await _walk(path, "", 0)
         return all_entries
 
     async def _tree_agent(
@@ -453,6 +459,7 @@ class VikingFS:
         abs_limit: int,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
+        level_limit: int = 3,
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """Recursively list all contents (agent format with abstracts)."""
@@ -461,8 +468,8 @@ class VikingFS:
         now = datetime.now()
         real_ctx = self._ctx_or_default(ctx)
 
-        async def _walk(current_path: str, current_rel: str):
-            if len(all_entries) >= node_limit:
+        async def _walk(current_path: str, current_rel: str, current_depth: int):
+            if len(all_entries) >= node_limit or current_depth > level_limit:
                 return
             for entry in self._ls_entries(current_path):
                 if len(all_entries) >= node_limit:
@@ -482,13 +489,13 @@ class VikingFS:
                     continue
                 if entry.get("isDir"):
                     all_entries.append(new_entry)
-                    await _walk(f"{current_path}/{name}", rel_path)
+                    await _walk(f"{current_path}/{name}", rel_path, current_depth + 1)
                 elif not name.startswith("."):
                     all_entries.append(new_entry)
                 elif show_all_hidden:
                     all_entries.append(new_entry)
 
-        await _walk(path, "")
+        await _walk(path, "", 0)
 
         await self._batch_fetch_abstracts(all_entries, abs_limit, ctx=ctx)
 

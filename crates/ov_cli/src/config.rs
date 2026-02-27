@@ -13,6 +13,8 @@ pub struct Config {
     pub timeout: f64,
     #[serde(default = "default_output_format")]
     pub output: String,
+    #[serde(default = "default_echo_command")]
+    pub echo_command: bool,
 }
 
 fn default_url() -> String {
@@ -27,6 +29,10 @@ fn default_output_format() -> String {
     "table".to_string()
 }
 
+fn default_echo_command() -> bool {
+    true
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -35,6 +41,7 @@ impl Default for Config {
             agent_id: None,
             timeout: 60.0,
             output: "table".to_string(),
+            echo_command: true,
         }
     }
 }

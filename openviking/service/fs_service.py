@@ -42,6 +42,7 @@ class FSService:
         abs_limit: int = 256,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
+        level_limit: int = 3,
     ) -> List[Any]:
         """List directory contents.
 
@@ -65,6 +66,7 @@ class FSService:
                     output="original",
                     show_all_hidden=show_all_hidden,
                     node_limit=node_limit,
+                    level_limit=level_limit,
                 )
             else:
                 entries = await viking_fs.ls(
@@ -80,6 +82,7 @@ class FSService:
                 abs_limit=abs_limit,
                 show_all_hidden=show_all_hidden,
                 node_limit=node_limit,
+                level_limit=level_limit,
             )
         else:
             entries = await viking_fs.ls(
@@ -114,6 +117,7 @@ class FSService:
         abs_limit: int = 128,
         show_all_hidden: bool = False,
         node_limit: int = 1000,
+        level_limit: int = 3,
     ) -> List[Dict[str, Any]]:
         """Get directory tree."""
         viking_fs = self._ensure_initialized()
@@ -124,6 +128,7 @@ class FSService:
             abs_limit=abs_limit,
             show_all_hidden=show_all_hidden,
             node_limit=node_limit,
+            level_limit=level_limit,
         )
 
     async def stat(self, uri: str, ctx: RequestContext) -> Dict[str, Any]:

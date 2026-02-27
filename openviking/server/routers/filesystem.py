@@ -48,6 +48,7 @@ async def tree(
     abs_limit: int = Query(256, description="Abstract limit (only for agent output)"),
     show_all_hidden: bool = Query(False, description="List all hidden files, like -a"),
     node_limit: int = Query(1000, description="Maximum number of nodes to list"),
+    level_limit: int = Query(3, description="Maximum depth level to traverse"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get directory tree."""
@@ -59,6 +60,7 @@ async def tree(
         abs_limit=abs_limit,
         show_all_hidden=show_all_hidden,
         node_limit=node_limit,
+        level_limit=level_limit,
     )
     return Response(status="ok", result=result)
 
