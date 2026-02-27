@@ -1,0 +1,28 @@
+server:
+  address: ":1833"
+  log_level: info
+
+plugins:
+  serverinfofs:
+    enabled: true
+    path: /serverinfo
+    config:
+      version: "1.0.0"
+
+  queuefs:
+    enabled: true
+    path: /queue
+    config: {}
+
+  s3fs:
+    - name: local
+      enabled: true
+      path: /local
+      config:
+        region: us-east-1
+        bucket: openviking-storage
+        access_key_id: openviking
+        secret_access_key: openviking_secret
+        endpoint: http://minio:9000
+        use_path_style: true
+        disable_ssl: true

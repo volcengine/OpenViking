@@ -1,15 +1,14 @@
 version: "3.8"
 
-# OpenViking 基础设施（仅 PostgreSQL + MinIO）
+# OpenViking 基础设施（PostgreSQL + MinIO + AGFS）
 #
 # 适用场景：本地开发、快速调试
 # OpenViking 服务器在宿主机直接运行（pip install），无需 Docker 构建
 #
 # 启动命令：
-#   docker compose -f docker-compose.infra.yml up -d
+#   docker compose -f docker-compose.infra.yml up -d --build
 #
 # 启动后在宿主机运行 OpenViking：
-#   pip install openviking          # 安装（已安装可跳过）
 #   openviking-server --config ov.conf.local
 
 services:
@@ -68,6 +67,22 @@ services:
         echo 'MinIO bucket openviking-storage ready'
       "
     restart: "no"
+
+  # ─── AGFS (Agent Global File System) ─────────────────────────────────────
+  agfs:
+    build:
+      context: ./third_party/agfs
+      dockerfile: agfs-server/Dockerfile
+    image: openviking-agfs:local
+    container_name: openviking-agfs
+    volumes:
+      - ./agfs.config.local.yaml:/config.yaml:ro
+    ports:
+      - "1833:1833"         # AGFS HTTP API（宿主机 localhost:1833）
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   postgres_data:
