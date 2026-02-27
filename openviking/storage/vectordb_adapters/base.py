@@ -325,7 +325,6 @@ class CollectionAdapter(ABC):
         limit: int = 10,
         offset: int = 0,
         output_fields: Optional[list[str]] = None,
-        with_vector: bool = False,
         order_by: Optional[str] = None,
         order_desc: bool = False,
     ) -> list[Dict[str, Any]]:
@@ -367,9 +366,6 @@ class CollectionAdapter(ABC):
             record["id"] = item.id
             record["_score"] = item.score if item.score is not None else 0.0
             record = self._normalize_record_for_read(record)
-            if not with_vector:
-                record.pop("vector", None)
-                record.pop("sparse_vector", None)
             records.append(record)
         return records
 
@@ -383,7 +379,7 @@ class CollectionAdapter(ABC):
         coll = self.get_collection()
         delete_ids = list(ids or [])
         if not delete_ids and filter is not None:
-            matched = self.query(filter=filter, limit=limit, with_vector=True)
+            matched = self.query(filter=filter, limit=limit)
             delete_ids = [record["id"] for record in matched if record.get("id")]
 
         if not delete_ids:

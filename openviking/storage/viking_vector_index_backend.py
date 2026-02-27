@@ -200,7 +200,6 @@ class VikingVectorIndexBackend:
         limit: int = 10,
         offset: int = 0,
         output_fields: Optional[List[str]] = None,
-        with_vector: bool = False,
         order_by: Optional[str] = None,
         order_desc: bool = False,
     ) -> List[Dict[str, Any]]:
@@ -212,7 +211,6 @@ class VikingVectorIndexBackend:
                 limit=limit,
                 offset=offset,
                 output_fields=output_fields,
-                with_vector=with_vector,
                 order_by=order_by,
                 order_desc=order_desc,
             )
@@ -228,7 +226,6 @@ class VikingVectorIndexBackend:
         limit: int = 10,
         offset: int = 0,
         output_fields: Optional[List[str]] = None,
-        with_vector: bool = False,
     ) -> List[Dict[str, Any]]:
         # Backward-compatible alias for internal call sites.
         return await self.query(
@@ -238,7 +235,6 @@ class VikingVectorIndexBackend:
             limit=limit,
             offset=offset,
             output_fields=output_fields,
-            with_vector=with_vector,
         )
 
     async def filter(
