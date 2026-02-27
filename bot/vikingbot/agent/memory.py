@@ -15,6 +15,9 @@ class MemoryStore:
         self.memory_dir = ensure_dir(workspace / "memory")
         self.memory_file = self.memory_dir / "MEMORY.md"
         self.history_file = self.memory_dir / "HISTORY.md"
+        config = load_config()
+        ov_config = config.openviking
+        self.user_id = ov_config.user_id if ov_config.mode == "remote" else "default"
 
     def read_long_term(self) -> str:
         if self.memory_file.exists():
@@ -56,9 +59,7 @@ class MemoryStore:
 
     async def get_viking_user_profile(self, sandbox_key: str) -> str:
         client = await VikingClient.create(agent_id=sandbox_key)
-        config = load_config()
-        ov_config = config.openviking
-        result = await client.read_content(uri=f"viking://user/{ov_config.user_id}/memories/profile.md", level="read")
+        result = await client.read_content(uri=f"viking://user/{self.user_id}/memories/profile.md", level="read")
         if not result:
             return ""
         return f"## User Information\n{result}"

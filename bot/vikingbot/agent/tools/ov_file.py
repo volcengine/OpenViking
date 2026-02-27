@@ -78,7 +78,7 @@ class VikingListTool(OVFileTool):
             "properties": {
                 "uri": {
                     "type": "string",
-                    "description": "The parent Viking uri to list (e.g., viking://resources/bot_test/dutao/)",
+                    "description": "The parent Viking uri to list (e.g., viking://resources/)",
                 },
                 "recursive": {
                     "type": "boolean",
@@ -86,7 +86,7 @@ class VikingListTool(OVFileTool):
                     "default": False,
                 },
             },
-            "required": [],
+            "required": ["uri"],
         }
 
     async def execute(

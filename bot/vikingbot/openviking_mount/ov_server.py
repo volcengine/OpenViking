@@ -1,6 +1,6 @@
 import asyncio
 from typing import List, Dict, Any, Optional
-
+import hashlib
 import openviking as ov
 from loguru import logger
 
@@ -8,7 +8,6 @@ from vikingbot.config.loader import get_data_dir
 from vikingbot.config.loader import load_config
 
 viking_resource_prefix = "viking://resources/"
-uri_agent_memory = "viking://agent/memories/"
 
 
 class VikingClient:
@@ -20,13 +19,17 @@ class VikingClient:
             ov_data_path.mkdir(parents=True, exist_ok=True)
             self.client = ov.AsyncOpenViking(path=str(ov_data_path))
             self.user_id = "default"
+            self.agent_id = "default"
+            self.agent_space_name = self.client.user.agent_space_name()
         else:
             self.client = ov.AsyncHTTPClient(
                 url=openviking_config.server_url,
                 api_key=openviking_config.api_key,
                 agent_id=agent_id,
             )
+            self.agent_id = agent_id
             self.user_id = openviking_config.user_id
+            self.agent_space_name = hashlib.md5((self.user_id + self.agent_id).encode()).hexdigest()[:12]
         self.mode = openviking_config.mode
 
     async def _initialize(self):
@@ -144,11 +147,13 @@ class VikingClient:
         self, query: str, limit: int = 10
     ) -> dict[str, list[Any]]:
         """通过上下文消息，检索viking 的user、Agent memory"""
+        uri_user_memory = f"viking://user/{self.user_id}/memories/"
         user_memory = await self.client.find(
             query=query,
             target_uri=uri_user_memory,
             limit=limit,
         )
+        uri_agent_memory = f"viking://agent/{self.agent_space_name}/memories/"
         agent_memory = await self.client.find(
             query=query,
             target_uri=uri_agent_memory,
@@ -276,9 +281,9 @@ async def main_test():
     client = await VikingClient.create(agent_id="shared")
     # res = client.list_resources()
     # res = await client.search("头有点疼", target_uri="viking://user/memories/")
-    res = await client.get_viking_memory_context("123", current_message="头疼", history=[])
+    # res = await client.get_viking_memory_context("123", current_message="头疼", history=[])
     # res = await client.search_memory("你好")
-    # res = await client.list_resources("viking://user/memories/events")
+    res = await client.list_resources("viking://resources/")
     # res = await client.read_content("viking://user/memories/profile.md", level="read")
     # res = await client.add_resource("/Users/bytedance/Documents/论文/吉比特年报.pdf", "吉比特年报")
     # res = await client.commit("123", [{"role": "user", "content": "我叫王大锤"}])

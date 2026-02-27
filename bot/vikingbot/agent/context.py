@@ -212,6 +212,7 @@ Always be helpful, accurate, and concise. When using tools, think step by step: 
         if session_key.channel_id and session_key.chat_id:
             system_prompt += f"\n\n## Current Session\nChannel: {session_key.type}:{session_key.channel_id}\nChat ID: {session_key.chat_id}"
         messages.append({"role": "system", "content": system_prompt})
+        # logger.debug(f"system_prompt: {system_prompt}")
 
         # History
         messages.extend(history)
