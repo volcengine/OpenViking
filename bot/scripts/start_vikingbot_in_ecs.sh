@@ -8,7 +8,7 @@ PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 cd "$PROJECT_ROOT"
 # 激活虚拟环境
 echo "Uv sync..."
-source uv sync
+uv sync
 
 # 激活虚拟环境
 echo "Activating virtual environment..."
