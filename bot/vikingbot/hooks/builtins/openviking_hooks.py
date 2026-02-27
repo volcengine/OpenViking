@@ -2,16 +2,17 @@ from typing import Any
 
 from loguru import logger
 
-from vikingbot.openviking_mount.ov_server import VikingClient
 from ..base import Hook, HookContext
 from ...session import Session
 
 try:
+    from vikingbot.openviking_mount.ov_server import VikingClient
     import openviking as ov
-
     HAS_OPENVIKING = True
-except ImportError:
+except Exception:
     HAS_OPENVIKING = False
+    VikingClient = None
+    ov = None
 
 
 class OpenVikingCompactHook(Hook):

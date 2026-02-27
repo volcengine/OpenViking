@@ -422,20 +422,28 @@ with gr.Blocks(title="Vikingbot Console") as demo:
 
 
 if __name__ == "__main__":
+    import uvicorn
+    from fastapi import FastAPI
+    
     port = 18791
     if len(sys.argv) > 1:
         try:
             port = int(sys.argv[1])
         except ValueError:
             pass
-    # First, get the FastAPI app and add health endpoint before launching
-    # Use Gradio's queue to get access to the app
-    demo.queue()
-    # Add /health endpoint to the FastAPI app
-    app = demo.app
+    
+    # Create FastAPI app for health endpoint
+    app = FastAPI()
+    
+    # Add /health endpoint
     @app.get("/health")
     async def health_endpoint():
         from vikingbot import __version__
         return {"status": "healthy", "version": __version__}
-    # Launch the demo
-    demo.launch(server_name="0.0.0.0", server_port=port, share=False)
+    
+    # Mount Gradio app
+    demo.queue()
+    app = gr.mount_gradio_app(app, demo, path="/")
+    
+    # Launch with uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=port)

@@ -6,7 +6,12 @@ from typing import List, Any, Dict, Type
 from loguru import logger
 
 from .base import Hook, HookContext
-from vikingbot.hooks.builtins.openviking_hooks import  hooks
+
+try:
+    from vikingbot.hooks.builtins.openviking_hooks import hooks as _openviking_hooks
+except Exception as e:
+    logger.warning(f"OpenViking built-in hooks unavailable: {e}")
+    _openviking_hooks = {}
 
 
 class HookManager:
