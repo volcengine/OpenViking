@@ -135,9 +135,18 @@ class OpenVikingService:
             logger.warning("AGFS client not initialized, skipping queue manager")
 
         # Initialize VikingDBManager with QueueManager
-        self._vikingdb_manager = VikingDBManager(
-            vectordb_config=config.vectordb, queue_manager=self._queue_manager
-        )
+        # Choose backend based on configuration
+        if config.vectordb.backend == "postgresql":
+            from openviking.storage.postgresql_manager import PostgreSQLManager
+
+            self._vikingdb_manager = PostgreSQLManager(
+                vectordb_config=config.vectordb, queue_manager=self._queue_manager
+            )
+            logger.info("Using PostgreSQL backend for vector storage (SaaS mode)")
+        else:
+            self._vikingdb_manager = VikingDBManager(
+                vectordb_config=config.vectordb, queue_manager=self._queue_manager
+            )
 
         # Configure queues if QueueManager is available
         if self._queue_manager:

@@ -1,0 +1,64 @@
+{
+  "storage": {
+    "workspace": "./data",
+
+    "agfs": {
+      "backend": "s3",
+      "port": 1833,
+      "s3": {
+        "bucket": "openviking-storage",
+        "region": "us-east-1",
+        "access_key": "openviking",
+        "secret_key": "openviking_secret",
+        "endpoint": "http://localhost:9000",
+        "prefix": "",
+        "use_ssl": false,
+        "use_path_style": true
+      }
+    },
+
+    "vectordb": {
+      "backend": "postgresql",
+      "name": "context",
+      "dimension": 1024,
+      "postgresql": {
+        "host": "localhost",
+        "port": 5432,
+        "database": "openviking",
+        "user": "openviking",
+        "password": "openviking_secret"
+      }
+    }
+  },
+
+  "embedding": {
+    "dense": {
+      "provider": "openai",
+      "api_base": "https://api.openai.com/v1",
+      "api_key": "YOUR_OPENAI_API_KEY",
+      "model": "text-embedding-3-small",
+      "dimension": 1024
+    }
+  },
+
+  "vlm": {
+    "provider": "openai",
+    "api_base": "https://api.openai.com/v1",
+    "api_key": "YOUR_OPENAI_API_KEY",
+    "model": "gpt-4o"
+  },
+
+  "server": {
+    "host": "0.0.0.0",
+    "port": 1933,
+    "cors_origins": ["*"]
+  },
+
+  "default_account": "default",
+  "default_user": "default",
+  "default_agent": "default",
+
+  "log": {
+    "level": "INFO"
+  }
+}

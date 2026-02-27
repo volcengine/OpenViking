@@ -148,7 +148,22 @@ class CMakeBuildExtension(build_ext):
                 self._copy_binary(agfs_target_lib, agfs_bin_dir_build / lib_name)
 
     def build_extension(self, ext):
-        """Build a single C++ extension module using CMake."""
+        """Build a single C++ extension module using CMake.
+
+        This extension powers the *local* VectorDB backend.
+        In SaaS mode (PostgreSQL backend) the extension is never imported,
+        so a build failure is treated as a non-fatal warning.
+
+        Set OPENVIKING_NO_CPP_EXT=1 to skip compilation explicitly.
+        """
+        # Allow explicit opt-out (useful for SaaS / PostgreSQL mode on Windows)
+        if os.environ.get("OPENVIKING_NO_CPP_EXT", "").strip() == "1":
+            print(
+                "[WARNING] OPENVIKING_NO_CPP_EXT=1: skipping C++ vectordb extension. "
+                "Local VectorDB backend will be unavailable; PostgreSQL/SaaS mode unaffected."
+            )
+            return
+
         ext_fullpath = Path(self.get_ext_fullpath(ext.name))
         ext_dir = ext_fullpath.parent.resolve()
         build_dir = Path(self.build_temp) / "cmake_build"
@@ -175,10 +190,18 @@ class CMakeBuildExtension(build_ext):
         elif sys.platform == "win32":
             cmake_args.extend(["-G", "MinGW Makefiles"])
 
-        self.spawn([self.cmake_executable] + cmake_args)
-
-        build_args = ["--build", str(build_dir), "--config", "Release", f"-j{os.cpu_count() or 4}"]
-        self.spawn([self.cmake_executable] + build_args)
+        try:
+            self.spawn([self.cmake_executable] + cmake_args)
+            build_args = ["--build", str(build_dir), "--config", "Release", f"-j{os.cpu_count() or 4}"]
+            self.spawn([self.cmake_executable] + build_args)
+        except Exception as e:
+            print(
+                f"\n[WARNING] C++ vectordb extension build failed: {e}\n"
+                "  The local VectorDB backend will be unavailable.\n"
+                "  This is fine for SaaS/PostgreSQL mode.\n"
+                "  To suppress this warning, set OPENVIKING_NO_CPP_EXT=1 before installing.\n"
+                "  To enable local mode on Windows, install MinGW: https://www.mingw-w64.org/\n"
+            )
 
 
 setup(

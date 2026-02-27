@@ -1,0 +1,95 @@
+version: "3.8"
+
+# OpenViking 基础设施（PostgreSQL + MinIO + AGFS）
+#
+# 适用场景：本地开发、快速调试
+# OpenViking 服务器在宿主机直接运行（pip install），无需 Docker 构建
+#
+# 启动命令：
+#   docker compose -f docker-compose.infra.yml up -d --build
+#
+# 启动后在宿主机运行 OpenViking：
+#   openviking-server --config ov.conf.local
+
+services:
+  # ─── PostgreSQL + pgvector ────────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: openviking-postgres
+    environment:
+      POSTGRES_USER: openviking
+      POSTGRES_PASSWORD: openviking_secret
+      POSTGRES_DB: openviking
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"         # 宿主机可直连 localhost:5432
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openviking -d openviking"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # ─── MinIO (S3-compatible object storage) ─────────────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: openviking-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: openviking
+      MINIO_ROOT_PASSWORD: openviking_secret
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"         # S3 API（宿主机 localhost:9000）
+      - "9001:9001"         # MinIO 控制台
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  # ─── MinIO bucket 初始化 ──────────────────────────────────────────────────
+  minio-init:
+    image: minio/mc:latest
+    container_name: openviking-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+        mc alias set local http://minio:9000 openviking openviking_secret &&
+        mc mb --ignore-existing local/openviking-storage &&
+        echo 'MinIO bucket openviking-storage ready'
+      "
+    restart: "no"
+
+  # ─── AGFS (Agent Global File System) ─────────────────────────────────────
+  agfs:
+    build:
+      context: ./third_party/agfs
+      dockerfile: agfs-server/Dockerfile
+    image: openviking-agfs:local
+    container_name: openviking-agfs
+    volumes:
+      - ./agfs.config.local.yaml:/config.yaml:ro
+    ports:
+      - "1833:1833"         # AGFS HTTP API（宿主机 localhost:1833）
+    depends_on:
+      minio:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  minio_data:
+    driver: local
+
+networks:
+  default:
+    name: openviking-infra

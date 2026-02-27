@@ -4,6 +4,7 @@
 
 from openviking.server.routers.admin import router as admin_router
 from openviking.server.routers.content import router as content_router
+from openviking.server.routers.dashboard import router as dashboard_router
 from openviking.server.routers.debug import router as debug_router
 from openviking.server.routers.filesystem import router as filesystem_router
 from openviking.server.routers.observer import router as observer_router
@@ -26,4 +27,5 @@ __all__ = [
     "pack_router",
     "debug_router",
     "observer_router",
+    "dashboard_router",
 ]

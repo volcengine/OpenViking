@@ -17,6 +17,7 @@ from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Respo
 from openviking.server.routers import (
     admin_router,
     content_router,
+    dashboard_router,
     debug_router,
     filesystem_router,
     observer_router,
@@ -159,5 +160,6 @@ def create_app(
     app.include_router(pack_router)
     app.include_router(debug_router)
     app.include_router(observer_router)
+    app.include_router(dashboard_router)
 
     return app

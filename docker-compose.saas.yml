@@ -1,0 +1,120 @@
+version: "3.8"
+
+# OpenViking SaaS Stack
+#
+# 存储层升级：
+#   - PostgreSQL + pgvector  → 向量索引 & 上下文元数据
+#   - MinIO (S3-compatible)  → 文件内容存储 (AGFS S3 后端)
+#
+# 【重要】OpenViking 服务器需要本地构建镜像（私有镜像不可直接拉取）
+#
+# 启动步骤：
+#   1. cp ov.conf.saas.example ov.conf.saas
+#   2. 编辑 ov.conf.saas，填入 Embedding API Key
+#   3. docker compose -f docker-compose.saas.yml up -d --build
+#      （首次构建需要 10~30 分钟，依赖网络和机器性能）
+#   4. 访问 http://localhost:1933/dashboard
+#
+# 如果只想快速启动基础设施（PostgreSQL + MinIO），本地运行 OpenViking：
+#   docker compose -f docker-compose.infra.yml up -d
+
+services:
+  # ─── PostgreSQL + pgvector ────────────────────────────────────────────────
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: openviking-postgres
+    environment:
+      POSTGRES_USER: openviking
+      POSTGRES_PASSWORD: openviking_secret
+      POSTGRES_DB: openviking
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U openviking -d openviking"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    restart: unless-stopped
+
+  # ─── MinIO (S3-compatible object storage for AGFS) ────────────────────────
+  minio:
+    image: minio/minio:latest
+    container_name: openviking-minio
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: openviking
+      MINIO_ROOT_PASSWORD: openviking_secret
+    volumes:
+      - minio_data:/data
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # MinIO Console (web UI)
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
+    restart: unless-stopped
+
+  # ─── MinIO bucket initialization ──────────────────────────────────────────
+  minio-init:
+    image: minio/mc:latest
+    container_name: openviking-minio-init
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+        mc alias set local http://minio:9000 openviking openviking_secret &&
+        mc mb --ignore-existing local/openviking-storage &&
+        echo 'MinIO bucket created successfully'
+      "
+    restart: "no"
+
+  # ─── OpenViking Server（本地源码构建）────────────────────────────────────
+  #
+  # 说明：因 ghcr.io/volcengine/openviking:main 为私有镜像，
+  # 改为 build: . 从本地 Dockerfile 构建。
+  # 首次构建需下载 Go + Python 工具链并编译 C++ 扩展，耗时较长（10~30 分钟）。
+  # 构建完成后再次启动无需重新构建。
+  openviking:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: openviking:saas-local    # 构建后本地缓存的镜像名
+    container_name: openviking-server
+    depends_on:
+      postgres:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    ports:
+      - "1933:1933"
+    volumes:
+      - ./ov.conf.saas:/app/ov.conf:ro
+      - openviking_temp:/app/data/temp
+    environment:
+      OPENVIKING_CONFIG_FILE: /app/ov.conf
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:1933/health || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+    driver: local
+  minio_data:
+    driver: local
+  openviking_temp:
+    driver: local
+
+networks:
+  default:
+    name: openviking-saas
