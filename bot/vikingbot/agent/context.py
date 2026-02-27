@@ -165,7 +165,7 @@ For normal conversation, just respond with text - do not call the message tool.
 Always be helpful, accurate, and concise. When using tools, think step by step: what you know, what you need, and why you chose this tool.
 
 ## Memory
-- Remember important facts: using openviking_memory_commit tool to commit memory
+- Remember important facts: using openviking_memory_commit tool to commit
 - Recall past events: prioritize using user_memory_search tool to search history, or grep {workspace_display}/memory/HISTORY.md"""
     
     def _load_bootstrap_files(self) -> str:
