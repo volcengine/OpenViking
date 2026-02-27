@@ -9,6 +9,7 @@ from litellm import acompletion
 
 from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
 from vikingbot.providers.registry import find_by_model, find_gateway
+from vikingbot.utils.helpers import cal_str_tokens
 
 
 class LiteLLMProvider(LLMProvider):
@@ -168,8 +169,10 @@ class LiteLLMProvider(LLMProvider):
             for tc in message.tool_calls:
                 # Parse arguments from JSON string if needed
                 args = tc.function.arguments
+                tokens = cal_str_tokens(tc.function.name, text_type="en")
                 if isinstance(args, str):
                     try:
+                        tokens += cal_str_tokens(args, text_type="mixed")
                         args = json.loads(args)
                     except json.JSONDecodeError:
                         args = {"raw": args}
@@ -178,6 +181,7 @@ class LiteLLMProvider(LLMProvider):
                     id=tc.id,
                     name=tc.function.name,
                     arguments=args,
+                    tokens=tokens
                 ))
         
         usage = {}

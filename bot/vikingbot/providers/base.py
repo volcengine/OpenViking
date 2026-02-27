@@ -11,6 +11,7 @@ class ToolCallRequest:
     id: str
     name: str
     arguments: dict[str, Any]
+    tokens: int
 
 
 @dataclass
