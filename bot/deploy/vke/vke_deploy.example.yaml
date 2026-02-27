@@ -18,7 +18,7 @@ use_timestamp_tag: false
 # image_tag: 固定标签 (仅当 use_timestamp_tag: false 时生效)
 #   - 可以设置为: latest, v1.0.0, build-123 等
 image_tag: latest
-local_image_name: vikingbot
+local_image_name: vikingbot-vke
 
 registry_username: ""
 registry_password: ""
