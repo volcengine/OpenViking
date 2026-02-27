@@ -22,8 +22,8 @@ from openviking.server.config import ServerConfig
 from openviking.service.core import OpenVikingService
 from openviking_cli.session.user_id import UserIdentifier
 
-TEST_ROOT = Path(__file__).parent
-TEST_TMP_DIR = TEST_ROOT / ".tmp_integration"
+PROJECT_ROOT = Path(__file__).parent.parent.parent
+TEST_TMP_DIR = PROJECT_ROOT / "test_data" / "tmp_integration"
 
 
 @pytest.fixture(scope="session")

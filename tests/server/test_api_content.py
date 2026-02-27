@@ -15,7 +15,8 @@ async def test_read_content(client_with_resource):
     # Find a file (non-directory) to read
     file_uri = None
     if children:
-        file_uri = uri.rstrip("/") + "/" + children[0] if isinstance(children[0], str) else None
+        # ls(simple=True) returns full URIs, use directly
+        file_uri = children[0] if isinstance(children[0], str) else None
     if file_uri is None:
         file_uri = uri
 

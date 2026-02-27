@@ -86,7 +86,7 @@
       "mineru_timeout": 300.0
     },
     "code": {
-      "enable_ast": true,
+      "code_summary_mode": "ast",
       "extract_functions": true,
       "extract_classes": true,
       "extract_imports": true,

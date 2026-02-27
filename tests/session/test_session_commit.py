@@ -76,9 +76,7 @@ class TestCommit:
         assert result.get("status") == "committed"
         assert "active_count_updated" in result
 
-    async def test_active_count_incremented_after_commit(
-        self, client_with_resource_sync: tuple
-    ):
+    async def test_active_count_incremented_after_commit(self, client_with_resource_sync: tuple):
         """Regression test: active_count must actually increment after commit.
 
         Previously _update_active_counts() had three bugs:
@@ -92,18 +90,19 @@ class TestCommit:
            has child records triggers a 'Duplicate records found' error and returns
            None — leaving active_count un-updated even after fixes 1 and 2.
 
-        Fix: derive the record id as md5(uri) (the canonical formula used in
-        collection_schemas.py) and call storage.get(ids=[id]) for an exact lookup.
+        Fix: use storage.filter() to look up the record by URI and read
+        its stored id, then call storage.update() with that id.
         """
-        import hashlib
-
         client, uri = client_with_resource_sync
         vikingdb = client._client.service.vikingdb_manager
 
-        # Use storage.get() for exact ID-based lookup (avoids fetch_by_uri subtree issue)
-        record_id = hashlib.md5(uri.encode("utf-8")).hexdigest()
-        records_before = await vikingdb.get("context", [record_id])
-        assert records_before, f"Resource not found by id for URI: {uri}"
+        # Look up the record by URI
+        records_before = await vikingdb.get_context_by_uri(
+            account_id="default",
+            uri=uri,
+            limit=1,
+        )
+        assert records_before, f"Resource not found for URI: {uri}"
         count_before = records_before[0].get("active_count") or 0
 
         # Mark as used and commit
@@ -116,7 +115,11 @@ class TestCommit:
         assert result.get("active_count_updated") == 1
 
         # Verify the count actually changed in storage
-        records_after = await vikingdb.get("context", [record_id])
+        records_after = await vikingdb.get_context_by_uri(
+            account_id="default",
+            uri=uri,
+            limit=1,
+        )
         assert records_after, f"Record disappeared after commit for URI: {uri}"
         count_after = records_after[0].get("active_count") or 0
         assert count_after == count_before + 1, (

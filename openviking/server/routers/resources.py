@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, File, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
@@ -34,6 +34,12 @@ class AddResourceRequest(BaseModel):
     include: Optional[str] = None
     exclude: Optional[str] = None
     directly_upload_media: bool = True
+
+    @model_validator(mode="after")
+    def check_path_or_temp_path(self):
+        if not self.path and not self.temp_path:
+            raise ValueError("Either 'path' or 'temp_path' must be provided")
+        return self
 
 
 class AddSkillRequest(BaseModel):

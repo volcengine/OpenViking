@@ -10,7 +10,7 @@ from openviking.storage.vectordb.collection.local_collection import get_or_creat
 
 # --- Configuration ---
 DEFAULT_DIM = 128
-DEFAULT_DB_PATH = "./benchmark_stress_db"
+DEFAULT_DB_PATH = "./test_data/benchmark_stress_db"
 CATEGORIES = ["news", "sports", "finance", "tech", "entertainment"]
 TAGS = ["hot", "new", "archived", "premium", "public"]
 

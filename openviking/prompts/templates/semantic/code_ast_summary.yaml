@@ -1,0 +1,38 @@
+metadata:
+  id: "semantic.code_ast_summary"
+  name: "Code AST Skeleton Summary Generation"
+  description: "Generate summary for code files from AST-extracted skeleton (ast_llm mode). Input is compact structural skeleton rather than full source."
+  version: "1.0.0"
+  language: "en"
+  category: "semantic"
+
+variables:
+  - name: "file_name"
+    type: "string"
+    description: "File name with extension"
+    required: true
+
+  - name: "skeleton"
+    type: "string"
+    description: "AST-extracted code skeleton (classes, functions, imports)"
+    required: true
+
+template: |
+  You are a code analysis expert. Based on the structural skeleton below,
+  generate a concise summary (80-200 words) focusing on purpose, key components,
+  and relationships. The skeleton was extracted via AST parsing.
+
+  【File Name】{{ file_name }}
+  【Code Structure】
+  {{ skeleton }}
+
+  Output requirements:
+  - Length: 80-200 words
+  - Focus on the main purpose and functionality inferred from the structure
+  - Highlight key classes, functions, and their relationships
+  - Note important dependencies shown in imports
+  - Include relevant technical keywords for semantic search
+  - Output plain text directly, no markdown format
+
+llm_config:
+  temperature: 0.0

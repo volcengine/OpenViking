@@ -202,7 +202,7 @@ class CodeConfig(CodeHostingConfig):
     Configuration for code parsing.
 
     Attributes:
-        enable_ast: Whether to use AST parsing (for supported languages)
+        code_summary_mode: Summary generation mode ("llm" | "ast" | "ast_llm")
         extract_functions: Whether to extract function definitions
         extract_classes: Whether to extract class definitions
         extract_imports: Whether to extract import statements
@@ -215,7 +215,7 @@ class CodeConfig(CodeHostingConfig):
         github_raw_domain: Domain for GitHub raw content (raw.githubusercontent.com)
     """
 
-    enable_ast: bool = True
+    code_summary_mode: str = "ast"  # "llm" | "ast" | "ast_llm"
     extract_functions: bool = True
     extract_classes: bool = True
     extract_imports: bool = True
@@ -238,6 +238,12 @@ class CodeConfig(CodeHostingConfig):
         super().validate()
 
         # Validate code-specific fields
+        if self.code_summary_mode not in ("llm", "ast", "ast_llm"):
+            raise ValueError(
+                f"Invalid code_summary_mode '{self.code_summary_mode}'. "
+                "Must be 'llm', 'ast', or 'ast_llm'"
+            )
+
         if self.max_line_length <= 0:
             raise ValueError("max_line_length must be positive")
 

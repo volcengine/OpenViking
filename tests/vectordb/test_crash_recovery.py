@@ -9,8 +9,8 @@ import unittest
 
 from openviking.storage.vectordb.collection.local_collection import get_or_create_local_collection
 
-DB_PATH_CRASH = "./test_db_crash_recovery"
-DB_PATH_ROBUST = "./test_db_robust_crash"
+DB_PATH_CRASH = "./test_data/test_db_crash_recovery"
+DB_PATH_ROBUST = "./test_data/test_db_robust_crash"
 
 
 def worker_write_and_crash(path, start_id, count, event_ready):
