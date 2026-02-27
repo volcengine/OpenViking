@@ -783,21 +783,45 @@ class AsyncHTTPClient(BaseClient):
 
     # ============= New methods for BaseClient interface =============
 
-    def session(self, session_id: Optional[str] = None) -> Any:
+    def session(self, session_id: Optional[str] = None, must_exist: bool = False) -> Any:
         """Create a new session or load an existing one.
 
         Args:
             session_id: Session ID, creates a new session if None
+            must_exist: If True and session_id is provided, raises NotFoundError
+                        when the session does not exist.
+                        If session_id is None, must_exist is ignored.
 
         Returns:
             Session object
+
+        Raises:
+            NotFoundError: If must_exist=True and the session does not exist.
         """
         from openviking.client.session import Session
 
         if not session_id:
             result = run_async(self.create_session())
             session_id = result.get("session_id", "")
+        elif must_exist:
+            # get_session() raises NotFoundError (via _handle_response) for 404.
+            run_async(self.get_session(session_id))
         return Session(self, session_id, self._user)
+
+    async def session_exists(self, session_id: str) -> bool:
+        """Check whether a session exists in storage.
+
+        Args:
+            session_id: Session ID to check
+
+        Returns:
+            True if the session exists, False otherwise
+        """
+        try:
+            await self.get_session(session_id)
+            return True
+        except NotFoundError:
+            return False
 
     def get_status(self) -> Dict[str, Any]:
         """Get system status.

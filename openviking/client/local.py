@@ -11,6 +11,7 @@ from openviking.server.identity import RequestContext, Role
 from openviking.service import OpenVikingService
 from openviking_cli.client.base import BaseClient
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils import run_async
 
 
 class LocalClient(BaseClient):
@@ -327,24 +328,40 @@ class LocalClient(BaseClient):
         """Check service health."""
         return True  # Local service is always healthy if initialized
 
-    def session(self, session_id: Optional[str] = None) -> Any:
+    def session(self, session_id: Optional[str] = None, must_exist: bool = False) -> Any:
         """Create a new session or load an existing one.
 
         Args:
             session_id: Session ID, creates a new session if None
+            must_exist: If True and session_id is provided, raises NotFoundError
+                        when the session does not exist.
+                        If session_id is None, must_exist is ignored.
 
         Returns:
             Session object
-        """
-        from openviking.session import Session
 
-        return Session(
-            viking_fs=self._service.viking_fs,
-            vikingdb_manager=self._service.vikingdb_manager,
-            session_compressor=self._service.session_compressor,
-            user=self._user,
-            session_id=session_id,
-        )
+        Raises:
+            NotFoundError: If must_exist=True and the session does not exist.
+        """
+        session = self._service.sessions.session(self._ctx, session_id)
+        if must_exist and session_id:
+            if not run_async(session.exists()):
+                from openviking_cli.exceptions import NotFoundError
+
+                raise NotFoundError(session_id, "session")
+        return session
+
+    async def session_exists(self, session_id: str) -> bool:
+        """Check whether a session exists in storage.
+
+        Args:
+            session_id: Session ID to check
+
+        Returns:
+            True if the session exists, False otherwise
+        """
+        session = self._service.sessions.session(self._ctx, session_id)
+        return await session.exists()
 
     def get_status(self) -> Any:
         """Get system status.

@@ -53,9 +53,22 @@ class SyncHTTPClient:
 
     # ============= session =============
 
-    def session(self, session_id: Optional[str] = None) -> Any:
-        """Create new session or load existing session."""
-        return self._async_client.session(session_id)
+    def session(self, session_id: Optional[str] = None, must_exist: bool = False) -> Any:
+        """Create a new session or load an existing one.
+
+        Args:
+            session_id: Session ID, creates a new session if None
+            must_exist: If True and session_id is provided, raises NotFoundError
+                        when the session does not exist.
+
+        Returns:
+            Session object
+        """
+        return self._async_client.session(session_id, must_exist=must_exist)
+
+    def session_exists(self, session_id: str) -> bool:
+        """Check whether a session exists in storage."""
+        return run_async(self._async_client.session_exists(session_id))
 
     def create_session(self) -> Dict[str, Any]:
         """Create a new session."""
