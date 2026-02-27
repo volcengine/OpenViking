@@ -280,6 +280,11 @@ class AsyncHTTPClient(BaseClient):
         instruction: str = "",
         wait: bool = False,
         timeout: Optional[float] = None,
+        strict: bool = True,
+        ignore_dirs: Optional[str] = None,
+        include: Optional[str] = None,
+        exclude: Optional[str] = None,
+        directly_upload_media: bool = True,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
         request_data = {
@@ -288,6 +293,11 @@ class AsyncHTTPClient(BaseClient):
             "instruction": instruction,
             "wait": wait,
             "timeout": timeout,
+            "strict": strict,
+            "ignore_dirs": ignore_dirs,
+            "include": include,
+            "exclude": exclude,
+            "directly_upload_media": directly_upload_media,
         }
 
         path_obj = Path(path)

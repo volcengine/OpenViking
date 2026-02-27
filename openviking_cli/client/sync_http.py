@@ -106,10 +106,27 @@ class SyncHTTPClient:
         instruction: str = "",
         wait: bool = False,
         timeout: Optional[float] = None,
+        strict: bool = True,
+        ignore_dirs: Optional[str] = None,
+        include: Optional[str] = None,
+        exclude: Optional[str] = None,
+        directly_upload_media: bool = True,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
         return run_async(
-            self._async_client.add_resource(path, target, reason, instruction, wait, timeout)
+            self._async_client.add_resource(
+                path,
+                target,
+                reason,
+                instruction,
+                wait,
+                timeout,
+                strict,
+                ignore_dirs,
+                include,
+                exclude,
+                directly_upload_media,
+            )
         )
 
     def add_skill(

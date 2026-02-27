@@ -76,7 +76,22 @@ enum Commands {
         wait: bool,
         /// Wait timeout in seconds
         #[arg(long)]
-        timeout: Option<f64>,
+        timeout: f64,
+        /// No strict mode for directory scanning
+        #[arg(long = "no-strict", default_value_t = false)]
+        no_strict: bool,
+        /// Ignore directories, e.g. --ignore-dirs "node_modules,dist"
+        #[arg(long)]
+        ignore_dirs: Option<String>,
+        /// Include files extensions, e.g. --include "*.pdf,*.md"
+        #[arg(long)]
+        include: Option<String>,
+        /// Exclude files extensions, e.g. --exclude "*.tmp,*.log"
+        #[arg(long)]
+        exclude: Option<String>,
+        /// Do not directly upload media files
+        #[arg(long = "no-directly-upload-media", default_value_t = false)]
+        no_directly_upload_media: bool,
     },
     /// Add a skill into OpenViking
     AddSkill {
@@ -452,8 +467,34 @@ async fn main() {
     };
 
     let result = match cli.command {
-        Commands::AddResource { path, to, reason, instruction, wait, timeout } => {
-            handle_add_resource(path, to, reason, instruction, wait, timeout, ctx).await
+        Commands::AddResource {
+            path,
+            to,
+            reason,
+            instruction,
+            wait,
+            timeout,
+            no_strict,
+            ignore_dirs,
+            include,
+            exclude,
+            no_directly_upload_media,
+        } => {
+            handle_add_resource(
+                path,
+                to,
+                reason,
+                instruction,
+                wait,
+                timeout,
+                no_strict,
+                ignore_dirs,
+                include,
+                exclude,
+                no_directly_upload_media,
+                ctx,
+            )
+            .await
         }
         Commands::AddSkill { data, wait, timeout } => {
             handle_add_skill(data, wait, timeout, ctx).await
@@ -544,7 +585,12 @@ async fn handle_add_resource(
     reason: String,
     instruction: String,
     wait: bool,
-    timeout: Option<f64>,
+    timeout: f64,
+    no_strict: bool,
+    ignore_dirs: Option<String>,
+    include: Option<String>,
+    exclude: Option<String>,
+    no_directly_upload_media: bool,
     ctx: CliContext,
 ) -> Result<()> {
     // Validate path: if it's a local path, check if it exists
@@ -575,9 +621,25 @@ async fn handle_add_resource(
         path = unescaped_path;
     }
     
+    let strict = !no_strict;
+    let directly_upload_media = !no_directly_upload_media;
+
     let client = ctx.get_client();
     commands::resources::add_resource(
-        &client, &path, to, reason, instruction, wait, timeout, ctx.output_format, ctx.compact
+        &client,
+        &path,
+        to,
+        reason,
+        instruction,
+        wait,
+        Some(timeout),
+        strict,
+        ignore_dirs,
+        include,
+        exclude,
+        directly_upload_media,
+        ctx.output_format,
+        ctx.compact,
     ).await
 }
 

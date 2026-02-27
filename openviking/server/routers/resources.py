@@ -29,6 +29,11 @@ class AddResourceRequest(BaseModel):
     instruction: str = ""
     wait: bool = False
     timeout: Optional[float] = None
+    strict: bool = True
+    ignore_dirs: Optional[str] = None
+    include: Optional[str] = None
+    exclude: Optional[str] = None
+    directly_upload_media: bool = True
 
 
 class AddSkillRequest(BaseModel):
@@ -98,6 +103,11 @@ async def add_resource(
         instruction=request.instruction,
         wait=request.wait,
         timeout=request.timeout,
+        strict=request.strict,
+        ignore_dirs=request.ignore_dirs,
+        include=request.include,
+        exclude=request.exclude,
+        directly_upload_media=request.directly_upload_media,
     )
     return Response(status="ok", result=result)
 
