@@ -30,7 +30,6 @@ class OpenVikingCompactHook(Hook):
     async def execute(self, context: HookContext, **kwargs) -> Any:
         vikingbot_session: Session = kwargs.get("session", {})
         session_id = context.session_id
-        logger.debug(f"OpenVikingCompactHook space: {context.agent_space}")
         try:
             client = await self._get_client(session_id)
             result = await client.commit(session_id, vikingbot_session.messages)
