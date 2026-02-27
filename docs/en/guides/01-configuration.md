@@ -338,7 +338,6 @@ Storage configuration for context data, including file storage (AGFS) and vector
 |-----------|------|-------------|---------|
 | `mode` | str | `"http-client"` or `"binding-client"` | `"http-client"` |
 | `backend` | str | `"local"`, `"s3"`, or `"memory"` | `"local"` |
-| `path` | str | Local directory path for `local` backend | `"./data"` |
 | `url` | str | AGFS service URL for `http-client` mode | `"http://localhost:1833"` |
 | `timeout` | float | Request timeout in seconds | `10.0` |
 | `s3` | object | S3 backend configuration (when backend is 's3') | - |
@@ -375,8 +374,7 @@ Directly uses the AGFS Go implementation through a shared library.
   "storage": {
     "agfs": {
       "mode": "binding-client",
-      "backend": "local",
-      "path": "./data"
+      "backend": "local"
     }
   }
 }
@@ -485,7 +483,6 @@ Supports cloud-deployed VikingDB on Volcengine
     "vectordb": {
       "name": "context",
       "backend": "volcengine",
-      "path": "./data",
       "project": "default",
       "volcengine": {
         "region": "cn-beijing",

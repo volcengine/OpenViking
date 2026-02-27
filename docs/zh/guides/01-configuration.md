@@ -345,7 +345,6 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 |------|------|------|--------|
 | `mode` | str | `"http-client"` 或 `"binding-client"` | `"http-client"` |
 | `backend` | str | `"local"`、`"s3"` 或 `"memory"` | `"local"` |
-| `path` | str | `local` 后端的本地目录路径 | `"./data"` |
 | `url` | str | `http-client` 模式下的 AGFS 服务地址 | `"http://localhost:1833"` |
 | `timeout` | float | 请求超时时间（秒） | `10.0` |
 | `s3` | object | S3 backend configuration (when backend is 's3') | - |
@@ -383,8 +382,7 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
   "storage": {
     "agfs": {
       "mode": "binding-client",
-      "backend": "local",
-      "path": "./data"
+      "backend": "local"
     }
   }
 }
@@ -493,7 +491,6 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
     "vectordb": {
       "name": "context",
       "backend": "volcengine",
-      "path": "./data",
       "project": "default",
       "volcengine": {
         "region": "cn-beijing",
