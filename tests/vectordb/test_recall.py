@@ -8,7 +8,7 @@ from typing import List
 from openviking.storage.vectordb.collection.local_collection import get_or_create_local_collection
 
 # Test data path
-TEST_DB_PATH = "./test_recall_collection/"
+TEST_DB_PATH = "./test_data/test_recall_collection/"
 
 
 def calculate_l2_distance(v1: List[float], v2: List[float]) -> float:

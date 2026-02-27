@@ -14,7 +14,7 @@ import unittest
 from openviking.storage.vectordb.collection.local_collection import get_or_create_local_collection
 
 # Test data path
-TEST_DB_PATH = "./test_large_scale_collection/"
+TEST_DB_PATH = "./test_data/test_large_scale_collection/"
 
 
 class TestLargeScaleScenarios(unittest.TestCase):

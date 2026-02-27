@@ -81,7 +81,16 @@ class ObserverService:
     @property
     def queue(self) -> ComponentStatus:
         """Get queue status."""
-        observer = QueueObserver(get_queue_manager())
+        try:
+            qm = get_queue_manager()
+        except Exception:
+            return ComponentStatus(
+                name="queue",
+                is_healthy=False,
+                has_errors=True,
+                status="Not initialized",
+            )
+        observer = QueueObserver(qm)
         return ComponentStatus(
             name="queue",
             is_healthy=observer.is_healthy(),

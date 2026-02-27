@@ -32,6 +32,8 @@ template: |
   {{ file_summaries }}
 
   Note: Files are numbered as [1], [2], [3], etc.
+  Some entries may be code structure skeletons (showing imports, classes, functions)
+  rather than prose summaries — treat them as structural descriptions of the file.
 
   [Subdirectories and Their Summaries]
   {{ children_abstracts }}

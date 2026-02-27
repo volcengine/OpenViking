@@ -306,7 +306,16 @@ If rerank is not configured, search uses vector similarity only.
 
 ### storage
 
-Storage backend configuration.
+Storage configuration for context data, including file storage (AGFS) and vector database storage (VectorDB).
+
+#### Root Configuration
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `workspace` | str | Local data storage path (main configuration) | "./data" |
+| `agfs` | object | AGFS configuration | {} |
+| `vectordb` | object | Vector database storage configuration | {} |
+
 
 ```json
 {
@@ -329,9 +338,9 @@ Storage backend configuration.
 |-----------|------|-------------|---------|
 | `mode` | str | `"http-client"` or `"binding-client"` | `"http-client"` |
 | `backend` | str | `"local"`, `"s3"`, or `"memory"` | `"local"` |
-| `path` | str | Local directory path for `local` backend | `"./data"` |
 | `url` | str | AGFS service URL for `http-client` mode | `"http://localhost:1833"` |
 | `timeout` | float | Request timeout in seconds | `10.0` |
+| `s3` | object | S3 backend configuration (when backend is 's3') | - |
 
 **Configuration Examples**
 
@@ -365,8 +374,7 @@ Directly uses the AGFS Go implementation through a shared library.
   "storage": {
     "agfs": {
       "mode": "binding-client",
-      "backend": "local",
-      "path": "./data"
+      "backend": "local"
     }
   }
 }
@@ -374,7 +382,25 @@ Directly uses the AGFS Go implementation through a shared library.
 
 </details>
 
-**S3 Backend**
+
+##### S3 Backend Configuration
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `bucket` | str | S3 bucket name | null |
+| `region` | str | AWS region where the bucket is located (e.g., us-east-1, cn-beijing) | null |
+| `access_key` | str | S3 access key ID | null |
+| `secret_key` | str | S3 secret access key corresponding to the access key ID | null |
+| `endpoint` | str | Custom S3 endpoint URL, required for S3-compatible services like MinIO or LocalStack | null |
+| `prefix` | str | Optional key prefix for namespace isolation | "" |
+| `use_ssl` | bool | Enable/disable SSL (HTTPS) for S3 connections | true |
+| `use_path_style` | bool | true for PathStyle used by MinIO and some S3-compatible services; false for VirtualHostStyle used by TOS and some S3-compatible services | true |
+
+</details>
+
+<details>
+<summary><b>PathStyle S3</b></summary>
+Supports S3 storage in PathStyle mode, such as MinIO, SeaweedFS.
 
 ```json
 {
@@ -392,8 +418,81 @@ Directly uses the AGFS Go implementation through a shared library.
   }
 }
 ```
+</details>
+
+
+<details>
+<summary><b>VirtualHostStyle S3</b></summary>
+Supports S3 storage in VirtualHostStyle mode, such as TOS.
+
+```json
+{
+  "storage": {
+    "agfs": {
+      "backend": "s3",
+      "s3": {
+        "bucket": "my-bucket",
+        "endpoint": "s3.amazonaws.com",
+        "region": "us-east-1",
+        "access_key": "your-ak",
+        "secret_key": "your-sk",
+        "use_path_style": false
+      }
+    }
+  }
+}
+```
+
+</details>
+
 
 #### vectordb
+
+Vector database storage configuration
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `backend` | str | VectorDB backend type: 'local' (file-based), 'http' (remote service), 'volcengine' (cloud VikingDB), or 'vikingdb' (private deployment) | "local" |
+| `name` | str | VectorDB collection name | "context" |
+| `url` | str | Remote service URL for 'http' type (e.g., 'http://localhost:5000') | null |
+| `project_name` | str | Project name (alias project) | "default" |
+| `distance_metric` | str | Distance metric for vector similarity search (e.g., 'cosine', 'l2', 'ip') | "cosine" |
+| `dimension` | int | Vector embedding dimension | 0 |
+| `sparse_weight` | float | Sparse weight for hybrid vector search, only effective when using hybrid index | 0.0 |
+| `volcengine` | object | 'volcengine' type VikingDB configuration | - |
+| `vikingdb` | object | 'vikingdb' type private deployment configuration | - |
+
+Default local mode
+```
+{
+  "storage": {
+    "vectordb": {
+      "backend": "local"
+    }
+  }
+}
+```
+
+<details>
+<summary><b>volcengine vikingDB</b></summary>
+Supports cloud-deployed VikingDB on Volcengine
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "name": "context",
+      "backend": "volcengine",
+      "project": "default",
+      "volcengine": {
+        "region": "cn-beijing",
+        "ak": "your-access-key",
+        "sk": "your-secret-key"
+      }
+  }
+}
+```
+</details>
 
 
 ## Config Files
@@ -560,7 +659,7 @@ Volcengine has rate limits. Consider batch processing with delays or upgrading y
 
 ## Related Documentation
 
-- [Volcengine Purchase Guide](./volcengine-purchase-guide.md) - API key setup
+- [Volcengine Purchase Guide](./02-volcengine-purchase-guide.md) - API key setup
 - [API Overview](../api/01-overview.md) - Client initialization
 - [Server Deployment](./03-deployment.md) - Server configuration
 - [Context Layers](../concepts/03-context-layers.md) - L0/L1/L2

@@ -16,7 +16,7 @@ def _make_viking_fs_mock(existing_uris: set[str]):
     """Create a mock VikingFS whose stat() raises for non-existing URIs."""
     fs = MagicMock()
 
-    async def _stat(uri):
+    async def _stat(uri, **kwargs):
         if uri in existing_uris:
             return {"name": uri.split("/")[-1], "isDir": True}
         raise FileNotFoundError(f"Not found: {uri}")
@@ -26,7 +26,6 @@ def _make_viking_fs_mock(existing_uris: set[str]):
 
 
 class TestResolveUniqueUri:
-
     @pytest.mark.asyncio
     async def test_no_conflict(self):
         """When the URI is free, return it unchanged."""
@@ -85,9 +84,7 @@ class TestResolveUniqueUri:
 
         with patch("openviking.parse.tree_builder.get_viking_fs", return_value=fs):
             with pytest.raises(FileExistsError, match="Cannot resolve unique name"):
-                await builder._resolve_unique_uri(
-                    "viking://resources/report", max_attempts=5
-                )
+                await builder._resolve_unique_uri("viking://resources/report", max_attempts=5)
 
     @pytest.mark.asyncio
     async def test_gap_in_sequence(self):

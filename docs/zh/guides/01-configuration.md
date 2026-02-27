@@ -313,7 +313,16 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 
 ### storage
 
-存储后端配置。
+用于存储上下文数据 ，包括文件存储（AGFS）和向量库存储（VectorDB）。
+
+#### 根级配置
+
+| 参数 | 类型 | 说明 | 默认值 |
+|------|------|------|--------|
+| `workspace` | str | 本地数据存储路径（主要配置） | "./data" |
+| `agfs` | object | agfs 配置 | {} |
+| `vectordb` | object | 向量库存储配置 | {} |
+
 
 ```json
 {
@@ -336,9 +345,10 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 |------|------|------|--------|
 | `mode` | str | `"http-client"` 或 `"binding-client"` | `"http-client"` |
 | `backend` | str | `"local"`、`"s3"` 或 `"memory"` | `"local"` |
-| `path` | str | `local` 后端的本地目录路径 | `"./data"` |
 | `url` | str | `http-client` 模式下的 AGFS 服务地址 | `"http://localhost:1833"` |
 | `timeout` | float | 请求超时时间（秒） | `10.0` |
+| `s3` | object | S3 backend configuration (when backend is 's3') | - |
+
 
 **配置示例**
 
@@ -372,8 +382,7 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
   "storage": {
     "agfs": {
       "mode": "binding-client",
-      "backend": "local",
-      "path": "./data"
+      "backend": "local"
     }
   }
 }
@@ -381,7 +390,25 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 
 </details>
 
-**S3 后端**
+
+##### S3 后端配置
+
+| 参数 | 类型 | 说明 | 默认值 |
+|------|------|------|--------|
+| `bucket` | str | S3 存储桶名称 | null |
+| `region` | str | 存储桶所在的 AWS 区域（例如 us-east-1, cn-beijing） | null |
+| `access_key` | str | S3 访问密钥 ID | null |
+| `secret_key` | str | 与访问密钥 ID 对应的 S3 秘密访问密钥 | null |
+| `endpoint` | str | 自定义 S3 端点 URL，对于 MinIO 或 LocalStack 等 S3 兼容服务是必需的 | null |
+| `prefix` | str | 用于命名空间隔离的可选键前缀 | "" |
+| `use_ssl` | bool | 为 S3 连接启用/禁用 SSL（HTTPS） | true |
+| `use_path_style` | bool | true 表示对 MinIO 和某些 S3 兼容服务使用 PathStyle；false 表示对 TOS 和某些 S3 兼容服务使用 VirtualHostStyle | true |
+
+</details>
+
+<details>
+<summary><b>PathStyle S3</b></summary>
+支持 PathStyle 模式的 S3 存储， 如 MinIO、SeaweedFS.
 
 ```json
 {
@@ -399,8 +426,83 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
   }
 }
 ```
+</details>
+
+
+<details>
+<summary><b>VirtualHostStyle S3</b></summary>
+支持 VirtualHostStyle 模式的 S3 存储， 如 TOS.
+
+```json
+{
+  "storage": {
+    "agfs": {
+      "backend": "s3",
+      "s3": {
+        "bucket": "my-bucket",
+        "endpoint": "s3.amazonaws.com",
+        "region": "us-east-1",
+        "access_key": "your-ak",
+        "secret_key": "your-sk",
+        "use_path_style": false
+      }
+    }
+  }
+}
+```
+
+</details>
+
 
 #### vectordb
+
+向量库存储的配置 
+
+| 参数 | 类型 | 说明 | 默认值 |
+|------|------|------|--------|
+| `backend` | str | VectorDB 后端类型: 'local'（基于文件）, 'http'（远程服务）, 'volcengine'（云上VikingDB）或 'vikingdb'（私有部署） | "local" |
+| `name` | str | VectorDB 的集合名称 | "context" |
+| `url` | str | 'http' 类型的远程服务 URL（例如 'http://localhost:5000'） | null |
+| `project_name` | str | 项目名称（别名 project） | "default" |
+| `distance_metric` | str | 向量相似度搜索的距离度量（例如 'cosine', 'l2', 'ip'） | "cosine" |
+| `dimension` | int | 向量嵌入的维度 | 0 |
+| `sparse_weight` | float | 混合向量搜索的稀疏权重，仅在使用混合索引时生效 | 0.0 |
+| `volcengine` | object | 'volcengine' 类型的 VikingDB 配置 | - |
+| `vikingdb` | object | 'vikingdb' 类型的私有部署配置 | - |
+
+默认使用本地模式
+```
+{
+  "storage": {
+    "vectordb": {
+      "backend": "local"
+    }
+  }
+}
+```
+
+<details>
+<summary><b>volcengine vikingDB</b></summary>
+支持火山引擎云上部署的 VikingDB
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "name": "context",
+      "backend": "volcengine",
+      "project": "default",
+      "volcengine": {
+        "region": "cn-beijing",
+        "ak": "your-access-key",
+        "sk": "your-secret-key"
+      }
+  }
+}
+```
+</details>
+
+
 
 ## 配置文件
 

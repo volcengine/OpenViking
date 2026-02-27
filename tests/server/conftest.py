@@ -25,8 +25,8 @@ from openviking_cli.session.user_id import UserIdentifier
 # Paths
 # ---------------------------------------------------------------------------
 
-TEST_ROOT = Path(__file__).parent
-TEST_TMP_DIR = TEST_ROOT / ".tmp_server"
+PROJECT_ROOT = Path(__file__).parent.parent.parent
+TEST_TMP_DIR = PROJECT_ROOT / "test_data" / "tmp_server"
 
 # ---------------------------------------------------------------------------
 # Sample data

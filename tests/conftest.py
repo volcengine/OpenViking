@@ -14,8 +14,8 @@ import pytest_asyncio
 from openviking import AsyncOpenViking
 
 # Test data root directory
-TEST_ROOT = Path(__file__).parent
-TEST_TMP_DIR = TEST_ROOT / ".tmp"
+PROJECT_ROOT = Path(__file__).parent.parent
+TEST_TMP_DIR = PROJECT_ROOT / "test_data" / "tmp"
 
 
 @pytest.fixture(scope="session")

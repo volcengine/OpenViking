@@ -6,7 +6,7 @@ import unittest
 
 from openviking.storage.vectordb.collection.local_collection import get_or_create_local_collection
 
-TEST_DB_PATH = "./db_test_openviking_vectordb/"
+TEST_DB_PATH = "./test_data/db_test_openviking_vectordb/"
 
 
 def clean_dir(path: str) -> None:
@@ -475,14 +475,14 @@ class TestOpenVikingVectorDBIP(TestOpenVikingVectorDB):
     def setUp(self):
         super().setUp()
         global TEST_DB_PATH
-        TEST_DB_PATH = "./db_test_openviking_vectordb_ip/"
+        TEST_DB_PATH = "./test_data/db_test_openviking_vectordb_ip/"
         clean_dir(TEST_DB_PATH)
 
     def tearDown(self):
         super().tearDown()
         global TEST_DB_PATH
         clean_dir(TEST_DB_PATH)
-        TEST_DB_PATH = "./db_test_openviking_vectordb/"  # Reset
+        TEST_DB_PATH = "./test_data/db_test_openviking_vectordb/"  # Reset
 
     def _create_collection(self):
         vector_dim = 1024

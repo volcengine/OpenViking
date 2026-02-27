@@ -15,7 +15,7 @@ async def test_vikingdb_observer():
     print("=== Test VikingDBObserver ===")
 
     # Create client
-    client = ov.AsyncOpenViking(path="./test_data")
+    client = ov.AsyncOpenViking(path="./test_data/test_vikingdb_observer")
 
     try:
         # Initialize client
@@ -81,7 +81,7 @@ def test_sync_client():
     """Test sync client"""
     print("\n=== Test sync client ===")
 
-    client = ov.OpenViking(path="./test_data")
+    client = ov.OpenViking(path="./test_data/test_vikingdb_observer")
 
     try:
         # Initialize
