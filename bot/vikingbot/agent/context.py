@@ -20,7 +20,7 @@ class ContextBuilder:
     into a coherent prompt for the LLM.
     """
     
-    BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md", "IDENTITY.md"]
+    BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "TOOLS.md", "IDENTITY.md"]
     INIT_DIR = "init"
     
     def __init__(self, workspace: Path, sandbox_manager=None):
@@ -74,21 +74,27 @@ class ContextBuilder:
             sandbox_cwd = await self.sandbox_manager.get_sandbox_cwd(session_key)
 
             parts.append(f"## Sandbox Environment\n\nYou are running in a sandboxed environment. All file operations and command execution are restricted to the sandbox directory.\nThe sandbox root directory is `{sandbox_cwd}` (use relative paths for all operations).")
-        
+
+        # Viking user profile
+        profile = await self.memory.get_viking_user_profile()
+        if profile:
+            parts.append(profile)
+
+        # Viking memory
+        viking_memory = await self.memory.get_viking_memory_context(session_key.safe_name(), current_message, history)
+        if viking_memory:
+            parts.append(viking_memory)
+
         # Bootstrap files
         bootstrap = self._load_bootstrap_files()
         if bootstrap:
             parts.append(bootstrap)
         
         # Memory context
-        memory = self.memory.get_memory_context()
-        if memory:
-            parts.append(f"# Memory\n\n{memory}")
+        # memory = self.memory.get_memory_context()
+        # if memory:
+        #     parts.append(f"# Memory\n\n{memory}")
 
-        # Viking memory
-        viking_memory = await self.memory.get_viking_memory_context(session_key.safe_name(), current_message, history)
-        if viking_memory:
-            parts.append(viking_memory)
         
         # Skills - progressive loading
         # 1. Always-loaded skills: include full content
@@ -148,7 +154,7 @@ You have access to tools that allow you to:
 You have two workspaces:
 1. Local workspace: {workspace_display}
 2. OpenViking workspace: managed via OpenViking tools
-- Long-term memory: tow types, a. using user_memory_search tool to search memory; b. {workspace_display}/memory/MEMORY.md: 
+- Long-term memory: using user_memory_search tool to search memory
 - History log: tow types, a. using user_memory_search tool to search history; b. memory/HISTORY.md (grep-searchable)
 - Custom skills: {workspace_display}/skills/{{skill-name}}/SKILL.md
 
@@ -159,7 +165,7 @@ For normal conversation, just respond with text - do not call the message tool.
 Always be helpful, accurate, and concise. When using tools, think step by step: what you know, what you need, and why you chose this tool.
 
 ## Memory
-- Remember important facts: write to {workspace_display}/memory/MEMORY.md
+- Remember important facts: using openviking_memory_commit tool to commit memory
 - Recall past events: prioritize using user_memory_search tool to search history, or grep {workspace_display}/memory/HISTORY.md"""
     
     def _load_bootstrap_files(self) -> str:
@@ -203,7 +209,7 @@ Always be helpful, accurate, and concise. When using tools, think step by step: 
         if session_key.channel_id and session_key.chat_id:
             system_prompt += f"\n\n## Current Session\nChannel: {session_key.type}:{session_key.channel_id}\nChat ID: {session_key.chat_id}"
         messages.append({"role": "system", "content": system_prompt})
-        # logger.debug(f"system_prompt: {system_prompt}")
+        logger.debug(f"system_prompt: {system_prompt}")
 
         # History
         messages.extend(history)

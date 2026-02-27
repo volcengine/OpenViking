@@ -25,12 +25,12 @@ class VikingClient:
             self.client = ov.AsyncOpenViking(path=str(ov_data_path))
         else:
             self.client = ov.AsyncHTTPClient(url=openviking_config.server_url)
-        self.tos_client = tos.TosClientV2(
-            openviking_config.tos_ak,
-            openviking_config.tos_sk,
-            openviking_config.tos_endpoint,
-            openviking_config.tos_region,
-        )
+            self.tos_client = tos.TosClientV2(
+                openviking_config.tos_ak,
+                openviking_config.tos_sk,
+                openviking_config.tos_endpoint,
+                openviking_config.tos_region
+            )
         self.viking_path = viking_path
         self.mode = openviking_config.mode
 
@@ -169,25 +169,16 @@ class VikingClient:
         )
 
     async def search_memory(
-        self, query: str, session_id: str, messages: list[dict[str, Any]], limit: int = 10
+        self, query: str, limit: int = 10
     ) -> dict[str, list[Any]]:
         """通过上下文消息，检索viking 的user、Agent memory"""
-        session = self.client.session(session_id)
-        if self.mode == "local":
-            for message in messages:
-                session.add_message(role=message.get("role"), parts=[TextPart(text=message.get("content"))])
-        else:
-            for message in messages:
-                await session.add_message(role=message.get("role"), content=message.get("content"))
-        user_memory = await self.client.search(
+        user_memory = await self.client.find(
             query=query,
-            session=session,
             target_uri=uri_user_memory,
             limit=limit,
         )
-        agent_memory = await self.client.search(
+        agent_memory = await self.client.find(
             query=query,
-            session=session,
             target_uri=uri_agent_memory,
             limit=limit,
         )
@@ -217,7 +208,7 @@ class VikingClient:
                 # logger.debug(f"message === {message}")
                 role = message.get("role")
                 content = message.get("content")
-                tools_used = message.get("tools_used", [])
+                tools_used = message.get("tools_used") or []
 
                 parts: list[Part] = []
 
@@ -293,7 +284,7 @@ class VikingClient:
     async def get_viking_memory_context(
         self, session_id: str, current_message: str, history: list[dict[str, Any]]
     ) -> str:
-        result = await self.search_memory(current_message, session_id, history)
+        result = await self.search_memory(current_message, limit=5)
         if not result:
             return ""
         user_memory = self._parse_viking_memory(result["user_memory"])
@@ -309,20 +300,19 @@ async def main_test():
     client = await VikingClient.create()
     # res = client.list_resources()
     # res = await client.search("头有点疼", target_uri="viking://user/memories/")
-    # res = await client.get_viking_memory_context("123", current_message="头疼", history=[])
+    res = await client.get_viking_memory_context("123", current_message="头疼", history=[])
+    # res = await client.search_memory("你好")
     # res = await client.list_resources("viking://user/memories/events")
-    # res = await client.read_content("viking://user/memories/events", level="overview")
+    # res = await client.read_content("viking://user/memories/profile.md", level="read")
     # res = await client.add_resource("/Users/bytedance/Documents/论文/吉比特年报.pdf", "吉比特年报")
     # res = await client.commit("123", [{"role": "user", "content": "我叫王大锤"}])
-    res = await client.commit("1234", [{"role": "user", "content": "帮我搜索 Python asyncio 教程"}
-                                       ,{"role": "assistant", "content": "我来帮你搜索 Python asyncio 相关的教程。"}])
+    # res = await client.commit("1234", [{"role": "user", "content": "帮我搜索 Python asyncio 教程"}
+    #                                    ,{"role": "assistant", "content": "我来帮你r搜索 Python asyncio 相关的教程。"}])
     print(res)
 
     print("等待后台处理完成...")
     await client.client.wait_processed(timeout=60)
     print("处理完成！")
-
-    client.close()
 
 
 async def account_test():

@@ -1,9 +1,10 @@
 """OpenViking file system tools: read, write, list, search resources."""
+
 from abc import ABC
 from pathlib import Path
 from typing import Any, Optional
 
-from vikingbot.agent.tools.base import Tool
+from vikingbot.agent.tools.base import Tool, ToolContext
 from vikingbot.openviking_mount.ov_server import VikingClient
 
 
@@ -16,6 +17,7 @@ class OVFileTool(Tool, ABC):
         if self._client is None:
             self._client = await VikingClient.create()
         return self._client
+
 
 class VikingReadTool(OVFileTool):
     """Tool to read content from Viking resources."""
@@ -47,7 +49,9 @@ class VikingReadTool(OVFileTool):
             "required": ["uri"],
         }
 
-    async def execute(self, tool_context: "ToolContext", uri: str, level: str = "abstract", **kwargs: Any) -> str:
+    async def execute(
+        self, tool_context: "ToolContext", uri: str, level: str = "abstract", **kwargs: Any
+    ) -> str:
         try:
             client = await self._get_client()
             content = await client.read_content(uri, level=level)
@@ -85,7 +89,9 @@ class VikingListTool(OVFileTool):
             "required": [],
         }
 
-    async def execute(self, tool_context: "ToolContext", uri: str, recursive: bool = False, **kwargs: Any) -> str:
+    async def execute(
+        self, tool_context: "ToolContext", uri: str, recursive: bool = False, **kwargs: Any
+    ) -> str:
         try:
             client = await self._get_client()
             entries = await client.list_resources(path=uri, recursive=recursive)
@@ -132,7 +138,13 @@ class VikingSearchTool(OVFileTool):
             "required": ["query"],
         }
 
-    async def execute(self, tool_context: "ToolContext", query: str, target_uri: Optional[str] = None, **kwargs: Any) -> str:
+    async def execute(
+        self,
+        tool_context: "ToolContext",
+        query: str,
+        target_uri: Optional[str] = None,
+        **kwargs: Any,
+    ) -> str:
         try:
             client = await self._get_client()
             results = await client.search(query, target_uri=target_uri)
@@ -214,6 +226,7 @@ class VikingAddResourceTool(OVFileTool):
 
 class VikingGrepTool(OVFileTool):
     """Tool to search Viking resources using regex patterns."""
+
     @property
     def name(self) -> str:
         return "openviking_grep"
@@ -245,7 +258,12 @@ class VikingGrepTool(OVFileTool):
         }
 
     async def execute(
-        self, tool_context: "ToolContext", uri: str, pattern: str, case_insensitive: bool = False, **kwargs: Any
+        self,
+        tool_context: "ToolContext",
+        uri: str,
+        pattern: str,
+        case_insensitive: bool = False,
+        **kwargs: Any,
     ) -> str:
         try:
             client = await self._get_client()
@@ -308,7 +326,9 @@ class VikingGlobTool(OVFileTool):
             "required": ["pattern"],
         }
 
-    async def execute(self, tool_context: "ToolContext", pattern: str, uri: str = "", **kwargs: Any) -> str:
+    async def execute(
+        self, tool_context: "ToolContext", pattern: str, uri: str = "", **kwargs: Any
+    ) -> str:
         try:
             client = await self._get_client()
             result = await client.glob(pattern, uri=uri or None)
@@ -363,3 +383,49 @@ class VikingSearchUserMemoryTool(OVFileTool):
             return str(results)
         except Exception as e:
             return f"Error searching Viking: {str(e)}"
+
+
+class VikingMemoryCommitTool(OVFileTool):
+    """Tool to commit messages to OpenViking session."""
+
+    @property
+    def name(self) -> str:
+        return "openviking_memory_commit"
+
+    @property
+    def description(self) -> str:
+        return "Commit messages to OpenViking session to persist conversation history."
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "messages": {
+                    "type": "array",
+                    "description": "List of messages to commit, each with role, content, and optional tools_used",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "role": {"type": "string", "enum": ["user", "assistant"]},
+                            "content": {"type": "string"}                        },
+                        "required": ["role", "content"],
+                    },
+                },
+            },
+            "required": ["messages"],
+        }
+
+    async def execute(
+        self,
+        tool_context: ToolContext,
+        messages: list[dict[str, Any]],
+        **kwargs: Any,
+    ) -> str:
+        try:
+            client = await self._get_client()
+            session_id = tool_context.session_key.safe_name()
+            await client.commit(session_id, messages)
+            return f"Successfully committed to session {session_id}"
+        except Exception as e:
+            return f"Error committing to Viking: {str(e)}"
