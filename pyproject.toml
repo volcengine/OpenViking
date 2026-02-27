@@ -89,7 +89,8 @@ Repository = "https://github.com/volcengine/openviking"
 Issues = "https://github.com/volcengine/openviking/issues"
 
 [project.scripts]
-openviking = "openviking_cli.cli.main:app"
+ov = "openviking.cli:main"  # Rust CLI 入口（极简包装器）
+# openviking = "openviking_cli.cli.main:app"  # 可选：保留或移除
 openviking-server = "openviking.server.bootstrap:main"
 
 [tool.setuptools_scm]
@@ -103,7 +104,13 @@ include = ["openviking*"]
 exclude = ["tests*", "docs*", "examples*"]
 
 [tool.setuptools.package-data]
-openviking = ["prompts/templates/**/*.yaml"]
+openviking = [
+    "prompts/templates/**/*.yaml",
+    "bin/agfs-server",
+    "bin/agfs-server.exe",
+    "bin/ov",        # 新增
+    "bin/ov.exe"     # 新增
+]
 
 [tool.mypy]
 python_version = "3.10"
