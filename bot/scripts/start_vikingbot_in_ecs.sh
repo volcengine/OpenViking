@@ -23,6 +23,7 @@ LOG_FILE="$LOG_DIR/output.log"
 echo "Killing existing vikingbot gateway processes..."
 pkill -f "vikingbot gateway" || true
 pkill -f "uvicorn" || true
+pkill -f "agfs" || true
 
 # 等待进程结束
 sleep 1
