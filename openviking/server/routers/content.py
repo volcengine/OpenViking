@@ -21,7 +21,7 @@ async def read(
 ):
     """Read file content (L2)."""
     service = get_service()
-    result = await service.fs.read(uri, offset=offset, limit=limit)
+    result = await service.fs.read(uri, ctx=_ctx, offset=offset, limit=limit)
     return Response(status="ok", result=result)
 
 
@@ -32,7 +32,7 @@ async def abstract(
 ):
     """Read L0 abstract."""
     service = get_service()
-    result = await service.fs.abstract(uri)
+    result = await service.fs.abstract(uri, ctx=_ctx)
     return Response(status="ok", result=result)
 
 
@@ -43,5 +43,5 @@ async def overview(
 ):
     """Read L1 overview."""
     service = get_service()
-    result = await service.fs.overview(uri)
+    result = await service.fs.overview(uri, ctx=_ctx)
     return Response(status="ok", result=result)

@@ -1,0 +1,69 @@
+{
+  "server": {
+    "host": "0.0.0.0",
+    "port": 1933,
+    "root_api_key": "<your-root-api-key>",
+    "cors_origins": ["*"]
+  },
+  "storage": {
+    "workspace": "/app/data",
+    "vectordb": {
+      "name": "context",
+      "backend": "volcengine",
+      "project": "default",
+      "volcengine": {
+        "region": "cn-beijing",
+        "ak": "<your-volcengine-ak>",
+        "sk": "<your-volcengine-sk>"
+      }
+    },
+    "agfs": {
+      "port": 1833,
+      "log_level": "warn",
+      "backend": "s3",
+      "timeout": 10,
+      "retry_times": 3,
+      "s3": {
+        "bucket": "<your-tos-bucket>",
+        "region": "cn-beijing",
+        "access_key": "<your-volcengine-ak>",
+        "secret_key": "<your-volcengine-sk>",
+        "endpoint": "https://tos-s3-cn-beijing.volces.com",
+        "prefix": "openviking",
+        "use_ssl": true,
+        "use_path_style": false
+      }
+    }
+  },
+  "embedding": {
+    "dense": {
+      "model": "doubao-embedding-vision-250615",
+      "api_key": "<your-ark-api-key>",
+      "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+      "dimension": 1024,
+      "provider": "volcengine",
+      "input": "multimodal"
+    }
+  },
+  "vlm": {
+    "model": "doubao-seed-1-8-251228",
+    "api_key": "<your-ark-api-key>",
+    "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+    "temperature": 0.0,
+    "max_retries": 3,
+    "provider": "volcengine",
+    "thinking": false
+  },
+  "auto_generate_l0": true,
+  "auto_generate_l1": true,
+  "default_search_mode": "thinking",
+  "default_search_limit": 3,
+  "enable_memory_decay": true,
+  "memory_decay_check_interval": 3600,
+  "log": {
+    "level": "WARN",
+    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    "output": "stdout",
+    "rotation": false
+  }
+}

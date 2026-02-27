@@ -45,7 +45,15 @@ class CollectionSchemas:
             "Fields": [
                 {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
                 {"FieldName": "uri", "FieldType": "path"},
+                # type 字段：当前版本未使用，保留用于未来扩展
+                # 预留用于表示资源的具体类型，如 "file", "directory", "image", "video", "repository" 等
                 {"FieldName": "type", "FieldType": "string"},
+                # context_type 字段：区分上下文的大类
+                # 枚举值："resource"（资源，默认）, "memory"（记忆）, "skill"（技能）
+                # 推导规则：
+                #   - URI 以 viking://agent/skills 开头 → "skill"
+                #   - URI 包含 "memories" → "memory"
+                #   - 其他情况 → "resource"
                 {"FieldName": "context_type", "FieldType": "string"},
                 {"FieldName": "vector", "FieldType": "vector", "Dim": vector_dim},
                 {"FieldName": "sparse_vector", "FieldType": "sparse_vector"},
@@ -53,11 +61,22 @@ class CollectionSchemas:
                 {"FieldName": "updated_at", "FieldType": "date_time"},
                 {"FieldName": "active_count", "FieldType": "int64"},
                 {"FieldName": "parent_uri", "FieldType": "path"},
-                {"FieldName": "is_leaf", "FieldType": "bool"},
+                # level 字段：区分 L0/L1/L2 层级
+                # 枚举值：
+                #   - 0 = L0（abstract，摘要）
+                #   - 1 = L1（overview，概览）
+                #   - 2 = L2（detail/content，详情/内容，默认）
+                # URI 命名规则：
+                #   - level=0: {目录}/.abstract.md
+                #   - level=1: {目录}/.overview.md
+                #   - level=2: {文件路径}
+                {"FieldName": "level", "FieldType": "int64"},
                 {"FieldName": "name", "FieldType": "string"},
                 {"FieldName": "description", "FieldType": "string"},
                 {"FieldName": "tags", "FieldType": "string"},
                 {"FieldName": "abstract", "FieldType": "string"},
+                {"FieldName": "account_id", "FieldType": "string"},
+                {"FieldName": "owner_space", "FieldType": "string"},
             ],
             "ScalarIndex": [
                 "uri",
@@ -67,9 +86,11 @@ class CollectionSchemas:
                 "updated_at",
                 "active_count",
                 "parent_uri",
-                "is_leaf",
+                "level",
                 "name",
                 "tags",
+                "account_id",
+                "owner_space",
             ],
         }
 
@@ -181,7 +202,10 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                 # Ensure vector DB has at most one record per URI.
                 uri = inserted_data.get("uri")
                 if uri:
-                    inserted_data["id"] = hashlib.md5(uri.encode("utf-8")).hexdigest()
+                    account_id = inserted_data.get("account_id", "default")
+                    owner_space = inserted_data.get("owner_space", "")
+                    id_seed = f"{account_id}:{owner_space}:{uri}"
+                    inserted_data["id"] = hashlib.md5(id_seed.encode("utf-8")).hexdigest()
 
                 record_id = await self._vikingdb.insert(self._collection_name, inserted_data)
                 if record_id:

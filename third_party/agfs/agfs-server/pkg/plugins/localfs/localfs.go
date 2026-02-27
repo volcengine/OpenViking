@@ -134,7 +134,7 @@ func (fs *LocalFS) Remove(path string) error {
 	info, err := os.Stat(localPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return fmt.Errorf("no such file or directory: %s", path)
+			return filesystem.NewNotFoundError("remove", path)
 		}
 		return fmt.Errorf("failed to stat: %w", err)
 	}
@@ -167,7 +167,7 @@ func (fs *LocalFS) RemoveAll(path string) error {
 
 	// Check if exists
 	if _, err := os.Stat(localPath); os.IsNotExist(err) {
-		return fmt.Errorf("no such file or directory: %s", path)
+		return filesystem.NewNotFoundError("remove", path)
 	}
 
 	// Remove recursively
@@ -189,7 +189,7 @@ func (fs *LocalFS) Read(path string, offset int64, size int64) ([]byte, error) {
 	info, err := os.Stat(localPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("no such file: %s", path)
+			return nil, filesystem.NewNotFoundError("read", path)
 		}
 		return nil, fmt.Errorf("failed to stat: %w", err)
 	}
@@ -364,7 +364,7 @@ func (fs *LocalFS) Stat(path string) (*filesystem.FileInfo, error) {
 	info, err := os.Stat(localPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("no such file or directory: %s", path)
+			return nil, filesystem.NewNotFoundError("stat", path)
 		}
 		return nil, fmt.Errorf("failed to stat: %w", err)
 	}
@@ -394,7 +394,7 @@ func (fs *LocalFS) Rename(oldPath, newPath string) error {
 
 	// Check if old path exists
 	if _, err := os.Stat(oldLocalPath); os.IsNotExist(err) {
-		return fmt.Errorf("no such file or directory: %s", oldPath)
+		return filesystem.NewNotFoundError("rename", oldPath)
 	}
 
 	// Check if new path parent directory exists
@@ -420,7 +420,7 @@ func (fs *LocalFS) Chmod(path string, mode uint32) error {
 
 	// Check if exists
 	if _, err := os.Stat(localPath); os.IsNotExist(err) {
-		return fmt.Errorf("no such file or directory: %s", path)
+		return filesystem.NewNotFoundError("chmod", path)
 	}
 
 	// Change permissions
@@ -442,7 +442,7 @@ func (fs *LocalFS) Open(path string) (io.ReadCloser, error) {
 	f, err := os.Open(localPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("no such file: %s", path)
+			return nil, filesystem.NewNotFoundError("open", path)
 		}
 		return nil, fmt.Errorf("failed to open file: %w", err)
 	}
@@ -554,7 +554,7 @@ func (fs *LocalFS) OpenStream(path string) (filesystem.StreamReader, error) {
 	info, err := os.Stat(localPath)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return nil, fmt.Errorf("no such file: %s", path)
+			return nil, filesystem.NewNotFoundError("grep", path)
 		}
 		return nil, fmt.Errorf("failed to stat: %w", err)
 	}

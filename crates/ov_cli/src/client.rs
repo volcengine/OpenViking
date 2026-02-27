@@ -1,6 +1,12 @@
 use reqwest::{Client as ReqwestClient, StatusCode};
 use serde::de::DeserializeOwned;
 use serde_json::Value;
+use std::fs::File;
+use std::path::Path;
+use tempfile::NamedTempFile;
+use url::Url;
+use zip::write::FileOptions;
+use zip::CompressionMethod;
 
 use crate::error::{Error, Result};
 
@@ -10,13 +16,19 @@ pub struct HttpClient {
     http: ReqwestClient,
     base_url: String,
     api_key: Option<String>,
+    agent_id: Option<String>,
 }
 
 impl HttpClient {
     /// Create a new HTTP client
-    pub fn new(base_url: impl Into<String>, api_key: Option<String>) -> Self {
+    pub fn new(
+        base_url: impl Into<String>,
+        api_key: Option<String>,
+        agent_id: Option<String>,
+        timeout_secs: f64,
+    ) -> Self {
         let http = ReqwestClient::builder()
-            .timeout(std::time::Duration::from_secs(60))
+            .timeout(std::time::Duration::from_secs_f64(timeout_secs))
             .build()
             .expect("Failed to build HTTP client");
 
@@ -24,7 +36,89 @@ impl HttpClient {
             http,
             base_url: base_url.into().trim_end_matches('/').to_string(),
             api_key,
+            agent_id,
         }
+    }
+
+    /// Check if the server is localhost or 127.0.0.1
+    fn is_local_server(&self) -> bool {
+        if let Ok(url) = Url::parse(&self.base_url) {
+            if let Some(host) = url.host_str() {
+                return host == "localhost" || host == "127.0.0.1";
+            }
+        }
+        false
+    }
+
+    /// Zip a directory to a temporary file
+    fn zip_directory(&self, dir_path: &Path) -> Result<NamedTempFile> {
+        if !dir_path.is_dir() {
+            return Err(Error::Network(format!(
+                "Path {} is not a directory",
+                dir_path.display()
+            )));
+        }
+
+        let temp_file = NamedTempFile::new()?;
+        let file = File::create(temp_file.path())?;
+        let mut zip = zip::ZipWriter::new(file);
+        let options: FileOptions<'_, ()> = FileOptions::default().compression_method(CompressionMethod::Deflated);
+
+        let walkdir = walkdir::WalkDir::new(dir_path);
+        for entry in walkdir.into_iter().filter_map(|e| e.ok()) {
+            let path = entry.path();
+            if path.is_file() {
+                let name = path.strip_prefix(dir_path).unwrap_or(path);
+                zip.start_file(name.to_string_lossy(), options)?;
+                let mut file = File::open(path)?;
+                std::io::copy(&mut file, &mut zip)?;
+            }
+        }
+
+        zip.finish()?;
+        Ok(temp_file)
+    }
+
+    /// Upload a temporary file and return the temp_path
+    async fn upload_temp_file(&self, file_path: &Path) -> Result<String> {
+        let url = format!("{}/api/v1/resources/temp_upload", self.base_url);
+        let file_name = file_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("temp_upload.zip");
+
+        // Read file content
+        let file_content = tokio::fs::read(file_path).await?;
+        
+        // Create multipart form
+        let part = reqwest::multipart::Part::bytes(file_content)
+            .file_name(file_name.to_string());
+        
+        let part = part.mime_str("application/octet-stream").map_err(|e| {
+            Error::Network(format!("Failed to set mime type: {}", e))
+        })?;
+
+        let form = reqwest::multipart::Form::new().part("file", part);
+
+        let mut headers = self.build_headers();
+        // Remove Content-Type: application/json, let reqwest set multipart/form-data automatically
+        headers.remove(reqwest::header::CONTENT_TYPE);
+
+        let response = self
+            .http
+            .post(&url)
+            .headers(headers)
+            .multipart(form)
+            .send()
+            .await
+            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+
+        let result: Value = self.handle_response(response).await?;
+        result
+            .get("temp_path")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .ok_or_else(|| Error::Parse("Missing temp_path in response".to_string()))
     }
 
     fn build_headers(&self) -> reqwest::header::HeaderMap {
@@ -36,6 +130,11 @@ impl HttpClient {
         if let Some(api_key) = &self.api_key {
             if let Ok(value) = reqwest::header::HeaderValue::from_str(api_key) {
                 headers.insert("X-API-Key", value);
+            }
+        }
+        if let Some(agent_id) = &self.agent_id {
+            if let Ok(value) = reqwest::header::HeaderValue::from_str(agent_id) {
+                headers.insert("X-OpenViking-Agent", value);
             }
         }
         headers
@@ -327,15 +426,37 @@ impl HttpClient {
         wait: bool,
         timeout: Option<f64>,
     ) -> Result<serde_json::Value> {
-        let body = serde_json::json!({
-            "path": path,
-            "target": target,
-            "reason": reason,
-            "instruction": instruction,
-            "wait": wait,
-            "timeout": timeout,
-        });
-        self.post("/api/v1/resources", &body).await
+        let path_obj = Path::new(path);
+        
+        // Check if it's a local directory and not a local server
+        if path_obj.exists() && path_obj.is_dir() && !self.is_local_server() {
+            // Zip the directory
+            let zip_file = self.zip_directory(path_obj)?;
+            let temp_path = self.upload_temp_file(zip_file.path()).await?;
+            
+            let body = serde_json::json!({
+                "temp_path": temp_path,
+                "target": target,
+                "reason": reason,
+                "instruction": instruction,
+                "wait": wait,
+                "timeout": timeout,
+            });
+            
+            self.post("/api/v1/resources", &body).await
+        } else {
+            // Regular case - use path directly
+            let body = serde_json::json!({
+                "path": path,
+                "target": target,
+                "reason": reason,
+                "instruction": instruction,
+                "wait": wait,
+                "timeout": timeout,
+            });
+            
+            self.post("/api/v1/resources", &body).await
+        }
     }
 
     pub async fn add_skill(
@@ -344,12 +465,26 @@ impl HttpClient {
         wait: bool,
         timeout: Option<f64>,
     ) -> Result<serde_json::Value> {
-        let body = serde_json::json!({
-            "data": data,
-            "wait": wait,
-            "timeout": timeout,
-        });
-        self.post("/api/v1/skills", &body).await
+        let path_obj = Path::new(data);
+
+        if path_obj.exists() && path_obj.is_dir() && !self.is_local_server() {
+            let zip_file = self.zip_directory(path_obj)?;
+            let temp_path = self.upload_temp_file(zip_file.path()).await?;
+
+            let body = serde_json::json!({
+                "temp_path": temp_path,
+                "wait": wait,
+                "timeout": timeout,
+            });
+            self.post("/api/v1/skills", &body).await
+        } else {
+            let body = serde_json::json!({
+                "data": data,
+                "wait": wait,
+                "timeout": timeout,
+            });
+            self.post("/api/v1/skills", &body).await
+        }
     }
 
     // ============ Relation Methods ============

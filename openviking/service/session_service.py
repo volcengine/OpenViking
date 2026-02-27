@@ -8,12 +8,12 @@ Provides session management operations: session, sessions, add_message, commit, 
 
 from typing import Any, Dict, List, Optional
 
+from openviking.server.identity import RequestContext
 from openviking.session import Session
 from openviking.session.compressor import SessionCompressor
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.exceptions import NotFoundError, NotInitializedError
-from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -27,32 +27,28 @@ class SessionService:
         vikingdb: Optional[VikingDBManager] = None,
         viking_fs: Optional[VikingFS] = None,
         session_compressor: Optional[SessionCompressor] = None,
-        user: Optional[UserIdentifier] = None,
     ):
         self._vikingdb = vikingdb
         self._viking_fs = viking_fs
         self._session_compressor = session_compressor
-        self._user = user or UserIdentifier.the_default_user()
 
     def set_dependencies(
         self,
         vikingdb: VikingDBManager,
         viking_fs: VikingFS,
         session_compressor: SessionCompressor,
-        user: Optional[UserIdentifier] = None,
     ) -> None:
         """Set dependencies (for deferred initialization)."""
         self._vikingdb = vikingdb
         self._viking_fs = viking_fs
         self._session_compressor = session_compressor
-        self._user = user or UserIdentifier.the_default_user()
 
     def _ensure_initialized(self) -> None:
         """Ensure all dependencies are initialized."""
         if not self._viking_fs:
             raise NotInitializedError("VikingFS")
 
-    def session(self, session_id: Optional[str] = None) -> Session:
+    def session(self, ctx: RequestContext, session_id: Optional[str] = None) -> Session:
         """Create a new session or load an existing one.
 
         Args:
@@ -66,21 +62,39 @@ class SessionService:
             viking_fs=self._viking_fs,
             vikingdb_manager=self._vikingdb,
             session_compressor=self._session_compressor,
-            user=self._user,
+            user=ctx.user,
+            ctx=ctx,
             session_id=session_id,
         )
 
-    async def sessions(self) -> List[Dict[str, Any]]:
+    async def create(self, ctx: RequestContext) -> Session:
+        """Create a session and persist its root path."""
+        session = self.session(ctx)
+        await session.ensure_exists()
+        return session
+
+    async def get(self, session_id: str, ctx: RequestContext) -> Session:
+        """Get an existing session.
+
+        Raises NotFoundError when the session does not exist under current user scope.
+        """
+        session = self.session(ctx, session_id)
+        if not await session.exists():
+            raise NotFoundError(session_id, "session")
+        await session.load()
+        return session
+
+    async def sessions(self, ctx: RequestContext) -> List[Dict[str, Any]]:
         """Get all sessions for the current user.
 
         Returns:
             List of session info dicts
         """
         self._ensure_initialized()
-        session_base_uri = "viking://session"
+        session_base_uri = f"viking://session/{ctx.user.user_space_name()}"
 
         try:
-            entries = await self._viking_fs.ls(session_base_uri)
+            entries = await self._viking_fs.ls(session_base_uri, ctx=ctx)
             sessions = []
             for entry in entries:
                 name = entry.get("name", "")
@@ -97,7 +111,7 @@ class SessionService:
         except Exception:
             return []
 
-    async def delete(self, session_id: str) -> bool:
+    async def delete(self, session_id: str, ctx: RequestContext) -> bool:
         """Delete a session.
 
         Args:
@@ -107,17 +121,17 @@ class SessionService:
             True if deleted successfully
         """
         self._ensure_initialized()
-        session_uri = f"viking://session/{session_id}"
+        session_uri = f"viking://session/{ctx.user.user_space_name()}/{session_id}"
 
         try:
-            await self._viking_fs.rm(session_uri, recursive=True)
+            await self._viking_fs.rm(session_uri, recursive=True, ctx=ctx)
             logger.info(f"Deleted session: {session_id}")
             return True
         except Exception as e:
             logger.error(f"Failed to delete session {session_id}: {e}")
             raise NotFoundError(session_id, "session")
 
-    async def commit(self, session_id: str) -> Dict[str, Any]:
+    async def commit(self, session_id: str, ctx: RequestContext) -> Dict[str, Any]:
         """Commit a session (archive messages and extract memories).
 
         Args:
@@ -127,11 +141,10 @@ class SessionService:
             Commit result
         """
         self._ensure_initialized()
-        session = self.session(session_id)
-        await session.load()
+        session = await self.get(session_id, ctx)
         return session.commit()
 
-    async def extract(self, session_id: str) -> List[Any]:
+    async def extract(self, session_id: str, ctx: RequestContext) -> List[Any]:
         """Extract memories from a session.
 
         Args:
@@ -144,11 +157,11 @@ class SessionService:
         if not self._session_compressor:
             raise NotInitializedError("SessionCompressor")
 
-        session = self.session(session_id)
-        await session.load()
+        session = await self.get(session_id, ctx)
 
         return await self._session_compressor.extract_long_term_memories(
             messages=session.messages,
-            user=self._user,
+            user=ctx.user,
             session_id=session_id,
+            ctx=ctx,
         )

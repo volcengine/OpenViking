@@ -132,6 +132,7 @@ class AsyncHTTPClient(BaseClient):
         url: Optional[str] = None,
         api_key: Optional[str] = None,
         agent_id: Optional[str] = None,
+        timeout: float = 60.0,
     ):
         """Initialize AsyncHTTPClient.
 
@@ -139,6 +140,7 @@ class AsyncHTTPClient(BaseClient):
             url: OpenViking Server URL. If not provided, reads from ovcli.conf.
             api_key: API key for authentication. If not provided, reads from ovcli.conf.
             agent_id: Agent identifier. If not provided, reads from ovcli.conf.
+            timeout: HTTP request timeout in seconds. Default 60.0.
         """
         if url is None:
             config_path = resolve_config_path(None, OPENVIKING_CLI_CONFIG_ENV, DEFAULT_OVCLI_CONF)
@@ -147,6 +149,8 @@ class AsyncHTTPClient(BaseClient):
                 url = cfg.get("url")
                 api_key = api_key or cfg.get("api_key")
                 agent_id = agent_id or cfg.get("agent_id")
+                if timeout == 60.0:  # only override default with config value
+                    timeout = cfg.get("timeout", 60.0)
         if not url:
             raise ValueError(
                 "url is required. Pass it explicitly or configure in "
@@ -156,6 +160,7 @@ class AsyncHTTPClient(BaseClient):
         self._api_key = api_key
         self._agent_id = agent_id
         self._user = UserIdentifier.the_default_user()
+        self._timeout = timeout
         self._http: Optional[httpx.AsyncClient] = None
         self._observer: Optional[_HTTPObserver] = None
 
@@ -171,7 +176,7 @@ class AsyncHTTPClient(BaseClient):
         self._http = httpx.AsyncClient(
             base_url=self._url,
             headers=headers,
-            timeout=60.0,
+            timeout=self._timeout,
         )
         self._observer = _HTTPObserver(self)
 
@@ -319,21 +324,38 @@ class AsyncHTTPClient(BaseClient):
         timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Add skill to OpenViking."""
+        request_data = {
+            "wait": wait,
+            "timeout": timeout,
+        }
+
+        if isinstance(data, str):
+            path_obj = Path(data)
+            if path_obj.exists() and path_obj.is_dir() and not self._is_local_server():
+                zip_path = self._zip_directory(data)
+                try:
+                    temp_path = await self._upload_temp_file(zip_path)
+                    request_data["temp_path"] = temp_path
+                finally:
+                    Path(zip_path).unlink(missing_ok=True)
+            else:
+                request_data["data"] = data
+        else:
+            request_data["data"] = data
+
         response = await self._http.post(
             "/api/v1/skills",
-            json={
-                "data": data,
-                "wait": wait,
-                "timeout": timeout,
-            },
+            json=request_data,
         )
         return self._handle_response(response)
 
     async def wait_processed(self, timeout: Optional[float] = None) -> Dict[str, Any]:
         """Wait for all processing to complete."""
+        http_timeout = timeout if timeout else 600.0
         response = await self._http.post(
             "/api/v1/system/wait",
             json={"timeout": timeout},
+            timeout=http_timeout,
         )
         return self._handle_response(response)
 
@@ -428,7 +450,13 @@ class AsyncHTTPClient(BaseClient):
     # ============= Content Reading =============
 
     async def read(self, uri: str, offset: int = 0, limit: int = -1) -> str:
-        """Read file content."""
+        """Read file content.
+
+        Args:
+            uri: Viking URI
+            offset: Starting line number (0-indexed). Default 0.
+            limit: Number of lines to read. -1 means read to end. Default -1.
+        """
         uri = VikingURI.normalize(uri)
         response = await self._http.get(
             "/api/v1/content/read",
@@ -593,11 +621,34 @@ class AsyncHTTPClient(BaseClient):
         response = await self._http.post(f"/api/v1/sessions/{session_id}/commit")
         return self._handle_response(response)
 
-    async def add_message(self, session_id: str, role: str, content: str) -> Dict[str, Any]:
-        """Add a message to a session."""
+    async def add_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str | None = None,
+        parts: list[dict] | None = None,
+    ) -> Dict[str, Any]:
+        """Add a message to a session.
+
+        Args:
+            session_id: Session ID
+            role: Message role ("user" or "assistant")
+            content: Text content (simple mode, backward compatible)
+            parts: Parts array (full Part support mode)
+
+        If both content and parts are provided, parts takes precedence.
+        """
+        payload: Dict[str, Any] = {"role": role}
+        if parts is not None:
+            payload["parts"] = parts
+        elif content is not None:
+            payload["content"] = content
+        else:
+            raise ValueError("Either content or parts must be provided")
+
         response = await self._http.post(
             f"/api/v1/sessions/{session_id}/messages",
-            json={"role": role, "content": content},
+            json=payload,
         )
         return self._handle_response(response)
 

@@ -29,7 +29,12 @@ impl CliContext {
     }
 
     pub fn get_client(&self) -> client::HttpClient {
-        client::HttpClient::new(&self.config.url, self.config.api_key.clone())
+        client::HttpClient::new(
+            &self.config.url,
+            self.config.api_key.clone(),
+            self.config.agent_id.clone(),
+            self.config.timeout,
+        )
     }
 }
 

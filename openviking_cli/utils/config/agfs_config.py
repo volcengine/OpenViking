@@ -84,6 +84,11 @@ class AGFSConfig(BaseModel):
         default="http://localhost:1833", description="AGFS service URL for service mode"
     )
 
+    mode: str = Field(
+        default="http-client",
+        description="AGFS client mode: 'http-client' | 'binding-client'",
+    )
+
     backend: str = Field(
         default="local", description="AGFS storage backend: 'local' | 's3' | 'memory'"
     )
@@ -97,6 +102,12 @@ class AGFSConfig(BaseModel):
         description="Enable/Disable SSL (HTTPS) for AGFS service. Set to False for local testing without HTTPS.",
     )
 
+    lib_path: Optional[str] = Field(
+        default=None,
+        description="Path to AGFS binding shared library. If set, use python binding instead of HTTP client. "
+        "Default: third_party/agfs/bin/libagfsbinding.{so,dylib}",
+    )
+
     # S3 backend configuration
     # These settings are used when backend is set to 's3'.
     # AGFS will act as a gateway to the specified S3 bucket.
@@ -107,6 +118,11 @@ class AGFSConfig(BaseModel):
     @model_validator(mode="after")
     def validate_config(self):
         """Validate configuration completeness and consistency"""
+        if self.mode not in ["http-client", "binding-client"]:
+            raise ValueError(
+                f"Invalid AGFS mode: '{self.mode}'. Must be one of: 'http-client', 'binding-client'"
+            )
+
         if self.backend not in ["local", "s3", "memory"]:
             raise ValueError(
                 f"Invalid AGFS backend: '{self.backend}'. Must be one of: 'local', 's3', 'memory'"

@@ -182,7 +182,7 @@ func (fs *serverInfoFS) getServerInfo() map[string]interface{} {
 
 func (fs *serverInfoFS) Read(path string, offset int64, size int64) ([]byte, error) {
 	if !fs.isValidPath(path) {
-		return nil, fmt.Errorf("no such file or directory: %s", path)
+		return nil, filesystem.NewNotFoundError("read", path)
 	}
 
 	if path == "/" {
@@ -239,7 +239,7 @@ func (fs *serverInfoFS) Read(path string, offset int64, size int64) ([]byte, err
 		data = []byte(fs.plugin.GetReadme())
 
 	default:
-		return nil, fmt.Errorf("no such file: %s", path)
+		return nil, filesystem.NewNotFoundError("read", path)
 	}
 
 	// if data is not ended by '\n' then add it
@@ -339,7 +339,7 @@ func (fs *serverInfoFS) ReadDir(path string) ([]filesystem.FileInfo, error) {
 
 func (fs *serverInfoFS) Stat(path string) (*filesystem.FileInfo, error) {
 	if !fs.isValidPath(path) {
-		return nil, fmt.Errorf("no such file or directory: %s", path)
+		return nil, filesystem.NewNotFoundError("stat", path)
 	}
 
 	now := time.Now()

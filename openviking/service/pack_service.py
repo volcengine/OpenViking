@@ -8,6 +8,7 @@ Provides ovpack export/import operations.
 
 from typing import Optional
 
+from openviking.server.identity import RequestContext
 from openviking.storage.local_fs import export_ovpack as local_export_ovpack
 from openviking.storage.local_fs import import_ovpack as local_import_ovpack
 from openviking.storage.viking_fs import VikingFS
@@ -33,7 +34,7 @@ class PackService:
             raise NotInitializedError("VikingFS")
         return self._viking_fs
 
-    async def export_ovpack(self, uri: str, to: str) -> str:
+    async def export_ovpack(self, uri: str, to: str, ctx: RequestContext) -> str:
         """Export specified context path as .ovpack file.
 
         Args:
@@ -44,10 +45,15 @@ class PackService:
             Exported file path
         """
         viking_fs = self._ensure_initialized()
-        return await local_export_ovpack(viking_fs, uri, to)
+        return await local_export_ovpack(viking_fs, uri, to, ctx=ctx)
 
     async def import_ovpack(
-        self, file_path: str, parent: str, force: bool = False, vectorize: bool = True
+        self,
+        file_path: str,
+        parent: str,
+        ctx: RequestContext,
+        force: bool = False,
+        vectorize: bool = True,
     ) -> str:
         """Import local .ovpack file to specified parent path.
 
@@ -62,5 +68,5 @@ class PackService:
         """
         viking_fs = self._ensure_initialized()
         return await local_import_ovpack(
-            viking_fs, file_path, parent, force=force, vectorize=vectorize
+            viking_fs, file_path, parent, force=force, vectorize=vectorize, ctx=ctx
         )

@@ -32,8 +32,11 @@ class SyncHTTPClient:
         url: Optional[str] = None,
         api_key: Optional[str] = None,
         agent_id: Optional[str] = None,
+        timeout: float = 60.0,
     ):
-        self._async_client = AsyncHTTPClient(url=url, api_key=api_key, agent_id=agent_id)
+        self._async_client = AsyncHTTPClient(
+            url=url, api_key=api_key, agent_id=agent_id, timeout=timeout
+        )
         self._initialized = False
 
     # ============= Lifecycle =============
@@ -70,9 +73,24 @@ class SyncHTTPClient:
         """Delete a session."""
         run_async(self._async_client.delete_session(session_id))
 
-    def add_message(self, session_id: str, role: str, content: str) -> Dict[str, Any]:
-        """Add a message to a session."""
-        return run_async(self._async_client.add_message(session_id, role, content))
+    def add_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str | None = None,
+        parts: list[dict] | None = None,
+    ) -> Dict[str, Any]:
+        """Add a message to a session.
+
+        Args:
+            session_id: Session ID
+            role: Message role ("user" or "assistant")
+            content: Text content (simple mode)
+            parts: Parts array (full Part support: TextPart, ContextPart, ToolPart)
+
+        If both content and parts are provided, parts takes precedence.
+        """
+        return run_async(self._async_client.add_message(session_id, role, content, parts))
 
     def commit_session(self, session_id: str) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""

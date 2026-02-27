@@ -15,6 +15,8 @@ async def resolve_identity(
     request: Request,
     x_api_key: Optional[str] = Header(None),
     authorization: Optional[str] = Header(None),
+    x_openviking_account: Optional[str] = Header(None, alias="X-OpenViking-Account"),
+    x_openviking_user: Optional[str] = Header(None, alias="X-OpenViking-User"),
     x_openviking_agent: Optional[str] = Header(None, alias="X-OpenViking-Agent"),
 ) -> ResolvedIdentity:
     """Resolve API key to identity.
@@ -28,8 +30,8 @@ async def resolve_identity(
     if api_key_manager is None:
         return ResolvedIdentity(
             role=Role.ROOT,
-            account_id="default",
-            user_id="default",
+            account_id=x_openviking_account or "default",
+            user_id=x_openviking_user or "default",
             agent_id=x_openviking_agent or "default",
         )
 
@@ -44,6 +46,9 @@ async def resolve_identity(
 
     identity = api_key_manager.resolve(api_key)
     identity.agent_id = x_openviking_agent or "default"
+    if identity.role == Role.ROOT:
+        identity.account_id = x_openviking_account or identity.account_id or "default"
+        identity.user_id = x_openviking_user or identity.user_id or "default"
     return identity
 
 

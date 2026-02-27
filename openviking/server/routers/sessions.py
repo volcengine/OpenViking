@@ -2,12 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """Sessions endpoints for OpenViking HTTP Server."""
 
-from typing import Any
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, Path
-from pydantic import BaseModel
+from pydantic import BaseModel, model_validator
 
-from openviking.message.part import TextPart
+from openviking.message.part import TextPart, part_from_dict
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
@@ -16,11 +16,57 @@ from openviking.server.models import Response
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
 
 
+class TextPartRequest(BaseModel):
+    """Text part request model."""
+
+    type: Literal["text"] = "text"
+    text: str
+
+
+class ContextPartRequest(BaseModel):
+    """Context part request model."""
+
+    type: Literal["context"] = "context"
+    uri: str = ""
+    context_type: Literal["memory", "resource", "skill"] = "memory"
+    abstract: str = ""
+
+
+class ToolPartRequest(BaseModel):
+    """Tool part request model."""
+
+    type: Literal["tool"] = "tool"
+    tool_id: str = ""
+    tool_name: str = ""
+    tool_uri: str = ""
+    skill_uri: str = ""
+    tool_input: Optional[Dict[str, Any]] = None
+    tool_output: str = ""
+    tool_status: str = "pending"
+
+
+PartRequest = TextPartRequest | ContextPartRequest | ToolPartRequest
+
+
 class AddMessageRequest(BaseModel):
-    """Request model for adding a message."""
+    """Request model for adding a message.
+
+    Supports two modes:
+    1. Simple mode: provide `content` string (backward compatible)
+    2. Parts mode: provide `parts` array for full Part support
+
+    If both are provided, `parts` takes precedence.
+    """
 
     role: str
-    content: str
+    content: Optional[str] = None
+    parts: Optional[List[Dict[str, Any]]] = None
+
+    @model_validator(mode="after")
+    def validate_content_or_parts(self) -> "AddMessageRequest":
+        if self.content is None and self.parts is None:
+            raise ValueError("Either 'content' or 'parts' must be provided")
+        return self
 
 
 def _to_jsonable(value: Any) -> Any:
@@ -41,7 +87,9 @@ async def create_session(
 ):
     """Create a new session."""
     service = get_service()
-    session = service.sessions.session()
+    await service.initialize_user_directories(_ctx)
+    await service.initialize_agent_directories(_ctx)
+    session = await service.sessions.create(_ctx)
     return Response(
         status="ok",
         result={
@@ -57,7 +105,7 @@ async def list_sessions(
 ):
     """List all sessions."""
     service = get_service()
-    result = await service.sessions.sessions()
+    result = await service.sessions.sessions(_ctx)
     return Response(status="ok", result=result)
 
 
@@ -68,8 +116,7 @@ async def get_session(
 ):
     """Get session details."""
     service = get_service()
-    session = service.sessions.session(session_id)
-    await session.load()
+    session = await service.sessions.get(session_id, _ctx)
     return Response(
         status="ok",
         result={
@@ -87,7 +134,7 @@ async def delete_session(
 ):
     """Delete a session."""
     service = get_service()
-    await service.sessions.delete(session_id)
+    await service.sessions.delete(session_id, _ctx)
     return Response(status="ok", result={"session_id": session_id})
 
 
@@ -98,7 +145,7 @@ async def commit_session(
 ):
     """Commit a session (archive and extract memories)."""
     service = get_service()
-    result = await service.sessions.commit(session_id)
+    result = await service.sessions.commit(session_id, _ctx)
     return Response(status="ok", result=result)
 
 
@@ -109,7 +156,7 @@ async def extract_session(
 ):
     """Extract memories from a session."""
     service = get_service()
-    result = await service.sessions.extract(session_id)
+    result = await service.sessions.extract(session_id, _ctx)
     return Response(status="ok", result=_to_jsonable(result))
 
 
@@ -119,11 +166,30 @@ async def add_message(
     session_id: str = Path(..., description="Session ID"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Add a message to a session."""
+    """Add a message to a session.
+
+    Supports two modes:
+    1. Simple mode: provide `content` string (backward compatible)
+       Example: {"role": "user", "content": "Hello"}
+
+    2. Parts mode: provide `parts` array for full Part support
+       Example: {"role": "assistant", "parts": [
+           {"type": "text", "text": "Here's the answer"},
+           {"type": "context", "uri": "viking://resources/doc.md", "abstract": "..."}
+       ]}
+
+    If both `content` and `parts` are provided, `parts` takes precedence.
+    """
     service = get_service()
-    session = service.sessions.session(session_id)
+    session = service.sessions.session(_ctx, session_id)
     await session.load()
-    session.add_message(request.role, [TextPart(text=request.content)])
+
+    if request.parts is not None:
+        parts = [part_from_dict(p) for p in request.parts]
+    else:
+        parts = [TextPart(text=request.content or "")]
+
+    session.add_message(request.role, parts)
     return Response(
         status="ok",
         result={

@@ -424,6 +424,62 @@ func (c *S3Client) DirectoryExists(ctx context.Context, path string) (bool, erro
 	return len(result.Contents) > 0 || len(result.CommonPrefixes) > 0, nil
 }
 
+// CopyObject copies an object within the same bucket
+func (c *S3Client) CopyObject(ctx context.Context, srcPath, dstPath string) error {
+	srcKey := c.buildKey(srcPath)
+	dstKey := c.buildKey(dstPath)
+
+	_, err := c.client.CopyObject(ctx, &s3.CopyObjectInput{
+		Bucket:     aws.String(c.bucket),
+		CopySource: aws.String(c.bucket + "/" + srcKey),
+		Key:        aws.String(dstKey),
+	})
+	if err != nil {
+		return fmt.Errorf("failed to copy object %s -> %s: %w", srcKey, dstKey, err)
+	}
+	return nil
+}
+
+// ListAllObjects lists all objects (recursively) under a given prefix.
+// Unlike ListObjects which only lists immediate children, this returns
+// every object in the subtree.
+func (c *S3Client) ListAllObjects(ctx context.Context, path string) ([]S3Object, error) {
+	prefix := c.buildKey(path)
+	if prefix != "" && !strings.HasSuffix(prefix, "/") {
+		prefix += "/"
+	}
+
+	var objects []S3Object
+	paginator := s3.NewListObjectsV2Paginator(c.client, &s3.ListObjectsV2Input{
+		Bucket: aws.String(c.bucket),
+		Prefix: aws.String(prefix),
+		// No Delimiter — list all objects recursively
+	})
+
+	for paginator.HasMorePages() {
+		page, err := paginator.NextPage(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list all objects: %w", err)
+		}
+
+		for _, obj := range page.Contents {
+			if obj.Key == nil {
+				continue
+			}
+			relPath := strings.TrimPrefix(*obj.Key, prefix)
+			isDir := strings.HasSuffix(relPath, "/")
+			objects = append(objects, S3Object{
+				Key:          relPath,
+				Size:         aws.ToInt64(obj.Size),
+				LastModified: aws.ToTime(obj.LastModified),
+				IsDir:        isDir,
+			})
+		}
+	}
+
+	return objects, nil
+}
+
 // getParentPath returns the parent directory path
 func getParentPath(path string) string {
 	if path == "" || path == "/" {

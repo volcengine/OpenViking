@@ -37,7 +37,7 @@ async def relations(
 ):
     """Get relations for a resource."""
     service = get_service()
-    result = await service.relations.relations(uri)
+    result = await service.relations.relations(uri, ctx=_ctx)
     return Response(status="ok", result=result)
 
 
@@ -48,7 +48,7 @@ async def link(
 ):
     """Create link between resources."""
     service = get_service()
-    await service.relations.link(request.from_uri, request.to_uris, request.reason)
+    await service.relations.link(request.from_uri, request.to_uris, ctx=_ctx, reason=request.reason)
     return Response(status="ok", result={"from": request.from_uri, "to": request.to_uris})
 
 
@@ -59,5 +59,5 @@ async def unlink(
 ):
     """Remove link between resources."""
     service = get_service()
-    await service.relations.unlink(request.from_uri, request.to_uri)
+    await service.relations.unlink(request.from_uri, request.to_uri, ctx=_ctx)
     return Response(status="ok", result={"from": request.from_uri, "to": request.to_uri})

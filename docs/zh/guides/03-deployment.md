@@ -52,8 +52,9 @@ python -m openviking serve --config /path/to/ov.conf --host 127.0.0.1 --port 800
     "cors_origins": ["*"]
   },
   "storage": {
-    "agfs": { "backend": "local", "path": "/data/openviking" },
-    "vectordb": { "backend": "local", "path": "/data/openviking" }
+    "workspace": "./data",
+    "agfs": { "backend": "local" },
+    "vectordb": { "backend": "local" }
   }
 }
 ```
@@ -67,8 +68,9 @@ python -m openviking serve --config /path/to/ov.conf --host 127.0.0.1 --port 800
 ```json
 {
   "storage": {
-    "agfs": { "backend": "local", "path": "./data" },
-    "vectordb": { "backend": "local", "path": "./data" }
+    "workspace": "./data",
+    "agfs": { "backend": "local" },
+    "vectordb": { "backend": "local" }
   }
 }
 ```
@@ -92,6 +94,59 @@ python -m openviking serve
 
 ```bash
 python -m openviking serve
+```
+
+## 使用 Systemd 部署服务（推荐）
+
+对于 Linux 系统，可以使用 Systemd 服务来管理 OpenViking，实现自动重启、开机自启等功能。首先，你应该已经成功安装并配置了 OpenViking 服务器，确保它可以正常运行，再进行服务化部署。
+
+### 创建 Systemd 服务文件
+
+创建 `/etc/systemd/system/openviking.service` 文件：
+
+```ini
+[Unit]
+Description=OpenViking HTTP Server
+After=network.target
+
+[Service]
+Type=simple
+# 替换为运行 OpenViking 的用户
+User=your-username
+# 替换为用户组
+Group=your-group
+# 替换为工作目录
+WorkingDirectory=/home/your-username/openviking_workspace
+# 以下两种启动方式二选一
+ExecStart=/path/to/your/python/bin/openviking-server
+Restart=always
+RestartSec=5
+# 配置文件路径
+Environment="OPENVIKING_CONFIG_FILE=/home/your-username/.openviking/ov.conf"
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### 管理服务
+
+创建好服务文件后，使用以下命令管理 OpenViking 服务：
+
+```bash
+# 重载 systemd 配置
+sudo systemctl daemon-reload
+
+# 启动服务
+sudo systemctl start openviking.service
+
+# 设置开机自启
+sudo systemctl enable openviking.service
+
+# 查看服务状态
+sudo systemctl status openviking.service
+
+# 查看服务日志
+sudo journalctl -u openviking.service -f
 ```
 
 ## 连接客户端
@@ -131,6 +186,60 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
   -H "X-API-Key: your-key"
 ```
+
+## 云上部署
+
+### Docker
+
+OpenViking 提供预构建的 Docker 镜像，发布在 GitHub Container Registry：
+
+```bash
+docker run -d \
+  --name openviking \
+  -p 1933:1933 \
+  -v ~/.openviking/ov.conf:/app/ov.conf \
+  -v /var/lib/openviking/data:/app/data \
+  --restart unless-stopped \
+  ghcr.io/volcengine/openviking:main
+```
+
+也可以使用 Docker Compose，项目根目录提供了 `docker-compose.yml`：
+
+```bash
+docker compose up -d
+```
+
+如需自行构建镜像：`docker build -t openviking:latest .`
+
+### Kubernetes + Helm
+
+项目提供了 Helm chart，位于 `examples/k8s-helm/`：
+
+```bash
+helm install openviking ./examples/k8s-helm \
+  --set openviking.config.embedding.dense.api_key="YOUR_API_KEY" \
+  --set openviking.config.vlm.api_key="YOUR_API_KEY"
+```
+
+详细的云上部署指南（包括火山引擎 TOS + VikingDB + 方舟配置）请参考 [云上部署指南](../../../examples/cloud/GUIDE.md)。
+
+## 健康检查
+
+| 端点 | 认证 | 用途 |
+|------|------|------|
+| `GET /health` | 否 | 存活探针 — 立即返回 `{"status": "ok"}` |
+| `GET /ready` | 否 | 就绪探针 — 检查 AGFS、VectorDB、APIKeyManager |
+
+```bash
+# 存活探针
+curl http://localhost:1933/health
+
+# 就绪探针
+curl http://localhost:1933/ready
+# {"status": "ready", "checks": {"agfs": "ok", "vectordb": "ok", "api_key_manager": "ok"}}
+```
+
+在 Kubernetes 中，使用 `/health` 作为存活探针，`/ready` 作为就绪探针。
 
 ## 相关文档
 

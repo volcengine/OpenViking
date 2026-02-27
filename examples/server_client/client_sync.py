@@ -64,9 +64,12 @@ def main():
     parser.add_argument("--url", default="http://localhost:1933", help="Server URL")
     parser.add_argument("--api-key", default=None, help="API key")
     parser.add_argument("--agent-id", default=None, help="Agent ID")
+    parser.add_argument("--timeout", type=float, default=60.0, help="HTTP timeout in seconds")
     args = parser.parse_args()
 
-    client = ov.SyncHTTPClient(url=args.url, api_key=args.api_key, agent_id=args.agent_id)
+    client = ov.SyncHTTPClient(
+        url=args.url, api_key=args.api_key, agent_id=args.agent_id, timeout=args.timeout
+    )
 
     try:
         # ── Connect ──

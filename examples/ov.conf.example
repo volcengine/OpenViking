@@ -94,8 +94,12 @@
       "max_line_length": 1000,
       "max_token_limit": 50000,
       "truncation_strategy": "head",
-      "warn_on_truncation": true
-    },
+      "warn_on_truncation": true,
+      "github_raw_domain": "raw.githubusercontent.com",
+      "code_hosting_domains": ["github.com", "gitlab.com"],
+      "github_domains": ["github.com", "www.github.com"],
+      "gitlab_domains": ["gitlab.com", "www.gitlab.com"]
+    }
     "image": {
       "enable_ocr": false,
       "enable_vlm": true,
@@ -126,8 +130,11 @@
       "extract_text_only": false,
       "preserve_structure": true,
       "clean_html": true,
-      "extract_metadata": true
-    },
+      "extract_metadata": true,
+      "code_hosting_domains": ["github.com", "gitlab.com"],
+      "github_domains": ["github.com", "www.github.com"],
+      "gitlab_domains": ["gitlab.com", "www.gitlab.com"]
+    }
     "text": {
       "detect_language": true,
       "split_by_paragraphs": true,

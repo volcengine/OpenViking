@@ -114,7 +114,7 @@ main()
 ```python
 import openviking as ov
 
-client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key", timeout=120.0)
 client.initialize()
 
 client.add_resource(path="./document.md")
@@ -129,7 +129,7 @@ client.close()
 ```python
 import openviking as ov
 
-client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key")
+client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="your-key", timeout=120.0)
 await client.initialize()
 
 await client.add_resource(path="./document.md")

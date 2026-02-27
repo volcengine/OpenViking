@@ -198,6 +198,23 @@ class VikingVectorIndexBackend(VikingDBInterface):
         meta_data = coll.get_meta_data()
         self._meta_data_cache[collection_name] = meta_data
 
+    @staticmethod
+    def _restore_uri_fields(record: Dict[str, Any]) -> Dict[str, Any]:
+        """Restore viking:// prefix on uri/parent_uri fields read from VikingDB.
+
+        The volcengine backend sanitizes URIs to /path/ format on write;
+        this reverses that transformation so the rest of the system sees
+        the canonical viking:// scheme.  Idempotent for values that
+        already carry the prefix (local/http backends).
+        """
+        for key in ("uri", "parent_uri"):
+            val = record.get(key)
+            if isinstance(val, str) and not val.startswith("viking://"):
+                restored = val.strip("/")
+                if restored:
+                    record[key] = f"viking://{restored}"
+        return record
+
     # =========================================================================
     # Collection/Table Management
     # =========================================================================
@@ -445,6 +462,7 @@ class VikingVectorIndexBackend(VikingDBInterface):
                 for item in result.items:
                     record = dict(item.fields) if item.fields else {}
                     record["id"] = item.id
+                    self._restore_uri_fields(record)
                     records.append(record)
                 return records
             elif isinstance(result, dict):
@@ -454,6 +472,7 @@ class VikingVectorIndexBackend(VikingDBInterface):
                         record = dict(item.get("fields", {})) if item.get("fields") else {}
                         record["id"] = item.get("id")
                         if record["id"]:
+                            self._restore_uri_fields(record)
                             records.append(record)
                 return records
             else:
@@ -476,6 +495,7 @@ class VikingVectorIndexBackend(VikingDBInterface):
             for item in result.data:
                 record = dict(item.fields) if item.fields else {}
                 record["id"] = item.id
+                self._restore_uri_fields(record)
                 records.append(record)
             if len(records) > 1:
                 raise ValueError(f"Duplicate records found for URI: {uri}")
@@ -574,7 +594,7 @@ class VikingVectorIndexBackend(VikingDBInterface):
             total_deleted = 0
 
             # If any record indicates this URI is a directory node, remove descendants first.
-            if any(not r.get("is_leaf", False) for r in target_records):
+            if any(r.get("level") in [0, 1] for r in target_records):
                 descendant_count = await self._remove_descendants(collection, uri)
                 total_deleted += descendant_count
 
@@ -602,10 +622,10 @@ class VikingVectorIndexBackend(VikingDBInterface):
 
         for child in children:
             child_uri = child.get("uri")
-            is_leaf = child.get("is_leaf", False)
+            level = child.get("level", 2)
 
             # Recursively delete if child is also an intermediate directory
-            if not is_leaf and child_uri:
+            if level in [0, 1] and child_uri:
                 descendant_count = await self._remove_descendants(collection, child_uri)
                 total_deleted += descendant_count
 
@@ -670,6 +690,7 @@ class VikingVectorIndexBackend(VikingDBInterface):
                     record = dict(item.fields) if item.fields else {}
                     record["id"] = item.id
                     record["_score"] = item.score if item.score is not None else 0.0
+                    self._restore_uri_fields(record)
 
                     if not with_vector:
                         if "vector" in record:
@@ -734,6 +755,7 @@ class VikingVectorIndexBackend(VikingDBInterface):
             for item in result.data:
                 record = dict(item.fields) if item.fields else {}
                 record["id"] = item.id
+                self._restore_uri_fields(record)
                 records.append(record)
 
             return records
