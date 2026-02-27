@@ -57,6 +57,8 @@ fi
 # 3. 初始化 ~/.vikingbot 目录
 echo -e "${GREEN}[3/6]${NC} 初始化 ${VIKINGBOT_DIR}..."
 mkdir -p "$VIKINGBOT_DIR/workspace" "$VIKINGBOT_DIR/sessions" "$VIKINGBOT_DIR/sandboxes" "$VIKINGBOT_DIR/bridge"
+# 创建 OpenViking 配置文件占位符
+touch "$VIKINGBOT_DIR/ov.conf"
 echo -e "  ${GREEN}✓${NC} 目录已就绪"
 
 # 4. 检查配置文件
@@ -115,6 +117,7 @@ docker run -d \
     --platform "${PLATFORM}" \
     -v "${VIKINGBOT_DIR}:/root/.vikingbot" \
     -p "${HOST_PORT}:18791" \
+    -e OPENVIKING_CONFIG_FILE=/root/.vikingbot/ov.conf \
     "${IMAGE_NAME}:${IMAGE_TAG}" \
     "${COMMAND}"
 

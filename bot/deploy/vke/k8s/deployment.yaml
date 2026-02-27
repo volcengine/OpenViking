@@ -80,6 +80,9 @@ spec:
           periodSeconds: 5
           timeoutSeconds: 3
           failureThreshold: 3
+        env:
+        - name: OPENVIKING_CONFIG_FILE
+          value: /root/.vikingbot/ov.conf
         command: ["vikingbot"]
         args: ["gateway"]
       volumes:

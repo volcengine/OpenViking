@@ -1,15 +1,38 @@
 # Vikingbot VKE 部署配置
 # 复制此文件到 ~/.config/vikingbot/vke_deploy.yaml 并填入你的信息
+#
+# 详细文档请参考: deploy/vke/README.md
 
+# ── 火山引擎凭证 ──────────────────────────────────────────────────────────────
+#
+# 获取方式：
+#   1. 登录火山引擎控制台 https://console.volcengine.com/
+#   2. 右上角头像 → API 访问密钥 → 新建密钥
+#
 volcengine_access_key: AKLTxxxxxxxxxx
 volcengine_secret_key: xxxxxxxxxx
 volcengine_region: cn-beijing
 
+# ── VKE 集群信息 ────────────────────────────────────────────────────────────
+#
+# 获取方式：
+#   1. 进入容器服务 VKE → 集群
+#   2. 找到你的集群，集群 ID 形如 "ccxxxxxxxxxx"
+#
 vke_cluster_id: ccxxxxxxxxxx
 
+# ── 镜像仓库配置 ──────────────────────────────────────────────────────────────
+#
+# 镜像仓库地址格式: {namespace}-{region}.cr.volces.com
+#
+# 前置准备：
+#   1. 进入容器镜像服务 CR → 命名空间，创建命名空间 "vikingbot"
+#   2. 进入镜像仓库，创建仓库 "vikingbot"
+#
 image_registry: vikingbot-cn-beijing.cr.volces.com
 image_namespace: vikingbot
 image_repository: vikingbot
+
 # 镜像标签配置
 # use_timestamp_tag: 是否使用时间戳标签 (true/false)
 #   - true: 自动生成时间戳标签，格式: build-YYYYMMDD-HHMMSS
@@ -20,41 +43,45 @@ use_timestamp_tag: false
 image_tag: latest
 local_image_name: vikingbot-vke
 
+# 镜像仓库登录凭证（私有仓库需要）
+# 用户名通常是你的火山引擎账号（手机号/邮箱）
+# 密码是你的火山引擎登录密码
 registry_username: ""
 registry_password: ""
 
+# ── 构建配置 ──────────────────────────────────────────────────────────────────
 dockerfile_path: deploy/Dockerfile
 build_context: .
 
+# ── Kubernetes 配置 ───────────────────────────────────────────────────────────
 # K8s manifest文件
 k8s_manifest_path: deploy/vke/k8s/deployment.yaml
 k8s_namespace: default
 k8s_deployment_name: vikingbot
 k8s_replicas: 1
 
+# kubeconfig 路径
+# 获取方式：VKE 控制台 → 集群 → 连接 → 下载 Kubeconfig
 kubeconfig_path: ~/.kube/config
 
+# 部署等待配置
 wait_for_rollout: true
 rollout_timeout: 120
 
-# 如果本地镜像已存在，是否跳过检查和重新构建
-# skip_image_check: false
-
+# ── 存储配置 ──────────────────────────────────────────────────────────────────
 # 存储类型选择
-# 可选值: local (本地存储, 默认), tos (对象存储, 需要手动创建PV), nas (文件存储, 需要NAS实例)
+# 可选值:
+#   - local (本地存储, 默认): 使用 EBS 云盘，AccessMode=ReadWriteOnce
+#   - tos (对象存储): 使用 TOS + CSI 驱动，AccessMode=ReadWriteMany
 storage_type: local
 
-# TOS配置 (仅当storage_type=tos时需要)
+# TOS 配置 (仅当 storage_type=tos 时需要)
+#
+# 前置准备：
+#   1. 进入对象存储 TOS → 存储桶列表 → 创建存储桶
+#   2. 桶名称: vikingbot_data（或自定义）
+#   3. 地域选择与 VKE 集群相同的地域
+#
 tos_bucket: vikingbot_data
 tos_path: /.vikingbot/
 tos_region: cn-beijing
-
-# NAS配置 (仅当storage_type=nas时需要)
-# nas_server: your-nas-server-address
-# nas_path: /your/nas/path
-
-# OpenSandbox 配置
-# 是否启用 OpenSandbox Sidecar 容器
-opensandbox_enabled: true
-# OpenSandbox Server 镜像
-opensandbox_image: opensandbox/server:latest

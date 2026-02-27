@@ -74,6 +74,7 @@ EXPOSE 18791
 # Environment variables
 ENV PYTHONUNBUFFERED=1
 ENV NODE_ENV=production
+ENV OPENVIKING_CONFIG_FILE=/root/.vikingbot/ov.conf
 
 # Set working directory
 WORKDIR /app
