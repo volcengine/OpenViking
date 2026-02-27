@@ -94,14 +94,29 @@ class AsyncOpenViking:
 
     # ============= Session methods =============
 
-    def session(self, session_id: Optional[str] = None) -> Session:
+    def session(self, session_id: Optional[str] = None, must_exist: bool = False) -> Session:
         """
         Create a new session or load an existing one.
 
         Args:
             session_id: Session ID, creates a new session (auto-generated ID) if None
+            must_exist: If True and session_id is provided, raises NotFoundError
+                        when the session does not exist.
+                        If session_id is None, must_exist is ignored.
         """
-        return self._client.session(session_id)
+        return self._client.session(session_id, must_exist=must_exist)
+
+    async def session_exists(self, session_id: str) -> bool:
+        """Check whether a session exists in storage.
+
+        Args:
+            session_id: Session ID to check
+
+        Returns:
+            True if the session exists, False otherwise
+        """
+        await self._ensure_initialized()
+        return await self._client.session_exists(session_id)
 
     async def create_session(self) -> Dict[str, Any]:
         """Create a new session."""

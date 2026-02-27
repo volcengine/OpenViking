@@ -70,3 +70,51 @@ class TestSessionLoad:
         assert hasattr(session, "uri")
         assert hasattr(session, "messages")
         assert hasattr(session, "session_id")
+
+
+class TestSessionMustExist:
+    """Test session(must_exist=True) raises when session does not exist."""
+
+    async def test_must_exist_raises_for_nonexistent(self, client: AsyncOpenViking):
+        """must_exist=True should raise NotFoundError for an unknown session_id."""
+        import pytest
+
+        from openviking_cli.exceptions import NotFoundError
+
+        with pytest.raises(NotFoundError):
+            client.session(session_id="definitely_not_a_real_session", must_exist=True)
+
+    async def test_must_exist_succeeds_after_create(self, client: AsyncOpenViking):
+        """must_exist=True should succeed for a session created via create_session()."""
+        result = await client.create_session()
+        existing_id = result["session_id"]
+
+        session = client.session(session_id=existing_id, must_exist=True)
+        assert session.session_id == existing_id
+
+    async def test_must_exist_false_default_accepts_unknown_id(self, client: AsyncOpenViking):
+        """Default must_exist=False should silently accept any session_id (backward compat)."""
+        session = client.session(session_id="fabricated_id_abc")
+        await session.load()
+        assert session.session_id == "fabricated_id_abc"
+
+
+class TestSessionExists:
+    """Test session_exists() convenience method."""
+
+    async def test_session_exists_true_after_create(self, client: AsyncOpenViking):
+        """session_exists() should return True for a created session."""
+        result = await client.create_session()
+        session_id = result["session_id"]
+
+        assert await client.session_exists(session_id) is True
+
+    async def test_session_exists_false_for_unknown(self, client: AsyncOpenViking):
+        """session_exists() should return False for an unknown session_id."""
+        assert await client.session_exists("definitely_not_a_real_session") is False
+
+    async def test_session_exists_true_after_add_message(
+        self, session_with_messages: Session, client: AsyncOpenViking
+    ):
+        """session_exists() should return True for a session that has messages."""
+        assert await client.session_exists(session_with_messages.session_id) is True
