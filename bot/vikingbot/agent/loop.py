@@ -22,7 +22,7 @@ from vikingbot.config.schema import SessionKey
 from vikingbot.hooks import HookContext
 from vikingbot.hooks.manager import hook_manager
 from vikingbot.providers.base import LLMProvider
-from vikingbot.sandbox.manager import SandboxManager
+from vikingbot.sandbox import SandboxManager
 from vikingbot.session.manager import SessionManager
 from vikingbot.utils.helpers import cal_str_tokens
 

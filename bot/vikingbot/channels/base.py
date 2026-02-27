@@ -11,7 +11,7 @@ from loguru import logger
 from vikingbot.bus.events import InboundMessage, OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.config.schema import SessionKey, BaseChannelConfig
-
+from vikingbot.utils import get_data_path
 
 # Optional HTML processing libraries
 try:
@@ -191,6 +191,9 @@ class BaseChannel(ABC):
                     )
 
                 return False, content
+        elif data_uri.startswith("send://"):
+            path_obj = get_data_path() / "images" / data_uri.split("send://", 1)[1]
+            return False, path_obj.read_bytes()
         else:
             # Try to resolve as local file path
             candidate_paths = []

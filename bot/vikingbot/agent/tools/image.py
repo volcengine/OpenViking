@@ -290,6 +290,7 @@ class ImageGenerationTool(Tool):
             images_dir = get_data_path() / "images"
             images_dir.mkdir(exist_ok=True)
             saved_paths = []
+            saved_paths.append("生成图片：")
             for img in images:
                 # Generate random filename
                 random_filename = f"{uuid.uuid4().hex}.png"
@@ -302,9 +303,12 @@ class ImageGenerationTool(Tool):
                 image_bytes = base64.b64decode(img)
                 with open(image_path, "wb") as f:
                     f.write(image_bytes)
-                saved_paths.append(f'![生成图片]({image_path})')
 
-            return "\n\n".join(saved_paths)
+
+                image_send_url = f'send://{random_filename}'
+                saved_paths.append(f'{image_send_url}')
+
+            return "\n".join(saved_paths)
 
         except Exception as e:
             import traceback
