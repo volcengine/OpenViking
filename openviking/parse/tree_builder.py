@@ -133,10 +133,6 @@ class TreeBuilder:
         if original_name != doc_name:
             logger.debug(f"[TreeBuilder] Sanitized doc name: {original_name!r} -> {doc_name!r}")
 
-        # 2. Determine base_uri and final document name with org/repo for GitHub/GitLab
-        if base_uri is None:
-            base_uri = self._get_base_uri(scope, source_path, source_format)
-
         # Check if source_path is a GitHub/GitLab URL and extract org/repo
         final_doc_name = doc_name
         if source_path and source_format == "repository":
@@ -144,27 +140,32 @@ class TreeBuilder:
             if parsed_org_repo:
                 final_doc_name = parsed_org_repo
 
+        # 2. Determine base_uri and final document name with org/repo for GitHub/GitLab
+        auto_base_uri = self._get_base_uri(scope, source_path, source_format)
+
         # 3. Check if base_uri exists - if it does, use it as parent directory
-        try:
-            await viking_fs.stat(base_uri)
-            base_exists = True
-        except Exception:
-            base_exists = False
+        base_exists = False
+        if base_uri:
+            try:
+                await viking_fs.stat(base_uri)
+                base_exists = True
+            except Exception:
+                base_exists = False
 
         if base_exists:
             if "/" in final_doc_name:
                 repo_name_only = final_doc_name.split("/")[-1]
             else:
                 repo_name_only = final_doc_name
-            candidate_uri = VikingURI(base_uri).join(repo_name_only).uri
+            candidate_uri = VikingURI(base_uri or auto_base_uri).join(repo_name_only).uri
         else:
             if "/" in final_doc_name:
                 parts = final_doc_name.split("/")
                 sanitized_parts = [VikingURI.sanitize_segment(p) for p in parts if p]
-                base_viking_uri = VikingURI(base_uri)
+                base_viking_uri = VikingURI(base_uri or auto_base_uri)
                 candidate_uri = VikingURI.build(base_viking_uri.scope, *sanitized_parts)
             else:
-                candidate_uri = VikingURI(base_uri).join(doc_name).uri
+                candidate_uri = VikingURI(base_uri or auto_base_uri).join(doc_name).uri
         final_uri = await self._resolve_unique_uri(candidate_uri, ctx=ctx)
 
         if final_uri != candidate_uri:
