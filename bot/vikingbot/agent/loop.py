@@ -283,7 +283,7 @@ class AgentLoop:
                         session_key=session_key,
                         sandbox_manager=self.sandbox_manager
                     )
-                    tool_execute_duration = time.time() - tool_execute_start_time
+                    tool_execute_duration = (time.time() - tool_execute_start_time) * 1000
                     logger.info(f"[RESULT]: {str(result)[:600]}")
 
                     # 回调：工具结果
