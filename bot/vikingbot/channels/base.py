@@ -1,4 +1,5 @@
 """Base channel interface for chat platforms."""
+
 import base64
 import re
 from abc import ABC, abstractmethod
@@ -26,20 +27,23 @@ except ImportError:
     BeautifulSoup = None
     Document = None
 
+
 class BaseChannel(ABC):
     """
     Abstract base class for chat channel implementations.
-    
+
     Each channel (Telegram, Discord, etc.) should implement this interface
     to integrate with the vikingbot message bus.
     """
-    
+
     name: str = "base"
-    
-    def __init__(self, config: BaseChannelConfig, bus: MessageBus, workspace_path: Path | None = None):
+
+    def __init__(
+        self, config: BaseChannelConfig, bus: MessageBus, workspace_path: Path | None = None
+    ):
         """
         Initialize the channel.
-        
+
         Args:
             config: Channel-specific configuration.
             bus: The message bus for communication.
@@ -53,50 +57,49 @@ class BaseChannel(ABC):
         self.channel_id = config.channel_id()
         self.workspace_path = workspace_path
 
-    
     @abstractmethod
     async def start(self) -> None:
         """
         Start the channel and begin listening for messages.
-        
+
         This should be a long-running async task that:
         1. Connects to the chat platform
         2. Listens for incoming messages
         3. Forwards messages to the bus via _handle_message()
         """
         pass
-    
+
     @abstractmethod
     async def stop(self) -> None:
         """Stop the channel and clean up resources."""
         pass
-    
+
     @abstractmethod
     async def send(self, msg: OutboundMessage) -> None:
         """
         Send a message through this channel.
-        
+
         Args:
             msg: The message to send.
         """
         pass
-    
+
     def is_allowed(self, sender_id: str) -> bool:
         """
         Check if a sender is allowed to use this bot.
-        
+
         Args:
             sender_id: The sender's identifier.
-        
+
         Returns:
             True if allowed, False otherwise.
         """
         allow_list = getattr(self.config, "allow_from", [])
-        
+
         # If no allow list, allow everyone
         if not allow_list:
             return True
-        
+
         sender_str = str(sender_id)
         if sender_str in allow_list:
             return True
@@ -105,20 +108,20 @@ class BaseChannel(ABC):
                 if part and part in allow_list:
                     return True
         return False
-    
+
     async def _handle_message(
         self,
         sender_id: str,
         chat_id: str,
         content: str,
         media: list[str] | None = None,
-        metadata: dict[str, Any] | None = None
+        metadata: dict[str, Any] | None = None,
     ) -> None:
         """
         Handle an incoming message from the chat platform.
-        
+
         This method checks permissions and forwards to the bus.
-        
+
         Args:
             sender_id: The sender's identifier.
             chat_id: The chat/channel identifier.
@@ -132,19 +135,17 @@ class BaseChannel(ABC):
                 f"Add them to allowFrom list in config to grant access."
             )
             return
-        
+
         msg = InboundMessage(
             session_key=SessionKey(
-                type=str(self.channel_type.value),
-                channel_id=self.channel_id,
-                chat_id=chat_id
+                type=str(self.channel_type.value), channel_id=self.channel_id, chat_id=chat_id
             ),
             sender_id=str(sender_id),
             content=content,
             media=media or [],
-            metadata=metadata or {}
+            metadata=metadata or {},
         )
-        
+
         await self.bus.publish_inbound(msg)
 
     async def _parse_data_uri(self, data_uri: str) -> Tuple[bool, Any]:
@@ -219,7 +220,7 @@ class BaseChannel(ABC):
         trailing_punctuation = ")].,!?:;'\">}`"
 
         for m in re.finditer(pattern, content):
-            before = content[last_end: m.start()]
+            before = content[last_end : m.start()]
             if before.strip():
                 parts.append(before)
 
@@ -267,7 +268,6 @@ class BaseChannel(ABC):
             return True
 
         return False
-
 
     def _html_to_markdown(self, html_content: str, url: str = "") -> str:
         """Convert HTML content to Markdown, extracting main article content."""

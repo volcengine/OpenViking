@@ -51,11 +51,15 @@ class AioSandboxBackend(SandboxBackend):
 
         try:
             result = await self._client.shell.exec_command(command=command, timeout=timeout)
-            
+
             output_parts = []
             if hasattr(result, "data") and hasattr(result.data, "output") and result.data.output:
                 output_parts.append(result.data.output)
-            if hasattr(result, "data") and hasattr(result.data, "exit_code") and result.data.exit_code != 0:
+            if (
+                hasattr(result, "data")
+                and hasattr(result.data, "exit_code")
+                and result.data.exit_code != 0
+            ):
                 output_parts.append(f"\nExit code: {result.data.exit_code}")
 
             result_text = "\n".join(output_parts) if output_parts else "(no output)"
@@ -65,12 +69,16 @@ class AioSandboxBackend(SandboxBackend):
 
             max_len = 10000
             if len(result_text) > max_len:
-                result_text = result_text[:max_len] + f"\n... (truncated, {len(result_text) - max_len} more chars)"
+                result_text = (
+                    result_text[:max_len]
+                    + f"\n... (truncated, {len(result_text) - max_len} more chars)"
+                )
 
             return result_text
         except Exception as e:
             logger.error(f"[AioSandbox] Error: {e}")
             import traceback
+
             logger.error(f"[AioSandbox] Traceback:\n{traceback.format_exc()}")
             raise
 
@@ -97,7 +105,7 @@ class AioSandboxBackend(SandboxBackend):
         """Read file from AIO Sandbox using SDK."""
         if not self._client:
             raise SandboxNotStartedError()
-        
+
         try:
             sandbox_path = path
             if not path.startswith("/"):
@@ -115,7 +123,7 @@ class AioSandboxBackend(SandboxBackend):
         """Write file to AIO Sandbox using SDK."""
         if not self._client:
             raise SandboxNotStartedError()
-        
+
         try:
             sandbox_path = path
             if not path.startswith("/"):
@@ -132,7 +140,7 @@ class AioSandboxBackend(SandboxBackend):
         """List directory in AIO Sandbox using SDK."""
         if not self._client:
             raise SandboxNotStartedError()
-        
+
         try:
             sandbox_path = path
             if not path.startswith("/"):
@@ -140,14 +148,14 @@ class AioSandboxBackend(SandboxBackend):
 
             # Use find_files with "*" glob to list directory
             result = await self._client.file.find_files(path=sandbox_path, glob="*")
-            
+
             items = []
             if hasattr(result, "data") and hasattr(result.data, "files"):
                 for file_info in result.data.files:
                     if hasattr(file_info, "name") and hasattr(file_info, "type"):
                         is_dir = file_info.type == "directory"
                         items.append((file_info.name, is_dir))
-            
+
             return items
         except Exception as e:
             logger.error(f"[AioSandbox] Failed to list directory {path}: {e}")

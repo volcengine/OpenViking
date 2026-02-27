@@ -12,6 +12,7 @@ def register_backend(name: str) -> Callable[[Type[SandboxBackend]], Type[Sandbox
     def decorator(cls: Type[SandboxBackend]) -> Type[SandboxBackend]:
         _BACKENDS[name] = cls
         return cls
+
     return decorator
 
 

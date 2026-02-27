@@ -44,9 +44,8 @@ class BaseChannelConfig(BaseModel):
     type: ChannelType
     enabled: bool = True
 
-
     def channel_id(self) -> str:
-        raise 'default'
+        raise "default"
 
 
 # ========== Channel helper configs ==========
@@ -103,7 +102,7 @@ class FeishuChannelConfig(BaseChannelConfig):
         return self.app_id
 
     def channel_key(self):
-        return f'{self.type.value}__{self.channel_id()}'
+        return f"{self.type.value}__{self.channel_id()}"
 
 
 class DiscordChannelConfig(BaseChannelConfig):
@@ -389,7 +388,9 @@ class ProvidersConfig(BaseModel):
     gemini: ProviderConfig = Field(default_factory=ProviderConfig)
     moonshot: ProviderConfig = Field(default_factory=ProviderConfig)
     minimax: ProviderConfig = Field(default_factory=ProviderConfig)
-    volcengine: ProviderConfig = Field(default_factory=ProviderConfig)  # VolcEngine (火山引擎) API gateway
+    volcengine: ProviderConfig = Field(
+        default_factory=ProviderConfig
+    )  # VolcEngine (火山引擎) API gateway
     aihubmix: ProviderConfig = Field(default_factory=ProviderConfig)  # AiHubMix API gateway
 
 
@@ -416,10 +417,12 @@ class WebSearchConfig(BaseModel):
 
 class OpenVikingConfig(BaseModel):
     """Viking tools configuration."""
-    mode: str = "local" # local or remote
+
+    mode: str = "local"  # local or remote
     server_url: str = ""
     user_id: str = ""
     api_key: str = ""
+
 
 class WebToolsConfig(BaseModel):
     """Web tools configuration."""
@@ -548,7 +551,6 @@ class SandboxConfig(BaseModel):
     backends: SandboxBackendsConfig = Field(default_factory=SandboxBackendsConfig)
 
 
-
 class Config(BaseSettings):
     """Root configuration for vikingbot."""
 
@@ -560,17 +562,20 @@ class Config(BaseSettings):
     openviking: OpenVikingConfig = Field(default_factory=OpenVikingConfig)
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
-    hooks: list[str] = Field(['vikingbot.hooks.builtins.openviking_hooks.hooks'])
-    skills: list[str] = Field(default_factory=lambda: [
-        "github-proxy",
-        "github",
-        "memory",
-        "cron",
-        "weather",
-        "tmux",
-        "skill-creator",
-        "summarize",
-    ])
+    hooks: list[str] = Field(["vikingbot.hooks.builtins.openviking_hooks.hooks"])
+    skills: list[str] = Field(
+        default_factory=lambda: [
+            "github-proxy",
+            "github",
+            "memory",
+            "cron",
+            "weather",
+            "tmux",
+            "skill-creator",
+            "summarize",
+        ]
+    )
+
     @property
     def channels_config(self) -> ChannelsConfig:
         """Get channels config wrapper."""
@@ -638,7 +643,6 @@ class Config(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="NANOBOT_", env_nested_delimiter="__")
 
 
-
 class SessionKey(BaseModel):
     model_config = ConfigDict(frozen=True)
     type: str
@@ -649,16 +653,14 @@ class SessionKey(BaseModel):
         return hash((self.type, self.channel_id, self.chat_id))
 
     def safe_name(self):
-        return f'{self.type}__{self.channel_id}__{self.chat_id}'
+        return f"{self.type}__{self.channel_id}__{self.chat_id}"
 
     def channel_key(self):
-        return f'{self.type}__{self.channel_id}'
+        return f"{self.type}__{self.channel_id}"
 
     @staticmethod
     def from_safe_name(safe_name: str):
-        file_name_split = safe_name.split('__')
+        file_name_split = safe_name.split("__")
         return SessionKey(
-            type=file_name_split[0],
-            channel_id=file_name_split[1],
-            chat_id=file_name_split[2]
+            type=file_name_split[0], channel_id=file_name_split[1], chat_id=file_name_split[2]
         )

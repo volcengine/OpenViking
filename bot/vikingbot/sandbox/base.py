@@ -35,35 +35,34 @@ class SandboxBackend(ABC):
     @property
     def sandbox_cwd(self) -> str:
         """Get the current working directory inside the sandbox.
-        
+
         Returns:
             Path string (e.g., "/", "/workspace")
         """
         return "/"
 
-
     def _check_path_restriction(self, path: Path) -> None:
         """Check if path is within workspace (if restricted).
-        
+
         Args:
             path: Path to check
-            
+
         Raises:
             PermissionError: If path outside workspace and restriction is enabled
         """
-        
+
         workspace = self.workspace.resolve()
         resolved = path.resolve()
-        
+
         if resolved != workspace and workspace not in resolved.parents:
             raise PermissionError(f"Path outside workspace: {path}")
 
     def _resolve_path(self, path: str) -> Path:
         """Resolve path to sandbox workspace.
-        
+
         Args:
             path: Input path (absolute or relative)
-            
+
         Returns:
             Resolved Path object in sandbox workspace
         """
@@ -76,13 +75,13 @@ class SandboxBackend(ABC):
 
     async def read_file(self, path: str) -> str:
         """Read file from sandbox (default implementation: host filesystem).
-        
+
         Args:
             path: Path to file (absolute or relative to sandbox_cwd)
-            
+
         Returns:
             File content as string
-            
+
         Raises:
             FileNotFoundError: If file doesn't exist
             IOError: If read fails
@@ -98,11 +97,11 @@ class SandboxBackend(ABC):
 
     async def write_file(self, path: str, content: str) -> None:
         """Write file to sandbox (default implementation: host filesystem).
-        
+
         Args:
             path: Path to file (absolute or relative to sandbox_cwd)
             content: Content to write
-            
+
         Raises:
             IOError: If write fails
             PermissionError: If path outside workspace and restriction is enabled
@@ -114,13 +113,13 @@ class SandboxBackend(ABC):
 
     async def list_dir(self, path: str) -> list[tuple[str, bool]]:
         """List directory in sandbox (default implementation: host filesystem).
-        
+
         Args:
             path: Path to directory (absolute or relative to sandbox_cwd)
-            
+
         Returns:
             List of (name, is_dir) tuples
-            
+
         Raises:
             FileNotFoundError: If directory doesn't exist
             IOError: If not a directory
@@ -132,7 +131,7 @@ class SandboxBackend(ABC):
             raise FileNotFoundError(f"Directory not found: {path}")
         if not sandbox_path.is_dir():
             raise IOError(f"Not a directory: {path}")
-        
+
         items = []
         for item in sorted(sandbox_path.iterdir()):
             items.append((item.name, item.is_dir()))

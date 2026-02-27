@@ -34,4 +34,3 @@ class Hook(ABC):
     @abstractmethod
     async def execute(self, context: HookContext, **kwargs) -> Any:
         pass
-

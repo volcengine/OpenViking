@@ -5,12 +5,13 @@ import logging
 import mimetypes
 import uuid
 from io import BytesIO
-from typing import Any
+from typing import Any, Callable, Awaitable
 from pathlib import Path
 import httpx
 import litellm
 
 from vikingbot.agent.tools.base import Tool
+from vikingbot.bus.events import OutboundMessage
 from vikingbot.utils import get_data_path
 
 
@@ -73,6 +74,11 @@ class ImageGenerationTool(Tool):
                     "maximum": 4,
                     "default": 1,
                 },
+                "send_to_user": {
+                    "type": "boolean",
+                    "description": "Whether to send the generated image directly to the user (default: true)",
+                    "default": True,
+                },
             },
             "required": [],
         }
@@ -82,10 +88,16 @@ class ImageGenerationTool(Tool):
         gen_image_model: str | None = None,
         api_key: str | None = None,
         api_base: str | None = None,
+        send_callback: Callable[[OutboundMessage], Awaitable[None]] | None = None,
     ):
         self.gen_image_model = gen_image_model or "openai/doubao-seedream-4-5-251128"
         self.api_key = api_key
         self.api_base = api_base
+        self._send_callback = send_callback
+
+    def set_send_callback(self, callback: Callable[[OutboundMessage], Awaitable[None]]) -> None:
+        """Set the callback for sending messages."""
+        self._send_callback = callback
 
     @property
     def _is_seedream_model(self) -> bool:
@@ -158,10 +170,12 @@ class ImageGenerationTool(Tool):
             include_size=False,
             include_style=False,
         )
-        kwargs.update({
-            "prompt": prompt,
-            "strength": strength,
-        })
+        kwargs.update(
+            {
+                "prompt": prompt,
+                "strength": strength,
+            }
+        )
         if base_format == "data":
             kwargs["image"] = base_image_data
         else:
@@ -179,6 +193,7 @@ class ImageGenerationTool(Tool):
         quality: str = "standard",
         style: str = "vivid",
         n: int = 1,
+        send_to_user: bool = True,
         **kwargs: Any,
     ) -> str:
         try:
@@ -252,6 +267,7 @@ class ImageGenerationTool(Tool):
             images_dir = get_data_path() / "images"
             images_dir.mkdir(exist_ok=True)
             saved_paths = ["生成图片："]
+            saved_filenames = []
 
             for img in images:
                 random_filename = f"{uuid.uuid4().hex}.png"
@@ -262,11 +278,28 @@ class ImageGenerationTool(Tool):
                 with open(image_path, "wb") as f:
                     f.write(image_bytes)
                 saved_paths.append(f"send://{random_filename}")
+                saved_filenames.append(random_filename)
 
-            return "\n".join(saved_paths)
+            # Send to user if requested
+            sent_to_user = False
+            if send_to_user and self._send_callback:
+                try:
+                    msg_content = "\n".join([f"send://{f}" for f in saved_filenames])
+                    msg = OutboundMessage(session_key=tool_context.session_key, content=msg_content)
+                    await self._send_callback(msg)
+                    sent_to_user = True
+                except Exception as e:
+                    return f"Error sending image to user: {str(e)}"
+
+            result = "\n".join(saved_paths)
+            if sent_to_user:
+                result += "\n（已发送给用户）"
+
+            return result
 
         except Exception as e:
             import traceback
+
             error_details = traceback.format_exc()
             log = logging.getLogger(__name__)
             log.error(f"Image generation error: {e}")

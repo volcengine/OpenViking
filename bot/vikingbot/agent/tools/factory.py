@@ -6,8 +6,15 @@ from vikingbot.agent.tools.cron import CronTool
 from vikingbot.agent.tools.filesystem import ReadFileTool, WriteFileTool, EditFileTool, ListDirTool
 from vikingbot.agent.tools.image import ImageGenerationTool
 from vikingbot.agent.tools.message import MessageTool
-from vikingbot.agent.tools.ov_file import VikingReadTool, VikingListTool, VikingSearchTool, \
-    VikingGrepTool, VikingGlobTool, VikingSearchUserMemoryTool, VikingMemoryCommitTool
+from vikingbot.agent.tools.ov_file import (
+    VikingReadTool,
+    VikingListTool,
+    VikingSearchTool,
+    VikingGrepTool,
+    VikingGlobTool,
+    VikingSearchUserMemoryTool,
+    VikingMemoryCommitTool,
+)
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.agent.tools.shell import ExecTool
 from vikingbot.agent.tools.web import WebFetchTool
@@ -31,7 +38,7 @@ def register_default_tools(
 ) -> None:
     """
     Register default tools to a tool registry.
-    
+
     Args:
         registry: Tool registry to register tools to
         config: Config object (all other parameters derived from this)
@@ -50,7 +57,7 @@ def register_default_tools(
     brave_api_key = config.tools.web.search.api_key if config.tools.web.search else None
     exa_api_key = None  # TODO: Add to config if needed
     gen_image_model = config.agents.defaults.gen_image_model
-    
+
     # Get provider API key and base from config
     provider_config = config.get_provider()
     provider_api_key = provider_config.api_key if provider_config else None
@@ -62,16 +69,16 @@ def register_default_tools(
     registry.register(ListDirTool())
 
     # Shell tool
-    registry.register(ExecTool(
-        timeout=exec_config.timeout,
-    ))
+    registry.register(
+        ExecTool(
+            timeout=exec_config.timeout,
+        )
+    )
 
     # Web tools
-    registry.register(WebSearchTool(
-        backend="auto",
-        brave_api_key=brave_api_key,
-        exa_api_key=exa_api_key
-    ))
+    registry.register(
+        WebSearchTool(backend="auto", brave_api_key=brave_api_key, exa_api_key=exa_api_key)
+    )
     registry.register(WebFetchTool())
 
     # Open Viking tools
@@ -86,11 +93,14 @@ def register_default_tools(
 
     # Image generation tool
     if include_image_tool:
-        registry.register(ImageGenerationTool(
-            gen_image_model=gen_image_model,
-            api_key=provider_api_key,
-            api_base=provider_api_base
-        ))
+        registry.register(
+            ImageGenerationTool(
+                gen_image_model=gen_image_model,
+                api_key=provider_api_key,
+                api_base=provider_api_base,
+                send_callback=send_callback,
+            )
+        )
 
     # Message tool
     if include_message_tool and send_callback:
@@ -100,6 +110,7 @@ def register_default_tools(
     # Spawn tool
     if include_spawn_tool and subagent_manager:
         from vikingbot.agent.tools.spawn import SpawnTool
+
         spawn_tool = SpawnTool(manager=subagent_manager)
         registry.register(spawn_tool)
 
@@ -114,7 +125,7 @@ def register_subagent_tools(
 ) -> None:
     """
     Register tools for subagents (limited set).
-    
+
     Args:
         registry: Tool registry to register tools to
         config: Config object (all parameters derived from this)

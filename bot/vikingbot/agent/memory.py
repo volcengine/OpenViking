@@ -28,10 +28,12 @@ class MemoryStore:
         if result and len(result) > 0:
             user_memories = []
             for idx, memory in enumerate(result, start=1):
-                user_memories.append(f"{idx}. {getattr(memory, 'abstract', '')}; "
-                                     f"uri: {getattr(memory, 'uri', '')}; "
-                                     f"isDir: {getattr(memory, 'is_leaf', False)}; "
-                                     f"related score: {getattr(memory, 'score', 0.0)}")
+                user_memories.append(
+                    f"{idx}. {getattr(memory, 'abstract', '')}; "
+                    f"uri: {getattr(memory, 'uri', '')}; "
+                    f"isDir: {getattr(memory, 'is_leaf', False)}; "
+                    f"related score: {getattr(memory, 'score', 0.0)}"
+                )
             return "\n".join(user_memories)
         return ""
 
@@ -53,14 +55,17 @@ class MemoryStore:
             return ""
         user_memory = self._parse_viking_memory(result["user_memory"])
         agent_memory = self._parse_viking_memory(result["agent_memory"])
-        return (f"## Related memories.Using tools to read more details.\n"
-                f"### user memories:\n{user_memory}\n"
-                f"### agent memories:\n{agent_memory}")
+        return (
+            f"## Related memories.Using tools to read more details.\n"
+            f"### user memories:\n{user_memory}\n"
+            f"### agent memories:\n{agent_memory}"
+        )
 
     async def get_viking_user_profile(self, sandbox_key: str) -> str:
         client = await VikingClient.create(agent_id=sandbox_key)
-        result = await client.read_content(uri=f"viking://user/{self.user_id}/memories/profile.md", level="read")
+        result = await client.read_content(
+            uri=f"viking://user/{self.user_id}/memories/profile.md", level="read"
+        )
         if not result:
             return ""
         return f"## User Information\n{result}"
-

@@ -12,27 +12,22 @@ from .registry import register_backend
 @register_backend
 class ExaBackend(WebSearchBackend):
     """Exa AI API backend."""
-    
+
     name = "exa"
-    
+
     def __init__(self, api_key: str | None = None):
         self.api_key = api_key or os.environ.get("EXA_API_KEY", "")
-    
+
     @property
     def is_available(self) -> bool:
         return bool(self.api_key)
-    
+
     async def search(
-        self, 
-        query: str, 
-        count: int,
-        type: str = "auto",
-        livecrawl: str = "fallback",
-        **kwargs: Any
+        self, query: str, count: int, type: str = "auto", livecrawl: str = "fallback", **kwargs: Any
     ) -> str:
         if not self.api_key:
             return "Error: EXA_API_KEY not configured"
-        
+
         try:
             n = min(max(count, 1), 20)
             async with httpx.AsyncClient() as client:
@@ -41,27 +36,24 @@ class ExaBackend(WebSearchBackend):
                     headers={
                         "accept": "application/json",
                         "content-type": "application/json",
-                        "x-api-key": self.api_key
+                        "x-api-key": self.api_key,
                     },
                     json={
                         "query": query,
                         "type": type,
                         "numResults": n,
-                        "contents": {
-                            "text": True,
-                            "livecrawl": livecrawl
-                        }
+                        "contents": {"text": True, "livecrawl": livecrawl},
                     },
-                    timeout=25.0
+                    timeout=25.0,
                 )
                 r.raise_for_status()
-            
+
             data = r.json()
             results = data.get("results", [])
-            
+
             if not results:
                 return f"No results for: {query}"
-            
+
             lines = [f"Results for: {query}\n"]
             for i, item in enumerate(results[:n], 1):
                 lines.append(f"{i}. {item.get('title', '')}\n   {item.get('url', '')}")

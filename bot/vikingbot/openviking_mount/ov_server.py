@@ -29,7 +29,9 @@ class VikingClient:
             )
             self.agent_id = agent_id
             self.user_id = openviking_config.user_id
-            self.agent_space_name = hashlib.md5((self.user_id + self.agent_id).encode()).hexdigest()[:12]
+            self.agent_space_name = hashlib.md5(
+                (self.user_id + self.agent_id).encode()
+            ).hexdigest()[:12]
         self.mode = openviking_config.mode
 
     async def _initialize(self):
@@ -78,8 +80,7 @@ class VikingClient:
         self, local_path: str, desc: str, target_path: Optional[str] = None, wait: bool = False
     ) -> Optional[Dict[str, Any]]:
         """添加资源到 Viking"""
-        result = await self.client.add_resource(
-            path=local_path, reason=desc, wait=wait)
+        result = await self.client.add_resource(path=local_path, reason=desc, wait=wait)
         return result
 
     async def list_resources(
@@ -143,9 +144,7 @@ class VikingClient:
             else []
         )
 
-    async def search_memory(
-        self, query: str, limit: int = 10
-    ) -> dict[str, list[Any]]:
+    async def search_memory(self, query: str, limit: int = 10) -> dict[str, list[Any]]:
         """通过上下文消息，检索viking 的user、Agent memory"""
         uri_user_memory = f"viking://user/{self.user_id}/memories/"
         user_memory = await self.client.find(
@@ -202,6 +201,7 @@ class VikingClient:
                     tool_input = None
                     try:
                         import json
+
                         args_str = tool_info.get("args", "{}")
                         tool_input = json.loads(args_str) if args_str else {}
                     except Exception:
@@ -211,7 +211,7 @@ class VikingClient:
 
                     skill_uri = ""
                     if tool_name == "read_file" and result_str:
-                        match = re.search(r'^---\s*\nname:\s*(.+?)\s*\n', result_str, re.MULTILINE)
+                        match = re.search(r"^---\s*\nname:\s*(.+?)\s*\n", result_str, re.MULTILINE)
                         if match:
                             skill_name = match.group(1).strip()
                             skill_uri = f"viking://agent/skills/{skill_name}"
@@ -220,18 +220,20 @@ class VikingClient:
                     execute_success = tool_info.get("execute_success", True)
                     tool_status = "completed" if execute_success else "error"
 
-                    parts.append(ToolPart(
-                        tool_id=tool_id,
-                        tool_name=tool_name,
-                        tool_uri=f"viking://session/{session_id}/tools/{tool_id}",
-                        tool_input=tool_input,
-                        tool_output=result_str[:2000],
-                        tool_status=tool_status,
-                        skill_uri=skill_uri,
-                        # duration_ms=tool_info.get("duration"),
-                        # prompt_tokens=tool_info.get("input_token"),
-                        # completion_tokens=tool_info.get("output_token")
-                    ))
+                    parts.append(
+                        ToolPart(
+                            tool_id=tool_id,
+                            tool_name=tool_name,
+                            tool_uri=f"viking://session/{session_id}/tools/{tool_id}",
+                            tool_input=tool_input,
+                            tool_output=result_str[:2000],
+                            tool_status=tool_status,
+                            skill_uri=skill_uri,
+                            # duration_ms=tool_info.get("duration"),
+                            # prompt_tokens=tool_info.get("input_token"),
+                            # completion_tokens=tool_info.get("output_token")
+                        )
+                    )
 
                 if not parts:
                     parts = [TextPart(text=content or "")]
@@ -249,6 +251,7 @@ class VikingClient:
     def close(self):
         """关闭客户端"""
         self.client.close()
+
     def _parse_viking_memory(self, result: Any) -> str:
         if result and len(result) > 0:
             user_memories = []
@@ -286,7 +289,16 @@ async def main_test():
     # res = await client.list_resources("viking://resources/")
     # res = await client.read_content("viking://user/memories/profile.md", level="read")
     # res = await client.add_resource("/Users/bytedance/Documents/论文/吉比特年报.pdf", "吉比特年报")
-    res = await client.commit("123", [{"role": "user", "content": "我叫吴彦祖"}, {"role": "assistant", "content": "好的吴彦祖😎，我已经记 住你的名字啦，之后随时都可以认出你~"}])
+    res = await client.commit(
+        "123",
+        [
+            {"role": "user", "content": "我叫吴彦祖"},
+            {
+                "role": "assistant",
+                "content": "好的吴彦祖😎，我已经记 住你的名字啦，之后随时都可以认出你~",
+            },
+        ],
+    )
     # res = await client.commit("1234", [{"role": "user", "content": "帮我搜索 Python asyncio 教程"}
     #                                    ,{"role": "assistant", "content": "我来帮你r搜索 Python asyncio 相关的教程。"}])
     print(res)

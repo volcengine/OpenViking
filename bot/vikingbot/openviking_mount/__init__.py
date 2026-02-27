@@ -6,21 +6,9 @@ OpenViking Filesystem Mount Module
 """
 
 from .mount import OpenVikingMount, MountScope, MountConfig, FileInfo
-from .manager import (
-    OpenVikingMountManager,
-    MountPoint,
-    get_mount_manager
-)
-from .viking_fuse import (
-    OpenVikingFUSE,
-    mount_fuse,
-    FUSEMountManager,
-    FUSE_AVAILABLE
-)
-from .session_integration import (
-    SessionOpenVikingManager,
-    get_session_ov_manager
-)
+from .manager import OpenVikingMountManager, MountPoint, get_mount_manager
+from .viking_fuse import OpenVikingFUSE, mount_fuse, FUSEMountManager, FUSE_AVAILABLE
+from .session_integration import SessionOpenVikingManager, get_session_ov_manager
 
 __all__ = [
     "OpenVikingMount",

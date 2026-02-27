@@ -1,6 +1,5 @@
 """Feishu/Lark channel implementation using lark-oapi SDK with WebSocket long connection."""
 
-
 import asyncio
 import base64
 import io
@@ -153,26 +152,28 @@ class FeishuChannel(BaseChannel):
         """
         if not self._client:
             raise Exception("Feishu client not initialized")
-        
+
         if message_id:
             # Use GetMessageResourceRequest for user-sent images
-            request: GetMessageResourceRequest = GetMessageResourceRequest.builder() \
-                .message_id(message_id) \
-                .file_key(image_key) \
-                .type("image") \
+            request: GetMessageResourceRequest = (
+                GetMessageResourceRequest.builder()
+                .message_id(message_id)
+                .file_key(image_key)
+                .type("image")
                 .build()
+            )
             response = await self._client.im.v1.message_resource.aget(request)
         else:
             # Use GetImageRequest for bot-sent/images uploaded via API
             request: GetImageRequest = GetImageRequest.builder().image_key(image_key).build()
             response = await self._client.im.v1.image.aget(request)
-        
+
         # Handle failed response
         if not response.success():
             raise Exception(
                 f"Failed to download image: code={response.code}, msg={response.msg}, log_id={response.get_log_id()}"
             )
-        
+
         # Read the image bytes from the response file
         return response.file.read()
 
@@ -445,12 +446,7 @@ class FeishuChannel(BaseChannel):
 
         # Add image elements
         for img in images:
-            elements.append(
-                {
-                    "tag": "img",
-                    "img_key": img["img_key"]
-                }
-            )
+            elements.append({"tag": "img", "img_key": img["img_key"]})
 
         if not elements:
             elements = [{"tag": "markdown", "content": content_no_images}]

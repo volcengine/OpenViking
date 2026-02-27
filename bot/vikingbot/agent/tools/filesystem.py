@@ -15,24 +15,19 @@ class ReadFileTool(Tool):
     @property
     def name(self) -> str:
         return "read_file"
-    
+
     @property
     def description(self) -> str:
         return "Read the contents of a file at the given path."
-    
+
     @property
     def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "The file path to read"
-                }
-            },
-            "required": ["path"]
+            "properties": {"path": {"type": "string", "description": "The file path to read"}},
+            "required": ["path"],
         }
-    
+
     async def execute(self, tool_context: "ToolContext", path: str, **kwargs: Any) -> str:
         try:
             sandbox = await tool_context.sandbox_manager.get_sandbox(tool_context.session_key)
@@ -52,29 +47,25 @@ class WriteFileTool(Tool):
     @property
     def name(self) -> str:
         return "write_file"
-    
+
     @property
     def description(self) -> str:
         return "Write content to a file at the given path. Creates parent directories if needed."
-    
+
     @property
     def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
             "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "The file path to write to"
-                },
-                "content": {
-                    "type": "string",
-                    "description": "The content to write"
-                }
+                "path": {"type": "string", "description": "The file path to write to"},
+                "content": {"type": "string", "description": "The content to write"},
             },
-            "required": ["path", "content"]
+            "required": ["path", "content"],
         }
-    
-    async def execute(self, tool_context: "ToolContext", path: str, content: str, **kwargs: Any) -> str:
+
+    async def execute(
+        self, tool_context: "ToolContext", path: str, content: str, **kwargs: Any
+    ) -> str:
         try:
             sandbox = await tool_context.sandbox_manager.get_sandbox(tool_context.session_key)
             await sandbox.write_file(path, content)
@@ -91,33 +82,26 @@ class EditFileTool(Tool):
     @property
     def name(self) -> str:
         return "edit_file"
-    
+
     @property
     def description(self) -> str:
         return "Edit a file by replacing old_text with new_text. The old_text must exist exactly in the file."
-    
+
     @property
     def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
             "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "The file path to edit"
-                },
-                "old_text": {
-                    "type": "string",
-                    "description": "The exact text to find and replace"
-                },
-                "new_text": {
-                    "type": "string",
-                    "description": "The text to replace with"
-                }
+                "path": {"type": "string", "description": "The file path to edit"},
+                "old_text": {"type": "string", "description": "The exact text to find and replace"},
+                "new_text": {"type": "string", "description": "The text to replace with"},
             },
-            "required": ["path", "old_text", "new_text"]
+            "required": ["path", "old_text", "new_text"],
         }
-    
-    async def execute(self, tool_context: "ToolContext", path: str, old_text: str, new_text: str, **kwargs: Any) -> str:
+
+    async def execute(
+        self, tool_context: "ToolContext", path: str, old_text: str, new_text: str, **kwargs: Any
+    ) -> str:
         try:
             sandbox = await tool_context.sandbox_manager.get_sandbox(tool_context.session_key)
             content = await sandbox.read_file(path)
@@ -147,24 +131,19 @@ class ListDirTool(Tool):
     @property
     def name(self) -> str:
         return "list_dir"
-    
+
     @property
     def description(self) -> str:
         return "List the contents of a directory."
-    
+
     @property
     def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
-            "properties": {
-                "path": {
-                    "type": "string",
-                    "description": "The directory path to list"
-                }
-            },
-            "required": ["path"]
+            "properties": {"path": {"type": "string", "description": "The directory path to list"}},
+            "required": ["path"],
         }
-    
+
     async def execute(self, tool_context: "ToolContext", path: str, **kwargs: Any) -> str:
         try:
             sandbox = await tool_context.sandbox_manager.get_sandbox(tool_context.session_key)

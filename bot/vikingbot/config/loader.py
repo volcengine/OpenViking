@@ -6,6 +6,7 @@ from typing import Any
 from loguru import logger
 from vikingbot.config.schema import Config
 
+
 def get_config_path() -> Path:
     """Get the default configuration file path."""
     return Path.home() / ".vikingbot" / "config.json"
@@ -14,6 +15,7 @@ def get_config_path() -> Path:
 def get_data_dir() -> Path:
     """Get the vikingbot data directory."""
     from vikingbot.utils.helpers import get_data_path
+
     return get_data_path()
 
 
@@ -28,18 +30,19 @@ def ensure_config():
     config = load_config(config_path)
     return config
 
+
 def load_config(config_path: Path | None = None) -> Config:
     """
     Load configuration from file or create default.
-    
+
     Args:
         config_path: Optional path to config file. Uses default if not provided.
-    
+
     Returns:
         Loaded configuration object.
     """
     path = config_path or get_config_path()
-    
+
     if path.exists():
         try:
             with open(path) as f:
@@ -49,24 +52,24 @@ def load_config(config_path: Path | None = None) -> Config:
         except (json.JSONDecodeError, ValueError) as e:
             print(f"Warning: Failed to load config from {path}: {e}")
             print("Using default configuration.")
-    
+
     return Config()
 
 
 def save_config(config: Config, config_path: Path | None = None) -> None:
     """
     Save configuration to file.
-    
+
     Args:
         config: Configuration to save.
         config_path: Optional path to save to. Uses default if not provided.
     """
     path = config_path or get_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    
+
     data = config.model_dump()
     data = convert_to_camel(data)
-    
+
     with open(path, "w") as f:
         json.dump(data, f, indent=2)
 

@@ -15,7 +15,6 @@ def get_data_path() -> Path:
     return ensure_dir(Path.home() / ".vikingbot")
 
 
-
 def get_source_workspace_path() -> Path:
     """Get the source workspace path from the codebase."""
     return Path(__file__).parent.parent.parent / "workspace"
@@ -24,11 +23,11 @@ def get_source_workspace_path() -> Path:
 def get_workspace_path(workspace: str | None = None, ensure_exists: bool = True) -> Path:
     """
     Get the workspace path.
-    
+
     Args:
         workspace: Optional workspace path. Defaults to ~/.vikingbot/workspace/shared.
         ensure_exists: If True, ensure the directory exists (creates it if necessary.
-    
+
     Returns:
         Expanded workspace path.
     """
@@ -36,7 +35,7 @@ def get_workspace_path(workspace: str | None = None, ensure_exists: bool = True)
         path = Path(workspace).expanduser()
     else:
         path = Path.home() / ".vikingbot" / "workspace" / "shared"
-    
+
     if ensure_exists:
         ensure_workspace_templates(path)
         return ensure_dir(path)
@@ -46,18 +45,18 @@ def get_workspace_path(workspace: str | None = None, ensure_exists: bool = True)
 def ensure_workspace_templates(workspace: Path) -> None:
     import shutil
     from vikingbot.agent.skills import BUILTIN_SKILLS_DIR
-    
+
     # Ensure workspace directory exists first
     ensure_dir(workspace)
-    
+
     # Check if workspace has any of the bootstrap files
     bootstrap_files = ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md", "IDENTITY.md"]
     has_any_file = any((workspace / filename).exists() for filename in bootstrap_files)
-    
+
     if not has_any_file:
         # Workspace is empty, copy templates from source
         source_dir = Path(__file__).parent.parent.parent / "workspace"
-        
+
         if not source_dir.exists():
             # Fallback: create minimal templates
             _create_minimal_workspace_templates(workspace)
@@ -66,7 +65,7 @@ def ensure_workspace_templates(workspace: Path) -> None:
             for item in source_dir.iterdir():
                 src = source_dir / item.name
                 dst = workspace / item.name
-                
+
                 if src.is_dir():
                     if src.name == "memory":
                         # Ensure memory directory exists
@@ -82,11 +81,11 @@ def ensure_workspace_templates(workspace: Path) -> None:
                     # Copy individual files
                     if not dst.exists():
                         shutil.copy2(src, dst)
-            
+
             # Ensure skills directory exists (for custom user skills)
             skills_dir = workspace / "skills"
             skills_dir.mkdir(exist_ok=True)
-            
+
             # Copy built-in skills to workspace skills directory
             if BUILTIN_SKILLS_DIR.exists() and BUILTIN_SKILLS_DIR.is_dir():
                 for skill_dir in BUILTIN_SKILLS_DIR.iterdir():
@@ -94,11 +93,11 @@ def ensure_workspace_templates(workspace: Path) -> None:
                         dst_skill_dir = skills_dir / skill_dir.name
                         if not dst_skill_dir.exists():
                             shutil.copytree(skill_dir, dst_skill_dir)
-    
+
     # Always ensure memory and skills directories exist
     memory_dir = workspace / "memory"
     memory_dir.mkdir(exist_ok=True)
-    
+
     # Create default memory files if they don't exist
     memory_file = memory_dir / "MEMORY.md"
     if not memory_file.exists():
@@ -118,11 +117,11 @@ This file stores important information that should persist across sessions.
 
 (Things to remember)
 """)
-    
+
     history_file = memory_dir / "HISTORY.md"
     if not history_file.exists():
         history_file.write_text("")
-    
+
     skills_dir = workspace / "skills"
     skills_dir.mkdir(exist_ok=True)
 
@@ -130,7 +129,7 @@ This file stores important information that should persist across sessions.
 def ensure_session_workspace(workspace_path: Path) -> Path:
     if workspace_path.exists() and workspace_path.is_dir():
         return workspace_path
-    
+
     ensure_workspace_templates(workspace_path)
     return workspace_path
 
@@ -176,12 +175,12 @@ Information about the user goes here.
 - Language: (your preferred language)
 """,
     }
-    
+
     for filename, content in templates.items():
         file_path = workspace / filename
         if not file_path.exists():
             file_path.write_text(content)
-    
+
     # Create memory directory and MEMORY.md
     memory_dir = workspace / "memory"
     memory_dir.mkdir(exist_ok=True)
@@ -203,11 +202,11 @@ This file stores important information that should persist across sessions.
 
 (Things to remember)
 """)
-    
+
     history_file = memory_dir / "HISTORY.md"
     if not history_file.exists():
         history_file.write_text("")
-    
+
     # Create skills directory for custom user skills
     skills_dir = workspace / "skills"
     skills_dir.mkdir(exist_ok=True)
@@ -223,7 +222,8 @@ def get_skills_path(workspace: Path | None = None) -> Path:
     ws = workspace or get_workspace_path()
     return ensure_dir(ws / "skills")
 
-def cal_str_tokens(text: str, text_type: str="mixed") -> int:
+
+def cal_str_tokens(text: str, text_type: str = "mixed") -> int:
     char_length = len(text)
     if text_type == "en":
         token_count = char_length / 4.5  # 1 token ≈ 4.5个英文字符
@@ -244,4 +244,3 @@ def truncate_string(s: str, max_len: int = 100, suffix: str = "...") -> str:
     if len(s) <= max_len:
         return s
     return s[: max_len - len(suffix)] + suffix
-

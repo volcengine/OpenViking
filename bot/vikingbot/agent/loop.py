@@ -29,6 +29,7 @@ from vikingbot.utils.helpers import cal_str_tokens
 
 class ThinkingStepType(Enum):
     """思考步骤类型（简化版本，避免循环依赖）"""
+
     REASONING = "reasoning"
     TOOL_CALL = "tool_call"
     TOOL_RESULT = "tool_result"
@@ -38,6 +39,7 @@ class ThinkingStepType(Enum):
 @dataclass
 class ThinkingStep:
     """单个思考步骤（简化版本，避免循环依赖）"""
+
     step_type: ThinkingStepType
     content: str
     timestamp: datetime = field(default_factory=datetime.now)
@@ -75,6 +77,7 @@ class AgentLoop:
         config: Config = None,
     ):
         from vikingbot.config.schema import ExecToolConfig
+
         self.bus = bus
         self.provider = provider
         self.workspace = workspace
@@ -92,7 +95,9 @@ class AgentLoop:
         self.context = ContextBuilder(workspace, sandbox_manager=sandbox_manager)
 
         self._register_builtin_hooks()
-        self.sessions = session_manager or SessionManager(workspace, sandbox_manager=sandbox_manager)
+        self.sessions = session_manager or SessionManager(
+            workspace, sandbox_manager=sandbox_manager
+        )
         self.tools = ToolRegistry()
         self.subagents = SubagentManager(
             provider=provider,
@@ -129,10 +134,7 @@ class AgentLoop:
         while self._running:
             try:
                 # Wait for next message
-                msg = await asyncio.wait_for(
-                    self.bus.consume_inbound(),
-                    timeout=1.0
-                )
+                msg = await asyncio.wait_for(self.bus.consume_inbound(), timeout=1.0)
 
                 # Process it
                 try:
@@ -142,10 +144,12 @@ class AgentLoop:
                 except Exception as e:
                     logger.exception(f"Error processing message: {e}")
                     # Send error response
-                    await self.bus.publish_outbound(OutboundMessage(
-                        session_key=msg.session_key,
-                        content=f"Sorry, I encountered an error: {str(e)}"
-                    ))
+                    await self.bus.publish_outbound(
+                        OutboundMessage(
+                            session_key=msg.session_key,
+                            content=f"Sorry, I encountered an error: {str(e)}",
+                        )
+                    )
             except asyncio.TimeoutError:
                 continue
 
@@ -185,11 +189,14 @@ class AgentLoop:
             await self._consolidate_memory(session, archive_all=True)
             session.clear()
             self.sessions.save(session)
-            return OutboundMessage(session_key=msg.session_key,
-                                  content="🐈 New session started. Memory consolidated.")
+            return OutboundMessage(
+                session_key=msg.session_key, content="🐈 New session started. Memory consolidated."
+            )
         if cmd == "/help":
-            return OutboundMessage(session_key=msg.session_key,
-                                  content="🐈 vikingbot commands:\n/new — Start a new conversation\n/help — Show available commands")
+            return OutboundMessage(
+                session_key=msg.session_key,
+                content="🐈 vikingbot commands:\n/new — Start a new conversation\n/help — Show available commands",
+            )
 
         # Consolidate memory before processing if session is too large
         if len(session.messages) > self.memory_window:
@@ -201,6 +208,7 @@ class AgentLoop:
             message_workspace = self.workspace
 
         from vikingbot.agent.context import ContextBuilder
+
         message_context = ContextBuilder(message_workspace, sandbox_manager=self.sandbox_manager)
 
         # Build initial messages (use get_history for LLM-formatted messages)
@@ -208,7 +216,7 @@ class AgentLoop:
             history=session.get_history(),
             current_message=msg.content,
             media=msg.media if msg.media else None,
-            session_key=msg.session_key
+            session_key=msg.session_key,
         )
 
         # Agent loop
@@ -221,26 +229,28 @@ class AgentLoop:
 
             # 回调：迭代开始
             if self.thinking_callback:
-                self.thinking_callback(ThinkingStep(
-                    step_type=ThinkingStepType.ITERATION,
-                    content=f"Iteration {iteration}/{self.max_iterations}",
-                    metadata={"iteration": iteration}
-                ))
+                self.thinking_callback(
+                    ThinkingStep(
+                        step_type=ThinkingStepType.ITERATION,
+                        content=f"Iteration {iteration}/{self.max_iterations}",
+                        metadata={"iteration": iteration},
+                    )
+                )
 
             # Call LLM
             response = await self.provider.chat(
-                messages=messages,
-                tools=self.tools.get_definitions(),
-                model=self.model
+                messages=messages, tools=self.tools.get_definitions(), model=self.model
             )
 
             # 回调：推理内容
             if response.reasoning_content and self.thinking_callback:
-                self.thinking_callback(ThinkingStep(
-                    step_type=ThinkingStepType.REASONING,
-                    content=response.reasoning_content,
-                    metadata={}
-                ))
+                self.thinking_callback(
+                    ThinkingStep(
+                        step_type=ThinkingStepType.REASONING,
+                        content=response.reasoning_content,
+                        metadata={},
+                    )
+                )
 
             # Handle tool calls
             if response.has_tool_calls:
@@ -251,13 +261,15 @@ class AgentLoop:
                         "type": "function",
                         "function": {
                             "name": tc.name,
-                            "arguments": json.dumps(args)  # Use truncated args
-                        }
+                            "arguments": json.dumps(args),  # Use truncated args
+                        },
                     }
                     for tc, args in zip(response.tool_calls, args_list)
                 ]
                 messages = self.context.add_assistant_message(
-                    messages, response.content, tool_call_dicts,
+                    messages,
+                    response.content,
+                    tool_call_dicts,
                     reasoning_content=response.reasoning_content,
                 )
 
@@ -267,19 +279,21 @@ class AgentLoop:
 
                     # 回调：工具调用
                     if self.thinking_callback:
-                        self.thinking_callback(ThinkingStep(
-                            step_type=ThinkingStepType.TOOL_CALL,
-                            content=f"{tool_call.name}({args_str})",
-                            metadata={"tool": tool_call.name, "args": tool_call.arguments}
-                        ))
+                        self.thinking_callback(
+                            ThinkingStep(
+                                step_type=ThinkingStepType.TOOL_CALL,
+                                content=f"{tool_call.name}({args_str})",
+                                metadata={"tool": tool_call.name, "args": tool_call.arguments},
+                            )
+                        )
 
                     logger.info(f"[TOOL_CALL]: {tool_call.name}({args_str[:200]})")
                     tool_execute_start_time = time.time()
                     result = await self.tools.execute(
-                        tool_call.name, 
-                        tool_call.arguments, 
+                        tool_call.name,
+                        tool_call.arguments,
                         session_key=session_key,
-                        sandbox_manager=self.sandbox_manager
+                        sandbox_manager=self.sandbox_manager,
                     )
                     tool_execute_duration = (time.time() - tool_execute_start_time) * 1000
                     logger.info(f"[RESULT]: {str(result)[:600]}")
@@ -289,11 +303,13 @@ class AgentLoop:
                         result_str = str(result)
                         if len(result_str) > 500:
                             result_str = result_str[:500] + "..."
-                        self.thinking_callback(ThinkingStep(
-                            step_type=ThinkingStepType.TOOL_RESULT,
-                            content=result_str,
-                            metadata={"tool": tool_call.name}
-                        ))
+                        self.thinking_callback(
+                            ThinkingStep(
+                                step_type=ThinkingStepType.TOOL_RESULT,
+                                content=result_str,
+                                metadata={"tool": tool_call.name},
+                            )
+                        )
 
                     messages = self.context.add_tool_result(
                         messages, tool_call.id, tool_call.name, result
@@ -304,13 +320,17 @@ class AgentLoop:
                         "args": args_str,
                         "result": result,
                         "duration": tool_execute_duration,
-                        "execute_success": True if result and "Error executing" not in result else False,
+                        "execute_success": True
+                        if result and "Error executing" not in result
+                        else False,
                         "input_token": tool_call.tokens,
-                        "output_token": cal_str_tokens(result, text_type="mixed")
+                        "output_token": cal_str_tokens(result, text_type="mixed"),
                     }
                     tools_used.append(tool_used_dict)
                 # Interleaved CoT: reflect before next action
-                messages.append({"role": "user", "content": "Reflect on the results and decide next steps."})
+                messages.append(
+                    {"role": "user", "content": "Reflect on the results and decide next steps."}
+                )
             else:
                 # No tool calls, we're done
                 final_content = response.content
@@ -326,18 +346,18 @@ class AgentLoop:
         preview = final_content[:120] + "..." if len(final_content) > 120 else final_content
         logger.info(f"Response to {msg.session_key}: {preview}")
 
-
-
         # Save to session (include tool names so consolidation sees what happened)
         session.add_message("user", msg.content)
-        session.add_message("assistant", final_content,
-                            tools_used=tools_used if tools_used else None)
+        session.add_message(
+            "assistant", final_content, tools_used=tools_used if tools_used else None
+        )
         self.sessions.save(session)
 
         return OutboundMessage(
             session_key=msg.session_key,
             content=final_content,
-            metadata=msg.metadata or {},  # Pass through for channel-specific needs (e.g. Slack thread_ts)
+            metadata=msg.metadata
+            or {},  # Pass through for channel-specific needs (e.g. Slack thread_ts)
         )
 
     async def _process_system_message(self, msg: InboundMessage) -> OutboundMessage | None:
@@ -351,13 +371,9 @@ class AgentLoop:
 
         session = self.sessions.get_or_create(msg.session_key)
 
-
-
         # Build messages with the announce content
         messages = await self.context.build_messages(
-            history=session.get_history(),
-            current_message=msg.content,
-            session_key=msg.session_key
+            history=session.get_history(), current_message=msg.content, session_key=msg.session_key
         )
 
         # Agent loop (limited for announce handling)
@@ -368,9 +384,7 @@ class AgentLoop:
             iteration += 1
 
             response = await self.provider.chat(
-                messages=messages,
-                tools=self.tools.get_definitions(),
-                model=self.model
+                messages=messages, tools=self.tools.get_definitions(), model=self.model
             )
 
             if response.has_tool_calls:
@@ -378,15 +392,14 @@ class AgentLoop:
                     {
                         "id": tc.id,
                         "type": "function",
-                        "function": {
-                            "name": tc.name,
-                            "arguments": json.dumps(tc.arguments)
-                        }
+                        "function": {"name": tc.name, "arguments": json.dumps(tc.arguments)},
                     }
                     for tc in response.tool_calls
                 ]
                 messages = self.context.add_assistant_message(
-                    messages, response.content, tool_call_dicts,
+                    messages,
+                    response.content,
+                    tool_call_dicts,
                     reasoning_content=response.reasoning_content,
                 )
 
@@ -394,16 +407,18 @@ class AgentLoop:
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                     logger.info(f"Tool call: {tool_call.name}({args_str[:200]})")
                     result = await self.tools.execute(
-                        tool_call.name, 
-                        tool_call.arguments, 
+                        tool_call.name,
+                        tool_call.arguments,
                         session_key=msg.session_key,
-                        sandbox_manager=self.sandbox_manager
+                        sandbox_manager=self.sandbox_manager,
                     )
                     messages = self.context.add_tool_result(
                         messages, tool_call.id, tool_call.name, result
                     )
                 # Interleaved CoT: reflect before next action
-                messages.append({"role": "user", "content": "Reflect on the results and decide next steps."})
+                messages.append(
+                    {"role": "user", "content": "Reflect on the results and decide next steps."}
+                )
             else:
                 final_content = response.content
                 break
@@ -416,10 +431,7 @@ class AgentLoop:
         session.add_message("assistant", final_content)
         self.sessions.save(session)
 
-        return OutboundMessage(
-            session_key=msg.session_key,
-            content=final_content
-        )
+        return OutboundMessage(session_key=msg.session_key, content=final_content)
 
     async def _consolidate_memory(self, session, archive_all: bool = False) -> None:
         """Consolidate old messages into MEMORY.md + HISTORY.md, then trim session."""
@@ -431,9 +443,9 @@ class AgentLoop:
             context=HookContext(
                 event_type="message.compact",
                 session_id=session.key.safe_name(),
-                sandbox_key=self.sandbox_manager.to_sandbox_key(session.key)
+                sandbox_key=self.sandbox_manager.to_sandbox_key(session.key),
             ),
-            session=session
+            session=session,
         )
 
         if self.sandbox_manager:
@@ -450,7 +462,9 @@ class AgentLoop:
             old_messages = session.messages[:-keep_count]
         if not old_messages:
             return
-        logger.info(f"Memory consolidation started: {len(session.messages)} messages, archiving {len(old_messages)}, keeping {keep_count}")
+        logger.info(
+            f"Memory consolidation started: {len(session.messages)} messages, archiving {len(old_messages)}, keeping {keep_count}"
+        )
 
         # Format messages for LLM (include tool names when available)
         lines = []
@@ -459,11 +473,15 @@ class AgentLoop:
                 continue
             tools_used = m.get("tools_used", [])
             if tools_used and isinstance(tools_used, list):
-                tool_names = [tc.get('tool_name', 'unknown') for tc in tools_used if isinstance(tc, dict)]
+                tool_names = [
+                    tc.get("tool_name", "unknown") for tc in tools_used if isinstance(tc, dict)
+                ]
                 tools_str = f" [tools: {', '.join(tool_names)}]" if tool_names else ""
             else:
                 tools_str = ""
-            lines.append(f"[{m.get('timestamp', '?')[:16]}] {m['role'].upper()}{tools_str}: {m['content']}")
+            lines.append(
+                f"[{m.get('timestamp', '?')[:16]}] {m['role'].upper()}{tools_str}: {m['content']}"
+            )
         conversation = "\n".join(lines)
         current_memory = memory.read_long_term()
 
@@ -484,7 +502,10 @@ Respond with ONLY valid JSON, no markdown fences."""
         try:
             response = await self.provider.chat(
                 messages=[
-                    {"role": "system", "content": "You are a memory consolidation agent. Respond only with valid JSON."},
+                    {
+                        "role": "system",
+                        "content": "You are a memory consolidation agent. Respond only with valid JSON.",
+                    },
                     {"role": "user", "content": prompt},
                 ],
                 model=self.model,
@@ -502,18 +523,16 @@ Respond with ONLY valid JSON, no markdown fences."""
 
             session.messages = session.messages[-keep_count:] if keep_count else []
             self.sessions.save(session)
-            logger.info(f"Memory consolidation done, session trimmed to {len(session.messages)} messages")
+            logger.info(
+                f"Memory consolidation done, session trimmed to {len(session.messages)} messages"
+            )
         except Exception as e:
             logger.exception(f"Memory consolidation failed: {e}")
 
     async def process_direct(
         self,
         content: str,
-        session_key: SessionKey = SessionKey(
-            type="cli",
-            channel_id="default",
-            chat_id="direct"
-        )
+        session_key: SessionKey = SessionKey(type="cli", channel_id="default", chat_id="direct"),
     ) -> str:
         """
         Process a message directly (for CLI or cron usage).
@@ -525,11 +544,7 @@ Respond with ONLY valid JSON, no markdown fences."""
         Returns:
             The agent's response.
         """
-        msg = InboundMessage(
-            session_key=session_key,
-            sender_id="user",
-            content=content
-        )
+        msg = InboundMessage(session_key=session_key, sender_id="user", content=content)
 
         response = await self._process_message(msg)
         return response.content if response else ""

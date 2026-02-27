@@ -49,10 +49,7 @@ class DirectBackend(SandboxBackend):
             )
 
             try:
-                stdout, stderr = await asyncio.wait_for(
-                    process.communicate(),
-                    timeout=timeout
-                )
+                stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=timeout)
             except asyncio.TimeoutError:
                 process.kill()
                 return f"Error: Command timed out after {timeout} seconds"
@@ -84,6 +81,7 @@ class DirectBackend(SandboxBackend):
         except Exception as e:
             logger.error(f"[Direct] Error: {e}")
             import traceback
+
             logger.error(f"[Direct] Traceback:\n{traceback.format_exc()}")
             raise
 
@@ -110,7 +108,7 @@ class DirectBackend(SandboxBackend):
         sandbox_path = Path(path)
         if not sandbox_path.is_absolute():
             sandbox_path = self._workspace / path
-        
+
         self._check_path_restriction(sandbox_path)
         if not sandbox_path.exists():
             raise FileNotFoundError(f"File not found: {path}")
@@ -122,7 +120,7 @@ class DirectBackend(SandboxBackend):
         sandbox_path = Path(path)
         if not sandbox_path.is_absolute():
             sandbox_path = self._workspace / path
-        
+
         self._check_path_restriction(sandbox_path)
         sandbox_path.parent.mkdir(parents=True, exist_ok=True)
         sandbox_path.write_text(content, encoding="utf-8")
@@ -131,13 +129,13 @@ class DirectBackend(SandboxBackend):
         sandbox_path = Path(path)
         if not sandbox_path.is_absolute():
             sandbox_path = self._workspace / path
-        
+
         self._check_path_restriction(sandbox_path)
         if not sandbox_path.exists():
             raise FileNotFoundError(f"Directory not found: {path}")
         if not sandbox_path.is_dir():
             raise IOError(f"Not a directory: {path}")
-        
+
         items = []
         for item in sorted(sandbox_path.iterdir()):
             items.append((item.name, item.is_dir()))

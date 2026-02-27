@@ -410,7 +410,8 @@ class VikingMemoryCommitTool(OVFileTool):
                         "type": "object",
                         "properties": {
                             "role": {"type": "string", "enum": ["user", "assistant"]},
-                            "content": {"type": "string"}                        },
+                            "content": {"type": "string"},
+                        },
                         "required": ["role", "content"],
                     },
                 },

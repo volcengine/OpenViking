@@ -21,7 +21,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.formatted_text import HTML
 from prompt_toolkit.history import FileHistory
 from prompt_toolkit.patch_stdout import patch_stdout
-from vikingbot.config.loader import load_config,ensure_config, get_data_dir, get_config_path
+from vikingbot.config.loader import load_config, ensure_config, get_data_dir, get_config_path
 from vikingbot.bus.queue import MessageBus
 from vikingbot.agent.loop import AgentLoop
 
@@ -31,6 +31,7 @@ from vikingbot.cron.types import CronJob
 from vikingbot.heartbeat.service import HeartbeatService
 from vikingbot import __version__, __logo__
 from vikingbot.config.schema import SessionKey
+
 # Create sandbox manager
 from vikingbot.sandbox.manager import SandboxManager
 from vikingbot.utils.helpers import get_source_workspace_path
@@ -164,7 +165,6 @@ def main(
     pass
 
 
-
 def _make_provider(config):
     """Create LiteLLMProvider from config. Allows starting without API key."""
     from vikingbot.providers.litellm_provider import LiteLLMProvider
@@ -195,12 +195,12 @@ def _make_provider(config):
 
 @app.command()
 def gateway(
-        port: int = typer.Option(18790, "--port", "-p", help="Gateway port"),
-        console_port: int = typer.Option(18791, "--console-port", help="Console web UI port"),
-        enable_console: bool = typer.Option(
-            True, "--console/--no-console", help="Enable console web UI"
-        ),
-        verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+    port: int = typer.Option(18790, "--port", "-p", help="Gateway port"),
+    console_port: int = typer.Option(18791, "--console-port", help="Console web UI port"),
+    enable_console: bool = typer.Option(
+        True, "--console/--no-console", help="Enable console web UI"
+    ),
+    verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
 ):
     """Start the vikingbot gateway."""
 
@@ -208,7 +208,6 @@ def gateway(
         import logging
 
         logging.basicConfig(level=logging.DEBUG)
-
 
     bus = MessageBus()
     config = ensure_config()
@@ -218,6 +217,7 @@ def gateway(
     channels = prepare_channel(config, bus)
     agent_loop = prepare_agent_loop(config, bus, session_manager, cron)
     heartbeat = prepare_heartbeat(config, agent_loop, session_manager)
+
     async def run():
         tasks = []
         tasks.append(cron.start())
@@ -230,6 +230,7 @@ def gateway(
         await asyncio.gather(*tasks)
 
     asyncio.run(run())
+
 
 def prepare_agent_loop(config, bus, session_manager, cron):
     sandbox_parent_path = config.workspace_path
@@ -263,6 +264,7 @@ def prepare_cron(bus) -> CronService:
     # Create cron service first (callback set after agent creation)
     cron_store_path = get_data_dir() / "cron" / "jobs.json"
     cron = CronService(cron_store_path)
+
     # Set cron callback (needs agent)
     async def on_cron_job(job: CronJob) -> str | None:
         """Execute a cron job through the agent."""
@@ -301,7 +303,7 @@ def prepare_channel(config, bus):
     return channels
 
 
-def prepare_heartbeat(config,agent_loop, session_manager)-> HeartbeatService:
+def prepare_heartbeat(config, agent_loop, session_manager) -> HeartbeatService:
     # Create heartbeat service
     async def on_heartbeat(prompt: str, session_key: SessionKey | None = None) -> str:
 
@@ -334,15 +336,14 @@ async def start_console(console_port):
         import os
 
         def start_gradio():
-            script_path = os.path.join(os.path.dirname(__file__), "..", "console",
-                                       "console_gradio_simple.py")
+            script_path = os.path.join(
+                os.path.dirname(__file__), "..", "console", "console_gradio_simple.py"
+            )
             subprocess.Popen([sys.executable, script_path, str(console_port)])
 
         start_gradio()
     except Exception as e:
-        console.print(
-            f"[yellow]Warning: Gradio not available ({e})[/yellow]")
-
+        console.print(f"[yellow]Warning: Gradio not available ({e})[/yellow]")
 
 
 # ============================================================================
@@ -809,11 +810,11 @@ def tui(
     async def run():
         tasks = []
         from vikingbot.tui.app import run_tui
+
         tasks.append(run_tui(agent_loop, bus, config))
         await asyncio.gather(*tasks)
 
     asyncio.run(run())
-
 
 
 if __name__ == "__main__":

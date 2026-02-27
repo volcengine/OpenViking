@@ -12,6 +12,7 @@ from vikingbot.config.loader import load_config
 try:
     from vikingbot.openviking_mount.ov_server import VikingClient
     import openviking as ov
+
     HAS_OPENVIKING = True
 except Exception:
     HAS_OPENVIKING = False
@@ -66,7 +67,9 @@ class OpenVikingPostCallHook(Hook):
             if openviking_config.mode == "local":
                 skill_memory_uri = f"viking://agent/ffb1327b18bf/memories/skills/{skill_name}.md"
             else:
-                skill_memory_uri = f"viking://agent/{ov_client.agent_space_name}/memories/skills/{skill_name}.md"
+                skill_memory_uri = (
+                    f"viking://agent/{ov_client.agent_space_name}/memories/skills/{skill_name}.md"
+                )
             # logger.warning(f"skill_memory_uri={skill_memory_uri}")
             content = await ov_client.read_content(skill_memory_uri, level="read")
             # logger.warning(f"content={content}")
@@ -76,33 +79,22 @@ class OpenVikingPostCallHook(Hook):
             return ""
 
     async def execute(self, context: HookContext, tool_name, params, result) -> Any:
-        if tool_name == 'read_file':
+        if tool_name == "read_file":
             if result and not isinstance(result, Exception):
-                match = re.search(r'^---\s*\nname:\s*(.+?)\s*\n', result, re.MULTILINE)
+                match = re.search(r"^---\s*\nname:\s*(.+?)\s*\n", result, re.MULTILINE)
                 if match:
                     skill_name = match.group(1).strip()
                     # logger.debug(f"skill_name={skill_name}")
 
                     agent_space_name = context.sandbox_key
                     # logger.debug(f"agent_space_name={agent_space_name}")
-                    
-                    skill_memory = await self._read_skill_memory(agent_space_name,skill_name)
+
+                    skill_memory = await self._read_skill_memory(agent_space_name, skill_name)
                     # logger.debug(f"skill_memory={skill_memory}")
                     if skill_memory:
                         result = f"{result}{skill_memory}"
 
-        return {
-            'tool_name': tool_name,
-            'params': params,
-            'result': result
-        }
+        return {"tool_name": tool_name, "params": params, "result": result}
 
 
-hooks = {
-    'message.compact':[
-        OpenVikingCompactHook()
-    ],
-    'tool.post_call':[
-        OpenVikingPostCallHook()
-    ]
-}
+hooks = {"message.compact": [OpenVikingCompactHook()], "tool.post_call": [OpenVikingPostCallHook()]}

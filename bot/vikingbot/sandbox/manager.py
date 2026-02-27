@@ -13,6 +13,7 @@ from vikingbot.config.schema import SandboxConfig, SessionKey, Config
 
 class SandboxManager:
     """Manager for creating and managing sandbox instances."""
+
     COPY_BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md", "IDENTITY.md"]
 
     def __init__(self, config: Config, sandbox_parent_path: Path, source_workspace_path: Path):
@@ -25,10 +26,8 @@ class SandboxManager:
             raise UnsupportedBackendError(f"Unknown sandbox backend: {config.backend}")
         self._backend_cls = backend_cls
 
-
     async def get_sandbox(self, session_key: SessionKey) -> SandboxBackend:
         return await self._get_or_create_sandbox(session_key)
-
 
     async def _get_or_create_sandbox(self, session_key: SessionKey) -> SandboxBackend:
         """Get or create session-specific sandbox."""
@@ -38,7 +37,6 @@ class SandboxManager:
             self._sandboxes[sandbox_key] = sandbox
         return self._sandboxes[sandbox_key]
 
-
     async def _create_sandbox(self, sandbox_key: str) -> SandboxBackend:
         """Create new sandbox instance."""
         workspace = self.workspace / sandbox_key
@@ -47,6 +45,7 @@ class SandboxManager:
             await instance.start()
         except Exception as e:
             import traceback
+
             traceback.print_exc()
         await self._copy_bootstrap_files(workspace)
         return instance
@@ -87,8 +86,6 @@ class SandboxManager:
                     continue
                 shutil.copytree(item, dst_skill, dirs_exist_ok=True)
 
-
-
     async def cleanup_session(self, session_key: SessionKey) -> None:
         """Clean up sandbox for a session."""
         sandbox_key = self.to_sandbox_key(session_key)
@@ -101,7 +98,6 @@ class SandboxManager:
         for sandbox in self._sandboxes.values():
             await sandbox.stop()
         self._sandboxes.clear()
-
 
     def get_workspace_path(self, session_key: SessionKey) -> Path:
         return self.workspace / self.to_sandbox_key(session_key)

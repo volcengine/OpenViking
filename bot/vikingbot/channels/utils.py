@@ -23,9 +23,9 @@ def is_image_file_path(path_str: str) -> bool:
     """
     if not path_str:
         return False
-    
+
     # Check if it starts with markdown image syntax - skip these
-    if path_str.startswith('!['):
+    if path_str.startswith("!["):
         return False
 
     # Check if it's a data URI or URL - those are handled separately

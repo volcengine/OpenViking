@@ -38,24 +38,18 @@ class HookManager:
             hooks = self.import_path(hook_path)
             if not hooks:
                 continue
-            for event_type,hook_types in hooks.items():
+            for event_type, hook_types in hooks.items():
                 for hook_type in hook_types:
                     self._hooks[event_type].append(hook_type)
                     logger.debug(f"Registered hook '{hook_type}' for event '{event_type}'")
 
     async def execute_hooks(self, context: HookContext, **kwargs) -> List[Any]:
-        async_hooks = [
-            hook
-            for hook in self._hooks[context.event_type]
-            if not hook.is_sync
-        ]
-        sync_hooks = [
-            hook
-            for hook in self._hooks[context.event_type]
-            if hook.is_sync
-        ]
+        async_hooks = [hook for hook in self._hooks[context.event_type] if not hook.is_sync]
+        sync_hooks = [hook for hook in self._hooks[context.event_type] if hook.is_sync]
         if async_hooks:
-            logger.debug(f"Executing {len(async_hooks)} async hooks for event '{context.event_type}'")
+            logger.debug(
+                f"Executing {len(async_hooks)} async hooks for event '{context.event_type}'"
+            )
             async_results = await asyncio.gather(
                 *[hook.execute(context, **kwargs) for hook in async_hooks], return_exceptions=True
             )

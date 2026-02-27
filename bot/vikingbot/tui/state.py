@@ -16,6 +16,7 @@ class MessageRole(Enum):
 
 class ThinkingStepType(Enum):
     """思考步骤类型"""
+
     REASONING = "reasoning"  # 推理内容
     TOOL_CALL = "tool_call"  # 工具调用
     TOOL_RESULT = "tool_result"  # 工具结果
@@ -25,6 +26,7 @@ class ThinkingStepType(Enum):
 @dataclass
 class ThinkingStep:
     """单个思考步骤"""
+
     step_type: ThinkingStepType
     content: str
     timestamp: datetime = field(default_factory=datetime.now)
@@ -43,11 +45,7 @@ class Message:
 @dataclass
 class TUIState:
     messages: List[Message] = field(default_factory=list)
-    session_key: SessionKey = SessionKey(
-        type="tui",
-        channel_id="default",
-        chat_id="default"
-    )
+    session_key: SessionKey = SessionKey(type="tui", channel_id="default", chat_id="default")
     is_thinking: bool = False
     thinking_message: str = "vikingbot is thinking..."
     input_text: str = ""
@@ -56,7 +54,7 @@ class TUIState:
     last_error: Optional[str] = None
     total_tokens: int = 0
     message_count: int = 0
-    
+
     # 思考过程相关
     current_thinking_steps: List[ThinkingStep] = field(default_factory=list)
     show_thinking_panel: bool = True  # 是否显示思考面板
