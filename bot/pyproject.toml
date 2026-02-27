@@ -1,6 +1,6 @@
 [project]
-name = "vikingbot-ai"
-version = "0.1.4"
+name = "vikingbot"
+version = "0.1.1"
 description = "A lightweight personal AI assistant framework"
 requires-python = ">=3.11, <=3.13"
 license = {text = "MIT"}
