@@ -59,6 +59,18 @@ vikingbot agent -m "What is 2+2?"
 
 您也可以使用 Docker 部署 vikingbot，以便更轻松地设置和隔离。
 
+## ☁️ 火山引擎 VKE 部署
+
+如果您想在火山引擎容器服务（VKE）上部署 vikingbot，请查看详细的部署文档：
+
+👉 [VKE 部署指南](deploy/vke/README.md)
+
+该指南包含：
+- 完整的前置准备步骤
+- 火山引擎账号、VKE 集群、镜像仓库、TOS 存储桶的创建方法
+- 一键部署脚本使用说明
+- 配置详解和故障排查
+
 ### 前置要求
 
 首先安装 Docker：

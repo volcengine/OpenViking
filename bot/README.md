@@ -48,6 +48,18 @@ That's it! You have a working AI assistant in 2 minutes.
 ## 🐳 Docker Deployment
 
 You can also deploy vikingbot using Docker for easier setup and isolation.
+
+## ☁️ Volcengine VKE Deployment
+
+If you want to deploy vikingbot on Volcengine Kubernetes Engine (VKE), see the detailed deployment guide:
+
+👉 [VKE Deployment Guide (Chinese)](deploy/vke/README.md)
+
+The guide includes:
+- Complete prerequisites
+- How to create Volcengine account, VKE cluster, container registry, and TOS bucket
+- One-click deployment script usage
+- Configuration details and troubleshooting
 ### Prerequisites
 
 First, install Docker:

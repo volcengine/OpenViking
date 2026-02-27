@@ -45,12 +45,15 @@ exec(command: str, working_dir: str = None) -> str
 ## Web Access
 
 ### web_search
-Search the web using Brave Search API.
+Search the web using configurable backend (Brave Search, DuckDuckGo, or Exa).
 ```
-web_search(query: str, count: int = 5) -> str
+web_search(query: str, count: int = 5, type: str = None, livecrawl: str = None) -> str
 ```
 
-Returns search results with titles, URLs, and snippets. Requires `tools.web.search.apiKey` in config.
+Returns search results with titles, URLs, and snippets. Requires API key configuration.
+- `count`: Number of results (1-20, default 5)
+- `type` (Exa only): Search type - "auto", "fast", or "deep"
+- `livecrawl` (Exa only): Live crawl mode - "fallback" or "preferred"
 
 ### web_fetch
 Fetch and extract main content from a URL.
@@ -63,12 +66,42 @@ web_fetch(url: str, extractMode: str = "markdown", maxChars: int = 50000) -> str
 - Supports markdown or plain text extraction
 - Output is truncated at 50,000 characters by default
 
+## Image Generation
+
+### generate_image
+Generate images from scratch, edit existing images, or create variations.
+```
+generate_image(
+    mode: str = "generate",
+    prompt: str = None,
+    base_image: str = None,
+    mask: str = None,
+    size: str = "1920x1920",
+    quality: str = "standard",
+    style: str = "vivid",
+    n: int = 1
+) -> str
+```
+
+**Modes:**
+- `generate`: Generate from scratch (requires `prompt`)
+- `edit`: Edit existing image (requires `prompt` and `base_image`)
+- `variation`: Create variations (requires `base_image`)
+
+**Parameters:**
+- `base_image`: Base image for edit/variation: base64 data URI, URL, or file path
+- `mask`: Mask image for edit mode (optional, transparent areas indicate where to edit
+- `size`: Image size (only "1920x1920" supported)
+- `quality`: "standard" or "hd"
+- `style`: "vivid" or "natural" (DALL-E 3 only)
+- `n`: Number of images (1-4)
+
 ## Communication
 
 ### message
 Send a message to the user (used internally).
 ```
-message(content: str, channel: str = None, chat_id: str = None) -> str
+message(content: str) -> str
 ```
 
 ## Background Tasks
@@ -86,14 +119,14 @@ Use for complex or time-consuming tasks that can run independently. The subagent
 Use the `cron` tool to create scheduled reminders:
 
 ### Set a recurring reminder
-```bash
+```
 # Every day at 9am
 cron(
     action="add",
     name="morning",
     message="Good morning! ☀️",
     cron_expr="0 9 * * *"
-) 
+)
 
 # Every 2 hours
 cron(
@@ -101,41 +134,84 @@ cron(
     name="water",
     message="Drink water! 💧",
     every_seconds=7200
-) 
+)
 ```
 
 ### Set a one-time reminder
-```bash
+```
 # At a specific time (ISO format)
 cron(
     action="add",
     name="meeting",
     message="Meeting starts now!",
     at="2025-01-31T15:00:00"
-) 
+)
 ```
 
 ### Manage reminders
-```bash
+```
 # List all jobs
 cron(
     action="list"
-) 
-vikingbot cron list              
+)
+
 # Remove a job
 cron(
     action="remove",
-    job_id=<job_id>
-) 
+    job_id="<job_id>"
+)
+```
+
+## OpenViking Tools
+
+### openviking_read
+Read content from OpenViking resources at different levels.
+```
+openviking_read(uri: str, level: str = "abstract") -> str
+```
+
+**Levels:**
+- `abstract`: L0 - Brief summary
+- `overview`: L1 - Medium overview
+- `read`: L2 - Full content
+
+### openviking_list
+List resources in an OpenViking path.
+```
+openviking_list(uri: str = "", recursive: bool = False) -> str
+```
+
+### openviking_search
+Search for resources in OpenViking using semantic search.
+```
+openviking_search(query: str, target_uri: str = None) -> str
+```
+
+### openviking_grep
+Search OpenViking resources using regex patterns.
+```
+openviking_grep(uri: str, pattern: str, case_insensitive: bool = False) -> str
+```
+
+### openviking_glob
+Find OpenViking resources using glob patterns.
+```
+openviking_glob(pattern: str, uri: str = "") -> str
+```
+
+### user_memory_search
+Search for user memories in OpenViking.
+```
+user_memory_search(query: str) -> str
 ```
 
 ## Heartbeat Task Management
 
-The `HEARTBEAT.md` file in the workspace is checked at regular intervals
+The `HEARTBEAT.md` file in the workspace is checked at regular intervals.
 Use file operations to manage periodic tasks:
 
 ### Add a heartbeat task
-```python
+```
 # Append a new task
 edit_file(
     path="HEARTBEAT.md",
@@ -145,7 +221,7 @@ edit_file(
 ```
 
 ### Remove a heartbeat task
-```python
+```
 # Remove a specific task
 edit_file(
     path="HEARTBEAT.md",
@@ -155,7 +231,7 @@ edit_file(
 ```
 
 ### Rewrite all tasks
-```python
+```
 # Replace the entire file
 write_file(
     path="HEARTBEAT.md",

@@ -3,19 +3,15 @@
 import base64
 import logging
 import mimetypes
-import os
 import uuid
 from io import BytesIO
 from typing import Any
-from urllib.parse import urlparse
 from pathlib import Path
 import httpx
 import litellm
 
 from vikingbot.agent.tools.base import Tool
-from vikingbot.sandbox import SandboxManager
 from vikingbot.utils import get_data_path
-from vikingbot.utils.helpers import get_workspace_path
 
 
 class ImageGenerationTool(Tool):
@@ -91,24 +87,25 @@ class ImageGenerationTool(Tool):
         self.api_key = api_key
         self.api_base = api_base
 
-    async def _parse_image_data(self, image_str: str) -> tuple[bytes | str, str]:
+    @property
+    def _is_seedream_model(self) -> bool:
+        """Check if the current model is a Seedream model."""
+        return "seedream" in self.gen_image_model.lower()
+
+    async def _parse_image_data(self, image_str: str) -> tuple[str, str]:
         """
-        Parse image from base64 data URI or URL.
-        Returns: (image_data, format_type) where format_type is "bytes" or "url"
+        Parse image from base64 data URI, URL, or file path.
+        Returns: (image_data, format_type) where format_type is "data" or "url"
         """
         if image_str.startswith("data:"):
             return image_str, "data"
         elif image_str.startswith("http://") or image_str.startswith("https://"):
-            # Return URL directly for the model
             return image_str, "url"
         else:
             mime_type, _ = mimetypes.guess_type(image_str)
             if not mime_type:
                 mime_type = "application/octet-stream"
-
-            # 步骤2：以二进制模式读取文件并编码为 Base64 字符串
             base64_str = base64.b64encode(Path(image_str).read_bytes()).decode("utf-8")
-            # 步骤3：拼接标准 Data URI 格式
             data_uri = f"data:{mime_type};base64,{base64_str}"
             return data_uri, "data"
 
@@ -117,9 +114,59 @@ class ImageGenerationTool(Tool):
         async with httpx.AsyncClient(timeout=60.0) as client:
             response = await client.get(url)
             response.raise_for_status()
-            image_data = response.content
-            b64 = base64.b64encode(image_data).decode("utf-8")
-            return b64
+            return base64.b64encode(response.content).decode("utf-8")
+
+    def _build_common_kwargs(
+        self,
+        size: str,
+        n: int,
+        include_size: bool = True,
+        include_style: bool = True,
+        quality: str | None = None,
+        style: str | None = None,
+    ) -> dict[str, Any]:
+        """Build common kwargs for image generation calls."""
+        kwargs: dict[str, Any] = {
+            "model": self.gen_image_model,
+            "n": n,
+        }
+        if include_size:
+            kwargs["size"] = size
+        if quality:
+            kwargs["quality"] = quality
+        if include_style and style:
+            kwargs["style"] = style
+        if self.api_key:
+            kwargs["api_key"] = self.api_key
+        if self.api_base:
+            kwargs["api_base"] = self.api_base
+        return kwargs
+
+    async def _seedream_image_to_image(
+        self,
+        base_image: str,
+        prompt: str,
+        strength: float,
+        size: str,
+        n: int,
+    ) -> Any:
+        """Shared method for Seedream image-to-image generation (used by edit and variation modes)."""
+        base_image_data, base_format = await self._parse_image_data(base_image)
+        kwargs = self._build_common_kwargs(
+            size=size,
+            n=n,
+            include_size=False,
+            include_style=False,
+        )
+        kwargs.update({
+            "prompt": prompt,
+            "strength": strength,
+        })
+        if base_format == "data":
+            kwargs["image"] = base_image_data
+        else:
+            kwargs["image"] = base_image_data
+        return await litellm.aimage_generation(**kwargs)
 
     async def execute(
         self,
@@ -135,184 +182,91 @@ class ImageGenerationTool(Tool):
         **kwargs: Any,
     ) -> str:
         try:
-            # Validate required parameters based on mode
             if mode in ["edit", "variation"] and not base_image:
                 return f"Error: base_image is required for {mode} mode"
-
             if mode in ["generate", "edit"] and not prompt:
                 return f"Error: prompt is required for {mode} mode"
 
-            # Common kwargs
-            common_kwargs: dict[str, Any] = {
-                "model": self.gen_image_model,
-                "size": size,
-                "n": n,
-            }
-
-            # Pass api_key and api_base
-            if self.api_key:
-                common_kwargs["api_key"] = self.api_key
-            if self.api_base:
-                common_kwargs["api_base"] = self.api_base
-
             # Execute based on mode
             if mode == "generate":
-                # Generate from scratch
-                kwargs = {
-                    **common_kwargs,
-                    "prompt": prompt,
-                    "quality": quality,
-                    "style": style,
-                }
-                response = await litellm.aimage_generation(**kwargs)
+                gen_kwargs = self._build_common_kwargs(
+                    size=size,
+                    n=n,
+                    quality=quality,
+                    style=style,
+                )
+                gen_kwargs["prompt"] = prompt
+                response = await litellm.aimage_generation(**gen_kwargs)
+
             elif mode == "edit":
-                # Edit existing image
-                # For Seedream models, use image-to-image generation instead of edit endpoint
-                if "seedream" in self.gen_image_model.lower():
-                    # Use image-to-image generation for Seedream models
-                    base_image_result = await self._parse_image_data(base_image)  # type: ignore[arg-type]
-                    base_image_data, base_format = base_image_result
-
-                    # Use image-to-image generation with strength parameter
-                    edit_kwargs = {
-                        **common_kwargs,
-                        "prompt": prompt,
-                        "strength": 0.7,  # Default edit strength
-                    }
-                    # Add image parameter based on format
-                    if base_format == "data":
-                        edit_kwargs["image"] = base_image_data
-                    else:  # url
-                        # url format: pass directly as URL
-                        assert isinstance(base_image_data, str), "Expected str for 'url' format"
-                        edit_kwargs["image"] = base_image_data
-
-                    # Remove style parameter for Seedream if not supported
-                    if "style" in edit_kwargs:
-                        del edit_kwargs["style"]
-
-                    # Remove size parameter for Seedream image-to-image mode
-                    if "size" in edit_kwargs:
-                        del edit_kwargs["size"]
-
-                    response = await litellm.aimage_generation(**edit_kwargs)
+                if self._is_seedream_model:
+                    response = await self._seedream_image_to_image(
+                        base_image=base_image,  # type: ignore[arg-type]
+                        prompt=prompt,  # type: ignore[arg-type]
+                        strength=0.7,
+                        size=size,
+                        n=n,
+                    )
                 else:
-                    # Use standard edit endpoint for other models
-                    base_image_result = await self._parse_image_data(base_image)  # type: ignore[arg-type]
-                    base_image_data, base_format = base_image_result
-
-                    edit_kwargs = {
-                        **common_kwargs,
-                        "prompt": prompt,
-                    }
-
-                    # Add image parameter based on format
-                    if base_format == "data":
-                        edit_kwargs["image"] = base_image_data  # type: ignore
-                    else:  # url
-                        edit_kwargs["image"] = base_image_data  # type: ignore
-
+                    base_image_data, base_format = await self._parse_image_data(base_image)  # type: ignore[arg-type]
+                    edit_kwargs = self._build_common_kwargs(size=size, n=n, include_style=False)
+                    edit_kwargs["prompt"] = prompt
+                    edit_kwargs["image"] = base_image_data
                     if mask:
-                        mask_result = await self._parse_image_data(mask)  # type: ignore[arg-type]
-                        mask_data, mask_format = mask_result
+                        mask_data, mask_format = await self._parse_image_data(mask)
                         if mask_format == "bytes":
                             edit_kwargs["mask"] = BytesIO(mask_data)  # type: ignore
-                        else:  # url
-                            edit_kwargs["mask"] = mask_data  # type: ignore
-
+                        else:
+                            edit_kwargs["mask"] = mask_data
                     response = await litellm.aimage_edit(**edit_kwargs)
+
             elif mode == "variation":
-                # Create variations
-                # For Seedream models, use image-to-image generation with low strength
-                if "seedream" in self.gen_image_model.lower():
-                    # Use image-to-image generation with low strength for variations
-                    base_image_result = await self._parse_image_data(base_image)  # type: ignore[arg-type]
-                    base_image_data, base_format = base_image_result
-
-                    # Use image-to-image generation with low strength for variations
-                    variation_kwargs = {
-                        **common_kwargs,
-                        "prompt": "Create a variation of this image",  # Simple prompt for variations
-                        "strength": 0.3,  # Low strength for variations
-                    }
-
-                    # Add image parameter based on format
-                    if base_format == "data":
-                        variation_kwargs["image"] = base_image_data
-                    else:  # url
-                        # url format: pass directly as URL
-                        assert isinstance(base_image_data, str), "Expected str for 'url' format"
-                        variation_kwargs["image"] = base_image_data
-
-                    # Remove style parameter for Seedream if not supported
-                    if "style" in variation_kwargs:
-                        del variation_kwargs["style"]
-
-                    # Remove size parameter for Seedream image-to-image mode
-                    if "size" in variation_kwargs:
-                        del variation_kwargs["size"]
-
-                    response = await litellm.aimage_generation(**variation_kwargs)
+                if self._is_seedream_model:
+                    response = await self._seedream_image_to_image(
+                        base_image=base_image,  # type: ignore[arg-type]
+                        prompt="Create a variation of this image",
+                        strength=0.3,
+                        size=size,
+                        n=n,
+                    )
                 else:
-                    # Use standard variation endpoint for other models
-                    base_image_result = await self._parse_image_data(base_image)  # type: ignore[arg-type]
-                    base_image_data, base_format = base_image_result
+                    base_image_data, base_format = await self._parse_image_data(base_image)  # type: ignore[arg-type]
+                    var_kwargs = self._build_common_kwargs(size=size, n=n, include_style=False)
+                    var_kwargs["image"] = base_image_data
+                    response = await litellm.aimage_variation(**var_kwargs)
 
-                    variation_kwargs = {
-                        **common_kwargs,
-                    }
-
-                    # Add image parameter based on format
-                    if base_format == "data":
-                        variation_kwargs["image"] = base_image_data # type: ignore
-                    else:  # url
-                        variation_kwargs["image"] = base_image_data  # type: ignore
-
-                    response = await litellm.aimage_variation(**variation_kwargs)
             else:
                 return f"Error: Unknown mode '{mode}'"
 
-            # Extract images
+            # Extract and save images
             images = []
             for data in response.data:
                 if hasattr(data, "b64_json") and data.b64_json is not None:
                     images.append(data.b64_json)
                 elif hasattr(data, "url") and data.url is not None:
-                    # Download URL and convert to base64
-                    b64 = await self._url_to_base64(data.url)
-                    images.append(b64)
+                    images.append(await self._url_to_base64(data.url))
 
             if not images:
                 return "Error: No images generated"
 
-
-
             images_dir = get_data_path() / "images"
             images_dir.mkdir(exist_ok=True)
-            saved_paths = []
-            saved_paths.append("生成图片：")
+            saved_paths = ["生成图片："]
+
             for img in images:
-                # Generate random filename
                 random_filename = f"{uuid.uuid4().hex}.png"
                 image_path = images_dir / random_filename
-
-                # Decode base64 and save
                 if img.startswith("data:"):
-                    # Extract base64 part from data URI
                     _, img = img.split(",", 1)
                 image_bytes = base64.b64decode(img)
                 with open(image_path, "wb") as f:
                     f.write(image_bytes)
-
-
-                image_send_url = f'send://{random_filename}'
-                saved_paths.append(f'{image_send_url}')
+                saved_paths.append(f"send://{random_filename}")
 
             return "\n".join(saved_paths)
 
         except Exception as e:
             import traceback
-
             error_details = traceback.format_exc()
             log = logging.getLogger(__name__)
             log.error(f"Image generation error: {e}")
