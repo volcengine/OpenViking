@@ -258,7 +258,7 @@ class VikingClient:
                         tool_output=result_str[:2000],
                         tool_status="completed",
                         skill_uri=skill_uri,
-                        duration_ms=tool_info.get("duration_ms"),
+                        # duration_ms=tool_info.get("duration"),
                     ))
 
                 if not parts:
