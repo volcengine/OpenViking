@@ -29,8 +29,13 @@ def create_agfs_client(agfs_config: Any) -> Any:
     mode = getattr(agfs_config, "mode", "http-client")
 
     if mode == "binding-client":
-        # Setup library path if needed
-        from pyagfs import AGFSBindingClient
+        # Import binding client if mode is binding-client
+        try:
+            from pyagfs import AGFSBindingClient
+        except ImportError:
+            raise ImportError(
+                "AGFS binding client not found. Please run: cd third_party/agfs/agfs-sdk/python && uv pip install -e ."
+            )
 
         lib_path = getattr(agfs_config, "lib_path", None)
         if lib_path and lib_path not in ["1", "default"]:
@@ -44,7 +49,7 @@ def create_agfs_client(agfs_config: Any) -> Any:
 
             actual_lib_path = _find_library()
         except Exception:
-            raise ImportError("AGFS binding library not found. Please run: pip install -e .")
+            raise ImportError("AGFS binding library not found. Please run: uv pip install -e .")
 
         client = AGFSBindingClient()
         logger.debug(f"[AGFSUtils] Created AGFSBindingClient (lib_path={actual_lib_path})")

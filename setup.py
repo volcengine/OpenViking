@@ -134,11 +134,11 @@ class CMakeBuildExtension(build_ext):
 
         # 2. Ensure binaries are copied to the build directory (where wheel is packaged from)
         if self.build_lib:
-            agfs_bin_dir_build = Path(self.build_lib) / "openviking/bin"
+            agfs_bin_dir_build = Path(self.build_lib) / "openviking"
             if agfs_target_binary.exists():
-                self._copy_binary(agfs_target_binary, agfs_bin_dir_build / binary_name)
+                self._copy_binary(agfs_target_binary, agfs_bin_dir_build / "bin" / binary_name)
             if agfs_target_lib.exists():
-                self._copy_binary(agfs_target_lib, agfs_bin_dir_build / lib_name)
+                self._copy_binary(agfs_target_lib, agfs_bin_dir_build / "lib" / lib_name)
 
     def build_extension(self, ext):
         """Build a single C++ extension module using CMake."""
