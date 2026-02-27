@@ -7,8 +7,6 @@ AGFS Client utilities for creating and configuring AGFS clients.
 import os
 from typing import Any
 
-from pyagfs import AGFSBindingClient, AGFSClient
-
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -31,6 +29,8 @@ def create_agfs_client(agfs_config: Any) -> Any:
 
     if mode == "binding-client":
         # Setup library path if needed
+        from pyagfs import AGFSBindingClient
+
         lib_path = getattr(agfs_config, "lib_path", None)
         if lib_path and lib_path not in ["1", "default"]:
             os.environ["AGFS_LIB_PATH"] = lib_path
@@ -44,6 +44,8 @@ def create_agfs_client(agfs_config: Any) -> Any:
         return client
     else:
         # Default to http-client
+        from pyagfs import AGFSClient
+
         url = getattr(agfs_config, "url", "http://localhost:8080")
         timeout = getattr(agfs_config, "timeout", 10)
         client = AGFSClient(api_base_url=url, timeout=timeout)
