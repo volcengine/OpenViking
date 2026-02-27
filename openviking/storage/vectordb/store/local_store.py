@@ -2,7 +2,13 @@
 # SPDX-License-Identifier: Apache-2.0
 from typing import List, Tuple, Union
 
-import openviking.storage.vectordb.engine as engine
+try:
+    import openviking.storage.vectordb.engine as engine
+    _ENGINE_AVAILABLE = True
+except ImportError:
+    engine = None  # type: ignore[assignment]
+    _ENGINE_AVAILABLE = False
+
 from openviking.storage.vectordb.store.store import BatchOp, IMutiTableStore, Op, OpType
 
 # Constant for the maximum Unicode character, used for range queries to cover all possible keys
@@ -19,6 +25,11 @@ def create_store_engine_proxy(path: str = "") -> "StoreEngineProxy":
     Returns:
         StoreEngineProxy: Proxy instance wrapping the underlying storage engine.
     """
+    if not _ENGINE_AVAILABLE:
+        raise RuntimeError(
+            "C++ vectordb engine is not available. "
+            "Use the PostgreSQL backend instead (set vectordb.backend='postgresql' in config)."
+        )
     date_engine = engine.PersistStore(path) if path else engine.VolatileStore()
     return StoreEngineProxy(date_engine)
 
