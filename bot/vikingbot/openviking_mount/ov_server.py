@@ -283,10 +283,10 @@ async def main_test():
     # res = await client.search("头有点疼", target_uri="viking://user/memories/")
     # res = await client.get_viking_memory_context("123", current_message="头疼", history=[])
     # res = await client.search_memory("你好")
-    res = await client.list_resources("viking://resources/")
+    # res = await client.list_resources("viking://resources/")
     # res = await client.read_content("viking://user/memories/profile.md", level="read")
     # res = await client.add_resource("/Users/bytedance/Documents/论文/吉比特年报.pdf", "吉比特年报")
-    # res = await client.commit("123", [{"role": "user", "content": "我叫王大锤"}])
+    res = await client.commit("123", [{"role": "user", "content": "我叫吴彦祖"}, {"role": "assistant", "content": "好的吴彦祖😎，我已经记 住你的名字啦，之后随时都可以认出你~"}])
     # res = await client.commit("1234", [{"role": "user", "content": "帮我搜索 Python asyncio 教程"}
     #                                    ,{"role": "assistant", "content": "我来帮你r搜索 Python asyncio 相关的教程。"}])
     print(res)

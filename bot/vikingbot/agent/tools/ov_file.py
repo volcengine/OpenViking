@@ -3,6 +3,7 @@
 from abc import ABC
 from pathlib import Path
 from typing import Any, Optional
+from loguru import logger
 
 from vikingbot.agent.tools.base import Tool, ToolContext
 from vikingbot.openviking_mount.ov_server import VikingClient
@@ -110,6 +111,7 @@ class VikingListTool(OVFileTool):
                 result.append(str(item))
             return "\n".join(result)
         except Exception as e:
+            logger.exception(f"Error processing message: {e}")
             return f"Error listing Viking resources: {str(e)}"
 
 
@@ -428,4 +430,5 @@ class VikingMemoryCommitTool(OVFileTool):
             await client.commit(session_id, messages)
             return f"Successfully committed to session {session_id}"
         except Exception as e:
+            logger.exception(f"Error processing message: {e}")
             return f"Error committing to Viking: {str(e)}"

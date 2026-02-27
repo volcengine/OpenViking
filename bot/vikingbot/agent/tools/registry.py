@@ -73,7 +73,8 @@ class ToolRegistry:
         
         tool_context = ToolContext(
             session_key=session_key,
-            sandbox_manager=sandbox_manager
+            sandbox_manager=sandbox_manager,
+            sandbox_key=sandbox_manager.to_sandbox_key(session_key)
         )
         
         result = None
