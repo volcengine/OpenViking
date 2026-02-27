@@ -524,6 +524,9 @@ class Session:
             "output": output,
             "status": status,
             "time": {"created": get_current_timestamp()},
+            "duration_ms": tool_part.duration_ms,
+            "prompt_tokens": tool_part.prompt_tokens,
+            "completion_tokens": tool_part.completion_tokens,
         }
         run_async(
             self._viking_fs.write_file(

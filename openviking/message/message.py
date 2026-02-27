@@ -65,6 +65,12 @@ class Message:
                 d["tool_input"] = part.tool_input
             if part.tool_output:
                 d["tool_output"] = part.tool_output
+            if part.duration_ms is not None:
+                d["duration_ms"] = part.duration_ms
+            if part.prompt_tokens is not None:
+                d["prompt_tokens"] = part.prompt_tokens
+            if part.completion_tokens is not None:
+                d["completion_tokens"] = part.completion_tokens
             return d
         return {}
 
@@ -93,6 +99,9 @@ class Message:
                         tool_input=p.get("tool_input"),
                         tool_output=p.get("tool_output", ""),
                         tool_status=p.get("tool_status", "pending"),
+                        duration_ms=p.get("duration_ms"),
+                        prompt_tokens=p.get("prompt_tokens"),
+                        completion_tokens=p.get("completion_tokens"),
                     )
                 )
         return cls(

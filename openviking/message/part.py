@@ -45,7 +45,7 @@ class ToolPart:
     tool_input: Optional[dict] = None
     tool_output: str = ""
     tool_status: str = "pending"  # pending | running | completed | error
-    duration_ms: Optional[int] = None  # 执行耗时（毫秒）
+    duration_ms: Optional[float] = None  # 执行耗时（毫秒）
     prompt_tokens: Optional[int] = None  # 输入 Token
     completion_tokens: Optional[int] = None  # 输出 Token
 
@@ -80,6 +80,9 @@ def part_from_dict(data: dict) -> Part:
             tool_input=data.get("tool_input"),
             tool_output=data.get("tool_output", ""),
             tool_status=data.get("tool_status", "pending"),
+            duration_ms=data.get("duration_ms"),
+            prompt_tokens=data.get("prompt_tokens"),
+            completion_tokens=data.get("completion_tokens"),
         )
     else:
         return TextPart(text=str(data))

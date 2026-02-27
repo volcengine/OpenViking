@@ -62,7 +62,12 @@ class ToolSkillCandidateMemory(CandidateMemory):
 
     tool_name: str = ""  # Tool 名称（用于 tools 类别）
     skill_name: str = ""  # Skill 名称（用于 skills 类别）
-    tool_status: str = "completed"  # completed | error
+    # tool_status: str = "completed"  # completed | error
+    duration_ms: int = 0  # 执行耗时（毫秒）
+    prompt_tokens: int = 0  # 输入 Token
+    completion_tokens: int = 0  # 输出 Token
+    call_time: int = 0 # 调用次数
+    success_time: int = 0 # 成功调用次数
 
 
 @dataclass
@@ -190,6 +195,37 @@ class MemoryExtractor:
 
         return "\n".join(lines) if lines else ""
 
+    def _collect_tool_stats_from_messages(self, messages: list) -> dict:
+        """从消息中收集工具统计数据"""
+        from openviking.message.part import ToolPart
+
+        stats_map = {}
+        for msg in messages:
+            parts = getattr(msg, "parts", [])
+            for part in parts:
+                if isinstance(part, ToolPart):
+                    name = part.tool_name
+                    if not name:
+                        continue
+                    if name not in stats_map:
+                        stats_map[name] = {
+                            "duration_ms": 0,
+                            "prompt_tokens": 0,
+                            "completion_tokens": 0,
+                            "success_time": 0,
+                            "call_count": 0,
+                        }
+                    stats_map[name]["call_count"] += 1
+                    if part.duration_ms is not None:
+                        stats_map[name]["duration_ms"] += part.duration_ms
+                    if part.prompt_tokens is not None:
+                        stats_map[name]["prompt_tokens"] += part.prompt_tokens
+                    if part.completion_tokens is not None:
+                        stats_map[name]["completion_tokens"] += part.completion_tokens
+                    if part.tool_status == "completed":
+                        stats_map[name]["success_time"] += 1
+        return stats_map
+
     async def extract(
         self,
         context: dict,
@@ -203,8 +239,12 @@ class MemoryExtractor:
             logger.warning("LLM not available, skipping memory extraction")
             return []
 
-        # Format all messages with parts (including tool calls)
         messages = context["messages"]
+
+
+        tool_stats_map = self._collect_tool_stats_from_messages(messages)
+
+        # logger.warning(f"tool_stats_map={tool_stats_map}")
 
         formatted_lines = []
         for m in messages:
@@ -215,6 +255,7 @@ class MemoryExtractor:
         formatted_messages = "\n".join(formatted_lines)
 
         if not formatted_messages:
+            logger.warning("No formatted messages, returning empty list")
             return []
 
         config = get_openviking_config()
@@ -223,7 +264,6 @@ class MemoryExtractor:
             messages, fallback_language=fallback_language
         )
 
-        # Call LLM to extract memories
         prompt = render_prompt(
             "compression.memory_extraction",
             {
@@ -261,6 +301,9 @@ class MemoryExtractor:
 
                 # 只在 tools/skills 时使用 ToolSkillCandidateMemory
                 if category in (MemoryCategory.TOOLS, MemoryCategory.SKILLS):
+                    tool_name = mem.get("tool_name", "")
+                    skill_name = mem.get("skill_name", "")
+                    stats = tool_stats_map.get(tool_name or skill_name, {})
                     candidates.append(
                         ToolSkillCandidateMemory(
                             category=category,
@@ -270,8 +313,13 @@ class MemoryExtractor:
                             source_session=session_id,
                             user=user,
                             language=output_language,
-                            tool_name=mem.get("tool_name", ""),
-                            skill_name=mem.get("skill_name", ""),
+                            tool_name=tool_name,
+                            skill_name=skill_name,
+                            call_time=stats.get("call_count",0),
+                            success_time=stats.get("success_time",0),
+                            duration_ms=stats.get("duration_ms", 0),
+                            prompt_tokens=stats.get("prompt_tokens", 0),
+                            completion_tokens=stats.get("completion_tokens", 0),
                         )
                     )
                 else:
@@ -503,16 +551,25 @@ class MemoryExtractor:
         except Exception:
             pass
 
-        new_stats = self._parse_tool_statistics(candidate.content)
-        if new_stats["total_calls"] == 0:
-            new_stats["total_calls"] = 1
-            tool_status = getattr(candidate, 'tool_status', 'completed')
-            if tool_status == "error":
-                new_stats["fail_count"] = 1
-                new_stats["success_count"] = 0
-            else:
-                new_stats["success_count"] = 1
-                new_stats["fail_count"] = 0
+        if isinstance(candidate, ToolSkillCandidateMemory):
+            new_stats = {
+                "total_calls": candidate.call_time,
+                "success_count": candidate.success_time,
+                "fail_count": candidate.call_time - candidate.success_time,
+                "total_time_ms": candidate.duration_ms or 0,
+                "total_tokens": (candidate.prompt_tokens or 0) + (candidate.completion_tokens or 0),
+            }
+        else:
+            new_stats = self._parse_tool_statistics(candidate.content)
+            if new_stats["total_calls"] == 0:
+                new_stats["total_calls"] = 1
+                tool_status = getattr(candidate, 'tool_status', 'completed')
+                if tool_status == "error":
+                    new_stats["fail_count"] = 1
+                    new_stats["success_count"] = 0
+                else:
+                    new_stats["success_count"] = 1
+                    new_stats["fail_count"] = 0
 
         if not existing.strip():
             merged_stats = self._compute_statistics_derived(new_stats)
@@ -582,9 +639,17 @@ class MemoryExtractor:
             stats["success_count"] = int(stats["total_calls"] * success_rate)
             stats["fail_count"] = stats["total_calls"] - stats["success_count"]
 
-        match = re.search(r"平均耗时:\s*([\d.]+)s", content)
+        match = re.search(r"平均耗时:\s*([\d.]+)ms", content)
         if match and stats["total_calls"] > 0:
-            stats["total_time_ms"] = int(float(match.group(1)) * 1000 * stats["total_calls"])
+            stats["total_time_ms"] = float(match.group(1)) * stats["total_calls"]
+        else:
+            match = re.search(r"平均耗时:\s*([\d.]+)s", content)
+            if match and stats["total_calls"] > 0:
+                stats["total_time_ms"] = float(match.group(1)) * 1000 * stats["total_calls"]
+
+        match = re.search(r"平均Token:\s*(\d+)", content)
+        if match and stats["total_calls"] > 0:
+            stats["total_tokens"] = int(match.group(1)) * stats["total_calls"]
 
         return stats
 
@@ -603,6 +668,23 @@ class MemoryExtractor:
             merged["success_rate"] = merged["success_count"] / merged["total_calls"]
         return merged
 
+    def _format_ms(self, value_ms: float) -> str:
+        """格式化毫秒值：默认保留3位小数，很小的值保留至少一个有效数字"""
+        if value_ms == 0:
+            return "0.000ms"
+        formatted = f"{value_ms:.3f}"
+        if formatted == "0.000":
+            first_nonzero = -1
+            s = f"{value_ms:.20f}"
+            for i, c in enumerate(s):
+                if c not in ('0', '.'):
+                    first_nonzero = i
+                    break
+            if first_nonzero > 0:
+                decimals_needed = first_nonzero - s.index('.') + 1
+                formatted = f"{value_ms:.{decimals_needed}f}"
+        return f"{formatted}ms"
+
     def _generate_tool_memory_content(
         self, tool_name: str, stats: dict, candidate: CandidateMemory
     ) -> str:
@@ -613,7 +695,8 @@ class MemoryExtractor:
 ## 调用统计
 - **总调用次数**: {stats["total_calls"]}
 - **成功率**: {stats["success_rate"] * 100:.1f}%（{stats["success_count"]} 成功，{stats["fail_count"]} 失败）
-- **平均耗时**: {stats["avg_time_ms"] / 1000:.1f}s
+- **平均耗时**: {self._format_ms(stats["avg_time_ms"])}
+- **平均Token**: {int(stats["avg_tokens"])}
 
 {candidate.content}
 """
@@ -685,12 +768,10 @@ class MemoryExtractor:
         return self._create_skill_context(uri, candidate, ctx)
 
     def _compute_skill_statistics_derived(self, stats: dict) -> dict:
-        """计算 Skill 派生统计数据（平均值、成功率）"""
+        """计算 Skill 派生统计数据（成功率）"""
         if stats["total_executions"] > 0:
-            stats["avg_time_ms"] = stats["total_time_ms"] / stats["total_executions"]
             stats["success_rate"] = stats["success_count"] / stats["total_executions"]
         else:
-            stats["avg_time_ms"] = 0
             stats["success_rate"] = 0
         return stats
 
@@ -700,7 +781,6 @@ class MemoryExtractor:
             "total_executions": 0,
             "success_count": 0,
             "fail_count": 0,
-            "total_time_ms": 0,
         }
 
         match = re.search(r"总执行次数:\s*(\d+)", content)
@@ -721,10 +801,8 @@ class MemoryExtractor:
             "total_executions": existing["total_executions"] + new["total_executions"],
             "success_count": existing["success_count"] + new["success_count"],
             "fail_count": existing["fail_count"] + new["fail_count"],
-            "total_time_ms": existing["total_time_ms"] + new["total_time_ms"],
         }
         if merged["total_executions"] > 0:
-            merged["avg_time_ms"] = merged["total_time_ms"] / merged["total_executions"]
             merged["success_rate"] = merged["success_count"] / merged["total_executions"]
         return merged
 
@@ -738,8 +816,8 @@ class MemoryExtractor:
 ## 执行统计
 - **总执行次数**: {stats["total_executions"]}
 - **成功率**: {stats["success_rate"] * 100:.1f}%（{stats["success_count"]} 成功，{stats["fail_count"]} 失败）
-- **平均耗时**: {stats["avg_time_ms"] / 1000:.1f}s
 
+## Guildlines
 {candidate.content}
 """
 

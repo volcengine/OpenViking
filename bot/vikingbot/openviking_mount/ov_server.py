@@ -219,7 +219,7 @@ class VikingClient:
 
                     execute_success = tool_info.get("execute_success", True)
                     tool_status = "completed" if execute_success else "error"
-
+                    # logger.debug(f"tool_info={tool_info}")
                     parts.append(
                         ToolPart(
                             tool_id=tool_id,
@@ -229,9 +229,9 @@ class VikingClient:
                             tool_output=result_str[:2000],
                             tool_status=tool_status,
                             skill_uri=skill_uri,
-                            # duration_ms=tool_info.get("duration"),
-                            # prompt_tokens=tool_info.get("input_token"),
-                            # completion_tokens=tool_info.get("output_token")
+                            duration_ms=float(tool_info.get("duration", 0.0)),
+                            prompt_tokens=tool_info.get("input_token"),
+                            completion_tokens=tool_info.get("output_token"),
                         )
                     )
 
