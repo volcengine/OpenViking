@@ -92,13 +92,13 @@ eval = [
 
 [project.urls]
 Homepage = "https://github.com/volcengine/openviking"
-Documentation = "https://openviking.readthedocs.io"
+Documentation = "https://openviking.ai"
 Repository = "https://github.com/volcengine/openviking"
 Issues = "https://github.com/volcengine/openviking/issues"
 
 [project.scripts]
-ov = "openviking.cli:main"  # Rust CLI 入口（极简包装器）
-# openviking = "openviking_cli.cli.main:app"  # 可选：保留或移除
+ov = "openviking_cli.rust_cli:main"  # Rust CLI 入口（极简包装器）
+openviking = "openviking_cli.rust_cli:main"  # Rust CLI 入口（放弃 python CLI）
 openviking-server = "openviking.server.bootstrap:main"
 
 [tool.setuptools_scm]

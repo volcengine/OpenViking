@@ -33,8 +33,8 @@ def main():
     """
     # 1. 检查 Wheel 自带（不导入 openviking，避免额外开销）
     try:
-        # __file__ is openviking/cli.py, so parent is openviking directory
-        package_dir = Path(__file__).parent
+        # __file__ is openviking_cli/rust_cli.py, so parent is openviking_cli directory
+        package_dir = Path(__file__).parent.parent / "openviking"
         package_bin = package_dir / "bin"
         for binary_name in ["ov", "ov.exe"]:
             binary = package_bin / binary_name
