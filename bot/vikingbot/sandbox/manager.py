@@ -13,6 +13,7 @@ from vikingbot.config.schema import SandboxConfig, SessionKey, Config
 
 class SandboxManager:
     """Manager for creating and managing sandbox instances."""
+    COPY_BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "USER.md", "TOOLS.md", "IDENTITY.md"]
 
     def __init__(self, config: Config, sandbox_parent_path: Path, source_workspace_path: Path):
         self.config = config
@@ -68,8 +69,7 @@ class SandboxManager:
                     shutil.copy2(src, dst)
 
         # Always copy bootstrap files from source workspace root
-        bootstrap_files = ContextBuilder.BOOTSTRAP_FILES
-        for filename in bootstrap_files:
+        for filename in self.COPY_BOOTSTRAP_FILES:
             src = self.source_workspace / filename
             if src.exists():
                 dst = sandbox_workspace / filename

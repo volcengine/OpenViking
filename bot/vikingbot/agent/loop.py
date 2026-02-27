@@ -70,7 +70,7 @@ class AgentLoop:
         exec_config: "ExecToolConfig | None" = None,
         cron_service: "CronService | None" = None,
         session_manager: SessionManager | None = None,
-        sandbox_manager: SandboxManager = None,
+        sandbox_manager: SandboxManager | None = None,
         thinking_callback=None,
         config: Config = None,
     ):
@@ -434,7 +434,7 @@ class AgentLoop:
             context=HookContext(
                 event_type="message.compact",
                 session_id=session.key.safe_name(),
-                sendbox_key=self.sandbox_manager.to_sandbox_key(session)
+                sandbox_key=self.sandbox_manager.to_sandbox_key(session.key)
             ),
             session=session
         )

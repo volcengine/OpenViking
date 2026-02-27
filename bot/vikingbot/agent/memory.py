@@ -45,12 +45,19 @@ class MemoryStore:
 
     async def get_viking_memory_context(self, session_id: str, current_message: str, history: list[dict[str, Any]]) -> str:
         client = await VikingClient.create()
-        result = await client.search_memory(current_message, session_id, history, limit=5)
+        result = await client.search_memory(current_message, limit=5)
         if not result:
             return ""
         user_memory = self._parse_viking_memory(result["user_memory"])
         agent_memory = self._parse_viking_memory(result["agent_memory"])
-        return (f"## Related openviking memories.Using tools to read more details.\n"
+        return (f"## Related memories.Using tools to read more details.\n"
                 f"### user memories:\n{user_memory}\n"
                 f"### agent memories:\n{agent_memory}")
+
+    async def get_viking_user_profile(self, ) -> str:
+        client = await VikingClient.create()
+        result = await client.read_content(uri="viking://user/memories/profile.md", level="read")
+        if not result:
+            return ""
+        return f"## User Information\n{result}"
 
