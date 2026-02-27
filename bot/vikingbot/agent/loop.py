@@ -2,35 +2,28 @@
 
 import asyncio
 import json
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Optional
 
 from loguru import logger
 
-from vikingbot.config.schema import SessionKey
-from vikingbot.hooks.manager import hook_manager
-
-
-
-from vikingbot.bus.events import InboundMessage, OutboundMessage
-from vikingbot.bus.queue import MessageBus
-from vikingbot.providers.base import LLMProvider
 from vikingbot.agent.context import ContextBuilder
-from vikingbot.agent.tools.registry import ToolRegistry
-from vikingbot.agent.tools import register_default_tools
 from vikingbot.agent.memory import MemoryStore
 from vikingbot.agent.subagent import SubagentManager
-from vikingbot.session.manager import SessionManager
-from vikingbot.hooks import HookContext
+from vikingbot.agent.tools import register_default_tools
+from vikingbot.agent.tools.registry import ToolRegistry
+from vikingbot.bus.events import InboundMessage, OutboundMessage
+from vikingbot.bus.queue import MessageBus
 from vikingbot.config.schema import Config
-
-
-from vikingbot.sandbox.manager import SandboxManager
-
-
+from vikingbot.config.schema import SessionKey
+from vikingbot.hooks import HookContext
+from vikingbot.hooks.manager import hook_manager
+from vikingbot.providers.base import LLMProvider
+from vikingbot.session.manager import SessionManager
+from vikingbot.utils.helpers import cal_str_tokens
 
 
 class ThinkingStepType(Enum):
@@ -283,12 +276,14 @@ class AgentLoop:
                         ))
 
                     logger.info(f"[TOOL_CALL]: {tool_call.name}({args_str[:200]})")
+                    tool_execute_start_time = time.time()
                     result = await self.tools.execute(
                         tool_call.name, 
                         tool_call.arguments, 
                         session_key=session_key,
                         sandbox_manager=self.sandbox_manager
                     )
+                    tool_execute_duration = time.time() - tool_execute_start_time
                     logger.info(f"[RESULT]: {str(result)[:600]}")
 
                     # 回调：工具结果
@@ -306,12 +301,16 @@ class AgentLoop:
                         messages, tool_call.id, tool_call.name, result
                     )
 
-                    tool_call_dict = {
+                    tool_used_dict = {
                         "tool_name": tool_call.name,
                         "args": args_str,
-                        "result": result
+                        "result": result,
+                        "duration": tool_execute_duration,
+                        "execute_success": True if result and "Error executing" not in result else False,
+                        "input_token": tool_call.tokens,
+                        "output_token": cal_str_tokens(result, text_type="mixed")
                     }
-                    tools_used.append(tool_call_dict)
+                    tools_used.append(tool_used_dict)
                 # Interleaved CoT: reflect before next action
                 messages.append({"role": "user", "content": "Reflect on the results and decide next steps."})
             else:
