@@ -8,7 +8,13 @@ import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-import openviking.storage.vectordb.engine as engine
+try:
+    import openviking.storage.vectordb.engine as engine
+    _ENGINE_AVAILABLE = True
+except ImportError:
+    engine = None  # type: ignore[assignment]
+    _ENGINE_AVAILABLE = False
+
 from openviking.storage.vectordb.index.index import IIndex
 from openviking.storage.vectordb.store.data import CandidateData, DeltaRecord
 from openviking.storage.vectordb.utils.constants import IndexFileMarkers
@@ -64,6 +70,12 @@ class IndexEngineProxy:
             normalize_vector_flag (bool): If True, all vectors will be L2-normalized
                 before being added to the index or used for search. Defaults to False.
         """
+        if not _ENGINE_AVAILABLE:
+            raise RuntimeError(
+                "C++ vectordb engine is not available (module 'openviking.storage.vectordb.engine' "
+                "was not built). On Windows, set OPENVIKING_NO_CPP_EXT=1 and use the PostgreSQL "
+                "backend instead of the local backend."
+            )
         self.index_engine: Optional[engine.IndexEngine] = engine.IndexEngine(index_path_or_json)
         self.normalize_vector_flag = normalize_vector_flag
 
