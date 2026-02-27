@@ -228,9 +228,9 @@ class VikingClient:
                         tool_output=result_str[:2000],
                         tool_status=tool_status,
                         skill_uri=skill_uri,
-                        duration_ms=tool_info.get("duration"),
-                        prompt_tokens=tool_info.get("input_token"),
-                        completion_tokens=tool_info.get("output_token")
+                        # duration_ms=tool_info.get("duration"),
+                        # prompt_tokens=tool_info.get("input_token"),
+                        # completion_tokens=tool_info.get("output_token")
                     ))
 
                 if not parts:
