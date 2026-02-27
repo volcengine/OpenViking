@@ -83,7 +83,7 @@ class MemoryDeduplicator:
     ):
         """Initialize deduplicator."""
         self.vikingdb = vikingdb
-        self.embedder = vikingdb.get_embedder()
+        self.embedder = self.vikingdb.get_embedder()
 
     async def deduplicate(
         self,
@@ -127,42 +127,33 @@ class MemoryDeduplicator:
         embed_result: EmbedResult = self.embedder.embed(query_text)
         query_vector = embed_result.dense_vector
 
-        # Determine collection and filter based on category
-        collection = "context"
-
         category_uri_prefix = self._category_uri_prefix(candidate.category.value, candidate.user)
 
-        # Build filter by memory scope + uri prefix (schema does not have category field yet).
-        filter_conds = [
-            {"field": "context_type", "op": "must", "conds": ["memory"]},
-            {"field": "level", "op": "must", "conds": [2]},
-        ]
         owner = candidate.user
-        if hasattr(owner, "account_id"):
-            filter_conds.append({"field": "account_id", "op": "must", "conds": [owner.account_id]})
+        account_id = owner.account_id if hasattr(owner, "account_id") else "default"
+        owner_space = None
         if owner and hasattr(owner, "user_space_name"):
             owner_space = (
                 owner.agent_space_name()
                 if candidate.category.value in {"cases", "patterns"}
                 else owner.user_space_name()
             )
-            filter_conds.append({"field": "owner_space", "op": "must", "conds": [owner_space]})
-        if category_uri_prefix:
-            filter_conds.append({"field": "uri", "op": "must", "conds": [category_uri_prefix]})
-        dedup_filter = {"op": "and", "conds": filter_conds}
         logger.debug(
-            "Dedup prefilter candidate category=%s filter=%s",
+            "Dedup prefilter candidate category=%s account=%s owner_space=%s uri_prefix=%s",
             candidate.category.value,
-            dedup_filter,
+            account_id,
+            owner_space,
+            category_uri_prefix,
         )
 
         try:
             # Search with memory-scope filter.
-            results = await self.vikingdb.search(
-                collection=collection,
+            results = await self.vikingdb.search_similar_memories(
+                account_id=account_id,
+                owner_space=owner_space,
+                category_uri_prefix=category_uri_prefix,
                 query_vector=query_vector,
                 limit=5,
-                filter=dedup_filter,
             )
 
             # Filter by similarity threshold

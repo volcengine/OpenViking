@@ -120,12 +120,7 @@ async def delete_account(
     try:
         storage = viking_fs._get_vector_store()
         if storage:
-            account_filter = {
-                "op": "must",
-                "field": "account_id",
-                "conds": [account_id],
-            }
-            deleted = await storage.batch_delete("context", account_filter)
+            deleted = await storage.delete_account_data(account_id)
             logger.info(f"VectorDB cascade delete for account {account_id}: {deleted} records")
     except Exception as e:
         logger.warning(f"VectorDB cleanup for account {account_id}: {e}")

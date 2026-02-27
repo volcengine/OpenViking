@@ -228,13 +228,9 @@ class DirectoryInitializer:
             logger.debug(f"[VikingFS] Directory {uri} already exists")
 
         # 2. Ensure record exists in vector storage
-        from openviking_cli.utils.config import get_openviking_config
-
-        config = get_openviking_config()
-
-        existing = await self.vikingdb.filter(
-            collection=config.storage.vectordb.name,
-            filter={"op": "must", "field": "uri", "conds": [uri]},
+        existing = await self.vikingdb.get_context_by_uri(
+            account_id=ctx.account_id,
+            uri=uri,
             limit=1,
         )
         if not existing:

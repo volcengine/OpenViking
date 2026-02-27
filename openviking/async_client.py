@@ -58,11 +58,13 @@ class AsyncOpenViking:
 
         self.user = UserIdentifier.the_default_user()
         self._initialized = False
-        self._singleton_initialized = True
+        # Mark initialized only after LocalClient is successfully constructed.
+        self._singleton_initialized = False
 
         self._client: BaseClient = LocalClient(
             path=path,
         )
+        self._singleton_initialized = True
 
     # ============= Lifecycle methods =============
 
@@ -78,7 +80,9 @@ class AsyncOpenViking:
 
     async def close(self) -> None:
         """Close OpenViking and release resources."""
-        await self._client.close()
+        client = getattr(self, "_client", None)
+        if client is not None:
+            await client.close()
         self._initialized = False
         self._singleton_initialized = False
 
@@ -88,8 +92,6 @@ class AsyncOpenViking:
         with cls._lock:
             if cls._instance is not None:
                 await cls._instance.close()
-                cls._instance._initialized = False
-                cls._instance._singleton_initialized = False
                 cls._instance = None
 
     # ============= Session methods =============

@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from openviking.models.embedder.base import EmbedResult
 from openviking.retrieve.memory_lifecycle import hotness_score
 from openviking.server.identity import RequestContext, Role
-from openviking.storage import VikingDBInterface
+from openviking.storage import VikingVectorIndexBackend
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.retrieve.types import (
     ContextType,
@@ -46,18 +46,18 @@ class HierarchicalRetriever:
 
     def __init__(
         self,
-        storage: VikingDBInterface,
+        storage: VikingVectorIndexBackend,
         embedder: Optional[Any],
         rerank_config: Optional[RerankConfig] = None,
     ):
         """Initialize hierarchical retriever with rerank_config.
 
         Args:
-            storage: VikingDBInterface instance
+            storage: VikingVectorIndexBackend instance
             embedder: Embedder instance (supports dense/sparse/hybrid)
             rerank_config: Rerank configuration (optional, will fallback to vector search only)
         """
-        self.storage = storage
+        self.vector_store = storage
         self.embedder = embedder
         self.rerank_config = rerank_config
 
@@ -85,7 +85,7 @@ class HierarchicalRetriever:
         mode: RetrieverMode = RetrieverMode.THINKING,
         score_threshold: Optional[float] = None,
         score_gte: bool = False,
-        metadata_filter: Optional[Dict[str, Any]] = None,
+        scope_dsl: Optional[Dict[str, Any]] = None,
     ) -> QueryResult:
         """
         Execute hierarchical retrieval.
@@ -95,44 +95,19 @@ class HierarchicalRetriever:
             score_threshold: Custom score threshold (overrides config)
             score_gte: True uses >=, False uses >
             grep_patterns: Keyword match pattern list
-            metadata_filter: Additional metadata filter conditions
+            scope_dsl: Additional scope constraints passed from public find/search filter
         """
 
         # Use custom threshold or default threshold
         effective_threshold = score_threshold if score_threshold is not None else self.threshold
 
-        collection = "context"
-
         target_dirs = [d for d in (query.target_directories or []) if d]
 
-        # Create context_type filter (skip when context_type is None = search all types)
-        filters_to_merge = []
-        if query.context_type is not None:
-            type_filter = {
-                "op": "must",
-                "field": "context_type",
-                "conds": [query.context_type.value],
-            }
-            filters_to_merge.append(type_filter)
-        tenant_filter = self._build_tenant_filter(ctx, context_type=query.context_type)
-        if tenant_filter:
-            filters_to_merge.append(tenant_filter)
-        if target_dirs:
-            target_filter = {
-                "op": "or",
-                "conds": [
-                    {"op": "must", "field": "uri", "conds": [target_dir]}
-                    for target_dir in target_dirs
-                ],
-            }
-            filters_to_merge.append(target_filter)
-        if metadata_filter:
-            filters_to_merge.append(metadata_filter)
-
-        final_metadata_filter = {"op": "and", "conds": filters_to_merge}
-
-        if not await self.storage.collection_exists(collection):
-            logger.warning(f"[RecursiveSearch] Collection {collection} does not exist")
+        if not await self.vector_store.collection_exists_bound():
+            logger.warning(
+                "[RecursiveSearch] Collection %s does not exist",
+                self.vector_store.collection_name,
+            )
             return QueryResult(
                 query=query,
                 matched_contexts=[],
@@ -155,11 +130,13 @@ class HierarchicalRetriever:
 
         # Step 2: Global vector search to supplement starting points
         global_results = await self._global_vector_search(
-            collection=collection,
+            ctx=ctx,
             query_vector=query_vector,
             sparse_query_vector=sparse_query_vector,
+            context_type=query.context_type.value if query.context_type else None,
+            target_dirs=target_dirs,
+            scope_dsl=scope_dsl,
             limit=self.GLOBAL_SEARCH_TOPK,
-            filter=final_metadata_filter,
         )
 
         # Step 3: Merge starting points
@@ -168,7 +145,7 @@ class HierarchicalRetriever:
         # Step 4: Recursive search
         candidates = await self._recursive_search(
             query=query.query,
-            collection=collection,
+            ctx=ctx,
             query_vector=query_vector,
             sparse_query_vector=sparse_query_vector,
             starting_points=starting_points,
@@ -176,7 +153,9 @@ class HierarchicalRetriever:
             mode=mode,
             threshold=effective_threshold,
             score_gte=score_gte,
-            metadata_filter=final_metadata_filter,
+            context_type=query.context_type.value if query.context_type else None,
+            target_dirs=target_dirs,
+            scope_dsl=scope_dsl,
         )
 
         # Step 6: Convert results
@@ -188,56 +167,24 @@ class HierarchicalRetriever:
             searched_directories=root_uris,
         )
 
-    def _build_tenant_filter(
-        self, ctx: RequestContext, context_type: Optional[ContextType] = None
-    ) -> Optional[Dict[str, Any]]:
-        """Build tenant visibility filter by role.
-
-        Args:
-            ctx: Request context with role and user info.
-            context_type: When RESOURCE, allow owner_space="" so shared
-                          resources are visible to USER role.
-        """
-        if ctx.role == Role.ROOT:
-            return None
-
-        owner_spaces = [ctx.user.user_space_name(), ctx.user.agent_space_name()]
-        if context_type == ContextType.RESOURCE:
-            owner_spaces.append("")
-        return {
-            "op": "and",
-            "conds": [
-                {"op": "must", "field": "account_id", "conds": [ctx.account_id]},
-                {
-                    "op": "must",
-                    "field": "owner_space",
-                    "conds": owner_spaces,
-                },
-            ],
-        }
-
     async def _global_vector_search(
         self,
-        collection: str,
+        ctx: RequestContext,
         query_vector: Optional[List[float]],
         sparse_query_vector: Optional[Dict[str, float]],
+        context_type: Optional[str],
+        target_dirs: List[str],
+        scope_dsl: Optional[Dict[str, Any]],
         limit: int,
-        filter: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """Global vector search to locate initial directories."""
-        if not query_vector:
-            return []
-        sparse_query_vector = sparse_query_vector or {}
-
-        global_filter = {
-            "op": "and",
-            "conds": [filter, {"op": "must", "field": "level", "conds": [0, 1]}],
-        }
-        results = await self.storage.search(
-            collection=collection,
+        results = await self.vector_store.search_global_roots_in_tenant(
+            ctx=ctx,
             query_vector=query_vector,
             sparse_query_vector=sparse_query_vector,
-            filter=global_filter,
+            context_type=context_type,
+            target_directories=target_dirs,
+            extra_filter=scope_dsl,
             limit=limit,
         )
         return results
@@ -283,7 +230,7 @@ class HierarchicalRetriever:
     async def _recursive_search(
         self,
         query: str,
-        collection: str,
+        ctx: RequestContext,
         query_vector: Optional[List[float]],
         sparse_query_vector: Optional[Dict[str, float]],
         starting_points: List[Tuple[str, float]],
@@ -291,7 +238,9 @@ class HierarchicalRetriever:
         mode: str,
         threshold: Optional[float] = None,
         score_gte: bool = False,
-        metadata_filter: Optional[Dict[str, Any]] = None,
+        context_type: Optional[str] = None,
+        target_dirs: Optional[List[str]] = None,
+        scope_dsl: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Recursive search with directory priority return and score propagation.
@@ -300,7 +249,7 @@ class HierarchicalRetriever:
             threshold: Score threshold
             score_gte: True uses >=, False uses >
             grep_patterns: Keyword match patterns
-            metadata_filter: Additional metadata filter conditions
+            scope_dsl: Additional scope constraints from public find/search filter
         """
         # Use passed threshold or default threshold
         effective_threshold = threshold if threshold is not None else self.threshold
@@ -310,12 +259,6 @@ class HierarchicalRetriever:
             if score_gte:
                 return score >= effective_threshold
             return score > effective_threshold
-
-        def merge_filter(base_filter: Dict, extra_filter: Optional[Dict]) -> Dict:
-            """Merge filter conditions."""
-            if not extra_filter:
-                return base_filter
-            return {"op": "and", "conds": [base_filter, extra_filter]}
 
         sparse_query_vector = sparse_query_vector or None
 
@@ -341,13 +284,14 @@ class HierarchicalRetriever:
 
             pre_filter_limit = max(limit * 2, 20)
 
-            results = await self.storage.search(
-                collection=collection,
+            results = await self.vector_store.search_children_in_tenant(
+                ctx=ctx,
+                parent_uri=current_uri,
                 query_vector=query_vector,
                 sparse_query_vector=sparse_query_vector,  # Pass sparse vector
-                filter=merge_filter(
-                    {"op": "must", "field": "parent_uri", "conds": [current_uri]}, metadata_filter
-                ),
+                context_type=context_type,
+                target_directories=target_dirs,
+                extra_filter=scope_dsl,
                 limit=pre_filter_limit,
             )
 

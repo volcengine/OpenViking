@@ -124,7 +124,7 @@ class SessionCompressor:
 
         try:
             # rm() already syncs vector deletion in most cases; keep this as a safe fallback.
-            await self.vikingdb.remove_by_uri("context", memory.uri)
+            await self.vikingdb.delete_uris(ctx, [memory.uri])
         except Exception as e:
             logger.warning(f"Failed to remove vector record for {memory.uri}: {e}")
         return True

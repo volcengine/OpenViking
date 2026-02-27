@@ -371,17 +371,17 @@ class VikingDBCollection(ICollection):
         filters: Optional[Dict[str, Any]] = None,
         cond: Optional[Dict[str, Any]] = None,
     ) -> AggregateResult:
-        path = "/api/vikingdb/data/aggregate"
+        path = "/api/vikingdb/data/agg"
         data = {
             "project": self.project_name,
             "collection_name": self.collection_name,
             "index_name": index_name,
-            "agg": {
-                "op": op,
-                "field": field,
-            },
+            "op": op,
+            "field": field,
             "filter": filters,
         }
+        if cond is not None:
+            data["cond"] = cond
         resp_data = self._data_post(path, data)
         return self._parse_aggregate_result(resp_data, op, field)
 

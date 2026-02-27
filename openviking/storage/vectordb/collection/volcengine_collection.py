@@ -35,14 +35,13 @@ def get_or_create_volcengine_collection(config: Dict[str, Any], meta_data: Dict[
     ak = config.get("AK")
     sk = config.get("SK")
     region = config.get("Region")
-    host = config.get("Host", "")
 
     collection_name = meta_data.get("CollectionName")
     if not collection_name:
         raise ValueError("CollectionName is required in config")
 
     # Initialize Console client for creating Collection
-    client = ClientForConsoleApi(ak, sk, region, host)
+    client = ClientForConsoleApi(ak, sk, region)
 
     # Try to create Collection
     try:
@@ -64,10 +63,10 @@ def get_or_create_volcengine_collection(config: Dict[str, Any], meta_data: Dict[
         raise e
 
     logger.info(f"Collection {collection_name} created successfully")
-    return VolcengineCollection(ak, sk, region, host, meta_data)
+    return VolcengineCollection(ak, sk, region, meta_data=meta_data)
 
     # Return VolcengineCollection instance
-    return VolcengineCollection(ak=ak, sk=sk, region=region, host=host, meta_data=meta_data)
+    return VolcengineCollection(ak=ak, sk=sk, region=region, meta_data=meta_data)
 
 
 class VolcengineCollection(ICollection):
@@ -76,7 +75,7 @@ class VolcengineCollection(ICollection):
         ak: str,
         sk: str,
         region: str,
-        host: str,
+        host: Optional[str] = None,
         meta_data: Optional[Dict[str, Any]] = None,
     ):
         self.console_client = ClientForConsoleApi(ak, sk, region, host)
@@ -580,16 +579,16 @@ class VolcengineCollection(ICollection):
         filters: Optional[Dict[str, Any]] = None,
         cond: Optional[Dict[str, Any]] = None,
     ) -> AggregateResult:
-        path = "/api/vikingdb/data/aggregate"
+        path = "/api/vikingdb/data/agg"
         data = {
             "project": self.project_name,
             "collection_name": self.collection_name,
             "index_name": index_name,
-            "agg": {
-                "op": op,
-                "field": field,
-            },
+            "op": op,
+            "field": field,
             "filter": filters,
         }
+        if cond is not None:
+            data["cond"] = cond
         resp_data = self._data_post(path, data)
         return self._parse_aggregate_result(resp_data, op, field)
