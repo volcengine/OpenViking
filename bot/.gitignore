@@ -35,3 +35,5 @@ build/
 coverage/
 
 test/
+
+CLAUDE.md

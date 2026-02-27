@@ -5,6 +5,11 @@
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
+cd "$PROJECT_ROOT"
+# 激活虚拟环境
+echo "Uv sync..."
+uv sync
+
 # 激活虚拟环境
 echo "Activating virtual environment..."
 source "$PROJECT_ROOT/.venv/bin/activate"
@@ -18,13 +23,13 @@ LOG_FILE="$LOG_DIR/output.log"
 echo "Killing existing vikingbot gateway processes..."
 pkill -f "vikingbot gateway" || true
 pkill -f "uvicorn" || true
+pkill -f "agfs" || true
 
 # 等待进程结束
 sleep 1
 
 # 启动 vikingbot gateway
 echo "Starting vikingbot gateway..."
-cd "$PROJECT_ROOT"
 nohup vikingbot gateway > "$LOG_FILE" 2>&1 &
 PID=$!
 
