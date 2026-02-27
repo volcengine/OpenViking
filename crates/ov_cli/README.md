@@ -114,6 +114,12 @@ ov -o json ls  # Compact JSON wrapper for scripts
 # Add URL and wait for processing
 ov add-resource https://example.com/docs --wait --timeout 60
 
+# Add local directory with advanced options
+ov add-resource ./dir \
+  --wait --timeout 600 \
+  --ignore-dirs "subdir-a,subdir-b/subsubdir-c" \
+  --exclude "*.tmp,*.log"
+
 # Search with threshold
 ov find "API authentication" --threshold 0.7 --limit 5
 

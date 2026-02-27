@@ -425,6 +425,11 @@ impl HttpClient {
         instruction: &str,
         wait: bool,
         timeout: Option<f64>,
+        strict: bool,
+        ignore_dirs: Option<String>,
+        include: Option<String>,
+        exclude: Option<String>,
+        directly_upload_media: bool,
     ) -> Result<serde_json::Value> {
         let path_obj = Path::new(path);
         
@@ -441,6 +446,11 @@ impl HttpClient {
                 "instruction": instruction,
                 "wait": wait,
                 "timeout": timeout,
+                "strict": strict,
+                "ignore_dirs": ignore_dirs,
+                "include": include,
+                "exclude": exclude,
+                "directly_upload_media": directly_upload_media,
             });
             
             self.post("/api/v1/resources", &body).await
@@ -453,6 +463,11 @@ impl HttpClient {
                 "instruction": instruction,
                 "wait": wait,
                 "timeout": timeout,
+                "strict": strict,
+                "ignore_dirs": ignore_dirs,
+                "include": include,
+                "exclude": exclude,
+                "directly_upload_media": directly_upload_media,
             });
             
             self.post("/api/v1/resources", &body).await
