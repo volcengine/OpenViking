@@ -1,7 +1,9 @@
 from typing import Any
 
 from loguru import logger
+import re
 
+from vikingbot.config.loader import get_data_dir
 from ..base import Hook, HookContext
 from ...session import Session
 
@@ -55,16 +57,36 @@ class OpenVikingPostCallHook(Hook):
             self._client = client
         return self._client
 
-    async def execute(self, context: HookContext,  tool_name, params, result) -> Any:
+    async def _read_skill_memory(self, skill_name: str, agent_space_name: str) -> str:
+        if not skill_name or not agent_space_name:
+            return ""
+        try:
+            ov_client = await self._get_client()
+            skill_memory_uri = f"viking://agent/{agent_space_name}/memories/skills/{skill_name}.md"
+            # logger.debug(f"skill_memory_uri={skill_memory_uri}")
+            content = await ov_client.read(skill_memory_uri)
+            # logger.debug(f"content={content}")
+            return f"\n\n---\n## Skill Memory\n{content}" if content else ""
+        except Exception as e:
+            logger.warning(f"Failed to read skill memory for {skill_name}: {e}")
+            return ""
+
+    async def execute(self, context: HookContext, tool_name, params, result) -> Any:
         if tool_name == 'read_file':
-            """result is like following, the skill name is weather:
-                ---
-                name: weather
-                description: Get current weather and forecasts (no API key required).
-            """
-            if result:  
-                if not isinstance(result, Exception):
-                    result = f'hahahahahaha:\n{result}'
+            if result and not isinstance(result, Exception):
+                match = re.search(r'^---\s*\nname:\s*(.+?)\s*\n', result, re.MULTILINE)
+                if match:
+                    skill_name = match.group(1).strip()
+                    # logger.debug(f"skill_name={skill_name}")
+
+                    agent_space_name = context.sandbox_key
+                    # logger.debug(f"agent_space_name={agent_space_name}")
+                    if agent_space_name:
+                        skill_memory = await self._read_skill_memory(skill_name, agent_space_name)
+                        # logger.debug(f"skill_memory={skill_memory}")
+                        if skill_memory:
+                            result = f"{result}{skill_memory}"
+
         return {
             'tool_name': tool_name,
             'params': params,
