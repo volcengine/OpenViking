@@ -1,22 +1,19 @@
 import asyncio
-import os
 from typing import List, Dict, Any, Optional
 
 import openviking as ov
-from openviking.message.part import TextPart, ToolPart
-import tos
 from loguru import logger
 
 from vikingbot.config.loader import get_data_dir
 from vikingbot.config.loader import load_config
 
-viking_resource_prefix = "viking://resources"
+viking_resource_prefix = "viking://resources/"
 uri_user_memory = "viking://user/memories/"
 uri_agent_memory = "viking://agent/memories/"
 
 
 class VikingClient:
-    def __init__(self, viking_path: str = "/"):
+    def __init__(self, agent_id: Optional[str] = None):
         config = load_config()
         openviking_config = config.openviking
         if openviking_config.mode == "local":
@@ -24,14 +21,11 @@ class VikingClient:
             ov_data_path.mkdir(parents=True, exist_ok=True)
             self.client = ov.AsyncOpenViking(path=str(ov_data_path))
         else:
-            self.client = ov.AsyncHTTPClient(url=openviking_config.server_url)
-            self.tos_client = tos.TosClientV2(
-                openviking_config.tos_ak,
-                openviking_config.tos_sk,
-                openviking_config.tos_endpoint,
-                openviking_config.tos_region
+            self.client = ov.AsyncHTTPClient(
+                url=openviking_config.server_url,
+                api_key=openviking_config.api_key,
+                agent_id=agent_id,
             )
-        self.viking_path = viking_path
         self.mode = openviking_config.mode
 
     async def _initialize(self):
@@ -39,9 +33,9 @@ class VikingClient:
         await self.client.initialize()
 
     @classmethod
-    async def create(cls, viking_path: str = "/"):
+    async def create(cls, agent_id: Optional[str] = None):
         """Factory method to create and initialize a VikingClient instance"""
-        instance = cls(viking_path)
+        instance = cls(agent_id)
         await instance._initialize()
         return instance
 
@@ -80,38 +74,8 @@ class VikingClient:
         self, local_path: str, desc: str, target_path: Optional[str] = None, wait: bool = False
     ) -> Optional[Dict[str, Any]]:
         """添加资源到 Viking"""
-        viking_target = f"{viking_resource_prefix}{self.viking_path}"
-        if target_path:
-            viking_target = f"{viking_resource_prefix}{target_path}"
-
-        file_name = os.path.basename(local_path)
-        object_key = f"{file_name}"
-        config = load_config()
-        openviking_config = config.openviking
-
-        try:
-            self.tos_client.put_object_from_file(
-                openviking_config.tos_bucket, object_key, local_path
-            )
-            self.tos_client.set_object_expires(openviking_config.tos_bucket, object_key, 1)
-        except tos.exceptions.TosClientError as e:
-            print(f"Failed to upload {local_path} to TOS: {e}")
-            return None
-
-        try:
-            pre_signed_url = self.tos_client.pre_signed_url(
-                tos.HttpMethodType.Http_Method_Get,
-                openviking_config.tos_bucket,
-                object_key,
-                expires=300,
-            ).signed_url
-        except tos.exceptions.TosClientError as e:
-            print(f"Failed to generate pre-signed URL for {object_key}: {e}")
-            return None
-
         result = await self.client.add_resource(
-            path=pre_signed_url, target=viking_target, reason=desc, wait=wait
-        )
+            path=local_path, reason=desc, wait=wait)
         return result
 
     async def list_resources(
@@ -119,7 +83,7 @@ class VikingClient:
     ) -> List[Dict[str, Any]]:
         """列出资源"""
         if path is None or path == "":
-            path = f"{viking_resource_prefix}{self.viking_path}"
+            path = viking_resource_prefix
         entries = await self.client.ls(path, recursive=recursive)
         return entries
 
@@ -307,7 +271,7 @@ class VikingClient:
 
 
 async def main_test():
-    client = await VikingClient.create()
+    client = await VikingClient.create(agent_id="shared")
     # res = client.list_resources()
     # res = await client.search("头有点疼", target_uri="viking://user/memories/")
     res = await client.get_viking_memory_context("123", current_message="头疼", history=[])

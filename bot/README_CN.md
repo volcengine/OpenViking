@@ -26,9 +26,9 @@ uv pip install -e .
 
 ## 🚀 快速开始
 
-&gt; [!TIP]
-&gt; 配置 vikingbot 最简单的方式是通过控制台 Web UI！
-&gt; 获取 API 密钥：[OpenRouter](https://openrouter.ai/keys)（全球）· [Brave Search](https://brave.com/search/api/)（可选，用于网页搜索）
+> [!TIP]
+> 配置 vikingbot 最简单的方式是通过控制台 Web UI！
+> 获取 API 密钥：[OpenRouter](https://openrouter.ai/keys)（全球）· [Brave Search](https://brave.com/search/api/)（可选，用于网页搜索）
 
 **1. 启动网关**
 
@@ -127,8 +127,8 @@ docker logs --tail 50 -f vikingbot
 | **邮件** | 中等（IMAP/SMTP 凭证） |
 | **QQ** | 简单（应用凭证） |
 
-&lt;details&gt;
-&lt;summary&gt;&lt;b&gt;Telegram&lt;/b&gt;（推荐）&lt;/summary&gt;
+<details>
+<summary><b>Telegram</b>（推荐）</summary>
 
 **1. 创建机器人**
 - 打开 Telegram，搜索 `@BotFather`
@@ -150,8 +150,8 @@ docker logs --tail 50 -f vikingbot
 }
 ```
 
-&gt; 您可以在 Telegram 设置中找到您的 **用户 ID**。它显示为 `@yourUserId`。
-&gt; 复制这个值**不带 `@` 符号**并粘贴到配置文件中。
+> 您可以在 Telegram 设置中找到您的 **用户 ID**。它显示为 `@yourUserId`。
+> 复制这个值**不带 `@` 符号**并粘贴到配置文件中。
 
 
 **3. 运行**
@@ -160,10 +160,10 @@ docker logs --tail 50 -f vikingbot
 vikingbot gateway
 ```
 
-&lt;/details&gt;
+</details>
 
-&lt;details&gt;
-&lt;summary&gt;&lt;b&gt;Mochat (Claw IM)&lt;/b&gt;&lt;/summary&gt;
+<details>
+<summary><b>Mochat (Claw IM)</b></summary>
 
 默认使用 **Socket.IO WebSocket**，并带有 HTTP 轮询回退。
 
@@ -185,14 +185,14 @@ vikingbot gateway
 
 就这么简单 —— vikingbot 处理剩下的一切！
 
-&lt;br&gt;
+<br>
 
-&lt;details&gt;
-&lt;summary&gt;手动配置（高级）&lt;/summary&gt;
+<details>
+<summary>手动配置（高级）</summary>
 
 如果您更喜欢手动配置，请将以下内容添加到 `~/.vikingbot/config.json`：
 
-&gt; 请保密 `claw_token`。它只应在 `X-Claw-Token` 头中发送到您的 Mochat API 端点。
+> 请保密 `claw_token`。它只应在 `X-Claw-Token` 头中发送到您的 Mochat API 端点。
 
 ```json
 {
@@ -215,12 +215,12 @@ vikingbot gateway
 ```
 
 
-&lt;/details&gt;
+</details>
 
-&lt;/details&gt;
+</details>
 
-&lt;details&gt;
-&lt;summary&gt;&lt;b&gt;Discord&lt;/b&gt;&lt;/summary&gt;
+<details>
+<summary><b>Discord</b></summary>
 
 **1. 创建机器人**
 - 访问 https://discord.com/developers/applications
@@ -262,10 +262,10 @@ vikingbot gateway
 vikingbot gateway
 ```
 
-&lt;/details&gt;
+</details>
 
-&lt;details&gt;
-&lt;summary&gt;&lt;b&gt;WhatsApp&lt;/b&gt;&lt;/summary&gt;
+<details>
+<summary><b>WhatsApp</b></summary>
 
 需要 **Node.js ≥18**。
 
@@ -300,10 +300,10 @@ vikingbot channels login
 vikingbot gateway
 ```
 
-&lt;/details&gt;
+</details>
 
-&lt;details&gt;
-&lt;summary&gt;&lt;b&gt;飞书&lt;/b&gt;&lt;/summary&gt;
+<details>
+<summary><b>飞书</b></summary>
 
 使用 **WebSocket** 长连接 —— 不需要公网 IP。
 
@@ -334,8 +334,8 @@ vikingbot gateway
 }
 ```
 
-&gt; 长连接模式下，`encryptKey` 和 `verificationToken` 是可选的。
-&gt; `allowFrom`：留空以允许所有用户，或添加 `["ou_xxx"]` 以限制访问。
+> 长连接模式下，`encryptKey` 和 `verificationToken` 是可选的。
+> `allowFrom`：留空以允许所有用户，或添加 `["ou_xxx"]` 以限制访问。
 
 **3. 运行**
 
@@ -343,13 +343,13 @@ vikingbot gateway
 vikingbot gateway
 ```
 
-&gt; [!TIP]
-&gt; 飞书使用 WebSocket 接收消息 —— 不需要 webhook 或公网 IP！
+> [!TIP]
+> 飞书使用 WebSocket 接收消息 —— 不需要 webhook 或公网 IP！
 
-&lt;/details&gt;
+</details>
 
-&lt;details&gt;
-&lt;summary&gt;&lt;b&gt;QQ（QQ单聊）&lt;/b&gt;&lt;/summary&gt;
+<details>
+<summary><b>QQ（QQ单聊）</b></summary>
 
 使用 **botpy SDK** 配合 WebSocket —— 不需要公网 IP。目前仅支持 **私聊**。
 
@@ -365,8 +365,8 @@ vikingbot gateway
 
 **3. 配置**
 
-&gt; - `allowFrom`：留空以供公开访问，或添加用户 openid 以限制。您可以在用户向机器人发消息时在 vikingbot 日志中找到 openid。
-&gt; - 生产环境：在机器人控制台提交审核并发布。查看 [QQ 机器人文档](https://bot.q.qq.com/wiki/) 了解完整发布流程。
+> - `allowFrom`：留空以供公开访问，或添加用户 openid 以限制。您可以在用户向机器人发消息时在 vikingbot 日志中找到 openid。
+> - 生产环境：在机器人控制台提交审核并发布。查看 [QQ 机器人文档](https://bot.q.qq.com/wiki/) 了解完整发布流程。
 
 ```json
 {
@@ -390,16 +390,16 @@ vikingbot gateway
 
 现在从 QQ 向机器人发送消息 —— 它应该会回复！
 
-&lt;/details&gt;
+</details>
 
-&lt;details&gt;
-&lt;summary&gt;&lt;b&gt;钉钉&lt;/b&gt;&lt;/summary&gt;
+<details>
+<summary><b>钉钉</b></summary>
 
 使用 **流模式** —— 不需要公网 IP。
 
 **1. 创建钉钉机器人**
 - 访问 [钉钉开放平台](https://open-dev.dingtalk.com/)
-- 创建新应用 -&gt; 添加 **机器人** 功能
+- 创建新应用 -> 添加 **机器人** 功能
 - **配置**：
   - 打开 **流模式**
 - **权限**：添加发送消息所需的权限
@@ -422,7 +422,7 @@ vikingbot gateway
 }
 ```
 
-&gt; `allowFrom`：留空以允许所有用户，或添加 `["staffId"]` 以限制访问。
+> `allowFrom`：留空以允许所有用户，或添加 `["staffId"]` 以限制访问。
 
 **3. 运行**
 
@@ -430,10 +430,10 @@ vikingbot gateway
 vikingbot gateway
 ```
 
-&lt;/details&gt;
+</details>
 
-&lt;details&gt;
-&lt;summary&gt;&lt;b&gt;Slack&lt;/b&gt;&lt;/summary&gt;
+<details>
+<summary><b>Slack</b></summary>
 
 使用 **Socket 模式** —— 不需要公网 URL。
 
@@ -472,14 +472,14 @@ vikingbot gateway
 
 直接向机器人发送私信或在频道中 @提及它 —— 它应该会回复！
 
-&gt; [!TIP]
-&gt; - `groupPolicy`：`"mention"`（默认 —— 仅在 @提及時回复）、`"open"`（回复所有频道消息）或 `"allowlist"`（限制到特定频道）。
-&gt; - 私信策略默认为开放。设置 `"dm": {"enabled": false}` 以禁用私信。
+> [!TIP]
+> - `groupPolicy`：`"mention"`（默认 —— 仅在 @提及時回复）、`"open"`（回复所有频道消息）或 `"allowlist"`（限制到特定频道）。
+> - 私信策略默认为开放。设置 `"dm": {"enabled": false}` 以禁用私信。
 
-&lt;/details&gt;
+</details>
 
-&lt;details&gt;
-&lt;summary&gt;&lt;b&gt;邮件&lt;/b&gt;&lt;/summary&gt;
+<details>
+<summary><b>邮件</b></summary>
 
 给 vikingbot 一个自己的邮箱账户。它通过 **IMAP** 轮询收件箱并通过 **SMTP** 回复 —— 就像一个个人邮件助手。
 
@@ -490,10 +490,10 @@ vikingbot gateway
 
 **2. 配置**
 
-&gt; - `consentGranted` 必须为 `true` 以允许邮箱访问。这是一个安全门 —— 设置为 `false` 以完全禁用。
-&gt; - `allowFrom`：留空以接受来自任何人的邮件，或限制到特定发件人。
-&gt; - `smtpUseTls` 和 `smtpUseSsl` 分别默认为 `true` / `false`，这对 Gmail（端口 587 + STARTTLS）是正确的。无需显式设置它们。
-&gt; - 如果您只想读取/分析邮件而不发送自动回复，请设置 `"autoReplyEnabled": false`。
+> - `consentGranted` 必须为 `true` 以允许邮箱访问。这是一个安全门 —— 设置为 `false` 以完全禁用。
+> - `allowFrom`：留空以接受来自任何人的邮件，或限制到特定发件人。
+> - `smtpUseTls` 和 `smtpUseSsl` 分别默认为 `true` / `false`，这对 Gmail（端口 587 + STARTTLS）是正确的。无需显式设置它们。
+> - 如果您只想读取/分析邮件而不发送自动回复，请设置 `"autoReplyEnabled": false`。
 
 ```json
 {
@@ -524,7 +524,7 @@ vikingbot gateway
 vikingbot gateway
 ```
 
-&lt;/details&gt;
+</details>
 
 ## 🌐 代理社交网络
 
@@ -541,9 +541,9 @@ vikingbot gateway
 
 配置文件：`~/.vikingbot/config.json`
 
-&gt; [!IMPORTANT]
-&gt; 修改配置后（无论是通过控制台 UI 还是直接编辑文件），
-&gt; 您需要重启网关服务以使更改生效。
+> [!IMPORTANT]
+> 修改配置后（无论是通过控制台 UI 还是直接编辑文件），
+> 您需要重启网关服务以使更改生效。
 
 ### OpenViking 配置
 
@@ -627,10 +627,10 @@ Vikingbot 默认启用 OpenViking 钩子：
 
 ### 提供商
 
-&gt; [!TIP]
-&gt; - **Groq** 通过 Whisper 提供免费的语音转录。如果已配置，Telegram 语音消息将自动转录。
-&gt; - **智谱编码计划**：如果您使用智谱的编码计划，请在您的 zhipu 提供商配置中设置 `"apiBase": "https://open.bigmodel.cn/api/coding/paas/v4"`。
-&gt; - **MiniMax（中国大陆）**：如果您的 API 密钥来自 MiniMax 的中国大陆平台（minimaxi.com），请在您的 minimax 提供商配置中设置 `"apiBase": "https://api.minimaxi.com/v1"`。
+> [!TIP]
+> - **Groq** 通过 Whisper 提供免费的语音转录。如果已配置，Telegram 语音消息将自动转录。
+> - **智谱编码计划**：如果您使用智谱的编码计划，请在您的 zhipu 提供商配置中设置 `"apiBase": "https://open.bigmodel.cn/api/coding/paas/v4"`。
+> - **MiniMax（中国大陆）**：如果您的 API 密钥来自 MiniMax 的中国大陆平台（minimaxi.com），请在您的 minimax 提供商配置中设置 `"apiBase": "https://api.minimaxi.com/v1"`。
 
 | 提供商 | 用途 | 获取 API 密钥 |
 |----------|---------|-------------|
@@ -647,8 +647,8 @@ Vikingbot 默认启用 OpenViking 钩子：
 | `zhipu` | LLM（智谱 GLM） | [open.bigmodel.cn](https://open.bigmodel.cn) |
 | `vllm` | LLM（本地，任何 OpenAI 兼容服务器） | — |
 
-&lt;details&gt;
-&lt;summary&gt;&lt;b&gt;添加新提供商（开发者指南）&lt;/b&gt;&lt;/summary&gt;
+<details>
+<summary><b>添加新提供商（开发者指南）</b></summary>
 
 vikingbot 使用 **提供商注册表**（`vikingbot/providers/registry.py`）作为事实的单一来源。
 添加新提供商只需 **2 步** —— 无需触及 if-elif 链。
@@ -689,7 +689,7 @@ class ProvidersConfig(BaseModel):
 | `detect_by_base_keyword` | 通过 API 基础 URL 检测网关 | `"openrouter"` |
 | `strip_model_prefix` | 在重新前缀之前去除现有前缀 | `True`（对于 AiHubMix） |
 
-&lt;/details&gt;
+</details>
 
 
 ### 安全
@@ -703,8 +703,8 @@ class ProvidersConfig(BaseModel):
 
 vikingbot 支持沙箱执行以增强安全性。默认情况下，沙箱是禁用的。要在会话模式下使用 SRT 后端启用沙箱，请设置 `"enabled": true`。
 
-&lt;details&gt;
-&lt;summary&gt;&lt;b&gt;沙箱配置（SRT 后端）&lt;/b&gt;&lt;/summary&gt;
+<details>
+<summary><b>沙箱配置（SRT 后端）</b></summary>
 
 ```json
 {
@@ -814,7 +814,7 @@ which node
 which nodejs
 ```
 
-&lt;/details&gt;
+</details>
 
 
 ## CLI 参考
@@ -843,13 +843,13 @@ which nodejs
 - **会话**：查看和管理聊天会话
 - **工作区**：浏览和编辑工作区目录中的文件
 
-&gt; [!IMPORTANT]
-&gt; 在控制台中保存配置更改后，您需要重启网关服务以使更改生效。
+> [!IMPORTANT]
+> 在控制台中保存配置更改后，您需要重启网关服务以使更改生效。
 
 交互模式退出：`exit`、`quit`、`/exit`、`/quit`、`:q` 或 `Ctrl+D`。
 
-&lt;details&gt;
-&lt;summary&gt;&lt;b&gt;TUI（终端用户界面）&lt;/b&gt;&lt;/summary&gt;
+<details>
+<summary><b>TUI（终端用户界面）</b></summary>
 
 启动 vikingbot TUI 以获得丰富的基于终端的聊天体验：
 
@@ -863,10 +863,10 @@ TUI 提供：
 - 实时代理响应
 - 导航的键盘快捷键
 
-&lt;/details&gt;
+</details>
 
-&lt;details&gt;
-&lt;summary&gt;&lt;b&gt;定时任务（Cron）&lt;/b&gt;&lt;/summary&gt;
+<details>
+<summary><b>定时任务（Cron）</b></summary>
 
 ```bash
 # 添加任务
@@ -877,8 +877,8 @@ vikingbot cron add --name "hourly" --message "Check status" --every 3600
 vikingbot cron list
 
 # 移除任务
-vikingbot cron remove &lt;job_id&gt;
+vikingbot cron remove <job_id>
 ```
 
-&lt;/details&gt;
+</details>
 

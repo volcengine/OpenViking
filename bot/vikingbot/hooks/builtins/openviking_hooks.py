@@ -23,9 +23,9 @@ class OpenVikingCompactHook(Hook):
     def __init__(self):
         self._client = None
 
-    async def _get_client(self, session_key: str) -> VikingClient:
+    async def _get_client(self, sandbox_key: str) -> VikingClient:
         if not self._client:
-            client = await VikingClient.create()
+            client = await VikingClient.create(sandbox_key)
             self._client = client
         return self._client
 
@@ -33,7 +33,7 @@ class OpenVikingCompactHook(Hook):
         vikingbot_session: Session = kwargs.get("session", {})
         session_id = context.session_id
         try:
-            client = await self._get_client(session_id)
+            client = await self._get_client(context.sandbox_key)
             result = await client.commit(session_id, vikingbot_session.messages)
             return result
         except Exception as e:

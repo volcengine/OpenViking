@@ -5,11 +5,13 @@ import mimetypes
 import platform
 from pathlib import Path
 from typing import Any
+
 from loguru import logger
 
 from vikingbot.agent.memory import MemoryStore
 from vikingbot.agent.skills import SkillsLoader
 from vikingbot.config.schema import SessionKey
+from vikingbot.sandbox import SandboxManager
 
 
 class ContextBuilder:
@@ -23,7 +25,7 @@ class ContextBuilder:
     BOOTSTRAP_FILES = ["AGENTS.md", "SOUL.md", "TOOLS.md", "IDENTITY.md"]
     INIT_DIR = "init"
     
-    def __init__(self, workspace: Path, sandbox_manager=None):
+    def __init__(self, workspace: Path, sandbox_manager: SandboxManager | None = None,):
         self.workspace = workspace
         self._templates_ensured = False
         self.sandbox_manager = sandbox_manager
@@ -63,6 +65,7 @@ class ContextBuilder:
         """
         # Ensure workspace templates exist only when first needed
         self._ensure_templates_once()
+        sandbox_key = self.sandbox_manager.to_sandbox_key(session_key)
         
         parts = []
         
@@ -76,12 +79,12 @@ class ContextBuilder:
             parts.append(f"## Sandbox Environment\n\nYou are running in a sandboxed environment. All file operations and command execution are restricted to the sandbox directory.\nThe sandbox root directory is `{sandbox_cwd}` (use relative paths for all operations).")
 
         # Viking user profile
-        profile = await self.memory.get_viking_user_profile()
+        profile = await self.memory.get_viking_user_profile(sandbox_key=sandbox_key)
         if profile:
             parts.append(profile)
 
         # Viking memory
-        viking_memory = await self.memory.get_viking_memory_context(session_key.safe_name(), current_message, history)
+        viking_memory = await self.memory.get_viking_memory_context(current_message=current_message, sandbox_key=sandbox_key)
         if viking_memory:
             parts.append(viking_memory)
 
@@ -209,7 +212,6 @@ Always be helpful, accurate, and concise. When using tools, think step by step: 
         if session_key.channel_id and session_key.chat_id:
             system_prompt += f"\n\n## Current Session\nChannel: {session_key.type}:{session_key.channel_id}\nChat ID: {session_key.chat_id}"
         messages.append({"role": "system", "content": system_prompt})
-        logger.debug(f"system_prompt: {system_prompt}")
 
         # History
         messages.extend(history)

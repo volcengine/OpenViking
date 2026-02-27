@@ -1,29 +1,23 @@
 """Base class for agent tools."""
 
-from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, TYPE_CHECKING
 
 from vikingbot.config.schema import SessionKey
-
-if TYPE_CHECKING:
-    from vikingbot.sandbox.manager import SandboxManager
+from vikingbot.sandbox.manager import SandboxManager
 
 
 @dataclass
 class ToolContext:
     """Context passed to tools during execution, containing runtime information."""
-    session_key: SessionKey
-    sandbox_manager: "SandboxManager | None" = None
+    session_key: SessionKey = None
+    sandbox_manager: SandboxManager | None = None
+    sandbox_key: str = sandbox_manager.to_sandbox_key(session_key) if sandbox_manager else None
 
 
 """Base class for agent tools."""
 
 from abc import ABC, abstractmethod
 from typing import Any
-
-from vikingbot.config.schema import SessionKey
 
 
 class Tool(ABC):
