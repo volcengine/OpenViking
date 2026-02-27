@@ -67,7 +67,7 @@ docker --version
 # 1. Create necessary directories
 mkdir -p ~/.vikingbot/
 
-# 2. Start container and view logs
+# 2. Start container
 docker run -d \
     --name vikingbot \
     --restart unless-stopped \
@@ -75,7 +75,10 @@ docker run -d \
     -v ~/.vikingbot:/root/.vikingbot \
     -p 18791:18791 \
     vikingbot-cn-beijing.cr.volces.com/vikingbot/vikingbot:latest \
-    gateway && docker logs --tail 50 -f vikingbot
+    gateway
+
+# 3. View logs
+docker logs --tail 50 -f vikingbot
 ```
 
 Press `Ctrl+C` to exit log view, the container continues running in background.

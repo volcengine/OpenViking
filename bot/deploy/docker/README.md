@@ -25,7 +25,7 @@ docker --version
 # 1. 创建必要的目录结构
 mkdir -p ~/.vikingbot/
 
-# 2. 启动容器并查看日志
+# 2. 启动容器
 docker run -d \
     --name vikingbot \
     --restart unless-stopped \
@@ -33,7 +33,10 @@ docker run -d \
     -v ~/.vikingbot:/root/.vikingbot \
     -p 18791:18791 \
     vikingbot-cn-beijing.cr.volces.com/vikingbot/vikingbot:latest \
-    gateway && docker logs --tail 50 -f vikingbot
+    gateway
+
+# 3. 查看日志
+docker logs --tail 50 -f vikingbot
 ```
 
 按 `Ctrl+C` 退出日志查看，容器继续后台运行。

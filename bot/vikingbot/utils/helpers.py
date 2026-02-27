@@ -16,8 +16,6 @@ def get_data_path() -> Path:
 
 
 
-
-
 def get_source_workspace_path() -> Path:
     """Get the source workspace path from the codebase."""
     return Path(__file__).parent.parent.parent / "workspace"
