@@ -2,6 +2,7 @@
 
 import base64
 import logging
+import mimetypes
 import os
 import uuid
 from io import BytesIO
@@ -13,6 +14,7 @@ import litellm
 
 from vikingbot.agent.tools.base import Tool
 from vikingbot.sandbox import SandboxManager
+from vikingbot.utils import get_data_path
 from vikingbot.utils.helpers import get_workspace_path
 
 
@@ -44,7 +46,7 @@ class ImageGenerationTool(Tool):
                 },
                 "base_image": {
                     "type": "string",
-                    "description": "Base image for edit/variation mode: base64 data URI or image URL (required for edit and variation modes)",
+                    "description": "Base image for edit/variation mode: base64 data URI or image file path (required for edit and variation modes)",
                 },
                 "mask": {
                     "type": "string",
@@ -95,18 +97,20 @@ class ImageGenerationTool(Tool):
         Returns: (image_data, format_type) where format_type is "bytes" or "url"
         """
         if image_str.startswith("data:"):
-            # Parse data URI
-            header, data = image_str.split(",", 1)
-            if ";base64" in header:
-                return base64.b64decode(data), "bytes"
-            else:
-                return data.encode("utf-8"), "bytes"
+            return image_str, "data"
         elif image_str.startswith("http://") or image_str.startswith("https://"):
             # Return URL directly for the model
             return image_str, "url"
         else:
-            # Assume it's raw base64 without prefix
-            return base64.b64decode(image_str), "bytes"
+            mime_type, _ = mimetypes.guess_type(image_str)
+            if not mime_type:
+                mime_type = "application/octet-stream"
+
+            # 步骤2：以二进制模式读取文件并编码为 Base64 字符串
+            base64_str = base64.b64encode(Path(image_str).read_bytes()).decode("utf-8")
+            # 步骤3：拼接标准 Data URI 格式
+            data_uri = f"data:{mime_type};base64,{base64_str}"
+            return data_uri, "data"
 
     async def _url_to_base64(self, url: str) -> str:
         """Download image from URL and convert to base64."""
@@ -176,12 +180,8 @@ class ImageGenerationTool(Tool):
                         "strength": 0.7,  # Default edit strength
                     }
                     # Add image parameter based on format
-                    if base_format == "bytes":
-                        # bytes format: wrap in BytesIO
-                        assert isinstance(base_image_data, bytes), (
-                            "Expected bytes for 'bytes' format"
-                        )
-                        edit_kwargs["image"] = BytesIO(base_image_data)
+                    if base_format == "data":
+                        edit_kwargs["image"] = base_image_data
                     else:  # url
                         # url format: pass directly as URL
                         assert isinstance(base_image_data, str), "Expected str for 'url' format"
@@ -207,8 +207,8 @@ class ImageGenerationTool(Tool):
                     }
 
                     # Add image parameter based on format
-                    if base_format == "bytes":
-                        edit_kwargs["image"] = BytesIO(base_image_data)  # type: ignore
+                    if base_format == "data":
+                        edit_kwargs["image"] = base_image_data  # type: ignore
                     else:  # url
                         edit_kwargs["image"] = base_image_data  # type: ignore
 
@@ -237,12 +237,8 @@ class ImageGenerationTool(Tool):
                     }
 
                     # Add image parameter based on format
-                    if base_format == "bytes":
-                        # bytes format: wrap in BytesIO
-                        assert isinstance(base_image_data, bytes), (
-                            "Expected bytes for 'bytes' format"
-                        )
-                        variation_kwargs["image"] = BytesIO(base_image_data)
+                    if base_format == "data":
+                        variation_kwargs["image"] = base_image_data
                     else:  # url
                         # url format: pass directly as URL
                         assert isinstance(base_image_data, str), "Expected str for 'url' format"
@@ -267,8 +263,8 @@ class ImageGenerationTool(Tool):
                     }
 
                     # Add image parameter based on format
-                    if base_format == "bytes":
-                        variation_kwargs["image"] = BytesIO(base_image_data)  # type: ignore
+                    if base_format == "data":
+                        variation_kwargs["image"] = base_image_data # type: ignore
                     else:  # url
                         variation_kwargs["image"] = base_image_data  # type: ignore
 
@@ -288,9 +284,10 @@ class ImageGenerationTool(Tool):
 
             if not images:
                 return "Error: No images generated"
-            workspace = tool_context.sandbox_manager.get_workspace_path(tool_context.session_key)
 
-            images_dir = workspace / "images"
+
+
+            images_dir = get_data_path() / "images"
             images_dir.mkdir(exist_ok=True)
             saved_paths = []
             for img in images:

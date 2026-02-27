@@ -4,6 +4,7 @@ from loguru import logger
 from typing import Any, TYPE_CHECKING
 
 from vikingbot.agent.tools.base import Tool, ToolContext
+from vikingbot.config import loader
 from vikingbot.config.schema import SessionKey
 from vikingbot.hooks import HookContext
 from vikingbot.hooks.manager import hook_manager

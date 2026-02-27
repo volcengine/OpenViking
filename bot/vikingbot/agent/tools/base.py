@@ -2,6 +2,7 @@
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 from vikingbot.config.schema import SessionKey
