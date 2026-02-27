@@ -7,6 +7,8 @@ from vikingbot.config.loader import get_data_dir
 from ..base import Hook, HookContext
 from ...session import Session
 
+from vikingbot.config.loader import load_config
+
 try:
     from vikingbot.openviking_mount.ov_server import VikingClient
     import openviking as ov
@@ -48,23 +50,25 @@ class OpenVikingPostCallHook(Hook):
     def __init__(self):
         self._client = None
 
-    async def _get_client(self, session_key: str) -> ov.AsyncOpenViking:
+    async def _get_client(self, sandbox_key: str) -> VikingClient:
         if not self._client:
-            ov_data_path = get_data_dir() / "ov_data"
-            ov_data_path.mkdir(parents=True, exist_ok=True)
-            client = ov.AsyncOpenViking(path=str(ov_data_path))
-            await client.initialize()
+            client = await VikingClient.create(sandbox_key)
             self._client = client
         return self._client
 
-    async def _read_skill_memory(self, skill_name: str, agent_space_name: str) -> str:
+    async def _read_skill_memory(self, sandbox_key: str, skill_name: str, agent_space_name: str) -> str:
         if not skill_name or not agent_space_name:
             return ""
         try:
-            ov_client = await self._get_client()
-            skill_memory_uri = f"viking://agent/{agent_space_name}/memories/skills/{skill_name}.md"
+            ov_client = await self._get_client(sandbox_key)
+            config = load_config()
+            openviking_config = config.openviking
+            if openviking_config.mode == "local":
+                skill_memory_uri = f"viking://agent/ffb1327b18bf/memories/skills/{skill_name}.md"
+            else:
+                skill_memory_uri = f"viking://agent/{agent_space_name}/memories/skills/{skill_name}.md"
             # logger.debug(f"skill_memory_uri={skill_memory_uri}")
-            content = await ov_client.read(skill_memory_uri)
+            content = await ov_client.read_content(skill_memory_uri)
             # logger.debug(f"content={content}")
             return f"\n\n---\n## Skill Memory\n{content}" if content else ""
         except Exception as e:
