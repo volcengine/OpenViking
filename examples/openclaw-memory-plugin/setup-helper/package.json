@@ -1,0 +1,21 @@
+{
+  "name": "openclaw-openviking-setup-helper",
+  "version": "0.1.0",
+  "description": "Setup helper for installing OpenViking memory plugin into OpenClaw",
+  "type": "module",
+  "bin": {
+    "openclaw-openviking-setup-helper": "./cli.js"
+  },
+  "keywords": ["openviking", "openclaw", "setup", "memory", "agent"],
+  "author": "OpenViking",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/OpenViking/OpenViking.git",
+    "directory": "examples/openclaw-memory-plugin/setup-helper"
+  },
+  "files": ["cli.js", "README.md"],
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}
