@@ -92,7 +92,8 @@ class ToolRegistry:
         hook_result  = await hook_manager.execute_hooks(
             context=HookContext(
                 event_type="tool.post_call",
-                session_id=session_key.safe_name()
+                session_id=session_key.safe_name(),
+                sendbox_key=sandbox_manager.to_sandbox_key(session_key)
             ),
             tool_name=name,
             params=params,

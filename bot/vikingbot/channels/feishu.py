@@ -403,12 +403,9 @@ class FeishuChannel(BaseChannel):
         """
         # Extract images from Markdown
         images = []
-
-        # Pattern: ![alt](url)
-        img_pattern = r"!\[([^\]]*)\]\(([^)]+)\)"
-
+        markdown_pattern = r"!\[([^\]]*)\]\((send://[^)\s]+\.(png|jpeg|jpg|gif|bmp|webp))\)"
         # Find all images and upload them
-        for m in re.finditer(img_pattern, content):
+        for m in re.finditer(markdown_pattern, content):
             alt_text = m.group(1) or ""
             img_url = m.group(2)
             try:
@@ -421,9 +418,26 @@ class FeishuChannel(BaseChannel):
                     images.append({"alt": alt_text, "img_key": image_key})
             except Exception as e:
                 logger.exception(f"Failed to upload Markdown image {img_url[:100]}: {e}")
+        content = re.sub(markdown_pattern, "", content)
+
+        # Pattern: ![alt](url)
+        send_pattern = r"(send://[^)\s]+\.(png|jpeg|jpg|gif|bmp|webp))\)?"
+        # Find all images and upload them
+        for m in re.finditer(send_pattern, content):
+            img_url = m.group(1) or ""
+            try:
+                logger.debug(f"Processing Markdown image: {img_url[:100]}...")
+                is_content, result = await self._parse_data_uri(img_url)
+
+                if not is_content and isinstance(result, bytes):
+                    # It's an image - upload
+                    image_key = await self._upload_image_to_feishu(result)
+                    images.append({"img_key": image_key})
+            except Exception as e:
+                logger.exception(f"Failed to upload Markdown image {img_url[:100]}: {e}")
 
         # Remove all ![alt](url) from content
-        content_no_images = re.sub(img_pattern, "", content)
+        content_no_images = re.sub(send_pattern, "", content)
 
         elements = []
         if content_no_images.strip():
@@ -434,8 +448,7 @@ class FeishuChannel(BaseChannel):
             elements.append(
                 {
                     "tag": "img",
-                    "img_key": img["img_key"],
-                    "alt": {"tag": "plain_text", "content": img["alt"]},
+                    "img_key": img["img_key"]
                 }
             )
 
