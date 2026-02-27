@@ -4,8 +4,11 @@ from typing import Dict, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
+from openviking_cli.utils.logger import get_logger
+
 COLLECTION_NAME = "context"
 DEFAULT_PROJECT_NAME = "default"
+logger = get_logger(__name__)
 
 
 class VolcengineConfig(BaseModel):
@@ -16,7 +19,13 @@ class VolcengineConfig(BaseModel):
     region: Optional[str] = Field(
         default=None, description="Volcengine region (e.g., 'cn-beijing')"
     )
-    host: Optional[str] = Field(default=None, description="Volcengine VikingDB host (optional)")
+    host: Optional[str] = Field(
+        default=None,
+        description=(
+            "[Deprecated] Ignored in volcengine mode. "
+            "Hosts are derived from `region` to route console/data APIs correctly."
+        ),
+    )
 
     model_config = {"extra": "forbid"}
 
@@ -112,6 +121,12 @@ class VectorDBBackendConfig(BaseModel):
                 raise ValueError("VectorDB volcengine backend requires 'ak' and 'sk' to be set")
             if not self.volcengine.region:
                 raise ValueError("VectorDB volcengine backend requires 'region' to be set")
+            if self.volcengine.host:
+                logger.warning(
+                    "VectorDB volcengine backend: 'volcengine.host' is deprecated and ignored. "
+                    "Using region-based console/data hosts for region='%s'.",
+                    self.volcengine.region,
+                )
 
         elif self.backend == "vikingdb":
             if not self.vikingdb or not self.vikingdb.host:

@@ -8,10 +8,10 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.collection_adapter import CollectionAdapter, create_collection_adapter
-from openviking.storage.vector_store.expr import And, Eq, FilterExpr, In, Or, RawDSL
+from openviking.storage.expr import And, Eq, FilterExpr, In, Or, RawDSL
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.utils.logging_init import init_cpp_logging
+from openviking.storage.vectordb_adapters import CollectionAdapter, create_collection_adapter
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.vectordb_config import VectorDBBackendConfig
 
