@@ -284,6 +284,38 @@ class TestObserverService:
         status = service.system
         assert all(c.is_healthy for name, c in status.components.items() if name != "transaction")
 
+    def test_is_healthy_without_dependencies(self):
+        """Test is_healthy returns False (not raises) when dependencies not set."""
+        service = ObserverService()
+        assert service.is_healthy() is False
+
+    def test_vikingdb_property_without_dependency(self):
+        """Test vikingdb property returns unhealthy ComponentStatus when vikingdb is None."""
+        service = ObserverService()
+        status = service.vikingdb
+        assert isinstance(status, ComponentStatus)
+        assert status.name == "vikingdb"
+        assert status.is_healthy is False
+        assert status.has_errors is True
+        assert status.status == "Not initialized"
+
+    def test_vlm_property_without_dependency(self):
+        """Test vlm property returns unhealthy ComponentStatus when config is None."""
+        service = ObserverService()
+        status = service.vlm
+        assert isinstance(status, ComponentStatus)
+        assert status.name == "vlm"
+        assert status.is_healthy is False
+        assert status.has_errors is True
+        assert status.status == "Not initialized"
+
+    def test_system_property_without_dependencies(self):
+        """Test system property returns unhealthy SystemStatus when dependencies not set."""
+        service = ObserverService()
+        status = service.system
+        assert isinstance(status, SystemStatus)
+        assert status.is_healthy is False
+
     @patch("openviking.service.debug_service.get_queue_manager")
     @patch("openviking.service.debug_service.QueueObserver")
     @patch("openviking.service.debug_service.VikingDBObserver")
