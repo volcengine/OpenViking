@@ -62,6 +62,7 @@ class ToolSkillCandidateMemory(CandidateMemory):
 
     tool_name: str = ""  # Tool 名称（用于 tools 类别）
     skill_name: str = ""  # Skill 名称（用于 skills 类别）
+    tool_status: str = "completed"  # completed | error
 
 
 @dataclass
@@ -505,7 +506,8 @@ class MemoryExtractor:
         new_stats = self._parse_tool_statistics(candidate.content)
         if new_stats["total_calls"] == 0:
             new_stats["total_calls"] = 1
-            if "error" in candidate.content.lower() or "fail" in candidate.content.lower():
+            tool_status = getattr(candidate, 'tool_status', 'completed')
+            if tool_status == "error":
                 new_stats["fail_count"] = 1
                 new_stats["success_count"] = 0
             else:
