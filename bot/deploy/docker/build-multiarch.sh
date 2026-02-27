@@ -21,7 +21,7 @@ NC='\033[0m'
 # 默认配置
 IMAGE_NAME=${IMAGE_NAME:-vikingbot}
 IMAGE_TAG=${IMAGE_TAG:-latest}
-DOCKERFILE=${DOCKERFILE:-deploy/Dockerfile}
+DOCKERFILE=${DOCKERFILE:-deploy/docker/Dockerfile}
 NO_CACHE=${NO_CACHE:-false}
 # 平台列表
 PLATFORMS=${PLATFORMS:-linux/amd64,linux/arm64}

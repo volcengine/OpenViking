@@ -1,14 +1,11 @@
 FROM python:3.13-slim-bookworm
 
-# Install Node.js (for WhatsApp bridge) using direct binary download
+# Install base tools, Node.js 20, and uv
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends curl ca-certificates gnupg git ripgrep bubblewrap socat libfuse2 build-essential xz-utils && \
-    # Download and install Node.js 20 directly
-    ARCH=$(dpkg --print-architecture) && \
-    NODE_VERSION=20.18.1 && \
-    curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-${ARCH}.tar.xz" -o /tmp/node.tar.xz && \
-    tar -xJf /tmp/node.tar.xz -C /usr/local --strip-components=1 && \
-    rm /tmp/node.tar.xz && \
+    apt-get install -y --no-install-recommends curl ca-certificates gnupg git ripgrep bubblewrap socat libfuse2 build-essential && \
+    # Add NodeSource repository for Node.js 20 (new setup script, old node_20.x URL is deprecated)
+    curl -fsSL https://deb.nodesource.com/setup_20.x | bash - && \
+    apt-get install -y --no-install-recommends nodejs && \
     # Install uv
     curl -LsSf https://astral.sh/uv/install.sh | sh && \
     # Clean up
