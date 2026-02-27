@@ -5,6 +5,7 @@ AGFS Client utilities for creating and configuring AGFS clients.
 """
 
 import os
+from pathlib import Path
 from typing import Any
 
 from openviking_cli.utils.logger import get_logger
@@ -34,9 +35,19 @@ def create_agfs_client(agfs_config: Any) -> Any:
         lib_path = getattr(agfs_config, "lib_path", None)
         if lib_path and lib_path not in ["1", "default"]:
             os.environ["AGFS_LIB_PATH"] = lib_path
+        else:
+            os.environ["AGFS_LIB_PATH"] = str(Path(__file__).parent.parent / "lib")
+
+        # Check if binding library exists
+        try:
+            from pyagfs.binding_client import _find_library
+
+            actual_lib_path = _find_library()
+        except Exception:
+            raise ImportError("AGFS binding library not found. Please run: pip install -e .")
 
         client = AGFSBindingClient()
-        logger.info(f"[AGFSUtils] Created AGFSBindingClient (lib_path={lib_path})")
+        logger.debug(f"[AGFSUtils] Created AGFSBindingClient (lib_path={actual_lib_path})")
 
         # Automatically mount backend for binding client
         mount_agfs_backend(client, agfs_config)
@@ -126,7 +137,7 @@ def mount_agfs_backend(agfs: Any, agfs_config: Any) -> None:
 
     try:
         agfs.mount(fstype, mount_path, config)
-        logger.info(f"[AGFSUtils] Mounted {fstype} at {mount_path} with config={config}")
+        logger.info(f"[AGFSUtils] Mounted {fstype} at {mount_path}")
     except Exception as e:
         logger.error(f"[AGFSUtils] Failed to mount {fstype} at {mount_path}: {e}")
         raise e

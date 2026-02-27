@@ -24,6 +24,28 @@ build: ## Build the server binary
 	$(GO) build $(GOFLAGS) $(LDFLAGS) -o $(BUILD_DIR)/$(BINARY_NAME) $(CMD_DIR)/main.go
 	@echo "Build complete: $(BUILD_DIR)/$(BINARY_NAME)"
 
+build-lib: ## Build AGFS binding library
+	@echo "Detecting OS for building binding library..."
+	@OS=$$(uname -s | tr '[:upper:]' '[:lower:]'); \
+	LIB_NAME=libagfsbinding; \
+	CMD_PYBINDING_DIR=cmd/pybinding; \
+	case "$$OS" in \
+		darwin*) \
+			echo "Building for macOS..."; \
+			CGO_ENABLED=1 $(GO) build -buildmode=c-shared -o $(BUILD_DIR)/$$LIB_NAME.dylib $$CMD_PYBINDING_DIR/main.go; \
+			;; \
+		linux*) \
+			echo "Building for Linux..."; \
+			CGO_ENABLED=1 $(GO) build -buildmode=c-shared -o $(BUILD_DIR)/$$LIB_NAME.so $$CMD_PYBINDING_DIR/main.go; \
+			;; \
+		msys*|cygwin*|mingw*) \
+			echo "Building for Windows..."; \
+			CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++ AR=x86_64-w64-mingw32-ar GOOS=windows GOARCH=amd64 CGO_ENABLED=1 $(GO) build -buildmode=c-shared -o $(BUILD_DIR)/$$LIB_NAME.dll $$CMD_PYBINDING_DIR/main.go; \
+			;; \
+		*) echo "Unsupported OS: $$OS"; exit 1 ;; \
+	esac; \
+	echo "Build complete in $(BUILD_DIR)"
+
 run: build
 	@echo "Starting $(BINARY_NAME) on $(ADDR)..."
 	./$(BUILD_DIR)/$(BINARY_NAME) -addr $(ADDR)

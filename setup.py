@@ -47,8 +47,9 @@ class CMakeBuildExtension(build_ext):
 
         # Target in source tree (for development/install)
         agfs_bin_dir = Path("openviking/bin").resolve()
+        agfs_lib_dir = Path("openviking/lib").resolve()
         agfs_target_binary = agfs_bin_dir / binary_name
-        agfs_target_lib = agfs_bin_dir / lib_name
+        agfs_target_lib = agfs_lib_dir / lib_name
 
         # 1. Try to build from source
         if agfs_server_dir.exists() and shutil.which("go"):
@@ -100,26 +101,18 @@ class CMakeBuildExtension(build_ext):
                 env = os.environ.copy()
                 env["CGO_ENABLED"] = "1"
 
-                pybinding_dir = agfs_server_dir / "cmd/pybinding"
-                lib_build_args = [
-                    "go",
-                    "build",
-                    "-buildmode=c-shared",
-                    "-o",
-                    f"build/{lib_name}",
-                    ".",
-                ]
+                lib_build_args = ["make", "build-lib"]
 
                 subprocess.run(
                     lib_build_args,
-                    cwd=str(pybinding_dir),
+                    cwd=str(agfs_server_dir),
                     env=env,
                     check=True,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                 )
 
-                agfs_built_lib = pybinding_dir / "build" / lib_name
+                agfs_built_lib = agfs_server_dir / "build" / lib_name
                 if agfs_built_lib.exists():
                     self._copy_binary(agfs_built_lib, agfs_target_lib)
                     print("[OK] AGFS binding library built successfully")

@@ -26,12 +26,12 @@ def _find_library() -> str:
     search_paths = [
         Path(__file__).parent / "lib" / lib_name,
         Path(__file__).parent.parent / "lib" / lib_name,
+        Path(__file__).parent.parent.parent / "lib" / lib_name,
         Path("/usr/local/lib") / lib_name,
         Path("/usr/lib") / lib_name,
         Path(os.environ.get("AGFS_LIB_PATH", "")) / lib_name
         if os.environ.get("AGFS_LIB_PATH")
         else None,
-        Path("/tmp") / lib_name,
     ]
 
     for path in search_paths:
