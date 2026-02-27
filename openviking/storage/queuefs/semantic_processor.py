@@ -318,6 +318,10 @@ class SemanticProcessor(DequeueHandlerBase):
 
         # Read file content (limit length)
         content = await viking_fs.read_file(file_path, ctx=active_ctx)
+
+        # Limit content length (about 10000 tokens)
+        max_chars = 30000
+        content = await viking_fs.read_file(file_path, ctx=active_ctx)
         if isinstance(content, bytes):
             # Try to decode with error handling for text files
             try:
@@ -340,7 +344,38 @@ class SemanticProcessor(DequeueHandlerBase):
         file_type = self._detect_file_type(file_name)
 
         if file_type == FILE_TYPE_CODE:
-            prompt_id = "semantic.code_summary"
+            code_mode = get_openviking_config().code.code_summary_mode
+
+            if code_mode in ("ast", "ast_llm") and len(content.splitlines()) >= 100:
+                from openviking.parse.parsers.code.ast import extract_skeleton
+
+                verbose = code_mode == "ast_llm"
+                skeleton_text = extract_skeleton(file_name, content, verbose=verbose)
+                if skeleton_text:
+                    if code_mode == "ast":
+                        return {"name": file_name, "summary": skeleton_text}
+                    else:  # ast_llm
+                        prompt = render_prompt(
+                            "semantic.code_ast_summary",
+                            {"file_name": file_name, "skeleton": skeleton_text},
+                        )
+                        async with llm_sem:
+                            summary = await vlm.get_completion_async(prompt)
+                        return {"name": file_name, "summary": summary.strip()}
+                if skeleton_text is None:
+                    logger.info("AST unsupported language, fallback to LLM: %s", file_path)
+                else:
+                    logger.info("AST empty skeleton, fallback to LLM: %s", file_path)
+
+            # "llm" mode or fallback when skeleton is None/empty
+            prompt = render_prompt(
+                "semantic.code_summary",
+                {"file_name": file_name, "content": content},
+            )
+            async with llm_sem:
+                summary = await vlm.get_completion_async(prompt)
+            return {"name": file_name, "summary": summary.strip()}
+
         elif file_type == FILE_TYPE_DOCUMENTATION:
             prompt_id = "semantic.document_summary"
         else:
