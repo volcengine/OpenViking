@@ -198,6 +198,8 @@ setup(
             "bin/libagfsbinding.so",
             "bin/libagfsbinding.dylib",
             "bin/libagfsbinding.dll",
+            "bin/ov",  # 新增
+            "bin/ov.exe",  # 新增
         ],
     },
     include_package_data=True,
