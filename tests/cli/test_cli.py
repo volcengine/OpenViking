@@ -12,6 +12,17 @@ from openviking_cli.cli.main import app
 
 runner = CliRunner()
 
+LOCAL_NO_PROXY_ENV = {
+    "NO_PROXY": "127.0.0.1,localhost",
+    "no_proxy": "127.0.0.1,localhost",
+    "HTTP_PROXY": "",
+    "HTTPS_PROXY": "",
+    "http_proxy": "",
+    "https_proxy": "",
+    "ALL_PROXY": "",
+    "all_proxy": "",
+}
+
 
 def _make_ovcli_conf(url: str, tmp_dir: str) -> str:
     """Create a temporary ovcli.conf and return its path."""
@@ -36,7 +47,10 @@ def _run_cli(args, server_url, env=None, expected_exit_code=0):
     """
     with tempfile.TemporaryDirectory() as tmp_dir:
         conf_path = _make_ovcli_conf(server_url, tmp_dir)
-        merged_env = {"OPENVIKING_CLI_CONFIG_FILE": conf_path}
+        merged_env = {
+            "OPENVIKING_CLI_CONFIG_FILE": conf_path,
+            **LOCAL_NO_PROXY_ENV,
+        }
         if env:
             merged_env.update(env)
         result = runner.invoke(app, ["-o", "json", *args], env=merged_env)
@@ -106,6 +120,8 @@ def test_cli_help_smoke():
         ["search", "--help"],
         ["grep", "--help"],
         ["glob", "--help"],
+        # mcp
+        ["mcp", "--help"],
         # serve
         ["serve", "--help"],
         # system
@@ -138,7 +154,10 @@ def test_cli_connection_refused():
         result = runner.invoke(
             app,
             ["-o", "json", "health"],
-            env={"OPENVIKING_CLI_CONFIG_FILE": conf_path},
+            env={
+                "OPENVIKING_CLI_CONFIG_FILE": conf_path,
+                **LOCAL_NO_PROXY_ENV,
+            },
         )
     assert result.exit_code == 3
     payload = json.loads(result.output)
@@ -241,3 +260,47 @@ def test_cli_nonexistent_resource(openviking_server):
         expected_exit_code=1,
     )
     assert result.exit_code == 1
+
+
+def test_cli_mcp_requires_path():
+    result = runner.invoke(app, ["mcp"], env={})
+    assert result.exit_code != 0
+    assert "--path" in result.output
+
+
+def test_cli_mcp_help_mentions_write_toggle():
+    result = runner.invoke(app, ["mcp", "--help"], env={})
+    assert result.exit_code == 0
+    assert "--access-level" in result.output
+    assert "--enable-write" in result.output
+    assert "--readonly" in result.output
+
+
+def test_cli_mcp_rejects_non_stdio():
+    result = runner.invoke(
+        app,
+        ["mcp", "--path", "./data", "--transport", "sse"],
+        env={},
+    )
+    assert result.exit_code == 1
+    assert "Only stdio transport is supported in V1" in result.output
+
+
+def test_cli_mcp_rejects_conflicting_access_options():
+    result = runner.invoke(
+        app,
+        ["mcp", "--path", "./data", "--enable-write", "--access-level", "admin"],
+        env={},
+    )
+    assert result.exit_code == 1
+    assert "Cannot use --enable-write together with --access-level" in result.output
+
+
+def test_cli_mcp_rejects_invalid_access_level():
+    result = runner.invoke(
+        app,
+        ["mcp", "--path", "./data", "--access-level", "bad-level"],
+        env={},
+    )
+    assert result.exit_code == 1
+    assert "Invalid access level" in result.output

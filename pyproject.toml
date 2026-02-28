@@ -89,6 +89,9 @@ eval = [
     "datasets>=2.0.0",
     "pandas>=2.0.0",
 ]
+mcp = [
+    "mcp",
+]
 
 [project.urls]
 Homepage = "https://github.com/volcengine/openviking"
