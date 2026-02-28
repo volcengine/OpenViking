@@ -1,7 +1,0 @@
-{
-  "url": "http://localhost:1933",
-  "api_key": "your-api-key",
-  "timeout": 60.0,
-  "output": "table",
-  "echo_command": true
-}

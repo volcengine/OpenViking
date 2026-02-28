@@ -3,5 +3,6 @@
   "api_key": null,
   "agent_id": null,
   "timeout": 60.0,
-  "output": "table"
+  "output": "table",
+  "echo_command": true
 }
