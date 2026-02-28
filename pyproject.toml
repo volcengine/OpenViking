@@ -66,6 +66,7 @@ dependencies = [
     "tree-sitter-cpp>=0.23.0",
     "tree-sitter-rust>=0.23.0",
     "tree-sitter-go>=0.23.0",
+    "tree-sitter-c-sharp>=0.23.0",
 ]
 
 [tool.uv.sources]
