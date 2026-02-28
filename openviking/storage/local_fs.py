@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import json
 import os
+import re
 import zipfile
 from datetime import datetime
 from typing import cast
@@ -14,6 +15,32 @@ from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
 
 logger = get_logger(__name__)
+
+
+_UNSAFE_PATH_RE = re.compile(r"(^|[\\/])\.\.($|[\\/])")
+_DRIVE_RE = re.compile(r"^[A-Za-z]:")
+
+
+def _validate_ovpack_member_path(zip_path: str, base_name: str) -> str:
+    """Validate a zip member path for ovpack imports and reject unsafe entries."""
+    if not zip_path:
+        raise ValueError("Invalid ovpack entry: empty path")
+    if "\\" in zip_path:
+        raise ValueError(f"Unsafe ovpack entry path: {zip_path!r}")
+    if zip_path.startswith("/"):
+        raise ValueError(f"Unsafe ovpack entry path: {zip_path!r}")
+    if _DRIVE_RE.match(zip_path):
+        raise ValueError(f"Unsafe ovpack entry path: {zip_path!r}")
+    if _UNSAFE_PATH_RE.search(zip_path):
+        raise ValueError(f"Unsafe ovpack entry path: {zip_path!r}")
+
+    parts = zip_path.split("/")
+    if any(part == ".." for part in parts):
+        raise ValueError(f"Unsafe ovpack entry path: {zip_path!r}")
+    if not parts or parts[0] != base_name:
+        raise ValueError(f"Invalid ovpack entry root: {zip_path!r}")
+
+    return zip_path
 
 
 def ensure_ovpack_extension(path: str) -> str:
@@ -174,19 +201,21 @@ async def import_ovpack(
             if not zip_path:
                 continue
 
+            safe_zip_path = _validate_ovpack_member_path(zip_path, base_name)
+
             # Handle directory entries
-            if zip_path.endswith("/"):
-                rel_path = get_viking_rel_path_from_zip(zip_path.rstrip("/"))
+            if safe_zip_path.endswith("/"):
+                rel_path = get_viking_rel_path_from_zip(safe_zip_path.rstrip("/"))
                 target_dir_uri = f"{root_uri}/{rel_path}" if rel_path else root_uri
                 await viking_fs.mkdir(target_dir_uri, exist_ok=True, ctx=ctx)
                 continue
 
             # Handle file entries
-            rel_path = get_viking_rel_path_from_zip(zip_path)
+            rel_path = get_viking_rel_path_from_zip(safe_zip_path)
             target_file_uri = f"{root_uri}/{rel_path}" if rel_path else root_uri
 
             try:
-                data = zf.read(zip_path)
+                data = zf.read(safe_zip_path)
                 await viking_fs.write_file_bytes(target_file_uri, data, ctx=ctx)
             except Exception as e:
                 logger.error(f"Failed to import {zip_path} to {target_file_uri}: {e}")
