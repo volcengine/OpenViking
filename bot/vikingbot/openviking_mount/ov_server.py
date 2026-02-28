@@ -1,11 +1,11 @@
 import asyncio
-from typing import List, Dict, Any, Optional
 import hashlib
+from typing import Any, Dict, List, Optional
+
 import openviking as ov
 from loguru import logger
 
-from vikingbot.config.loader import get_data_dir
-from vikingbot.config.loader import load_config
+from vikingbot.config.loader import get_data_dir, load_config
 
 viking_resource_prefix = "viking://resources/"
 
@@ -173,9 +173,10 @@ class VikingClient:
 
     async def commit(self, session_id: str, messages: list[dict[str, Any]]):
         """提交会话"""
-        import uuid
         import re
-        from openviking.message.part import TextPart, ToolPart, Part
+        import uuid
+
+        from openviking.message.part import Part, TextPart, ToolPart
 
         session = self.client.session(session_id)
 
