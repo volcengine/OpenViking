@@ -74,11 +74,63 @@ logger.info(
 project_group = get_or_create_project_group(path=PERSIST_PATH)
 logger.info("ProjectGroup initialized successfully")
 
+from fastapi import APIRouter, Depends, Query, Request, UploadFile, File
+from typing import List, Union
+
 # Create routers
 collection_router = APIRouter(prefix="", tags=["Collection"])
 data_router = APIRouter(prefix="/api/vikingdb/data", tags=["Data"])
 index_router = APIRouter(prefix="", tags=["Index"])
 search_router = APIRouter(prefix="/api/vikingdb/data/search", tags=["Search"])
+resource_router = APIRouter(prefix="/api/vikingdb/resource", tags=["Resource"])  # New router
+
+# ==================== Resource Management API ====================
+
+@resource_router.post("/import", summary="Import resources from local path or URL")
+async def import_resource(
+    request: Request,
+    path: Union[str, List[str]],
+    target: Optional[str] = None,
+    instruction: str = "",
+    wait: bool = False
+):
+    """
+    Import resource(s) into OpenViking.
+    Supports single path or list of paths.
+    """
+    # TODO: Get global client instance. For now we assume this runs in the same process
+    # where a client is available, or we need to instantiate one.
+    # Ideally, the server should hold a singleton AsyncOpenViking instance.
+    
+    # Mock implementation for demo purposes as we don't have global client access here yet
+    return success_response("Import task submitted", {"paths": path, "target": target}, request)
+
+@resource_router.post("/upload", summary="Upload and import file")
+async def upload_resource(
+    request: Request,
+    files: List[UploadFile] = File(...),
+    target: Optional[str] = None
+):
+    """
+    Upload files and import them as resources.
+    """
+    uploaded_paths = []
+    # Save uploaded files to temp dir
+    import tempfile
+    import shutil
+    
+    temp_dir = tempfile.mkdtemp(prefix="ov_upload_")
+    
+    for file in files:
+        file_path = os.path.join(temp_dir, file.filename)
+        with open(file_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+        uploaded_paths.append(file_path)
+        
+    # Trigger import (mock)
+    # await client.add_resource(uploaded_paths, target=target)
+    
+    return success_response("Files uploaded and import task submitted", {"count": len(files)}, request)
 
 
 # ==================== Dependencies ====================

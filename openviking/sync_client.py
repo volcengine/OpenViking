@@ -4,7 +4,8 @@
 Synchronous OpenViking client implementation.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+import asyncio
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 if TYPE_CHECKING:
     from openviking.session import Session
@@ -77,17 +78,19 @@ class SyncOpenViking:
 
     def add_resource(
         self,
-        path: str,
+        path: Union[str, List[str]],
         target: Optional[str] = None,
         reason: str = "",
         instruction: str = "",
         wait: bool = False,
         timeout: float = None,
         **kwargs,
-    ) -> Dict[str, Any]:
-        """Add resource to OpenViking (resources scope only)
+    ) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
+        """Add resource(s) to OpenViking (resources scope only)
 
         Args:
+            path: Local file path or list of file paths to import
+            wait: Whether to wait for all background processing to complete
             **kwargs: Extra options forwarded to the parser chain, e.g.
                 ``strict``, ``ignore_dirs``, ``include``, ``exclude``.
         """

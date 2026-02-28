@@ -171,17 +171,18 @@ class AsyncOpenViking:
 
     async def add_resource(
         self,
-        path: str,
+        path: Union[str, List[str]],
         target: Optional[str] = None,
         reason: str = "",
         instruction: str = "",
         wait: bool = False,
         timeout: float = None,
         **kwargs,
-    ) -> Dict[str, Any]:
-        """Add resource to OpenViking (only supports resources scope).
+    ) -> Union[Dict[str, Any], List[Dict[str, Any]]]:
+        """Add resource(s) to OpenViking (only supports resources scope).
 
         Args:
+            path: Single file path or list of file paths to import
             wait: Whether to wait for semantic extraction and vectorization to complete
             timeout: Wait timeout in seconds
             **kwargs: Extra options forwarded to the parser chain, e.g.
@@ -189,6 +190,46 @@ class AsyncOpenViking:
         """
         await self._ensure_initialized()
         return await self._client.add_resource(
+
+        if not self._resource_processor:
+            raise RuntimeError("CoordinatedWriter not initialized")
+
+        # add_resource only supports resources scope
+        if target and target.startswith("viking://"):
+            parsed = VikingURI(target)
+            if parsed.scope != "resources":
+                raise ValueError(
+                    f"add_resource only supports resources scope, use dedicated interface to add {parsed.scope} content"
+                )
+        
+        # Handle batch processing
+        if isinstance(path, list):
+            import asyncio
+            tasks = []
+            for p in path:
+                # For batch, we ignore wait=True for individual items to maximize parallelism
+                # We will wait globally at the end if requested
+                tasks.append(self._resource_processor.process_resource(
+                    path=p,
+                    reason=reason,
+                    instruction=instruction,
+                    scope="resources",
+                    target=target,
+                ))
+            
+            results = await asyncio.gather(*tasks)
+            
+            if wait:
+                from openviking.storage.queuefs import get_queue_manager
+                qm = get_queue_manager()
+                status = await qm.wait_complete(timeout=timeout)
+                # Attach queue status to the last result or return separately?
+                # For simplicity, we just wait. Detailed status is complex for batch.
+            
+            return list(results)
+
+        # Single path processing
+        result = await self._resource_processor.process_resource(
             path=path,
             target=target,
             reason=reason,
