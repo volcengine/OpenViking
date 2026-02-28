@@ -12,11 +12,25 @@ from openviking.server.config import load_server_config
 from openviking_cli.utils.logger import configure_uvicorn_logging
 
 
+def _get_version() -> str:
+    try:
+        from openviking import __version__
+
+        return __version__
+    except ImportError:
+        return "unknown"
+
+
 def main():
     """Main entry point for openviking-server command."""
     parser = argparse.ArgumentParser(
         description="OpenViking HTTP Server",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"openviking-server {_get_version()}",
     )
     parser.add_argument(
         "--host",
