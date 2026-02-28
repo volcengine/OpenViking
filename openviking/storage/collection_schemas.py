@@ -157,6 +157,11 @@ class TextEmbeddingHandler(DequeueHandlerBase):
             embedding_msg = EmbeddingMsg.from_dict(queue_data)
             inserted_data = embedding_msg.context_data
 
+            if getattr(self._vikingdb, "is_closing", False):
+                logger.debug("Skip embedding dequeue during shutdown")
+                self.report_success()
+                return None
+
             # Only process string messages
             if not isinstance(embedding_msg.message, str):
                 logger.debug(f"Skipping non-string message type: {type(embedding_msg.message)}")
@@ -222,6 +227,10 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                 self.report_error(str(db_err), data)
                 return None
             except Exception as db_err:
+                if getattr(self._vikingdb, "is_closing", False):
+                    logger.debug(f"Skip embedding write during shutdown: {db_err}")
+                    self.report_success()
+                    return None
                 logger.error(f"Failed to write to vector database: {db_err}")
                 import traceback
 
