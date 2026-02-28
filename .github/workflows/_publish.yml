@@ -97,7 +97,7 @@ jobs:
         merge-multiple: true
 
     - name: Publish distribution to TestPyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
+      uses: pypa/gh-action-pypi-publish@release/v1.13
       with:
         repository-url: https://test.pypi.org/legacy/
         skip-existing: true
@@ -144,7 +144,7 @@ jobs:
         merge-multiple: true
 
     - name: Publish distribution to PyPI
-      uses: pypa/gh-action-pypi-publish@release/v1
+      uses: pypa/gh-action-pypi-publish@release/v1.13
       with:
         skip-existing: true
         verbose: true
