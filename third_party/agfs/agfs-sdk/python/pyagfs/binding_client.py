@@ -23,22 +23,15 @@ def _find_library() -> str:
     else:
         raise AGFSClientError(f"Unsupported platform: {system}")
 
-    env_lib_path = os.environ.get("AGFS_LIB_PATH")
-    env_paths = []
-    if env_lib_path:
-        env_p = Path(env_lib_path)
-        if env_p.is_file():
-            env_paths.append(env_p)
-        else:
-            env_paths.append(env_p / lib_name)
-
     search_paths = [
         Path(__file__).parent / "lib" / lib_name,
         Path(__file__).parent.parent / "lib" / lib_name,
         Path(__file__).parent.parent.parent / "lib" / lib_name,
         Path("/usr/local/lib") / lib_name,
         Path("/usr/lib") / lib_name,
-        *env_paths,
+        Path(os.environ.get("AGFS_LIB_PATH", "")) / lib_name
+        if os.environ.get("AGFS_LIB_PATH")
+        else None,
     ]
 
     for path in search_paths:
