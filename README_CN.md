@@ -167,9 +167,11 @@ Volcengine 支持模型名称和端点 ID。为简单起见，建议使用模型
 </details>
 
 <details>
-<summary><b>LiteLLM (Anthropic, DeepSeek, Gemini, vLLM, Ollama 等)</b></summary>
+<summary><b>LiteLLM (Anthropic, DeepSeek, Gemini, Qwen, vLLM, Ollama 等)</b></summary>
 
-LiteLLM 提供对各种模型的统一访问。`model` 字段应遵循 LiteLLM 的命名约定：
+LiteLLM 提供对各种模型的统一访问。`model` 字段应遵循 LiteLLM 的命名约定。以下以 Claude 和 Qwen 为例：
+
+**Anthropic:**
 
 ```json
 {
@@ -181,6 +183,23 @@ LiteLLM 提供对各种模型的统一访问。`model` 字段应遵循 LiteLLM �
 }
 ```
 
+**Qwen (DashScope)：**
+
+```json
+{
+  "vlm": {
+    "provider": "litellm",
+    "model": "dashscope/qwen-turbo",
+    "api_key": "your-dashscope-api-key",
+    "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  }
+}
+```
+
+> 💡 **Qwen 提示**：
+> - **中国/北京** 区域，使用 `api_base`：`https://dashscope.aliyuncs.com/compatible-mode/v1`
+> - **国际** 区域，使用 `api_base`：`https://dashscope-intl.aliyuncs.com/compatible-mode/v1`
+
 **常见模型格式：**
 
 | 提供商 | 模型示例 | 说明 |
@@ -188,6 +207,7 @@ LiteLLM 提供对各种模型的统一访问。`model` 字段应遵循 LiteLLM �
 | Anthropic | `claude-3-5-sonnet-20240620` | 自动检测，使用 `ANTHROPIC_API_KEY` |
 | DeepSeek | `deepseek-chat` | 自动检测，使用 `DEEPSEEK_API_KEY` |
 | Gemini | `gemini-pro` | 自动检测，使用 `GEMINI_API_KEY` |
+| Qwen | `dashscope/qwen-turbo` | 根据区域设置 `api_base`（见上方说明） |
 | OpenRouter | `openrouter/openai/gpt-4o` | 需要完整前缀 |
 | vLLM | `hosted_vllm/llama-3.1-8b` | 设置 `api_base` 为 vLLM 服务器 |
 | Ollama | `ollama/llama3.1` | 设置 `api_base` 为 Ollama 服务器 |

@@ -168,9 +168,11 @@ You can also use a custom OpenAI-compatible endpoint:
 </details>
 
 <details>
-<summary><b>LiteLLM (Anthropic, DeepSeek, Gemini, vLLM, Ollama, etc.)</b></summary>
+<summary><b>LiteLLM (Anthropic, DeepSeek, Gemini, Qwen, vLLM, Ollama, etc.)</b></summary>
 
-LiteLLM provides unified access to various models. The `model` field should follow LiteLLM's naming convention:
+LiteLLM provides unified access to various models. The `model` field should follow LiteLLM's naming convention. Here we use Claude and Qwen as examples:
+
+**Anthropic:**
 
 ```json
 {
@@ -182,6 +184,23 @@ LiteLLM provides unified access to various models. The `model` field should foll
 }
 ```
 
+**Qwen (DashScope):**
+
+```json
+{
+  "vlm": {
+    "provider": "litellm",
+    "model": "dashscope/qwen-turbo", // see https://docs.litellm.ai/docs/providers/dashscope for more details
+    "api_key": "your-dashscope-api-key",
+    "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  }
+}
+```
+
+> 💡 **Tip for Qwen**: 
+> - For **China/Beijing** region, use `api_base`: `https://dashscope.aliyuncs.com/compatible-mode/v1`
+> - For **International** region, use `api_base`: `https://dashscope-intl.aliyuncs.com/compatible-mode/v1`
+
 **Common model formats:**
 
 | Provider | Model Example | Notes |
@@ -189,6 +208,7 @@ LiteLLM provides unified access to various models. The `model` field should foll
 | Anthropic | `claude-3-5-sonnet-20240620` | Auto-detected, uses `ANTHROPIC_API_KEY` |
 | DeepSeek | `deepseek-chat` | Auto-detected, uses `DEEPSEEK_API_KEY` |
 | Gemini | `gemini-pro` | Auto-detected, uses `GEMINI_API_KEY` |
+| Qwen | `dashscope/qwen-turbo` | Set `api_base` based on region (see above) |
 | OpenRouter | `openrouter/openai/gpt-4o` | Full prefix required |
 | vLLM | `hosted_vllm/llama-3.1-8b` | Set `api_base` to vLLM server |
 | Ollama | `ollama/llama3.1` | Set `api_base` to Ollama server |
