@@ -292,6 +292,9 @@ class OpenVikingService:
             self._transaction_manager.stop()
             self._transaction_manager = None
 
+        if self._vikingdb_manager:
+            self._vikingdb_manager.mark_closing()
+
         if self._queue_manager:
             self._queue_manager.stop()
             self._queue_manager = None

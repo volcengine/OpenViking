@@ -51,9 +51,18 @@ class VikingDBManager(VikingVectorIndexBackend):
         self._queue_manager = queue_manager
         self._closing = False
 
+    def mark_closing(self) -> None:
+        """Mark the manager as entering shutdown flow.
+
+        Queue workers may still be draining messages before the backend is
+        finally closed. Handlers should check ``is_closing`` and stop writing
+        into vector storage to avoid lock contention during rapid restart.
+        """
+        self._closing = True
+
     async def close(self) -> None:
         """Close storage connection and release resources."""
-        self._closing = True
+        self.mark_closing()
         try:
             # We do NOT stop the queue manager here as it is an injected dependency
             # and should be managed by the creator (OpenVikingService).
