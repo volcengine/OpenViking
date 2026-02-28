@@ -5,7 +5,7 @@ OpenViking 异步客户端示例 (HTTP mode)
 使用 AsyncHTTPClient 通过 HTTP 连接远程 Server，演示完整 API。
 
 前置条件:
-    先启动 Server: openviking serve
+    先启动 Server: openviking-server
 
 运行:
     uv run client_async.py

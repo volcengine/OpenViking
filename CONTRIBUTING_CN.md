@@ -84,6 +84,22 @@ async def main():
 asyncio.run(main())
 ```
 
+### 5. 构建 Rust CLI（可选）
+
+Rust CLI (`ov`) 提供高性能的命令行客户端，用于连接 OpenViking Server 进行操作。
+
+**前置要求**：Rust >= 1.88
+
+```bash
+# 从源码编译安装
+cargo install --path crates/ov_cli
+
+# 或者使用一键安装脚本（下载预编译二进制）
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/crates/ov_cli/install.sh | bash
+```
+
+安装后通过 `ov --help` 查看所有可用命令。CLI 连接配置见 `~/.openviking/ovcli.conf`。
+
 ---
 
 ## 项目结构
@@ -91,6 +107,7 @@ asyncio.run(main())
 ```
 openviking/
 ├── pyproject.toml        # 项目配置
+├── Cargo.toml            # Rust workspace 配置
 ├── third_party/          # 第三方依赖
 │   └── agfs/             # AGFS 文件系统
 │
@@ -116,6 +133,11 @@ openviking/
 │   │   ├── session.py    # 会话核心
 │   │   └── compressor.py # 压缩
 │   │
+│   ├── server/           # HTTP 服务端
+│   │   ├── app.py        # FastAPI 应用工厂
+│   │   ├── bootstrap.py  # 启动入口 (openviking-server)
+│   │   └── routers/      # API 路由
+│   │
 │   ├── storage/          # 存储层
 │   │   ├── viking_fs.py  # VikingFS
 │   │   └── vectordb/     # 向量数据库
@@ -125,7 +147,21 @@ openviking/
 │   │
 │   └── prompts/          # 提示词模板
 │
+├── crates/               # Rust 组件
+│   └── ov_cli/           # Rust CLI 客户端
+│       ├── src/           # CLI 源码
+│       └── install.sh     # 一键安装脚本
+│
+├── src/                  # C++ 扩展 (pybind11)
+│
 ├── tests/                # 测试套件
+│   ├── client/           # 客户端测试
+│   ├── server/           # 服务端测试
+│   ├── session/          # 会话测试
+│   ├── parse/            # 解析器测试
+│   ├── vectordb/         # 向量数据库测试
+│   └── integration/      # 集成测试
+│
 └── docs/                 # 文档
     ├── en/               # 英文文档
     └── zh/               # 中文文档
@@ -189,47 +225,49 @@ mypy openviking/
 # 运行所有测试
 pytest
 
+# 运行特定测试模块
+pytest tests/client/ -v
+pytest tests/server/ -v
+pytest tests/parse/ -v
+
 # 运行特定测试文件
-pytest tests/test_parser.py
+pytest tests/client/test_lifecycle.py
+
+# 运行特定测试
+pytest tests/client/test_lifecycle.py::TestClientInitialization::test_initialize_success
+
+# 按关键字运行
+pytest -k "search" -v
 
 # 运行并生成覆盖率报告
 pytest --cov=openviking --cov-report=term-missing
-
-# 详细输出模式运行
-pytest -v
 ```
 
 ### 编写测试
 
-将测试文件放在 `tests/` 目录下，命名为 `test_*.py`：
+测试按模块组织在 `tests/` 的子目录中。项目使用 `asyncio_mode = "auto"`，异步测试**不需要** `@pytest.mark.asyncio` 装饰器：
 
 ```python
-# tests/test_client.py
-import pytest
+# tests/client/test_example.py
 from openviking import AsyncOpenViking
 
+
 class TestAsyncOpenViking:
-    @pytest.mark.asyncio
-    async def test_initialize(self, tmp_path):
-        client = AsyncOpenViking(path=str(tmp_path / "data"))
-        await client.initialize()
-        assert client._viking_fs is not None
-        await client.close()
+    async def test_initialize(self, uninitialized_client: AsyncOpenViking):
+        await uninitialized_client.initialize()
+        assert uninitialized_client._service is not None
+        await uninitialized_client.close()
 
-    @pytest.mark.asyncio
-    async def test_add_resource(self, tmp_path):
-        client = AsyncOpenViking(path=str(tmp_path / "data"))
-        await client.initialize()
-
+    async def test_add_resource(self, client: AsyncOpenViking):
         result = await client.add_resource(
             "./test.md",
             reason="test document"
         )
         assert result["status"] == "success"
         assert "root_uri" in result
-
-        await client.close()
 ```
+
+常用 fixture 定义在 `tests/conftest.py` 中，包括 `client`（已初始化的 `AsyncOpenViking`）、`uninitialized_client`、`temp_dir` 等。
 
 ---
 

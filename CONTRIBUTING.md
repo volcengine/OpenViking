@@ -85,6 +85,22 @@ async def main():
 asyncio.run(main())
 ```
 
+### 5. Build Rust CLI (Optional)
+
+The Rust CLI (`ov`) provides a high-performance command-line client for interacting with OpenViking Server.
+
+**Prerequisites**: Rust >= 1.88
+
+```bash
+# Build and install from source
+cargo install --path crates/ov_cli
+
+# Or use the quick install script (downloads pre-built binary)
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/crates/ov_cli/install.sh | bash
+```
+
+After installation, run `ov --help` to see all available commands. CLI connection config goes in `~/.openviking/ovcli.conf`.
+
 ---
 
 ## Project Structure
@@ -92,6 +108,7 @@ asyncio.run(main())
 ```
 openviking/
 ├── pyproject.toml        # Project configuration
+├── Cargo.toml            # Rust workspace configuration
 ├── third_party/          # Third-party dependencies
 │   └── agfs/             # AGFS filesystem
 │
@@ -117,6 +134,11 @@ openviking/
 │   │   ├── session.py    # Session core
 │   │   └── compressor.py # Compression
 │   │
+│   ├── server/           # HTTP server
+│   │   ├── app.py        # FastAPI app factory
+│   │   ├── bootstrap.py  # Entry point (openviking-server)
+│   │   └── routers/      # API routers
+│   │
 │   ├── storage/          # Storage layer
 │   │   ├── viking_fs.py  # VikingFS
 │   │   └── vectordb/     # Vector database
@@ -126,7 +148,21 @@ openviking/
 │   │
 │   └── prompts/          # Prompt templates
 │
+├── crates/               # Rust components
+│   └── ov_cli/           # Rust CLI client
+│       ├── src/           # CLI source code
+│       └── install.sh     # Quick install script
+│
+├── src/                  # C++ extensions (pybind11)
+│
 ├── tests/                # Test suite
+│   ├── client/           # Client tests
+│   ├── server/           # Server tests
+│   ├── session/          # Session tests
+│   ├── parse/            # Parser tests
+│   ├── vectordb/         # Vector database tests
+│   └── integration/      # Integration tests
+│
 └── docs/                 # Documentation
     ├── en/               # English docs
     └── zh/               # Chinese docs
@@ -190,47 +226,49 @@ mypy openviking/
 # Run all tests
 pytest
 
+# Run specific test module
+pytest tests/client/ -v
+pytest tests/server/ -v
+pytest tests/parse/ -v
+
 # Run specific test file
-pytest tests/test_parser.py
+pytest tests/client/test_lifecycle.py
+
+# Run specific test
+pytest tests/client/test_lifecycle.py::TestClientInitialization::test_initialize_success
+
+# Run by keyword
+pytest -k "search" -v
 
 # Run with coverage
 pytest --cov=openviking --cov-report=term-missing
-
-# Run with verbose output
-pytest -v
 ```
 
 ### Writing Tests
 
-Place test files in `tests/` directory with `test_*.py` naming:
+Tests are organized in subdirectories under `tests/`. The project uses `asyncio_mode = "auto"`, so async tests do **not** need the `@pytest.mark.asyncio` decorator:
 
 ```python
-# tests/test_client.py
-import pytest
+# tests/client/test_example.py
 from openviking import AsyncOpenViking
 
+
 class TestAsyncOpenViking:
-    @pytest.mark.asyncio
-    async def test_initialize(self, tmp_path):
-        client = AsyncOpenViking(path=str(tmp_path / "data"))
-        await client.initialize()
-        assert client._viking_fs is not None
-        await client.close()
+    async def test_initialize(self, uninitialized_client: AsyncOpenViking):
+        await uninitialized_client.initialize()
+        assert uninitialized_client._service is not None
+        await uninitialized_client.close()
 
-    @pytest.mark.asyncio
-    async def test_add_resource(self, tmp_path):
-        client = AsyncOpenViking(path=str(tmp_path / "data"))
-        await client.initialize()
-
+    async def test_add_resource(self, client: AsyncOpenViking):
         result = await client.add_resource(
             "./test.md",
             reason="test document"
         )
         assert result["status"] == "success"
         assert "root_uri" in result
-
-        await client.close()
 ```
+
+Common fixtures are defined in `tests/conftest.py`, including `client` (initialized `AsyncOpenViking`), `uninitialized_client`, `temp_dir`, etc.
 
 ---
 
