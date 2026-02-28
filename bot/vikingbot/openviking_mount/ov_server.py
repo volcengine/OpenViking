@@ -197,6 +197,9 @@ class VikingClient:
                     if not tool_name:
                         continue
 
+                    if tool_name.startswith("openviking_"):
+                        continue
+
                     tool_id = f"{tool_name}_{uuid.uuid4().hex[:8]}"
                     tool_input = None
                     try:
