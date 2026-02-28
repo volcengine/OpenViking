@@ -433,30 +433,63 @@ impl HttpClient {
         directly_upload_media: bool,
     ) -> Result<serde_json::Value> {
         let path_obj = Path::new(path);
-        
-        // Check if it's a local directory and not a local server
-        if path_obj.exists() && path_obj.is_dir() && !self.is_local_server() {
-            // Zip the directory
-            let zip_file = self.zip_directory(path_obj)?;
-            let temp_path = self.upload_temp_file(zip_file.path()).await?;
-            
-            let body = serde_json::json!({
-                "temp_path": temp_path,
-                "target": target,
-                "reason": reason,
-                "instruction": instruction,
-                "wait": wait,
-                "timeout": timeout,
-                "strict": strict,
-                "ignore_dirs": ignore_dirs,
-                "include": include,
-                "exclude": exclude,
-                "directly_upload_media": directly_upload_media,
-            });
-            
-            self.post("/api/v1/resources", &body).await
+
+        if path_obj.exists() && !self.is_local_server() {
+            if path_obj.is_dir() {
+                let zip_file = self.zip_directory(path_obj)?;
+                let temp_path = self.upload_temp_file(zip_file.path()).await?;
+
+                let body = serde_json::json!({
+                    "temp_path": temp_path,
+                    "target": target,
+                    "reason": reason,
+                    "instruction": instruction,
+                    "wait": wait,
+                    "timeout": timeout,
+                    "strict": strict,
+                    "ignore_dirs": ignore_dirs,
+                    "include": include,
+                    "exclude": exclude,
+                    "directly_upload_media": directly_upload_media,
+                });
+
+                self.post("/api/v1/resources", &body).await
+            } else if path_obj.is_file() {
+                let temp_path = self.upload_temp_file(path_obj).await?;
+
+                let body = serde_json::json!({
+                    "temp_path": temp_path,
+                    "target": target,
+                    "reason": reason,
+                    "instruction": instruction,
+                    "wait": wait,
+                    "timeout": timeout,
+                    "strict": strict,
+                    "ignore_dirs": ignore_dirs,
+                    "include": include,
+                    "exclude": exclude,
+                    "directly_upload_media": directly_upload_media,
+                });
+
+                self.post("/api/v1/resources", &body).await
+            } else {
+                let body = serde_json::json!({
+                    "path": path,
+                    "target": target,
+                    "reason": reason,
+                    "instruction": instruction,
+                    "wait": wait,
+                    "timeout": timeout,
+                    "strict": strict,
+                    "ignore_dirs": ignore_dirs,
+                    "include": include,
+                    "exclude": exclude,
+                    "directly_upload_media": directly_upload_media,
+                });
+
+                self.post("/api/v1/resources", &body).await
+            }
         } else {
-            // Regular case - use path directly
             let body = serde_json::json!({
                 "path": path,
                 "target": target,
@@ -470,7 +503,7 @@ impl HttpClient {
                 "exclude": exclude,
                 "directly_upload_media": directly_upload_media,
             });
-            
+
             self.post("/api/v1/resources", &body).await
         }
     }
@@ -483,16 +516,34 @@ impl HttpClient {
     ) -> Result<serde_json::Value> {
         let path_obj = Path::new(data);
 
-        if path_obj.exists() && path_obj.is_dir() && !self.is_local_server() {
-            let zip_file = self.zip_directory(path_obj)?;
-            let temp_path = self.upload_temp_file(zip_file.path()).await?;
+        if path_obj.exists() && !self.is_local_server() {
+            if path_obj.is_dir() {
+                let zip_file = self.zip_directory(path_obj)?;
+                let temp_path = self.upload_temp_file(zip_file.path()).await?;
 
-            let body = serde_json::json!({
-                "temp_path": temp_path,
-                "wait": wait,
-                "timeout": timeout,
-            });
-            self.post("/api/v1/skills", &body).await
+                let body = serde_json::json!({
+                    "temp_path": temp_path,
+                    "wait": wait,
+                    "timeout": timeout,
+                });
+                self.post("/api/v1/skills", &body).await
+            } else if path_obj.is_file() {
+                let temp_path = self.upload_temp_file(path_obj).await?;
+
+                let body = serde_json::json!({
+                    "temp_path": temp_path,
+                    "wait": wait,
+                    "timeout": timeout,
+                });
+                self.post("/api/v1/skills", &body).await
+            } else {
+                let body = serde_json::json!({
+                    "data": data,
+                    "wait": wait,
+                    "timeout": timeout,
+                });
+                self.post("/api/v1/skills", &body).await
+            }
         } else {
             let body = serde_json::json!({
                 "data": data,

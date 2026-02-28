@@ -304,13 +304,19 @@ class AsyncHTTPClient(BaseClient):
         }
 
         path_obj = Path(path)
-        if path_obj.exists() and path_obj.is_dir() and not self._is_local_server():
-            zip_path = self._zip_directory(path)
-            try:
-                temp_path = await self._upload_temp_file(zip_path)
+        if path_obj.exists() and not self._is_local_server():
+            if path_obj.is_dir():
+                zip_path = self._zip_directory(path)
+                try:
+                    temp_path = await self._upload_temp_file(zip_path)
+                    request_data["temp_path"] = temp_path
+                finally:
+                    Path(zip_path).unlink(missing_ok=True)
+            elif path_obj.is_file():
+                temp_path = await self._upload_temp_file(path)
                 request_data["temp_path"] = temp_path
-            finally:
-                Path(zip_path).unlink(missing_ok=True)
+            else:
+                request_data["path"] = path
         else:
             request_data["path"] = path
 
@@ -334,13 +340,19 @@ class AsyncHTTPClient(BaseClient):
 
         if isinstance(data, str):
             path_obj = Path(data)
-            if path_obj.exists() and path_obj.is_dir() and not self._is_local_server():
-                zip_path = self._zip_directory(data)
-                try:
-                    temp_path = await self._upload_temp_file(zip_path)
+            if path_obj.exists() and not self._is_local_server():
+                if path_obj.is_dir():
+                    zip_path = self._zip_directory(data)
+                    try:
+                        temp_path = await self._upload_temp_file(zip_path)
+                        request_data["temp_path"] = temp_path
+                    finally:
+                        Path(zip_path).unlink(missing_ok=True)
+                elif path_obj.is_file():
+                    temp_path = await self._upload_temp_file(data)
                     request_data["temp_path"] = temp_path
-                finally:
-                    Path(zip_path).unlink(missing_ok=True)
+                else:
+                    request_data["data"] = data
             else:
                 request_data["data"] = data
         else:

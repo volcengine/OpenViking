@@ -74,9 +74,9 @@ enum Commands {
         /// Wait until processing is complete
         #[arg(long)]
         wait: bool,
-        /// Wait timeout in seconds
+        /// Wait timeout in seconds (only used with --wait)
         #[arg(long)]
-        timeout: f64,
+        timeout: Option<f64>,
         /// No strict mode for directory scanning
         #[arg(long = "no-strict", default_value_t = false)]
         no_strict: bool,
@@ -588,7 +588,7 @@ async fn handle_add_resource(
     reason: String,
     instruction: String,
     wait: bool,
-    timeout: f64,
+    timeout: Option<f64>,
     no_strict: bool,
     ignore_dirs: Option<String>,
     include: Option<String>,
@@ -635,7 +635,7 @@ async fn handle_add_resource(
         reason,
         instruction,
         wait,
-        Some(timeout),
+        timeout,
         strict,
         ignore_dirs,
         include,
