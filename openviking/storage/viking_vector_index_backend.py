@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -451,15 +452,55 @@ class VikingVectorIndexBackend:
     async def increment_active_count(self, ctx: RequestContext, uris: List[str]) -> int:
         updated = 0
         for uri in uris:
-            records = await self.get_context_by_uri(account_id=ctx.account_id, uri=uri, limit=1)
-            if not records:
+            if not uri:
                 continue
-            record = records[0]
+            owner_space = self._owner_space_for_uri(uri=uri, ctx=ctx)
+            record: Optional[Dict[str, Any]] = None
+            for record_id in self._candidate_context_ids(
+                account_id=ctx.account_id,
+                owner_space=owner_space,
+                uri=uri,
+            ):
+                records = await self.get([record_id])
+                if records:
+                    record = records[0]
+                    break
+            if not record:
+                records = await self.get_context_by_uri(
+                    account_id=ctx.account_id,
+                    uri=uri,
+                    owner_space=owner_space or None,
+                    limit=1,
+                )
+                if records:
+                    record = records[0]
+            if not record:
+                continue
             current = int(record.get("active_count", 0) or 0)
             record["active_count"] = current + 1
             if await self.upsert(record):
                 updated += 1
         return updated
+
+    @staticmethod
+    def _owner_space_for_uri(uri: str, ctx: RequestContext) -> str:
+        if uri.startswith("viking://agent/"):
+            return ctx.user.agent_space_name()
+        if uri.startswith("viking://user/") or uri.startswith("viking://session/"):
+            return ctx.user.user_space_name()
+        return ""
+
+    @staticmethod
+    def _candidate_context_ids(account_id: str, owner_space: str, uri: str) -> List[str]:
+        candidate_ids: List[str] = []
+        seen: set[str] = set()
+        for seed in (f"{account_id}:{owner_space}:{uri}", f"{account_id}:{uri}", uri):
+            record_id = hashlib.md5(seed.encode("utf-8")).hexdigest()
+            if record_id in seen:
+                continue
+            seen.add(record_id)
+            candidate_ids.append(record_id)
+        return candidate_ids
 
     def _build_scope_filter(
         self,
