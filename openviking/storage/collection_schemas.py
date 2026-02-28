@@ -157,7 +157,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
             embedding_msg = EmbeddingMsg.from_dict(queue_data)
             inserted_data = embedding_msg.context_data
 
-            if getattr(self._vikingdb, "is_closing", False):
+            if self._vikingdb.is_closing:
                 logger.debug("Skip embedding dequeue during shutdown")
                 self.report_success()
                 return None
@@ -219,7 +219,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     )
             except CollectionNotFoundError as db_err:
                 # During shutdown, queue workers may finish one dequeued item.
-                if getattr(self._vikingdb, "is_closing", False):
+                if self._vikingdb.is_closing:
                     logger.debug(f"Skip embedding write during shutdown: {db_err}")
                     self.report_success()
                     return None
@@ -227,7 +227,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                 self.report_error(str(db_err), data)
                 return None
             except Exception as db_err:
-                if getattr(self._vikingdb, "is_closing", False):
+                if self._vikingdb.is_closing:
                     logger.debug(f"Skip embedding write during shutdown: {db_err}")
                     self.report_success()
                     return None

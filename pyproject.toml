@@ -74,6 +74,9 @@ test = [
     "pytest-asyncio>=0.21.0",
     "boto3>=1.42.44",
     "pytest-cov>=4.0.0",
+    "ragas>=0.1.0",
+    "datasets>=2.0.0",
+    "pandas>=2.0.0",
 ]
 dev = [
     "mypy>=1.0.0",

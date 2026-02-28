@@ -70,6 +70,9 @@ async def viking_fs_binding_instance():
     # Initialize VikingFS with client
     vfs = init_viking_fs(agfs=agfs_client)
 
+    # Ensure test directory exists
+    await vfs.mkdir("viking://temp/", exist_ok=True)
+
     yield vfs
 
 

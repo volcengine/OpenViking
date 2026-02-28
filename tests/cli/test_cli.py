@@ -183,7 +183,7 @@ def test_cli_real_requests(openviking_server, tmp_path):
     _run_cli(["overview", "viking://resources"], server_url)
 
     # -- search --
-    _run_cli(["grep", root_uri, "OpenViking"], server_url)
+    _run_cli(["grep", "OpenViking", "--uri", root_uri], server_url)
     _run_cli(["glob", "*.txt", "--uri", root_uri], server_url)
     _run_cli(["search", "OpenViking", "--uri", root_uri], server_url)
 
