@@ -613,7 +613,7 @@ class VikingFS:
             ctx=self._ctx_or_default(ctx),
             limit=limit,
             score_threshold=score_threshold,
-            scope_dsl=filter,
+            metadata_filter=filter,
         )
 
         # Convert QueryResult to FindResult
@@ -730,7 +730,7 @@ class VikingFS:
                 ctx=self._ctx_or_default(ctx),
                 limit=limit,
                 score_threshold=score_threshold,
-                scope_dsl=filter,
+                metadata_filter=filter,
             )
 
         query_results = await asyncio.gather(*[_execute(tq) for tq in typed_queries])

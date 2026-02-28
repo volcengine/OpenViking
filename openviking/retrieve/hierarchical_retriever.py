@@ -85,7 +85,7 @@ class HierarchicalRetriever:
         mode: RetrieverMode = RetrieverMode.THINKING,
         score_threshold: Optional[float] = None,
         score_gte: bool = False,
-        scope_dsl: Optional[Dict[str, Any]] = None,
+        metadata_filter: Optional[Dict[str, Any]] = None,
     ) -> QueryResult:
         """
         Execute hierarchical retrieval.
@@ -95,7 +95,7 @@ class HierarchicalRetriever:
             score_threshold: Custom score threshold (overrides config)
             score_gte: True uses >=, False uses >
             grep_patterns: Keyword match pattern list
-            scope_dsl: Additional scope constraints passed from public find/search filter
+            metadata_filter: Additional metadata constraints passed from public find/search filter
         """
 
         # Use custom threshold or default threshold
@@ -135,7 +135,7 @@ class HierarchicalRetriever:
             sparse_query_vector=sparse_query_vector,
             context_type=query.context_type.value if query.context_type else None,
             target_dirs=target_dirs,
-            scope_dsl=scope_dsl,
+            metadata_filter=metadata_filter,
             limit=self.GLOBAL_SEARCH_TOPK,
         )
 
@@ -155,7 +155,7 @@ class HierarchicalRetriever:
             score_gte=score_gte,
             context_type=query.context_type.value if query.context_type else None,
             target_dirs=target_dirs,
-            scope_dsl=scope_dsl,
+            metadata_filter=metadata_filter,
         )
 
         # Step 6: Convert results
@@ -174,7 +174,7 @@ class HierarchicalRetriever:
         sparse_query_vector: Optional[Dict[str, float]],
         context_type: Optional[str],
         target_dirs: List[str],
-        scope_dsl: Optional[Dict[str, Any]],
+        metadata_filter: Optional[Dict[str, Any]],
         limit: int,
     ) -> List[Dict[str, Any]]:
         """Global vector search to locate initial directories."""
@@ -184,7 +184,7 @@ class HierarchicalRetriever:
             sparse_query_vector=sparse_query_vector,
             context_type=context_type,
             target_directories=target_dirs,
-            extra_filter=scope_dsl,
+            extra_filter=metadata_filter,
             limit=limit,
         )
         return results
@@ -240,7 +240,7 @@ class HierarchicalRetriever:
         score_gte: bool = False,
         context_type: Optional[str] = None,
         target_dirs: Optional[List[str]] = None,
-        scope_dsl: Optional[Dict[str, Any]] = None,
+        metadata_filter: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Recursive search with directory priority return and score propagation.
@@ -249,7 +249,7 @@ class HierarchicalRetriever:
             threshold: Score threshold
             score_gte: True uses >=, False uses >
             grep_patterns: Keyword match patterns
-            scope_dsl: Additional scope constraints from public find/search filter
+            metadata_filter: Additional metadata constraints from public find/search filter
         """
         # Use passed threshold or default threshold
         effective_threshold = threshold if threshold is not None else self.threshold
@@ -291,7 +291,7 @@ class HierarchicalRetriever:
                 sparse_query_vector=sparse_query_vector,  # Pass sparse vector
                 context_type=context_type,
                 target_directories=target_dirs,
-                extra_filter=scope_dsl,
+                extra_filter=metadata_filter,
                 limit=pre_filter_limit,
             )
 
