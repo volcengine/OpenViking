@@ -119,7 +119,7 @@ class AGFSManager:
             sock.close()
 
     def _generate_config(self) -> Path:
-        """Dynamically generate AGFS configuration file based on backend type."""
+        """Dynamically generate AGFS configuration based on backend type."""
         config = {
             "server": {
                 "address": f":{self.port}",
@@ -171,7 +171,11 @@ class AGFSManager:
                 "enabled": True,
                 "path": "/local",
             }
+        return config
 
+    def _generate_config_file(self) -> Path:
+        """Dynamically generate AGFS configuration file based on backend type."""
+        config = self._generate_config()
         config_dir = self.data_path / ".agfs"
         config_dir.mkdir(parents=True, exist_ok=True)
         config_file = config_dir / "config.yaml"
@@ -192,9 +196,10 @@ class AGFSManager:
         self._check_port_available()
 
         self.vikingfs_path.mkdir(parents=True, exist_ok=True)
+        # NOTICE: should use viking://temp/ instead of self.vikingfs_path / "temp"
         # Create temp directory for Parser use
-        (self.vikingfs_path / "temp").mkdir(exist_ok=True)
-        config_file = self._generate_config()
+        # (self.vikingfs_path / "temp").mkdir(exist_ok=True)
+        config_file = self._generate_config_file()
 
         if not self.binary_path.exists():
             raise FileNotFoundError(
