@@ -477,9 +477,11 @@ class VikingVectorIndexBackend:
             filters.append(tenant_filter)
 
         if target_directories:
-            uri_conds = [In("uri", [target_dir]) for target_dir in target_directories if target_dir]
-            if uri_conds:
-                filters.append(Or(uri_conds))
+            non_root = [d for d in target_directories if d and d.rstrip("/") != "viking:"]
+            if non_root:
+                uri_conds = [In("uri", [target_dir]) for target_dir in non_root]
+                if uri_conds:
+                    filters.append(Or(uri_conds))
 
         if extra_filter:
             if isinstance(extra_filter, dict):
