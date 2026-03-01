@@ -1,4 +1,5 @@
 import { spawn, execSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir, tmpdir, platform } from "node:os";
@@ -26,8 +27,28 @@ type FindResult = {
 };
 
 type CaptureMode = "semantic" | "keyword";
+type ScopeName = "user" | "agent";
+type RuntimeIdentity = {
+  userId: string;
+  agentId: string;
+};
+type LocalClientCacheEntry = {
+  client: OpenVikingClient;
+  process: ReturnType<typeof spawn> | null;
+};
 
-const MEMORY_URI_PREFIXES = ["viking://user/memories", "viking://agent/memories"];
+const localClientCache = new Map<string, LocalClientCacheEntry>();
+
+const MEMORY_URI_PATTERNS = [
+  /^viking:\/\/user\/(?:[^/]+\/)?memories(?:\/|$)/,
+  /^viking:\/\/agent\/(?:[^/]+\/)?memories(?:\/|$)/,
+];
+const USER_STRUCTURE_DIRS = new Set(["memories"]);
+const AGENT_STRUCTURE_DIRS = new Set(["memories", "skills", "instructions", "workspaces"]);
+
+function md5Short(input: string): string {
+  return createHash("md5").update(input).digest("hex").slice(0, 12);
+}
 
 const MEMORY_TRIGGERS = [
   /remember|preference|prefer|important|decision|decided|always|never/i,
@@ -317,7 +338,7 @@ function clampScore(value: number | undefined): number {
 }
 
 function isMemoryUri(uri: string): boolean {
-  return MEMORY_URI_PREFIXES.some((prefix) => uri.startsWith(prefix));
+  return MEMORY_URI_PATTERNS.some((pattern) => pattern.test(uri));
 }
 
 function normalizeDedupeText(text: string): string {
@@ -573,6 +594,9 @@ function pickMemoriesForInjection(
 }
 
 class OpenVikingClient {
+  private readonly resolvedSpaceByScope: Partial<Record<ScopeName, string>> = {};
+  private runtimeIdentity: RuntimeIdentity | null = null;
+
   constructor(
     private readonly baseUrl: string,
     private readonly apiKey: string,
@@ -619,6 +643,96 @@ class OpenVikingClient {
     await this.request<{ status: string }>("/health");
   }
 
+  private async ls(uri: string): Promise<Array<Record<string, unknown>>> {
+    return this.request<Array<Record<string, unknown>>>(
+      `/api/v1/fs/ls?uri=${encodeURIComponent(uri)}&output=original`,
+    );
+  }
+
+  private async getRuntimeIdentity(): Promise<RuntimeIdentity> {
+    if (this.runtimeIdentity) {
+      return this.runtimeIdentity;
+    }
+    const fallback: RuntimeIdentity = { userId: "default", agentId: "default" };
+    try {
+      const status = await this.request<{ user?: unknown }>("/api/v1/system/status");
+      const userId =
+        typeof status.user === "string" && status.user.trim() ? status.user.trim() : "default";
+      this.runtimeIdentity = { userId, agentId: "default" };
+      return this.runtimeIdentity;
+    } catch {
+      this.runtimeIdentity = fallback;
+      return fallback;
+    }
+  }
+
+  private async resolveScopeSpace(scope: ScopeName): Promise<string> {
+    const cached = this.resolvedSpaceByScope[scope];
+    if (cached) {
+      return cached;
+    }
+
+    const identity = await this.getRuntimeIdentity();
+    const fallbackSpace =
+      scope === "user" ? identity.userId : md5Short(`${identity.userId}${identity.agentId}`);
+    const reservedDirs = scope === "user" ? USER_STRUCTURE_DIRS : AGENT_STRUCTURE_DIRS;
+    const preferredSpace =
+      scope === "user" ? identity.userId : md5Short(`${identity.userId}${identity.agentId}`);
+
+    try {
+      const entries = await this.ls(`viking://${scope}`);
+      const spaces = entries
+        .filter((entry) => entry?.isDir === true)
+        .map((entry) => (typeof entry.name === "string" ? entry.name.trim() : ""))
+        .filter((name) => name && !name.startsWith(".") && !reservedDirs.has(name));
+
+      if (spaces.length > 0) {
+        if (spaces.includes(preferredSpace)) {
+          this.resolvedSpaceByScope[scope] = preferredSpace;
+          return preferredSpace;
+        }
+        if (scope === "user" && spaces.includes("default")) {
+          this.resolvedSpaceByScope[scope] = "default";
+          return "default";
+        }
+        if (spaces.length === 1) {
+          this.resolvedSpaceByScope[scope] = spaces[0]!;
+          return spaces[0]!;
+        }
+      }
+    } catch {
+      // Fall back to identity-derived space when listing fails.
+    }
+
+    this.resolvedSpaceByScope[scope] = fallbackSpace;
+    return fallbackSpace;
+  }
+
+  private async normalizeTargetUri(targetUri: string): Promise<string> {
+    const trimmed = targetUri.trim().replace(/\/+$/, "");
+    const match = trimmed.match(/^viking:\/\/(user|agent)(?:\/(.*))?$/);
+    if (!match) {
+      return trimmed;
+    }
+    const scope = match[1] as ScopeName;
+    const rawRest = (match[2] ?? "").trim();
+    if (!rawRest) {
+      return trimmed;
+    }
+    const parts = rawRest.split("/").filter(Boolean);
+    if (parts.length === 0) {
+      return trimmed;
+    }
+
+    const reservedDirs = scope === "user" ? USER_STRUCTURE_DIRS : AGENT_STRUCTURE_DIRS;
+    if (!reservedDirs.has(parts[0]!)) {
+      return trimmed;
+    }
+
+    const space = await this.resolveScopeSpace(scope);
+    return `viking://${scope}/${space}/${parts.join("/")}`;
+  }
+
   async find(
     query: string,
     options: {
@@ -628,9 +742,10 @@ class OpenVikingClient {
       sessionId?: string;
     },
   ): Promise<FindResult> {
+    const normalizedTargetUri = await this.normalizeTargetUri(options.targetUri);
     const body = {
       query,
-      target_uri: options.targetUri,
+      target_uri: normalizedTargetUri,
       limit: options.limit,
       score_threshold: options.scoreThreshold,
       session_id: options.sessionId,
@@ -753,15 +868,22 @@ const memoryPlugin = {
 
   register(api: OpenClawPluginApi) {
     const cfg = memoryOpenVikingConfigSchema.parse(api.pluginConfig);
+    const localCacheKey = `${cfg.mode}:${cfg.baseUrl}:${cfg.configPath}:${cfg.apiKey}`;
 
     let clientPromise: Promise<OpenVikingClient>;
     let localProcess: ReturnType<typeof spawn> | null = null;
     let resolveLocalClient: ((c: OpenVikingClient) => void) | null = null;
 
     if (cfg.mode === "local") {
-      clientPromise = new Promise<OpenVikingClient>((resolve) => {
-        resolveLocalClient = resolve;
-      });
+      const cached = localClientCache.get(localCacheKey);
+      if (cached) {
+        localProcess = cached.process;
+        clientPromise = Promise.resolve(cached.client);
+      } else {
+        clientPromise = new Promise<OpenVikingClient>((resolve) => {
+          resolveLocalClient = resolve;
+        });
+      }
     } else {
       clientPromise = Promise.resolve(new OpenVikingClient(cfg.baseUrl, cfg.apiKey, cfg.timeoutMs));
     }
@@ -1271,6 +1393,7 @@ const memoryPlugin = {
           try {
             await waitForHealth(baseUrl, timeoutMs, intervalMs);
             const client = new OpenVikingClient(baseUrl, cfg.apiKey, cfg.timeoutMs);
+            localClientCache.set(localCacheKey, { client, process: child });
             resolveLocalClient(client);
             api.logger.info(
               `memory-openviking: local server started (${baseUrl}, config: ${cfg.configPath})`,
@@ -1290,6 +1413,7 @@ const memoryPlugin = {
       stop: () => {
         if (localProcess) {
           localProcess.kill("SIGTERM");
+          localClientCache.delete(localCacheKey);
           localProcess = null;
           api.logger.info("memory-openviking: local server stopped");
         } else {
