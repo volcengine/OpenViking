@@ -7,9 +7,12 @@ from loguru import logger
 
 # Try to import langfuse - will be None if not installed
 Langfuse = None
+propagate_attributes = None
 
 try:
     from langfuse import Langfuse
+    from langfuse import propagate_attributes as _propagate_attributes
+    propagate_attributes = _propagate_attributes
 except ImportError:
     pass
 
@@ -95,14 +98,20 @@ class LangfuseClient:
             if user_id:
                 propagate_kwargs["user_id"] = user_id
 
-            if propagate_kwargs and hasattr(self._client, "propagate_attributes"):
-                with self._client.propagate_attributes(**propagate_kwargs):
+            if not propagate_kwargs:
+                yield
+                return
+
+            # Use module-level propagate_attributes from langfuse SDK v3
+            global propagate_attributes
+            if propagate_attributes is not None:
+                with propagate_attributes(**propagate_kwargs):
                     yield
             else:
-                # Fallback if propagate_attributes not available
+                logger.debug(f"[LANGFUSE] propagate_attributes not available (SDK version may not support it)")
                 yield
         except Exception as e:
-            logger.debug(f"Langfuse propagate_attributes error: {e}")
+            logger.debug(f"[LANGFUSE] propagate_attributes error: {e}")
             yield
 
     @contextmanager

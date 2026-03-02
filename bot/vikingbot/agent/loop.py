@@ -418,8 +418,9 @@ class AgentLoop:
         await hook_manager.execute_hooks(
             context=HookContext(
                 event_type="message.compact",
+                session_id=session.key.safe_name(),
+                workspace_id=self.sandbox_manager.to_workspace_id(session.key),
                 session_key=session.key,
-                sandbox_key=self.sandbox_manager.to_sandbox_key(session.key),
             ),
             session=session,
         )
