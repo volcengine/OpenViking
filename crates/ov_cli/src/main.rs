@@ -265,7 +265,7 @@ enum Commands {
         #[arg(short, long, default_value = "")]
         uri: String,
         /// Maximum number of results
-        #[arg(short = 'n', long, default_value = "10")]
+        #[arg(short = 'n', long = "node-limit", default_value = "10")]
         limit: i32,
         /// Score threshold
         #[arg(short, long)]
@@ -282,7 +282,7 @@ enum Commands {
         #[arg(long)]
         session_id: Option<String>,
         /// Maximum number of results
-        #[arg(short = 'n', long, default_value = "10")]
+        #[arg(short = 'n', long = "node-limit", default_value = "10")]
         limit: i32,
         /// Score threshold
         #[arg(short, long)]
@@ -298,6 +298,9 @@ enum Commands {
         /// Case insensitive
         #[arg(short, long)]
         ignore_case: bool,
+        /// Maximum number of results
+        #[arg(short = 'n', long = "node-limit", default_value = "256")]
+        node_limit: i32,
     },
     /// Run file glob pattern search
     Glob {
@@ -568,7 +571,9 @@ async fn main() {
         Commands::Search { query, uri, session_id, limit, threshold } => {
             handle_search(query, uri, session_id, limit, threshold, ctx).await
         }
-        Commands::Grep { uri, pattern, ignore_case } => {
+        Commands::Grep { uri, pattern, ignore_case, node_limit } => {
+            handle_grep(uri, pattern, ignore_case, node_limit, ctx).await
+        }
             handle_grep(uri, pattern, ignore_case, ctx).await
         }
         Commands::Glob { pattern, uri } => {
@@ -938,7 +943,10 @@ async fn handle_stat(uri: String, ctx: CliContext) -> Result<()> {
     commands::filesystem::stat(&client, &uri, ctx.output_format, ctx.compact).await
 }
 
-async fn handle_grep(uri: String, pattern: String, ignore_case: bool, ctx: CliContext) -> Result<()> {
+async fn handle_grep(uri: String, pattern: String, ignore_case: bool, node_limit: i32, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    commands::search::grep(&client, &uri, &pattern, ignore_case, node_limit, ctx.output_format, ctx.compact).await
+}
     let client = ctx.get_client();
     commands::search::grep(&client, &uri, &pattern, ignore_case, ctx.output_format, ctx.compact).await
 }
