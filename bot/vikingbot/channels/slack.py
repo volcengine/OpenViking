@@ -74,6 +74,10 @@ class SlackChannel(BaseChannel):
 
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message through Slack."""
+        # Only send normal response messages, skip thinking/tool_call/etc.
+        if not msg.is_normal_message:
+            return
+
         if not self._web_client:
             logger.warning("Slack client not running")
             return

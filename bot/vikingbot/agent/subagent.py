@@ -4,17 +4,15 @@ import asyncio
 import json
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from loguru import logger
 
+from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.bus.events import InboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.config.schema import SessionKey
 from vikingbot.providers.base import LLMProvider
-from vikingbot.agent.tools.registry import ToolRegistry
-
-
 from vikingbot.sandbox.manager import SandboxManager
 
 

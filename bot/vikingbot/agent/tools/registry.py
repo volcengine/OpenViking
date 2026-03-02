@@ -1,25 +1,17 @@
 """Tool registry for dynamic tool management."""
 
-from loguru import logger
+import time
 
-from typing import Any, TYPE_CHECKING
-
-from vikingbot.agent.tools.base import Tool, ToolContext
-from vikingbot.config import loader
-from vikingbot.config.schema import SessionKey
-from vikingbot.hooks import HookContext
-from vikingbot.hooks.manager import hook_manager
-from vikingbot.sandbox.manager import SandboxManager
-
-"""Tool registry for dynamic tool management."""
 from loguru import logger
 
 from typing import Any
 
-from vikingbot.agent.tools.base import Tool
+from vikingbot.agent.tools.base import Tool, ToolContext
 from vikingbot.config.schema import SessionKey
 from vikingbot.hooks import HookContext
 from vikingbot.hooks.manager import hook_manager
+from vikingbot.integrations.langfuse import LangfuseClient
+from vikingbot.sandbox.manager import SandboxManager
 
 
 class ToolRegistry:
@@ -31,6 +23,7 @@ class ToolRegistry:
 
     def __init__(self):
         self._tools: dict[str, Tool] = {}
+        self.langfuse = LangfuseClient.get_instance()
 
     def register(self, tool: Tool) -> None:
         """Register a tool."""
@@ -84,15 +77,47 @@ class ToolRegistry:
             sandbox_key=sandbox_manager.to_sandbox_key(session_key),
         )
 
+        # Langfuse tool call tracing - automatic for all tools
+        tool_span = None
+        start_time = time.time()
         result = None
         try:
+            if self.langfuse.enabled:
+                tool_ctx = self.langfuse.tool_call(
+                    name=name,
+                    input=params,
+                    session_id=session_key.safe_name(),
+                )
+                tool_span = tool_ctx.__enter__()
+
             errors = tool.validate_params(params)
             if errors:
-                return f"Error: Invalid parameters for tool '{name}': " + "; ".join(errors)
-            result = await tool.execute(tool_context, **params)
+                result = f"Error: Invalid parameters for tool '{name}': " + "; ".join(errors)
+            else:
+                result = await tool.execute(tool_context, **params)
         except Exception as e:
             result = e
             logger.exception("Tool call fail: ", e)
+        finally:
+            # End Langfuse tool call tracing
+            duration_ms = (time.time() - start_time) * 1000
+            if tool_span is not None:
+                try:
+                    execute_success = not isinstance(result, Exception) and not (
+                        isinstance(result, str) and result.startswith("Error")
+                    )
+                    output_str = str(result) if result is not None else None
+                    self.langfuse.end_tool_call(
+                        span=tool_span,
+                        output=output_str,
+                        success=execute_success,
+                        metadata={"duration_ms": duration_ms},
+                    )
+                    if hasattr(tool_span, "__exit__"):
+                        tool_span.__exit__(None, None, None)
+                    self.langfuse.flush()
+                except Exception:
+                    pass
 
         hook_result = await hook_manager.execute_hooks(
             context=HookContext(

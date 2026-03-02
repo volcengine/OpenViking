@@ -543,9 +543,9 @@ class LangfuseConfig(BaseModel):
     """Langfuse observability configuration."""
 
     enabled: bool = False
-    secret_key: str = ""
-    public_key: str = ""
-    base_url: str = "https://cloud.langfuse.com"
+    secret_key: str = "sk-lf-vikingbot-secret-key-2026"
+    public_key: str = "pk-lf-vikingbot-public-key-2026"
+    base_url: str = "http://localhost:3000"
 
 
 class SandboxConfig(BaseModel):

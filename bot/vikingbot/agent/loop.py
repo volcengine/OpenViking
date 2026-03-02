@@ -22,6 +22,8 @@ from vikingbot.providers.base import LLMProvider
 from vikingbot.sandbox import SandboxManager
 from vikingbot.session.manager import SessionManager
 from vikingbot.utils.helpers import cal_str_tokens
+from vikingbot.utils.tracing import trace
+from vikingbot.utils.tracing import trace, set_session_id
 
 
 class AgentLoop:
@@ -180,7 +182,10 @@ class AgentLoop:
                 )
 
             response = await self.provider.chat(
-                messages=messages, tools=self.tools.get_definitions(), model=self.model
+                messages=messages,
+                tools=self.tools.get_definitions(),
+                model=self.model,
+                session_id=session_key.safe_name(),
             )
 
             if publish_events and response.reasoning_content:
@@ -274,6 +279,10 @@ class AgentLoop:
 
         return final_content, tools_used
 
+    @trace(
+        name="process_message",
+        extract_session_id=lambda msg, **_: msg.session_key.safe_name(),
+    )
     async def _process_message(self, msg: InboundMessage) -> OutboundMessage | None:
         """
         Process a single inbound message.
@@ -471,6 +480,7 @@ Respond with ONLY valid JSON, no markdown fences."""
                     {"role": "user", "content": prompt},
                 ],
                 model=self.model,
+                session_id=session.key.safe_name(),
             )
             text = (response.content or "").strip()
             if text.startswith("```"):
