@@ -1,5 +1,6 @@
 import os
 import shutil
+import subprocess
 import sys
 import sysconfig
 from pathlib import Path
@@ -15,10 +16,11 @@ ENGINE_SOURCE_DIR = "src/"
 
 
 class CMakeBuildExtension(build_ext):
-    """Custom CMake build extension that builds AGFS and C++ extensions."""
+    """Custom CMake build extension that builds AGFS, ov CLI and C++ extensions."""
 
     def run(self):
         self.build_agfs()
+        self.build_ov()
         self.cmake_executable = CMAKE_PATH
 
         for ext in self.extensions:
@@ -26,14 +28,24 @@ class CMakeBuildExtension(build_ext):
 
     def _copy_binary(self, src, dst):
         """Helper to copy binary and set permissions."""
-        print(f"Copying AGFS binary from {src} to {dst}")
+        print(f"Copying binary from {src} to {dst}")
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(str(src), str(dst))
         if sys.platform != "win32":
             os.chmod(str(dst), 0o755)
 
+    def _ensure_build_lib_copied(self, target_binary=None, target_lib=None):
+        """Ensure binaries are copied to the build directory (where wheel is packaged from)."""
+        if self.build_lib:
+            build_pkg_dir = Path(self.build_lib) / "openviking"
+            if target_binary and target_binary.exists():
+                self._copy_binary(target_binary, build_pkg_dir / "bin" / target_binary.name)
+            if target_lib and target_lib.exists():
+                # Libs go to lib/ as expected by agfs_utils.py
+                self._copy_binary(target_lib, build_pkg_dir / "lib" / target_lib.name)
+
     def build_agfs(self):
-        """Build AGFS server and binding library from source."""
+        """Build AGFS server and binding library."""
         # Paths
         binary_name = "agfs-server.exe" if sys.platform == "win32" else "agfs-server"
         if sys.platform == "win32":
@@ -51,14 +63,44 @@ class CMakeBuildExtension(build_ext):
         agfs_target_binary = agfs_bin_dir / binary_name
         agfs_target_lib = agfs_lib_dir / lib_name
 
-        # 1. Try to build from source
+        # 1. Check for pre-built binaries in a specified directory
+        prebuilt_dir = os.environ.get("OV_PREBUILT_BIN_DIR")
+        if prebuilt_dir:
+            prebuilt_path = Path(prebuilt_dir).resolve()
+            print(f"Checking for pre-built AGFS binaries in {prebuilt_path}...")
+            src_bin = prebuilt_path / binary_name
+            src_lib = prebuilt_path / lib_name
+
+            if src_bin.exists():
+                self._copy_binary(src_bin, agfs_target_binary)
+            if src_lib.exists():
+                self._copy_binary(src_lib, agfs_target_lib)
+
+            if agfs_target_binary.exists() and agfs_target_lib.exists():
+                print(f"[OK] Used pre-built AGFS binaries from {prebuilt_dir}")
+                self._ensure_build_lib_copied(agfs_target_binary, agfs_target_lib)
+                return
+
+        # 2. Skip build if requested and binaries exist
+        if os.environ.get("OV_SKIP_AGFS_BUILD") == "1":
+            if agfs_target_binary.exists() and agfs_target_lib.exists():
+                print("[OK] Skipping AGFS build, using existing binaries")
+                self._ensure_build_lib_copied(agfs_target_binary, agfs_target_lib)
+                return
+            else:
+                print("[Warning] OV_SKIP_AGFS_BUILD=1 but binaries not found. Will try to build.")
+
+        # 3. Try to build from source
         if agfs_server_dir.exists() and shutil.which("go"):
             print("Building AGFS from source...")
-            import subprocess
 
             # Build server
             try:
                 print(f"Building AGFS server: {binary_name}")
+                env = os.environ.copy()
+                if "GOOS" in env or "GOARCH" in env:
+                    print(f"Cross-compiling with GOOS={env.get('GOOS')} GOARCH={env.get('GOARCH')}")
+
                 build_args = (
                     ["go", "build", "-o", f"build/{binary_name}", "cmd/server/main.go"]
                     if sys.platform == "win32"
@@ -68,6 +110,7 @@ class CMakeBuildExtension(build_ext):
                 subprocess.run(
                     build_args,
                     cwd=str(agfs_server_dir),
+                    env=env,
                     check=True,
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
@@ -128,17 +171,80 @@ class CMakeBuildExtension(build_ext):
 
         else:
             if not agfs_server_dir.exists():
-                raise FileNotFoundError(f"AGFS source directory not found at {agfs_server_dir}")
+                print(f"[Warning] AGFS source directory not found at {agfs_server_dir}")
             else:
-                raise RuntimeError("Go compiler not found. Please install Go to build AGFS.")
+                print("[Warning] Go compiler not found. Cannot build AGFS from source.")
 
-        # 2. Ensure binaries are copied to the build directory (where wheel is packaged from)
-        if self.build_lib:
-            agfs_bin_dir_build = Path(self.build_lib) / "openviking"
-            if agfs_target_binary.exists():
-                self._copy_binary(agfs_target_binary, agfs_bin_dir_build / "bin" / binary_name)
-            if agfs_target_lib.exists():
-                self._copy_binary(agfs_target_lib, agfs_bin_dir_build / "lib" / lib_name)
+        # Final check and copy to build dir
+        self._ensure_build_lib_copied(agfs_target_binary, agfs_target_lib)
+
+    def build_ov(self):
+        """Build or copy ov Rust CLI."""
+        binary_name = "ov.exe" if sys.platform == "win32" else "ov"
+        ov_cli_dir = Path("crates/ov_cli").resolve()
+
+        agfs_bin_dir = Path("openviking/bin").resolve()
+        ov_target_binary = agfs_bin_dir / binary_name
+
+        # 1. Check for pre-built
+        prebuilt_dir = os.environ.get("OV_PREBUILT_BIN_DIR")
+        if prebuilt_dir:
+            src_bin = Path(prebuilt_dir).resolve() / binary_name
+            if src_bin.exists():
+                self._copy_binary(src_bin, ov_target_binary)
+                self._ensure_build_lib_copied(ov_target_binary, None)
+                return
+
+        # 2. Skip build if requested
+        if os.environ.get("OV_SKIP_OV_BUILD") == "1":
+            if ov_target_binary.exists():
+                print("[OK] Skipping ov CLI build, using existing binary")
+                self._ensure_build_lib_copied(ov_target_binary, None)
+                return
+            else:
+                print("[Warning] OV_SKIP_OV_BUILD=1 but binary not found. Will try to build.")
+
+        # 3. Build from source
+        if ov_cli_dir.exists() and shutil.which("cargo"):
+            print("Building ov CLI from source...")
+            try:
+                env = os.environ.copy()
+                build_args = ["cargo", "build", "--release"]
+
+                # Support cross-compilation via CARGO_BUILD_TARGET
+                target = env.get("CARGO_BUILD_TARGET")
+                if target:
+                    print(f"Cross-compiling with CARGO_BUILD_TARGET={target}")
+                    build_args.extend(["--target", target])
+
+                subprocess.run(
+                    build_args,
+                    cwd=str(ov_cli_dir),
+                    env=env,
+                    check=True,
+                )
+
+                # Find built binary
+                if target:
+                    built_bin = ov_cli_dir / "target" / target / "release" / binary_name
+                else:
+                    built_bin = ov_cli_dir / "target" / "release" / binary_name
+
+                if built_bin.exists():
+                    self._copy_binary(built_bin, ov_target_binary)
+                    print("[OK] ov CLI built successfully from source")
+                else:
+                    print(f"[Warning] Built ov binary not found at {built_bin}")
+            except Exception as e:
+                print(f"[Warning] Failed to build ov CLI from source: {e}")
+        else:
+            if not ov_cli_dir.exists():
+                print(f"[Warning] ov CLI source directory not found at {ov_cli_dir}")
+            else:
+                print("[Warning] Cargo not found. Cannot build ov CLI from source.")
+
+        # Final check and copy to build dir
+        self._ensure_build_lib_copied(ov_target_binary, None)
 
     def build_extension(self, ext):
         """Build a single C++ extension module using CMake."""
@@ -191,11 +297,11 @@ setup(
         "openviking": [
             "bin/agfs-server",
             "bin/agfs-server.exe",
-            "bin/libagfsbinding.so",
-            "bin/libagfsbinding.dylib",
-            "bin/libagfsbinding.dll",
-            "bin/ov",  # 新增
-            "bin/ov.exe",  # 新增
+            "lib/libagfsbinding.so",
+            "lib/libagfsbinding.dylib",
+            "lib/libagfsbinding.dll",
+            "bin/ov",
+            "bin/ov.exe",
         ],
     },
     include_package_data=True,
