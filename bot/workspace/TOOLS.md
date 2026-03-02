@@ -34,7 +34,7 @@ Search for user-related memories and events.
 ```
 openviking_memory_commit(session_id: str, messages: list) -> str
 ```
-**All important conversations, events, and memories MUST be committed to OpenViking** for future retrieval and context understanding.
+**All user's important conversations, information, and memories MUST be committed to OpenViking** for future retrieval and context understanding.
 
 ---
 

@@ -99,7 +99,7 @@ class FeishuChannelConfig(BaseChannelConfig):
     app_secret: str = ""
     encrypt_key: str = ""
     verification_token: str = ""
-    allow_from: list[str] = Field(default_factory=list)
+    allow_from: list[str] = Field(default_factory=list) ## 允许更新Agent对话的Feishu用户ID列表
 
     def channel_id(self) -> str:
         # Use app_id directly as the ID
@@ -587,6 +587,7 @@ class Config(BaseSettings):
         ]
     )
     storage_workspace: str | None = None  # From ov.conf root level storage.workspace
+    use_local_memory: bool = False
 
     @property
     def channels_config(self) -> ChannelsConfig:

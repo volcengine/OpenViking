@@ -14,6 +14,7 @@ from vikingbot.agent.tools import register_default_tools
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.bus.events import InboundMessage, OutboundMessage, OutboundEventType
 from vikingbot.bus.queue import MessageBus
+from vikingbot.config import load_config
 from vikingbot.config.schema import Config
 from vikingbot.config.schema import SessionKey
 from vikingbot.hooks import HookContext
@@ -352,6 +353,7 @@ class AgentLoop:
             messages=messages,
             session_key=session_key,
             publish_events=True,
+            sender_id=msg.sender_id,
         )
 
         # Log response preview
@@ -359,7 +361,7 @@ class AgentLoop:
         logger.info(f"Response to {msg.session_key}: {preview}")
 
         # Save to session (include tool names so consolidation sees what happened)
-        session.add_message("user", msg.content)
+        session.add_message("user", msg.content, sender_id=msg.sender_id)
         session.add_message(
             "assistant", final_content, tools_used=tools_used if tools_used else None
         )
@@ -416,7 +418,7 @@ class AgentLoop:
         await hook_manager.execute_hooks(
             context=HookContext(
                 event_type="message.compact",
-                session_id=session.key.safe_name(),
+                session_key=session.key,
                 sandbox_key=self.sandbox_manager.to_sandbox_key(session.key),
             ),
             session=session,
@@ -493,7 +495,7 @@ Respond with ONLY valid JSON, no markdown fences."""
             if entry := result.get("history_entry"):
                 memory.append_history(entry)
             if update := result.get("memory_update"):
-                if update != current_memory:
+                if load_config().use_local_memory and update != current_memory:
                     memory.write_long_term(update)
 
             session.messages = session.messages[-keep_count:] if keep_count else []

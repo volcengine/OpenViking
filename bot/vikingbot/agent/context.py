@@ -200,7 +200,6 @@ Always be helpful, accurate, and concise. When using tools, think step by step: 
         self,
         history: list[dict[str, Any]],
         current_message: str,
-        skill_names: list[str] | None = None,
         media: list[str] | None = None,
         session_key: SessionKey | None = None,
     ) -> list[dict[str, Any]]:

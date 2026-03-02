@@ -31,9 +31,13 @@ class Session:
     updated_at: datetime = field(default_factory=datetime.now)
     metadata: dict[str, Any] = field(default_factory=dict)
 
-    def add_message(self, role: str, content: str, **kwargs: Any) -> None:
+    def add_message(
+        self, role: str, content: str, sender_id: str | None = None, **kwargs: Any
+    ) -> None:
         """Add a message to the session."""
         msg = {"role": role, "content": content, "timestamp": datetime.now().isoformat(), **kwargs}
+        if sender_id is not None:
+            msg["sender_id"] = sender_id
         self.messages.append(msg)
         self.updated_at = datetime.now()
 

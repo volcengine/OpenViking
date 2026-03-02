@@ -265,11 +265,17 @@ class VikingClient:
         """通过 glob 模式匹配文件"""
         return await self.client.glob(pattern, uri=uri)
 
-    async def commit(self, session_id: str, messages: list[dict[str, Any]], user_id: str = None) -> None:
+    async def commit(self, session_id: str, messages: list[dict[str, Any]], user_id: str = None):
         """提交会话"""
         import uuid
         import re
         from openviking.message.part import TextPart, ToolPart, Part
+
+        user_exists = await self._check_user_exists(user_id)
+        if not user_exists:
+            success = await self._initialize_user(user_id)
+            if not success:
+                return {"error": "Failed to initialize user"}
 
         session = self.client.session(session_id)
 
@@ -339,39 +345,13 @@ class VikingClient:
             for message in messages:
                 await session.add_message(role=message.get("role"), content=message.get("content"))
             result = await session.commit()
-        logger.debug(f"Message add ed to OpenViking session {session_id}")
+            logger.debug(result)
+        logger.debug(f"Message add ed to OpenViking session {session_id}, user: {user_id}")
         return {"success": result["status"]}
 
     def close(self):
         """关闭客户端"""
         self.client.close()
-
-    def _parse_viking_memory(self, result: Any) -> str:
-        if result and len(result) > 0:
-            user_memories = []
-            for idx, memory in enumerate(result, start=1):
-                user_memories.append(
-                    f"{idx}. {getattr(memory, 'abstract', '')}; "
-                    f"uri: {getattr(memory, 'uri', '')}; "
-                    f"isDir: {getattr(memory, 'is_leaf', False)}; "
-                    f"related score: {getattr(memory, 'score', 0.0)}"
-                )
-            return "\n".join(user_memories)
-        return ""
-
-    async def get_viking_memory_context(
-        self, session_id: str, current_message: str, history: list[dict[str, Any]]
-    ) -> str:
-        result = await self.search_memory(current_message, limit=5)
-        if not result:
-            return ""
-        user_memory = self._parse_viking_memory(result["user_memory"])
-        agent_memory = self._parse_viking_memory(result["agent_memory"])
-        return (
-            f"## Related openviking memories.Using tools to read more details.\n"
-            f"### user memories:\n{user_memory}\n"
-            f"### agent memories:\n{agent_memory}"
-        )
 
 
 async def main_test():
@@ -379,20 +359,17 @@ async def main_test():
     # res = client.list_resources()
     # res = await client.search("头有点疼", target_uri="viking://user/memories/")
     # res = await client.get_viking_memory_context("123", current_message="头疼", history=[])
-    res = await client.search_memory("你好", "user_1")
+    # res = await client.search_memory("你好", "user_1")
     # res = await client.list_resources("viking://resources/")
     # res = await client.read_content("viking://user/memories/profile.md", level="read")
     # res = await client.add_resource("/Users/bytedance/Documents/论文/吉比特年报.pdf", "吉比特年报")
-    # res = await client.commit(
-    #     "123",
-    #     [
-    #         {"role": "user", "content": "我叫吴彦祖"},
-    #         {
-    #             "role": "assistant",
-    #             "content": "好的吴彦祖😎，我已经记 住你的名字啦，之后随时都可以认出你~",
-    #         },
-    #     ],
-    # )
+    res = await client.commit(
+        session_id="456",
+        messages=[
+            {"role": "user", "content": "我特别喜欢喝啤酒"}
+        ],
+        user_id="ou_69e48b1314d1400af9d40fe3e4c24b8a"
+    )
     # res = await client.commit("1234", [{"role": "user", "content": "帮我搜索 Python asyncio 教程"}
     #                                    ,{"role": "assistant", "content": "我来帮你r搜索 Python asyncio 相关的教程。"}])
     print(res)
@@ -412,5 +389,5 @@ async def account_test():
 
 
 if __name__ == "__main__":
-    # asyncio.run(main_test())
-    asyncio.run(account_test())
+    asyncio.run(main_test())
+    # asyncio.run(account_test())
