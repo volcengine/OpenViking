@@ -209,7 +209,7 @@ class AgentLoop:
 
         from vikingbot.agent.context import ContextBuilder
 
-        message_context = ContextBuilder(message_workspace, sandbox_manager=self.sandbox_manager)
+        message_context = ContextBuilder(message_workspace, sandbox_manager=self.sandbox_manager, sender_id=msg.sender_id)
 
         # Build initial messages (use get_history for LLM-formatted messages)
         messages = await message_context.build_messages(

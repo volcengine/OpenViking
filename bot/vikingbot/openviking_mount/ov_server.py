@@ -20,15 +20,17 @@ class VikingClient:
             self.client = ov.AsyncOpenViking(path=str(ov_data_path))
             self.user_id = "default"
             self.agent_id = "default"
+            self.account_id = "default"
             self.agent_space_name = self.client.user.agent_space_name()
         else:
             self.client = ov.AsyncHTTPClient(
                 url=openviking_config.server_url,
-                api_key=openviking_config.api_key,
+                api_key=openviking_config.admin_account_api_key,
                 agent_id=agent_id,
             )
             self.agent_id = agent_id
             self.user_id = openviking_config.user_id
+            self.account_id = openviking_config.account_id
             self.agent_space_name = hashlib.md5(
                 (self.user_id + self.agent_id).encode()
             ).hexdigest()[:12]
@@ -113,6 +115,27 @@ class VikingClient:
         except Exception as e:
             logger.warning(f"Failed to read content from {uri}: {e}")
             return ""
+
+    async def read_user_profile(self, user_id: str) -> str:
+        res = await self.client.admin_list_users(self.account_id)
+        if not res or len(res) == 0:
+            return ""
+        has_user = any(user["user_id"] == user_id for user in res)
+        if not has_user:
+            # 注册user
+            try:
+                await self.client.admin_register_user(
+                    account_id=self.account_id,
+                    user_id=user_id
+                )
+                logger.debug(f"Added user {user_id} to account {self.account_id}")
+            except Exception as e:
+                if 'User already exists' not in str(e):
+                    logger.warning(f"Failed to register user {user_id} to account {self.account_id}: {e}")
+                    return ""
+        uri = f"viking://user/{user_id}/memories/profile.md"
+        result = await self.read_content(uri=uri, level="read")
+        return result
 
     async def search(self, query: str, target_uri: Optional[str] = "") -> Dict[str, Any]:
         # session = self.client.session()
@@ -309,12 +332,12 @@ async def main_test():
 
 
 async def account_test():
-    client = ov.AsyncHTTPClient(url="")
-    await client.initialize()
-    res = await client.search("test", target_uri="viking://memories/")
+    client = await VikingClient.create(agent_id="shared")
+    # res = await client.client.admin_list_users("vikingbot")
+    # res = await client.client.admin_register_user(account_id="vikingbot", user_id="test")
+    res = await client.read_user_profile(user_id="test")
     print(res)
 
-
 if __name__ == "__main__":
-    asyncio.run(main_test())
-    # asyncio.run(account_test())
+    # asyncio.run(main_test())
+    asyncio.run(account_test())
