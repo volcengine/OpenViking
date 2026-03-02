@@ -1,7 +1,7 @@
 """Async message queue for decoupled channel-agent communication."""
 
 import asyncio
-from typing import Callable, Awaitable
+from typing import Callable, Awaitable, Any
 
 from loguru import logger
 
@@ -26,6 +26,7 @@ class MessageBus:
 
     async def publish_inbound(self, msg: InboundMessage) -> None:
         """Publish a message from a channel to the agent."""
+        #print(f'publish_inbound={msg}')
         await self.inbound.put(msg)
 
     async def consume_inbound(self) -> InboundMessage:
@@ -34,6 +35,7 @@ class MessageBus:
 
     async def publish_outbound(self, msg: OutboundMessage) -> None:
         """Publish a response from the agent to channels."""
+        #print(f'publish_outbound={msg}')
         await self.outbound.put(msg)
 
     async def consume_outbound(self) -> OutboundMessage:
@@ -41,12 +43,12 @@ class MessageBus:
         return await self.outbound.get()
 
     def subscribe_outbound(
-        self, channel: str, callback: Callable[[OutboundMessage], Awaitable[None]]
+        self, channel_key: str, callback: Callable[[OutboundMessage], Awaitable[None]]
     ) -> None:
-        """Subscribe to outbound messages for a specific channel."""
-        if channel not in self._outbound_subscribers:
-            self._outbound_subscribers[channel] = []
-        self._outbound_subscribers[channel].append(callback)
+        """Subscribe to outbound messages for a specific channel key."""
+        if channel_key not in self._outbound_subscribers:
+            self._outbound_subscribers[channel_key] = []
+        self._outbound_subscribers[channel_key].append(callback)
 
     async def dispatch_outbound(self) -> None:
         """
@@ -57,14 +59,17 @@ class MessageBus:
         while self._running:
             try:
                 msg = await asyncio.wait_for(self.outbound.get(), timeout=1.0)
-                subscribers = self._outbound_subscribers.get(msg.channel, [])
+                channel_key = msg.session_key.channel_key()
+                subscribers = self._outbound_subscribers.get(channel_key, [])
                 for callback in subscribers:
                     try:
                         await callback(msg)
                     except Exception as e:
-                        logger.exception(f"Error dispatching to {msg.channel}: {e}")
+                        logger.exception(f"Error dispatching to {channel_key}: {e}")
             except asyncio.TimeoutError:
                 continue
+            except asyncio.CancelledError:
+                break
 
     def stop(self) -> None:
         """Stop the dispatcher loop."""

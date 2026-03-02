@@ -40,8 +40,38 @@ uv venv --python 3.11
 source .venv/bin/activate  # macOS/Linux
 # .venv\Scripts\activate   # Windows
 
-# 安装依赖
+# 安装依赖（最小化）
 uv pip install -e .
+
+# 或安装包含可选功能
+uv pip install -e ".[langfuse,telegram,console]"
+```
+
+### 可选依赖
+
+只安装你需要的功能：
+
+| 功能组 | 安装命令 | 描述 |
+|---------------|-----------------|-------------|
+| **完整版** | `uv pip install -e ".[full]"` | 包含所有功能 |
+| **Langfuse** | `uv pip install -e ".[langfuse]"` | LLM 可观测性和追踪 |
+| **FUSE** | `uv pip install -e ".[fuse]"` | OpenViking 文件系统挂载 |
+| **沙箱** | `uv pip install -e ".[sandbox]"` | 代码执行沙箱 |
+| **OpenCode** | `uv pip install -e ".[opencode]"` | OpenCode AI 集成 |
+
+#### 聊天渠道
+
+| 渠道 | 安装命令 |
+|---------|-----------------|
+| **Telegram** | `uv pip install -e ".[telegram]"` |
+| **飞书/Lark** | `uv pip install -e ".[feishu]"` |
+| **钉钉** | `uv pip install -e ".[dingtalk]"` |
+| **Slack** | `uv pip install -e ".[slack]"` |
+| **QQ** | `uv pip install -e ".[qq]"` |
+
+可以组合多个功能：
+```bash
+uv pip install -e ".[langfuse,telegram,console]"
 ```
 
 ## 🚀 快速开始
@@ -70,7 +100,7 @@ vikingbot gateway
 **3. 聊天**
 
 ```bash
-vikingbot agent -m "What is 2+2?"
+vikingbot chat -m "What is 2+2?"
 ```
 
 就这么简单！您只需 2 分钟就能拥有一个可用的 AI 助手。
@@ -733,60 +763,146 @@ class ProvidersConfig(BaseModel):
 
 ### 沙箱
 
-vikingbot 支持沙箱执行以增强安全性。默认情况下，沙箱是禁用的。要在会话模式下使用 SRT 后端启用沙箱，请设置 `"enabled": true`。
+vikingbot 支持沙箱执行以增强安全性。
+
+**默认情况下，`ov.conf` 中不需要配置 sandbox：**
+- 默认后端：`direct`（直接在主机上运行代码）
+- 默认模式：`shared`（所有会话共享一个沙箱）
+
+只有当您想要更改这些默认值时，才需要添加 sandbox 配置。
 
 <details>
-<summary><b>沙箱配置（SRT 后端）</b></summary>
+<summary><b>沙箱配置选项</b></summary>
 
+**使用不同的后端或模式：**
 ```json
 {
-  "sandbox": {
-    "enabled": false,
-    "backend": "srt",
-    "mode": "per-session",
-    "network": {
-      "allowedDomains": [],
-      "deniedDomains": [],
-      "allowLocalBinding": false
-    },
-    "filesystem": {
-      "denyRead": [],
-      "allowWrite": [],
-      "denyWrite": []
-    },
-    "runtime": {
-      "cleanupOnExit": true,
-      "timeout": 300
-    },
-    "backends": {
-      "srt": {
-        "nodePath": "node"
+  "bot": {
+    "sandbox": {
+      "backend": "opensandbox",
+      "mode": "per-session"
+    }
+  }
+}
+```
+
+**可用后端：**
+| 后端 | 描述 |
+|---------|-------------|
+| `direct` | （默认）直接在主机上运行代码 |
+| `docker` | 使用 Docker 容器进行隔离 |
+| `opensandbox` | 使用 OpenSandbox 服务 |
+| `srt` | 使用 Anthropic 的 SRT 沙箱运行时 |
+| `aiosandbox` | 使用 AIO Sandbox 服务 |
+
+**可用模式：**
+| 模式 | 描述 |
+|------|-------------|
+| `shared` | （默认）所有会话共享一个沙箱 |
+| `per-session` | 每个会话使用独立的沙箱实例 |
+
+**后端特定配置（仅在使用该后端时需要）：**
+
+**Direct 后端：**
+```json
+{
+  "bot": {
+    "sandbox": {
+      "backends": {
+        "direct": {
+          "restrictToWorkspace": false
+        }
       }
     }
   }
 }
 ```
 
-**配置选项：**
+**OpenSandbox 后端：**
+```json
+{
+  "bot": {
+    "sandbox": {
+      "backend": "opensandbox",
+      "backends": {
+        "opensandbox": {
+          "serverUrl": "http://localhost:18792",
+          "apiKey": "",
+          "defaultImage": "opensandbox/code-interpreter:v1.0.1"
+        }
+      }
+    }
+  }
+}
+```
 
-| 选项 | 默认值 | 描述 |
-|--------|---------|-------------|
-| `enabled` | `false` | 启用沙箱执行 |
-| `backend` | `"srt"` | 沙箱后端：`srt` 或 `docker` |
-| `mode` | `"per-session"` | 沙箱模式：`per-session`（每个会话隔离）或 `shared`（跨会话共享） |
-| `network.allowedDomains` | `[]` | 允许网络访问的域列表（空 = 允许所有） |
-| `network.deniedDomains` | `[]` | 拒绝的域列表（无论允许列表如何都被阻止） |
-| `network.allowLocalBinding` | `false` | 允许绑定到本地地址（localhost、127.0.0.1） |
-| `filesystem.denyRead` | `[]` | 拒绝读取访问的路径/文件 |
-| `filesystem.allowWrite` | `[]` | 明确允许写入访问的路径/文件 |
-| `filesystem.denyWrite` | `[]` | 拒绝写入访问的路径/文件 |
-| `runtime.cleanupOnExit` | `true` | 退出时清理沙箱资源 |
-| `runtime.timeout` | `300` | 命令执行超时（秒） |
-| `backends.srt.nodePath` | `"/usr/local/bin/node"` | Node.js 可执行文件的路径（如果 `node` 不在 PATH 中，请使用完整路径） |
+**Docker 后端：**
+```json
+{
+  "bot": {
+    "sandbox": {
+      "backend": "docker",
+      "backends": {
+        "docker": {
+          "image": "python:3.11-slim",
+          "networkMode": "bridge"
+        }
+      }
+    }
+  }
+}
+```
+
+**SRT 后端：**
+```json
+{
+  "bot": {
+    "sandbox": {
+      "backend": "srt",
+      "backends": {
+        "srt": {
+          "settingsPath": "~/.vikingbot/srt-settings.json",
+          "nodePath": "node",
+          "network": {
+            "allowedDomains": [],
+            "deniedDomains": [],
+            "allowLocalBinding": false
+          },
+          "filesystem": {
+            "denyRead": [],
+            "allowWrite": [],
+            "denyWrite": []
+          },
+          "runtime": {
+            "cleanupOnExit": true,
+            "timeout": 300
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+**AIO Sandbox 后端：**
+```json
+{
+  "bot": {
+    "sandbox": {
+      "backend": "aiosandbox",
+      "backends": {
+        "aiosandbox": {
+          "baseUrl": "http://localhost:18794"
+        }
+      }
+    }
+  }
+}
+```
 
 **SRT 后端设置：**
 
-SRT 后端使用 `@anthropic-ai/sandbox-runtime`。当您运行 `vikingbot onboard` 时它会自动安装。
+SRT 后端使用 `@anthropic-ai/sandbox-runtime`。
 
 **系统依赖：**
 
@@ -853,11 +969,10 @@ which nodejs
 
 | 命令 | 描述 |
 |---------|-------------|
-| `vikingbot agent -m "..."` | 与代理聊天 |
-| `vikingbot agent` | 交互式聊天模式 |
-| `vikingbot agent --no-markdown` | 显示纯文本回复 |
-| `vikingbot agent --logs` | 聊天期间显示运行时日志 |
-| `vikingbot tui` | 启动 TUI（终端用户界面） |
+| `vikingbot chat -m "..."` | 与代理聊天 |
+| `vikingbot chat` | 交互式聊天模式 |
+| `vikingbot chat --no-markdown` | 显示纯文本回复 |
+| `vikingbot chat --logs` | 聊天期间显示运行时日志 |
 | `vikingbot gateway` | 启动网关和控制台 Web UI |
 | `vikingbot status` | 显示状态 |
 | `vikingbot channels login` | 链接 WhatsApp（扫描二维码） |
@@ -879,23 +994,6 @@ which nodejs
 > 在控制台中保存配置更改后，您需要重启网关服务以使更改生效。
 
 交互模式退出：`exit`、`quit`、`/exit`、`/quit`、`:q` 或 `Ctrl+D`。
-
-<details>
-<summary><b>TUI（终端用户界面）</b></summary>
-
-启动 vikingbot TUI 以获得丰富的基于终端的聊天体验：
-
-```bash
-vikingbot tui
-```
-
-TUI 提供：
-- 支持 markdown 的富文本渲染
-- 消息历史和对话管理
-- 实时代理响应
-- 导航的键盘快捷键
-
-</details>
 
 <details>
 <summary><b>定时任务（Cron）</b></summary>

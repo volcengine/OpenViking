@@ -2,28 +2,31 @@
 
 from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from typing import Any
 
 from vikingbot.config.schema import SessionKey
+
+
+class OutboundEventType(str, Enum):
+    """Type of outbound message/event."""
+    RESPONSE = "response"  # Normal response message
+    TOOL_CALL = "tool_call"  # Tool being called
+    TOOL_RESULT = "tool_result"  # Result from tool execution
+    REASONING = "reasoning"  # Reasoning content
+    ITERATION = "iteration"  # Iteration marker
 
 
 @dataclass
 class InboundMessage:
     """Message received from a chat channel."""
 
-    # channel: str  # telegram, discord, slack, whatsapp
     sender_id: str  # User identifier
-    # chat_id: str  # Chat/channel identifier
     content: str  # Message text
     session_key: SessionKey
     timestamp: datetime = field(default_factory=datetime.now)
     media: list[str] = field(default_factory=list)  # Media URLs
     metadata: dict[str, Any] = field(default_factory=dict)  # Channel-specific data
-
-    # @property
-    # def session_key(self) -> str:
-    #     """Unique key for session identification."""
-    #     return f"{self.channel}:{self.chat_id}"
 
 
 @dataclass
@@ -32,6 +35,17 @@ class OutboundMessage:
 
     session_key: SessionKey
     content: str
+    event_type: OutboundEventType = OutboundEventType.RESPONSE
     reply_to: str | None = None
     media: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def channel(self) -> str:
+        """Get channel key from session key."""
+        return self.session_key.channel_key()
+
+    @property
+    def is_normal_message(self) -> bool:
+        """Check if this is a normal response message."""
+        return self.event_type == OutboundEventType.RESPONSE

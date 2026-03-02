@@ -56,7 +56,7 @@ def register_default_tools(
     exec_config = config.tools.exec
     brave_api_key = config.tools.web.search.api_key if config.tools.web.search else None
     exa_api_key = None  # TODO: Add to config if needed
-    gen_image_model = config.agents.defaults.gen_image_model
+    gen_image_model = config.agents.gen_image_model
 
     # Get provider API key and base from config
     provider_config = config.get_provider()

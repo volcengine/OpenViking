@@ -139,7 +139,7 @@ class FeishuChannel(BaseChannel):
 
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(url, headers=headers, data=data, files=files)
-            logger.debug(f"Upload response status: {resp.status_code}")
+            # logger.debug(f"Upload response status: {resp.status_code}")
             logger.debug(f"Upload response content: {resp.text}")
             resp.raise_for_status()
             result = resp.json()
@@ -193,7 +193,7 @@ class FeishuChannel(BaseChannel):
     async def start(self) -> None:
         """Start the Feishu bot with WebSocket long connection."""
         if not FEISHU_AVAILABLE:
-            logger.exception("Feishu SDK not installed. Run: pip install lark-oapi")
+            logger.exception("Feishu SDK not installed. Install with: uv pip install 'vikingbot[feishu]' (or uv pip install -e \".[feishu]\" for local dev)")
             return
 
         if not self.config.app_id or not self.config.app_secret:
@@ -469,7 +469,7 @@ class FeishuChannel(BaseChannel):
                 receive_id_type = "chat_id"
             else:
                 receive_id_type = "open_id"
-            logger.info(f"[DEBUG] Feishu send() content: {msg.content[:300]}")
+            #logger.info(f"[DEBUG] Feishu send() content: {msg.content[:300]}")
 
             # Process images and get cleaned content
             cleaned_content, images = await self._extract_and_upload_images(msg.content)

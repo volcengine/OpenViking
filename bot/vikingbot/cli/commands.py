@@ -3,40 +3,37 @@
 import asyncio
 import json
 import os
-import signal
-from multiprocessing.spawn import prepare
-from pathlib import Path
 import select
+import signal
 import sys
-from xml.etree.ElementPath import prepare_self
-from loguru import logger
+from pathlib import Path
+
 import typer
-from jinja2.filters import prepare_map
+from loguru import logger
+from prompt_toolkit import PromptSession
+from prompt_toolkit.formatted_text import HTML
+from prompt_toolkit.history import FileHistory
+from prompt_toolkit.patch_stdout import patch_stdout
 from rich.console import Console
 from rich.markdown import Markdown
 from rich.table import Table
 from rich.text import Text
 
-from prompt_toolkit import PromptSession
-from prompt_toolkit.formatted_text import HTML
-from prompt_toolkit.history import FileHistory
-from prompt_toolkit.patch_stdout import patch_stdout
-from vikingbot.config.loader import load_config, ensure_config, get_data_dir, get_config_path
-from vikingbot.bus.queue import MessageBus
+from vikingbot import __logo__, __version__
 from vikingbot.agent.loop import AgentLoop
-
-from vikingbot.session.manager import SessionManager
+from vikingbot.bus.queue import MessageBus
+from vikingbot.channels.manager import ChannelManager
+from vikingbot.config.loader import ensure_config, get_config_path, get_data_dir, load_config
+from vikingbot.config.schema import SessionKey
 from vikingbot.cron.service import CronService
 from vikingbot.cron.types import CronJob
 from vikingbot.heartbeat.service import HeartbeatService
-from vikingbot import __version__, __logo__
-from vikingbot.config.schema import SessionKey
+from vikingbot.integrations.langfuse import LangfuseClient
 
 # Create sandbox manager
 from vikingbot.sandbox.manager import SandboxManager
-from vikingbot.utils.helpers import get_source_workspace_path
-from vikingbot.channels.manager import ChannelManager
-
+from vikingbot.session.manager import SessionManager
+from vikingbot.utils.helpers import get_source_workspace_path, set_bot_data_path, get_history_path, get_bridge_path
 
 app = typer.Typer(
     name="vikingbot",
@@ -46,6 +43,12 @@ app = typer.Typer(
 
 console = Console()
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
+
+
+def _init_bot_data(config):
+    """Initialize bot data directory and set global paths."""
+    set_bot_data_path(config.bot_data_path)
+
 
 # ---------------------------------------------------------------------------
 # CLI input: prompt_toolkit for editing, paste, history, and display
@@ -107,7 +110,7 @@ def _init_prompt_session() -> None:
     except Exception:
         pass
 
-    history_file = Path.home() / ".vikingbot" / "history" / "cli_history"
+    history_file = get_history_path() / "cli_history"
     history_file.parent.mkdir(parents=True, exist_ok=True)
 
     _PROMPT_SESSION = PromptSession(
@@ -145,7 +148,7 @@ async def _read_interactive_input_async() -> str:
     try:
         with patch_stdout():
             return await _PROMPT_SESSION.prompt_async(
-                HTML("<b fg='ansiblue'>You:</b> "),
+                HTML("<b fg='ansiblack'>You:</b> "),
             )
     except EOFError as exc:
         raise KeyboardInterrupt from exc
@@ -165,12 +168,13 @@ def main(
     pass
 
 
-def _make_provider(config):
+def _make_provider(config, langfuse_client: LangfuseClient | None = None):
     """Create LiteLLMProvider from config. Allows starting without API key."""
     from vikingbot.providers.litellm_provider import LiteLLMProvider
 
     p = config.get_provider()
-    model = config.agents.defaults.model
+
+    model = config.agents.model
     api_key = p.api_key if p else None
     api_base = config.get_api_base()
     provider_name = config.get_provider_name()
@@ -185,6 +189,7 @@ def _make_provider(config):
         default_model=model,
         extra_headers=p.extra_headers if p else None,
         provider_name=provider_name,
+        langfuse_client=langfuse_client,
     )
 
 
@@ -211,7 +216,8 @@ def gateway(
 
     bus = MessageBus()
     config = ensure_config()
-    session_manager = SessionManager(config.workspace_path)
+    _init_bot_data(config)
+    session_manager = SessionManager(config.bot_data_path)
 
     cron = prepare_cron(bus)
     channels = prepare_channel(config, bus)
@@ -232,25 +238,42 @@ def gateway(
     asyncio.run(run())
 
 
-def prepare_agent_loop(config, bus, session_manager, cron):
-    sandbox_parent_path = config.workspace_path
+def prepare_agent_loop(config, bus, session_manager, cron, quiet: bool = False):
+    sandbox_parent_path = config.bot_data_path
     source_workspace_path = get_source_workspace_path()
     sandbox_manager = SandboxManager(config, sandbox_parent_path, source_workspace_path)
-    console.print(
-        f"[green]✓[/green] Sandbox: enabled (backend={config.sandbox.backend}, mode={config.sandbox.mode})"
-    )
-    provider = _make_provider(config)
+    if config.sandbox.backend == "direct":
+        logger.warning("Sandbox: disabled (using DIRECT mode - commands run directly on host)")
+    else:
+        logger.info(f"Sandbox: enabled (backend={config.sandbox.backend}, mode={config.sandbox.mode})")
+
+    # Initialize Langfuse if enabled
+    langfuse_client = None
+    if hasattr(config, "langfuse") and config.langfuse.enabled:
+        langfuse_client = LangfuseClient(
+            enabled=config.langfuse.enabled,
+            secret_key=config.langfuse.secret_key,
+            public_key=config.langfuse.public_key,
+            base_url=config.langfuse.base_url,
+        )
+        LangfuseClient.set_instance(langfuse_client)
+        if langfuse_client.enabled:
+            logger.info(f"Langfuse: enabled (base_url={config.langfuse.base_url})")
+        else:
+            logger.warning("Langfuse: configured but failed to initialize")
+
+    provider = _make_provider(config, langfuse_client)
     # Create agent with cron service
     agent = AgentLoop(
         bus=bus,
         provider=provider,
         workspace=config.workspace_path,
-        model=config.agents.defaults.model,
-        max_iterations=config.agents.defaults.max_tool_iterations,
-        memory_window=config.agents.defaults.memory_window,
+        model=config.agents.model,
+        max_iterations=config.agents.max_tool_iterations,
+        memory_window=config.agents.memory_window,
         brave_api_key=config.tools.web.search.api_key or None,
         exa_api_key=None,
-        gen_image_model=config.agents.defaults.gen_image_model,
+        gen_image_model=config.agents.gen_image_model,
         exec_config=config.tools.exec,
         cron_service=cron,
         session_manager=session_manager,
@@ -260,7 +283,7 @@ def prepare_agent_loop(config, bus, session_manager, cron):
     return agent
 
 
-def prepare_cron(bus) -> CronService:
+def prepare_cron(bus, quiet: bool = False) -> CronService:
     # Create cron service first (callback set after agent creation)
     cron_store_path = get_data_dir() / "cron" / "jobs.json"
     cron = CronService(cron_store_path)
@@ -287,15 +310,16 @@ def prepare_cron(bus) -> CronService:
     cron.on_job = on_cron_job
 
     cron_status = cron.status()
-    if cron_status["jobs"] > 0:
-        console.print(f"[green]✓[/green] Cron: {cron_status['jobs']} scheduled jobs")
+    if cron_status["jobs"] > 0 and not quiet:
+        logger.info(f"Cron: {cron_status['jobs']} scheduled jobs")
 
     return cron
 
 
 def prepare_channel(config, bus):
 
-    channels = ChannelManager(config, bus)
+    channels = ChannelManager(bus)
+    channels.load_channels_from_config(config)
     if channels.enabled_channels:
         console.print(f"[green]✓[/green] Channels enabled: {', '.join(channels.enabled_channels)}")
     else:
@@ -330,20 +354,22 @@ def prepare_heartbeat(config, agent_loop, session_manager) -> HeartbeatService:
 
 
 async def start_console(console_port):
+    """Start the console web UI in a separate thread within the same process."""
     try:
-        import subprocess
-        import sys
-        import os
+        import threading
+        from vikingbot.console.console_gradio_simple import run_console_server
 
-        def start_gradio():
-            script_path = os.path.join(
-                os.path.dirname(__file__), "..", "console", "console_gradio_simple.py"
-            )
-            subprocess.Popen([sys.executable, script_path, str(console_port)])
+        def run_in_thread():
+            try:
+                run_console_server(console_port)
+            except Exception as e:
+                console.print(f"[yellow]Console server error: {e}[/yellow]")
 
-        start_gradio()
+        thread = threading.Thread(target=run_in_thread, daemon=True)
+        thread.start()
+        console.print(f"[green]✓[/green] Console: http://localhost:{console_port}")
     except Exception as e:
-        console.print(f"[yellow]Warning: Gradio not available ({e})[/yellow]")
+        console.print(f"[yellow]Warning: Console not available ({e})[/yellow]")
 
 
 # ============================================================================
@@ -351,92 +377,130 @@ async def start_console(console_port):
 # ============================================================================
 
 
+# Helper for thinking spinner context
+def _thinking_ctx(logs: bool):
+    """Return a context manager for showing thinking spinner."""
+    if logs:
+        from contextlib import nullcontext
+        return nullcontext()
+    return console.status("[dim]vikingbot is thinking...[/dim]", spinner="dots")
+
+
+def prepare_agent_channel(config, bus, mode: str, message: str | None, session_id: str, markdown: bool, logs: bool):
+    """Prepare channel for agent command."""
+    from vikingbot.channels.chat import ChatChannel, ChatChannelConfig
+    from vikingbot.channels.stdio import StdioChannel, StdioChannelConfig
+    from vikingbot.channels.single_turn import SingleTurnChannel, SingleTurnChannelConfig
+
+    channels = ChannelManager(bus)
+
+    if mode == "stdio":
+        channel_config = StdioChannelConfig()
+        channel = StdioChannel(
+            channel_config,
+            bus,
+            workspace_path=config.workspace_path,
+        )
+        channels.add_channel(channel)
+    elif message is not None:
+        # Single message mode - use SingleTurnChannel for clean output
+        channel_config = SingleTurnChannelConfig()
+        channel = SingleTurnChannel(
+            channel_config,
+            bus,
+            workspace_path=config.workspace_path,
+            message=message,
+            session_id=session_id,
+            markdown=markdown,
+        )
+        channels.add_channel(channel)
+    else:
+        # Interactive mode - use ChatChannel with thinking display
+        channel_config = ChatChannelConfig()
+        channel = ChatChannel(
+            channel_config,
+            bus,
+            workspace_path=config.workspace_path,
+            session_id=session_id,
+            markdown=markdown,
+            logs=logs,
+        )
+        channels.add_channel(channel)
+
+    return channels
+
+
 @app.command()
-def agent(
+def chat(
     message: str = typer.Option(None, "--message", "-m", help="Message to send to the agent"),
-    session_id: str = typer.Option("cli__default__direct", "--session", "-s", help="Session ID"),
+    session_id: str = typer.Option(None, "--session", "-s", help="Session ID"),
     markdown: bool = typer.Option(
         True, "--markdown/--no-markdown", help="Render assistant output as Markdown"
     ),
     logs: bool = typer.Option(
         False, "--logs/--no-logs", help="Show vikingbot runtime logs during chat"
     ),
+    mode: str = typer.Option(
+        "direct", "--mode", help="Mode: direct (interactive), stdio (JSON IPC)"
+    ),
 ):
     """Interact with the agent directly."""
-    if logs:
+    if message is not None:
+        # Single-turn mode: only show error logs
+        logger.remove()
+        logger.add(sys.stderr, level="ERROR")
+    elif logs:
         logger.enable("vikingbot")
     else:
         logger.disable("vikingbot")
 
-    session_key = SessionKey.from_safe_name(session_id)
-
     bus = MessageBus()
     config = ensure_config()
-    session_manager = SessionManager(config.workspace_path)
+    _init_bot_data(config)
+    session_manager = SessionManager(config.bot_data_path)
 
-    cron = prepare_cron(bus)
-    agent_loop = prepare_agent_loop(config, bus, session_manager, cron)
+    is_single_turn = message is not None
+    # Use unified default session ID
+    if session_id is None:
+        session_id = "cli__chat__default"
+    cron = prepare_cron(bus, quiet=is_single_turn)
+    channels = prepare_agent_channel(config, bus, mode, message, session_id, markdown, logs)
+    agent_loop = prepare_agent_loop(config, bus, session_manager, cron, quiet=is_single_turn)
 
-    # Show spinner when logs are off (no output to miss); skip when logs are on
-    def _thinking_ctx():
-        if logs:
-            from contextlib import nullcontext
+    async def run():
+        if is_single_turn:
+            # Single-turn mode: run channels and agent, exit after response
+            task_cron = asyncio.create_task(cron.start())
+            task_channels = asyncio.create_task(channels.start_all())
+            task_agent = asyncio.create_task(agent_loop.run())
 
-            return nullcontext()
-        # Animated spinner is safe to use with prompt_toolkit input handling
-        return console.status("[dim]vikingbot is thinking...[/dim]", spinner="dots")
+            # Wait for channels to complete (it will complete after getting response)
+            done, pending = await asyncio.wait(
+                [task_channels],
+                return_when=asyncio.FIRST_COMPLETED
+            )
 
-    if message:
-        # Single message mode
-        async def run_once():
-            with _thinking_ctx():
-                response = await agent_loop.process_direct(message, session_key=session_key)
-            _print_agent_response(response, render_markdown=markdown)
+            # Cancel all other tasks
+            for task in pending:
+                task.cancel()
+            task_cron.cancel()
+            task_agent.cancel()
 
-        asyncio.run(run_once())
-    else:
-        # Interactive mode
-        _init_prompt_session()
-        console.print(
-            f"{__logo__} Interactive mode (type [bold]exit[/bold] or [bold]Ctrl+C[/bold] to quit)\n"
-        )
+            # Wait for cancellation
+            await asyncio.gather(task_cron, task_agent, return_exceptions=True)
+        else:
+            # Interactive mode: run forever
+            tasks = []
+            tasks.append(cron.start())
+            tasks.append(channels.start_all())
+            tasks.append(agent_loop.run())
 
-        def _exit_on_sigint(signum, frame):
-            _restore_terminal()
-            console.print("\nGoodbye!")
-            os._exit(0)
+            await asyncio.gather(*tasks)
 
-        signal.signal(signal.SIGINT, _exit_on_sigint)
-
-        async def run_interactive():
-            while True:
-                try:
-                    _flush_pending_tty_input()
-                    user_input = await _read_interactive_input_async()
-                    command = user_input.strip()
-                    if not command:
-                        continue
-
-                    if _is_exit_command(command):
-                        _restore_terminal()
-                        console.print("\nGoodbye!")
-                        break
-
-                    with _thinking_ctx():
-                        response = await agent_loop.process_direct(
-                            user_input, session_key=session_key
-                        )
-                    _print_agent_response(response, render_markdown=markdown)
-                except KeyboardInterrupt:
-                    _restore_terminal()
-                    console.print("\nGoodbye!")
-                    break
-                except EOFError:
-                    _restore_terminal()
-                    console.print("\nGoodbye!")
-                    break
-
-        asyncio.run(run_interactive())
+    try:
+        asyncio.run(run())
+    except KeyboardInterrupt:
+        console.print("\nGoodbye!")
 
 
 # ============================================================================
@@ -451,7 +515,6 @@ app.add_typer(channels_app, name="channels")
 @channels_app.command("status")
 def channels_status():
     """Show channel status."""
-    from vikingbot.config.loader import load_config
     from vikingbot.config.schema import ChannelType
 
     config = load_config()
@@ -498,7 +561,7 @@ def _get_bridge_dir() -> Path:
     import subprocess
 
     # User's bridge location
-    user_bridge = Path.home() / ".vikingbot" / "bridge"
+    user_bridge = get_bridge_path()
 
     # Check if already built
     if (user_bridge / "dist" / "index.js").exists():
@@ -521,7 +584,7 @@ def _get_bridge_dir() -> Path:
 
     if not source:
         console.print("[red]Bridge source not found.[/red]")
-        console.print("Try reinstalling: pip install --force-reinstall vikingbot")
+        console.print("Try reinstalling: uv pip install --force-reinstall vikingbot")
         raise typer.Exit(1)
 
     console.print(f"{__logo__} Setting up bridge...")
@@ -554,7 +617,7 @@ def _get_bridge_dir() -> Path:
 def channels_login():
     """Link device via QR code."""
     import subprocess
-    from vikingbot.config.loader import load_config
+
     from vikingbot.config.schema import ChannelType
 
     config = load_config()
@@ -736,7 +799,7 @@ def cron_run(
         return await service.run_job(job_id, force=force)
 
     if asyncio.run(run()):
-        console.print(f"[green]✓[/green] Job executed")
+        console.print("[green]✓[/green] Job executed")
     else:
         console.print(f"[red]Failed to run job {job_id}[/red]")
 
@@ -749,7 +812,6 @@ def cron_run(
 @app.command()
 def status():
     """Show vikingbot status."""
-    from vikingbot.config.loader import load_config, get_config_path
 
     config_path = get_config_path()
     config = load_config()
@@ -767,7 +829,7 @@ def status():
     if config_path.exists():
         from vikingbot.providers.registry import PROVIDERS
 
-        console.print(f"Model: {config.agents.defaults.model}")
+        console.print(f"Model: {config.agents.model}")
 
         # Check API keys from registry
         for spec in PROVIDERS:
@@ -787,34 +849,16 @@ def status():
                 )
 
 
-@app.command()
-def tui(
-    console_port: int = typer.Option(18791, "--console-port", help="Console web UI port"),
-    enable_console: bool = typer.Option(
-        True, "--console/--no-console", help="Enable console web UI"
-    ),
-):
-    """Launch vikingbot TUI interface interface."""
-    """Interact with the agent directly."""
-    logger.enable("vikingbot")
-    if enable_console:
-        console.print(f"[green]✓[/green] Console: http://localhost:{console_port} ")
+# ============================================================================
+# Test Commands
+# ============================================================================
 
-    bus = MessageBus()
-    config = ensure_config()
-    session_manager = SessionManager(config.workspace_path)
-
-    cron = prepare_cron(bus)
-    agent_loop = prepare_agent_loop(config, bus, session_manager, cron)
-
-    async def run():
-        tasks = []
-        from vikingbot.tui.app import run_tui
-
-        tasks.append(run_tui(agent_loop, bus, config))
-        await asyncio.gather(*tasks)
-
-    asyncio.run(run())
+try:
+    from vikingbot.cli.test_commands import test_app
+    app.add_typer(test_app, name="test")
+except ImportError:
+    # If test commands not available, don't add them
+    pass
 
 
 if __name__ == "__main__":
