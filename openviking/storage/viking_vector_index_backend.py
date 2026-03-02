@@ -499,10 +499,32 @@ class VikingVectorIndexBackend:
         if ctx.role == Role.ROOT:
             return None
 
-        owner_spaces = [ctx.user.user_space_name(), ctx.user.agent_space_name()]
+        user_spaces = [ctx.user.user_space_name(), ctx.user.agent_space_name()]
+        resource_spaces = [*user_spaces, ""]
+        account_filter = Eq("account_id", ctx.account_id)
+
         if context_type == "resource":
-            owner_spaces.append("")
-        return And([Eq("account_id", ctx.account_id), In("owner_space", owner_spaces)])
+            return And([account_filter, In("owner_space", resource_spaces)])
+        if context_type in {"memory", "skill"}:
+            return And([account_filter, In("owner_space", user_spaces)])
+
+        # context_type=None: include shared owner_space only for resources.
+        return And(
+            [
+                account_filter,
+                Or(
+                    [
+                        And([Eq("context_type", "resource"), In("owner_space", resource_spaces)]),
+                        And(
+                            [
+                                In("context_type", ["memory", "skill"]),
+                                In("owner_space", user_spaces),
+                            ]
+                        ),
+                    ]
+                ),
+            ]
+        )
 
     @staticmethod
     def _merge_filters(*filters: Optional[FilterExpr]) -> Optional[FilterExpr]:
