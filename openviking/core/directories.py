@@ -229,35 +229,12 @@ class DirectoryInitializer:
         else:
             logger.debug(f"[VikingFS] Directory {uri} already exists")
 
-        # 2. Ensure record exists in vector storage
+        # 2. Seed directory L0/L1 vectors only during fresh initialization.
         owner_space = self._owner_space_for_scope(scope=scope, ctx=ctx)
-        existing = await self.vikingdb.get_context_by_uri(
-            account_id=ctx.account_id,
-            uri=uri,
-            limit=1,
-        )
-        record_created = False
-        if not existing:
-            context = Context(
-                uri=uri,
-                parent_uri=parent_uri,
-                is_leaf=False,
-                context_type=get_context_type_for_uri(uri),
-                abstract=defn.abstract,
-                user=ctx.user,
-                account_id=ctx.account_id,
-                owner_space=owner_space,
-            )
-            context.set_vectorize(Vectorize(text=defn.overview))
-            dir_emb_msg = EmbeddingMsgConverter.from_context(context)
-            await self.vikingdb.enqueue_embedding_msg(dir_emb_msg)
-            created = True
-            record_created = True
-
-        # Only seed L0/L1 vectors during fresh initialization flow.
-        if agfs_created or record_created:
+        if agfs_created:
             await self._ensure_directory_l0_l1_vectors(
                 uri=uri,
+                parent_uri=parent_uri,
                 defn=defn,
                 owner_space=owner_space,
                 ctx=ctx,
@@ -267,29 +244,31 @@ class DirectoryInitializer:
     async def _ensure_directory_l0_l1_vectors(
         self,
         uri: str,
+        parent_uri: Optional[str],
         defn: DirectoryDefinition,
         owner_space: str,
         ctx: RequestContext,
     ) -> None:
         """Ensure L0/L1 vector records exist for a preset directory."""
-        for filename, vector_text in (
-            (".abstract.md", defn.abstract),
-            (".overview.md", defn.overview),
+        for level, vector_text in (
+            (0, defn.abstract),
+            (1, defn.overview),
         ):
-            child_uri = f"{uri}/{filename}"
             existing = await self.vikingdb.get_context_by_uri(
                 account_id=ctx.account_id,
-                uri=child_uri,
+                uri=uri,
+                level=level,
                 limit=1,
             )
             if existing:
                 continue
             context = Context(
-                uri=child_uri,
-                parent_uri=uri,
-                is_leaf=True,
+                uri=uri,
+                parent_uri=parent_uri,
+                is_leaf=False,
                 context_type=get_context_type_for_uri(uri),
                 abstract=defn.abstract,
+                level=level,
                 user=ctx.user,
                 account_id=ctx.account_id,
                 owner_space=owner_space,

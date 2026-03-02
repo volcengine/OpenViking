@@ -8,7 +8,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from openviking.server.identity import RequestContext, Role
-from openviking.storage.expr import And, Eq, FilterExpr, In, Or, RawDSL
+from openviking.storage.expr import And, Eq, FilterExpr, In, Or, PathScope, RawDSL
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.utils.logging_init import init_cpp_logging
 from openviking.storage.vectordb_adapters import CollectionAdapter, create_collection_adapter
@@ -342,7 +342,7 @@ class VikingVectorIndexBackend:
                 target_directories=target_directories,
                 extra_filter=extra_filter,
             ),
-            In("level", [1, 2]),
+            In("level", [0, 1]),
         )
         return await self.search(
             query_vector=query_vector,
@@ -363,7 +363,7 @@ class VikingVectorIndexBackend:
         limit: int = 10,
     ) -> List[Dict[str, Any]]:
         merged_filter = self._merge_filters(
-            Eq("parent_uri", parent_uri),
+            PathScope("uri", parent_uri, depth=1),
             self._build_scope_filter(
                 ctx=ctx,
                 context_type=context_type,
@@ -407,11 +407,14 @@ class VikingVectorIndexBackend:
         account_id: str,
         uri: str,
         owner_space: Optional[str] = None,
+        level: Optional[int] = None,
         limit: int = 1,
     ) -> List[Dict[str, Any]]:
-        conds: List[FilterExpr] = [Eq("uri", uri), Eq("account_id", account_id)]
+        conds: List[FilterExpr] = [PathScope("uri", uri, depth=0), Eq("account_id", account_id)]
         if owner_space:
             conds.append(Eq("owner_space", owner_space))
+        if level is not None:
+            conds.append(Eq("level", level))
         return await self.filter(filter=And(conds), limit=limit)
 
     async def delete_account_data(self, account_id: str) -> int:
@@ -477,7 +480,11 @@ class VikingVectorIndexBackend:
             filters.append(tenant_filter)
 
         if target_directories:
-            uri_conds = [In("uri", [target_dir]) for target_dir in target_directories if target_dir]
+            uri_conds = [
+                PathScope("uri", target_dir, depth=-1)
+                for target_dir in target_directories
+                if target_dir
+            ]
             if uri_conds:
                 filters.append(Or(uri_conds))
 
@@ -528,7 +535,16 @@ class VikingVectorIndexBackend:
 
     @staticmethod
     def _merge_filters(*filters: Optional[FilterExpr]) -> Optional[FilterExpr]:
-        non_empty = [f for f in filters if f]
+        non_empty = [
+            f
+            for f in filters
+            if f
+            and not (
+                isinstance(f, RawDSL)
+                and f.payload.get("op") == "and"
+                and not f.payload.get("conds")
+            )
+        ]
         if not non_empty:
             return None
         if len(non_empty) == 1:

@@ -17,6 +17,7 @@ from openviking.storage.expr import (
     FilterExpr,
     In,
     Or,
+    PathScope,
     Range,
     RawDSL,
     TimeRange,
@@ -284,7 +285,10 @@ class CollectionAdapter(ABC):
                 if expr.field in self._URI_FIELD_NAMES
                 else expr.value
             )
-            return {"op": "must", "field": expr.field, "conds": [value]}
+            payload = {"op": "must", "field": expr.field, "conds": [value]}
+            if expr.field in self._URI_FIELD_NAMES:
+                payload["para"] = "-d=0"
+            return payload
         if isinstance(expr, In):
             values = (
                 [self._encode_uri_field_value(v) for v in expr.values]
@@ -292,6 +296,18 @@ class CollectionAdapter(ABC):
                 else list(expr.values)
             )
             return {"op": "must", "field": expr.field, "conds": values}
+        if isinstance(expr, PathScope):
+            path = (
+                self._encode_uri_field_value(expr.path)
+                if expr.field in self._URI_FIELD_NAMES
+                else expr.path
+            )
+            return {
+                "op": "must",
+                "field": expr.field,
+                "conds": [path],
+                "para": f"-d={expr.depth}",
+            }
         if isinstance(expr, Range):
             payload: Dict[str, Any] = {"op": "range", "field": expr.field}
             if expr.gte is not None:

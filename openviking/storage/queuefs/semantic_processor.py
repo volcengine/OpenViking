@@ -520,46 +520,42 @@ class SemanticProcessor(DequeueHandlerBase):
         active_ctx = ctx or self._current_ctx
         queue_manager = get_queue_manager()
         embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING)
+        owner_space = self._owner_space_for_uri(uri, active_ctx)
+        parent_uri = VikingURI(uri).parent.uri
 
         # Vectorize L0: .abstract.md (abstract), level=0
-        abstract_uri = f"{uri}/.abstract.md"
         context_abstract = Context(
-            uri=abstract_uri,
-            parent_uri=uri,
+            uri=uri,
+            parent_uri=parent_uri,
             is_leaf=False,
             abstract=abstract,
             context_type=context_type,
+            level=0,
             user=active_ctx.user,
             account_id=active_ctx.account_id,
-            owner_space=self._owner_space_for_uri(uri, active_ctx),
+            owner_space=owner_space,
         )
         context_abstract.set_vectorize(Vectorize(text=abstract))
         embedding_msg_abstract = EmbeddingMsgConverter.from_context(context_abstract)
         await embedding_queue.enqueue(embedding_msg_abstract)  # type: ignore
-        logger.debug(f"Enqueued directory L0 (abstract) for vectorization: {abstract_uri}")
+        logger.debug(f"Enqueued directory L0 (abstract) for vectorization: {uri}")
 
         # Vectorize L1: .overview.md (overview), level=1
-        overview_uri = f"{uri}/.overview.md"
         context_overview = Context(
-            uri=overview_uri,
-            parent_uri=uri,
+            uri=uri,
+            parent_uri=parent_uri,
             is_leaf=False,
             abstract=abstract,
             context_type=context_type,
+            level=1,
             user=active_ctx.user,
             account_id=active_ctx.account_id,
-            owner_space=(
-                active_ctx.user.agent_space_name()
-                if uri.startswith("viking://agent/")
-                else active_ctx.user.user_space_name()
-                if uri.startswith("viking://user/") or uri.startswith("viking://session/")
-                else ""
-            ),
+            owner_space=owner_space,
         )
         context_overview.set_vectorize(Vectorize(text=overview))
         embedding_msg_overview = EmbeddingMsgConverter.from_context(context_overview)
         await embedding_queue.enqueue(embedding_msg_overview)  # type: ignore
-        logger.debug(f"Enqueued directory L1 (overview) for vectorization: {overview_uri}")
+        logger.debug(f"Enqueued directory L1 (overview) for vectorization: {uri}")
 
     async def _vectorize_files(
         self,

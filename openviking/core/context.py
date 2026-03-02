@@ -65,6 +65,7 @@ class Context:
         active_count: int = 0,
         related_uri: Optional[List[str]] = None,
         meta: Optional[Dict[str, Any]] = None,
+        level: int | ContextLevel | None = None,
         session_id: Optional[str] = None,
         user: Optional[UserIdentifier] = None,
         account_id: Optional[str] = None,
@@ -86,6 +87,10 @@ class Context:
         self.active_count = active_count
         self.related_uri = related_uri or []
         self.meta = meta or {}
+        try:
+            self.level = int(level) if level is not None else None
+        except (TypeError, ValueError):
+            self.level = None
         self.session_id = session_id
         self.user = user
         self.account_id = account_id or (user.account_id if user else "default")
@@ -168,6 +173,8 @@ class Context:
             "account_id": self.account_id,
             "owner_space": self.owner_space,
         }
+        if self.level is not None:
+            data["level"] = int(self.level)
 
         if self.user:
             data["user"] = self.user.to_dict()
@@ -204,6 +211,13 @@ class Context:
             active_count=data.get("active_count", 0),
             related_uri=data.get("related_uri", []),
             meta=data.get("meta", {}),
+            level=(
+                data.get("level")
+                if data.get("level") is not None
+                else data.get("meta", {}).get("level")
+                if isinstance(data.get("meta"), dict)
+                else None
+            ),
             session_id=data.get("session_id"),
             user=user_obj,
             account_id=data.get("account_id"),
