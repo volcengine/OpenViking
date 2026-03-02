@@ -474,26 +474,26 @@ class FeishuChannel(BaseChannel):
             # Process images and get cleaned content
             cleaned_content, images = await self._extract_and_upload_images(msg.content)
             
-            # Process @mentions: convert @ou_xxxx to Feishu mention format
+                                    # Process @mentions: convert @ou_xxxx to Feishu mention format
             # Pattern: @ou_xxxxxxx (user open_id)
             import re
             mention_pattern = r"@(ou_[a-zA-Z0-9_-]+)"
-            
+
             def replace_mention(match):
                 open_id = match.group(1)
                 return f'<at user_id="{open_id}">@{open_id}</at>'
-            
+
             # Replace all mentions
             content_with_mentions = re.sub(mention_pattern, replace_mention, cleaned_content)
-            
+
             # Also support @all mention
             content_with_mentions = content_with_mentions.replace(
                 "@all", '<at user_id="all">所有人</at>'
             )
-            
+
             # Build post message content
             content_elements = []
-            
+
             # Add text content with mentions
             if content_with_mentions.strip():
                 content_elements.append([
@@ -502,7 +502,7 @@ class FeishuChannel(BaseChannel):
                         "text": content_with_mentions
                     }
                 ])
-            
+
             # Add images
             for img in images:
                 content_elements.append([
@@ -511,7 +511,7 @@ class FeishuChannel(BaseChannel):
                         "image_key": img["image_key"]
                     }
                 ])
-            
+
             # Ensure we have content
             if not content_elements:
                 content_elements.append([
@@ -520,23 +520,23 @@ class FeishuChannel(BaseChannel):
                         "text": " "
                     }
                 ])
-            
+
             post_content = {
                 "zh_cn": {
                     "title": "",
                     "content": content_elements
                 }
             }
-            
+
             import json
             content = json.dumps(post_content, ensure_ascii=False)
-            
+
             # Check if we need to reply to a specific message
             # Get reply message ID from metadata (original incoming message ID)
             reply_to_message_id = None
             if msg.metadata:
                 reply_to_message_id = msg.metadata.get("reply_to_message_id") or msg.metadata.get("message_id")
-            
+
             if reply_to_message_id:
                 # Reply to existing message (quotes the original)
                 request = (
@@ -546,6 +546,8 @@ class FeishuChannel(BaseChannel):
                         ReplyMessageRequestBody.builder()
                         .content(content)
                         .msg_type("post")
+                        # Reply in topic thread if root_id exists
+                        .reply_in_thread(msg.metadata.get("root_id") is not None if msg.metadata else False)
                         .build()
                     )
                     .build()
@@ -569,10 +571,17 @@ class FeishuChannel(BaseChannel):
                 response = self._client.im.v1.message.create(request)
 
             if not response.success():
-                logger.exception(
-                    f"Failed to send Feishu message: code={response.code}, "
-                    f"msg={response.msg}, log_id={response.get_log_id()}"
-                )
+                if response.code == 230011:
+                    # Original message was withdrawn, just log warning
+                    logger.warning(
+                        f"Failed to reply to message: original message was withdrawn, code={response.code}, "
+                        f"msg={response.msg}, log_id={response.get_log_id()}"
+                    )
+                else:
+                    logger.exception(
+                        f"Failed to send Feishu message: code={response.code}, "
+                        f"msg={response.msg}, log_id={response.get_log_id()}"
+                    )
             else:
                 logger.debug(f"Feishu message sent to {msg.session_key.chat_id}")
 
@@ -720,6 +729,8 @@ class FeishuChannel(BaseChannel):
                     "message_id": message_id,
                     "chat_type": chat_type,
                     "msg_type": msg_type,
+                    "root_id": message.root_id,  # Topic/thread ID for topic groups
+                    "sender_id": sender_id,  # Original message sender ID for @mention in replies
                 },
             )
 
@@ -730,7 +741,7 @@ class FeishuChannel(BaseChannel):
         """Extract images from markdown content, upload to Feishu, and return cleaned content."""
         images = []
         cleaned_content = content
-        
+
         # Pattern 1: ![alt](send://...)
         markdown_pattern = r"!\[([^\]]*)\]\((send://[^)\s]+\.(png|jpeg|jpg|gif|bmp|webp))\)"
         for m in re.finditer(markdown_pattern, content):
@@ -738,16 +749,16 @@ class FeishuChannel(BaseChannel):
             try:
                 logger.debug(f"Processing Markdown image: {img_url[:100]}...")
                 is_content, result = await self._parse_data_uri(img_url)
-                
+
                 if not is_content and isinstance(result, bytes):
                     image_key = await self._upload_image_to_feishu(result)
                     images.append({"image_key": image_key})
             except Exception as e:
                 logger.exception(f"Failed to upload Markdown image {img_url[:100]}: {e}")
-        
+
         # Remove markdown image syntax
         cleaned_content = re.sub(markdown_pattern, "", cleaned_content)
-        
+
         # Pattern 2: send://... (without alt text)
         send_pattern = r"(send://[^)\s]+\.(png|jpeg|jpg|gif|bmp|webp))\)?"
         for m in re.finditer(send_pattern, content):
@@ -755,14 +766,14 @@ class FeishuChannel(BaseChannel):
             try:
                 logger.debug(f"Processing Markdown image: {img_url[:100]}...")
                 is_content, result = await self._parse_data_uri(img_url)
-                
+
                 if not is_content and isinstance(result, bytes):
                     image_key = await self._upload_image_to_feishu(result)
                     images.append({"image_key": image_key})
             except Exception as e:
                 logger.exception(f"Failed to upload Markdown image {img_url[:100]}: {e}")
-        
+
         # Remove standalone send:// URLs
         cleaned_content = re.sub(send_pattern, "", cleaned_content)
-        
+
         return cleaned_content.strip(), images
