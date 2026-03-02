@@ -4,6 +4,24 @@ Give [OpenClaw](https://github.com/openclaw/openclaw) long-term memory powered b
 
 ---
 
+## One-Click Install (Linux / macOS)
+
+**Prerequisites:** Python >= 3.10, Node.js >= 22. The script checks these and prompts you to install any missing components.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-memory-plugin/install.sh | bash
+```
+
+Non-interactive mode:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-memory-plugin/install.sh | bash -s -y
+```
+
+The script will: 1) validate the OpenViking runtime environment (and check that OpenClaw is installed), 2) install OpenViking only, 3) configure and deploy the memory plugin.
+
+---
+
 ## 1. Quick Start (Let OpenClaw Install It)
 
 Copy the skill file into OpenClaw's skill directory, then let OpenClaw handle the rest:

@@ -4,6 +4,24 @@
 
 ---
 
+## 一键安装（Linux / macOS）
+
+**前置条件：** Python >= 3.10、Node.js >= 22。脚本会自动校验这些依赖，若有缺失会给出安装指引。
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-memory-plugin/install.sh | bash
+```
+
+非交互模式（使用默认配置）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-memory-plugin/install.sh | bash -s -y
+```
+
+脚本会：1) 校验 OpenViking 运行环境（并检查是否已安装 OpenClaw）；2) 仅安装 OpenViking；3) 配置并部署记忆插件。
+
+---
+
 ## 一、快速开始（让 OpenClaw 自动安装）
 
 先将技能文件复制到 OpenClaw 技能目录，再让 OpenClaw 完成后续步骤：
