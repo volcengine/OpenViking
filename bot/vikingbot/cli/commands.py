@@ -239,7 +239,7 @@ def gateway(
 
 
 def prepare_agent_loop(config, bus, session_manager, cron, quiet: bool = False):
-    sandbox_parent_path = config.bot_data_path
+    sandbox_parent_path = config.workspace_path
     source_workspace_path = get_source_workspace_path()
     sandbox_manager = SandboxManager(config, sandbox_parent_path, source_workspace_path)
     if config.sandbox.backend == "direct":

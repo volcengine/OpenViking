@@ -78,26 +78,8 @@ def get_source_workspace_path() -> Path:
     return Path(__file__).parent.parent.parent / "workspace"
 
 
-def get_workspace_path(workspace: str | None = None, ensure_exists: bool = True) -> Path:
-    """
-    Get the workspace path.
-
-    Args:
-        workspace: Optional workspace path. Defaults to {bot_data_path}/workspace/shared.
-        ensure_exists: If True, ensure the directory exists (creates it if necessary.
-
-    Returns:
-        Expanded workspace path.
-    """
-    if workspace:
-        path = Path(workspace).expanduser()
-    else:
-        path = get_bot_data_path() / "workspace" / "shared"
-
-    if ensure_exists:
-        ensure_workspace_templates(path)
-        return ensure_dir(path)
-    return path
+def get_workspace_path() -> Path:
+    return ensure_dir(get_bot_data_path() / "workspace")
 
 
 def ensure_workspace_templates(workspace: Path) -> None:

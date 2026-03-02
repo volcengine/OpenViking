@@ -155,12 +155,11 @@ class LiteLLMProvider(LLMProvider):
             kwargs["tool_choice"] = "auto"
 
         # Direct Langfuse v3 SDK usage
+        # Note: session_id is set via propagate_attributes in loop.py, not here
         langfuse_generation = None
         try:
             if self.langfuse.enabled and self.langfuse._client:
                 metadata = {"has_tools": tools is not None}
-                if session_id:
-                    metadata["session_id"] = session_id
                 langfuse_generation = self.langfuse._client.start_generation(
                     name="llm-chat",
                     model=model,
