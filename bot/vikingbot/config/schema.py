@@ -2,8 +2,9 @@
 
 from enum import Enum
 from pathlib import Path
-from typing import Union, Any
-from pydantic import BaseModel, Field, ConfigDict
+from typing import Any, Dict, Optional
+
+from pydantic import BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -41,11 +42,14 @@ class SandboxMode(str, Enum):
 class BaseChannelConfig(BaseModel):
     """Base channel configuration."""
 
-    type: ChannelType
+    type: Any = ChannelType.TELEGRAM  # Default for backwards compatibility
     enabled: bool = True
 
     def channel_id(self) -> str:
-        raise "default"
+        return "default"
+
+    def channel_key(self):
+        return f"{getattr(self.type, 'value', self.type)}__{self.channel_id()}"
 
 
 # ========== Channel helper configs ==========
@@ -348,22 +352,13 @@ class ChannelsConfig(BaseModel):
         return result
 
 
-class AgentDefaults(BaseModel):
-    """Default agent configuration."""
-
-    workspace: str = "~/.vikingbot/workspace"
-    model: str = "openai/doubao-seed-2-0-pro-260215"
-    max_tokens: int = 8192
-    temperature: float = 0.7
-    max_tool_iterations: int = 50
-    memory_window: int = 50
-    gen_image_model: str = "openai/doubao-seedream-4-5-251128"
-
-
 class AgentsConfig(BaseModel):
     """Agent configuration."""
 
-    defaults: AgentDefaults = Field(default_factory=AgentDefaults)
+    model: str = "openai/doubao-seed-2-0-pro-260215"
+    max_tool_iterations: int = 50
+    memory_window: int = 50
+    gen_image_model: str = "openai/doubao-seedream-4-5-251128"
 
 
 class ProviderConfig(BaseModel):
@@ -543,6 +538,15 @@ class SandboxBackendsConfig(BaseModel):
     aiosandbox: AioSandboxBackendConfig = Field(default_factory=AioSandboxBackendConfig)
 
 
+class LangfuseConfig(BaseModel):
+    """Langfuse observability configuration."""
+
+    enabled: bool = False
+    secret_key: str = ""
+    public_key: str = ""
+    base_url: str = "https://cloud.langfuse.com"
+
+
 class SandboxConfig(BaseModel):
     """Sandbox configuration."""
 
@@ -556,12 +560,13 @@ class Config(BaseSettings):
 
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     channels: list[Any] = Field(default_factory=list)
-    providers: ProvidersConfig = Field(default_factory=ProvidersConfig)
+    providers: ProvidersConfig = Field(default_factory=ProvidersConfig, deprecated=True)  # Deprecated: Use ov.conf vlm config instead
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     openviking: OpenVikingConfig = Field(default_factory=OpenVikingConfig)
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
+    langfuse: LangfuseConfig = Field(default_factory=LangfuseConfig)
     hooks: list[str] = Field(["vikingbot.hooks.builtins.openviking_hooks.hooks"])
     skills: list[str] = Field(
         default_factory=lambda: [
@@ -575,6 +580,7 @@ class Config(BaseSettings):
             "summarize",
         ]
     )
+    storage_workspace: str | None = None  # From ov.conf root level storage.workspace
 
     @property
     def channels_config(self) -> ChannelsConfig:
@@ -584,29 +590,56 @@ class Config(BaseSettings):
         return config
 
     @property
+    def bot_data_path(self) -> Path:
+        """Get expanded bot data path: {storage_workspace}/bot."""
+        return Path(self.storage_workspace).expanduser() / "bot"
+
+    @property
     def workspace_path(self) -> Path:
-        """Get expanded workspace path."""
-        return Path(self.agents.defaults.workspace).expanduser()
+        """Get expanded workspace path: {storage_workspace}/bot/workspace."""
+        return self.bot_data_path / "workspace"
+
+    def _get_vlm_config(self) -> Optional[Dict[str, Any]]:
+        """Get vlm config from OpenVikingConfig. Returns (vlm_config_dict)."""
+        from openviking_cli.utils.config import get_openviking_config
+        ov_config = get_openviking_config()
+
+        if hasattr(ov_config, "vlm"):
+            return ov_config.vlm.model_dump()
+        return None
 
     def _match_provider(
         self, model: str | None = None
     ) -> tuple["ProviderConfig | None", str | None]:
-        """Match provider config and its registry name. Returns (config, spec_name)."""
-        from vikingbot.providers.registry import PROVIDERS
+        """Match provider config from ov.conf vlm section. Returns (config, spec_name)."""
+        # Get from OpenVikingConfig vlm
+        vlm_config = self._get_vlm_config()
 
-        model_lower = (model or self.agents.defaults.model).lower()
+        if vlm_config:
+            provider_name = vlm_config.get("provider")
+            if provider_name:
+                # Build provider config from vlm
+                provider_config = ProviderConfig()
 
-        # Match by keyword (order follows PROVIDERS registry)
-        for spec in PROVIDERS:
-            p = getattr(self.providers, spec.name, None)
-            if p and any(kw in model_lower for kw in spec.keywords) and p.api_key:
-                return p, spec.name
+                # Try to get from vlm.providers first
+                if "providers" in vlm_config and provider_name in vlm_config["providers"]:
+                    p_data = vlm_config["providers"][provider_name]
+                    if "api_key" in p_data:
+                        provider_config.api_key = p_data["api_key"]
+                    if "api_base" in p_data:
+                        provider_config.api_base = p_data["api_base"]
+                    if "extra_headers" in p_data:
+                        provider_config.extra_headers = p_data["extra_headers"]
+                else:
+                    # Fall back to top-level vlm fields
+                    if vlm_config.get("api_key"):
+                        provider_config.api_key = vlm_config["api_key"]
+                    if vlm_config.get("api_base"):
+                        provider_config.api_base = vlm_config["api_base"]
 
-        # Fallback: gateways first, then others (follows registry order)
-        for spec in PROVIDERS:
-            p = getattr(self.providers, spec.name, None)
-            if p and p.api_key:
-                return p, spec.name
+                if provider_config.api_key:
+                    return provider_config, provider_name
+
         return None, None
 
     def get_provider(self, model: str | None = None) -> ProviderConfig | None:
@@ -631,9 +664,6 @@ class Config(BaseSettings):
         p, name = self._match_provider(model)
         if p and p.api_base:
             return p.api_base
-        # Only gateways get a default api_base here. Standard providers
-        # (like Moonshot) set their base URL via env vars in _setup_env
-        # to avoid polluting the global litellm.api_base.
         if name:
             spec = find_by_name(name)
             if spec and spec.is_gateway and spec.default_api_base:

@@ -10,9 +10,67 @@ def ensure_dir(path: Path) -> Path:
     return path
 
 
+# Global bot data path - must be set before use
+_bot_data_path: Path | None = None
+
+
+def set_bot_data_path(path: Path) -> None:
+    """Set the global bot data path."""
+    global _bot_data_path
+    _bot_data_path = path
+
+
+def get_bot_data_path() -> Path:
+    """Get the bot data directory. set_bot_data_path() must be called first."""
+    global _bot_data_path
+    if not _bot_data_path:
+        raise RuntimeError("bot_data_path not set. Call set_bot_data_path() first.")
+    return ensure_dir(_bot_data_path)
+
+
 def get_data_path() -> Path:
-    """Get the vikingbot data directory (~/.vikingbot)."""
-    return ensure_dir(Path.home() / ".vikingbot")
+    """Get the bot data directory. Alias for get_bot_data_path()."""
+    return get_bot_data_path()
+
+
+def get_sessions_path() -> Path:
+    """Get the sessions storage directory."""
+    return ensure_dir(get_bot_data_path() / "sessions")
+
+
+def get_history_path() -> Path:
+    """Get the CLI history directory."""
+    return ensure_dir(get_bot_data_path() / "history")
+
+
+def get_bridge_path() -> Path:
+    """Get the bridge directory."""
+    return ensure_dir(get_bot_data_path() / "bridge")
+
+
+def get_images_path() -> Path:
+    """Get the images directory."""
+    return ensure_dir(get_bot_data_path() / "images")
+
+
+def get_media_path() -> Path:
+    """Get the media directory."""
+    return ensure_dir(get_bot_data_path() / "media")
+
+
+def get_received_path() -> Path:
+    """Get the received files directory."""
+    return ensure_dir(get_bot_data_path() / "received")
+
+
+def get_mochat_path() -> Path:
+    """Get the mochat state directory."""
+    return ensure_dir(get_bot_data_path() / "mochat")
+
+
+def get_mounts_path() -> Path:
+    """Get the mounts directory."""
+    return ensure_dir(get_bot_data_path() / "mounts")
 
 
 def get_source_workspace_path() -> Path:
@@ -25,7 +83,7 @@ def get_workspace_path(workspace: str | None = None, ensure_exists: bool = True)
     Get the workspace path.
 
     Args:
-        workspace: Optional workspace path. Defaults to ~/.vikingbot/workspace/shared.
+        workspace: Optional workspace path. Defaults to {bot_data_path}/workspace/shared.
         ensure_exists: If True, ensure the directory exists (creates it if necessary.
 
     Returns:
@@ -34,7 +92,7 @@ def get_workspace_path(workspace: str | None = None, ensure_exists: bool = True)
     if workspace:
         path = Path(workspace).expanduser()
     else:
-        path = Path.home() / ".vikingbot" / "workspace" / "shared"
+        path = get_bot_data_path() / "workspace" / "shared"
 
     if ensure_exists:
         ensure_workspace_templates(path)
@@ -210,11 +268,6 @@ This file stores important information that should persist across sessions.
     # Create skills directory for custom user skills
     skills_dir = workspace / "skills"
     skills_dir.mkdir(exist_ok=True)
-
-
-def get_sessions_path() -> Path:
-    """Get the sessions storage directory."""
-    return ensure_dir(get_data_path() / "sessions")
 
 
 def get_skills_path(workspace: Path | None = None) -> Path:

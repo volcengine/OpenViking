@@ -1,6 +1,7 @@
 """Configuration loading utilities."""
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 from loguru import logger
@@ -8,8 +9,26 @@ from vikingbot.config.schema import Config
 
 
 def get_config_path() -> Path:
-    """Get the default configuration file path."""
-    return Path.home() / ".vikingbot" / "config.json"
+    """Get the path to ov.conf config file.
+
+    Resolution order:
+      1. OPENVIKING_CONFIG_FILE environment variable
+      2. ~/.openviking/ov.conf
+    """
+    return _resolve_ov_conf_path()
+
+
+def _resolve_ov_conf_path() -> Path:
+    """Resolve the ov.conf file path."""
+    # Check environment variable first
+    env_path = os.environ.get("OPENVIKING_CONFIG_FILE")
+    if env_path:
+        path = Path(env_path).expanduser()
+        if path.exists():
+            return path
+
+    # Default path
+    return Path.home() / ".openviking" / "ov.conf"
 
 
 def get_data_dir() -> Path:
@@ -20,23 +39,30 @@ def get_data_dir() -> Path:
 
 
 def ensure_config():
+    """Ensure ov.conf exists, create with default bot config if not."""
     config_path = get_config_path()
+
     if not config_path.exists():
         logger.info("Config not found, creating default config...")
 
-        config = Config()
-        save_config(config)
+        # Create directory if needed
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Create default config with empty bot section
+        default_config = Config()
+        save_config(default_config, config_path)
         logger.info(f"[green]✓[/green] Created default config at {config_path}")
+
     config = load_config(config_path)
     return config
 
 
 def load_config(config_path: Path | None = None) -> Config:
     """
-    Load configuration from file or create default.
+    Load configuration from ov.conf's bot field, and merge vlm config for model.
 
     Args:
-        config_path: Optional path to config file. Uses default if not provided.
+        config_path: Optional path to ov.conf file. Uses default if not provided.
 
     Returns:
         Loaded configuration object.
@@ -46,9 +72,27 @@ def load_config(config_path: Path | None = None) -> Config:
     if path.exists():
         try:
             with open(path) as f:
-                data = json.load(f)
-            data = _migrate_config(data)
-            return Config.model_validate(convert_keys(data))
+                full_data = json.load(f)
+
+            # Extract bot section
+            bot_data = full_data.get("bot", {})
+            bot_data = convert_keys(bot_data)
+
+            # Extract storage.workspace from root level, default to ~/.openviking_data
+            storage_data = full_data.get("storage", {})
+            if isinstance(storage_data, dict) and "workspace" in storage_data:
+                bot_data["storage_workspace"] = storage_data["workspace"]
+            else:
+                bot_data["storage_workspace"] = "~/.openviking_data"
+
+            # Extract and merge vlm config for model settings only
+            # Provider config is directly read from OpenVikingConfig at runtime
+            vlm_data = full_data.get("vlm", {})
+            vlm_data = convert_keys(vlm_data)
+            if vlm_data:
+                _merge_vlm_model_config(bot_data, vlm_data)
+
+            return Config.model_validate(bot_data)
         except (json.JSONDecodeError, ValueError) as e:
             print(f"Warning: Failed to load config from {path}: {e}")
             print("Using default configuration.")
@@ -56,45 +100,54 @@ def load_config(config_path: Path | None = None) -> Config:
     return Config()
 
 
+def _merge_vlm_model_config(bot_data: dict, vlm_data: dict) -> None:
+    """
+    Merge vlm model config into bot config.
+
+    Only sets model - provider config is read directly from OpenVikingConfig.
+    """
+    # Set default model from vlm.model
+    if vlm_data.get("model"):
+        if "agents" not in bot_data:
+            bot_data["agents"] = {}
+        # Prepend provider prefix if provider is specified
+        model = vlm_data["model"]
+        provider = vlm_data.get("provider")
+        if provider and "/" not in model:
+            model = f"{provider}/{model}"
+        bot_data["agents"]["model"] = model
+
+
 def save_config(config: Config, config_path: Path | None = None) -> None:
     """
-    Save configuration to file.
+    Save configuration to ov.conf's bot field, preserving other sections.
 
     Args:
         config: Configuration to save.
-        config_path: Optional path to save to. Uses default if not provided.
+        config_path: Optional path to ov.conf file. Uses default if not provided.
     """
     path = config_path or get_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    data = config.model_dump()
-    data = convert_to_camel(data)
+    # Read existing config if it exists
+    full_data = {}
+    if path.exists():
+        try:
+            with open(path) as f:
+                full_data = json.load(f)
+        except (json.JSONDecodeError, IOError):
+            pass
 
+    # Update bot section - only save fields that were explicitly set
+    bot_data = config.model_dump(exclude_unset=True)
+    if bot_data:
+        full_data["bot"] = convert_to_camel(bot_data)
+    else:
+        full_data.pop("bot", None)
+
+    # Write back full config
     with open(path, "w") as f:
-        json.dump(data, f, indent=2)
-
-
-def _migrate_config(data: dict) -> dict:
-    """Migrate old config formats to current."""
-    # Move sandbox.network/filesystem/runtime to sandbox.backends.srt if they exist
-    if "sandbox" in data:
-        sandbox = data["sandbox"]
-        # Initialize backends if not present
-        if "backends" not in sandbox:
-            sandbox["backends"] = {}
-        if "srt" not in sandbox["backends"]:
-            sandbox["backends"]["srt"] = {}
-        srt_backend = sandbox["backends"]["srt"]
-        # Move network
-        if "network" in sandbox:
-            srt_backend["network"] = sandbox.pop("network")
-        # Move filesystem
-        if "filesystem" in sandbox:
-            srt_backend["filesystem"] = sandbox.pop("filesystem")
-        # Move runtime
-        if "runtime" in sandbox:
-            srt_backend["runtime"] = sandbox.pop("runtime")
-    return data
+        json.dump(full_data, f, indent=2)
 
 
 def convert_keys(data: Any) -> Any:
@@ -129,3 +182,4 @@ def snake_to_camel(name: str) -> str:
     """Convert snake_case to camelCase."""
     components = name.split("_")
     return components[0] + "".join(x.title() for x in components[1:])
+

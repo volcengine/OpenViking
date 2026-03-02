@@ -6,6 +6,7 @@ import typer
 
 from openviking_cli.cli.commands import (
     admin,
+    chat,
     content,
     debug,
     filesystem,
@@ -34,3 +35,4 @@ def register_commands(app: typer.Typer) -> None:
     debug.register(app)
     observer.register(app)
     session.register(app)
+    chat.register(app)

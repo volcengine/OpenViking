@@ -70,11 +70,12 @@ class SessionManager:
 
     def __init__(
         self,
-        workspace: Path,
+        bot_data_path: Path,
         sandbox_manager: "SandboxManager | None" = None,
     ):
-        self.workspace = workspace
-        self.sessions_dir = ensure_dir(Path.home() / ".vikingbot" / "sessions")
+        self.bot_data_path = bot_data_path
+        self.workspace = bot_data_path / "workspace"
+        self.sessions_dir = ensure_dir(bot_data_path / "sessions")
         self._cache: dict[SessionKey, Session] = {}
         self.sandbox_manager = sandbox_manager
 
@@ -175,7 +176,7 @@ class SessionManager:
             logger.warning(f"Failed to load session {session_key}: {e}")
             return None
 
-    def save(self, session: Session) -> None:
+    async def save(self, session: Session) -> None:
         """Save a session to disk."""
         path = self._get_session_path(session.key)
 
