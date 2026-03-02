@@ -128,6 +128,7 @@ class OpenVikingConfig(BaseModel):
 
         # Remove sections managed by other loaders (e.g. server config)
         config_copy.pop("server", None)
+        config_copy.pop("bot", None)
 
         # Handle parser configurations from nested "parsers" section
         parser_configs = {}

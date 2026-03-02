@@ -31,8 +31,38 @@ uv venv --python 3.11
 source .venv/bin/activate  # macOS/Linux
 # .venv\Scripts\activate   # Windows
 
-# Install dependencies
+# Install dependencies (minimal)
 uv pip install -e .
+
+# Or install with optional features
+uv pip install -e ".[langfuse,telegram,console]"
+```
+
+### Optional Dependencies
+
+Install only the features you need:
+
+| Feature Group | Install Command | Description |
+|---------------|-----------------|-------------|
+| **Full** | `uv pip install -e ".[full]"` | All features included |
+| **Langfuse** | `uv pip install -e ".[langfuse]"` | LLM observability and tracing |
+| **FUSE** | `uv pip install -e ".[fuse]"` | OpenViking filesystem mount |
+| **Sandbox** | `uv pip install -e ".[sandbox]"` | Code execution sandbox |
+| **OpenCode** | `uv pip install -e ".[opencode]"` | OpenCode AI integration |
+
+#### Channels (chat apps)
+
+| Channel | Install Command |
+|---------|-----------------|
+| **Telegram** | `uv pip install -e ".[telegram]"` |
+| **Feishu/Lark** | `uv pip install -e ".[feishu]"` |
+| **DingTalk** | `uv pip install -e ".[dingtalk]"` |
+| **Slack** | `uv pip install -e ".[slack]"` |
+| **QQ** | `uv pip install -e ".[qq]"` |
+
+Multiple features can be combined:
+```bash
+uv pip install -e ".[langfuse,telegram,console]"
 ```
 
 ## 🚀 Quick Start
@@ -61,7 +91,7 @@ Open http://localhost:18791 in your browser and:
 **3. Chat**
 
 ```bash
-vikingbot agent -m "What is 2+2?"
+vikingbot chat -m "What is 2+2?"
 ```
 
 That's it! You have a working AI assistant in 2 minutes.
@@ -663,60 +693,146 @@ That's it! Environment variables, model prefixing, config matching, and `vikingb
 
 ### Sandbox
 
-vikingbot supports sandboxed execution for enhanced security. By default, sandbox is disabled. To enable sandbox with SRT backend in per-session mode, set `"enabled": true`.
+vikingbot supports sandboxed execution for enhanced security.
+
+**By default, no sandbox configuration is needed in `ov.conf`:**
+- Default backend: `direct` (runs code directly on host)
+- Default mode: `shared` (single sandbox shared across all sessions)
+
+You only need to add sandbox configuration when you want to change these defaults.
 
 <details>
-<summary><b>Sandbox Configuration (SRT Backend)</b></summary>
+<summary><b>Sandbox Configuration Options</b></summary>
 
+**To use a different backend or mode:**
 ```json
 {
-  "sandbox": {
-    "enabled": false,
-    "backend": "srt",
-    "mode": "per-session",
-    "network": {
-      "allowedDomains": [],
-      "deniedDomains": [],
-      "allowLocalBinding": false
-    },
-    "filesystem": {
-      "denyRead": [],
-      "allowWrite": [],
-      "denyWrite": []
-    },
-    "runtime": {
-      "cleanupOnExit": true,
-      "timeout": 300
-    },
-    "backends": {
-      "srt": {
-        "nodePath": "node"
+  "bot": {
+    "sandbox": {
+      "backend": "opensandbox",
+      "mode": "per-session"
+    }
+  }
+}
+```
+
+**Available Backends:**
+| Backend | Description |
+|---------|-------------|
+| `direct` | (Default) Runs code directly on the host |
+| `docker` | Uses Docker containers for isolation |
+| `opensandbox` | Uses OpenSandbox service |
+| `srt` | Uses Anthropic's SRT sandbox runtime |
+| `aiosandbox` | Uses AIO Sandbox service |
+
+**Available Modes:**
+| Mode | Description |
+|------|-------------|
+| `shared` | (Default) Single sandbox shared across all sessions |
+| `per-session` | Separate sandbox instance for each session |
+
+**Backend-specific Configuration (only needed when using that backend):**
+
+**Direct Backend:**
+```json
+{
+  "bot": {
+    "sandbox": {
+      "backends": {
+        "direct": {
+          "restrictToWorkspace": false
+        }
       }
     }
   }
 }
 ```
 
-**Configuration Options:**
+**OpenSandbox Backend:**
+```json
+{
+  "bot": {
+    "sandbox": {
+      "backend": "opensandbox",
+      "backends": {
+        "opensandbox": {
+          "serverUrl": "http://localhost:18792",
+          "apiKey": "",
+          "defaultImage": "opensandbox/code-interpreter:v1.0.1"
+        }
+      }
+    }
+  }
+}
+```
 
-| Option | Default | Description |
-|--------|---------|-------------|
-| `enabled` | `false` | Enable sandbox execution |
-| `backend` | `"srt"` | Sandbox backend: `srt` or `docker` |
-| `mode` | `"per-session"` | Sandbox mode: `per-session` (isolated per session) or `shared` (shared across sessions) |
-| `network.allowedDomains` | `[]` | List of allowed domains for network access (empty = all allowed) |
-| `network.deniedDomains` | `[]` | List of denied domains (blocked regardless of allowed list) |
-| `network.allowLocalBinding` | `false` | Allow binding to local addresses (localhost, 127.0.0.1) |
-| `filesystem.denyRead` | `[]` | Paths/files to deny read access |
-| `filesystem.allowWrite` | `[]` | Paths/files to explicitly allow write access |
-| `filesystem.denyWrite` | `[]` | Paths/files to deny write access |
-| `runtime.cleanupOnExit` | `true` | Clean up sandbox resources on exit |
-| `runtime.timeout` | `300` | Command execution timeout in seconds |
-| `backends.srt.nodePath` | `"/usr/local/bin/node"` | Path to Node.js executable (use full path if `node` is not in PATH) |
+**Docker Backend:**
+```json
+{
+  "bot": {
+    "sandbox": {
+      "backend": "docker",
+      "backends": {
+        "docker": {
+          "image": "python:3.11-slim",
+          "networkMode": "bridge"
+        }
+      }
+    }
+  }
+}
+```
+
+**SRT Backend:**
+```json
+{
+  "bot": {
+    "sandbox": {
+      "backend": "srt",
+      "backends": {
+        "srt": {
+          "settingsPath": "~/.vikingbot/srt-settings.json",
+          "nodePath": "node",
+          "network": {
+            "allowedDomains": [],
+            "deniedDomains": [],
+            "allowLocalBinding": false
+          },
+          "filesystem": {
+            "denyRead": [],
+            "allowWrite": [],
+            "denyWrite": []
+          },
+          "runtime": {
+            "cleanupOnExit": true,
+            "timeout": 300
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+**AIO Sandbox Backend:**
+```json
+{
+  "bot": {
+    "sandbox": {
+      "backend": "aiosandbox",
+      "backends": {
+        "aiosandbox": {
+          "baseUrl": "http://localhost:18794"
+        }
+      }
+    }
+  }
+}
+```
 
 **SRT Backend Setup:**
 
-The SRT backend uses `@anthropic-ai/sandbox-runtime`. It's automatically installed when you run `vikingbot onboard`.
+The SRT backend uses `@anthropic-ai/sandbox-runtime`.
 
 **System Dependencies:**
 
@@ -783,11 +899,10 @@ which nodejs
 
 | Command | Description |
 |---------|-------------|
-| `vikingbot agent -m "..."` | Chat with the agent |
-| `vikingbot agent` | Interactive chat mode |
-| `vikingbot agent --no-markdown` | Show plain-text replies |
-| `vikingbot agent --logs` | Show runtime logs during chat |
-| `vikingbot tui` | Launch TUI (Terminal User Interface) |
+| `vikingbot chat -m "..."` | Chat with the agent |
+| `vikingbot chat` | Interactive chat mode |
+| `vikingbot chat --no-markdown` | Show plain-text replies |
+| `vikingbot chat --logs` | Show runtime logs during chat |
 | `vikingbot gateway` | Start the gateway and Console Web UI |
 | `vikingbot status` | Show status |
 | `vikingbot channels login` | Link WhatsApp (scan QR) |
@@ -809,23 +924,6 @@ The Console Web UI is automatically started when you run `vikingbot gateway`, ac
 > After saving configuration changes in the Console, you need to restart the gateway service for changes to take effect.
 
 Interactive mode exits: `exit`, `quit`, `/exit`, `/quit`, `:q`, or `Ctrl+D`.
-
-<details>
-<summary><b>TUI (Terminal User Interface)</b></summary>
-
-Launch the vikingbot TUI for a rich terminal-based chat experience:
-
-```bash
-vikingbot tui
-```
-
-The TUI provides:
-- Rich text rendering with markdown support
-- Message history and conversation management
-- Real-time agent responses
-- Keyboard shortcuts for navigation
-
-</details>
 
 <details>
 <summary><b>Scheduled Tasks (Cron)</b></summary>

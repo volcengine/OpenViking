@@ -25,7 +25,6 @@ try:
     FUSE_AVAILABLE = True
 except (ImportError, OSError) as e:
     FUSE_AVAILABLE = False
-    logger.warning(f"fusepy not available: {e}")
     # 创建占位符
     Operations = object
     FUSE = None
@@ -478,7 +477,7 @@ else:
 
     def mount_fuse(*args, **kwargs):
         raise ImportError(
-            "fusepy and libfuse are required. Install with: pip install fusepy and install libfuse system package"
+            "fusepy and libfuse are required. Install with: uv pip install 'vikingbot[fuse]' (or uv pip install -e \".[fuse]\" for local dev) and install libfuse system package"
         )
 
     class FUSEMountManager:

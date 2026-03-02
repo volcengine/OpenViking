@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 import gradio as gr
 
-from vikingbot.config.loader import load_config, save_config
+from vikingbot.config.loader import load_config, save_config, get_config_path
 from vikingbot.config.schema import Config, ChannelType, SandboxBackend, SandboxMode
 
 
@@ -38,7 +38,7 @@ def create_dashboard_tab():
         |--------|-------|
         | 🟢 Status | Running |
         | 📦 Version | {__version__} |
-        | 📁 Config Path | {str(config.workspace_path.parent / "config.json")} |
+        | 📁 Config Path | {str(get_config_path())} |
         | 🖥️ Workspace Path | {str(config.workspace_path)} |
         """)
 
@@ -299,7 +299,8 @@ def create_sessions_tab():
                 status_msg = gr.Markdown("")
 
         def refresh_sessions():
-            sessions_dir = Path.home() / ".vikingbot" / "sessions"
+            config = load_config()
+            sessions_dir = config.bot_data_path / "sessions"
             if not sessions_dir.exists():
                 return gr.Dropdown(choices=[], value=None), ""
             session_files = list(sessions_dir.glob("*.jsonl")) + list(sessions_dir.glob("*.json"))
@@ -309,7 +310,8 @@ def create_sessions_tab():
         def load_session(session_name):
             if not session_name:
                 return "", "Please select a session"
-            sessions_dir = Path.home() / ".vikingbot" / "sessions"
+            config = load_config()
+            sessions_dir = config.bot_data_path / "sessions"
             session_file_jsonl = sessions_dir / f"{session_name}.jsonl"
             session_file_json = sessions_dir / f"{session_name}.json"
 
@@ -403,16 +405,9 @@ with gr.Blocks(title="Vikingbot Console") as demo:
         create_workspace_tab()
 
 
-if __name__ == "__main__":
-    import uvicorn
+def create_console_app():
+    """Create and return the FastAPI app with Gradio mounted."""
     from fastapi import FastAPI
-
-    port = 18791
-    if len(sys.argv) > 1:
-        try:
-            port = int(sys.argv[1])
-        except ValueError:
-            pass
 
     # Create FastAPI app for health endpoint
     app = FastAPI()
@@ -428,5 +423,22 @@ if __name__ == "__main__":
     demo.queue()
     app = gr.mount_gradio_app(app, demo, path="/")
 
-    # Launch with uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    return app
+
+
+def run_console_server(port: int = 18791):
+    """Run the console server in the current thread."""
+    import uvicorn
+
+    app = create_console_app()
+    uvicorn.run(app, host="0.0.0.0", port=port, log_level="warning")
+
+
+if __name__ == "__main__":
+    port = 18791
+    if len(sys.argv) > 1:
+        try:
+            port = int(sys.argv[1])
+        except ValueError:
+            pass
+    run_console_server(port)

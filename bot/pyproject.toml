@@ -28,32 +28,19 @@ dependencies = [
     "readability-lxml>=0.8.0",
     "rich>=13.0.0",
     "croniter>=2.0.0",
-    "dingtalk-stream>=0.4.0",
-    "python-telegram-bot[socks]>=21.0",
-    "lark-oapi>=1.0.0",
     "socksio>=1.0.0",
     "python-socketio>=5.11.0",
     "msgpack>=1.0.8",
-    "slack-sdk>=3.26.0",
-    "qq-botpy>=1.0.0",
     "python-socks[asyncio]>=2.4.0",
     "prompt-toolkit>=3.0.0",
-    "textual>=0.50.0",
     "pygments>=2.16.0",
-    "ddgs>=9.0.0",
     "fastapi>=0.100.0",
     "uvicorn>=0.20.0",
-    "opensandbox>=0.1.0",
-    "opensandbox-server>=0.1.0",
-    "agent-sandbox>=0.0.23",
     "html2text>=2020.1.16",
     "beautifulsoup4>=4.12.0",
-    "opencode-ai>=0.1.0a0",
     "openviking>=0.1.18",
-    "tos>=2.9.0",
+    "ddgs>=9.0.0",
     "gradio>=6.6.0",
-    "fusepy>=3.0.1",
-    "pytest>=9.0.2",
 ]
 
 [project.optional-dependencies]
@@ -61,6 +48,53 @@ dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
     "ruff>=0.1.0",
+]
+langfuse = [
+    "langfuse>=3.0.0",
+]
+# Channels - install only the ones you need
+telegram = [
+    "python-telegram-bot[socks]>=21.0",
+]
+feishu = [
+    "lark-oapi>=1.0.0",
+]
+dingtalk = [
+    "dingtalk-stream>=0.4.0",
+]
+slack = [
+    "slack-sdk>=3.26.0",
+]
+qq = [
+    "qq-botpy>=1.0.0",
+]
+# Sandbox backends
+sandbox = [
+    "opensandbox>=0.1.0",
+    "opensandbox-server>=0.1.0",
+    "agent-sandbox>=0.0.23",
+]
+# FUSE filesystem mount
+fuse = [
+    "fusepy>=3.0.1",
+]
+# OpenCode AI integration
+opencode = [
+    "opencode-ai>=0.1.0a0",
+]
+# Full installation - includes everything
+full = [
+    "langfuse>=3.0.0",
+    "python-telegram-bot[socks]>=21.0",
+    "lark-oapi>=1.0.0",
+    "dingtalk-stream>=0.4.0",
+    "slack-sdk>=3.26.0",
+    "qq-botpy>=1.0.0",
+    "opensandbox>=0.1.0",
+    "opensandbox-server>=0.1.0",
+    "agent-sandbox>=0.0.23",
+    "fusepy>=3.0.1",
+    "opencode-ai>=0.1.0a0",
 ]
 
 [project.scripts]

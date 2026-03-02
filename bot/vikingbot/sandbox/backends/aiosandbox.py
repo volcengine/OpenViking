@@ -35,7 +35,7 @@ class AioSandboxBackend(SandboxBackend):
             self._client = AsyncSandbox(base_url=self._base_url)
             logger.info("[AioSandbox] Connected successfully")
         except ImportError:
-            logger.error("agent-sandbox SDK not installed. Install with: pip install agent-sandbox")
+            logger.error("agent-sandbox SDK not installed. Install with: uv pip install 'vikingbot[sandbox]' (or uv pip install -e \".[sandbox]\" for local dev)")
             raise
         except Exception as e:
             logger.error("[AioSandbox] Failed to start: {}", e)
