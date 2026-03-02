@@ -23,7 +23,6 @@ from vikingbot.sandbox import SandboxManager
 from vikingbot.session.manager import SessionManager
 from vikingbot.utils.helpers import cal_str_tokens
 from vikingbot.utils.tracing import trace
-from vikingbot.utils.tracing import trace, set_session_id
 
 
 class AgentLoop:
@@ -153,6 +152,7 @@ class AgentLoop:
         messages: list[dict],
         session_key: SessionKey,
         publish_events: bool = True,
+        sender_id: str | None = None,
     ) -> tuple[str | None, list[dict]]:
         """
         Run the core agent loop: call LLM, execute tools, repeat until done.
@@ -235,6 +235,7 @@ class AgentLoop:
                         tool_call.arguments,
                         session_key=session_key,
                         sandbox_manager=self.sandbox_manager,
+                        sender_id=sender_id,
                     )
                     tool_execute_duration = (time.time() - tool_execute_start_time) * 1000
                     logger.info(f"[RESULT]: {str(result)[:600]}")

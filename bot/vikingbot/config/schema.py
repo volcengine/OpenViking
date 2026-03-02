@@ -359,6 +359,10 @@ class AgentsConfig(BaseModel):
     max_tool_iterations: int = 50
     memory_window: int = 50
     gen_image_model: str = "openai/doubao-seedream-4-5-251128"
+    provider: str = ""
+    api_key: str = ""
+    api_base: str = ""
+    extra_headers: dict[str, str] = None
 
 
 class ProviderConfig(BaseModel):
@@ -413,11 +417,12 @@ class WebSearchConfig(BaseModel):
 class OpenVikingConfig(BaseModel):
     """Viking tools configuration."""
 
-    mode: str = "local"  # local or remote
+    mode: str = "remote"  # local or remote
     server_url: str = ""
-    user_id: str = ""
-    account_id: str = ""
-    admin_account_api_key: str = ""
+    root_api_key: str = ""
+    account_id: str = "default"
+    admin_user_id: str = "admin"
+    agent_id: str = ""
 
 
 class WebToolsConfig(BaseModel):
@@ -564,7 +569,7 @@ class Config(BaseSettings):
     providers: ProvidersConfig = Field(default_factory=ProvidersConfig, deprecated=True)  # Deprecated: Use ov.conf vlm config instead
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
-    openviking: OpenVikingConfig = Field(default_factory=OpenVikingConfig)
+    ov_server: OpenVikingConfig = Field(default_factory=OpenVikingConfig)
     sandbox: SandboxConfig = Field(default_factory=SandboxConfig)
     heartbeat: HeartbeatConfig = Field(default_factory=HeartbeatConfig)
     langfuse: LangfuseConfig = Field(default_factory=LangfuseConfig)

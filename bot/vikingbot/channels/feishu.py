@@ -1,22 +1,14 @@
 """Feishu/Lark channel implementation using lark-oapi SDK with WebSocket long connection."""
 
 import asyncio
-import base64
 import io
 import json
 import re
-import os
-import threading
 import tempfile
+import threading
 from collections import OrderedDict
-from pathlib import Path
-from typing import Any, Tuple
-from urllib.parse import urlparse
+from typing import Any
 
-import httpx
-from loguru import logger
-
-from vikingbot.utils import get_data_path
 import httpx
 from loguru import logger
 
@@ -51,8 +43,8 @@ try:
         P2ImMessageReceiveV1,
         GetImageRequest,
         GetMessageResourceRequest,
-    ReplyMessageRequest,
-    ReplyMessageRequestBody,
+        ReplyMessageRequest,
+        ReplyMessageRequestBody,
     )
 
     FEISHU_AVAILABLE = True
@@ -124,7 +116,6 @@ class FeishuChannel(BaseChannel):
         """
         Upload image to Feishu media library and get image_key.
         """
-        import time
 
         token = await self._get_tenant_access_token()
         url = "https://open.feishu.cn/open-apis/im/v1/images"
@@ -135,12 +126,9 @@ class FeishuChannel(BaseChannel):
         files = {"image": ("image.png", io.BytesIO(image_data), "image/png")}
         data = {"image_type": "message"}
 
-        logger.debug(f"Uploading image to {url} with image_data {image_data[:20]}...")
-
         async with httpx.AsyncClient(timeout=60.0) as client:
             resp = await client.post(url, headers=headers, data=data, files=files)
             # logger.debug(f"Upload response status: {resp.status_code}")
-            logger.debug(f"Upload response content: {resp.text}")
             resp.raise_for_status()
             result = resp.json()
             if result.get("code") != 0:
@@ -187,13 +175,14 @@ class FeishuChannel(BaseChannel):
             f.write(image_bytes)
             temp_path = f.name
 
-        logger.debug(f"Saved image to temp file: {temp_path}")
         return temp_path
 
     async def start(self) -> None:
         """Start the Feishu bot with WebSocket long connection."""
         if not FEISHU_AVAILABLE:
-            logger.exception("Feishu SDK not installed. Install with: uv pip install 'vikingbot[feishu]' (or uv pip install -e \".[feishu]\" for local dev)")
+            logger.exception(
+                "Feishu SDK not installed. Install with: uv pip install 'vikingbot[feishu]' (or uv pip install -e \".[feishu]\" for local dev)"
+            )
             return
 
         if not self.config.app_id or not self.config.app_secret:
@@ -282,8 +271,6 @@ class FeishuChannel(BaseChannel):
 
             if not response.success():
                 logger.warning(f"Failed to add reaction: code={response.code}, msg={response.msg}")
-            else:
-                logger.debug(f"Added {emoji_type} reaction to message {message_id}")
         except Exception as e:
             logger.warning(f"Error adding reaction: {e}")
 
@@ -412,7 +399,6 @@ class FeishuChannel(BaseChannel):
             alt_text = m.group(1) or ""
             img_url = m.group(2)
             try:
-                logger.debug(f"Processing Markdown image: {img_url[:100]}...")
                 is_content, result = await self._parse_data_uri(img_url)
 
                 if not is_content and isinstance(result, bytes):
@@ -429,7 +415,6 @@ class FeishuChannel(BaseChannel):
         for m in re.finditer(send_pattern, content):
             img_url = m.group(1) or ""
             try:
-                logger.debug(f"Processing Markdown image: {img_url[:100]}...")
                 is_content, result = await self._parse_data_uri(img_url)
 
                 if not is_content and isinstance(result, bytes):
@@ -473,14 +458,14 @@ class FeishuChannel(BaseChannel):
                 receive_id_type = "chat_id"
             else:
                 receive_id_type = "open_id"
-            #logger.info(f"[DEBUG] Feishu send() content: {msg.content[:300]}")
 
             # Process images and get cleaned content
             cleaned_content, images = await self._extract_and_upload_images(msg.content)
-            
-                                    # Process @mentions: convert @ou_xxxx to Feishu mention format
+
+            # Process @mentions: convert @ou_xxxx to Feishu mention format
             # Pattern: @ou_xxxxxxx (user open_id)
             import re
+
             mention_pattern = r"@(ou_[a-zA-Z0-9_-]+)"
 
             def replace_mention(match):
@@ -500,46 +485,29 @@ class FeishuChannel(BaseChannel):
 
             # Add text content with mentions
             if content_with_mentions.strip():
-                content_elements.append([
-                    {
-                        "tag": "text",
-                        "text": content_with_mentions
-                    }
-                ])
+                content_elements.append([{"tag": "text", "text": content_with_mentions}])
 
             # Add images
             for img in images:
-                content_elements.append([
-                    {
-                        "tag": "img",
-                        "image_key": img["image_key"]
-                    }
-                ])
+                content_elements.append([{"tag": "img", "image_key": img["image_key"]}])
 
             # Ensure we have content
             if not content_elements:
-                content_elements.append([
-                    {
-                        "tag": "text",
-                        "text": " "
-                    }
-                ])
+                content_elements.append([{"tag": "text", "text": " "}])
 
-            post_content = {
-                "zh_cn": {
-                    "title": "",
-                    "content": content_elements
-                }
-            }
+            post_content = {"zh_cn": {"title": "", "content": content_elements}}
 
             import json
+
             content = json.dumps(post_content, ensure_ascii=False)
 
             # Check if we need to reply to a specific message
             # Get reply message ID from metadata (original incoming message ID)
             reply_to_message_id = None
             if msg.metadata:
-                reply_to_message_id = msg.metadata.get("reply_to_message_id") or msg.metadata.get("message_id")
+                reply_to_message_id = msg.metadata.get("reply_to_message_id") or msg.metadata.get(
+                    "message_id"
+                )
 
             if reply_to_message_id:
                 # Reply to existing message (quotes the original)
@@ -551,13 +519,14 @@ class FeishuChannel(BaseChannel):
                         .content(content)
                         .msg_type("post")
                         # Reply in topic thread if root_id exists
-                        .reply_in_thread(msg.metadata.get("root_id") is not None if msg.metadata else False)
+                        .reply_in_thread(
+                            msg.metadata.get("root_id") is not None if msg.metadata else False
+                        )
                         .build()
                     )
                     .build()
                 )
                 response = self._client.im.v1.message.reply(request)
-                logger.debug(f"Replying to message {reply_to_message_id}")
             else:
                 # Send new message
                 request = (
@@ -586,12 +555,9 @@ class FeishuChannel(BaseChannel):
                         f"Failed to send Feishu message: code={response.code}, "
                         f"msg={response.msg}, log_id={response.get_log_id()}"
                     )
-            else:
-                logger.debug(f"Feishu message sent to {msg.session_key.chat_id}")
 
         except Exception as e:
             logger.exception(f"Error sending Feishu message: {e}")
-
 
     def _on_message_sync(self, data: "P2ImMessageReceiveV1") -> None:
         """
@@ -751,7 +717,6 @@ class FeishuChannel(BaseChannel):
         for m in re.finditer(markdown_pattern, content):
             img_url = m.group(2)
             try:
-                logger.debug(f"Processing Markdown image: {img_url[:100]}...")
                 is_content, result = await self._parse_data_uri(img_url)
 
                 if not is_content and isinstance(result, bytes):
@@ -768,7 +733,6 @@ class FeishuChannel(BaseChannel):
         for m in re.finditer(send_pattern, content):
             img_url = m.group(1) or ""
             try:
-                logger.debug(f"Processing Markdown image: {img_url[:100]}...")
                 is_content, result = await self._parse_data_uri(img_url)
 
                 if not is_content and isinstance(result, bytes):

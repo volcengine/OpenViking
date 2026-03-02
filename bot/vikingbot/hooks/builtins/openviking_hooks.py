@@ -37,7 +37,7 @@ class OpenVikingCompactHook(Hook):
         session_id = context.session_id
         try:
             client = await self._get_client(context.sandbox_key)
-            result = await client.commit(session_id, vikingbot_session.messages)
+            result = await client.commit(session_id, vikingbot_session.messages, load_config().ov_server.admin_user_id)
             return result
         except Exception as e:
             logger.exception(f"Failed to add message to OpenViking: {e}")

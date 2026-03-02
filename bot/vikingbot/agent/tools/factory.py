@@ -19,6 +19,7 @@ from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.agent.tools.shell import ExecTool
 from vikingbot.agent.tools.web import WebFetchTool
 from vikingbot.agent.tools.websearch import WebSearchTool
+from vikingbot.config.loader import load_config
 
 if TYPE_CHECKING:
     from vikingbot.agent.tools.spawn import SpawnTool
@@ -56,12 +57,13 @@ def register_default_tools(
     exec_config = config.tools.exec
     brave_api_key = config.tools.web.search.api_key if config.tools.web.search else None
     exa_api_key = None  # TODO: Add to config if needed
-    gen_image_model = config.agents.gen_image_model
 
     # Get provider API key and base from config
-    provider_config = config.get_provider()
-    provider_api_key = provider_config.api_key if provider_config else None
-    provider_api_base = provider_config.api_base if provider_config else None
+
+    agent_config = load_config().agents
+    provider_api_key = agent_config.api_key if agent_config else None
+    provider_api_base = agent_config.api_base if agent_config else None
+    gen_image_model = agent_config.gen_image_model
     # File tools
     registry.register(ReadFileTool())
     registry.register(WriteFileTool())

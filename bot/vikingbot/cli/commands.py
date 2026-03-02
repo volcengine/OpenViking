@@ -28,7 +28,8 @@ from vikingbot.config.schema import SessionKey
 from vikingbot.cron.service import CronService
 from vikingbot.cron.types import CronJob
 from vikingbot.heartbeat.service import HeartbeatService
-from vikingbot.integrations.langfuse import LangfuseClient
+# from vikingbot.integrations.langfuse import LangfuseClient
+from vikingbot.config.loader import load_config
 
 # Create sandbox manager
 from vikingbot.sandbox.manager import SandboxManager
@@ -168,16 +169,18 @@ def main(
     pass
 
 
-def _make_provider(config, langfuse_client: LangfuseClient | None = None):
+def _make_provider(config, langfuse_client:  None = None):
     """Create LiteLLMProvider from config. Allows starting without API key."""
     from vikingbot.providers.litellm_provider import LiteLLMProvider
 
-    p = config.get_provider()
 
-    model = config.agents.model
+    config = load_config()
+    p = config.agents
+
+    model = p.model
     api_key = p.api_key if p else None
-    api_base = config.get_api_base()
-    provider_name = config.get_provider_name()
+    api_base = p.api_base if p else None
+    provider_name = p.provider if p else None
 
     if not (api_key) and not model.startswith("bedrock/"):
         console.print("[yellow]Warning: No API key configured.[/yellow]")
@@ -189,7 +192,7 @@ def _make_provider(config, langfuse_client: LangfuseClient | None = None):
         default_model=model,
         extra_headers=p.extra_headers if p else None,
         provider_name=provider_name,
-        langfuse_client=langfuse_client,
+        # langfuse_client=langfuse_client,
     )
 
 
@@ -239,7 +242,7 @@ def gateway(
 
 
 def prepare_agent_loop(config, bus, session_manager, cron, quiet: bool = False):
-    sandbox_parent_path = config.workspace_path
+    sandbox_parent_path = config.bot_data_path
     source_workspace_path = get_source_workspace_path()
     sandbox_manager = SandboxManager(config, sandbox_parent_path, source_workspace_path)
     if config.sandbox.backend == "direct":
@@ -249,16 +252,18 @@ def prepare_agent_loop(config, bus, session_manager, cron, quiet: bool = False):
 
     # Initialize Langfuse if enabled
     langfuse_client = None
-    if hasattr(config, "langfuse") and config.langfuse.enabled:
-        langfuse_client = LangfuseClient(
-            enabled=config.langfuse.enabled,
-            secret_key=config.langfuse.secret_key,
-            public_key=config.langfuse.public_key,
-            base_url=config.langfuse.base_url,
-        )
-        LangfuseClient.set_instance(langfuse_client)
-        if langfuse_client.enabled:
-            logger.info(f"Langfuse: {config.langfuse.base_url}")
+    # if hasattr(config, "langfuse") and config.langfuse.enabled:
+    #     langfuse_client = LangfuseClient(
+    #         enabled=config.langfuse.enabled,
+    #         secret_key=config.langfuse.secret_key,
+    #         public_key=config.langfuse.public_key,
+    #         base_url=config.langfuse.base_url,
+    #     )
+    #     LangfuseClient.set_instance(langfuse_client)
+    #     if langfuse_client.enabled:
+    #         logger.info(f"Langfuse: enabled (base_url={config.langfuse.base_url})")
+    #     else:
+    #         logger.warning("Langfuse: configured but failed to initialize")
 
     provider = _make_provider(config, langfuse_client)
     # Create agent with cron service
@@ -355,7 +360,7 @@ async def start_console(console_port):
     """Start the console web UI in a separate thread within the same process."""
     try:
         import threading
-        from vikingbot.console.web_console import run_console_server
+        from vikingbot.console.console_gradio_simple import run_console_server
 
         def run_in_thread():
             try:

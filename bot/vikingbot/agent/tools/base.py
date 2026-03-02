@@ -13,6 +13,7 @@ class ToolContext:
     session_key: SessionKey = None
     sandbox_manager: SandboxManager | None = None
     sandbox_key: str = sandbox_manager.to_sandbox_key(session_key) if sandbox_manager else None
+    sender_id: str | None = None
 
 
 """Base class for agent tools."""

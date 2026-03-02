@@ -51,6 +51,7 @@ class ToolRegistry:
         params: dict[str, Any],
         session_key: SessionKey,
         sandbox_manager: SandboxManager | None = None,
+        sender_id: str | None = None,
     ) -> str:
         """
         Execute a tool by name with given parameters.
@@ -60,6 +61,7 @@ class ToolRegistry:
             params: Tool parameters.
             session_key: Session key for the current session.
             sandbox_manager: Sandbox manager for file/shell operations.
+            sender_id: Sender id for the current session.
 
         Returns:
             Tool execution result as string.
@@ -75,6 +77,7 @@ class ToolRegistry:
             session_key=session_key,
             sandbox_manager=sandbox_manager,
             sandbox_key=sandbox_manager.to_sandbox_key(session_key),
+            sender_id=sender_id,
         )
 
         # Langfuse tool call tracing - automatic for all tools
