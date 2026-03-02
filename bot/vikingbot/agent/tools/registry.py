@@ -74,7 +74,7 @@ class ToolRegistry:
         tool_context = ToolContext(
             session_key=session_key,
             sandbox_manager=sandbox_manager,
-            sandbox_key=sandbox_manager.to_sandbox_key(session_key),
+            workspace_id=sandbox_manager.to_workspace_id(session_key),
         )
 
         # Langfuse tool call tracing - automatic for all tools
@@ -123,7 +123,7 @@ class ToolRegistry:
             context=HookContext(
                 event_type="tool.post_call",
                 session_id=session_key.safe_name(),
-                sandbox_key=sandbox_manager.to_sandbox_key(session_key),
+                workspace_id=sandbox_manager.to_workspace_id(session_key),
             ),
             tool_name=name,
             params=params,

@@ -16,7 +16,7 @@ class HookContext:
     event_type: str
     session_id: Optional[str] = None
     # 沙箱唯一主键
-    sandbox_key: Optional[str] = None
+    workspace_id: Optional[str] = None
     metadata: Dict[str, Any] = None
     timestamp: datetime = None
 

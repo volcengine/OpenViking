@@ -74,7 +74,7 @@ class ContextBuilder:
         """
         # Ensure workspace templates exist only when first needed
         self._ensure_templates_once()
-        sandbox_key = self.sandbox_manager.to_sandbox_key(session_key)
+        workspace_id = self.sandbox_manager.to_workspace_id(session_key)
 
         parts = []
 
@@ -90,13 +90,13 @@ class ContextBuilder:
             )
 
         # Viking user profile
-        profile = await self.memory.get_viking_user_profile(sandbox_key=sandbox_key, user_id=self._sender_id)
+        profile = await self.memory.get_viking_user_profile(workspace_id=workspace_id, user_id=self._sender_id)
         if profile:
             parts.append(profile)
 
         # Viking memory
         viking_memory = await self.memory.get_viking_memory_context(
-            current_message=current_message, sandbox_key=sandbox_key
+            current_message=current_message, workspace_id=workspace_id
         )
         if viking_memory:
             parts.append(viking_memory)

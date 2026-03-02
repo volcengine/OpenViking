@@ -48,8 +48,8 @@ class MemoryStore:
         long_term = self.read_long_term()
         return f"## Long-term Memory\n{long_term}" if long_term else ""
 
-    async def get_viking_memory_context(self, current_message: str, sandbox_key: str) -> str:
-        client = await VikingClient.create(agent_id=sandbox_key)
+    async def get_viking_memory_context(self, current_message: str, workspace_id: str) -> str:
+        client = await VikingClient.create(agent_id=workspace_id)
         result = await client.search_memory(current_message, limit=5)
         if not result:
             return ""
@@ -61,8 +61,8 @@ class MemoryStore:
             f"### agent memories:\n{agent_memory}"
         )
 
-    async def get_viking_user_profile(self, sandbox_key: str, user_id: str) -> str:
-        client = await VikingClient.create(agent_id=sandbox_key)
+    async def get_viking_user_profile(self, workspace_id: str, user_id: str) -> str:
+        client = await VikingClient.create(agent_id=workspace_id)
         result = await client.read_content(
             uri=f"viking://user/{self.user_id}/memories/profile.md", level="read"
         )

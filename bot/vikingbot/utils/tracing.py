@@ -86,13 +86,30 @@ def trace(
             session_id: str | None = None
             if extract_session_id:
                 try:
-                    session_id = extract_session_id(*args, **kwargs)
+                    # Inspect the extractor's signature to determine how to call it
+                    import inspect
+                    sig = inspect.signature(extract_session_id)
+                    param_count = len([
+                        p for p in sig.parameters.values()
+                        if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+                    ])
+
+                    if param_count == 1 and len(args) >= 1:
+                        # Extractor expects single arg (e.g., lambda msg: ...)
+                        # Use the last arg which is typically the message/object
+                        session_id = extract_session_id(args[-1])
+                    else:
+                        # Extractor expects multiple args or specific signature
+                        session_id = extract_session_id(*args, **kwargs)
                 except Exception as e:
-                    logger.debug(f"Failed to extract session_id: {e}")
+                    logger.warning(f"Failed to extract session_id: {e}")
 
             # Fall back to current context if no session_id extracted
             if session_id is None:
                 session_id = get_current_session_id()
+                logger.debug(f"[TRACE] No session_id extracted, using context: {session_id}")
+            else:
+                logger.info(f"[TRACE] Extracted session_id: {session_id}")
 
             # Use context manager to set session_id for nested operations
             if session_id:

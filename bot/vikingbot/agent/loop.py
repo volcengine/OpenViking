@@ -414,7 +414,7 @@ class AgentLoop:
             context=HookContext(
                 event_type="message.compact",
                 session_id=session.key.safe_name(),
-                sandbox_key=self.sandbox_manager.to_sandbox_key(session.key),
+                workspace_id=self.sandbox_manager.to_workspace_id(session.key),
             ),
             session=session,
         )
