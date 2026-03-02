@@ -49,6 +49,7 @@ def trace(
     name: str | None = None,
     *,
     extract_session_id: Callable[..., str] | None = None,
+    extract_user_id: Callable[..., str] | None = None,
 ) -> Callable[[Callable[..., T]], Callable[..., T]]:
     """
     Decorator to trace a function execution with session context.
@@ -62,20 +63,21 @@ def trace(
         extract_session_id: Optional callable to extract session_id from
             function arguments. The callable receives all positional (*args)
             and keyword (**kwargs) arguments of the decorated function.
+        extract_user_id: Optional callable to extract user_id from
+            function arguments (e.g., lambda msg: msg.sender_id).
 
     Returns:
         Decorated function with tracing context management.
 
     Example:
-        @trace(name="process_message")
+        @trace(
+            name="process_message",
+            extract_session_id=lambda msg: msg.session_key.safe_name(),
+            extract_user_id=lambda msg: msg.sender_id,
+        )
         async def process_message(msg: InboundMessage) -> Response:
-            # session_id is automatically set in context
+            # session_id and user_id are automatically propagated
             return await handle(msg)
-
-        # Or with custom session extraction
-        @trace(extract_session_id=lambda msg, **_: msg.session_key.safe_name())
-        async def process(msg: InboundMessage) -> Response:
-            ...
     """
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         span_name = name or func.__name__
@@ -104,12 +106,33 @@ def trace(
                 except Exception as e:
                     logger.warning(f"Failed to extract session_id: {e}")
 
+            # Extract user_id if extractor provided
+            user_id: str | None = None
+            if extract_user_id:
+                try:
+                    import inspect
+                    sig = inspect.signature(extract_user_id)
+                    param_count = len([
+                        p for p in sig.parameters.values()
+                        if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+                    ])
+
+                    if param_count == 1 and len(args) >= 1:
+                        user_id = extract_user_id(args[-1])
+                    else:
+                        user_id = extract_user_id(*args, **kwargs)
+                except Exception as e:
+                    logger.warning(f"Failed to extract user_id: {e}")
+
             # Fall back to current context if no session_id extracted
             if session_id is None:
                 session_id = get_current_session_id()
                 logger.debug(f"[TRACE] No session_id extracted, using context: {session_id}")
             else:
                 logger.info(f"[TRACE] Extracted session_id: {session_id}")
+
+            if user_id:
+                logger.info(f"[TRACE] Extracted user_id: {user_id}")
 
             # Use context manager to set session_id for nested operations
             if session_id:
@@ -119,7 +142,7 @@ def trace(
 
                     langfuse = LangfuseClient.get_instance()
                     if langfuse.enabled and hasattr(langfuse, "propagate_attributes"):
-                        with langfuse.propagate_attributes(session_id=session_id):
+                        with langfuse.propagate_attributes(session_id=session_id, user_id=user_id):
                             return await func(*args, **kwargs)
                     return await func(*args, **kwargs)
             else:

@@ -283,7 +283,8 @@ class AgentLoop:
 
     @trace(
         name="process_message",
-        extract_session_id=lambda *args, **_: args[1].session_key.safe_name(),
+        extract_session_id=lambda msg: msg.session_key.safe_name(),
+        extract_user_id=lambda msg: msg.sender_id,
     )
     async def _process_message(self, msg: InboundMessage) -> OutboundMessage | None:
         """
