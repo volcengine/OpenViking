@@ -51,6 +51,8 @@ try:
         P2ImMessageReceiveV1,
         GetImageRequest,
         GetMessageResourceRequest,
+    ReplyMessageRequest,
+    ReplyMessageRequestBody,
     )
 
     FEISHU_AVAILABLE = True
@@ -473,30 +475,102 @@ class FeishuChannel(BaseChannel):
                 receive_id_type = "open_id"
             #logger.info(f"[DEBUG] Feishu send() content: {msg.content[:300]}")
 
-            # No images extracted from content, but content might still have Markdown images
-            elements = await self._process_content_with_images(
-                msg.content, receive_id_type, msg.session_key.chat_id
+            # Process images and get cleaned content
+            cleaned_content, images = await self._extract_and_upload_images(msg.content)
+            
+            # Process @mentions: convert @ou_xxxx to Feishu mention format
+            # Pattern: @ou_xxxxxxx (user open_id)
+            import re
+            mention_pattern = r"@(ou_[a-zA-Z0-9_-]+)"
+            
+            def replace_mention(match):
+                open_id = match.group(1)
+                return f'<at user_id="{open_id}">@{open_id}</at>'
+            
+            # Replace all mentions
+            content_with_mentions = re.sub(mention_pattern, replace_mention, cleaned_content)
+            
+            # Also support @all mention
+            content_with_mentions = content_with_mentions.replace(
+                "@all", '<at user_id="all">所有人</at>'
             )
-            card = {
-                "config": {"wide_screen_mode": True},
-                "elements": elements,
+            
+            # Build post message content
+            content_elements = []
+            
+            # Add text content with mentions
+            if content_with_mentions.strip():
+                content_elements.append([
+                    {
+                        "tag": "text",
+                        "text": content_with_mentions
+                    }
+                ])
+            
+            # Add images
+            for img in images:
+                content_elements.append([
+                    {
+                        "tag": "img",
+                        "image_key": img["image_key"]
+                    }
+                ])
+            
+            # Ensure we have content
+            if not content_elements:
+                content_elements.append([
+                    {
+                        "tag": "text",
+                        "text": " "
+                    }
+                ])
+            
+            post_content = {
+                "zh_cn": {
+                    "title": "",
+                    "content": content_elements
+                }
             }
-            content = json.dumps(card, ensure_ascii=False)
-
-            request = (
-                CreateMessageRequest.builder()
-                .receive_id_type(receive_id_type)
-                .request_body(
-                    CreateMessageRequestBody.builder()
-                    .receive_id(msg.session_key.chat_id)
-                    .msg_type("interactive")
-                    .content(content)
+            
+            import json
+            content = json.dumps(post_content, ensure_ascii=False)
+            
+            # Check if we need to reply to a specific message
+            # Get reply message ID from metadata (original incoming message ID)
+            reply_to_message_id = None
+            if msg.metadata:
+                reply_to_message_id = msg.metadata.get("reply_to_message_id") or msg.metadata.get("message_id")
+            
+            if reply_to_message_id:
+                # Reply to existing message (quotes the original)
+                request = (
+                    ReplyMessageRequest.builder()
+                    .message_id(reply_to_message_id)
+                    .request_body(
+                        ReplyMessageRequestBody.builder()
+                        .content(content)
+                        .msg_type("post")
+                        .build()
+                    )
                     .build()
                 )
-                .build()
-            )
-
-            response = self._client.im.v1.message.create(request)
+                response = self._client.im.v1.message.reply(request)
+                logger.debug(f"Replying to message {reply_to_message_id}")
+            else:
+                # Send new message
+                request = (
+                    CreateMessageRequest.builder()
+                    .receive_id_type(receive_id_type)
+                    .request_body(
+                        CreateMessageRequestBody.builder()
+                        .receive_id(msg.session_key.chat_id)
+                        .msg_type("post")
+                        .content(content)
+                        .build()
+                    )
+                    .build()
+                )
+                response = self._client.im.v1.message.create(request)
 
             if not response.success():
                 logger.exception(
@@ -508,6 +582,7 @@ class FeishuChannel(BaseChannel):
 
         except Exception as e:
             logger.exception(f"Error sending Feishu message: {e}")
+
 
     def _on_message_sync(self, data: "P2ImMessageReceiveV1") -> None:
         """
@@ -654,3 +729,44 @@ class FeishuChannel(BaseChannel):
 
         except Exception as e:
             logger.exception(f"Error processing Feishu message")
+
+    async def _extract_and_upload_images(self, content: str) -> tuple[str, list[dict]]:
+        """Extract images from markdown content, upload to Feishu, and return cleaned content."""
+        images = []
+        cleaned_content = content
+        
+        # Pattern 1: ![alt](send://...)
+        markdown_pattern = r"!\[([^\]]*)\]\((send://[^)\s]+\.(png|jpeg|jpg|gif|bmp|webp))\)"
+        for m in re.finditer(markdown_pattern, content):
+            img_url = m.group(2)
+            try:
+                logger.debug(f"Processing Markdown image: {img_url[:100]}...")
+                is_content, result = await self._parse_data_uri(img_url)
+                
+                if not is_content and isinstance(result, bytes):
+                    image_key = await self._upload_image_to_feishu(result)
+                    images.append({"image_key": image_key})
+            except Exception as e:
+                logger.exception(f"Failed to upload Markdown image {img_url[:100]}: {e}")
+        
+        # Remove markdown image syntax
+        cleaned_content = re.sub(markdown_pattern, "", cleaned_content)
+        
+        # Pattern 2: send://... (without alt text)
+        send_pattern = r"(send://[^)\s]+\.(png|jpeg|jpg|gif|bmp|webp))\)?"
+        for m in re.finditer(send_pattern, content):
+            img_url = m.group(1) or ""
+            try:
+                logger.debug(f"Processing Markdown image: {img_url[:100]}...")
+                is_content, result = await self._parse_data_uri(img_url)
+                
+                if not is_content and isinstance(result, bytes):
+                    image_key = await self._upload_image_to_feishu(result)
+                    images.append({"image_key": image_key})
+            except Exception as e:
+                logger.exception(f"Failed to upload Markdown image {img_url[:100]}: {e}")
+        
+        # Remove standalone send:// URLs
+        cleaned_content = re.sub(send_pattern, "", cleaned_content)
+        
+        return cleaned_content.strip(), images

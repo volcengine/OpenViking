@@ -29,12 +29,14 @@ class ContextBuilder:
         self,
         workspace: Path,
         sandbox_manager: SandboxManager | None = None,
+        sender_id: str = None,
     ):
         self.workspace = workspace
         self._templates_ensured = False
         self.sandbox_manager = sandbox_manager
         self._memory = None
         self._skills = None
+        self._sender_id = sender_id
 
     @property
     def memory(self):
@@ -88,7 +90,7 @@ class ContextBuilder:
             )
 
         # Viking user profile
-        profile = await self.memory.get_viking_user_profile(sandbox_key=sandbox_key)
+        profile = await self.memory.get_viking_user_profile(sandbox_key=sandbox_key, user_id=self._sender_id)
         if profile:
             parts.append(profile)
 

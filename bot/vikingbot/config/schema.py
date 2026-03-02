@@ -416,7 +416,8 @@ class OpenVikingConfig(BaseModel):
     mode: str = "local"  # local or remote
     server_url: str = ""
     user_id: str = ""
-    api_key: str = ""
+    account_id: str = ""
+    admin_account_api_key: str = ""
 
 
 class WebToolsConfig(BaseModel):

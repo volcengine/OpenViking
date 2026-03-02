@@ -61,7 +61,7 @@ class MemoryStore:
             f"### agent memories:\n{agent_memory}"
         )
 
-    async def get_viking_user_profile(self, sandbox_key: str) -> str:
+    async def get_viking_user_profile(self, sandbox_key: str, user_id: str) -> str:
         client = await VikingClient.create(agent_id=sandbox_key)
         result = await client.read_content(
             uri=f"viking://user/{self.user_id}/memories/profile.md", level="read"
