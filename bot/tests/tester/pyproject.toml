@@ -1,0 +1,16 @@
+[project]
+name = "vikingbot-tester"
+version = "0.1.0"
+description = "Test framework for vikingbot - tests basic functionality with clear specs"
+requires-python = ">=3.11"
+dependencies = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.21.0",
+]
+
+[project.scripts]
+test_vikingbot = "test_vikingbot:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

@@ -110,6 +110,7 @@ class LiteLLMProvider(LLMProvider):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.7,
+        session_id: str | None = None,
     ) -> LLMResponse:
         """
         Send a chat completion request via LiteLLM.
@@ -120,6 +121,7 @@ class LiteLLMProvider(LLMProvider):
             model: Model identifier (e.g., 'anthropic/claude-sonnet-4-5').
             max_tokens: Maximum tokens in response.
             temperature: Sampling temperature.
+            session_id: Optional session ID for tracing.
 
         Returns:
             LLMResponse with content and/or tool calls.
@@ -156,11 +158,14 @@ class LiteLLMProvider(LLMProvider):
         langfuse_generation = None
         try:
             if self.langfuse.enabled and self.langfuse._client:
+                metadata = {"has_tools": tools is not None}
+                if session_id:
+                    metadata["session_id"] = session_id
                 langfuse_generation = self.langfuse._client.start_generation(
                     name="llm-chat",
                     model=model,
                     input=messages,
-                    metadata={"has_tools": tools is not None},
+                    metadata=metadata,
                 )
 
             response = await acompletion(**kwargs)

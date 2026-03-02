@@ -51,6 +51,7 @@ class LLMProvider(ABC):
         model: str | None = None,
         max_tokens: int = 4096,
         temperature: float = 0.7,
+        session_id: str | None = None,
     ) -> LLMResponse:
         """
         Send a chat completion request.
@@ -61,6 +62,7 @@ class LLMProvider(ABC):
             model: Model identifier (provider-specific).
             max_tokens: Maximum tokens in response.
             temperature: Sampling temperature.
+            session_id: Optional session ID for tracing.
 
         Returns:
             LLMResponse with content and/or tool calls.

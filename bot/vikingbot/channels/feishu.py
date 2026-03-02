@@ -460,6 +460,10 @@ class FeishuChannel(BaseChannel):
             logger.warning("Feishu client not initialized")
             return
 
+        # Only send normal response messages, skip thinking/tool_call/etc.
+        if not msg.is_normal_message:
+            return
+
         try:
             # Determine receive_id_type based on chat_id format
             # open_id starts with "ou_", chat_id starts with "oc_"

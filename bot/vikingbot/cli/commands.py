@@ -258,9 +258,7 @@ def prepare_agent_loop(config, bus, session_manager, cron, quiet: bool = False):
         )
         LangfuseClient.set_instance(langfuse_client)
         if langfuse_client.enabled:
-            logger.info(f"Langfuse: enabled (base_url={config.langfuse.base_url})")
-        else:
-            logger.warning("Langfuse: configured but failed to initialize")
+            logger.info(f"Langfuse: {config.langfuse.base_url}")
 
     provider = _make_provider(config, langfuse_client)
     # Create agent with cron service
@@ -357,7 +355,7 @@ async def start_console(console_port):
     """Start the console web UI in a separate thread within the same process."""
     try:
         import threading
-        from vikingbot.console.console_gradio_simple import run_console_server
+        from vikingbot.console.web_console import run_console_server
 
         def run_in_thread():
             try:

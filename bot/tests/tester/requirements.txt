@@ -1,0 +1,6 @@
+# 测试框架依赖
+pytest>=7.0.0
+pytest-asyncio>=0.21.0
+
+# vikingbot 依赖（从 ../openviking/bot/pyproject.toml 继承）
+# 这些将通过 editable install 获取

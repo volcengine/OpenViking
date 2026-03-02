@@ -180,7 +180,10 @@ class AgentLoop:
                 )
 
             response = await self.provider.chat(
-                messages=messages, tools=self.tools.get_definitions(), model=self.model
+                messages=messages,
+                tools=self.tools.get_definitions(),
+                model=self.model,
+                session_id=session_key.safe_name(),
             )
 
             if publish_events and response.reasoning_content:
@@ -471,6 +474,7 @@ Respond with ONLY valid JSON, no markdown fences."""
                     {"role": "user", "content": prompt},
                 ],
                 model=self.model,
+                session_id=session.key.safe_name(),
             )
             text = (response.content or "").strip()
             if text.startswith("```"):

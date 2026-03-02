@@ -193,6 +193,10 @@ class TelegramChannel(BaseChannel):
 
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message through Telegram."""
+        # Only send normal response messages, skip thinking/tool_call/etc.
+        if not msg.is_normal_message:
+            return
+
         if not self._app:
             logger.warning("Telegram bot not running")
             return
