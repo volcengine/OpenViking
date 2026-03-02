@@ -17,40 +17,57 @@ def _stub_config():
 
 
 def test_parse_code_hosting_url_http_gitlab_deep_path_takes_first_two_parts(monkeypatch):
-    module_path = Path(__file__).resolve().parents[2] / "openviking" / "utils" / "code_hosting_utils.py"
+    module_path = (
+        Path(__file__).resolve().parents[2] / "openviking" / "utils" / "code_hosting_utils.py"
+    )
     spec = importlib.util.spec_from_file_location("code_hosting_utils", module_path)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
     spec.loader.exec_module(module)
 
     monkeypatch.setattr(module, "get_openviking_config", _stub_config)
-    assert module.parse_code_hosting_url("https://gitlab.com/group/subgroup/project") == "group/subgroup"
+    assert (
+        module.parse_code_hosting_url("https://gitlab.com/group/subgroup/project")
+        == "group/subgroup"
+    )
 
 
 def test_parse_code_hosting_url_ssh_gitlab_deep_path_takes_first_two_parts(monkeypatch):
-    module_path = Path(__file__).resolve().parents[2] / "openviking" / "utils" / "code_hosting_utils.py"
+    module_path = (
+        Path(__file__).resolve().parents[2] / "openviking" / "utils" / "code_hosting_utils.py"
+    )
     spec = importlib.util.spec_from_file_location("code_hosting_utils", module_path)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
     spec.loader.exec_module(module)
 
     monkeypatch.setattr(module, "get_openviking_config", _stub_config)
-    assert module.parse_code_hosting_url("git@gitlab.com:group/subgroup/project.git") == "group/subgroup"
+    assert (
+        module.parse_code_hosting_url("git@gitlab.com:group/subgroup/project.git")
+        == "group/subgroup"
+    )
 
 
 def test_parse_code_hosting_url_ssh_github_standard_org_repo(monkeypatch):
-    module_path = Path(__file__).resolve().parents[2] / "openviking" / "utils" / "code_hosting_utils.py"
+    module_path = (
+        Path(__file__).resolve().parents[2] / "openviking" / "utils" / "code_hosting_utils.py"
+    )
     spec = importlib.util.spec_from_file_location("code_hosting_utils", module_path)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
     spec.loader.exec_module(module)
 
     monkeypatch.setattr(module, "get_openviking_config", _stub_config)
-    assert module.parse_code_hosting_url("git@github.com:volcengine/OpenViking.git") == "volcengine/OpenViking"
+    assert (
+        module.parse_code_hosting_url("git@github.com:volcengine/OpenViking.git")
+        == "volcengine/OpenViking"
+    )
 
 
 def test_parse_code_hosting_url_rejects_unlisted_host(monkeypatch):
-    module_path = Path(__file__).resolve().parents[2] / "openviking" / "utils" / "code_hosting_utils.py"
+    module_path = (
+        Path(__file__).resolve().parents[2] / "openviking" / "utils" / "code_hosting_utils.py"
+    )
     spec = importlib.util.spec_from_file_location("code_hosting_utils", module_path)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
@@ -61,7 +78,9 @@ def test_parse_code_hosting_url_rejects_unlisted_host(monkeypatch):
 
 
 def test_parse_code_hosting_url_sanitizes_org_repo(monkeypatch):
-    module_path = Path(__file__).resolve().parents[2] / "openviking" / "utils" / "code_hosting_utils.py"
+    module_path = (
+        Path(__file__).resolve().parents[2] / "openviking" / "utils" / "code_hosting_utils.py"
+    )
     spec = importlib.util.spec_from_file_location("code_hosting_utils", module_path)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
@@ -72,7 +91,9 @@ def test_parse_code_hosting_url_sanitizes_org_repo(monkeypatch):
 
 
 def test_is_code_repository_root_url_accepts_github_repo_root(monkeypatch):
-    module_path = Path(__file__).resolve().parents[2] / "openviking" / "utils" / "code_hosting_utils.py"
+    module_path = (
+        Path(__file__).resolve().parents[2] / "openviking" / "utils" / "code_hosting_utils.py"
+    )
     spec = importlib.util.spec_from_file_location("code_hosting_utils", module_path)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
@@ -85,7 +106,9 @@ def test_is_code_repository_root_url_accepts_github_repo_root(monkeypatch):
 
 
 def test_is_code_repository_root_url_rejects_github_non_repo_pages(monkeypatch):
-    module_path = Path(__file__).resolve().parents[2] / "openviking" / "utils" / "code_hosting_utils.py"
+    module_path = (
+        Path(__file__).resolve().parents[2] / "openviking" / "utils" / "code_hosting_utils.py"
+    )
     spec = importlib.util.spec_from_file_location("code_hosting_utils", module_path)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
@@ -99,7 +122,9 @@ def test_is_code_repository_root_url_rejects_github_non_repo_pages(monkeypatch):
 
 
 def test_is_code_repository_root_url_rejects_gitlab_subpages(monkeypatch):
-    module_path = Path(__file__).resolve().parents[2] / "openviking" / "utils" / "code_hosting_utils.py"
+    module_path = (
+        Path(__file__).resolve().parents[2] / "openviking" / "utils" / "code_hosting_utils.py"
+    )
     spec = importlib.util.spec_from_file_location("code_hosting_utils", module_path)
     module = importlib.util.module_from_spec(spec)
     assert spec and spec.loader
