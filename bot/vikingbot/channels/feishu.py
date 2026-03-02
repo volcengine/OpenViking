@@ -601,11 +601,6 @@ class FeishuChannel(BaseChannel):
             content = ""
             media = []
 
-            # Log detailed message info for debugging
-            logger.info(
-                f"Received Feishu message: msg_type={msg_type}, content={message.content[:200]}"
-            )
-
             if msg_type == "text":
                 try:
                     content = json.loads(message.content).get("text", "")
@@ -675,8 +670,6 @@ class FeishuChannel(BaseChannel):
                                 logger.warning(
                                     f"Could not download image for image_key: {image_key}"
                                 )
-                    else:
-                        logger.warning(f"No image_key found in message content: {msg_content}")
                 except Exception as e:
                     logger.warning(f"Failed to download Feishu image: {e}")
                     import traceback

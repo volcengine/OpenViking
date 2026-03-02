@@ -282,7 +282,7 @@ class AgentLoop:
 
     @trace(
         name="process_message",
-        extract_session_id=lambda msg, **_: msg.session_key.safe_name(),
+        extract_session_id=lambda *args, **_: args[1].session_key.safe_name(),
     )
     async def _process_message(self, msg: InboundMessage) -> OutboundMessage | None:
         """
@@ -335,7 +335,9 @@ class AgentLoop:
 
         from vikingbot.agent.context import ContextBuilder
 
-        message_context = ContextBuilder(message_workspace, sandbox_manager=self.sandbox_manager, sender_id=msg.sender_id)
+        message_context = ContextBuilder(
+            message_workspace, sandbox_manager=self.sandbox_manager, sender_id=msg.sender_id
+        )
 
         # Build initial messages (use get_history for LLM-formatted messages)
         messages = await message_context.build_messages(
