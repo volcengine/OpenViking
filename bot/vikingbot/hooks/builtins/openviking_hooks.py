@@ -60,17 +60,15 @@ class OpenVikingPostCallHook(Hook):
     async def _read_skill_memory(self, sandbox_key: str, skill_name: str) -> str:
         ov_client = await self._get_client(sandbox_key)
         config = load_config()
-        openviking_config = config.openviking
-        if not skill_name or (not sandbox_key and openviking_config.mode != "local"):
+        openviking_config = config.ov_server
+        if not skill_name:
             return ""
         try:
             if openviking_config.mode == "local":
                 skill_memory_uri = f"viking://agent/ffb1327b18bf/memories/skills/{skill_name}.md"
             else:
-                skill_memory_uri = (
-                    f"viking://agent/{ov_client.agent_space_name}/memories/skills/{skill_name}.md"
-                )
-            # logger.warning(f"skill_memory_uri={skill_memory_uri}")
+                agent_space_name = ov_client.get_agent_space_name(openviking_config.admin_user_id)
+                skill_memory_uri = f"viking://agent/{agent_space_name}/memories/skills/{skill_name}.md"
             content = await ov_client.read_content(skill_memory_uri, level="read")
             # logger.warning(f"content={content}")
             return f"\n\n---\n## Skill Memory\n{content}" if content else ""

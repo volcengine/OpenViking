@@ -76,7 +76,7 @@ class VikingClient:
             "reason": getattr(relation, "reason", ""),
         }
 
-    def _get_agent_space_name(self, user_id: str) -> str:
+    def get_agent_space_name(self, user_id: str) -> str:
         return hashlib.md5((user_id + self.agent_id).encode()).hexdigest()[:12]
 
     async def find(self, query: str, target_uri: Optional[str] = None):
@@ -245,7 +245,7 @@ class VikingClient:
             target_uri=uri_user_memory,
             limit=limit,
         )
-        agent_space_name = self._get_agent_space_name(user_id)
+        agent_space_name = self.get_agent_space_name(user_id)
         uri_agent_memory = f"viking://agent/{agent_space_name}/memories/"
         agent_memory = await self.client.find(
             query=query,
