@@ -41,7 +41,9 @@ def register(app: typer.Typer) -> None:
         """Add resources into OpenViking."""
         # Validate path: if it's a local path, check if it exists
         final_path = path
-        if not (path.startswith("http://") or path.startswith("https://")):
+        if not (
+            path.startswith(("http://", "https://", "git@", "ssh://", "git://"))
+        ):
             unescaped_path = path.replace("\\ ", " ")
             local_path = Path(unescaped_path)
             final_path = unescaped_path
