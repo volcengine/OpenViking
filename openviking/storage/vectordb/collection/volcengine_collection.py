@@ -121,6 +121,8 @@ class VolcengineCollection(ICollection):
         if not isinstance(v, str):
             return v
         s = v.strip()
+        if s in {"/", "viking://"}:
+            return "/"
         if s.startswith("viking://"):
             s = s[len("viking://") :]
         s = s.strip("/")

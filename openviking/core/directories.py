@@ -219,26 +219,25 @@ class DirectoryInitializer:
 
         logger = get_logger(__name__)
         created = False
+        agfs_created = False
         # 1. Ensure files exist in AGFS
         if not await self._check_agfs_files_exist(uri, ctx=ctx):
             logger.debug(f"[VikingFS] Creating directory: {uri} for scope {scope}")
             await self._create_agfs_structure(uri, defn.abstract, defn.overview, ctx=ctx)
             created = True
+            agfs_created = True
         else:
             logger.debug(f"[VikingFS] Directory {uri} already exists")
 
         # 2. Ensure record exists in vector storage
+        owner_space = self._owner_space_for_scope(scope=scope, ctx=ctx)
         existing = await self.vikingdb.get_context_by_uri(
             account_id=ctx.account_id,
             uri=uri,
             limit=1,
         )
+        record_created = False
         if not existing:
-            owner_space = ""
-            if scope in {"user", "session"}:
-                owner_space = ctx.user.user_space_name()
-            elif scope == "agent":
-                owner_space = ctx.user.agent_space_name()
             context = Context(
                 uri=uri,
                 parent_uri=parent_uri,
@@ -253,7 +252,60 @@ class DirectoryInitializer:
             dir_emb_msg = EmbeddingMsgConverter.from_context(context)
             await self.vikingdb.enqueue_embedding_msg(dir_emb_msg)
             created = True
+            record_created = True
+
+        # Only seed L0/L1 vectors during fresh initialization flow.
+        if agfs_created or record_created:
+            await self._ensure_directory_l0_l1_vectors(
+                uri=uri,
+                defn=defn,
+                owner_space=owner_space,
+                ctx=ctx,
+            )
         return created
+
+    async def _ensure_directory_l0_l1_vectors(
+        self,
+        uri: str,
+        defn: DirectoryDefinition,
+        owner_space: str,
+        ctx: RequestContext,
+    ) -> None:
+        """Ensure L0/L1 vector records exist for a preset directory."""
+        for filename, vector_text in (
+            (".abstract.md", defn.abstract),
+            (".overview.md", defn.overview),
+        ):
+            child_uri = f"{uri}/{filename}"
+            existing = await self.vikingdb.get_context_by_uri(
+                account_id=ctx.account_id,
+                uri=child_uri,
+                limit=1,
+            )
+            if existing:
+                continue
+            context = Context(
+                uri=child_uri,
+                parent_uri=uri,
+                is_leaf=True,
+                context_type=get_context_type_for_uri(uri),
+                abstract=defn.abstract,
+                user=ctx.user,
+                account_id=ctx.account_id,
+                owner_space=owner_space,
+            )
+            context.set_vectorize(Vectorize(text=vector_text))
+            emb_msg = EmbeddingMsgConverter.from_context(context)
+            if emb_msg:
+                await self.vikingdb.enqueue_embedding_msg(emb_msg)
+
+    @staticmethod
+    def _owner_space_for_scope(scope: str, ctx: RequestContext) -> str:
+        if scope in {"user", "session"}:
+            return ctx.user.user_space_name()
+        if scope == "agent":
+            return ctx.user.agent_space_name()
+        return ""
 
     async def _check_agfs_files_exist(self, uri: str, ctx: RequestContext) -> bool:
         """Check if L0/L1 files exist in AGFS."""
