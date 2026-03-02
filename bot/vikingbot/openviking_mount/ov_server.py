@@ -1,9 +1,10 @@
 import asyncio
-from typing import List, Dict, Any, Optional
 import hashlib
-import openviking as ov
+from typing import List, Dict, Any, Optional
+
 from loguru import logger
 
+import openviking as ov
 from vikingbot.config.loader import get_data_dir
 from vikingbot.config.loader import load_config
 
@@ -13,32 +14,35 @@ viking_resource_prefix = "viking://resources/"
 class VikingClient:
     def __init__(self, agent_id: Optional[str] = None):
         config = load_config()
-        openviking_config = config.openviking
+        openviking_config = config.ov_server
         if openviking_config.mode == "local":
             ov_data_path = get_data_dir() / "ov_data"
             ov_data_path.mkdir(parents=True, exist_ok=True)
             self.client = ov.AsyncOpenViking(path=str(ov_data_path))
-            self.user_id = "default"
             self.agent_id = "default"
             self.account_id = "default"
-            self.agent_space_name = self.client.user.agent_space_name()
+            self.admin_user_id = "default"
         else:
             self.client = ov.AsyncHTTPClient(
                 url=openviking_config.server_url,
-                api_key=openviking_config.admin_account_api_key,
+                api_key=openviking_config.root_api_key,
                 agent_id=agent_id,
             )
             self.agent_id = agent_id
-            self.user_id = openviking_config.user_id
             self.account_id = openviking_config.account_id
-            self.agent_space_name = hashlib.md5(
-                (self.user_id + self.agent_id).encode()
-            ).hexdigest()[:12]
+            self.admin_user_id = openviking_config.admin_user_id
         self.mode = openviking_config.mode
 
     async def _initialize(self):
         """Initialize the client (must be called after construction)"""
         await self.client.initialize()
+
+        # 检查并初始化 admin_user_id（如果配置了）
+        if self.admin_user_id:
+            user_exists = await self._check_user_exists(self.admin_user_id)
+            if not user_exists:
+                await self._initialize_user(self.admin_user_id, role="admin")
+
 
     @classmethod
     async def create(cls, agent_id: Optional[str] = None):
@@ -71,6 +75,9 @@ class VikingClient:
             "relation_type": getattr(relation, "relation_type", ""),
             "reason": getattr(relation, "reason", ""),
         }
+
+    def get_agent_space_name(self, user_id: str) -> str:
+        return hashlib.md5((user_id + self.agent_id).encode()).hexdigest()[:12]
 
     async def find(self, query: str, target_uri: Optional[str] = None):
         """搜索资源"""
@@ -117,22 +124,28 @@ class VikingClient:
             return ""
 
     async def read_user_profile(self, user_id: str) -> str:
-        res = await self.client.admin_list_users(self.account_id)
-        if not res or len(res) == 0:
+        """读取用户 profile。
+
+        首先检查用户是否存在，如不存在则初始化用户并返回空字符串。
+        用户存在时，再查询 profile 信息。
+
+        Args:
+            user_id: 用户ID
+
+        Returns:
+            str: 用户 profile 内容，如果用户不存在或查询失败返回空字符串
+        """
+        # Step 1: 检查用户是否存在
+        user_exists = await self._check_user_exists(user_id)
+
+        # Step 2: 如果用户不存在，初始化用户并直接返回
+        if not user_exists:
+            success = await self._initialize_user(user_id)
+            if success:
+                logger.debug(f"User {user_id} initialized, returning empty profile")
             return ""
-        has_user = any(user["user_id"] == user_id for user in res)
-        if not has_user:
-            # 注册user
-            try:
-                await self.client.admin_register_user(
-                    account_id=self.account_id,
-                    user_id=user_id
-                )
-                logger.debug(f"Added user {user_id} to account {self.account_id}")
-            except Exception as e:
-                if 'User already exists' not in str(e):
-                    logger.warning(f"Failed to register user {user_id} to account {self.account_id}: {e}")
-                    return ""
+
+        # Step 3: 用户存在，查询 profile
         uri = f"viking://user/{user_id}/memories/profile.md"
         result = await self.read_content(uri=uri, level="read")
         return result
@@ -158,8 +171,11 @@ class VikingClient:
             "target_uri": target_uri,
         }
 
-    async def search_user_memory(self, query: str) -> list[Any]:
-        uri_user_memory = f"viking://user/{self.user_id}/memories/"
+    async def search_user_memory(self, query: str, user_id: str) -> list[Any]:
+        user_exists = await self._check_user_exists(user_id)
+        if not user_exists:
+            return []
+        uri_user_memory = f"viking://user/{user_id}/memories/"
         result = await self.client.search(query, target_uri=uri_user_memory)
         return (
             [self._matched_context_to_dict(m) for m in result.memories]
@@ -167,15 +183,70 @@ class VikingClient:
             else []
         )
 
-    async def search_memory(self, query: str, limit: int = 10) -> dict[str, list[Any]]:
-        """通过上下文消息，检索viking 的user、Agent memory"""
-        uri_user_memory = f"viking://user/{self.user_id}/memories/"
+    async def _check_user_exists(self, user_id: str) -> bool:
+        """检查用户是否存在于账户中。
+
+        Args:
+            user_id: 用户ID
+
+        Returns:
+            bool: 用户是否存在
+        """
+        try:
+            res = await self.client.admin_list_users(self.account_id)
+            if not res or len(res) == 0:
+                return False
+            return any(user.get("user_id") == user_id for user in res)
+        except Exception as e:
+            logger.warning(f"Failed to check user existence: {e}")
+            return False
+
+    async def _initialize_user(self, user_id: str, role: str = "user") -> bool:
+        """初始化用户。
+
+        Args:
+            user_id: 用户ID
+
+        Returns:
+            bool: 初始化是否成功
+        """
+        try:
+            await self.client.admin_register_user(account_id=self.account_id, user_id=user_id, role=role)
+            logger.debug(f"Initialized user {user_id} in account {self.account_id}")
+            return True
+        except Exception as e:
+            if "User already exists" in str(e):
+                return True
+            logger.warning(f"Failed to initialize user {user_id}: {e}")
+            return False
+
+    async def search_memory(
+        self, query: str, user_id: str, limit: int = 10
+    ) -> dict[str, list[Any]]:
+        """通过上下文消息，检索viking 的user、Agent memory。
+
+        首先检查用户是否存在，如不存在则初始化用户并返回空结果。
+        用户存在时，再进行记忆检索。
+        """
+        # Step 1: 检查用户是否存在
+        user_exists = await self._check_user_exists(user_id)
+
+        # Step 2: 如果用户不存在，初始化用户并直接返回
+        if not user_exists:
+            await self._initialize_user(user_id)
+            return {
+                "user_memory": [],
+                "agent_memory": [],
+            }
+        # Step 3: 用户存在，查询记忆
+        uri_user_memory = f"viking://user/{user_id}/memories/"
         user_memory = await self.client.find(
             query=query,
             target_uri=uri_user_memory,
             limit=limit,
         )
-        uri_agent_memory = f"viking://agent/{self.agent_space_name}/memories/"
+        agent_space_name = self.get_agent_space_name(user_id)
+        uri_agent_memory = f"viking://agent/{agent_space_name}/memories/"
         agent_memory = await self.client.find(
             query=query,
             target_uri=uri_agent_memory,
@@ -194,7 +265,7 @@ class VikingClient:
         """通过 glob 模式匹配文件"""
         return await self.client.glob(pattern, uri=uri)
 
-    async def commit(self, session_id: str, messages: list[dict[str, Any]]):
+    async def commit(self, session_id: str, messages: list[dict[str, Any]], user_id: str = None) -> None:
         """提交会话"""
         import uuid
         import re
@@ -308,20 +379,20 @@ async def main_test():
     # res = client.list_resources()
     # res = await client.search("头有点疼", target_uri="viking://user/memories/")
     # res = await client.get_viking_memory_context("123", current_message="头疼", history=[])
-    # res = await client.search_memory("你好")
+    res = await client.search_memory("你好", "user_1")
     # res = await client.list_resources("viking://resources/")
     # res = await client.read_content("viking://user/memories/profile.md", level="read")
     # res = await client.add_resource("/Users/bytedance/Documents/论文/吉比特年报.pdf", "吉比特年报")
-    res = await client.commit(
-        "123",
-        [
-            {"role": "user", "content": "我叫吴彦祖"},
-            {
-                "role": "assistant",
-                "content": "好的吴彦祖😎，我已经记 住你的名字啦，之后随时都可以认出你~",
-            },
-        ],
-    )
+    # res = await client.commit(
+    #     "123",
+    #     [
+    #         {"role": "user", "content": "我叫吴彦祖"},
+    #         {
+    #             "role": "assistant",
+    #             "content": "好的吴彦祖😎，我已经记 住你的名字啦，之后随时都可以认出你~",
+    #         },
+    #     ],
+    # )
     # res = await client.commit("1234", [{"role": "user", "content": "帮我搜索 Python asyncio 教程"}
     #                                    ,{"role": "assistant", "content": "我来帮你r搜索 Python asyncio 相关的教程。"}])
     print(res)
@@ -332,11 +403,13 @@ async def main_test():
 
 
 async def account_test():
-    client = await VikingClient.create(agent_id="shared")
-    # res = await client.client.admin_list_users("vikingbot")
-    # res = await client.client.admin_register_user(account_id="vikingbot", user_id="test")
-    res = await client.read_user_profile(user_id="test")
+    client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="test")
+    await client.initialize()
+
+    res = await client.admin_list_users("default")
+    # res = await client.admin_remove_user("default", "admin")
     print(res)
+
 
 if __name__ == "__main__":
     # asyncio.run(main_test())

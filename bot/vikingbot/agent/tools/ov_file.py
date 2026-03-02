@@ -375,10 +375,10 @@ class VikingSearchUserMemoryTool(OVFileTool):
             "required": ["query"],
         }
 
-    async def execute(self, tool_context: "ToolContext", query: str, **kwargs: Any) -> str:
+    async def execute(self, tool_context: ToolContext, query: str, **kwargs: Any) -> str:
         try:
             client = await self._get_client(tool_context)
-            results = await client.search_user_memory(query)
+            results = await client.search_user_memory(query, tool_context.sender_id)
 
             if not results:
                 return f"No results found for query: {query}"
@@ -428,7 +428,7 @@ class VikingMemoryCommitTool(OVFileTool):
         try:
             client = await self._get_client(tool_context)
             session_id = tool_context.session_key.safe_name()
-            await client.commit(session_id, messages)
+            await client.commit(session_id, messages, tool_context.sender_id)
             return f"Successfully committed to session {session_id}"
         except Exception as e:
             logger.exception(f"Error processing message: {e}")

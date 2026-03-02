@@ -23,7 +23,6 @@ from vikingbot.sandbox import SandboxManager
 from vikingbot.session.manager import SessionManager
 from vikingbot.utils.helpers import cal_str_tokens
 from vikingbot.utils.tracing import trace
-from vikingbot.utils.tracing import trace, set_session_id
 
 
 class AgentLoop:
@@ -153,6 +152,7 @@ class AgentLoop:
         messages: list[dict],
         session_key: SessionKey,
         publish_events: bool = True,
+        sender_id: str | None = None,
     ) -> tuple[str | None, list[dict]]:
         """
         Run the core agent loop: call LLM, execute tools, repeat until done.
@@ -235,6 +235,7 @@ class AgentLoop:
                         tool_call.arguments,
                         session_key=session_key,
                         sandbox_manager=self.sandbox_manager,
+                        sender_id=sender_id,
                     )
                     tool_execute_duration = (time.time() - tool_execute_start_time) * 1000
                     logger.info(f"[RESULT]: {str(result)[:600]}")
@@ -281,7 +282,7 @@ class AgentLoop:
 
     @trace(
         name="process_message",
-        extract_session_id=lambda msg, **_: msg.session_key.safe_name(),
+        extract_session_id=lambda *args, **_: args[1].session_key.safe_name(),
     )
     async def _process_message(self, msg: InboundMessage) -> OutboundMessage | None:
         """
@@ -334,7 +335,9 @@ class AgentLoop:
 
         from vikingbot.agent.context import ContextBuilder
 
-        message_context = ContextBuilder(message_workspace, sandbox_manager=self.sandbox_manager, sender_id=msg.sender_id)
+        message_context = ContextBuilder(
+            message_workspace, sandbox_manager=self.sandbox_manager, sender_id=msg.sender_id
+        )
 
         # Build initial messages (use get_history for LLM-formatted messages)
         messages = await message_context.build_messages(

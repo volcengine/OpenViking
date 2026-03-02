@@ -92,6 +92,11 @@ def load_config(config_path: Path | None = None) -> Config:
             if vlm_data:
                 _merge_vlm_model_config(bot_data, vlm_data)
 
+            bot_server_data = bot_data.get("ov_server", {})
+            ov_server_data = full_data.get("server", {})
+            _merge_ov_server_config(bot_server_data, ov_server_data)
+
+
             return Config.model_validate(bot_data)
         except (json.JSONDecodeError, ValueError) as e:
             print(f"Warning: Failed to load config from {path}: {e}")
@@ -116,7 +121,20 @@ def _merge_vlm_model_config(bot_data: dict, vlm_data: dict) -> None:
         if provider and "/" not in model:
             model = f"{provider}/{model}"
         bot_data["agents"]["model"] = model
+        bot_data["agents"]["provider"] = provider if provider else ""
+        bot_data["agents"]["api_base"] = vlm_data.get("api_base", "")
+        bot_data["agents"]["api_key"] = vlm_data.get("api_key", "")
 
+def _merge_ov_server_config(bot_data: dict, ov_data: dict) -> None:
+    """
+    Merge ov_server config into bot config.
+    """
+    if "server_url" not in bot_data or not bot_data["server_url"]:
+        host = ov_data.get("host", "127.0.0.1")
+        port = ov_data.get("port", "1933")
+        bot_data["server_url"] = f"http://{host}:{port}"
+    if "root_api_key" not in bot_data or not bot_data["root_api_key"]:
+        bot_data["root_api_key"] = ov_data.get("root_api_key", "")
 
 def save_config(config: Config, config_path: Path | None = None) -> None:
     """
@@ -182,4 +200,3 @@ def snake_to_camel(name: str) -> str:
     """Convert snake_case to camelCase."""
     components = name.split("_")
     return components[0] + "".join(x.title() for x in components[1:])
-

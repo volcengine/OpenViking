@@ -92,14 +92,14 @@ class ContextBuilder:
         # Viking user profile
         profile = await self.memory.get_viking_user_profile(workspace_id=workspace_id, user_id=self._sender_id)
         if profile:
-            parts.append(profile)
+            parts.append(f"## Current user's information\n{profile}")
 
-        # Viking memory
+        # Viking agent memory
         viking_memory = await self.memory.get_viking_memory_context(
             current_message=current_message, workspace_id=workspace_id
         )
         if viking_memory:
-            parts.append(viking_memory)
+            parts.append(f"## Your memories. Using tools to read more details.\n{viking_memory}")
 
         # Bootstrap files
         bootstrap = self._load_bootstrap_files()

@@ -26,9 +26,9 @@ class OpenVikingCompactHook(Hook):
     def __init__(self):
         self._client = None
 
-    async def _get_client(self, workspace_id: str) -> VikingClient:
+    async def _get_client(self, sandbox_key: str) -> VikingClient:
         if not self._client:
-            client = await VikingClient.create(workspace_id)
+            client = await VikingClient.create(sandbox_key)
             self._client = client
         return self._client
 
@@ -36,8 +36,8 @@ class OpenVikingCompactHook(Hook):
         vikingbot_session: Session = kwargs.get("session", {})
         session_id = context.session_id
         try:
-            client = await self._get_client(context.workspace_id)
-            result = await client.commit(session_id, vikingbot_session.messages)
+            client = await self._get_client(context.sandbox_key)
+            result = await client.commit(session_id, vikingbot_session.messages, load_config().ov_server.admin_user_id)
             return result
         except Exception as e:
             logger.exception(f"Failed to add message to OpenViking: {e}")
@@ -51,26 +51,24 @@ class OpenVikingPostCallHook(Hook):
     def __init__(self):
         self._client = None
 
-    async def _get_client(self, workspace_id: str) -> VikingClient:
+    async def _get_client(self, sandbox_key: str) -> VikingClient:
         if not self._client:
-            client = await VikingClient.create(workspace_id)
+            client = await VikingClient.create(sandbox_key)
             self._client = client
         return self._client
 
-    async def _read_skill_memory(self, workspace_id: str, skill_name: str) -> str:
-        ov_client = await self._get_client(workspace_id)
+    async def _read_skill_memory(self, sandbox_key: str, skill_name: str) -> str:
+        ov_client = await self._get_client(sandbox_key)
         config = load_config()
-        openviking_config = config.openviking
-        if not skill_name or (not workspace_id and openviking_config.mode != "local"):
+        openviking_config = config.ov_server
+        if not skill_name:
             return ""
         try:
             if openviking_config.mode == "local":
                 skill_memory_uri = f"viking://agent/ffb1327b18bf/memories/skills/{skill_name}.md"
             else:
-                skill_memory_uri = (
-                    f"viking://agent/{ov_client.agent_space_name}/memories/skills/{skill_name}.md"
-                )
-            # logger.warning(f"skill_memory_uri={skill_memory_uri}")
+                agent_space_name = ov_client.get_agent_space_name(openviking_config.admin_user_id)
+                skill_memory_uri = f"viking://agent/{agent_space_name}/memories/skills/{skill_name}.md"
             content = await ov_client.read_content(skill_memory_uri, level="read")
             # logger.warning(f"content={content}")
             return f"\n\n---\n## Skill Memory\n{content}" if content else ""
@@ -86,7 +84,7 @@ class OpenVikingPostCallHook(Hook):
                     skill_name = match.group(1).strip()
                     # logger.debug(f"skill_name={skill_name}")
 
-                    agent_space_name = context.workspace_id
+                    agent_space_name = context.sandbox_key
                     # logger.debug(f"agent_space_name={agent_space_name}")
 
                     skill_memory = await self._read_skill_memory(agent_space_name, skill_name)
