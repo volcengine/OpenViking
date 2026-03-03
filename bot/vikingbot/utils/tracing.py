@@ -88,6 +88,11 @@ def trace(
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         span_name = name or func.__name__
 
+        # Apply @observe decorator if available for Langfuse tracing
+        wrapped_func = func
+        if langfuse_observe is not None:
+            wrapped_func = langfuse_observe(name=span_name)(func)
+
         @wraps(func)
         async def async_wrapper(*args: Any, **kwargs: Any) -> T:
             # Extract session_id if extractor provided
@@ -148,15 +153,14 @@ def trace(
 
                     langfuse = LangfuseClient.get_instance()
                     if langfuse.enabled and hasattr(langfuse, "propagate_attributes"):
-                        # Apply @observe decorator if available to create Langfuse trace
-                        observed_func = func
-                        if langfuse_observe is not None:
-                            observed_func = langfuse_observe(name=span_name)(func)
+                        logger.info(f"[LANGFUSE] Starting trace with attributes: session_id={session_id}, user_id={user_id}")
                         with langfuse.propagate_attributes(session_id=session_id, user_id=user_id):
-                            return await observed_func(*args, **kwargs)
-                    return await func(*args, **kwargs)
+                            return await wrapped_func(*args, **kwargs)
+                    else:
+                        logger.warning(f"[LANGFUSE] Client not enabled or propagate_attributes not available")
+                    return await wrapped_func(*args, **kwargs)
             else:
-                return await func(*args, **kwargs)
+                return await wrapped_func(*args, **kwargs)
 
         return async_wrapper  # type: ignore[return-value]
 
