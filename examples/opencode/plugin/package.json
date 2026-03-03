@@ -1,0 +1,22 @@
+{
+  "name": "openviking-opencode",
+  "version": "0.3.0",
+  "description": "OpenCode plugin for OpenViking — injects indexed repo context into the AI assistant and auto-installs the openviking skill",
+  "type": "module",
+  "main": "index.mjs",
+  "exports": {
+    ".": "./index.mjs"
+  },
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "openviking",
+    "rag",
+    "code-search"
+  ],
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/volcengine/OpenViking"
+  }
+}

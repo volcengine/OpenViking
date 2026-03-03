@@ -4,6 +4,7 @@
 """AGFS Local Backend Tests for VikingFS interface"""
 
 import os
+import shutil
 import uuid
 
 import pytest
@@ -17,8 +18,9 @@ AGFS_CONF = AGFSConfig(
     path="/tmp/ov-test", backend="local", port=1833, url="http://localhost:1833", timeout=10
 )
 
-# 2. Ensure test directory exists
-os.makedirs(AGFS_CONF.path, exist_ok=True)
+# clean up test directory if it exists
+if os.path.exists(AGFS_CONF.path):
+    shutil.rmtree(AGFS_CONF.path)
 
 
 @pytest.fixture(scope="module")
@@ -34,6 +36,8 @@ async def viking_fs_instance():
 
     # Initialize VikingFS with client
     vfs = init_viking_fs(agfs=agfs_client)
+    # make sure default/temp directory exists
+    await vfs.mkdir("viking://temp/", exist_ok=True)
 
     yield vfs
 
@@ -48,6 +52,7 @@ class TestVikingFSLocal:
     async def test_file_operations(self, viking_fs_instance):
         """Test VikingFS file operations: read, write, ls, stat."""
         vfs = viking_fs_instance
+
         test_filename = f"local_file_{uuid.uuid4().hex}.txt"
         test_content = "Hello VikingFS Local! " + uuid.uuid4().hex
         test_uri = f"viking://temp/{test_filename}"

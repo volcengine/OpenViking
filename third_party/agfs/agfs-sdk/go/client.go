@@ -543,6 +543,7 @@ type GrepRequest struct {
 	Pattern         string `json:"pattern"`
 	Recursive       bool   `json:"recursive"`
 	CaseInsensitive bool   `json:"case_insensitive"`
+	NodeLimit       int    `json:"node_limit"` // Maximum number of results to return (0 means no limit)
 }
 
 // GrepMatch represents a single match result
@@ -572,12 +573,17 @@ type DigestResponse struct {
 }
 
 // Grep searches for a pattern in files using regular expressions
-func (c *Client) Grep(path, pattern string, recursive, caseInsensitive bool) (*GrepResponse, error) {
+func (c *Client) Grep(path, pattern string, recursive, caseInsensitive bool, nodeLimit int) (*GrepResponse, error) {
+	nl := 0
+	if nodeLimit > 0 {
+		nl = nodeLimit
+	}
 	reqBody := GrepRequest{
 		Path:            path,
 		Pattern:         pattern,
 		Recursive:       recursive,
 		CaseInsensitive: caseInsensitive,
+		NodeLimit:       nl,
 	}
 
 	body, err := json.Marshal(reqBody)

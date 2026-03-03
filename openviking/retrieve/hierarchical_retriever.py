@@ -43,6 +43,7 @@ class HierarchicalRetriever:
     DIRECTORY_DOMINANCE_RATIO = 1.2  # Directory score must exceed max child score
     GLOBAL_SEARCH_TOPK = 3  # Global retrieval count
     HOTNESS_ALPHA = 0.2  # Weight for hotness score in final ranking (0 = disabled)
+    LEVEL_URI_SUFFIX = {0: ".abstract.md", 1: ".overview.md"}
 
     def __init__(
         self,
@@ -262,7 +263,7 @@ class HierarchicalRetriever:
 
         sparse_query_vector = sparse_query_vector or None
 
-        collected: List[Dict[str, Any]] = []  # Collected results (directories and leaves)
+        collected_by_uri: Dict[str, Dict[str, Any]] = {}
         dir_queue: List[tuple] = []  # Priority queue: (-score, uri)
         visited: set = set()
         prev_topk_uris: set = set()
@@ -324,26 +325,27 @@ class HierarchicalRetriever:
                     )
                     continue
 
-                # Always collect results that pass threshold, even if already
-                # visited as a directory starting point. The visited set only
-                # prevents re-entering directories for child search.
-                if not any(c.get("uri") == uri for c in collected):
+                # Deduplicate by URI and keep the highest-scored candidate.
+                previous = collected_by_uri.get(uri)
+                if previous is None or final_score > previous.get("_final_score", 0):
                     r["_final_score"] = final_score
-                    collected.append(r)
+                    collected_by_uri[uri] = r
                     logger.debug(
-                        f"[RecursiveSearch] Added URI: {uri} to candidates with score: {final_score}"
+                        "[RecursiveSearch] Updated URI: %s candidate score to %.4f",
+                        uri,
+                        final_score,
                     )
 
-                if uri not in visited:
-                    if r.get("level") == 2:
-                        visited.add(uri)
-                    else:
-                        heapq.heappush(dir_queue, (-final_score, uri))
+                # Only recurse into directories (L0/L1). L2 files are terminal hits.
+                if uri not in visited and r.get("level", 2) != 2:
+                    heapq.heappush(dir_queue, (-final_score, uri))
 
             # Convergence check
-            current_topk = sorted(collected, key=lambda x: x.get("_final_score", 0), reverse=True)[
-                :limit
-            ]
+            current_topk = sorted(
+                collected_by_uri.values(),
+                key=lambda x: x.get("_final_score", 0),
+                reverse=True,
+            )[:limit]
             current_topk_uris = {c.get("uri", "") for c in current_topk}
 
             if current_topk_uris == prev_topk_uris and len(current_topk_uris) >= limit:
@@ -355,7 +357,11 @@ class HierarchicalRetriever:
                 convergence_rounds = 0
                 prev_topk_uris = current_topk_uris
 
-        collected.sort(key=lambda x: x.get("_final_score", 0), reverse=True)
+        collected = sorted(
+            collected_by_uri.values(),
+            key=lambda x: x.get("_final_score", 0),
+            reverse=True,
+        )
         return collected[:limit]
 
     async def _convert_to_matched_contexts(
@@ -407,14 +413,16 @@ class HierarchicalRetriever:
 
             alpha = self.HOTNESS_ALPHA
             final_score = (1 - alpha) * semantic_score + alpha * h_score
+            level = c.get("level", 2)
+            display_uri = self._append_level_suffix(c.get("uri", ""), level)
 
             results.append(
                 MatchedContext(
-                    uri=c.get("uri", ""),
+                    uri=display_uri,
                     context_type=ContextType(c["context_type"])
                     if c.get("context_type")
                     else ContextType.RESOURCE,
-                    level=c.get("level", 2),
+                    level=level,
                     abstract=c.get("abstract", ""),
                     category=c.get("category", ""),
                     score=final_score,
@@ -425,6 +433,20 @@ class HierarchicalRetriever:
         # Re-sort by blended score so hotness boost can change ranking
         results.sort(key=lambda x: x.score, reverse=True)
         return results
+
+    @classmethod
+    def _append_level_suffix(cls, uri: str, level: int) -> str:
+        """Return user-facing URI with L0/L1 suffix reconstructed by level."""
+        suffix = cls.LEVEL_URI_SUFFIX.get(level)
+        if not uri or not suffix:
+            return uri
+        if uri.endswith(f"/{suffix}"):
+            return uri
+        if uri.endswith("/.abstract.md") or uri.endswith("/.overview.md"):
+            return uri
+        if uri.endswith("/") and not uri.endswith("://"):
+            uri = uri.rstrip("/")
+        return f"{uri}/{suffix}"
 
     def _get_root_uris_for_type(
         self, context_type: Optional[ContextType], ctx: Optional[RequestContext] = None

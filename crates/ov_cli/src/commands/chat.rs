@@ -1,13 +1,13 @@
 //! Chat command for interacting with Vikingbot via OpenAPI
 
-use std::io::{self, Write};
+use std::io::Write;
 use std::time::Duration;
 
-use anyhow::{Context, Result};
 use clap::Parser;
-use futures::StreamExt;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+
+use crate::error::{Error, Result};
 
 const DEFAULT_ENDPOINT: &str = "http://localhost:18790/api/v1/openapi";
 
@@ -19,7 +19,7 @@ pub struct ChatCommand {
     pub endpoint: String,
 
     /// API key for authentication
-    #[arg(short, long, env = "OPENAPI_API_KEY")]
+    #[arg(short, long, env = "VIKINGBOT_API_KEY")]
     pub api_key: Option<String>,
 
     /// Session ID to use (creates new if not provided)
@@ -85,15 +85,11 @@ impl ChatCommand {
         let client = Client::builder()
             .timeout(Duration::from_secs(300))
             .build()
-            .context("Failed to create HTTP client")?;
+            .map_err(|e| Error::Network(format!("Failed to create HTTP client: {}", e)))?;
 
         if let Some(message) = &self.message {
-            // Single message mode
-            if self.stream {
-                self.send_stream_message(&client, message).await
-            } else {
-                self.send_message(&client, message).await
-            }
+            // Single message mode - ignore stream flag for now
+            self.send_message(&client, message).await
         } else {
             // Interactive mode
             self.run_interactive(&client).await
@@ -121,18 +117,18 @@ impl ChatCommand {
         let response = req_builder
             .send()
             .await
-            .context("Failed to send request")?;
+            .map_err(|e| Error::Network(format!("Failed to send request: {}", e)))?;
 
         if !response.status().is_success() {
             let status = response.status();
             let text = response.text().await.unwrap_or_default();
-            return Err(anyhow::anyhow!("Request failed ({}): {}", status, text));
+            return Err(Error::Api(format!("Request failed ({}): {}", status, text)));
         }
 
         let chat_response: ChatResponse = response
             .json()
             .await
-            .context("Failed to parse response")?;
+            .map_err(|e| Error::Parse(format!("Failed to parse response: {}", e)))?;
 
         // Print events if any
         if let Some(events) = &chat_response.events {
@@ -183,103 +179,6 @@ impl ChatCommand {
         Ok(())
     }
 
-    /// Send a message and stream the response
-    async fn send_stream_message(&self, client: &Client, message: &str) -> Result<()> {
-        let url = format!("{}/chat/stream", self.endpoint);
-
-        let request = ChatRequest {
-            message: message.to_string(),
-            session_id: self.session.clone(),
-            user_id: Some(self.user.clone()),
-            stream: true,
-            context: None,
-        };
-
-        let mut req_builder = client.post(&url).json(&request);
-
-        if let Some(api_key) = &self.api_key {
-            req_builder = req_builder.header("X-API-Key", api_key);
-        }
-
-        let mut response = req_builder
-            .send()
-            .await
-            .context("Failed to send request")?;
-
-        if !response.status().is_success() {
-            let status = response.status();
-            let text = response.text().await.unwrap_or_default();
-            return Err(anyhow::anyhow!("Request failed ({}): {}", status, text));
-        }
-
-        // Process SSE stream
-        let mut bot_response = String::new();
-        let mut in_bot_response = false;
-
-        while let Some(chunk) = response.chunk().await? {
-            let text = String::from_utf8_lossy(&chunk);
-            for line in text.lines() {
-                if line.starts_with("data: ") {
-                    let data = &line[6..];
-                    if let Ok(event) = serde_json::from_str::<StreamEvent>(data) {
-                        match event.event.as_str() {
-                            "reasoning" => {
-                                if !self.no_format {
-                                    let content = event.data.as_str().unwrap_or("");
-                                    let truncated = if content.len() > 100 {
-                                        format!("{}...", &content[..100])
-                                    } else {
-                                        content.to_string()
-                                    };
-                                    println!("\x1b[2mThink: {}\x1b[0m", truncated);
-                                }
-                            }
-                            "tool_call" => {
-                                if !self.no_format {
-                                    let content = event.data.as_str().unwrap_or("");
-                                    println!("\x1b[2m├─ Calling: {}\x1b[0m", content);
-                                }
-                            }
-                            "tool_result" => {
-                                if !self.no_format {
-                                    let content = event.data.as_str().unwrap_or("");
-                                    let truncated = if content.len() > 150 {
-                                        format!("{}...", &content[..150])
-                                    } else {
-                                        content.to_string()
-                                    };
-                                    println!("\x1b[2m└─ Result: {}\x1b[0m", truncated);
-                                }
-                            }
-                            "response" => {
-                                if !in_bot_response && !self.no_format {
-                                    println!("\n\x1b[1;31mBot:\x1b[0m");
-                                    in_bot_response = true;
-                                }
-                                if let Some(content) = event.data.as_str() {
-                                    bot_response.push_str(content);
-                                    if self.no_format {
-                                        print!("{}", content);
-                                    } else {
-                                        print!("{}", content);
-                                    }
-                                    std::io::stdout().flush()?;
-                                }
-                            }
-                            _ => {}
-                        }
-                    }
-                }
-            }
-        }
-
-        if !self.no_format {
-            println!("\n");
-        }
-
-        Ok(())
-    }
-
     /// Run interactive chat mode
     async fn run_interactive(&self, client: &Client) -> Result<()> {
         println!("Vikingbot Chat - Interactive Mode");
@@ -295,10 +194,10 @@ impl ChatCommand {
         loop {
             // Read input
             print!("\x1b[1;32mYou:\x1b[0m ");
-            std::io::stdout().flush()?;
+            std::io::stdout().flush().map_err(|e| Error::Io(e))?;
 
             let mut input = String::new();
-            std::io::stdin().read_line(&mut input)?;
+            std::io::stdin().read_line(&mut input).map_err(|e| Error::Io(e))?;
             let input = input.trim();
 
             if input.is_empty() {

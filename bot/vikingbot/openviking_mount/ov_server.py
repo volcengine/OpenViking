@@ -334,9 +334,10 @@ class VikingClient:
 
     async def commit(self, session_id: str, messages: list[dict[str, Any]], user_id: str = None):
         """提交会话"""
-        import uuid
         import re
-        from openviking.message.part import TextPart, ToolPart, Part
+        import uuid
+
+        from openviking.message.part import Part, TextPart, ToolPart
 
         user_exists = await self._check_user_exists(user_id)
         if not user_exists:

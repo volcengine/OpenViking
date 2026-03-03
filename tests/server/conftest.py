@@ -51,11 +51,13 @@ This is a sample markdown document for server testing.
 
 @pytest.fixture(scope="function")
 def temp_dir():
-    """Create temp directory, auto-cleanup."""
-    shutil.rmtree(TEST_TMP_DIR, ignore_errors=True)
-    TEST_TMP_DIR.mkdir(parents=True, exist_ok=True)
-    yield TEST_TMP_DIR
-    shutil.rmtree(TEST_TMP_DIR, ignore_errors=True)
+    """Create a unique temp directory per test, auto-cleanup."""
+    import uuid
+
+    unique_dir = TEST_TMP_DIR / uuid.uuid4().hex[:8]
+    unique_dir.mkdir(parents=True, exist_ok=True)
+    yield unique_dir
+    shutil.rmtree(unique_dir, ignore_errors=True)
 
 
 @pytest.fixture(scope="function")

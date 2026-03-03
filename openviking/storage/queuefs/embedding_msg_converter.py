@@ -18,7 +18,7 @@ class EmbeddingMsgConverter:
     """Converter for Context objects to EmbeddingMsg."""
 
     @staticmethod
-    def from_context(context: Context, **kwargs) -> EmbeddingMsg:
+    def from_context(context: Context) -> EmbeddingMsg:
         """
         Convert a Context object to EmbeddingMsg.
         """
@@ -48,22 +48,28 @@ class EmbeddingMsgConverter:
             else:
                 context_data["owner_space"] = ""
 
-        # Derive level field from URI for hierarchical retrieval.
+        # Derive level field for hierarchical retrieval.
         uri = context_data.get("uri", "")
-        if uri.endswith("/.abstract.md"):
-            context_data["level"] = ContextLevel.ABSTRACT
+        context_level = getattr(context, "level", None)
+        if context_level is not None:
+            resolved_level = context_level
+        elif context_data.get("level") is not None:
+            resolved_level = context_data.get("level")
+        elif isinstance(context.meta, dict) and context.meta.get("level") is not None:
+            resolved_level = context.meta.get("level")
+        elif uri.endswith("/.abstract.md"):
+            resolved_level = ContextLevel.ABSTRACT
         elif uri.endswith("/.overview.md"):
-            context_data["level"] = ContextLevel.OVERVIEW
+            resolved_level = ContextLevel.OVERVIEW
         else:
-            context_data["level"] = ContextLevel.DETAIL
+            resolved_level = ContextLevel.DETAIL
+
+        if isinstance(resolved_level, ContextLevel):
+            resolved_level = int(resolved_level.value)
+        context_data["level"] = int(resolved_level)
 
         embedding_msg = EmbeddingMsg(
             message=vectorization_text,
             context_data=context_data,
         )
-
-        # Set any additional fields from kwargs
-        for key, value in kwargs.items():
-            if value is not None:
-                embedding_msg.context_data[key] = value
         return embedding_msg

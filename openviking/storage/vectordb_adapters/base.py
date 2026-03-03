@@ -17,6 +17,7 @@ from openviking.storage.expr import (
     FilterExpr,
     In,
     Or,
+    PathScope,
     Range,
     RawDSL,
     TimeRange,
@@ -58,6 +59,7 @@ class CollectionAdapter(ABC):
     """
 
     mode: str
+    _URI_FIELD_NAMES = {"uri", "parent_uri"}
 
     def __init__(self, collection_name: str):
         self._collection_name = collection_name
@@ -192,15 +194,75 @@ class CollectionAdapter(ABC):
         return index_meta
 
     def _normalize_record_for_read(self, record: Dict[str, Any]) -> Dict[str, Any]:
-        return record
+        normalized = dict(record)
+        for key in self._URI_FIELD_NAMES:
+            if key in normalized:
+                normalized[key] = self._decode_uri_field_value(normalized[key])
+        return normalized
+
+    def _normalize_record_for_write(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = dict(record)
+        for key in self._URI_FIELD_NAMES:
+            if key in normalized:
+                normalized[key] = self._encode_uri_field_value(normalized[key])
+        return normalized
+
+    @staticmethod
+    def _encode_uri_field_value(value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        stripped = value.strip()
+        if not stripped.startswith("viking://"):
+            return value
+        suffix = stripped[len("viking://") :].strip("/")
+        return f"/{suffix}" if suffix else "/"
+
+    @staticmethod
+    def _decode_uri_field_value(value: Any) -> Any:
+        if not isinstance(value, str):
+            return value
+        stripped = value.strip()
+        if stripped.startswith("viking://"):
+            return stripped
+        if not stripped.startswith("/"):
+            return value
+        suffix = stripped.strip("/")
+        return f"viking://{suffix}" if suffix else "viking://"
+
+    def _normalize_filter_payload_for_write(self, payload: Any) -> Any:
+        if isinstance(payload, list):
+            return [self._normalize_filter_payload_for_write(item) for item in payload]
+        if not isinstance(payload, dict):
+            return payload
+
+        field_name = payload.get("field") if isinstance(payload.get("field"), str) else None
+        normalized: Dict[str, Any] = {}
+        for key, value in payload.items():
+            if key in self._URI_FIELD_NAMES:
+                normalized[key] = self._encode_uri_field_value(value)
+                continue
+
+            if key == "conds" and isinstance(value, list) and field_name in self._URI_FIELD_NAMES:
+                normalized[key] = [
+                    self._encode_uri_field_value(item) if isinstance(item, str) else item
+                    for item in value
+                ]
+                continue
+
+            if key == "prefix" and field_name in self._URI_FIELD_NAMES:
+                normalized[key] = self._encode_uri_field_value(value)
+                continue
+
+            normalized[key] = self._normalize_filter_payload_for_write(value)
+        return normalized
 
     def _compile_filter(self, expr: FilterExpr | Dict[str, Any] | None) -> Dict[str, Any]:
         if expr is None:
             return {}
         if isinstance(expr, dict):
-            return expr
+            return self._normalize_filter_payload_for_write(expr)
         if isinstance(expr, RawDSL):
-            return expr.payload
+            return self._normalize_filter_payload_for_write(expr.payload)
         if isinstance(expr, And):
             conds = [self._compile_filter(c) for c in expr.conds if c is not None]
             conds = [c for c in conds if c]
@@ -218,9 +280,34 @@ class CollectionAdapter(ABC):
                 return conds[0]
             return {"op": "or", "conds": conds}
         if isinstance(expr, Eq):
-            return {"op": "must", "field": expr.field, "conds": [expr.value]}
+            value = (
+                self._encode_uri_field_value(expr.value)
+                if expr.field in self._URI_FIELD_NAMES
+                else expr.value
+            )
+            payload = {"op": "must", "field": expr.field, "conds": [value]}
+            if expr.field in self._URI_FIELD_NAMES:
+                payload["para"] = "-d=0"
+            return payload
         if isinstance(expr, In):
-            return {"op": "must", "field": expr.field, "conds": list(expr.values)}
+            values = (
+                [self._encode_uri_field_value(v) for v in expr.values]
+                if expr.field in self._URI_FIELD_NAMES
+                else list(expr.values)
+            )
+            return {"op": "must", "field": expr.field, "conds": values}
+        if isinstance(expr, PathScope):
+            path = (
+                self._encode_uri_field_value(expr.path)
+                if expr.field in self._URI_FIELD_NAMES
+                else expr.path
+            )
+            return {
+                "op": "must",
+                "field": expr.field,
+                "conds": [path],
+                "para": f"-d={expr.depth}",
+            }
         if isinstance(expr, Range):
             payload: Dict[str, Any] = {"op": "range", "field": expr.field}
             if expr.gte is not None:
@@ -287,7 +374,7 @@ class CollectionAdapter(ABC):
         normalized: list[Dict[str, Any]] = []
         ids: list[str] = []
         for item in records:
-            record = dict(item)
+            record = self._normalize_record_for_write(item)
             record_id = record.get("id") or str(uuid.uuid4())
             record["id"] = record_id
             ids.append(record_id)

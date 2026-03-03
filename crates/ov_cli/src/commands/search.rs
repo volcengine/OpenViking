@@ -6,12 +6,12 @@ pub async fn find(
     client: &HttpClient,
     query: &str,
     uri: &str,
-    limit: i32,
+    node_limit: i32,
     threshold: Option<f64>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let result = client.find(query.to_string(), uri.to_string(), limit, threshold).await?;
+    let result = client.find(query.to_string(), uri.to_string(), node_limit, threshold).await?;
     output_success(&result, output_format, compact);
     Ok(())
 }
@@ -21,12 +21,12 @@ pub async fn search(
     query: &str,
     uri: &str,
     session_id: Option<String>,
-    limit: i32,
+    node_limit: i32,
     threshold: Option<f64>,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let result = client.search(query.to_string(), uri.to_string(), session_id, limit, threshold).await?;
+    let result = client.search(query.to_string(), uri.to_string(), session_id, node_limit, threshold).await?;
     output_success(&result, output_format, compact);
     Ok(())
 }
@@ -36,13 +36,15 @@ pub async fn grep(
     uri: &str,
     pattern: &str,
     ignore_case: bool,
+    node_limit: i32,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let result = client.grep(uri, pattern, ignore_case).await?;
+    let result = client.grep(uri, pattern, ignore_case, node_limit).await?;
     output_success(&result, output_format, compact);
     Ok(())
 }
+
 
 pub async fn glob(
     client: &HttpClient,

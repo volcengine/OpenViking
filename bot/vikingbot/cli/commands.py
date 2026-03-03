@@ -28,7 +28,7 @@ from vikingbot.config.schema import SessionKey
 from vikingbot.cron.service import CronService
 from vikingbot.cron.types import CronJob
 from vikingbot.heartbeat.service import HeartbeatService
-# from vikingbot.integrations.langfuse import LangfuseClient
+from vikingbot.integrations.langfuse import LangfuseClient
 from vikingbot.config.loader import load_config
 
 # Create sandbox manager
@@ -255,18 +255,18 @@ def prepare_agent_loop(config, bus, session_manager, cron, quiet: bool = False):
 
     # Initialize Langfuse if enabled
     langfuse_client = None
-    # if hasattr(config, "langfuse") and config.langfuse.enabled:
-    #     langfuse_client = LangfuseClient(
-    #         enabled=config.langfuse.enabled,
-    #         secret_key=config.langfuse.secret_key,
-    #         public_key=config.langfuse.public_key,
-    #         base_url=config.langfuse.base_url,
-    #     )
-    #     LangfuseClient.set_instance(langfuse_client)
-    #     if langfuse_client.enabled:
-    #         logger.info(f"Langfuse: enabled (base_url={config.langfuse.base_url})")
-    #     else:
-    #         logger.warning("Langfuse: configured but failed to initialize")
+    if hasattr(config, "langfuse") and config.langfuse.enabled:
+        langfuse_client = LangfuseClient(
+            enabled=config.langfuse.enabled,
+            secret_key=config.langfuse.secret_key,
+            public_key=config.langfuse.public_key,
+            base_url=config.langfuse.base_url,
+        )
+        LangfuseClient.set_instance(langfuse_client)
+        if langfuse_client.enabled:
+            logger.info(f"Langfuse: enabled (base_url={config.langfuse.base_url})")
+        else:
+            logger.warning("Langfuse: configured but failed to initialize")
 
     provider = _make_provider(config, langfuse_client)
     # Create agent with cron service
@@ -286,6 +286,9 @@ def prepare_agent_loop(config, bus, session_manager, cron, quiet: bool = False):
         sandbox_manager=sandbox_manager,
         config=config,
     )
+    # Set the agent reference in cron if it uses the holder pattern
+    if hasattr(cron, '_agent_holder'):
+        cron._agent_holder['agent'] = agent
     return agent
 
 
@@ -294,12 +297,35 @@ def prepare_cron(bus, quiet: bool = False) -> CronService:
     cron_store_path = get_data_dir() / "cron" / "jobs.json"
     cron = CronService(cron_store_path)
 
+    # Use a mutable holder for the agent reference
+    agent_holder = {"agent": None}
+
     # Set cron callback (needs agent)
     async def on_cron_job(job: CronJob) -> str | None:
         """Execute a cron job through the agent."""
         session_key = SessionKey(**json.loads(job.payload.session_key_str))
-        response = await agent.process_direct(
-            job.payload.message,
+        message = job.payload.message
+
+        if agent_holder["agent"] is None:
+            raise RuntimeError("Agent not initialized yet")
+
+        # Clear instructions: let agent know this is a cron task to deliver
+        cron_instruction = f"""[CRON TASK]
+This is a scheduled task triggered by cron job: '{job.name}'
+Your task is to deliver the following reminder message to the user.
+
+IMPORTANT:
+- This is NOT a user message - it's a scheduled reminder you need to send
+- You should acknowledge/confirm the reminder and send it in a friendly way
+- DO NOT treat this as a question from the user
+- Simply deliver the reminder message as requested
+
+Reminder message to deliver:
+\"\"\"{message}\"\"\"
+"""
+
+        response = await agent_holder["agent"].process_direct(
+            cron_instruction,
             session_key=session_key,
         )
         if job.payload.deliver:
@@ -314,6 +340,7 @@ def prepare_cron(bus, quiet: bool = False) -> CronService:
         return response
 
     cron.on_job = on_cron_job
+    cron._agent_holder = agent_holder
 
     cron_status = cron.status()
     if cron_status["jobs"] > 0 and not quiet:

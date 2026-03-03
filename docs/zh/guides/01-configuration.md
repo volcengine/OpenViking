@@ -289,6 +289,40 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 
 如果未配置 VLM，L0/L1 将直接从内容生成（语义性较弱），多模态资源的描述可能有限。
 
+### code
+
+通过 `code_summary_mode` 控制代码文件的摘要生成方式。以下两种写法等价：
+
+```json
+{
+  "code": {
+    "code_summary_mode": "ast"
+  }
+}
+```
+
+```json
+{
+  "parsers": {
+    "code": {
+      "code_summary_mode": "ast"
+    }
+  }
+}
+```
+
+将 `code_summary_mode` 设置为以下三个值之一：
+
+| 值 | 说明 | 默认 |
+|----|------|------|
+| `"ast"` | 对 ≥100 行的代码文件提取 AST 骨架（类名、方法签名、首行注释、import），跳过 LLM 调用。**推荐用于大规模代码索引** | ✓ |
+| `"llm"` | 全部走 LLM 生成摘要（成本较高） | |
+| `"ast_llm"` | 先提取 AST 骨架（含完整注释），再将骨架作为上下文辅助 LLM 生成摘要（质量最高，成本居中） | |
+
+AST 提取支持：Python、JavaScript/TypeScript、Rust、Go、Java、C/C++。其他语言、提取失败或骨架为空时自动 fallback 到 LLM。
+
+详见 [代码骨架提取](../concepts/06-extraction.md#代码骨架提取ast-模式)。
+
 ### rerank
 
 用于搜索结果精排的 Rerank 模型。
@@ -617,6 +651,9 @@ HTTP 客户端（`SyncHTTPClient` / `AsyncHTTPClient`）和 CLI 工具连接远�
       "url": "string",
       "project": "string"
     }
+  },
+  "code": {
+    "code_summary_mode": "ast"
   },
   "server": {
     "host": "string",

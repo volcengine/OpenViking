@@ -168,9 +168,11 @@ You can also use a custom OpenAI-compatible endpoint:
 </details>
 
 <details>
-<summary><b>LiteLLM (Anthropic, DeepSeek, Gemini, vLLM, Ollama, etc.)</b></summary>
+<summary><b>LiteLLM (Anthropic, DeepSeek, Gemini, Qwen, vLLM, Ollama, etc.)</b></summary>
 
-LiteLLM provides unified access to various models. The `model` field should follow LiteLLM's naming convention:
+LiteLLM provides unified access to various models. The `model` field should follow LiteLLM's naming convention. Here we use Claude and Qwen as examples:
+
+**Anthropic:**
 
 ```json
 {
@@ -182,6 +184,23 @@ LiteLLM provides unified access to various models. The `model` field should foll
 }
 ```
 
+**Qwen (DashScope):**
+
+```json
+{
+  "vlm": {
+    "provider": "litellm",
+    "model": "dashscope/qwen-turbo", // see https://docs.litellm.ai/docs/providers/dashscope for more details
+    "api_key": "your-dashscope-api-key",
+    "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1"
+  }
+}
+```
+
+> 💡 **Tip for Qwen**: 
+> - For **China/Beijing** region, use `api_base`: `https://dashscope.aliyuncs.com/compatible-mode/v1`
+> - For **International** region, use `api_base`: `https://dashscope-intl.aliyuncs.com/compatible-mode/v1`
+
 **Common model formats:**
 
 | Provider | Model Example | Notes |
@@ -189,6 +208,7 @@ LiteLLM provides unified access to various models. The `model` field should foll
 | Anthropic | `claude-3-5-sonnet-20240620` | Auto-detected, uses `ANTHROPIC_API_KEY` |
 | DeepSeek | `deepseek-chat` | Auto-detected, uses `DEEPSEEK_API_KEY` |
 | Gemini | `gemini-pro` | Auto-detected, uses `GEMINI_API_KEY` |
+| Qwen | `dashscope/qwen-turbo` | Set `api_base` based on region (see above) |
 | OpenRouter | `openrouter/openai/gpt-4o` | Full prefix required |
 | vLLM | `hosted_vllm/llama-3.1-8b` | Set `api_base` to vLLM server |
 | Ollama | `ollama/llama3.1` | Set `api_base` to Ollama server |
@@ -218,7 +238,7 @@ For complete model support, see [LiteLLM Providers Documentation](https://docs.l
 
 ### 3. Environment Configuration
 
-#### Configuration Template
+#### Server Configuration Template
 
 Create a configuration file `~/.openviking/ov.conf`, remove the comments before copy:
 
@@ -253,7 +273,7 @@ Create a configuration file `~/.openviking/ov.conf`, remove the comments before 
 
 > **Note**: For embedding models, currently `volcengine` (Doubao), `openai`, and `jina` providers are supported. For VLM models, we support three providers: `volcengine`, `openai`, and `litellm`. The `litellm` provider supports various models including Anthropic (Claude), DeepSeek, Gemini, Moonshot, Zhipu, DashScope, MiniMax, vLLM, Ollama, and more.
 
-#### Configuration Examples
+#### Server Configuration Examples
 
 👇 Expand to see the configuration example for your model service:
 
@@ -325,12 +345,12 @@ Create a configuration file `~/.openviking/ov.conf`, remove the comments before 
 
 </details>
 
-#### Set Environment Variable
+#### Set Server Configuration Environment Variable
 
 After creating the configuration file, set the environment variable to point to it (Linux/macOS):
 
 ```bash
-export OPENVIKING_CONFIG_FILE=~/.openviking/ov.conf
+export OPENVIKING_CONFIG_FILE=~/.openviking/ov.conf # by default
 ```
 
 On Windows, use one of the following:
@@ -349,95 +369,75 @@ set "OPENVIKING_CONFIG_FILE=%USERPROFILE%\.openviking\ov.conf"
 
 > 💡 **Tip**: You can also place the configuration file in other locations, just specify the correct path in the environment variable.
 
+#### CLI/Client Configuration Examples
+
+👇 Expand to see the configuration example for your CLI/Client:
+
+Example: ovcli.conf for visiting localhost server
+
+```json
+{
+  "url": "http://localhost:1933",
+  "timeout": 60.0,
+  "output": "table"
+}
+```
+
+After creating the configuration file, set the environment variable to point to it (Linux/macOS):
+
+```bash
+export OPENVIKING_CLI_CONFIG_FILE=~/.openviking/ovcli.conf # by default
+```
+
+On Windows, use one of the following:
+
+PowerShell:
+
+```powershell
+$env:OPENVIKING_CLI_CONFIG_FILE = "$HOME/.openviking/ovcli.conf"
+```
+
+Command Prompt (cmd.exe):
+
+```bat
+set "OPENVIKING_CLI_CONFIG_FILE=%USERPROFILE%\.openviking\ovcli.conf"
+```
+
 ### 4. Run Your First Example
 
-> 📝 **Prerequisite**: Ensure you have completed the environment configuration in the previous step.
+> 📝 **Prerequisite**: Ensure you have completed the configuration (ov.conf and ovcli.conf) in the previous step.
 
 Now let's run a complete example to experience the core features of OpenViking.
 
-#### Create Python Script
-
-Create `example.py`:
-
-```python
-import openviking as ov
-
-# Initialize OpenViking client with data directory
-client = ov.SyncOpenViking(path="./data")
-
-try:
-    # Initialize the client
-    client.initialize()
-
-    # Add resource (supports URL, file, or directory)
-    add_result = client.add_resource(
-        path="https://raw.githubusercontent.com/volcengine/OpenViking/refs/heads/main/README.md"
-    )
-    root_uri = add_result['root_uri']
-
-    # Explore the resource tree structure
-    ls_result = client.ls(root_uri)
-    print(f"Directory structure:\n{ls_result}\n")
-
-    # Use glob to find markdown files
-    glob_result = client.glob(pattern="**/*.md", uri=root_uri)
-    if glob_result['matches']:
-        content = client.read(glob_result['matches'][0])
-        print(f"Content preview: {content[:200]}...\n")
-
-    # Wait for semantic processing to complete
-    print("Wait for semantic processing...")
-    client.wait_processed()
-
-    # Get abstract and overview of the resource
-    abstract = client.abstract(root_uri)
-    overview = client.overview(root_uri)
-    print(f"Abstract:\n{abstract}\n\nOverview:\n{overview}\n")
-
-    # Perform semantic search
-    results = client.find("what is openviking", target_uri=root_uri)
-    print("Search results:")
-    for r in results.resources:
-        print(f"  {r.uri} (score: {r.score:.4f})")
-
-    # Close the client
-    client.close()
-
-except Exception as e:
-    print(f"Error: {e}")
-```
-
-#### Run the Script
+#### Launch Server
 
 ```bash
-python example.py
+openviking-server
 ```
 
-#### Expected Output
+or you can run in background
 
+```bash
+nohup openviking-server > /data/log/openviking.log 2>&1 &
 ```
-Directory structure:
-...
 
-Content preview: ...
+#### Run the CLI
 
-Wait for semantic processing...
-Abstract:
-...
-
-Overview:
-...
-
-Search results:
-  viking://resources/... (score: 0.8523)
-  ...
+```bash
+ov status
+ov add-resource https://github.com/volcengine/OpenViking # --wait
+ov ls viking://resources/
+ov tree viking://resources/volcengine -L 2
+# wait some time for semantic processing if not --wait
+ov find "what is openviking"
+ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/zh
 ```
 
 Congratulations! You have successfully run OpenViking 🎉
 
 ---
 
-## Server Deployment
+## Server Deployment Details
 
 For production environments, we recommend running OpenViking as a standalone HTTP service to provide persistent, high-performance context support for your AI Agents.
 
@@ -446,7 +446,30 @@ To ensure optimal storage performance and data security, we recommend deploying 
 
 👉 **[View: Server Deployment & ECS Setup Guide](./docs/en/getting-started/03-quickstart-server.md)**
 
----
+
+## OpenClaw Memory Plugin Details
+
+* Test Dataset: Effect testing based on LoCoMo10 (https://github.com/snap-research/locomo) long-range dialogues (1,540 cases in total after removing category5 without ground truth)
+* Experimental Groups: Since users may not disable OpenClaw's native memory when using OpenViking, we added experimental groups with native memory enabled or disabled
+* OpenViking Version: 0.1.18
+* Model: seed-2.0-code
+* Evaluation Script: https://github.com/ZaynJarvis/openclaw-eval/tree/main
+
+| Experimental Group | Task Completion Rate | Cost: Input Tokens (Total) |
+|----------|------------------|------------------|
+| OpenClaw(memory-core) |	35.65% |	24,611,530 |
+| OpenClaw + LanceDB (-memory-core) |	44.55% |	51,574,530 |
+| OpenClaw + OpenViking Plugin (-memory-core) |	52.08% |	4,264,396 |
+| OpenClaw + OpenViking Plugin (+memory-core) |	51.23% |	2,099,622 |
+
+* Experimental Conclusions:
+After integrating OpenViking:
+- With native memory enabled: 43% improvement over original OpenClaw with 91% reduction in input token cost; 15% improvement over LanceDB with 96% reduction in input token cost.
+- With native memory disabled: 49% improvement over original OpenClaw with 83% reduction in input token cost; 17% improvement over LanceDB with 92% reduction in input token cost.
+
+👉 **[View: OpenClaw Memory Plugin](examples/openclaw-memory-plugin/README.md)**
+
+--
 
 ## Core Concepts
 
@@ -537,74 +560,15 @@ This allows the Agent to get "smarter with use" through interactions with the wo
 
 ---
 
-## Project Architecture
-
-The OpenViking project adopts a clear modular architecture design. The main directory structure is as follows:
-
-```
-OpenViking/
-├── openviking/              # Core source code directory
-│   ├── core/               # Core modules: client, engine, filesystem, etc.
-│   ├── models/             # Model integration: VLM and Embedding model encapsulation
-│   ├── parse/              # Resource parsing: file parsing, detection, OVPack handling
-│   ├── retrieve/           # Retrieval module: semantic retrieval, directory recursive retrieval
-│   ├── storage/            # Storage layer: vector DB, filesystem queue, observers
-│   ├── session/            # Session management: history, memory extraction
-│   ├── message/            # Message processing: formatting, conversion
-│   ├── prompts/            # Prompt templates: templates for various tasks
-│   ├── utils/              # Utilities: config, helpers
-│   └── bin/                # Command line tools
-├── docs/                    # Project documentation
-│   ├── zh/                 # Chinese documentation
-│   ├── en/                 # English documentation
-│   └── images/             # Documentation images
-├── examples/                # Usage examples
-├── tests/                   # Test cases
-│   ├── client/             # Client tests
-│   ├── engine/             # Engine tests
-│   ├── integration/        # Integration tests
-│   ├── session/            # Session tests
-│   └── vectordb/           # Vector DB tests
-├── src/                     # C++ extensions (high-performance index and storage)
-│   ├── common/             # Common components
-│   ├── index/              # Index implementation
-│   └── store/              # Storage implementation
-├── third_party/             # Third-party dependencies
-├── pyproject.toml           # Python project configuration
-├── setup.py                 # Setup script
-├── LICENSE                  # Open source license
-├── CONTRIBUTING.md          # Contributing guide
-├── AGENT.md                 # Agent development guide
-└── README.md                # Project readme
-```
-
-
----
-
 ## Advanced Reading
+
+### Documentation
 
 For more details, please visit our [Full Documentation](./docs/en/).
 
----
-
-## Community & Team
-
-### About Us
-
-OpenViking is an open-source context database initiated and maintained by the **ByteDance Volcengine Viking Team**.
-
-The Viking team focuses on unstructured information processing and intelligent retrieval, accumulating rich commercial practical experience in context engineering technology:
-
-- **2019**: VikingDB vector database supported large-scale use across all ByteDance businesses.
-- **2023**: VikingDB sold on Volcengine public cloud.
-- **2024**: Launched developer product matrix: VikingDB, Viking KnowledgeBase, Viking MemoryBase.
-- **2025**: Created upper-layer application products like AI Search and Vaka Knowledge Assistant.
-- **Oct 2025**: Open-sourced [MineContext](https://github.com/volcengine/MineContext), exploring proactive AI applications.
-- **Jan 2026**: Open-sourced OpenViking, providing underlying context database support for AI Agents.
+### Community & Team
 
 For more details, please see: **[About Us](./docs/en/about/01-about-us.md)**
-
----
 
 ### Join the Community
 
@@ -621,13 +585,9 @@ OpenViking is still in its early stages, and there are many areas for improvemen
 
 Let's work together to define and build the future of AI Agent context management. The journey has begun, looking forward to your participation!
 
----
-
 ### Star Trend
 
 [![Star History Chart](https://api.star-history.com/svg?repos=volcengine/OpenViking&type=timeline&legend=top-left)](https://www.star-history.com/#volcengine/OpenViking&type=timeline&legend=top-left)
-
----
 
 ## License
 

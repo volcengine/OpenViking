@@ -30,6 +30,11 @@ def _ts_extractor():
     return JsTsExtractor(lang="typescript")
 
 
+def _csharp_extractor():
+    from openviking.parse.parsers.code.ast.languages.csharp import CSharpExtractor
+    return CSharpExtractor()
+
+
 
 # ---------------------------------------------------------------------------
 # Python
@@ -453,6 +458,130 @@ public class Calculator {
 
 
 # ---------------------------------------------------------------------------
+# C#
+# ---------------------------------------------------------------------------
+
+class TestCSharpExtractor:
+    SAMPLE = """
+using System;
+using System.Collections.Generic;
+
+namespace MyApp.Services
+{
+    /// <summary>
+    /// A simple calculator service.
+    ///
+    /// Supports basic arithmetic operations.
+    /// </summary>
+    public class Calculator
+    {
+        /// <summary>
+        /// Add two integers.
+        ///
+        /// <param name=\"a\">First operand</param>
+        /// <param name=\"b\">Second operand</param>
+        /// <returns>Sum of a and b</returns>
+        /// </summary>
+        public int Add(int a, int b)
+        {
+            return a + b;
+        }
+
+        /// <summary>
+        /// Subtract b from a.
+        /// </summary>
+        public int Subtract(int a, int b)
+        {
+            return a - b;
+        }
+    }
+}
+"""
+
+    def setup_method(self):
+        self.e = _csharp_extractor()
+
+    def test_imports(self):
+        sk = self.e.extract("Calculator.cs", self.SAMPLE)
+        assert "System" in sk.imports
+        assert "System.Collections.Generic" in sk.imports
+
+    def test_class_extracted(self):
+        sk = self.e.extract("Calculator.cs", self.SAMPLE)
+        names = {c.name for c in sk.classes}
+        assert "Calculator" in names
+
+    def test_class_docstring(self):
+        sk = self.e.extract("Calculator.cs", self.SAMPLE)
+        cls = next(c for c in sk.classes if c.name == "Calculator")
+        assert "simple calculator service" in cls.docstring
+        assert "Supports basic arithmetic" in cls.docstring
+
+    def test_methods_extracted(self):
+        sk = self.e.extract("Calculator.cs", self.SAMPLE)
+        cls = next(c for c in sk.classes if c.name == "Calculator")
+        methods = {m.name: m for m in cls.methods}
+        assert "Add" in methods
+        assert "Subtract" in methods
+
+    def test_method_docstring(self):
+        sk = self.e.extract("Calculator.cs", self.SAMPLE)
+        cls = next(c for c in sk.classes if c.name == "Calculator")
+        methods = {m.name: m for m in cls.methods}
+        assert "Add two integers." in methods["Add"].docstring
+        assert "First operand" in methods["Add"].docstring
+
+    def test_to_text_compact(self):
+        sk = self.e.extract("Calculator.cs", self.SAMPLE)
+        text = sk.to_text(verbose=False)
+        assert "# Calculator.cs [C#]" in text
+        assert "class Calculator" in text
+        assert "+ Add(" in text
+        assert "First operand" not in text
+
+    def test_to_text_verbose(self):
+        sk = self.e.extract("Calculator.cs", self.SAMPLE)
+        text = sk.to_text(verbose=True)
+        assert "simple calculator service" in text
+        assert "First operand" in text
+
+    def test_file_scoped_namespace(self):
+        code = '''
+using System;
+
+namespace MyApp.Services;
+
+public class Calculator
+{
+    public int Add(int a, int b)
+    {
+        return a + b;
+    }
+}
+'''
+        sk = self.e.extract("Calculator.cs", code)
+        names = {c.name for c in sk.classes}
+        assert "Calculator" in names
+
+    def test_property_accessor_signature(self):
+        code = '''
+public class Calculator
+{
+    /// <summary>
+    /// Current result.
+    /// </summary>
+    public int Result { get; set; }
+}
+'''
+        sk = self.e.extract("Calculator.cs", code)
+        cls = next(c for c in sk.classes if c.name == "Calculator")
+        methods = {m.name: m for m in cls.methods}
+        assert "Result" in methods
+        assert "get" in methods["Result"].params
+        assert "set" in methods["Result"].params
+
+
+# ---------------------------------------------------------------------------
 # C/C++
 # ---------------------------------------------------------------------------
 
@@ -852,6 +981,12 @@ class TestASTExtractorDispatch:
         text = self.extractor.extract_skeleton("main.go", code)
         assert "# main.go [Go]" in text
         assert "Run" in text
+
+    def test_csharp_dispatch(self):
+        code = 'namespace Demo;\n\npublic class Util { public int Add(int a, int b) { return a + b; } }\n'
+        text = self.extractor.extract_skeleton("util.cs", code)
+        assert "# util.cs [C#]" in text
+        assert "class Util" in text
 
     def test_unknown_extension_returns_none(self):
         code = "def foo(x): pass\nclass Bar: pass\n"

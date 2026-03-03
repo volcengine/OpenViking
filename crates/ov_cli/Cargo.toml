@@ -1,6 +1,6 @@
 [package]
 name = "ov_cli"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2024"
 authors = ["OpenViking Contributors"]
 description = "Rust CLI client for OpenViking"
@@ -16,6 +16,7 @@ reqwest = { version = "0.12", features = ["json", "multipart", "rustls-tls"], de
 serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["preserve_order"] }
 tokio = { version = "1.38", features = ["full"] }
+futures = "0.3"
 colored = "2.1"
 dirs = "5.0"
 anyhow = "1.0"

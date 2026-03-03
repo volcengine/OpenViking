@@ -34,7 +34,7 @@ def create_agfs_client(agfs_config: Any) -> Any:
             from pyagfs import AGFSBindingClient
         except ImportError:
             raise ImportError(
-                "AGFS binding client not found. Please run: cd third_party/agfs/agfs-sdk/python && uv pip install -e ."
+                "AGFS binding client not found. Please run 'pip install -e .' in the project root to install the AGFS SDK."
             )
 
         lib_path = getattr(agfs_config, "lib_path", None)
@@ -49,7 +49,9 @@ def create_agfs_client(agfs_config: Any) -> Any:
 
             actual_lib_path = _find_library()
         except Exception:
-            raise ImportError("AGFS binding library not found. Please run: uv pip install -e .")
+            raise ImportError(
+                "AGFS binding library not found. Please run 'pip install -e .' in the project root to build and install the AGFS SDK."
+            )
 
         client = AGFSBindingClient()
         logger.debug(f"[AGFSUtils] Created AGFSBindingClient (lib_path={actual_lib_path})")
@@ -79,70 +81,31 @@ def mount_agfs_backend(agfs: Any, agfs_config: Any) -> None:
     """
     from pyagfs import AGFSBindingClient
 
+    from openviking.agfs_manager import AGFSManager
+
     # Only binding-client needs manual mounting, but we can also do it for HTTP client
     # if it supports it. Usually, HTTP server handles its own mounting.
     if not isinstance(agfs, AGFSBindingClient):
         return
 
     # 1. Mount standard plugins to align with HTTP server behavior
-    # serverinfofs: /serverinfo
-    try:
-        agfs.unmount("/serverinfo")
-    except Exception:
-        pass
-    try:
-        agfs.mount("serverinfofs", "/serverinfo", {"version": "1.0.0"})
-    except Exception as e:
-        logger.warning(f"[AGFSUtils] Failed to mount serverinfofs at /serverinfo: {e}")
+    agfs_manager = AGFSManager(agfs_config)
+    config = agfs_manager._generate_config()
 
-    # queuefs: /queue
-    try:
-        agfs.unmount("/queue")
-    except Exception:
-        pass
-    try:
-        agfs.mount("queuefs", "/queue", {})
-    except Exception as e:
-        logger.warning(f"[AGFSUtils] Failed to mount queuefs at /queue: {e}")
+    for plugin_name, plugin_config in config["plugins"].items():
+        mount_path = plugin_config["path"]
+        # Ensure localfs directory exists before mounting
+        if plugin_name == "localfs" and "local_dir" in plugin_config.get("config", {}):
+            local_dir = plugin_config["config"]["local_dir"]
+            os.makedirs(local_dir, exist_ok=True)
+            logger.debug(f"[AGFSUtils] Ensured local directory exists: {local_dir}")
 
-    # 2. Mount primary storage backend to /local
-    backend = getattr(agfs_config, "backend", "local")
-    mount_path = "/local"
-    config = {}
-
-    if backend == "local":
-        path = getattr(agfs_config, "path", "./data")
-        config = {"local_dir": str(path)}
-    elif backend == "s3":
-        s3_config = getattr(agfs_config, "s3", None)
-        if s3_config:
-            config = {
-                "bucket": s3_config.bucket,
-                "region": s3_config.region,
-                "access_key_id": s3_config.access_key,
-                "secret_access_key": s3_config.secret_key,
-                "endpoint": s3_config.endpoint,
-                "prefix": s3_config.prefix or "",
-                "disable_ssl": not s3_config.use_ssl,
-                "use_path_style": s3_config.use_path_style,
-            }
-    elif backend == "memory":
-        # memfs plugin
-        config = {}
-
-    fstype = f"{backend}fs"
-    if backend == "memory":
-        fstype = "memfs"
-
-    # Try to unmount existing mount at /local to allow backend switching
-    try:
-        agfs.unmount(mount_path)
-    except Exception:
-        pass
-
-    try:
-        agfs.mount(fstype, mount_path, config)
-        logger.info(f"[AGFSUtils] Mounted {fstype} at {mount_path}")
-    except Exception as e:
-        logger.error(f"[AGFSUtils] Failed to mount {fstype} at {mount_path}: {e}")
-        raise e
+        try:
+            agfs.unmount(mount_path)
+        except Exception:
+            pass
+        try:
+            agfs.mount(plugin_name, mount_path, plugin_config.get("config", {}))
+            logger.debug(f"[AGFSUtils] Successfully mounted {plugin_name} at {mount_path}")
+        except Exception as e:
+            logger.error(f"[AGFSUtils] Failed to mount {plugin_name} at {mount_path}: {e}")

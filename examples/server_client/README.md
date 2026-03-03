@@ -23,9 +23,9 @@ uv sync
 #    参见 ov.conf.example 了解完整配置项
 
 # 2. 启动 Server（另开终端）
-openviking serve                            # 从默认路径读取 ov.conf
-openviking serve --config ./ov.conf         # 指定配置文件
-openviking serve --host 0.0.0.0 --port 1933 # 覆盖 host/port
+openviking-server                            # 从默认路径读取 ov.conf
+openviking-server --config ./ov.conf         # 指定配置文件
+openviking-server --host 0.0.0.0 --port 1933 # 覆盖 host/port
 
 # 3. 配置 CLI 连接（ovcli.conf）
 #    CLI 读取配置的优先级：
@@ -89,16 +89,16 @@ pyproject.toml      # 项目依赖
 
 ```bash
 # 基本启动（从 ~/.openviking/ov.conf 或 $OPENVIKING_CONFIG_FILE 读取配置）
-openviking serve
+openviking-server
 
 # 指定配置文件
-openviking serve --config ./ov.conf
+openviking-server --config ./ov.conf
 
 # 覆盖 host/port
-openviking serve --host 0.0.0.0 --port 1933
+openviking-server --host 0.0.0.0 --port 1933
 ```
 
-`serve` 命令支持 `--config`、`--host`、`--port` 三个选项。认证密钥等其他配置通过 ov.conf 的 `server` 段设置。
+`openviking-server` 命令支持 `--config`、`--host`、`--port` 三个选项。认证密钥等其他配置通过 ov.conf 的 `server` 段设置。
 
 ### Python 脚本
 

@@ -814,6 +814,7 @@ type GrepRequest struct {
 	Recursive       bool   `json:"recursive"`        // Whether to search recursively in directories
 	CaseInsensitive bool   `json:"case_insensitive"` // Case-insensitive matching
 	Stream          bool   `json:"stream"`           // Stream results as NDJSON (one match per line)
+	NodeLimit       int    `json:"node_limit"`       // Maximum number of results to return (0 means no limit)
 }
 
 // GrepMatch represents a single match result
@@ -870,7 +871,7 @@ func (h *Handler) Grep(w http.ResponseWriter, r *http.Request) {
 
 	// Handle stream mode
 	if req.Stream {
-		h.grepStream(w, req.Path, re, info.IsDir, req.Recursive)
+		h.grepStream(w, req.Path, re, info.IsDir, req.Recursive, req.NodeLimit)
 		return
 	}
 
@@ -880,18 +881,13 @@ func (h *Handler) Grep(w http.ResponseWriter, r *http.Request) {
 	// Search in file or directory
 	if info.IsDir {
 		if req.Recursive {
-			matches, err = h.grepDirectory(req.Path, re)
+			matches, err = h.grepDirectory(req.Path, re, req.NodeLimit)
 		} else {
 			writeError(w, http.StatusBadRequest, "path is a directory, use recursive=true to search")
 			return
 		}
 	} else {
-		matches, err = h.grepFile(req.Path, re)
-	}
-
-	if err != nil {
-		writeError(w, http.StatusInternalServerError, "grep failed: "+err.Error())
-		return
+		matches, err = h.grepFile(req.Path, re, req.NodeLimit)
 	}
 
 	response := GrepResponse{
@@ -903,7 +899,7 @@ func (h *Handler) Grep(w http.ResponseWriter, r *http.Request) {
 }
 
 // grepStream handles streaming grep results as NDJSON
-func (h *Handler) grepStream(w http.ResponseWriter, path string, re *regexp.Regexp, isDir bool, recursive bool) {
+func (h *Handler) grepStream(w http.ResponseWriter, path string, re *regexp.Regexp, isDir bool, recursive bool, nodeLimit int) {
 	// Set headers for NDJSON streaming
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	w.Header().Set("Transfer-Encoding", "chunked")
@@ -941,9 +937,9 @@ func (h *Handler) grepStream(w http.ResponseWriter, path string, re *regexp.Rege
 			flusher.Flush()
 			return
 		}
-		err = h.grepDirectoryStream(path, re, sendMatch)
+		_, err = h.grepDirectoryStream(path, re, nodeLimit, sendMatch)
 	} else {
-		err = h.grepFileStream(path, re, sendMatch)
+		_, err = h.grepFileStream(path, re, nodeLimit, sendMatch)
 	}
 
 	// Send final summary with count
@@ -959,18 +955,22 @@ func (h *Handler) grepStream(w http.ResponseWriter, path string, re *regexp.Rege
 }
 
 // grepFileStream searches for pattern in a single file and calls callback for each match
-func (h *Handler) grepFileStream(path string, re *regexp.Regexp, callback func(GrepMatch) error) error {
+func (h *Handler) grepFileStream(path string, re *regexp.Regexp, nodeLimit int, callback func(GrepMatch) error) (int, error) {
 	// Read file content
 	data, err := h.fs.Read(path, 0, -1)
 	// io.EOF is normal when reading entire file, only return error for other errors
 	if err != nil && err != io.EOF {
-		return err
+		return 0, err
 	}
 
 	scanner := bufio.NewScanner(bytes.NewReader(data))
 	lineNum := 1
+	count := 0
 
 	for scanner.Scan() {
+		if nodeLimit > 0 && count >= nodeLimit {
+			break
+		}
 		line := scanner.Text()
 		if re.MatchString(line) {
 			match := GrepMatch{
@@ -979,42 +979,52 @@ func (h *Handler) grepFileStream(path string, re *regexp.Regexp, callback func(G
 				Content: line,
 			}
 			if err := callback(match); err != nil {
-				return err
+				return count, err
 			}
+			count++
 		}
 		lineNum++
 	}
 
 	if err := scanner.Err(); err != nil {
-		return err
+		return count, err
 	}
 
-	return nil
+	return count, nil
 }
 
 // grepDirectoryStream recursively searches for pattern in a directory and calls callback for each match
-func (h *Handler) grepDirectoryStream(dirPath string, re *regexp.Regexp, callback func(GrepMatch) error) error {
+func (h *Handler) grepDirectoryStream(dirPath string, re *regexp.Regexp, nodeLimit int, callback func(GrepMatch) error) (int, error) {
 	// List directory contents
 	entries, err := h.fs.ReadDir(dirPath)
 	if err != nil {
-		return err
+		return 0, err
 	}
 
+	totalCount := 0
+
 	for _, entry := range entries {
+		if nodeLimit > 0 && totalCount >= nodeLimit {
+			break
+		}
 		// Build full path
 		// Use path.Join for VFS paths to ensure forward slashes on all OS
 		fullPath := path.Join(dirPath, entry.Name)
 
 		if entry.IsDir {
 			// Recursively search subdirectories
-			if err := h.grepDirectoryStream(fullPath, re, callback); err != nil {
+			count, err := h.grepDirectoryStream(fullPath, re, nodeLimit-totalCount, callback)
+			totalCount += count
+			if err != nil {
 				// Log error but continue searching other files
 				log.Warnf("failed to search directory %s: %v", fullPath, err)
 				continue
 			}
 		} else {
 			// Search in file
-			if err := h.grepFileStream(fullPath, re, callback); err != nil {
+			count, err := h.grepFileStream(fullPath, re, nodeLimit-totalCount, callback)
+			totalCount += count
+			if err != nil {
 				// Log error but continue searching other files
 				log.Warnf("failed to search file %s: %v", fullPath, err)
 				continue
@@ -1022,11 +1032,11 @@ func (h *Handler) grepDirectoryStream(dirPath string, re *regexp.Regexp, callbac
 		}
 	}
 
-	return nil
+	return totalCount, nil
 }
 
 // grepFile searches for pattern in a single file
-func (h *Handler) grepFile(path string, re *regexp.Regexp) ([]GrepMatch, error) {
+func (h *Handler) grepFile(path string, re *regexp.Regexp, nodeLimit int) ([]GrepMatch, error) {
 	// Read file content
 	data, err := h.fs.Read(path, 0, -1)
 	// io.EOF is normal when reading entire file, only return error for other errors
@@ -1039,6 +1049,9 @@ func (h *Handler) grepFile(path string, re *regexp.Regexp) ([]GrepMatch, error) 
 	lineNum := 1
 
 	for scanner.Scan() {
+		if nodeLimit > 0 && len(matches) >= nodeLimit {
+			break
+		}
 		line := scanner.Text()
 		if re.MatchString(line) {
 			matches = append(matches, GrepMatch{
@@ -1058,7 +1071,7 @@ func (h *Handler) grepFile(path string, re *regexp.Regexp) ([]GrepMatch, error) 
 }
 
 // grepDirectory recursively searches for pattern in a directory
-func (h *Handler) grepDirectory(dirPath string, re *regexp.Regexp) ([]GrepMatch, error) {
+func (h *Handler) grepDirectory(dirPath string, re *regexp.Regexp, nodeLimit int) ([]GrepMatch, error) {
 	var allMatches []GrepMatch
 
 	// List directory contents
@@ -1068,13 +1081,16 @@ func (h *Handler) grepDirectory(dirPath string, re *regexp.Regexp) ([]GrepMatch,
 	}
 
 	for _, entry := range entries {
+		if nodeLimit > 0 && len(allMatches) >= nodeLimit {
+			break
+		}
 		// Build full path
 		// Use path.Join for VFS paths to ensure forward slashes on all OS
 		fullPath := path.Join(dirPath, entry.Name)
 
 		if entry.IsDir {
 			// Recursively search subdirectories
-			subMatches, err := h.grepDirectory(fullPath, re)
+			subMatches, err := h.grepDirectory(fullPath, re, nodeLimit-len(allMatches))
 			if err != nil {
 				// Log error but continue searching other files
 				log.Warnf("failed to search directory %s: %v", fullPath, err)
@@ -1083,7 +1099,7 @@ func (h *Handler) grepDirectory(dirPath string, re *regexp.Regexp) ([]GrepMatch,
 			allMatches = append(allMatches, subMatches...)
 		} else {
 			// Search in file
-			matches, err := h.grepFile(fullPath, re)
+			matches, err := h.grepFile(fullPath, re, nodeLimit-len(allMatches))
 			if err != nil {
 				// Log error but continue searching other files
 				log.Warnf("failed to search file %s: %v", fullPath, err)
