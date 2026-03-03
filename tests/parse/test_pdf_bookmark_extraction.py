@@ -7,8 +7,7 @@ Verifies that _extract_bookmarks correctly extracts bookmark entries
 and that _convert_local injects them as markdown headings.
 """
 
-import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 from openviking.parse.parsers.pdf import PDFParser
 
