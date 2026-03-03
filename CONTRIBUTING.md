@@ -14,9 +14,19 @@ Thank you for your interest in OpenViking! We welcome contributions of all kinds
 ### Prerequisites
 
 - **Python**: 3.10+
-- **Go**: 1.25.1+ (Required for building AGFS components)
+- **Go**: 1.25.1+ (Required for building AGFS components from source)
 - **C++ Compiler**: GCC 9+ or Clang 11+ (Required for building core extensions, must support C++17)
 - **CMake**: 3.12+
+
+#### Supported Platforms (Pre-compiled Wheels)
+
+OpenViking provides pre-compiled **Wheel** packages for the following environments:
+
+- **Windows**: x86_64
+- **macOS**: x86_64, arm64 (Apple Silicon)
+- **Linux**: x86_64 (manylinux)
+
+For other platforms (e.g., Linux ARM64, FreeBSD), the package will be automatically compiled from source during installation via `pip`. Ensure you have the [Prerequisites](#prerequisites) installed.
 
 ### 1. Fork and Clone
 
@@ -37,8 +47,17 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync --all-extras
 source .venv/bin/activate  # Linux/macOS
 # or .venv\Scripts\activate  # Windows
-
 ```
+
+#### Local Development & AGFS Compilation
+
+If you modify the **AGFS (Go)** code or **C++ extensions**, you need to re-compile and re-install them to make the changes take effect in your environment. Run the following command in the project root:
+
+```bash
+uv pip install -e . --force-reinstall
+```
+
+This command ensures that `setup.py` is re-executed, triggering the compilation of AGFS and C++ components.
 
 ### 3. Configure Environment
 
