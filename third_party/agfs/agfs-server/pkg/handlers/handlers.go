@@ -814,6 +814,7 @@ type GrepRequest struct {
 	Recursive       bool   `json:"recursive"`        // Whether to search recursively in directories
 	CaseInsensitive bool   `json:"case_insensitive"` // Case-insensitive matching
 	Stream          bool   `json:"stream"`           // Stream results as NDJSON (one match per line)
+	NodeLimit       int    `json:"node_limit"`       // Maximum number of results to return (0 means no limit)
 }
 
 // GrepMatch represents a single match result
@@ -892,6 +893,10 @@ func (h *Handler) Grep(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "grep failed: "+err.Error())
 		return
+	}
+	// Apply node limit if set
+	if req.NodeLimit > 0 && len(matches) > req.NodeLimit {
+		matches = matches[:req.NodeLimit]
 	}
 
 	response := GrepResponse{
