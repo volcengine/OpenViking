@@ -21,6 +21,7 @@ class FindRequest(BaseModel):
     query: str
     target_uri: str = ""
     limit: int = 10
+    node_limit: Optional[int] = None
     score_threshold: Optional[float] = None
     filter: Optional[Dict[str, Any]] = None
 
@@ -32,6 +33,7 @@ class SearchRequest(BaseModel):
     target_uri: str = ""
     session_id: Optional[str] = None
     limit: int = 10
+    node_limit: Optional[int] = None
     score_threshold: Optional[float] = None
     filter: Optional[Dict[str, Any]] = None
 
@@ -42,6 +44,7 @@ class GrepRequest(BaseModel):
     uri: str
     pattern: str
     case_insensitive: bool = False
+    node_limit: Optional[int] = None
 
 
 class GlobRequest(BaseModel):
@@ -58,11 +61,12 @@ async def find(
 ):
     """Semantic search without session context."""
     service = get_service()
+    actual_limit = request.node_limit if request.node_limit is not None else request.limit
     result = await service.search.find(
         query=request.query,
         ctx=_ctx,
         target_uri=request.target_uri,
-        limit=request.limit,
+        limit=actual_limit,
         score_threshold=request.score_threshold,
         filter=request.filter,
     )
@@ -86,12 +90,13 @@ async def search(
         session = service.sessions.session(_ctx, request.session_id)
         await session.load()
 
+    actual_limit = request.node_limit if request.node_limit is not None else request.limit
     result = await service.search.search(
         query=request.query,
         ctx=_ctx,
         target_uri=request.target_uri,
         session=session,
-        limit=request.limit,
+        limit=actual_limit,
         score_threshold=request.score_threshold,
         filter=request.filter,
     )
@@ -113,6 +118,7 @@ async def grep(
         request.pattern,
         ctx=_ctx,
         case_insensitive=request.case_insensitive,
+        node_limit=request.node_limit,
     )
     return Response(status="ok", result=result)
 

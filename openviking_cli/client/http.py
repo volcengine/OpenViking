@@ -504,18 +504,20 @@ class AsyncHTTPClient(BaseClient):
         query: str,
         target_uri: str = "",
         limit: int = 10,
+        node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
     ) -> FindResult:
         """Semantic search without session context."""
         if target_uri:
             target_uri = VikingURI.normalize(target_uri)
+        actual_limit = node_limit if node_limit is not None else limit
         response = await self._http.post(
             "/api/v1/search/find",
             json={
                 "query": query,
                 "target_uri": target_uri,
-                "limit": limit,
+                "limit": actual_limit,
                 "score_threshold": score_threshold,
                 "filter": filter,
             },
@@ -529,12 +531,14 @@ class AsyncHTTPClient(BaseClient):
         session: Optional[Any] = None,
         session_id: Optional[str] = None,
         limit: int = 10,
+        node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
     ) -> FindResult:
         """Semantic search with optional session context."""
         if target_uri:
             target_uri = VikingURI.normalize(target_uri)
+        actual_limit = node_limit if node_limit is not None else limit
         sid = session_id or (session.session_id if session else None)
         response = await self._http.post(
             "/api/v1/search/search",
@@ -542,23 +546,32 @@ class AsyncHTTPClient(BaseClient):
                 "query": query,
                 "target_uri": target_uri,
                 "session_id": sid,
-                "limit": limit,
+                "limit": actual_limit,
                 "score_threshold": score_threshold,
                 "filter": filter,
             },
         )
         return FindResult.from_dict(self._handle_response(response))
 
-    async def grep(self, uri: str, pattern: str, case_insensitive: bool = False) -> Dict[str, Any]:
+    async def grep(
+        self,
+        uri: str,
+        pattern: str,
+        case_insensitive: bool = False,
+        node_limit: Optional[int] = None,
+    ) -> Dict[str, Any]:
         """Content search with pattern."""
         uri = VikingURI.normalize(uri)
+        request_json = {
+            "uri": uri,
+            "pattern": pattern,
+            "case_insensitive": case_insensitive,
+        }
+        if node_limit is not None:
+            request_json["node_limit"] = node_limit
         response = await self._http.post(
             "/api/v1/search/grep",
-            json={
-                "uri": uri,
-                "pattern": pattern,
-                "case_insensitive": case_insensitive,
-            },
+            json=request_json,
         )
         return self._handle_response(response)
 

@@ -300,12 +300,13 @@ class VikingFS:
         uri: str,
         pattern: str,
         case_insensitive: bool = False,
+        node_limit: Optional[int] = None,
         ctx: Optional[RequestContext] = None,
     ) -> Dict:
         """Content search by pattern or keywords."""
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
-        result = self.agfs.grep(path, pattern, True, case_insensitive)
+        result = self.agfs.grep(path, pattern, True, case_insensitive, node_limit)
         if result.get("matches", None) is None:
             result["matches"] = []
         new_matches = []
@@ -1303,6 +1304,7 @@ class VikingFS:
         output: str = "original",
         abs_limit: int = 256,
         show_all_hidden: bool = False,
+        node_limit: int = 1000,
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """
@@ -1313,6 +1315,7 @@ class VikingFS:
             output: str = "original"
             abs_limit: int = 256
             show_all_hidden: bool = False (list all hidden files, like -a)
+            node_limit: int = 1000 (maximum number of nodes to list)
 
         output="original"
         [{'name': '.abstract.md', 'size': 100, 'mode': 420, 'modTime': '2026-02-11T16:52:16.256334192+08:00', 'isDir': False, 'meta': {'Name': 'localfs', 'Type': 'local', 'Content': None}, 'uri': 'viking://resources/.abstract.md'}]
@@ -1322,9 +1325,9 @@ class VikingFS:
         """
         self._ensure_access(uri, ctx)
         if output == "original":
-            return await self._ls_original(uri, show_all_hidden, ctx=ctx)
+            return await self._ls_original(uri, show_all_hidden, node_limit, ctx=ctx)
         elif output == "agent":
-            return await self._ls_agent(uri, abs_limit, show_all_hidden, ctx=ctx)
+            return await self._ls_agent(uri, abs_limit, show_all_hidden, node_limit, ctx=ctx)
         else:
             raise ValueError(f"Invalid output format: {output}")
 
@@ -1333,6 +1336,7 @@ class VikingFS:
         uri: str,
         abs_limit: int,
         show_all_hidden: bool,
+        node_limit: int = 1000,
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """List directory contents (URI version)."""
@@ -1346,6 +1350,8 @@ class VikingFS:
         now = datetime.now()
         all_entries = []
         for entry in entries:
+            if len(all_entries) >= node_limit:
+                break
             name = entry.get("name", "")
             # 修改后：通过截断字符串来兼容 7 位或更多位的微秒
             raw_time = entry.get("modTime", "")
@@ -1377,6 +1383,7 @@ class VikingFS:
         self,
         uri: str,
         show_all_hidden: bool = False,
+        node_limit: int = 1000,
         ctx: Optional[RequestContext] = None,
     ) -> List[Dict[str, Any]]:
         """List directory contents (URI version)."""
@@ -1387,6 +1394,8 @@ class VikingFS:
             # AGFS returns read-only structure, need to create new dict
             all_entries = []
             for entry in entries:
+                if len(all_entries) >= node_limit:
+                    break
                 name = entry.get("name", "")
                 new_entry = dict(entry)  # Copy original data
                 new_entry["uri"] = self._path_to_uri(f"{path}/{name}", ctx=ctx)

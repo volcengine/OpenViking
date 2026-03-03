@@ -70,7 +70,11 @@ class FSService:
                 )
             else:
                 entries = await viking_fs.ls(
-                    uri, ctx=ctx, output="original", show_all_hidden=show_all_hidden
+                    uri,
+                    ctx=ctx,
+                    output="original",
+                    show_all_hidden=show_all_hidden,
+                    node_limit=node_limit,
                 )
             return [e.get("uri", "") for e in entries]
 
@@ -91,6 +95,7 @@ class FSService:
                 output=output,
                 abs_limit=abs_limit,
                 show_all_hidden=show_all_hidden,
+                node_limit=node_limit,
             )
         return entries
 
@@ -152,11 +157,18 @@ class FSService:
         return await viking_fs.overview(uri, ctx=ctx)
 
     async def grep(
-        self, uri: str, pattern: str, ctx: RequestContext, case_insensitive: bool = False
+        self,
+        uri: str,
+        pattern: str,
+        ctx: RequestContext,
+        case_insensitive: bool = False,
+        node_limit: Optional[int] = None,
     ) -> Dict:
         """Content search."""
         viking_fs = self._ensure_initialized()
-        return await viking_fs.grep(uri, pattern, case_insensitive=case_insensitive, ctx=ctx)
+        return await viking_fs.grep(
+            uri, pattern, case_insensitive=case_insensitive, node_limit=node_limit, ctx=ctx
+        )
 
     async def glob(self, pattern: str, ctx: RequestContext, uri: str = "viking://") -> Dict:
         """File pattern matching."""
