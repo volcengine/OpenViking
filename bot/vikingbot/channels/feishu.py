@@ -480,12 +480,36 @@ class FeishuChannel(BaseChannel):
                 "@all", '<at user_id="all">所有人</at>'
             )
 
+            # Check if we need to reply to a specific message
+            # Get reply message ID from metadata (original incoming message ID)
+            reply_to_message_id = None
+            if msg.metadata:
+                reply_to_message_id = msg.metadata.get("reply_to_message_id") or msg.metadata.get(
+                    "message_id"
+                )
+
             # Build post message content
             content_elements = []
 
-            # Add text content with mentions
+            # Add @mention for the original sender when replying
+            original_sender_id = None
+            if reply_to_message_id and msg.metadata:
+                original_sender_id = msg.metadata.get("sender_id")
+
+            # Build content line: [@mention, text content]
+            content_line = []
+
+            # Add @mention element for original sender when replying
+            if original_sender_id:
+                content_line.append({"tag": "at", "user_id": original_sender_id})
+
+            # Add text content
             if content_with_mentions.strip():
-                content_elements.append([{"tag": "text", "text": content_with_mentions}])
+                content_line.append({"tag": "text", "text": content_with_mentions})
+
+            # Add content line if not empty
+            if content_line:
+                content_elements.append(content_line)
 
             # Add images
             for img in images:
@@ -501,16 +525,17 @@ class FeishuChannel(BaseChannel):
 
             content = json.dumps(post_content, ensure_ascii=False)
 
-            # Check if we need to reply to a specific message
-            # Get reply message ID from metadata (original incoming message ID)
-            reply_to_message_id = None
-            if msg.metadata:
-                reply_to_message_id = msg.metadata.get("reply_to_message_id") or msg.metadata.get(
-                    "message_id"
-                )
-
             if reply_to_message_id:
                 # Reply to existing message (quotes the original)
+                # Only reply in thread if the original message is in a topic (has root_id and is a thread)
+                should_reply_in_thread = False
+                if msg.metadata:
+                    root_id = msg.metadata.get("root_id")
+                    # Only use reply_in_thread=True if this is an actual topic group thread
+                    # In Feishu, topic groups have root_id set for messages in threads
+                    # root_id will be set if the message is already part of a thread
+                    should_reply_in_thread = root_id is not None and root_id != reply_to_message_id
+
                 request = (
                     ReplyMessageRequest.builder()
                     .message_id(reply_to_message_id)
@@ -518,10 +543,8 @@ class FeishuChannel(BaseChannel):
                         ReplyMessageRequestBody.builder()
                         .content(content)
                         .msg_type("post")
-                        # Reply in topic thread if root_id exists
-                        .reply_in_thread(
-                            msg.metadata.get("root_id") is not None if msg.metadata else False
-                        )
+                        # Only reply in topic thread if it's actually a topic thread (not regular group)
+                        .reply_in_thread(should_reply_in_thread)
                         .build()
                     )
                     .build()
