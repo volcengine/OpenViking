@@ -573,10 +573,10 @@ type DigestResponse struct {
 }
 
 // Grep searches for a pattern in files using regular expressions
-func (c *Client) Grep(path, pattern string, recursive, caseInsensitive bool, nodeLimit ...int) (*GrepResponse, error) {
+func (c *Client) Grep(path, pattern string, recursive, caseInsensitive bool, nodeLimit int) (*GrepResponse, error) {
 	nl := 0
-	if len(nodeLimit) > 0 {
-		nl = nodeLimit[0]
+	if nodeLimit > 0 {
+		nl = nodeLimit
 	}
 	reqBody := GrepRequest{
 		Path:            path,
