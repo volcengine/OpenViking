@@ -691,6 +691,50 @@ That's it! Environment variables, model prefixing, config matching, and `vikingb
 | `tools.restrictToWorkspace` | `true` | When `true`, restricts **all** agent tools (shell, file read/write/edit, list) to the workspace directory. Prevents path traversal and out-of-scope access. |
 | `channels.*.allowFrom` | `[]` (allow all) | Whitelist of user IDs. Empty = allow everyone; non-empty = only listed users can interact. |
 
+### Observability (Optional)
+
+**Langfuse** integration for LLM observability and tracing.
+
+<details>
+<summary><b>Langfuse Configuration</b></summary>
+
+1. **Install with Langfuse support:**
+   ```bash
+   uv pip install -e ".[langfuse]"
+   ```
+
+2. **Add configuration to `~/.openviking/ov.conf`:**
+   ```json
+   {
+     "bot": {
+       "langfuse": {
+         "enabled": true,
+         "secret_key": "sk-lf-xxxxxxxx",
+         "public_key": "pk-lf-xxxxxxxx",
+         "base_url": "https://cloud.langfuse.com"
+       }
+     }
+   }
+   ```
+
+3. **Get your API keys:**
+   - Sign up at [langfuse.com](https://langfuse.com)
+   - Create a new project
+   - Copy the **Secret Key** and **Public Key** from project settings
+
+4. **Restart vikingbot:**
+   ```bash
+   vikingbot gateway
+   ```
+
+**Features enabled:**
+- Automatic trace creation for each conversation
+- Session and user tracking
+- LLM call monitoring
+- Token usage tracking
+
+</details>
+
 ### Sandbox
 
 vikingbot supports sandboxed execution for enhanced security.
