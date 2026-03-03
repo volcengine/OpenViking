@@ -19,7 +19,7 @@ Prerequisites:
         }
       }
 
-    python -m openviking serve
+    openviking-server
 
 Usage:
     uv run admin_workflow.py

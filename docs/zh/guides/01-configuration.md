@@ -557,7 +557,7 @@ export OPENVIKING_CONFIG_FILE=/path/to/ov.conf
 export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 
 # 方式二：命令行参数（仅 serve 命令）
-python -m openviking serve --config /path/to/ov.conf
+openviking-server --config /path/to/ov.conf
 ```
 
 ### ov.conf
