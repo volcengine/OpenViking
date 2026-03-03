@@ -28,7 +28,7 @@ from vikingbot.config.schema import SessionKey
 from vikingbot.cron.service import CronService
 from vikingbot.cron.types import CronJob
 from vikingbot.heartbeat.service import HeartbeatService
-# from vikingbot.integrations.langfuse import LangfuseClient
+from vikingbot.integrations.langfuse import LangfuseClient
 from vikingbot.config.loader import load_config
 
 # Create sandbox manager
@@ -255,18 +255,18 @@ def prepare_agent_loop(config, bus, session_manager, cron, quiet: bool = False):
 
     # Initialize Langfuse if enabled
     langfuse_client = None
-    # if hasattr(config, "langfuse") and config.langfuse.enabled:
-    #     langfuse_client = LangfuseClient(
-    #         enabled=config.langfuse.enabled,
-    #         secret_key=config.langfuse.secret_key,
-    #         public_key=config.langfuse.public_key,
-    #         base_url=config.langfuse.base_url,
-    #     )
-    #     LangfuseClient.set_instance(langfuse_client)
-    #     if langfuse_client.enabled:
-    #         logger.info(f"Langfuse: enabled (base_url={config.langfuse.base_url})")
-    #     else:
-    #         logger.warning("Langfuse: configured but failed to initialize")
+    if hasattr(config, "langfuse") and config.langfuse.enabled:
+        langfuse_client = LangfuseClient(
+            enabled=config.langfuse.enabled,
+            secret_key=config.langfuse.secret_key,
+            public_key=config.langfuse.public_key,
+            base_url=config.langfuse.base_url,
+        )
+        LangfuseClient.set_instance(langfuse_client)
+        if langfuse_client.enabled:
+            logger.info(f"Langfuse: enabled (base_url={config.langfuse.base_url})")
+        else:
+            logger.warning("Langfuse: configured but failed to initialize")
 
     provider = _make_provider(config, langfuse_client)
     # Create agent with cron service
