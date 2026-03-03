@@ -17,10 +17,10 @@ class VikingClient:
         openviking_config = config.ov_server
         self.openviking_config = openviking_config
         self.ov_path = config.ov_data_path
-
         if openviking_config.mode == "local":
-            ov_data_path = config.storage_workspace if config.storage_workspace else None
-            self.client = ov.AsyncOpenViking(path=str(ov_data_path))
+            self.client = ov.AsyncHTTPClient(
+                url=openviking_config.server_url
+            )
             self.agent_id = "default"
             self.account_id = "default"
             self.admin_user_id = "default"
@@ -48,7 +48,7 @@ class VikingClient:
         await self.client.initialize()
 
         # 检查并初始化 admin_user_id（如果配置了）
-        if self.admin_user_id:
+        if self.mode == "remote" and self.admin_user_id:
             user_exists = await self._check_user_exists(self.admin_user_id)
             if not user_exists:
                 await self._initialize_user(self.admin_user_id, role="admin")
@@ -337,8 +337,6 @@ class VikingClient:
         import re
         import uuid
 
-        from openviking.message.part import Part, TextPart, ToolPart
-
         user_exists = await self._check_user_exists(user_id)
         if not user_exists:
             success = await self._initialize_user(user_id)
@@ -358,78 +356,75 @@ class VikingClient:
                 )
                 await client.initialize()
 
+        create_res = await client.create_session()
+        session_id = create_res['session_id']
         session = client.session(session_id)
 
-        if self.mode == "local":
-            for message in messages:
-                role = message.get("role")
-                content = message.get("content")
-                tools_used = message.get("tools_used") or []
+        for message in messages:
+            role = message.get("role")
+            content = message.get("content")
+            tools_used = message.get("tools_used") or []
 
-                parts: list[Part] = []
+            parts: list[Any] = []
 
-                if content:
-                    parts.append(TextPart(text=content))
+            if content:
+                parts.append({"text": content, "type": "text"})
 
-                for tool_info in tools_used:
-                    tool_name = tool_info.get("tool_name", "")
-                    if not tool_name:
-                        continue
+            for tool_info in tools_used:
+                tool_name = tool_info.get("tool_name", "")
+                if not tool_name:
+                    continue
 
-                    tool_id = f"{tool_name}_{uuid.uuid4().hex[:8]}"
-                    tool_input = None
-                    try:
-                        import json
+                tool_id = f"{tool_name}_{uuid.uuid4().hex[:8]}"
+                tool_input = None
+                try:
+                    import json
 
-                        args_str = tool_info.get("args", "{}")
-                        tool_input = json.loads(args_str) if args_str else {}
-                    except Exception:
-                        tool_input = {"raw_args": tool_info.get("args", "")}
+                    args_str = tool_info.get("args", "{}")
+                    tool_input = json.loads(args_str) if args_str else {}
+                except Exception:
+                    tool_input = {"raw_args": tool_info.get("args", "")}
 
-                    result_str = str(tool_info.get("result", ""))
+                result_str = str(tool_info.get("result", ""))
 
-                    skill_uri = ""
-                    if tool_name == "read_file" and result_str:
-                        match = re.search(r"^---\s*\nname:\s*(.+?)\s*\n", result_str, re.MULTILINE)
-                        if match:
-                            skill_name = match.group(1).strip()
-                            skill_uri = f"viking://agent/skills/{skill_name}"
+                skill_uri = ""
+                if tool_name == "read_file" and result_str:
+                    match = re.search(r"^---\s*\nname:\s*(.+?)\s*\n", result_str, re.MULTILINE)
+                    if match:
+                        skill_name = match.group(1).strip()
+                        skill_uri = f"viking://agent/skills/{skill_name}"
 
-                    execute_success = tool_info.get("execute_success", True)
-                    tool_status = "completed" if execute_success else "error"
-                    parts.append(
-                        ToolPart(
-                            tool_id=tool_id,
-                            tool_name=tool_name,
-                            tool_uri=f"viking://session/{session_id}/tools/{tool_id}",
-                            tool_input=tool_input,
-                            tool_output=result_str[:2000],
-                            tool_status=tool_status,
-                            skill_uri=skill_uri,
-                            duration_ms=float(tool_info.get("duration", 0.0)),
-                            prompt_tokens=tool_info.get("input_token"),
-                            completion_tokens=tool_info.get("output_token"),
-                        )
-                    )
+                execute_success = tool_info.get("execute_success", True)
+                tool_status = "completed" if execute_success else "error"
+                parts.append(
+                    {
+                        "type": "tool",
+                        "tool_id": tool_id,
+                        "tool_name": tool_name,
+                        "tool_uri": f"viking://session/{session_id}/tools/{tool_id}",
+                        "tool_input": tool_input,
+                        "tool_output": result_str[:2000],
+                        "tool_status": tool_status,
+                        "skill_uri": skill_uri,
+                        "duration_ms": float(tool_info.get("duration", 0.0)),
+                        "prompt_tokens": tool_info.get("input_token"),
+                        "completion_tokens": tool_info.get("output_token"),
+                    }
+                )
 
-                if not parts:
-                    parts = [TextPart(text=content or "")]
+            if not parts:
+                continue
+            await client.add_message(session_id=session_id, role=role, parts=parts)
 
-                session.add_message(role=role, parts=parts)
-
-            result = session.commit()
-        else:
-            for message in messages:
-                await session.add_message(role=message.get("role"), content=message.get("content"))
-            result = await session.commit()
+        result = await session.commit()
         if client is not self.client:
             await client.close()
         logger.debug(f"Message add ed to OpenViking session {session_id}, user: {user_id}")
         return {"success": result["status"]}
 
-    def close(self):
+    async def close(self):
         """关闭客户端"""
-        self.client.close()
+        await self.client.close()
 
 
 async def main_test():
@@ -442,16 +437,15 @@ async def main_test():
     # res = await client.read_content("viking://user/memories/profile.md", level="read")
     # res = await client.add_resource("/Users/bytedance/Documents/论文/吉比特年报.pdf", "吉比特年报")
     res = await client.commit(
-        session_id="23123123",
+        session_id="99999",
         messages=[{"role": "user", "content": "我叫吴彦祖"}],
-        user_id="789",
+        user_id="1010101010",
     )
     # res = await client.commit("1234", [{"role": "user", "content": "帮我搜索 Python asyncio 教程"}
     #                                    ,{"role": "assistant", "content": "我来帮你r搜索 Python asyncio 相关的教程。"}])
     print(res)
 
-    print("等待后台处理完成...")
-    await client.client.wait_processed(timeout=60)
+    await client.close()
     print("处理完成！")
 
 
