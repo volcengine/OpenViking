@@ -116,7 +116,7 @@ class SessionManager:
             if self.sandbox_manager.config.mode == "shared":
                 workspace_path = self.sandbox_manager.workspace / "shared"
             else:
-                workspace_path = self.sandbox_manager.workspace / key.replace(":", "_")
+                workspace_path = self.sandbox_manager.workspace / key.safe_name()
             ensure_session_workspace(workspace_path)
 
         # Initialize sandbox

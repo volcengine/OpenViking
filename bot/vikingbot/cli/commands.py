@@ -255,6 +255,9 @@ def prepare_agent_loop(config, bus, session_manager, cron, quiet: bool = False):
 
     # Initialize Langfuse if enabled
     langfuse_client = None
+    logger.info(f"[LANGFUSE] Config check: has langfuse attr={hasattr(config, 'langfuse')}")
+    if hasattr(config, "langfuse"):
+        logger.info(f"[LANGFUSE] Config check: enabled={config.langfuse.enabled}, base_url={config.langfuse.base_url}")
     if hasattr(config, "langfuse") and config.langfuse.enabled:
         langfuse_client = LangfuseClient(
             enabled=config.langfuse.enabled,
