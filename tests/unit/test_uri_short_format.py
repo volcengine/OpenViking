@@ -84,7 +84,9 @@ class TestVikingURIShortFormat:
         """Normalizing an already-normalized URI should be idempotent."""
         original = "viking://resources/docs"
         assert VikingURI.normalize(original) == original
-        assert VikingURI.normalize(VikingURI.normalize("/resources/docs")) == "viking://resources/docs"
+        assert (
+            VikingURI.normalize(VikingURI.normalize("/resources/docs")) == "viking://resources/docs"
+        )
 
     @pytest.mark.parametrize(
         "short,expected",
