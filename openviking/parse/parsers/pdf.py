@@ -213,7 +213,6 @@ class PDFParser(BaseParser):
 
             # Build a mapping from pdfminer page objects to page numbers
             # pdfplumber pages are 0-indexed internally
-            page_objids = set()
             objid_to_pagenum: Dict[int, int] = {}
             for i, page in enumerate(pdf.pages):
                 if hasattr(page, "page_obj") and hasattr(page.page_obj, "objid"):
@@ -244,11 +243,13 @@ class PDFParser(BaseParser):
                 # Cap heading level to 1-6 for markdown compatibility
                 md_level = min(max(level, 1), 6)
 
-                bookmarks.append({
-                    "title": title.strip(),
-                    "level": md_level,
-                    "page_num": page_num,  # May be None if resolution failed
-                })
+                bookmarks.append(
+                    {
+                        "title": title.strip(),
+                        "level": md_level,
+                        "page_num": page_num,  # May be None if resolution failed
+                    }
+                )
 
             logger.info(f"Extracted {len(bookmarks)} bookmarks from PDF outline")
 
@@ -370,9 +371,7 @@ class PDFParser(BaseParser):
                 # Append any bookmarks with unresolved page numbers at the end
                 unresolved = [bm for bm in bookmarks if bm.get("page_num") is None]
                 if unresolved:
-                    logger.debug(
-                        f"{len(unresolved)} bookmarks had unresolved page numbers"
-                    )
+                    logger.debug(f"{len(unresolved)} bookmarks had unresolved page numbers")
 
             if not parts:
                 logger.warning(f"No content extracted from {pdf_path}")
