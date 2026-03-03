@@ -78,6 +78,7 @@ app.include_router(api_fastapi.collection_router)
 app.include_router(api_fastapi.data_router)
 app.include_router(api_fastapi.index_router)
 app.include_router(api_fastapi.search_router)
+app.include_router(api_fastapi.resource_router)
 
 
 @app.get("/")
