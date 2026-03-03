@@ -170,7 +170,13 @@ class FSService:
             uri, pattern, case_insensitive=case_insensitive, node_limit=node_limit, ctx=ctx
         )
 
-    async def glob(self, pattern: str, ctx: RequestContext, uri: str = "viking://") -> Dict:
+    async def glob(
+        self,
+        pattern: str,
+        ctx: RequestContext,
+        uri: str = "viking://",
+        node_limit: Optional[int] = None,
+    ) -> Dict:
         """File pattern matching."""
         viking_fs = self._ensure_initialized()
-        return await viking_fs.glob(pattern, uri=uri, ctx=ctx)
+        return await viking_fs.glob(pattern, uri=uri, node_limit=node_limit, ctx=ctx)

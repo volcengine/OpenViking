@@ -50,10 +50,11 @@ pub async fn glob(
     client: &HttpClient,
     pattern: &str,
     uri: &str,
+    node_limit: i32,
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let result = client.glob(pattern, uri).await?;
+    let result = client.glob(pattern, uri, node_limit).await?;
     output_success(&result, output_format, compact);
     Ok(())
 }

@@ -52,6 +52,7 @@ class GlobRequest(BaseModel):
 
     pattern: str
     uri: str = "viking://"
+    node_limit: Optional[int] = None
 
 
 @router.post("/find")
@@ -130,5 +131,7 @@ async def glob(
 ):
     """File pattern matching."""
     service = get_service()
-    result = await service.fs.glob(request.pattern, ctx=_ctx, uri=request.uri)
+    result = await service.fs.glob(
+        request.pattern, ctx=_ctx, uri=request.uri, node_limit=request.node_limit
+    )
     return Response(status="ok", result=result)
