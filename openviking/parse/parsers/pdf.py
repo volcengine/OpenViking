@@ -35,6 +35,9 @@ class PDFParser(BaseParser):
     PDF parser with dual conversion strategy.
 
     Converts PDF → Markdown → ParseResult using MarkdownParser.
+    When available, extracts PDF bookmarks/outlines and injects them as
+    markdown headings so MarkdownParser can build a hierarchical directory
+    structure instead of flat numbered files.
 
     Strategies:
     - "local": Use pdfplumber for text and table extraction
@@ -185,11 +188,85 @@ class PDFParser(BaseParser):
         else:
             raise ValueError(f"Unknown strategy: {self.config.strategy}")
 
+    def _extract_bookmarks(self, pdf) -> List[Dict[str, Any]]:
+        """
+        Extract PDF bookmarks/outlines and map them to page numbers.
+
+        Uses pdfplumber's underlying pdfminer to access the PDF document
+        outline (table of contents). Each bookmark entry is mapped to a
+        page number by resolving its destination object.
+
+        Args:
+            pdf: An open pdfplumber PDF object
+
+        Returns:
+            List of dicts with keys: title, level, page_num (1-based).
+            Empty list if no bookmarks are found or extraction fails.
+        """
+        bookmarks: List[Dict[str, Any]] = []
+
+        try:
+            # Access pdfminer's document object through pdfplumber
+            doc = pdf.doc
+            if not hasattr(doc, "get_outlines"):
+                return []
+
+            # Build a mapping from pdfminer page objects to page numbers
+            # pdfplumber pages are 0-indexed internally
+            page_objids = set()
+            objid_to_pagenum: Dict[int, int] = {}
+            for i, page in enumerate(pdf.pages):
+                if hasattr(page, "page_obj") and hasattr(page.page_obj, "objid"):
+                    objid_to_pagenum[page.page_obj.objid] = i + 1  # 1-based
+
+            for level, title, dest, _a, _se in doc.get_outlines():
+                if not title or not title.strip():
+                    continue
+
+                page_num = None
+
+                # Resolve destination to page number
+                # dest can be various types depending on the PDF structure
+                if dest:
+                    try:
+                        # dest is typically a list where first element is a page reference
+                        if isinstance(dest, (list, tuple)) and len(dest) > 0:
+                            page_ref = dest[0]
+                            if hasattr(page_ref, "objid"):
+                                page_num = objid_to_pagenum.get(page_ref.objid)
+                            elif hasattr(page_ref, "resolve"):
+                                resolved = page_ref.resolve()
+                                if hasattr(resolved, "objid"):
+                                    page_num = objid_to_pagenum.get(resolved.objid)
+                    except Exception:
+                        pass  # Best-effort resolution
+
+                # Cap heading level to 1-6 for markdown compatibility
+                md_level = min(max(level, 1), 6)
+
+                bookmarks.append({
+                    "title": title.strip(),
+                    "level": md_level,
+                    "page_num": page_num,  # May be None if resolution failed
+                })
+
+            logger.info(f"Extracted {len(bookmarks)} bookmarks from PDF outline")
+
+        except Exception as e:
+            logger.debug(f"Bookmark extraction failed (PDF may have no outlines): {e}")
+
+        return bookmarks
+
     async def _convert_local(
         self, pdf_path: Path, storage=None, resource_name: Optional[str] = None
     ) -> tuple[str, Dict[str, Any]]:
         """
         Convert PDF to Markdown using pdfplumber.
+
+        When the PDF contains bookmarks/outlines, these are extracted and
+        injected as markdown headings at the appropriate page positions.
+        This allows MarkdownParser to build a hierarchical directory tree
+        instead of producing flat numbered files.
 
         Args:
             pdf_path: Path to PDF file
@@ -221,13 +298,32 @@ class PDFParser(BaseParser):
             "pages_processed": 0,
             "images_extracted": 0,
             "tables_extracted": 0,
+            "bookmarks_extracted": 0,
         }
 
         try:
             with pdfplumber.open(str(pdf_path)) as pdf:
                 meta["total_pages"] = len(pdf.pages)
 
+                # Step 1: Extract bookmarks and group by page number
+                bookmarks = self._extract_bookmarks(pdf)
+                meta["bookmarks_extracted"] = len(bookmarks)
+
+                # Build a lookup: page_num -> list of bookmarks to inject before that page's content
+                bookmarks_by_page: Dict[int, List[Dict[str, Any]]] = {}
+                for bm in bookmarks:
+                    pg = bm.get("page_num")
+                    if pg is not None:
+                        bookmarks_by_page.setdefault(pg, []).append(bm)
+
+                # Step 2: Extract content page by page, injecting bookmark headings
                 for page_num, page in enumerate(pdf.pages, 1):
+                    # Inject bookmark headings for this page (before page content)
+                    if page_num in bookmarks_by_page:
+                        for bm in bookmarks_by_page[page_num]:
+                            heading_prefix = "#" * bm["level"]
+                            parts.append(f"{heading_prefix} {bm['title']}")
+
                     # Extract text
                     text = page.extract_text()
                     if text and text.strip():
@@ -271,6 +367,13 @@ class PDFParser(BaseParser):
                                 f"Failed to extract image {img_idx + 1} on page {page_num}: {img_err}"
                             )
 
+                # Append any bookmarks with unresolved page numbers at the end
+                unresolved = [bm for bm in bookmarks if bm.get("page_num") is None]
+                if unresolved:
+                    logger.debug(
+                        f"{len(unresolved)} bookmarks had unresolved page numbers"
+                    )
+
             if not parts:
                 logger.warning(f"No content extracted from {pdf_path}")
                 return "", meta
@@ -278,6 +381,7 @@ class PDFParser(BaseParser):
             markdown_content = "\n\n".join(parts)
             logger.info(
                 f"Local conversion: {meta['pages_processed']}/{meta['total_pages']} pages, "
+                f"{meta['bookmarks_extracted']} bookmarks, "
                 f"{meta['images_extracted']} images, {meta['tables_extracted']} tables → "
                 f"{len(markdown_content)} chars"
             )
