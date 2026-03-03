@@ -5,8 +5,10 @@
 Session delegates all operations to the underlying Client (LocalClient or AsyncHTTPClient).
 """
 
-from typing import TYPE_CHECKING, Any, Dict
+from dataclasses import asdict
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
+from openviking.message.part import Part
 from openviking_cli.session.user_id import UserIdentifier
 
 if TYPE_CHECKING:
@@ -32,17 +34,28 @@ class Session:
         self.session_id = session_id
         self.user = user
 
-    async def add_message(self, role: str, content: str) -> Dict[str, Any]:
+    async def add_message(
+        self,
+        role: str,
+        content: Optional[str] = None,
+        parts: Optional[List[Part]] = None,
+    ) -> Dict[str, Any]:
         """Add a message to the session.
 
         Args:
             role: Message role (e.g., "user", "assistant")
-            content: Message content
+            content: Text content (simple mode)
+            parts: Parts list (TextPart, ContextPart, ToolPart)
+
+        If both content and parts are provided, parts takes precedence.
 
         Returns:
             Result dict with session_id and message_count
         """
-        return await self._client.add_message(self.session_id, role, content)
+        if parts is not None:
+            parts_dicts = [asdict(p) for p in parts]
+            return await self._client.add_message(self.session_id, role, parts=parts_dicts)
+        return await self._client.add_message(self.session_id, role, content=content)
 
     async def commit(self) -> Dict[str, Any]:
         """Commit the session (archive messages and extract memories).
