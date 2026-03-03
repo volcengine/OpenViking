@@ -7,6 +7,7 @@ from loguru import logger
 import openviking as ov
 from vikingbot.config.loader import get_data_dir
 from vikingbot.config.loader import load_config
+from vikingbot.openviking_mount.user_apikey_manager import UserApiKeyManager
 
 viking_resource_prefix = "viking://resources/"
 
@@ -15,6 +16,10 @@ class VikingClient:
     def __init__(self, agent_id: Optional[str] = None):
         config = load_config()
         openviking_config = config.ov_server
+        logger.debug(f"openviking_config: {openviking_config}")
+        self.openviking_config = openviking_config
+        self.ov_path = config.ov_data_path
+
         if openviking_config.mode == "local":
             ov_data_path = get_data_dir() / "ov_data"
             ov_data_path.mkdir(parents=True, exist_ok=True)
@@ -22,6 +27,7 @@ class VikingClient:
             self.agent_id = "default"
             self.account_id = "default"
             self.admin_user_id = "default"
+            self._apikey_manager = None
         else:
             self.client = ov.AsyncHTTPClient(
                 url=openviking_config.server_url,
@@ -31,6 +37,13 @@ class VikingClient:
             self.agent_id = agent_id
             self.account_id = openviking_config.account_id
             self.admin_user_id = openviking_config.admin_user_id
+            self._apikey_manager = None
+            if self.ov_path:
+                self._apikey_manager = UserApiKeyManager(
+                    ov_path=self.ov_path,
+                    server_url=openviking_config.server_url,
+                    account_id=openviking_config.account_id,
+                )
         self.mode = openviking_config.mode
 
     async def _initialize(self):
@@ -43,10 +56,13 @@ class VikingClient:
             if not user_exists:
                 await self._initialize_user(self.admin_user_id, role="admin")
 
-
     @classmethod
     async def create(cls, agent_id: Optional[str] = None):
-        """Factory method to create and initialize a VikingClient instance"""
+        """Factory method to create and initialize a VikingClient instance.
+
+        Args:
+            agent_id: The agent ID to use
+        """
         instance = cls(agent_id)
         await instance._initialize()
         return instance
@@ -140,9 +156,7 @@ class VikingClient:
 
         # Step 2: 如果用户不存在，初始化用户并直接返回
         if not user_exists:
-            success = await self._initialize_user(user_id)
-            if success:
-                logger.debug(f"User {user_id} initialized, returning empty profile")
+            await self._initialize_user(user_id)
             return ""
 
         # Step 3: 用户存在，查询 profile
@@ -211,14 +225,67 @@ class VikingClient:
             bool: 初始化是否成功
         """
         try:
-            await self.client.admin_register_user(account_id=self.account_id, user_id=user_id, role=role)
-            logger.debug(f"Initialized user {user_id} in account {self.account_id}")
+            result = await self.client.admin_register_user(
+                account_id=self.account_id, user_id=user_id, role=role
+            )
+            logger.debug(f"Initialized user {user_id} in account {result}")
+
+            # Save the API key if returned and we're in remote mode with a valid apikey manager
+            if self.mode == "remote" and self._apikey_manager and isinstance(result, dict):
+                api_key = result.get("user_key")
+                if api_key:
+                    self._apikey_manager.set_apikey(user_id, api_key)
+
             return True
         except Exception as e:
             if "User already exists" in str(e):
                 return True
             logger.warning(f"Failed to initialize user {user_id}: {e}")
             return False
+
+    async def _get_or_create_user_apikey(self, user_id: str) -> Optional[str]:
+        """获取或创建用户的 API key。
+
+        优先从本地 json 文件获取，如果本地没有则：
+        1. 删除用户（如果存在）
+        2. 重新创建用户
+        3. 保存新的 API key
+
+        Args:
+            user_id: 用户ID
+
+        Returns:
+            API key 或 None（如果获取失败）
+        """
+        if not self._apikey_manager:
+            return None
+
+        # Step 1: Check local storage first
+        api_key = self._apikey_manager.get_apikey(user_id)
+        if api_key:
+            return api_key
+
+        try:
+            # 2a. Remove user if exists
+            user_exists = await self._check_user_exists(user_id)
+            if user_exists:
+                await self.client.admin_remove_user(self.account_id, user_id)
+            # 2b. Recreate user - this will save API key in _initialize_user
+            success = await self._initialize_user(user_id)
+            if not success:
+                logger.warning(f"Failed to recreate user {user_id}")
+                return None
+
+            # 2c. Get API key from local storage (it was saved by _initialize_user)
+            api_key = self._apikey_manager.get_apikey(user_id)
+            if api_key:
+                return api_key
+            else:
+                return None
+
+        except Exception as e:
+            logger.error(f"Error getting or creating API key for user {user_id}: {e}")
+            return None
 
     async def search_memory(
         self, query: str, user_id: str, limit: int = 10
@@ -277,11 +344,24 @@ class VikingClient:
             if not success:
                 return {"error": "Failed to initialize user"}
 
-        session = self.client.session(session_id)
+        # For remote mode, try to get user's API key and create a dedicated client
+        client = self.client
+        if self.mode == "remote" and user_id and user_id != self.admin_user_id and self._apikey_manager:
+            user_api_key = await self._get_or_create_user_apikey(user_id)
+            if user_api_key:
+                # Create a new HTTP client with user's API key
+                client = ov.AsyncHTTPClient(
+                    url=self.openviking_config.server_url,
+                    api_key=user_api_key,
+                    agent_id=self.agent_id,
+                )
+                await client.initialize()
+                logger.debug(f"Created dedicated HTTP client for user {user_id}")
+
+        session = client.session(session_id)
 
         if self.mode == "local":
             for message in messages:
-                # logger.debug(f"message === {message}")
                 role = message.get("role")
                 content = message.get("content")
                 tools_used = message.get("tools_used") or []
@@ -293,7 +373,6 @@ class VikingClient:
 
                 for tool_info in tools_used:
                     tool_name = tool_info.get("tool_name", "")
-                    # logger.debug(f"tool_name === {tool_name}")
                     if not tool_name:
                         continue
 
@@ -315,11 +394,9 @@ class VikingClient:
                         if match:
                             skill_name = match.group(1).strip()
                             skill_uri = f"viking://agent/skills/{skill_name}"
-                            # logger.debug(f"skill_uri === {skill_uri}")
 
                     execute_success = tool_info.get("execute_success", True)
                     tool_status = "completed" if execute_success else "error"
-                    # logger.debug(f"tool_info={tool_info}")
                     parts.append(
                         ToolPart(
                             tool_id=tool_id,
@@ -341,11 +418,14 @@ class VikingClient:
                 session.add_message(role=role, parts=parts)
 
             result = session.commit()
+            if client is not self.client:
+                await client.close()
         else:
             for message in messages:
                 await session.add_message(role=message.get("role"), content=message.get("content"))
             result = await session.commit()
-            logger.debug(result)
+            if client is not self.client:
+                await client.close()
         logger.debug(f"Message add ed to OpenViking session {session_id}, user: {user_id}")
         return {"success": result["status"]}
 
@@ -365,10 +445,8 @@ async def main_test():
     # res = await client.add_resource("/Users/bytedance/Documents/论文/吉比特年报.pdf", "吉比特年报")
     res = await client.commit(
         session_id="456",
-        messages=[
-            {"role": "user", "content": "我特别喜欢喝啤酒"}
-        ],
-        user_id="ou_69e48b1314d1400af9d40fe3e4c24b8a"
+        messages=[{"role": "user", "content": "我特别喜欢喝啤酒"}],
+        user_id="ou_69e48b1314d1400af9d40fe3e4c24b8a",
     )
     # res = await client.commit("1234", [{"role": "user", "content": "帮我搜索 Python asyncio 教程"}
     #                                    ,{"role": "assistant", "content": "我来帮你r搜索 Python asyncio 相关的教程。"}])
@@ -383,7 +461,8 @@ async def account_test():
     client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="test")
     await client.initialize()
 
-    res = await client.admin_list_users("default")
+    # res = await client.admin_list_users("default")
+    res = await client.admin_remove_user("default", "ou_69e48b1314d1400af9d40fe3e4c24b8a")
     # res = await client.admin_remove_user("default", "admin")
     print(res)
 

@@ -27,9 +27,9 @@ class OpenVikingCompactHook(Hook):
     def __init__(self):
         self._client = None
 
-    async def _get_client(self, sandbox_key: str) -> VikingClient:
+    async def _get_client(self, workspace_id: str) -> VikingClient:
         if not self._client:
-            client = await VikingClient.create(sandbox_key)
+            client = await VikingClient.create(workspace_id)
             self._client = client
         return self._client
 
@@ -64,7 +64,7 @@ class OpenVikingCompactHook(Hook):
                 logger.info(f"No messages to commit openviking for session {session_id} (allow_from filter applied)")
                 return {"success": True, "message": "No messages matched allow_from filter"}
 
-            client = await self._get_client(context.sandbox_key)
+            client = await self._get_client(context.workspace_id)
             result = await client.commit(session_id, filtered_messages, load_config().ov_server.admin_user_id)
             return result
         except Exception as e:
@@ -79,14 +79,14 @@ class OpenVikingPostCallHook(Hook):
     def __init__(self):
         self._client = None
 
-    async def _get_client(self, sandbox_key: str) -> VikingClient:
+    async def _get_client(self, workspace_id: str) -> VikingClient:
         if not self._client:
-            client = await VikingClient.create(sandbox_key)
+            client = await VikingClient.create(workspace_id)
             self._client = client
         return self._client
 
-    async def _read_skill_memory(self, sandbox_key: str, skill_name: str) -> str:
-        ov_client = await self._get_client(sandbox_key)
+    async def _read_skill_memory(self, workspace_id: str, skill_name: str) -> str:
+        ov_client = await self._get_client(workspace_id)
         config = load_config()
         openviking_config = config.ov_server
         if not skill_name:
@@ -114,7 +114,7 @@ class OpenVikingPostCallHook(Hook):
                     skill_name = match.group(1).strip()
                     # logger.debug(f"skill_name={skill_name}")
 
-                    agent_space_name = context.sandbox_key
+                    agent_space_name = context.workspace_id
                     # logger.debug(f"agent_space_name={agent_space_name}")
 
                     skill_memory = await self._read_skill_memory(agent_space_name, skill_name)

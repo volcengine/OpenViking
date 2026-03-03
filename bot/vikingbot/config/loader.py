@@ -95,7 +95,7 @@ def load_config(config_path: Path | None = None) -> Config:
             bot_server_data = bot_data.get("ov_server", {})
             ov_server_data = full_data.get("server", {})
             _merge_ov_server_config(bot_server_data, ov_server_data)
-
+            bot_data["ov_server"] = bot_server_data
 
             return Config.model_validate(bot_data)
         except (json.JSONDecodeError, ValueError) as e:

@@ -606,6 +606,10 @@ class Config(BaseSettings):
         """Get expanded workspace path: {storage_workspace}/bot/workspace."""
         return self.bot_data_path / "workspace"
 
+    @property
+    def ov_data_path(self) -> Path:
+        return self.bot_data_path / "ov_data"
+
     def _get_vlm_config(self) -> Optional[Dict[str, Any]]:
         """Get vlm config from OpenVikingConfig. Returns (vlm_config_dict)."""
         from openviking_cli.utils.config import get_openviking_config

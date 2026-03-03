@@ -12,7 +12,7 @@ class ToolContext:
 
     session_key: SessionKey = None
     sandbox_manager: SandboxManager | None = None
-    sandbox_key: str = sandbox_manager.to_sandbox_key(session_key) if sandbox_manager else None
+    workspace_id: str = sandbox_manager.to_workspace_id(session_key) if sandbox_manager else None
     sender_id: str | None = None
 
 
