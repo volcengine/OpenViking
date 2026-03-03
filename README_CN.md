@@ -462,7 +462,7 @@ ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/zh
 | OpenClaw + OpenViking Plugin (+memory-core)	| 51.23% |	2,099,622 |
 
 * 实验结论：
-结合 OpenViking 后，若仍开启原生记忆，效果在原 OpenClaw 上提升 43%，输入 token 成本降低 91%；在 LanceDB 上效果提升 15%，输入 token 降低 92%。若关闭原生记忆，效果在原 OpenClaw 上提升 49%，输入 token 成本降低 83%；在 LanceDB 上效果提升 17%，输入 token 降低 96%。
+结合 OpenViking 后，若仍开启原生记忆，效果在原 OpenClaw 上提升 43%，输入 token 成本降低 91%；在 LanceDB 上效果提升 15%，输入 token 降低 96%。若关闭原生记忆，效果在原 OpenClaw 上提升 49%，输入 token 成本降低 83%；在 LanceDB 上效果提升 17%，输入 token 降低 92%。
 
 👉 **[查看：OpenClaw 记忆插件](examples/openclaw-memory-plugin/README.md)**
 
