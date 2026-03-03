@@ -464,8 +464,8 @@ To ensure optimal storage performance and data security, we recommend deploying 
 
 * Experimental Conclusions:
 After integrating OpenViking:
-- With native memory enabled: 43% improvement over original OpenClaw with 91% reduction in input token cost; 15% improvement over LanceDB with 92% reduction in input token cost.
-- With native memory disabled: 49% improvement over original OpenClaw with 83% reduction in input token cost; 17% improvement over LanceDB with 96% reduction in input token cost.
+- With native memory enabled: 43% improvement over original OpenClaw with 91% reduction in input token cost; 15% improvement over LanceDB with 96% reduction in input token cost.
+- With native memory disabled: 49% improvement over original OpenClaw with 83% reduction in input token cost; 17% improvement over LanceDB with 92% reduction in input token cost.
 
 👉 **[View: OpenClaw Memory Plugin](examples/openclaw-memory-plugin/README.md)**
 
