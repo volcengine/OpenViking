@@ -5,7 +5,6 @@ from typing import List, Dict, Any, Optional
 from loguru import logger
 
 import openviking as ov
-from vikingbot.config.loader import get_data_dir
 from vikingbot.config.loader import load_config
 from vikingbot.openviking_mount.user_apikey_manager import UserApiKeyManager
 
@@ -20,8 +19,7 @@ class VikingClient:
         self.ov_path = config.ov_data_path
 
         if openviking_config.mode == "local":
-            ov_data_path = get_data_dir() / "ov_data"
-            ov_data_path.mkdir(parents=True, exist_ok=True)
+            ov_data_path = config.storage_workspace if config.storage_workspace else None
             self.client = ov.AsyncOpenViking(path=str(ov_data_path))
             self.agent_id = "default"
             self.account_id = "default"
@@ -205,6 +203,8 @@ class VikingClient:
         Returns:
             bool: 用户是否存在
         """
+        if self.mode == "local":
+            return True
         try:
             res = await self.client.admin_list_users(self.account_id)
             if not res or len(res) == 0:
@@ -223,13 +223,15 @@ class VikingClient:
         Returns:
             bool: 初始化是否成功
         """
+        if self.mode == "local":
+            return True
         try:
             result = await self.client.admin_register_user(
                 account_id=self.account_id, user_id=user_id, role=role
             )
 
             # Save the API key if returned and we're in remote mode with a valid apikey manager
-            if self.mode == "remote" and self._apikey_manager and isinstance(result, dict):
+            if self._apikey_manager and isinstance(result, dict):
                 api_key = result.get("user_key")
                 if api_key:
                     self._apikey_manager.set_apikey(user_id, api_key)
@@ -415,14 +417,12 @@ class VikingClient:
                 session.add_message(role=role, parts=parts)
 
             result = session.commit()
-            if client is not self.client:
-                await client.close()
         else:
             for message in messages:
                 await session.add_message(role=message.get("role"), content=message.get("content"))
             result = await session.commit()
-            if client is not self.client:
-                await client.close()
+        if client is not self.client:
+            await client.close()
         logger.debug(f"Message add ed to OpenViking session {session_id}, user: {user_id}")
         return {"success": result["status"]}
 
@@ -441,9 +441,9 @@ async def main_test():
     # res = await client.read_content("viking://user/memories/profile.md", level="read")
     # res = await client.add_resource("/Users/bytedance/Documents/论文/吉比特年报.pdf", "吉比特年报")
     res = await client.commit(
-        session_id="456",
+        session_id="23123123",
         messages=[{"role": "user", "content": "我叫吴彦祖"}],
-        user_id="ou_69e48b1314d1400af9d40fe3e4c24b8a",
+        user_id="789",
     )
     # res = await client.commit("1234", [{"role": "user", "content": "帮我搜索 Python asyncio 教程"}
     #                                    ,{"role": "assistant", "content": "我来帮你r搜索 Python asyncio 相关的教程。"}])

@@ -336,9 +336,9 @@ class AgentLoop:
             message_workspace = self.workspace
 
         from vikingbot.agent.context import ContextBuilder
-
+        is_group_chat = msg.metadata.get("chat_type") == "group" if msg.metadata else False
         message_context = ContextBuilder(
-            message_workspace, sandbox_manager=self.sandbox_manager, sender_id=msg.sender_id
+            message_workspace, sandbox_manager=self.sandbox_manager, sender_id=msg.sender_id, is_group_chat=is_group_chat
         )
 
         # Build initial messages (use get_history for LLM-formatted messages)
