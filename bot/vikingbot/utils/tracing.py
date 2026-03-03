@@ -152,12 +152,17 @@ def trace(
                     from vikingbot.integrations.langfuse import LangfuseClient
 
                     langfuse = LangfuseClient.get_instance()
-                    if langfuse.enabled and hasattr(langfuse, "propagate_attributes"):
+                    has_propagate = hasattr(langfuse, "propagate_attributes")
+                    logger.info(f"[LANGFUSE] Client status: enabled={langfuse.enabled}, has_propagate_attributes={has_propagate}")
+                    if langfuse.enabled and has_propagate:
                         logger.info(f"[LANGFUSE] Starting trace with attributes: session_id={session_id}, user_id={user_id}")
                         with langfuse.propagate_attributes(session_id=session_id, user_id=user_id):
                             return await wrapped_func(*args, **kwargs)
                     else:
-                        logger.warning(f"[LANGFUSE] Client not enabled or propagate_attributes not available")
+                        if not langfuse.enabled:
+                            logger.warning(f"[LANGFUSE] Client not enabled")
+                        if not has_propagate:
+                            logger.warning(f"[LANGFUSE] propagate_attributes not available")
                     return await wrapped_func(*args, **kwargs)
             else:
                 return await wrapped_func(*args, **kwargs)

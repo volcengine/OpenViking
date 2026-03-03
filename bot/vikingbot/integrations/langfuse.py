@@ -87,7 +87,12 @@ class LangfuseClient:
             session_id: Optional session ID to associate with all nested observations
             user_id: Optional user ID to associate with all nested observations
         """
-        if not self.enabled or not self._client:
+        if not self.enabled:
+            logger.warning(f"[LANGFUSE] propagate_attributes skipped: Langfuse client not enabled")
+            yield
+            return
+        if not self._client:
+            logger.warning(f"[LANGFUSE] propagate_attributes skipped: Langfuse client not initialized")
             yield
             return
 
