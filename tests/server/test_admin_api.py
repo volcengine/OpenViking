@@ -3,6 +3,8 @@
 
 """Tests for Admin API endpoints (openviking/server/routers/admin.py)."""
 
+import uuid
+
 import httpx
 import pytest_asyncio
 
@@ -12,6 +14,11 @@ from openviking.server.config import ServerConfig
 from openviking.server.dependencies import set_service
 from openviking.service.core import OpenVikingService
 from openviking_cli.session.user_id import UserIdentifier
+
+
+def _uid() -> str:
+    return f"acme_{uuid.uuid4().hex[:8]}"
+
 
 ROOT_KEY = "admin-api-test-root-key-abcdef1234567890ab"
 
@@ -55,23 +62,25 @@ def root_headers():
 
 async def test_create_account(admin_client: httpx.AsyncClient):
     """ROOT can create an account with first admin."""
+    acct = _uid()
     resp = await admin_client.post(
         "/api/v1/admin/accounts",
-        json={"account_id": "acme", "admin_user_id": "alice"},
+        json={"account_id": acct, "admin_user_id": "alice"},
         headers=root_headers(),
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["result"]["account_id"] == "acme"
+    assert body["result"]["account_id"] == acct
     assert body["result"]["admin_user_id"] == "alice"
     assert "user_key" in body["result"]
 
 
 async def test_list_accounts(admin_client: httpx.AsyncClient):
     """ROOT can list all accounts."""
+    acct = _uid()
     await admin_client.post(
         "/api/v1/admin/accounts",
-        json={"account_id": "acme", "admin_user_id": "alice"},
+        json={"account_id": acct, "admin_user_id": "alice"},
         headers=root_headers(),
     )
     resp = await admin_client.get("/api/v1/admin/accounts", headers=root_headers())
@@ -79,19 +88,20 @@ async def test_list_accounts(admin_client: httpx.AsyncClient):
     accounts = resp.json()["result"]
     account_ids = {a["account_id"] for a in accounts}
     assert "default" in account_ids
-    assert "acme" in account_ids
+    assert acct in account_ids
 
 
 async def test_delete_account(admin_client: httpx.AsyncClient):
     """ROOT can delete an account."""
+    acct = _uid()
     resp = await admin_client.post(
         "/api/v1/admin/accounts",
-        json={"account_id": "acme", "admin_user_id": "alice"},
+        json={"account_id": acct, "admin_user_id": "alice"},
         headers=root_headers(),
     )
     user_key = resp.json()["result"]["user_key"]
 
-    resp = await admin_client.delete("/api/v1/admin/accounts/acme", headers=root_headers())
+    resp = await admin_client.delete(f"/api/v1/admin/accounts/{acct}", headers=root_headers())
     assert resp.status_code == 200
     assert resp.json()["result"]["deleted"] is True
 
@@ -105,14 +115,15 @@ async def test_delete_account(admin_client: httpx.AsyncClient):
 
 async def test_create_duplicate_account_fails(admin_client: httpx.AsyncClient):
     """Creating duplicate account should fail."""
+    acct = _uid()
     await admin_client.post(
         "/api/v1/admin/accounts",
-        json={"account_id": "acme", "admin_user_id": "alice"},
+        json={"account_id": acct, "admin_user_id": "alice"},
         headers=root_headers(),
     )
     resp = await admin_client.post(
         "/api/v1/admin/accounts",
-        json={"account_id": "acme", "admin_user_id": "bob"},
+        json={"account_id": acct, "admin_user_id": "bob"},
         headers=root_headers(),
     )
     assert resp.status_code == 409  # ALREADY_EXISTS
@@ -123,13 +134,14 @@ async def test_create_duplicate_account_fails(admin_client: httpx.AsyncClient):
 
 async def test_register_user(admin_client: httpx.AsyncClient):
     """ROOT can register a user in an account."""
+    acct = _uid()
     await admin_client.post(
         "/api/v1/admin/accounts",
-        json={"account_id": "acme", "admin_user_id": "alice"},
+        json={"account_id": acct, "admin_user_id": "alice"},
         headers=root_headers(),
     )
     resp = await admin_client.post(
-        "/api/v1/admin/accounts/acme/users",
+        f"/api/v1/admin/accounts/{acct}/users",
         json={"user_id": "bob", "role": "user"},
         headers=root_headers(),
     )
@@ -149,15 +161,16 @@ async def test_register_user(admin_client: httpx.AsyncClient):
 
 async def test_admin_can_register_user_in_own_account(admin_client: httpx.AsyncClient):
     """ADMIN can register users in their own account."""
+    acct = _uid()
     resp = await admin_client.post(
         "/api/v1/admin/accounts",
-        json={"account_id": "acme", "admin_user_id": "alice"},
+        json={"account_id": acct, "admin_user_id": "alice"},
         headers=root_headers(),
     )
     alice_key = resp.json()["result"]["user_key"]
 
     resp = await admin_client.post(
-        "/api/v1/admin/accounts/acme/users",
+        f"/api/v1/admin/accounts/{acct}/users",
         json={"user_id": "bob", "role": "user"},
         headers={"X-API-Key": alice_key},
     )
@@ -166,21 +179,23 @@ async def test_admin_can_register_user_in_own_account(admin_client: httpx.AsyncC
 
 async def test_admin_cannot_register_user_in_other_account(admin_client: httpx.AsyncClient):
     """ADMIN cannot register users in another account."""
+    acct = _uid()
+    other = _uid()
     resp = await admin_client.post(
         "/api/v1/admin/accounts",
-        json={"account_id": "acme", "admin_user_id": "alice"},
+        json={"account_id": acct, "admin_user_id": "alice"},
         headers=root_headers(),
     )
     alice_key = resp.json()["result"]["user_key"]
 
     await admin_client.post(
         "/api/v1/admin/accounts",
-        json={"account_id": "other_corp", "admin_user_id": "eve"},
+        json={"account_id": other, "admin_user_id": "eve"},
         headers=root_headers(),
     )
 
     resp = await admin_client.post(
-        "/api/v1/admin/accounts/other_corp/users",
+        f"/api/v1/admin/accounts/{other}/users",
         json={"user_id": "bob", "role": "user"},
         headers={"X-API-Key": alice_key},
     )
@@ -189,17 +204,18 @@ async def test_admin_cannot_register_user_in_other_account(admin_client: httpx.A
 
 async def test_list_users(admin_client: httpx.AsyncClient):
     """ROOT can list users in an account."""
+    acct = _uid()
     await admin_client.post(
         "/api/v1/admin/accounts",
-        json={"account_id": "acme", "admin_user_id": "alice"},
+        json={"account_id": acct, "admin_user_id": "alice"},
         headers=root_headers(),
     )
     await admin_client.post(
-        "/api/v1/admin/accounts/acme/users",
+        f"/api/v1/admin/accounts/{acct}/users",
         json={"user_id": "bob", "role": "user"},
         headers=root_headers(),
     )
-    resp = await admin_client.get("/api/v1/admin/accounts/acme/users", headers=root_headers())
+    resp = await admin_client.get(f"/api/v1/admin/accounts/{acct}/users", headers=root_headers())
     assert resp.status_code == 200
     users = resp.json()["result"]
     user_ids = {u["user_id"] for u in users}
@@ -208,20 +224,21 @@ async def test_list_users(admin_client: httpx.AsyncClient):
 
 async def test_remove_user(admin_client: httpx.AsyncClient):
     """ROOT can remove a user."""
+    acct = _uid()
     await admin_client.post(
         "/api/v1/admin/accounts",
-        json={"account_id": "acme", "admin_user_id": "alice"},
+        json={"account_id": acct, "admin_user_id": "alice"},
         headers=root_headers(),
     )
     resp = await admin_client.post(
-        "/api/v1/admin/accounts/acme/users",
+        f"/api/v1/admin/accounts/{acct}/users",
         json={"user_id": "bob", "role": "user"},
         headers=root_headers(),
     )
     bob_key = resp.json()["result"]["user_key"]
 
     resp = await admin_client.delete(
-        "/api/v1/admin/accounts/acme/users/bob", headers=root_headers()
+        f"/api/v1/admin/accounts/{acct}/users/bob", headers=root_headers()
     )
     assert resp.status_code == 200
 
@@ -238,18 +255,19 @@ async def test_remove_user(admin_client: httpx.AsyncClient):
 
 async def test_set_role(admin_client: httpx.AsyncClient):
     """ROOT can change a user's role."""
+    acct = _uid()
     await admin_client.post(
         "/api/v1/admin/accounts",
-        json={"account_id": "acme", "admin_user_id": "alice"},
+        json={"account_id": acct, "admin_user_id": "alice"},
         headers=root_headers(),
     )
     await admin_client.post(
-        "/api/v1/admin/accounts/acme/users",
+        f"/api/v1/admin/accounts/{acct}/users",
         json={"user_id": "bob", "role": "user"},
         headers=root_headers(),
     )
     resp = await admin_client.put(
-        "/api/v1/admin/accounts/acme/users/bob/role",
+        f"/api/v1/admin/accounts/{acct}/users/bob/role",
         json={"role": "admin"},
         headers=root_headers(),
     )
@@ -259,20 +277,21 @@ async def test_set_role(admin_client: httpx.AsyncClient):
 
 async def test_regenerate_key(admin_client: httpx.AsyncClient):
     """ROOT can regenerate a user's key."""
+    acct = _uid()
     await admin_client.post(
         "/api/v1/admin/accounts",
-        json={"account_id": "acme", "admin_user_id": "alice"},
+        json={"account_id": acct, "admin_user_id": "alice"},
         headers=root_headers(),
     )
     resp = await admin_client.post(
-        "/api/v1/admin/accounts/acme/users",
+        f"/api/v1/admin/accounts/{acct}/users",
         json={"user_id": "bob", "role": "user"},
         headers=root_headers(),
     )
     old_key = resp.json()["result"]["user_key"]
 
     resp = await admin_client.post(
-        "/api/v1/admin/accounts/acme/users/bob/key",
+        f"/api/v1/admin/accounts/{acct}/users/bob/key",
         headers=root_headers(),
     )
     assert resp.status_code == 200
@@ -299,13 +318,14 @@ async def test_regenerate_key(admin_client: httpx.AsyncClient):
 
 async def test_user_role_cannot_access_admin_api(admin_client: httpx.AsyncClient):
     """USER role should not access admin endpoints."""
+    acct = _uid()
     await admin_client.post(
         "/api/v1/admin/accounts",
-        json={"account_id": "acme", "admin_user_id": "alice"},
+        json={"account_id": acct, "admin_user_id": "alice"},
         headers=root_headers(),
     )
     resp = await admin_client.post(
-        "/api/v1/admin/accounts/acme/users",
+        f"/api/v1/admin/accounts/{acct}/users",
         json={"user_id": "bob", "role": "user"},
         headers=root_headers(),
     )
@@ -313,7 +333,7 @@ async def test_user_role_cannot_access_admin_api(admin_client: httpx.AsyncClient
 
     # USER cannot register users
     resp = await admin_client.post(
-        "/api/v1/admin/accounts/acme/users",
+        f"/api/v1/admin/accounts/{acct}/users",
         json={"user_id": "charlie", "role": "user"},
         headers={"X-API-Key": bob_key},
     )

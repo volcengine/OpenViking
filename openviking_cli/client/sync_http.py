@@ -164,6 +164,7 @@ class SyncHTTPClient:
         session: Optional[Any] = None,
         session_id: Optional[str] = None,
         limit: int = 10,
+        node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
     ):
@@ -175,6 +176,7 @@ class SyncHTTPClient:
                 session=session,
                 session_id=session_id,
                 limit=limit,
+                node_limit=node_limit,
                 score_threshold=score_threshold,
                 filter=filter,
             )
@@ -185,15 +187,24 @@ class SyncHTTPClient:
         query: str,
         target_uri: str = "",
         limit: int = 10,
+        node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
     ):
         """Semantic search without session context."""
-        return run_async(self._async_client.find(query, target_uri, limit, score_threshold, filter))
+        return run_async(
+            self._async_client.find(query, target_uri, limit, node_limit, score_threshold, filter)
+        )
 
-    def grep(self, uri: str, pattern: str, case_insensitive: bool = False) -> Dict:
+    def grep(
+        self,
+        uri: str,
+        pattern: str,
+        case_insensitive: bool = False,
+        node_limit: Optional[int] = None,
+    ) -> Dict:
         """Content search with pattern."""
-        return run_async(self._async_client.grep(uri, pattern, case_insensitive))
+        return run_async(self._async_client.grep(uri, pattern, case_insensitive, node_limit))
 
     def glob(self, pattern: str, uri: str = "viking://") -> Dict:
         """File pattern matching."""

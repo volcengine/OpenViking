@@ -29,7 +29,6 @@ from openviking.parse.parsers.upload_utils import (  # noqa: I001
     is_text_file,
     upload_directory,
 )
-from openviking.utils.compression import CompressManager
 from openviking_cli.utils.uri import VikingURI
 
 
@@ -135,7 +134,7 @@ class TestLongFilenames:
         assert ".txt" in sanitized  # Extension should be preserved
 
     def test_filename_with_path_traversal_attempts(self):
-        """Test filename containing path traversal sequences."""
+        """Test filename containing path traversal sequences are rejected."""
         dangerous_filenames = [
             "../../../etc/passwd",
             "..\\..\\windows\\system32\\config",
@@ -144,10 +143,8 @@ class TestLongFilenames:
         ]
 
         for filename in dangerous_filenames:
-            sanitized = _sanitize_rel_path(filename)
-            # Should not contain path traversal sequences
-            assert ".." not in sanitized
-            assert "\\" not in sanitized or sanitized.count("\\") == 0
+            with pytest.raises(ValueError, match="Unsafe relative path rejected"):
+                _sanitize_rel_path(filename)
 
 
 class TestSearchByIdEdgeCases:
@@ -266,64 +263,6 @@ class TestDuplicateFilenameHandling:
 
         assert sanitized_nfc is not None
         assert sanitized_nfd is not None
-
-
-class TestCompressionEdgeCases:
-    """Test compression with various edge cases."""
-
-    def test_compress_empty_string(self):
-        """Test compressing empty string."""
-        compressor = CompressManager()
-
-        empty_text = ""
-        compressed = compressor.compress_text(empty_text)
-
-        assert compressed is not None
-        assert len(compressed) >= 0  # May be empty or minimal header
-
-    def test_compress_emoji_only(self):
-        """Test compressing string containing only emoji."""
-        compressor = CompressManager()
-
-        emoji_text = "😀😃😄😁😆😅😂🤣😊😇🙂🙃😉😌😍🥰😘😗😙😚"
-        compressed = compressor.compress_text(emoji_text)
-
-        assert compressed is not None
-        # Emoji compression ratio might be poor due to lack of repetition
-        assert len(compressed) > 0
-
-    def test_compress_large_text(self):
-        """Test compressing 1MB of text."""
-        compressor = CompressManager()
-
-        # Generate ~1MB of text with patterns (should compress well)
-        large_text = "This is a repeating pattern for compression testing. " * 20000
-
-        assert len(large_text.encode("utf-8")) > 1_000_000
-
-        compressed = compressor.compress_text(large_text)
-
-        assert compressed is not None
-        # Should achieve significant compression due to repetition
-        compression_ratio = len(compressed) / len(large_text.encode("utf-8"))
-        assert compression_ratio < 0.1  # Should compress to less than 10%
-
-    def test_compress_binary_like_data(self):
-        """Test compressing text that looks like binary data."""
-        compressor = CompressManager()
-
-        # Pseudo-random looking text (poor compression expected)
-        import hashlib
-
-        binary_like = ""
-        for i in range(1000):
-            binary_like += hashlib.md5(f"seed{i}".encode()).hexdigest()
-
-        compressed = compressor.compress_text(binary_like)
-        assert compressed is not None
-        # Compression ratio should be poor for random-looking data
-        compression_ratio = len(compressed) / len(binary_like.encode("utf-8"))
-        assert compression_ratio > 0.8  # Should not compress much
 
 
 class TestConcurrentOperations:

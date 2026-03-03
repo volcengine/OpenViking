@@ -8,9 +8,8 @@ without HTTP server.
 """
 
 import os
-import platform
+import shutil
 import uuid
-from pathlib import Path
 
 import pytest
 
@@ -20,40 +19,9 @@ from openviking_cli.utils.config.agfs_config import AGFSConfig
 # Direct configuration for testing
 AGFS_CONF = AGFSConfig(path="/tmp/ov-test", backend="local", mode="binding-client")
 
-# Ensure test directory exists
-os.makedirs(AGFS_CONF.path, exist_ok=True)
-
-
-def get_lib_path() -> str:
-    """Get the path to AGFS binding shared library."""
-    system = platform.system()
-    if system == "Darwin":
-        lib_name = "libagfsbinding.dylib"
-    elif system == "Windows":
-        lib_name = "libagfsbinding.dll"
-    else:
-        lib_name = "libagfsbinding.so"
-
-    project_root = Path(__file__).parent.parent.parent
-    lib_path = project_root / "third_party" / "agfs" / "bin" / lib_name
-
-    if lib_path.exists():
-        return str(lib_path)
-
-    env_path = os.environ.get("AGFS_LIB_PATH")
-    if env_path and Path(env_path).exists():
-        return env_path
-
-    return None
-
-
-LIB_PATH = get_lib_path()
-
-
-pytestmark = pytest.mark.skipif(
-    LIB_PATH is None,
-    reason="AGFS binding library not found. Build it first: make -C third_party/agfs/agfs-server/cmd/pybinding",
-)
+# clean up test directory if it exists
+if os.path.exists(AGFS_CONF.path):
+    shutil.rmtree(AGFS_CONF.path)
 
 
 @pytest.fixture(scope="module")
@@ -61,14 +29,16 @@ async def viking_fs_binding_instance():
     """Initialize VikingFS with binding mode."""
     from openviking.utils.agfs_utils import create_agfs_client
 
-    # Set lib_path for the test
-    AGFS_CONF.lib_path = LIB_PATH
-
     # Create AGFS client
     agfs_client = create_agfs_client(AGFS_CONF)
 
     # Initialize VikingFS with client
     vfs = init_viking_fs(agfs=agfs_client)
+    # make sure default/temp directory exists
+    await vfs.mkdir("viking://temp/", exist_ok=True)
+
+    # Ensure test directory exists
+    await vfs.mkdir("viking://temp/", exist_ok=True)
 
     yield vfs
 
@@ -80,6 +50,7 @@ class TestVikingFSBindingLocal:
     async def test_file_operations(self, viking_fs_binding_instance):
         """Test VikingFS file operations: read, write, ls, stat."""
         vfs = viking_fs_binding_instance
+
         test_filename = f"binding_file_{uuid.uuid4().hex}.txt"
         test_content = "Hello VikingFS Binding! " + uuid.uuid4().hex
         test_uri = f"viking://temp/{test_filename}"

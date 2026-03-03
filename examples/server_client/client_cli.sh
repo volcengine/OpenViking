@@ -13,9 +13,9 @@
 #        b) ~/.openviking/ov.conf                  # default path
 #      See ov.conf.example for template.
 #
-#      openviking serve                            # default: localhost:1933
-#      openviking serve --port 8080                # custom port
-#      openviking serve --config /path/to/ov.conf  # explicit config path
+#      openviking-server                            # default: localhost:1933
+#      openviking-server --port 8080                # custom port
+#      openviking-server --config /path/to/ov.conf  # explicit config path
 #
 #   2. Configure CLI connection (ovcli.conf):
 #      CLI reads ovcli.conf from (priority high → low):

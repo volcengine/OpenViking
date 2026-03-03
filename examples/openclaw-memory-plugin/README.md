@@ -28,7 +28,7 @@ openclaw config set plugins.enabled true
 openclaw config set plugins.slots.memory memory-openviking
 openclaw config set plugins.entries.memory-openviking.config.mode "local"
 openclaw config set plugins.entries.memory-openviking.config.configPath "~/.openviking/ov.conf"
-openclaw config set plugins.entries.memory-openviking.config.targetUri "viking://"
+openclaw config set plugins.entries.memory-openviking.config.targetUri "viking://user/memories"
 openclaw config set plugins.entries.memory-openviking.config.autoRecall true --json
 openclaw config set plugins.entries.memory-openviking.config.autoCapture true --json
 

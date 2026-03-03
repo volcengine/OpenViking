@@ -55,10 +55,15 @@ class TestCheckPortAvailable:
 
         mgr = _make_manager(port)
         try:
+            # Flush any ResourceWarnings accumulated from previous tests
+            with warnings.catch_warnings(record=True):
+                warnings.simplefilter("always", ResourceWarning)
+                gc.collect()
+
             with pytest.raises(RuntimeError):
                 mgr._check_port_available()
 
-            # Force GC and check for ResourceWarning about unclosed socket
+            # Now check only for new ResourceWarnings from _check_port_available
             with warnings.catch_warnings(record=True) as w:
                 warnings.simplefilter("always", ResourceWarning)
                 gc.collect()

@@ -282,6 +282,40 @@ When resources are added, VLM generates:
 
 If VLM is not configured, L0/L1 will be generated from content directly (less semantic), and multimodal resources may have limited descriptions.
 
+### code
+
+Controls how code files are summarized via `code_summary_mode`. Both config formats are equivalent:
+
+```json
+{
+  "code": {
+    "code_summary_mode": "ast"
+  }
+}
+```
+
+```json
+{
+  "parsers": {
+    "code": {
+      "code_summary_mode": "ast"
+    }
+  }
+}
+```
+
+Set `code_summary_mode` to one of:
+
+| Value | Description | Default |
+|-------|-------------|---------|
+| `"ast"` | Extract AST skeleton (class names, method signatures, first-line docstrings, imports) for files ≥100 lines, skip LLM calls. **Recommended for large-scale code indexing** | ✓ |
+| `"llm"` | Always use LLM for summarization (higher cost) | |
+| `"ast_llm"` | Extract AST skeleton (with full docstrings) first, then pass it as context to LLM (highest quality, moderate cost) | |
+
+AST extraction supports: Python, JavaScript/TypeScript, Rust, Go, Java, C/C++. Other languages, extraction failures, or empty skeletons automatically fall back to LLM.
+
+See [Code Skeleton Extraction](../concepts/06-extraction.md#code-skeleton-extraction-ast-mode) for details.
+
 ### rerank
 
 Reranking model for search result refinement.
@@ -608,6 +642,9 @@ For startup and deployment details see [Deployment](./03-deployment.md), for aut
       "url": "string",
       "project": "string"
     }
+  },
+  "code": {
+    "code_summary_mode": "ast"
   },
   "server": {
     "host": "0.0.0.0",
