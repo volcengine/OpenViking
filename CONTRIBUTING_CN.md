@@ -37,8 +37,6 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
 uv sync --all-extras
 source .venv/bin/activate  # Linux/macOS
 # 或者 .venv\Scripts\activate  # Windows
-
-uv pip install -e . --force-reinstall
 ```
 
 ### 3. 配置环境
