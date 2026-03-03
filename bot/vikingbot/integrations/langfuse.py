@@ -105,10 +105,11 @@ class LangfuseClient:
             # Use module-level propagate_attributes from langfuse SDK v3
             global propagate_attributes
             if propagate_attributes is not None:
+                logger.info(f"[LANGFUSE] Propagating attributes: {list(propagate_kwargs.keys())}")
                 with propagate_attributes(**propagate_kwargs):
                     yield
             else:
-                logger.debug(f"[LANGFUSE] propagate_attributes not available (SDK version may not support it)")
+                logger.warning(f"[LANGFUSE] propagate_attributes not available (SDK version may not support it)")
                 yield
         except Exception as e:
             logger.debug(f"[LANGFUSE] propagate_attributes error: {e}")

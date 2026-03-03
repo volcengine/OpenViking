@@ -20,6 +20,7 @@ class ChannelType(str, Enum):
     EMAIL = "email"
     SLACK = "slack"
     QQ = "qq"
+    OPENAPI = "openapi"
 
 
 class SandboxBackend(str, Enum):
@@ -241,6 +242,19 @@ class QQChannelConfig(BaseChannelConfig):
         return self.app_id
 
 
+class OpenAPIChannelConfig(BaseChannelConfig):
+    """OpenAPI channel configuration for HTTP-based chat API."""
+
+    type: ChannelType = ChannelType.OPENAPI
+    enabled: bool = True
+    api_key: str = ""  # If empty, no auth required
+    allow_from: list[str] = Field(default_factory=list)
+    max_concurrent_requests: int = 100
+
+    def channel_id(self) -> str:
+        return "openapi"
+
+
 class ChannelsConfig(BaseModel):
     """Configuration for chat channels - array of channel configs."""
 
@@ -338,6 +352,8 @@ class ChannelsConfig(BaseModel):
             return SlackChannelConfig(**config)
         elif channel_type == ChannelType.QQ:
             return QQChannelConfig(**config)
+        elif channel_type == ChannelType.OPENAPI:
+            return OpenAPIChannelConfig(**config)
         else:
             return BaseChannelConfig(**config)
 
