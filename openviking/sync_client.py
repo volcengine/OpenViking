@@ -4,6 +4,7 @@
 Synchronous OpenViking client implementation.
 """
 
+from __future__ import annotations
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
@@ -83,22 +84,28 @@ class SyncOpenViking:
         instruction: str = "",
         wait: bool = False,
         timeout: float = None,
+        build_index: bool = True,
+        summarize: bool = False,
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking (resources scope only)
 
         Args:
+            build_index: Whether to build vector index immediately (default: True).
+            summarize: Whether to generate summary (default: False).
             **kwargs: Extra options forwarded to the parser chain, e.g.
                 ``strict``, ``ignore_dirs``, ``include``, ``exclude``.
         """
         return run_async(
             self._async_client.add_resource(
-                path,
-                target,
-                reason,
-                instruction,
-                wait,
-                timeout,
+                path=path,
+                target=target,
+                reason=reason,
+                instruction=instruction,
+                wait=wait,
+                timeout=timeout,
+                build_index=build_index,
+                summarize=summarize,
                 **kwargs,
             )
         )

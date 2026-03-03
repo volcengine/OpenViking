@@ -25,6 +25,7 @@ import logging
 from typing import TYPE_CHECKING, Optional
 
 from openviking.core.building_tree import BuildingTree
+from openviking.core.context import Context
 from openviking.parse.parsers.media.utils import get_media_base_uri, get_media_type
 from openviking.server.identity import RequestContext
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
@@ -87,29 +88,18 @@ class TreeBuilder:
         self,
         temp_dir_path: str,
         ctx: RequestContext,
-        scope: str,
+        scope: str = "resources",
         base_uri: Optional[str] = None,
         source_path: Optional[str] = None,
         source_format: Optional[str] = None,
+        trigger_semantic: bool = False,
     ) -> "BuildingTree":
         """
-        Finalize tree from temporary directory (v5.0 architecture).
-
-        New architecture:
-        1. Move directory to AGFS
-        2. Enqueue to SemanticQueue for async semantic generation
-        3. Scan and create Resource objects (for compatibility)
+        Finalize processing by moving from temp to AGFS.
 
         Args:
-            temp_dir_path: Temporary directory Viking URI (e.g., viking://temp/xxx)
-            scope: Scope ("resources", "user", or "agent")
-            base_uri: Base URI (None = use scope default)
-            source_node: Source ResourceNode
-            source_path: Source file path
-            source_format: Source file format
-
-        Returns:
-            Complete BuildingTree with all resources moved to AGFS
+            trigger_semantic: Whether to automatically trigger semantic generation.
+                              Default is False (handled by ResourceProcessor/Summarizer).
         """
 
         viking_fs = get_viking_fs()
@@ -185,11 +175,12 @@ class TreeBuilder:
             logger.warning(f"[TreeBuilder] Failed to cleanup temp root: {e}")
 
         # 6. Enqueue to SemanticQueue for async semantic generation
-        try:
-            await self._enqueue_semantic_generation(final_uri, "resource", ctx=ctx)
-            logger.info(f"[TreeBuilder] Enqueued semantic generation for: {final_uri}")
-        except Exception as e:
-            logger.error(f"[TreeBuilder] Failed to enqueue semantic generation: {e}", exc_info=True)
+        if trigger_semantic:
+            try:
+                await self._enqueue_semantic_generation(final_uri, "resource", ctx=ctx)
+                logger.info(f"[TreeBuilder] Enqueued semantic generation for: {final_uri}")
+            except Exception as e:
+                logger.error(f"[TreeBuilder] Failed to enqueue semantic generation: {e}", exc_info=True)
 
         # 7. Return simple BuildingTree (no scanning needed)
         tree = BuildingTree(
@@ -197,6 +188,10 @@ class TreeBuilder:
             source_format=source_format,
         )
         tree._root_uri = final_uri
+        
+        # Create a minimal Context object for the root so that tree.root is not None
+        root_context = Context(uri=final_uri)
+        tree.add_context(root_context)
 
         return tree
 
