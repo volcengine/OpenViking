@@ -111,15 +111,23 @@ class CodeRepositoryParser(BaseParser):
             # 2. Fetch content (Clone or Extract)
             repo_name = "repository"
             local_dir = Path(temp_local_dir)
-            if source_str.startswith(("http://", "https://", "git://", "ssh://")):
+            if source_str.startswith("git@"):
+                # git@ SSH URL: use git clone directly (no GitHub ZIP optimization)
+                repo_name = await self._git_clone(
+                    source_str,
+                    temp_local_dir,
+                    branch=branch,
+                    commit=commit,
+                )
+            elif source_str.startswith(("http://", "https://", "git://", "ssh://")):
                 repo_url, branch, commit = self._parse_repo_source(source_str, **kwargs)
-                if self._is_github_url(repo_url) and not commit:
-                    # Use GitHub ZIP API: single HTTPS download, no git history, much faster
+                if self._is_github_url(repo_url):
+                    # Use GitHub ZIP API: supports branch names, tags, and commit SHAs
                     local_dir, repo_name = await self._github_zip_download(
-                        repo_url, branch, temp_local_dir
+                        repo_url, branch or commit, temp_local_dir
                     )
                 else:
-                    # Non-GitHub URL or specific commit: fall back to git clone
+                    # Non-GitHub URL: use git clone
                     repo_name = await self._git_clone(
                         repo_url,
                         temp_local_dir,
@@ -235,8 +243,17 @@ class CodeRepositoryParser(BaseParser):
         if "tree" in parts:
             idx = parts.index("tree")
             if idx + 1 < len(parts):
-                branch = unquote(parts[idx + 1])
+                ref = unquote(parts[idx + 1])
+                if self._looks_like_sha(ref):
+                    commit = ref
+                else:
+                    branch = ref
         return branch, commit
+
+    @staticmethod
+    def _looks_like_sha(ref: str) -> bool:
+        """Return True if ref looks like a git commit SHA (7-40 hex chars)."""
+        return 7 <= len(ref) <= 40 and all(c in "0123456789abcdefABCDEF" for c in ref)
 
     def _normalize_repo_url(self, url: str) -> str:
         if url.startswith(("http://", "https://", "git://", "ssh://")):
@@ -292,7 +309,14 @@ class CodeRepositoryParser(BaseParser):
         stdout, stderr = await proc.communicate()
         if proc.returncode != 0:
             error_msg = stderr.decode().strip()
-            raise RuntimeError(f"Git command failed: {' '.join(args)}: {error_msg}")
+            user_msg = "Git command failed."
+            if "Could not resolve hostname" in error_msg:
+                user_msg = "Git command failed: could not resolve hostname. Check the URL or your network."
+            elif "Permission denied" in error_msg or "publickey" in error_msg:
+                user_msg = "Git command failed: authentication error. Check your SSH keys or credentials."
+            raise RuntimeError(
+                f'{user_msg} Command: git {" ".join(args[1:])}. Details: {error_msg}'
+            )
         return stdout.decode().strip()
 
     async def _has_commit(self, repo_dir: str, commit: str) -> bool:
@@ -331,7 +355,7 @@ class CodeRepositoryParser(BaseParser):
         repo_slug = repo_raw[:-4] if repo_raw.endswith(".git") else repo_raw
 
         if branch:
-            zip_url = f"https://github.com/{owner}/{repo_slug}/archive/refs/heads/{branch}.zip"
+            zip_url = f"https://github.com/{owner}/{repo_slug}/archive/{branch}.zip"
         else:
             zip_url = f"https://github.com/{owner}/{repo_slug}/archive/HEAD.zip"
 

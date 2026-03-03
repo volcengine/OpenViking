@@ -5,12 +5,33 @@
 
 ## 📦 Install
 
+**Prerequisites**
+
+First, install [uv](https://github.com/astral-sh/uv) (an extremely fast Python package installer):
+
+```bash
+# macOS/Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
 **Install from source** (latest features, recommended for development)
 
 ```bash
 git clone https://github.com/volcengine/OpenViking
 cd OpenViking/bot
-source .venv/bin/activate
+
+# Create a virtual environment using Python 3.11 or higher
+# uv will automatically fetch the required Python version if it's missing
+uv venv --python 3.11
+
+# Activate environment
+source .venv/bin/activate  # macOS/Linux
+# .venv\Scripts\activate   # Windows
+
+# Install dependencies
 uv pip install -e .
 ```
 

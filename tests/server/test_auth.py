@@ -3,6 +3,8 @@
 
 """Tests for multi-tenant authentication (openviking/server/auth.py)."""
 
+import uuid
+
 import httpx
 import pytest
 import pytest_asyncio
@@ -12,6 +14,11 @@ from openviking.server.config import ServerConfig, _is_localhost, validate_serve
 from openviking.server.dependencies import set_service
 from openviking.service.core import OpenVikingService
 from openviking_cli.session.user_id import UserIdentifier
+
+
+def _uid() -> str:
+    return f"acct_{uuid.uuid4().hex[:8]}"
+
 
 ROOT_KEY = "root-secret-key-for-testing-only-1234567890abcdef"
 
@@ -56,7 +63,7 @@ async def auth_client(auth_app):
 async def user_key(auth_app):
     """Create a test user and return its key."""
     manager = auth_app.state.api_key_manager
-    key = await manager.create_account("test_account", "test_admin")
+    key = await manager.create_account(_uid(), "test_admin")
     return key
 
 
@@ -173,8 +180,8 @@ async def test_agent_id_header_forwarded(auth_client: httpx.AsyncClient):
 async def test_cross_tenant_session_get_returns_not_found(auth_client: httpx.AsyncClient, auth_app):
     """A user must not access another tenant's session by session_id."""
     manager = auth_app.state.api_key_manager
-    alice_key = await manager.create_account("acme", "alice")
-    bob_key = await manager.create_account("beta", "bob")
+    alice_key = await manager.create_account(_uid(), "alice")
+    bob_key = await manager.create_account(_uid(), "bob")
 
     create_resp = await auth_client.post(
         "/api/v1/sessions", json={}, headers={"X-API-Key": alice_key}

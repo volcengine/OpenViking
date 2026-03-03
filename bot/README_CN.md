@@ -15,12 +15,32 @@ Vikingbot 深度集成 OpenViking，提供强大的知识管理和记忆检索�
 
 ## 📦 安装
 
+**前置要求**
+
+首先安装 [uv](https://github.com/astral-sh/uv)（一个极速的 Python 包安装器）：
+
+```bash
+# macOS/Linux
+curl -LsSf https://astral.sh/uv/install.sh | sh
+
+# Windows
+powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
+```
+
 **从源码安装**（最新功能，推荐用于开发）
 
 ```bash
 git clone https://github.com/volcengine/OpenViking
 cd OpenViking/bot
-source .venv/bin/activate
+
+# 创建 Python 3.11 或更高版本 虚拟环境
+uv venv --python 3.11
+
+# 激活环境
+source .venv/bin/activate  # macOS/Linux
+# .venv\Scripts\activate   # Windows
+
+# 安装依赖
 uv pip install -e .
 ```
 

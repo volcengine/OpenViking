@@ -30,7 +30,7 @@
     },
     "targetUri": {
       "label": "Search Target URI",
-      "placeholder": "viking://",
+      "placeholder": "viking://user/memories",
       "help": "Default OpenViking target URI for memory search"
     },
     "timeoutMs": {

@@ -131,6 +131,62 @@ Leaf directories → Parent directories → Root
 | `max_images_per_call` | 10 | Max images per VLM call |
 | `max_sections_per_call` | 20 | Max sections per VLM call |
 
+## Code Skeleton Extraction (AST Mode)
+
+For code files, OpenViking supports AST-based skeleton extraction via tree-sitter as a lightweight alternative to LLM summarization, significantly reducing processing cost.
+
+### Modes
+
+Controlled by `code_summary_mode` in `ov.conf` (see [Configuration](../guides/01-configuration.md#code)):
+
+| Mode | Description |
+|------|-------------|
+| `"ast"` | Extract structural skeleton for files ≥100 lines, skip LLM calls (**default**) |
+| `"llm"` | Always use LLM for summarization (original behavior) |
+| `"ast_llm"` | Extract AST skeleton first, then pass it as context to LLM for summarization |
+
+### What AST Extracts
+
+The skeleton includes:
+
+- Module-level docstring (first line)
+- Import statement list
+- Class names, base classes, and method signatures (`ast` mode: first-line docstrings only; `ast_llm` mode: full docstrings)
+- Top-level function signatures
+
+### Supported Languages
+
+The following languages have dedicated extractors built on tree-sitter:
+
+| Language | Status |
+|----------|--------|
+| Python | Supported |
+| JavaScript / TypeScript | Supported |
+| Rust | Supported |
+| Go | Supported |
+| Java | Supported |
+| C / C++ | Supported |
+
+Other languages automatically fall back to LLM.
+
+### Fallback Behavior
+
+The following conditions trigger automatic fallback to LLM, with the reason logged. The overall pipeline is unaffected:
+
+- Language not in the supported list
+- File has fewer than 100 lines
+- AST parse error
+- Extraction produces an empty skeleton
+
+### File Structure
+
+```
+openviking/parse/parsers/code/ast/
+├── extractor.py      # Language detection and dispatch
+├── skeleton.py       # CodeSkeleton / FunctionSig / ClassSkeleton data structures
+└── languages/        # Per-language extractors
+```
+
 ## Three Context Types Extraction
 
 ### Flow Comparison

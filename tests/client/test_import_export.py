@@ -3,7 +3,11 @@
 
 """Import/export tests"""
 
+import io
+import zipfile
 from pathlib import Path
+
+import pytest
 
 from openviking import AsyncOpenViking
 
@@ -111,3 +115,61 @@ class TestImportOvpack:
 
         # Verify content consistency
         assert original_content == imported_content
+
+
+    @staticmethod
+    def _build_ovpack(zip_path: Path, entries: dict[str, str]) -> None:
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w") as zf:
+            for name, content in entries.items():
+                zf.writestr(name, content)
+        zip_path.write_bytes(buffer.getvalue())
+
+    @pytest.mark.parametrize(
+        "entries,error_pattern",
+        [
+            (
+                {
+                    "pkg/_._meta.json": '{"uri": "viking://resources/pkg"}',
+                    "pkg/../../escape.txt": "pwned",
+                },
+                "Unsafe ovpack entry path",
+            ),
+            (
+                {
+                    "pkg/_._meta.json": '{"uri": "viking://resources/pkg"}',
+                    "/abs/path.txt": "pwned",
+                },
+                "Unsafe ovpack entry path",
+            ),
+            (
+                {
+                    "pkg/_._meta.json": '{"uri": "viking://resources/pkg"}',
+                    "C:/drive/path.txt": "pwned",
+                },
+                "Unsafe ovpack entry path",
+            ),
+            (
+                {
+                    "pkg/_._meta.json": '{"uri": "viking://resources/pkg"}',
+                    "pkg\\windows\\path.txt": "pwned",
+                },
+                "Unsafe ovpack entry path",
+            ),
+            (
+                {
+                    "pkg/_._meta.json": '{"uri": "viking://resources/pkg"}',
+                    "other/file.txt": "pwned",
+                },
+                "Invalid ovpack entry root",
+            ),
+        ],
+    )
+    async def test_import_rejects_unsafe_entries(
+        self, client: AsyncOpenViking, temp_dir: Path, entries: dict[str, str], error_pattern: str
+    ):
+        ovpack_path = temp_dir / "malicious.ovpack"
+        self._build_ovpack(ovpack_path, entries)
+
+        with pytest.raises(ValueError, match=error_pattern):
+            await client.import_ovpack(str(ovpack_path), "viking://resources/security/", vectorize=False)

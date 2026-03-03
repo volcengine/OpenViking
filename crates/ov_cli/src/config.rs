@@ -3,6 +3,8 @@ use std::path::PathBuf;
 
 use crate::error::{Error, Result};
 
+const OPENVIKING_CLI_CONFIG_ENV: &str = "OPENVIKING_CLI_CONFIG_FILE";
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default = "default_url")]
@@ -53,6 +55,14 @@ impl Config {
     }
 
     pub fn load_default() -> Result<Self> {
+        // Resolution order: env var > default path
+        if let Ok(env_path) = std::env::var(OPENVIKING_CLI_CONFIG_ENV) {
+            let p = PathBuf::from(env_path);
+            if p.exists() {
+                return Self::from_file(&p.to_string_lossy());
+            }
+        }
+
         let config_path = default_config_path()?;
         if config_path.exists() {
             Self::from_file(&config_path.to_string_lossy())

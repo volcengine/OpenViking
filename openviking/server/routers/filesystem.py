@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Filesystem endpoints for OpenViking HTTP Server."""
 
+from typing import Optional
+
 from fastapi import APIRouter, Depends, Query
 from pyagfs.exceptions import AGFSClientError
 from pydantic import BaseModel
@@ -24,10 +26,12 @@ async def ls(
     abs_limit: int = Query(256, description="Abstract limit (only for agent output)"),
     show_all_hidden: bool = Query(False, description="List all hidden files, like -a"),
     node_limit: int = Query(1000, description="Maximum number of nodes to list"),
+    limit: Optional[int] = Query(None, description="Alias for node_limit"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """List directory contents."""
     service = get_service()
+    actual_node_limit = limit if limit is not None else node_limit
     result = await service.fs.ls(
         uri,
         ctx=_ctx,
@@ -36,7 +40,7 @@ async def ls(
         output=output,
         abs_limit=abs_limit,
         show_all_hidden=show_all_hidden,
-        node_limit=node_limit,
+        node_limit=actual_node_limit,
     )
     return Response(status="ok", result=result)
 
@@ -48,18 +52,20 @@ async def tree(
     abs_limit: int = Query(256, description="Abstract limit (only for agent output)"),
     show_all_hidden: bool = Query(False, description="List all hidden files, like -a"),
     node_limit: int = Query(1000, description="Maximum number of nodes to list"),
+    limit: Optional[int] = Query(None, description="Alias for node_limit"),
     level_limit: int = Query(3, description="Maximum depth level to traverse"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get directory tree."""
     service = get_service()
+    actual_node_limit = limit if limit is not None else node_limit
     result = await service.fs.tree(
         uri,
         ctx=_ctx,
         output=output,
         abs_limit=abs_limit,
         show_all_hidden=show_all_hidden,
-        node_limit=node_limit,
+        node_limit=actual_node_limit,
         level_limit=level_limit,
     )
     return Response(status="ok", result=result)

@@ -11,12 +11,12 @@ import os
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Union
 
-from openviking.core.context import Context, ResourceContentType, Vectorize
+from openviking.core.context import Context, ContextLevel, ResourceContentType, Vectorize
 from openviking.server.identity import RequestContext
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.viking_fs import get_viking_fs
-from openviking_cli.utils import get_logger
+from openviking_cli.utils import VikingURI, get_logger
 
 logger = get_logger(__name__)
 
@@ -66,42 +66,45 @@ async def vectorize_directory_meta(
 
     queue_manager = get_queue_manager()
     embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING)
+    
+    parent_uri = VikingURI(uri).parent.uri
+    owner_space = _owner_space_for_uri(uri, ctx)
 
     # Vectorize L0: .abstract.md (abstract)
-    abstract_uri = f"{uri}/.abstract.md"
     context_abstract = Context(
-        uri=abstract_uri,
-        parent_uri=uri,
+        uri=uri,
+        parent_uri=parent_uri,
         is_leaf=False,
         abstract=abstract,
         context_type=context_type,
+        level=ContextLevel.ABSTRACT,
         user=ctx.user,
         account_id=ctx.account_id,
-        owner_space=_owner_space_for_uri(uri, ctx),
+        owner_space=owner_space,
     )
     context_abstract.set_vectorize(Vectorize(text=abstract))
     msg_abstract = EmbeddingMsgConverter.from_context(context_abstract)
     if msg_abstract:
         await embedding_queue.enqueue(msg_abstract)
-        logger.debug(f"Enqueued directory L0 (abstract) for vectorization: {abstract_uri}")
+        logger.debug(f"Enqueued directory L0 (abstract) for vectorization: {uri}")
 
     # Vectorize L1: .overview.md (overview)
-    overview_uri = f"{uri}/.overview.md"
     context_overview = Context(
-        uri=overview_uri,
-        parent_uri=uri,
+        uri=uri,
+        parent_uri=parent_uri,
         is_leaf=False,
         abstract=abstract,
         context_type=context_type,
+        level=ContextLevel.OVERVIEW,
         user=ctx.user,
         account_id=ctx.account_id,
-        owner_space=_owner_space_for_uri(uri, ctx),
+        owner_space=owner_space,
     )
     context_overview.set_vectorize(Vectorize(text=overview))
     msg_overview = EmbeddingMsgConverter.from_context(context_overview)
     if msg_overview:
         await embedding_queue.enqueue(msg_overview)
-        logger.debug(f"Enqueued directory L1 (overview) for vectorization: {overview_uri}")
+        logger.debug(f"Enqueued directory L1 (overview) for vectorization: {uri}")
 
 async def vectorize_file(
     file_path: str,

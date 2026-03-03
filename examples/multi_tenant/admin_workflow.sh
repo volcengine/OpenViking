@@ -10,7 +10,7 @@
 #   1. Configure & start the server with root_api_key:
 #      Copy ov.conf.example to ov.conf, fill in your model API keys, then:
 #
-#      openviking serve --config ./ov.conf
+#      openviking-server --config ./ov.conf
 #
 #      The key config for multi-tenant auth:
 #        {

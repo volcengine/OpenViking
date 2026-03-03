@@ -35,5 +35,6 @@ build/
 coverage/
 
 test/
+data/
 
 CLAUDE.md
