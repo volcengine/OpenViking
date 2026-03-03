@@ -1,0 +1,1 @@
+"""Vikingbot test suite."""

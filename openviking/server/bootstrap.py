@@ -4,6 +4,9 @@
 
 import argparse
 import os
+import subprocess
+import sys
+import time
 
 import uvicorn
 
@@ -36,6 +39,11 @@ def main():
         default=None,
         help="Path to ov.conf config file",
     )
+    parser.add_argument(
+        "--bot",
+        action="store_true",
+        help="Also start vikingbot gateway after server starts",
+    )
 
     args = parser.parse_args()
 
@@ -59,7 +67,98 @@ def main():
     # Create and run app
     app = create_app(config)
     print(f"OpenViking HTTP Server is running on {config.host}:{config.port}")
-    uvicorn.run(app, host=config.host, port=config.port, log_config=None)
+
+    # Start vikingbot gateway if --bot flag is set
+    bot_process = None
+    if args.bot:
+        bot_process = _start_vikingbot_gateway()
+
+    try:
+        uvicorn.run(app, host=config.host, port=config.port, log_config=None)
+    finally:
+        # Cleanup vikingbot process on shutdown
+        if bot_process is not None:
+            _stop_vikingbot_gateway(bot_process)
+
+
+def _start_vikingbot_gateway() -> subprocess.Popen:
+    """Start vikingbot gateway as a subprocess."""
+    print("Starting vikingbot gateway...")
+
+    # Check if vikingbot is available
+    vikingbot_cmd = None
+    if subprocess.run(["which", "vikingbot"], capture_output=True).returncode == 0:
+        vikingbot_cmd = ["vikingbot", "gateway"]
+    else:
+        # Try python -m vikingbot
+        python_cmd = sys.executable
+        try:
+            result = subprocess.run(
+                [python_cmd, "-m", "vikingbot", "--help"],
+                capture_output=True,
+                timeout=5
+            )
+            if result.returncode == 0:
+                vikingbot_cmd = [python_cmd, "-m", "vikingbot", "gateway"]
+        except (subprocess.TimeoutExpired, FileNotFoundError):
+            pass
+
+    if vikingbot_cmd is None:
+        print("Warning: vikingbot not found. Please install vikingbot first.")
+        print("  cd bot && uv pip install -e '.[dev]'")
+        return None
+
+    # Start vikingbot gateway process
+    try:
+        # Set environment to ensure it uses the same Python environment
+        env = os.environ.copy()
+
+        process = subprocess.Popen(
+            vikingbot_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+
+        # Wait a moment to check if it started successfully
+        time.sleep(2)
+        if process.poll() is not None:
+            # Process exited early
+            stdout, stderr = process.communicate(timeout=1)
+            print(f"Warning: vikingbot gateway exited early (code {process.returncode})")
+            if stderr:
+                print(f"Error: {stderr[:500]}")
+            return None
+
+        print(f"Vikingbot gateway started (PID: {process.pid})")
+        return process
+
+    except Exception as e:
+        print(f"Warning: Failed to start vikingbot gateway: {e}")
+        return None
+
+
+def _stop_vikingbot_gateway(process: subprocess.Popen) -> None:
+    """Stop the vikingbot gateway subprocess."""
+    if process is None:
+        return
+
+    print(f"\nStopping vikingbot gateway (PID: {process.pid})...")
+
+    try:
+        # Try graceful termination first
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+            print("Vikingbot gateway stopped gracefully.")
+        except subprocess.TimeoutExpired:
+            # Force kill if it doesn't stop in time
+            process.kill()
+            process.wait()
+            print("Vikingbot gateway force killed.")
+    except Exception as e:
+        print(f"Error stopping vikingbot gateway: {e}")
 
 
 if __name__ == "__main__":
