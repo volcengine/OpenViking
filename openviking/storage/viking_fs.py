@@ -945,7 +945,7 @@ class VikingFS:
         if ctx.role == Role.ROOT:
             return True
         if not uri.startswith("viking://"):
-            return False
+            uri = VikingURI.normalize(uri)
 
         parts = [p for p in uri[len("viking://") :].strip("/").split("/") if p]
         if not parts:

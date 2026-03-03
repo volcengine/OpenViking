@@ -38,10 +38,13 @@ class VikingURI:
         """
         Initialize URI handler.
 
+        Accepts both full-format (viking://...) and short-format (/resources, resources)
+        URIs. Short-format URIs are automatically normalized to full format.
+
         Args:
-            uri: URI string
+            uri: URI string (full or short format)
         """
-        self.uri = uri
+        self.uri = self.normalize(uri)
         self._parsed = self._parse()
 
     def _parse(self) -> Dict[str, str]:
