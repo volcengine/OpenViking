@@ -146,6 +146,20 @@ class TextEmbeddingHandler(DequeueHandlerBase):
         """Initialize the embedder instance from config."""
         self._embedder = config.embedding.get_embedder()
 
+    @staticmethod
+    def _seed_uri_for_id(uri: str, level: Any) -> str:
+        """Build deterministic id seed URI from canonical uri + hierarchy level."""
+        try:
+            level_int = int(level)
+        except (TypeError, ValueError):
+            level_int = 2
+
+        if level_int == 0:
+            return uri if uri.endswith("/.abstract.md") else f"{uri}/.abstract.md"
+        if level_int == 1:
+            return uri if uri.endswith("/.overview.md") else f"{uri}/.overview.md"
+        return uri
+
     async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """Process dequeued message and add embedding vector(s)."""
         if not data:
@@ -205,11 +219,12 @@ class TextEmbeddingHandler(DequeueHandlerBase):
 
             # Write to vector database
             try:
-                # Ensure vector DB has at most one record per URI.
+                # Ensure vector DB has deterministic IDs per semantic layer.
                 uri = inserted_data.get("uri")
                 if uri:
                     account_id = inserted_data.get("account_id", "default")
-                    id_seed = f"{account_id}:{uri}"
+                    seed_uri = self._seed_uri_for_id(uri, inserted_data.get("level", 2))
+                    id_seed = f"{account_id}:{seed_uri}"
                     inserted_data["id"] = hashlib.md5(id_seed.encode("utf-8")).hexdigest()
 
                 record_id = await self._vikingdb.upsert(inserted_data)

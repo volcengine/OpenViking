@@ -102,6 +102,7 @@ async def _enqueue_direct_vectorization(viking_fs, uri: str, ctx: RequestContext
         parent_uri=parent_uri,
         is_leaf=False,
         abstract=abstract,
+        level=0,
         created_at=datetime.now(),
         active_count=0,
         related_uri=[],

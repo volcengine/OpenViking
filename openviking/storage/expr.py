@@ -58,4 +58,13 @@ class RawDSL:
     payload: Dict[str, Any]
 
 
-FilterExpr = Union[And, Or, Eq, In, Range, Contains, TimeRange, RawDSL]
+@dataclass(frozen=True)
+class PathScope:
+    """Path prefix scope expression with optional depth control."""
+
+    field: str
+    path: str
+    depth: int = -1
+
+
+FilterExpr = Union[And, Or, Eq, In, Range, Contains, TimeRange, RawDSL, PathScope]

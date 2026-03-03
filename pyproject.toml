@@ -123,8 +123,11 @@ openviking = [
     "prompts/templates/**/*.yaml",
     "bin/agfs-server",
     "bin/agfs-server.exe",
-    "bin/ov",        # 新增
-    "bin/ov.exe"     # 新增
+    "lib/libagfsbinding.so",
+    "lib/libagfsbinding.dylib",
+    "lib/libagfsbinding.dll",
+    "bin/ov",
+    "bin/ov.exe"
 ]
 
 [tool.mypy]

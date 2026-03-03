@@ -14,9 +14,19 @@
 ### 前置要求
 
 - **Python**: 3.10+
-- **Go**: 1.25.1+ (构建 AGFS 组件需要)
+- **Go**: 1.25.1+ (从源码构建 AGFS 组件需要)
 - **C++ 编译器**: GCC 9+ 或 Clang 11+ (构建核心扩展需要，必须支持 C++17)
 - **CMake**: 3.12+
+
+#### 支持的平台 (预编译 Wheel 包)
+
+OpenViking 为以下环境提供预编译的 **Wheel** 包，安装时无需本地编译：
+
+- **Windows**: x86_64
+- **macOS**: x86_64, arm64 (Apple Silicon)
+- **Linux**: x86_64 (manylinux)
+
+对于其他平台（如 Linux ARM64、FreeBSD 等），安装时 `pip` 将会自动从源码进行编译。请确保已安装上述[前置要求](#前置要求)中的工具。
 
 ### 1. Fork 并克隆
 
@@ -38,6 +48,16 @@ uv sync --all-extras
 source .venv/bin/activate  # Linux/macOS
 # 或者 .venv\Scripts\activate  # Windows
 ```
+
+#### 本地开发与 AGFS 编译
+
+如果你修改了 **AGFS (Go)** 代码或 **C++ 扩展**，你需要重新编译并安装它们，以使更改在本地环境中生效。在项目根目录下运行以下命令：
+
+```bash
+uv pip install -e . --force-reinstall
+```
+
+该命令会强制重新执行 `setup.py`，触发 AGFS 和 C++ 组件的编译与安装。
 
 ### 3. 配置环境
 

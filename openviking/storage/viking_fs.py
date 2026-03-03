@@ -584,7 +584,7 @@ class VikingFS:
 
         if not self.rerank_config:
             raise RuntimeError("rerank_config is required for find")
-        if target_uri:
+        if target_uri and target_uri not in {"/", "viking://"}:
             self._ensure_access(target_uri, ctx)
 
         storage = self._get_vector_store()
@@ -670,7 +670,7 @@ class VikingFS:
         recent_messages = session_info.get("recent_messages") if session_info else None
 
         query_plan: Optional[QueryPlan] = None
-        if target_uri:
+        if target_uri and target_uri not in {"/", "viking://"}:
             self._ensure_access(target_uri, ctx)
 
         # When target_uri exists: read abstract, infer context_type
@@ -714,7 +714,13 @@ class VikingFS:
             else:
                 # No target_uri: query all types
                 typed_queries = [
-                    TypedQuery(query=query, context_type=ctx_type, intent="", priority=1)
+                    TypedQuery(
+                        query=query,
+                        context_type=ctx_type,
+                        intent="",
+                        priority=1,
+                        target_directories=[target_uri] if target_uri else [],
+                    )
                     for ctx_type in [ContextType.MEMORY, ContextType.RESOURCE, ContextType.SKILL]
                 ]
 
@@ -920,6 +926,9 @@ class VikingFS:
             return None
         scope = parts[0]
         second = parts[1]
+        # Treat scope-root metadata files as not having a tenant space segment.
+        if len(parts) == 2 and second in {".abstract.md", ".overview.md"}:
+            return None
         if scope == "user" and second not in self._USER_STRUCTURE_DIRS:
             return second
         if scope == "agent" and second not in self._AGENT_STRUCTURE_DIRS:

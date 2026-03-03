@@ -111,7 +111,15 @@ class CodeRepositoryParser(BaseParser):
             # 2. Fetch content (Clone or Extract)
             repo_name = "repository"
             local_dir = Path(temp_local_dir)
-            if source_str.startswith(("http://", "https://", "git://", "ssh://")):
+            if source_str.startswith("git@"):
+                # git@ SSH URL: use git clone directly (no GitHub ZIP optimization)
+                repo_name = await self._git_clone(
+                    source_str,
+                    temp_local_dir,
+                    branch=branch,
+                    commit=commit,
+                )
+            elif source_str.startswith(("http://", "https://", "git://", "ssh://")):
                 repo_url, branch, commit = self._parse_repo_source(source_str, **kwargs)
                 if self._is_github_url(repo_url) and not commit:
                     # Use GitHub ZIP API: single HTTPS download, no git history, much faster
@@ -292,7 +300,14 @@ class CodeRepositoryParser(BaseParser):
         stdout, stderr = await proc.communicate()
         if proc.returncode != 0:
             error_msg = stderr.decode().strip()
-            raise RuntimeError(f"Git command failed: {' '.join(args)}: {error_msg}")
+            user_msg = "Git command failed."
+            if "Could not resolve hostname" in error_msg:
+                user_msg = "Git command failed: could not resolve hostname. Check the URL or your network."
+            elif "Permission denied" in error_msg or "publickey" in error_msg:
+                user_msg = "Git command failed: authentication error. Check your SSH keys or credentials."
+            raise RuntimeError(
+                f'{user_msg} Command: git {" ".join(args[1:])}. Details: {error_msg}'
+            )
         return stdout.decode().strip()
 
     async def _has_commit(self, repo_dir: str, commit: str) -> bool:
