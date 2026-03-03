@@ -227,7 +227,6 @@ class VikingClient:
             result = await self.client.admin_register_user(
                 account_id=self.account_id, user_id=user_id, role=role
             )
-            logger.debug(f"Initialized user {user_id} in account {result}")
 
             # Save the API key if returned and we're in remote mode with a valid apikey manager
             if self.mode == "remote" and self._apikey_manager and isinstance(result, dict):
@@ -355,7 +354,6 @@ class VikingClient:
                     agent_id=self.agent_id,
                 )
                 await client.initialize()
-                logger.debug(f"Created dedicated HTTP client for user {user_id}")
 
         session = client.session(session_id)
 
