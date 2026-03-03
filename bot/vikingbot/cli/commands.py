@@ -208,9 +208,12 @@ def gateway(
     enable_console: bool = typer.Option(
         True, "--console/--no-console", help="Enable console web UI"
     ),
+    agent: bool = typer.Option(
+        True, "--agent/--no-agent", help="Enable agent loop for OpenAPI/chat"
+    ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
 ):
-    """Start the vikingbot gateway."""
+    """Start the vikingbot gateway with OpenAPI chat enabled by default."""
 
     if verbose:
         import logging

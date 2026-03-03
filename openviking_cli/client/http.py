@@ -143,9 +143,12 @@ class AsyncHTTPClient(BaseClient):
             timeout: HTTP request timeout in seconds. Default 60.0.
         """
         if url is None:
+            print(f'OPENVIKING_CLI_CONFIG_ENV={OPENVIKING_CLI_CONFIG_ENV}')
+            print(f'DEFAULT_OVCLI_CONF={DEFAULT_OVCLI_CONF}')
             config_path = resolve_config_path(None, OPENVIKING_CLI_CONFIG_ENV, DEFAULT_OVCLI_CONF)
             if config_path:
                 cfg = load_json_config(config_path)
+
                 url = cfg.get("url")
                 api_key = api_key or cfg.get("api_key")
                 agent_id = agent_id or cfg.get("agent_id")

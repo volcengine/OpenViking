@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod chat;
 pub mod content;
 pub mod search;
 pub mod filesystem;

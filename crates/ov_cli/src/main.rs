@@ -577,9 +577,17 @@ async fn main() {
         Commands::Tui { uri } => {
             handle_tui(uri, ctx).await
         }
-        Commands::Chat { .. } => {
-            // This is already handled at the beginning of main()
-            Ok(())
+        Commands::Chat { message, session, markdown, logs } => {
+            let cmd = commands::chat::ChatCommand {
+                endpoint: std::env::var("VIKINGBOT_ENDPOINT").unwrap_or_else(|_| "http://localhost:18790/api/v1/openapi".to_string()),
+                api_key: std::env::var("VIKINGBOT_API_KEY").ok(),
+                session: Some(session),
+                user: "cli_user".to_string(),
+                message,
+                stream: false,
+                no_format: !markdown,
+            };
+            cmd.run().await
         }
         Commands::Config { action } => handle_config(action, ctx).await,
         Commands::Version => {

@@ -405,7 +405,7 @@ with gr.Blocks(title="Vikingbot Console") as demo:
         create_workspace_tab()
 
 
-def create_console_app():
+def create_console_app(bus=None, config=None):
     """Create and return the FastAPI app with Gradio mounted."""
     from fastapi import FastAPI
 
@@ -418,6 +418,22 @@ def create_console_app():
         from vikingbot import __version__
 
         return {"status": "healthy", "version": __version__}
+
+    # Mount OpenAPI router if bus and config are provided
+    if bus is not None and config is not None:
+        try:
+            from vikingbot.channels.openapi import get_openapi_router
+
+            openapi_router = get_openapi_router(bus, config)
+            app.include_router(
+                openapi_router,
+                prefix="/api/v1/openapi",
+                tags=["openapi"],
+            )
+        except Exception as e:
+            import logging
+
+            logging.getLogger(__name__).warning(f"Failed to mount OpenAPI router: {e}")
 
     # Mount Gradio app
     demo.queue()
