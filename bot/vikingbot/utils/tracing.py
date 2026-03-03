@@ -18,6 +18,12 @@ _session_id: ContextVar[str | None] = ContextVar("session_id", default=None)
 
 T = TypeVar("T")
 
+# Try to import langfuse observe decorator
+try:
+    from langfuse.decorators import observe as langfuse_observe
+except ImportError:
+    langfuse_observe = None
+
 
 def get_current_session_id() -> str | None:
     """Get the current session ID from context."""
@@ -142,8 +148,12 @@ def trace(
 
                     langfuse = LangfuseClient.get_instance()
                     if langfuse.enabled and hasattr(langfuse, "propagate_attributes"):
+                        # Apply @observe decorator if available to create Langfuse trace
+                        observed_func = func
+                        if langfuse_observe is not None:
+                            observed_func = langfuse_observe(name=span_name)(func)
                         with langfuse.propagate_attributes(session_id=session_id, user_id=user_id):
-                            return await func(*args, **kwargs)
+                            return await observed_func(*args, **kwargs)
                     return await func(*args, **kwargs)
             else:
                 return await func(*args, **kwargs)
