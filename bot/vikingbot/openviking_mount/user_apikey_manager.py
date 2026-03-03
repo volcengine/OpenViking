@@ -55,7 +55,6 @@ class UserApiKeyManager:
                 with open(self.config_file, "r", encoding="utf-8") as f:
                     data = json.load(f)
                     self._apikeys = data.get("apikeys", {})
-                logger.debug(f"Loaded {len(self._apikeys)} API keys from {self.config_file}")
             except Exception as e:
                 logger.warning(f"Failed to load API keys from {self.config_file}: {e}")
                 self._apikeys = {}

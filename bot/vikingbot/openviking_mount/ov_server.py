@@ -16,7 +16,6 @@ class VikingClient:
     def __init__(self, agent_id: Optional[str] = None):
         config = load_config()
         openviking_config = config.ov_server
-        logger.debug(f"openviking_config: {openviking_config}")
         self.openviking_config = openviking_config
         self.ov_path = config.ov_data_path
 
@@ -445,7 +444,7 @@ async def main_test():
     # res = await client.add_resource("/Users/bytedance/Documents/论文/吉比特年报.pdf", "吉比特年报")
     res = await client.commit(
         session_id="456",
-        messages=[{"role": "user", "content": "我特别喜欢喝啤酒"}],
+        messages=[{"role": "user", "content": "我叫吴彦祖"}],
         user_id="ou_69e48b1314d1400af9d40fe3e4c24b8a",
     )
     # res = await client.commit("1234", [{"role": "user", "content": "帮我搜索 Python asyncio 教程"}
