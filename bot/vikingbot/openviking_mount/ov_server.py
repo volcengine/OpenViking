@@ -336,6 +336,7 @@ class VikingClient:
         """提交会话"""
         import re
         import uuid
+        from openviking.message.part import Part, TextPart, ToolPart
 
         user_exists = await self._check_user_exists(user_id)
         if not user_exists:
@@ -368,7 +369,7 @@ class VikingClient:
             parts: list[Any] = []
 
             if content:
-                parts.append({"text": content, "type": "text"})
+                parts.append(TextPart(text=content))
 
             for tool_info in tools_used:
                 tool_name = tool_info.get("tool_name", "")
@@ -397,24 +398,23 @@ class VikingClient:
                 execute_success = tool_info.get("execute_success", True)
                 tool_status = "completed" if execute_success else "error"
                 parts.append(
-                    {
-                        "type": "tool",
-                        "tool_id": tool_id,
-                        "tool_name": tool_name,
-                        "tool_uri": f"viking://session/{session_id}/tools/{tool_id}",
-                        "tool_input": tool_input,
-                        "tool_output": result_str[:2000],
-                        "tool_status": tool_status,
-                        "skill_uri": skill_uri,
-                        "duration_ms": float(tool_info.get("duration", 0.0)),
-                        "prompt_tokens": tool_info.get("input_token"),
-                        "completion_tokens": tool_info.get("output_token"),
-                    }
+                    ToolPart(
+                        tool_id=tool_id,
+                        tool_name=tool_name,
+                        tool_uri=f"viking://session/{session_id}/tools/{tool_id}",
+                        tool_input=tool_input,
+                        tool_output=result_str[:2000],
+                        tool_status=tool_status,
+                        skill_uri=skill_uri,
+                        duration_ms=float(tool_info.get("duration", 0.0)),
+                        prompt_tokens=tool_info.get("input_token"),
+                        completion_tokens=tool_info.get("output_token"),
+                    )
                 )
 
             if not parts:
                 continue
-            await client.add_message(session_id=session_id, role=role, parts=parts)
+            await session.add_message(role=role, parts=parts)
 
         result = await session.commit()
         if client is not self.client:
