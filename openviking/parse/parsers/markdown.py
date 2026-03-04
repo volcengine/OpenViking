@@ -449,6 +449,8 @@ class MarkdownParser(BaseParser):
         min_size: int,
     ) -> None:
         """Process sections with small section merge logic."""
+        viking_fs = self._get_viking_fs()
+
         # Expand section info
         expanded = [
             section
@@ -456,23 +458,6 @@ class MarkdownParser(BaseParser):
             else self._get_section_info(content, headings, section["heading_idx"])
             for section in sections
         ]
-
-        await self._process_expanded_sections(
-            content, headings, parent_dir, expanded, parent_name, max_size, min_size
-        )
-
-    async def _process_expanded_sections(
-        self,
-        content: str,
-        headings: List[Tuple[int, int, str, int]],
-        parent_dir: str,
-        expanded: List[Dict[str, Any]],
-        parent_name: str,
-        max_size: int,
-        min_size: int,
-    ) -> None:
-        """Process a list of already-expanded sections with merge logic."""
-        viking_fs = self._get_viking_fs()
 
         pending = []
         for sec in expanded:
