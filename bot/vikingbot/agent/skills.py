@@ -37,8 +37,6 @@ class SkillsLoader:
         skills = []
 
         # Workspace skills (highest priority)
-        logger.debug(f"Workspace skills dir: {self.workspace_skills}")
-
         if self.workspace_skills.exists():
             for skill_dir in self.workspace_skills.iterdir():
                 if skill_dir.is_dir():
@@ -49,7 +47,6 @@ class SkillsLoader:
                         )
 
         # Built-in skills
-        logger.debug(f"Built-in skills dir: {self.builtin_skills}")
         if self.builtin_skills and self.builtin_skills.exists():
             for skill_dir in self.builtin_skills.iterdir():
                 if skill_dir.is_dir():
