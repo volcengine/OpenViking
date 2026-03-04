@@ -504,6 +504,7 @@ class AGFSClient:
         recursive: bool = False,
         case_insensitive: bool = False,
         stream: bool = False,
+        node_limit: Optional[int] = None,
     ):
         """Search for a pattern in files using regular expressions
 
@@ -513,6 +514,7 @@ class AGFSClient:
             recursive: Whether to search recursively in directories (default: False)
             case_insensitive: Whether to perform case-insensitive matching (default: False)
             stream: Whether to stream results as NDJSON (default: False)
+            node_limit: Maximum number of results to return (default: None)
 
         Returns:
             If stream=False: Dict with 'matches' (list of match objects) and 'count'
@@ -531,15 +533,18 @@ class AGFSClient:
             ...         print(f"{item['file']}:{item['line']}: {item['content']}")
         """
         try:
+            json_payload = {
+                "path": path,
+                "pattern": pattern,
+                "recursive": recursive,
+                "case_insensitive": case_insensitive,
+                "stream": stream,
+            }
+            if node_limit is not None:
+                json_payload["node_limit"] = node_limit
             response = self.session.post(
                 f"{self.api_base}/grep",
-                json={
-                    "path": path,
-                    "pattern": pattern,
-                    "recursive": recursive,
-                    "case_insensitive": case_insensitive,
-                    "stream": stream,
-                },
+                json=json_payload,
                 timeout=None if stream else self.timeout,
                 stream=stream,
             )

@@ -704,8 +704,15 @@ class FeishuChannel(BaseChannel):
             if not content:
                 return
 
+            import re
+
+            mention_pattern = re.compile(r"@_user_\d+")
+            content = mention_pattern.sub(f"@{sender_id}", content)
+
             # Forward to message bus
             reply_to = chat_id if chat_type == "group" else sender_id
+            logger.info(f"Received message from Feishu: {content}")
+
             await self._handle_message(
                 sender_id=sender_id,
                 chat_id=reply_to,

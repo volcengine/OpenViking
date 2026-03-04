@@ -13,13 +13,13 @@
 
 ```bash
 # 配置文件在默认路径 ~/.openviking/ov.conf 时，直接启动
-python -m openviking serve
+openviking-server
 
 # 配置文件在其他位置时，通过 --config 指定
-python -m openviking serve --config /path/to/ov.conf
+openviking-server --config /path/to/ov.conf
 
 # 覆盖 host/port
-python -m openviking serve --port 1933
+openviking-server --port 1933
 ```
 
 你应该看到：

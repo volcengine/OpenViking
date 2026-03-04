@@ -275,7 +275,7 @@ def gateway(
     asyncio.run(run())
 
 
-def prepare_agent_loop(config, bus, session_manager, cron, quiet: bool = False):
+def prepare_agent_loop(config, bus, session_manager, cron, quiet: bool = False, eval: bool = False):
     sandbox_parent_path = config.bot_data_path
     source_workspace_path = get_source_workspace_path()
     sandbox_manager = SandboxManager(config, sandbox_parent_path, source_workspace_path)
@@ -318,7 +318,11 @@ def prepare_agent_loop(config, bus, session_manager, cron, quiet: bool = False):
         session_manager=session_manager,
         sandbox_manager=sandbox_manager,
         config=config,
+        eval=eval
     )
+    # Set the agent reference in cron if it uses the holder pattern
+    if hasattr(cron, '_agent_holder'):
+        cron._agent_holder['agent'] = agent
     return agent
 
 
@@ -327,12 +331,35 @@ def prepare_cron(bus, quiet: bool = False) -> CronService:
     cron_store_path = get_data_dir() / "cron" / "jobs.json"
     cron = CronService(cron_store_path)
 
+    # Use a mutable holder for the agent reference
+    agent_holder = {"agent": None}
+
     # Set cron callback (needs agent)
     async def on_cron_job(job: CronJob) -> str | None:
         """Execute a cron job through the agent."""
         session_key = SessionKey(**json.loads(job.payload.session_key_str))
-        response = await agent.process_direct(
-            job.payload.message,
+        message = job.payload.message
+
+        if agent_holder["agent"] is None:
+            raise RuntimeError("Agent not initialized yet")
+
+        # Clear instructions: let agent know this is a cron task to deliver
+        cron_instruction = f"""[CRON TASK]
+This is a scheduled task triggered by cron job: '{job.name}'
+Your task is to deliver the following reminder message to the user.
+
+IMPORTANT:
+- This is NOT a user message - it's a scheduled reminder you need to send
+- You should acknowledge/confirm the reminder and send it in a friendly way
+- DO NOT treat this as a question from the user
+- Simply deliver the reminder message as requested
+
+Reminder message to deliver:
+\"\"\"{message}\"\"\"
+"""
+
+        response = await agent_holder["agent"].process_direct(
+            cron_instruction,
             session_key=session_key,
         )
         if job.payload.deliver:
@@ -347,6 +374,7 @@ def prepare_cron(bus, quiet: bool = False) -> CronService:
         return response
 
     cron.on_job = on_cron_job
+    cron._agent_holder = agent_holder
 
     cron_status = cron.status()
     if cron_status["jobs"] > 0 and not quiet:
@@ -451,7 +479,7 @@ def _thinking_ctx(logs: bool):
     return console.status("[dim]vikingbot is thinking...[/dim]", spinner="dots")
 
 
-def prepare_agent_channel(config, bus, mode: str, message: str | None, session_id: str, markdown: bool, logs: bool):
+def prepare_agent_channel(config, bus, mode: str, message: str | None, session_id: str, markdown: bool, logs: bool, eval: bool = False):
     """Prepare channel for agent command."""
     from vikingbot.channels.chat import ChatChannel, ChatChannelConfig
     from vikingbot.channels.stdio import StdioChannel, StdioChannelConfig
@@ -477,6 +505,7 @@ def prepare_agent_channel(config, bus, mode: str, message: str | None, session_i
             message=message,
             session_id=session_id,
             markdown=markdown,
+            eval=eval,
         )
         channels.add_channel(channel)
     else:
@@ -508,6 +537,9 @@ def chat(
     mode: str = typer.Option(
         "direct", "--mode", help="Mode: direct (interactive), stdio (JSON IPC)"
     ),
+    eval: bool = typer.Option(
+        False, "--eval", "-e", help="Run evaluation mode, output JSON results"
+    ),
 ):
     """Interact with the agent directly."""
     if message is not None:
@@ -529,8 +561,8 @@ def chat(
     if session_id is None:
         session_id = "cli__chat__default"
     cron = prepare_cron(bus, quiet=is_single_turn)
-    channels = prepare_agent_channel(config, bus, mode, message, session_id, markdown, logs)
-    agent_loop = prepare_agent_loop(config, bus, session_manager, cron, quiet=is_single_turn)
+    channels = prepare_agent_channel(config, bus, mode, message, session_id, markdown, logs, eval)
+    agent_loop = prepare_agent_loop(config, bus, session_manager, cron, quiet=is_single_turn, eval=eval)
 
     async def run():
         if is_single_turn:

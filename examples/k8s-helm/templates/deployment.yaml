@@ -24,7 +24,7 @@ spec:
             - /bin/sh
             - -c
             - |
-              exec uv run --with openviking openviking serve \
+              exec uv run --with openviking openviking-server \
                 --host {{ .Values.server.host }} \
                 --port {{ .Values.server.port }} \
                 --config /etc/openviking/ov.conf

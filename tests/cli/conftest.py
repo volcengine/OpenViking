@@ -55,12 +55,11 @@ def openviking_server(tmp_path_factory: pytest.TempPathFactory) -> Generator[str
     conf_data["server"]["port"] = port
 
     conf_data.setdefault("storage", {})
+    conf_data["storage"]["workspace"] = str(storage_dir)
     conf_data["storage"].setdefault("vectordb", {})
     conf_data["storage"]["vectordb"]["backend"] = "local"
-    conf_data["storage"]["vectordb"]["path"] = str(storage_dir)
     conf_data["storage"].setdefault("agfs", {})
     conf_data["storage"]["agfs"]["backend"] = "local"
-    conf_data["storage"]["agfs"]["path"] = str(storage_dir)
 
     # Write temporary ov.conf
     tmp_conf = storage_dir / "ov.conf"
@@ -92,10 +91,22 @@ def openviking_server(tmp_path_factory: pytest.TempPathFactory) -> Generator[str
     try:
         _wait_for_health(url)
         yield url
+    except RuntimeError:
+        # Capture server output for debugging
+        stdout, stderr = "", ""
+        if proc.poll() is not None:
+            stdout, stderr = proc.communicate(timeout=5)
+        else:
+            proc.terminate()
+            stdout, stderr = proc.communicate(timeout=10)
+        raise RuntimeError(
+            f"OpenViking server failed to start.\nstdout:\n{stdout}\nstderr:\n{stderr}"
+        )
     finally:
-        proc.terminate()
-        try:
-            proc.wait(timeout=10)
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait(timeout=10)
+        if proc.poll() is None:
+            proc.terminate()
+            try:
+                proc.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait(timeout=10)

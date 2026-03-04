@@ -112,7 +112,7 @@ class OpenVikingService:
         from openviking.utils.agfs_utils import create_agfs_client
 
         mode = getattr(config.agfs, "mode", "http-client")
-        if mode == "http-client" and config.agfs.backend == "local":
+        if mode == "http-client":
             self._agfs_manager = AGFSManager(config=config.agfs)
             self._agfs_manager.start()
             self._agfs_url = self._agfs_manager.url

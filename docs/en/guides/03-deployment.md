@@ -6,10 +6,10 @@ OpenViking can run as a standalone HTTP server, allowing multiple clients to con
 
 ```bash
 # Start server (reads ~/.openviking/ov.conf by default)
-python -m openviking serve
+openviking-server
 
 # Or specify a custom config path
-python -m openviking serve --config /path/to/ov.conf
+openviking-server --config /path/to/ov.conf
 
 # Verify it's running
 curl http://localhost:1933/health
@@ -28,13 +28,13 @@ curl http://localhost:1933/health
 
 ```bash
 # With default config
-python -m openviking serve
+openviking-server
 
 # With custom port
-python -m openviking serve --port 8000
+openviking-server --port 8000
 
 # With custom config, host, and port
-python -m openviking serve --config /path/to/ov.conf --host 127.0.0.1 --port 8000
+openviking-server --config /path/to/ov.conf --host 127.0.0.1 --port 8000
 ```
 
 ## Configuration
@@ -76,7 +76,7 @@ Server manages local AGFS and VectorDB. Configure the storage path in `ov.conf`:
 ```
 
 ```bash
-python -m openviking serve
+openviking-server
 ```
 
 ### Hybrid (Remote Storage)
@@ -93,7 +93,7 @@ Server connects to remote AGFS and VectorDB services. Configure remote URLs in `
 ```
 
 ```bash
-python -m openviking serve
+openviking-server
 ```
 
 ## Deploying with Systemd (Recommended)

@@ -8,7 +8,6 @@ Tests the python binding mode of VikingFS with S3 backend (MinIO/TOS).
 
 import json
 import os
-import platform
 import uuid
 from pathlib import Path
 
@@ -44,36 +43,9 @@ def load_agfs_config() -> AGFSConfig:
 
 AGFS_CONF = load_agfs_config()
 
-
-def get_lib_path() -> str:
-    """Get the path to AGFS binding shared library."""
-    system = platform.system()
-    if system == "Darwin":
-        lib_name = "libagfsbinding.dylib"
-    elif system == "Windows":
-        lib_name = "libagfsbinding.dll"
-    else:
-        lib_name = "libagfsbinding.so"
-
-    project_root = Path(__file__).parent.parent.parent
-    lib_path = project_root / "third_party" / "agfs" / "bin" / lib_name
-
-    if lib_path.exists():
-        return str(lib_path)
-
-    env_path = os.environ.get("AGFS_LIB_PATH")
-    if env_path and Path(env_path).exists():
-        return env_path
-
-    return None
-
-
-LIB_PATH = get_lib_path()
-
-
 pytestmark = pytest.mark.skipif(
-    LIB_PATH is None or AGFS_CONF is None or AGFS_CONF.backend != "s3",
-    reason="AGFS binding library not found or S3 configuration not available",
+    AGFS_CONF is None or AGFS_CONF.backend != "s3",
+    reason="AGFS binding client install failed or S3 configuration not available",
 )
 
 
@@ -81,9 +53,6 @@ pytestmark = pytest.mark.skipif(
 async def viking_fs_binding_s3_instance():
     """Initialize VikingFS with binding mode for S3 backend."""
     from openviking.utils.agfs_utils import create_agfs_client
-
-    # Set lib_path for the test
-    AGFS_CONF.lib_path = LIB_PATH
 
     # Create AGFS client
     agfs_client = create_agfs_client(AGFS_CONF)

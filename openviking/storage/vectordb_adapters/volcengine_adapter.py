@@ -123,10 +123,4 @@ class VolcengineCollectionAdapter(CollectionAdapter):
         return index_meta
 
     def _normalize_record_for_read(self, record: Dict[str, Any]) -> Dict[str, Any]:
-        for key in ("uri", "parent_uri"):
-            value = record.get(key)
-            if isinstance(value, str) and not value.startswith("viking://"):
-                stripped = value.strip("/")
-                if stripped:
-                    record[key] = f"viking://{stripped}"
-        return record
+        return super()._normalize_record_for_read(record)

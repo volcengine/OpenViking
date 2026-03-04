@@ -172,49 +172,6 @@ cron(
 )
 ```
 
-## OpenViking Tools
-
-### openviking_read
-Read content from OpenViking resources at different levels.
-```
-openviking_read(uri: str, level: str = "abstract") -> str
-```
-
-**Levels:**
-- `abstract`: L0 - Brief summary
-- `overview`: L1 - Medium overview
-- `read`: L2 - Full content
-
-### openviking_list
-List resources in an OpenViking path.
-```
-openviking_list(uri: str = "", recursive: bool = False) -> str
-```
-
-### openviking_search
-Search for resources in OpenViking using semantic search.
-```
-openviking_search(query: str, target_uri: str = None) -> str
-```
-
-### openviking_grep
-Search OpenViking resources using regex patterns.
-```
-openviking_grep(uri: str, pattern: str, case_insensitive: bool = False) -> str
-```
-
-### openviking_glob
-Find OpenViking resources using glob patterns.
-```
-openviking_glob(pattern: str, uri: str = "") -> str
-```
-
-### user_memory_search
-Search for user memories in OpenViking.
-```
-user_memory_search(query: str) -> str
-```
-
 ## Heartbeat Task Management
 
 The `HEARTBEAT.md` file in the workspace is checked at regular intervals.

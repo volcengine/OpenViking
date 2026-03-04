@@ -256,13 +256,6 @@ class LiteLLMProvider(LLMProvider):
                 "total_tokens": response.usage.total_tokens,
             }
 
-            # Debug: log the raw usage object to see what fields are available
-            logger.debug(f"[LANGFUSE] Raw usage object: {response.usage}")
-            if hasattr(response.usage, "prompt_tokens_details"):
-                logger.debug(f"[LANGFUSE] prompt_tokens_details: {response.usage.prompt_tokens_details}")
-            if hasattr(response.usage, "cache_read_input_tokens"):
-                logger.debug(f"[LANGFUSE] cache_read_input_tokens: {response.usage.cache_read_input_tokens}")
-
             # Extract cached tokens from various provider formats
             # OpenAI style: prompt_tokens_details.cached_tokens
             if hasattr(response.usage, "prompt_tokens_details"):
@@ -271,13 +264,11 @@ class LiteLLMProvider(LLMProvider):
                     cached = details.cached_tokens
                     if cached:
                         usage["cache_read_input_tokens"] = cached
-                        logger.info(f"[LANGFUSE] Found cached_tokens: {cached}")
             # Anthropic style: cache_read_input_tokens
             elif hasattr(response.usage, "cache_read_input_tokens"):
                 cached = response.usage.cache_read_input_tokens
                 if cached:
                     usage["cache_read_input_tokens"] = cached
-                    logger.info(f"[LANGFUSE] Found cache_read_input_tokens: {cached}")
 
         reasoning_content = getattr(message, "reasoning_content", None)
 

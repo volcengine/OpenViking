@@ -54,6 +54,7 @@ class AgentLoop:
         session_manager: SessionManager | None = None,
         sandbox_manager: SandboxManager | None = None,
         config: Config = None,
+        eval: bool = False,
     ):
         """
         Initialize the AgentLoop with all required dependencies and configuration.
@@ -110,6 +111,7 @@ class AgentLoop:
             self.config.bot_data_path, sandbox_manager=sandbox_manager
         )
         self.tools = ToolRegistry()
+        self._eval = eval
         self.subagents = SubagentManager(
             provider=provider,
             workspace=workspace,
@@ -121,6 +123,11 @@ class AgentLoop:
 
         self._running = False
         self._register_default_tools()
+        self._token_usage = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        }
 
     async def _publish_thinking_event(
         self, session_key: SessionKey, event_type: OutboundEventType, content: str
@@ -242,6 +249,11 @@ class AgentLoop:
                 model=self.model,
                 session_id=session_key.safe_name(),
             )
+            if  response.usage:
+                cur_token = response.usage
+                self._token_usage["prompt_tokens"] += cur_token["prompt_tokens"]
+                self._token_usage["completion_tokens"] += cur_token["completion_tokens"]
+                self._token_usage["total_tokens"] += cur_token["total_tokens"]
 
             if publish_events and response.reasoning_content:
                 await self.bus.publish_outbound(
@@ -366,7 +378,11 @@ class AgentLoop:
         session = self.sessions.get_or_create(session_key, skip_heartbeat=skip_heartbeat)
 
         # Handle slash commands
-        cmd = msg.content.strip().lower()
+        is_group_chat = msg.metadata.get("chat_type") == "group" if msg.metadata else False
+        if is_group_chat:
+            cmd = msg.content.replace(f"@{msg.sender_id}", "").strip().lower()
+        else:
+            cmd = msg.content.strip().lower()
         if cmd == "/new":
             await self._consolidate_memory(session, archive_all=True)
             session.clear()
@@ -390,9 +406,8 @@ class AgentLoop:
             message_workspace = self.workspace
 
         from vikingbot.agent.context import ContextBuilder
-
         message_context = ContextBuilder(
-            message_workspace, sandbox_manager=self.sandbox_manager, sender_id=msg.sender_id
+            message_workspace, sandbox_manager=self.sandbox_manager, sender_id=msg.sender_id, is_group_chat=is_group_chat, eval=self._eval
         )
 
         # Build initial messages (use get_history for LLM-formatted messages)
@@ -425,7 +440,8 @@ class AgentLoop:
         return OutboundMessage(
             session_key=msg.session_key,
             content=final_content,
-            metadata=msg.metadata
+            metadata=msg.metadata,
+            token_usage=self._token_usage
             or {},  # Pass through for channel-specific needs (e.g. Slack thread_ts)
         )
 

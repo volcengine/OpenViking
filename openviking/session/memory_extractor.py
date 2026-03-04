@@ -620,7 +620,7 @@ class MemoryExtractor:
         return stats
 
     def _parse_tool_statistics(self, content: str) -> dict:
-        """从 Markdown 内容中解析统计数据"""
+        """从 Tools Markdown 内容中解析 Tools 已有信息，用于后续统计分析"""
         stats = {
             "total_calls": 0,
             "success_count": 0,
@@ -654,13 +654,16 @@ class MemoryExtractor:
         return stats
 
     def _merge_tool_statistics(self, existing: dict, new: dict) -> dict:
-        """累加统计数据（Python 计算）"""
+        """累加Tools统计数据"""
         merged = {
             "total_calls": existing["total_calls"] + new["total_calls"],
             "success_count": existing["success_count"] + new["success_count"],
             "fail_count": existing["fail_count"] + new["fail_count"],
             "total_time_ms": existing["total_time_ms"] + new["total_time_ms"],
             "total_tokens": existing["total_tokens"] + new["total_tokens"],
+            "avg_time_ms": 0.0,
+            "avg_tokens": 0.0,
+            "success_rate": 0.0,
         }
         if merged["total_calls"] > 0:
             merged["avg_time_ms"] = merged["total_time_ms"] / merged["total_calls"]
@@ -801,6 +804,7 @@ class MemoryExtractor:
             "total_executions": existing["total_executions"] + new["total_executions"],
             "success_count": existing["success_count"] + new["success_count"],
             "fail_count": existing["fail_count"] + new["fail_count"],
+            "success_rate": 0.0,
         }
         if merged["total_executions"] > 0:
             merged["success_rate"] = merged["success_count"] / merged["total_executions"]

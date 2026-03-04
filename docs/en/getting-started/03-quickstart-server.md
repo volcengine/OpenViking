@@ -13,13 +13,13 @@ Make sure you have a config file at `~/.openviking/ov.conf` with your model and 
 
 ```bash
 # Config file at default path ~/.openviking/ov.conf — just start
-python -m openviking serve
+openviking-server
 
 # Config file at a different location — specify with --config
-python -m openviking serve --config /path/to/ov.conf
+openviking-server --config /path/to/ov.conf
 
 # Override host/port
-python -m openviking serve --port 8000
+openviking-server --port 8000
 ```
 
 You should see:

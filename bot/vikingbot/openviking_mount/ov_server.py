@@ -3,9 +3,9 @@ import hashlib
 from typing import List, Dict, Any, Optional
 
 from loguru import logger
+import time
 
 import openviking as ov
-from vikingbot.config.loader import get_data_dir
 from vikingbot.config.loader import load_config
 from vikingbot.openviking_mount.user_apikey_manager import UserApiKeyManager
 
@@ -18,11 +18,10 @@ class VikingClient:
         openviking_config = config.ov_server
         self.openviking_config = openviking_config
         self.ov_path = config.ov_data_path
-
         if openviking_config.mode == "local":
-            ov_data_path = get_data_dir() / "ov_data"
-            ov_data_path.mkdir(parents=True, exist_ok=True)
-            self.client = ov.AsyncOpenViking(path=str(ov_data_path))
+            self.client = ov.AsyncHTTPClient(
+                url=openviking_config.server_url
+            )
             self.agent_id = "default"
             self.account_id = "default"
             self.admin_user_id = "default"
@@ -50,7 +49,7 @@ class VikingClient:
         await self.client.initialize()
 
         # 检查并初始化 admin_user_id（如果配置了）
-        if self.admin_user_id:
+        if self.mode == "remote" and self.admin_user_id:
             user_exists = await self._check_user_exists(self.admin_user_id)
             if not user_exists:
                 await self._initialize_user(self.admin_user_id, role="admin")
@@ -205,6 +204,8 @@ class VikingClient:
         Returns:
             bool: 用户是否存在
         """
+        if self.mode == "local":
+            return True
         try:
             res = await self.client.admin_list_users(self.account_id)
             if not res or len(res) == 0:
@@ -223,14 +224,15 @@ class VikingClient:
         Returns:
             bool: 初始化是否成功
         """
+        if self.mode == "local":
+            return True
         try:
             result = await self.client.admin_register_user(
                 account_id=self.account_id, user_id=user_id, role=role
             )
-            logger.debug(f"Initialized user {user_id} in account {result}")
 
             # Save the API key if returned and we're in remote mode with a valid apikey manager
-            if self.mode == "remote" and self._apikey_manager and isinstance(result, dict):
+            if self._apikey_manager and isinstance(result, dict):
                 api_key = result.get("user_key")
                 if api_key:
                     self._apikey_manager.set_apikey(user_id, api_key)
@@ -333,9 +335,9 @@ class VikingClient:
 
     async def commit(self, session_id: str, messages: list[dict[str, Any]], user_id: str = None):
         """提交会话"""
-        import uuid
         import re
-        from openviking.message.part import TextPart, ToolPart, Part
+        import uuid
+        from openviking.message.part import Part, TextPart, ToolPart
 
         user_exists = await self._check_user_exists(user_id)
         if not user_exists:
@@ -345,6 +347,7 @@ class VikingClient:
 
         # For remote mode, try to get user's API key and create a dedicated client
         client = self.client
+        start = time.time()
         if self.mode == "remote" and user_id and user_id != self.admin_user_id and self._apikey_manager:
             user_api_key = await self._get_or_create_user_apikey(user_id)
             if user_api_key:
@@ -355,82 +358,76 @@ class VikingClient:
                     agent_id=self.agent_id,
                 )
                 await client.initialize()
-                logger.debug(f"Created dedicated HTTP client for user {user_id}")
 
+        create_res = await client.create_session()
+        session_id = create_res['session_id']
         session = client.session(session_id)
 
-        if self.mode == "local":
-            for message in messages:
-                role = message.get("role")
-                content = message.get("content")
-                tools_used = message.get("tools_used") or []
+        for message in messages:
+            role = message.get("role")
+            content = message.get("content")
+            tools_used = message.get("tools_used") or []
 
-                parts: list[Part] = []
+            parts: list[Any] = []
 
-                if content:
-                    parts.append(TextPart(text=content))
+            if content:
+                parts.append(TextPart(text=content))
 
-                for tool_info in tools_used:
-                    tool_name = tool_info.get("tool_name", "")
-                    if not tool_name:
-                        continue
+            for tool_info in tools_used:
+                tool_name = tool_info.get("tool_name", "")
+                if not tool_name:
+                    continue
 
-                    tool_id = f"{tool_name}_{uuid.uuid4().hex[:8]}"
-                    tool_input = None
-                    try:
-                        import json
+                tool_id = f"{tool_name}_{uuid.uuid4().hex[:8]}"
+                tool_input = None
+                try:
+                    import json
 
-                        args_str = tool_info.get("args", "{}")
-                        tool_input = json.loads(args_str) if args_str else {}
-                    except Exception:
-                        tool_input = {"raw_args": tool_info.get("args", "")}
+                    args_str = tool_info.get("args", "{}")
+                    tool_input = json.loads(args_str) if args_str else {}
+                except Exception:
+                    tool_input = {"raw_args": tool_info.get("args", "")}
 
-                    result_str = str(tool_info.get("result", ""))
+                result_str = str(tool_info.get("result", ""))
 
-                    skill_uri = ""
-                    if tool_name == "read_file" and result_str:
-                        match = re.search(r"^---\s*\nname:\s*(.+?)\s*\n", result_str, re.MULTILINE)
-                        if match:
-                            skill_name = match.group(1).strip()
-                            skill_uri = f"viking://agent/skills/{skill_name}"
+                skill_uri = ""
+                if tool_name == "read_file" and result_str:
+                    match = re.search(r"^---\s*\nname:\s*(.+?)\s*\n", result_str, re.MULTILINE)
+                    if match:
+                        skill_name = match.group(1).strip()
+                        skill_uri = f"viking://agent/skills/{skill_name}"
 
-                    execute_success = tool_info.get("execute_success", True)
-                    tool_status = "completed" if execute_success else "error"
-                    parts.append(
-                        ToolPart(
-                            tool_id=tool_id,
-                            tool_name=tool_name,
-                            tool_uri=f"viking://session/{session_id}/tools/{tool_id}",
-                            tool_input=tool_input,
-                            tool_output=result_str[:2000],
-                            tool_status=tool_status,
-                            skill_uri=skill_uri,
-                            duration_ms=float(tool_info.get("duration", 0.0)),
-                            prompt_tokens=tool_info.get("input_token"),
-                            completion_tokens=tool_info.get("output_token"),
-                        )
+                execute_success = tool_info.get("execute_success", True)
+                tool_status = "completed" if execute_success else "error"
+                parts.append(
+                    ToolPart(
+                        tool_id=tool_id,
+                        tool_name=tool_name,
+                        tool_uri=f"viking://session/{session_id}/tools/{tool_id}",
+                        tool_input=tool_input,
+                        tool_output=result_str[:2000],
+                        tool_status=tool_status,
+                        skill_uri=skill_uri,
+                        duration_ms=float(tool_info.get("duration", 0.0)),
+                        prompt_tokens=tool_info.get("input_token"),
+                        completion_tokens=tool_info.get("output_token"),
                     )
+                )
 
-                if not parts:
-                    parts = [TextPart(text=content or "")]
+            if not parts:
+                continue
+            await session.add_message(role=role, parts=parts)
 
-                session.add_message(role=role, parts=parts)
-
-            result = session.commit()
-            if client is not self.client:
-                await client.close()
-        else:
-            for message in messages:
-                await session.add_message(role=message.get("role"), content=message.get("content"))
-            result = await session.commit()
-            if client is not self.client:
-                await client.close()
+        result = await session.commit()
+        if client is not self.client:
+            await client.close()
+        logger.info(f"time spent: {time.time() - start}")
         logger.debug(f"Message add ed to OpenViking session {session_id}, user: {user_id}")
         return {"success": result["status"]}
 
-    def close(self):
+    async def close(self):
         """关闭客户端"""
-        self.client.close()
+        await self.client.close()
 
 
 async def main_test():
@@ -443,16 +440,15 @@ async def main_test():
     # res = await client.read_content("viking://user/memories/profile.md", level="read")
     # res = await client.add_resource("/Users/bytedance/Documents/论文/吉比特年报.pdf", "吉比特年报")
     res = await client.commit(
-        session_id="456",
-        messages=[{"role": "user", "content": "我叫吴彦祖"}],
-        user_id="ou_69e48b1314d1400af9d40fe3e4c24b8a",
+        session_id="99999",
+        messages=[{"role": "user", "content": "你好"}],
+        user_id="1010101010",
     )
     # res = await client.commit("1234", [{"role": "user", "content": "帮我搜索 Python asyncio 教程"}
     #                                    ,{"role": "assistant", "content": "我来帮你r搜索 Python asyncio 相关的教程。"}])
     print(res)
 
-    print("等待后台处理完成...")
-    await client.client.wait_processed(timeout=60)
+    await client.close()
     print("处理完成！")
 
 
@@ -460,9 +456,11 @@ async def account_test():
     client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="test")
     await client.initialize()
 
-    # res = await client.admin_list_users("default")
-    res = await client.admin_remove_user("default", "ou_69e48b1314d1400af9d40fe3e4c24b8a")
+    # res = await client.admin_list_users("eval")
+    # res = await client.admin_remove_user("default", "ou_69e48b1314d1400af9d40fe3e4c24b8a")
     # res = await client.admin_remove_user("default", "admin")
+    # res = await client.admin_list_accounts()
+    res = await client.admin_create_account("eval", "default")
     print(res)
 
 

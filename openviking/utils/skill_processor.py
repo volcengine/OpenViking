@@ -219,8 +219,13 @@ class SkillProcessor:
                 await viking_fs.write_file_bytes(aux_uri, file_bytes, ctx=ctx)
 
     async def _index_skill(self, context: Context, skill_dir_uri: str):
-        """Write skill to vector store via async queue."""
+        """Write skill directory vector via async queue as L0."""
         context.uri = skill_dir_uri
+        context.parent_uri = "viking://agent/skills"
+        context.is_leaf = False
+        context.level = 0
 
+        context.set_vectorize(Vectorize(text=context.abstract))
         embedding_msg = EmbeddingMsgConverter.from_context(context)
-        await self.vikingdb.enqueue_embedding_msg(embedding_msg)
+        if embedding_msg:
+            await self.vikingdb.enqueue_embedding_msg(embedding_msg)

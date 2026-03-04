@@ -74,9 +74,9 @@ enum Commands {
         /// Wait until processing is complete
         #[arg(long)]
         wait: bool,
-        /// Wait timeout in seconds
+        /// Wait timeout in seconds (only used with --wait)
         #[arg(long)]
-        timeout: f64,
+        timeout: Option<f64>,
         /// No strict mode for directory scanning
         #[arg(long = "no-strict", default_value_t = false)]
         no_strict: bool,
@@ -195,7 +195,7 @@ enum Commands {
         #[arg(short, long)]
         all: bool,
         /// Maximum number of nodes to list
-        #[arg(long = "node-limit", short = 'n', default_value = "256")]
+        #[arg(long = "node-limit", short = 'n', alias = "limit", default_value = "256")]
         node_limit: i32,
     },
     /// Get directory tree
@@ -209,7 +209,7 @@ enum Commands {
         #[arg(short, long)]
         all: bool,
         /// Maximum number of nodes to list
-        #[arg(long = "node-limit", short = 'n', default_value = "256")]
+        #[arg(long = "node-limit", short = 'n', alias = "limit", default_value = "256")]
         node_limit: i32,
         /// Maximum depth level to traverse (default: 3)
         #[arg(short = 'L', long = "level-limit", default_value = "3")]
@@ -265,8 +265,8 @@ enum Commands {
         #[arg(short, long, default_value = "")]
         uri: String,
         /// Maximum number of results
-        #[arg(short = 'n', long, default_value = "10")]
-        limit: i32,
+        #[arg(short = 'n', long = "node-limit", alias = "limit", default_value = "10")]
+        node_limit: i32,
         /// Score threshold
         #[arg(short, long)]
         threshold: Option<f64>,
@@ -282,8 +282,8 @@ enum Commands {
         #[arg(long)]
         session_id: Option<String>,
         /// Maximum number of results
-        #[arg(short = 'n', long, default_value = "10")]
-        limit: i32,
+        #[arg(short = 'n', long = "node-limit", alias = "limit", default_value = "10")]
+        node_limit: i32,
         /// Score threshold
         #[arg(short, long)]
         threshold: Option<f64>,
@@ -298,6 +298,9 @@ enum Commands {
         /// Case insensitive
         #[arg(short, long)]
         ignore_case: bool,
+        /// Maximum number of results
+        #[arg(short = 'n', long = "node-limit", alias = "limit", default_value = "256")]
+        node_limit: i32,
     },
     /// Run file glob pattern search
     Glob {
@@ -306,6 +309,9 @@ enum Commands {
         /// Search root URI
         #[arg(short, long, default_value = "viking://")]
         uri: String,
+        /// Maximum number of results
+        #[arg(short = 'n', long = "node-limit", alias = "limit", default_value = "256")]
+        node_limit: i32,
     },
     /// Add memory in one shot (creates session, adds messages, commits)
     AddMemory {
@@ -597,17 +603,18 @@ async fn main() {
         Commands::Read { uri } => handle_read(uri, ctx).await,
         Commands::Abstract { uri } => handle_abstract(uri, ctx).await,
         Commands::Overview { uri } => handle_overview(uri, ctx).await,
-        Commands::Find { query, uri, limit, threshold } => {
-            handle_find(query, uri, limit, threshold, ctx).await
+        Commands::Find { query, uri, node_limit, threshold } => {
+            handle_find(query, uri, node_limit, threshold, ctx).await
         }
-        Commands::Search { query, uri, session_id, limit, threshold } => {
-            handle_search(query, uri, session_id, limit, threshold, ctx).await
+        Commands::Search { query, uri, session_id, node_limit, threshold } => {
+            handle_search(query, uri, session_id, node_limit, threshold, ctx).await
         }
-        Commands::Grep { uri, pattern, ignore_case } => {
-            handle_grep(uri, pattern, ignore_case, ctx).await
+        Commands::Grep { uri, pattern, ignore_case, node_limit } => {
+            handle_grep(uri, pattern, ignore_case, node_limit, ctx).await
         }
-        Commands::Glob { pattern, uri } => {
-            handle_glob(pattern, uri, ctx).await
+
+        Commands::Glob { pattern, uri, node_limit } => {
+            handle_glob(pattern, uri, node_limit, ctx).await
         }
     };
 
@@ -623,7 +630,7 @@ async fn handle_add_resource(
     reason: String,
     instruction: String,
     wait: bool,
-    timeout: f64,
+    timeout: Option<f64>,
     no_strict: bool,
     ignore_dirs: Option<String>,
     include: Option<String>,
@@ -670,7 +677,7 @@ async fn handle_add_resource(
         reason,
         instruction,
         wait,
-        Some(timeout),
+        timeout,
         strict,
         ignore_dirs,
         include,
@@ -895,24 +902,39 @@ async fn handle_overview(uri: String, ctx: CliContext) -> Result<()> {
 async fn handle_find(
     query: String,
     uri: String,
-    limit: i32,
+    node_limit: i32,
     threshold: Option<f64>,
     ctx: CliContext,
 ) -> Result<()> {
+    let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
+    if let Some(t) = threshold {
+        params.push(format!("--threshold {}", t));
+    }
+    params.push(format!("\"{}\"", query));
+    print_command_echo("ov find", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
-    commands::search::find(&client, &query, &uri, limit, threshold, ctx.output_format, ctx.compact).await
+    commands::search::find(&client, &query, &uri, node_limit, threshold, ctx.output_format, ctx.compact).await
 }
 
 async fn handle_search(
     query: String,
     uri: String,
     session_id: Option<String>,
-    limit: i32,
+    node_limit: i32,
     threshold: Option<f64>,
     ctx: CliContext,
 ) -> Result<()> {
+    let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
+    if let Some(s) = &session_id {
+        params.push(format!("--session-id {}", s));
+    }
+    if let Some(t) = threshold {
+        params.push(format!("--threshold {}", t));
+    }
+    params.push(format!("\"{}\"", query));
+    print_command_echo("ov search", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
-    commands::search::search(&client, &query, &uri, session_id, limit, threshold, ctx.output_format, ctx.compact).await
+    commands::search::search(&client, &query, &uri, session_id, node_limit, threshold, ctx.output_format, ctx.compact).await
 }
 
 /// Print command with specified parameters for debugging
@@ -973,14 +995,21 @@ async fn handle_stat(uri: String, ctx: CliContext) -> Result<()> {
     commands::filesystem::stat(&client, &uri, ctx.output_format, ctx.compact).await
 }
 
-async fn handle_grep(uri: String, pattern: String, ignore_case: bool, ctx: CliContext) -> Result<()> {
+async fn handle_grep(uri: String, pattern: String, ignore_case: bool, node_limit: i32, ctx: CliContext) -> Result<()> {
+    let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
+    if ignore_case { params.push("-i".to_string()); }
+    params.push(format!("\"{}\"", pattern));
+    print_command_echo("ov grep", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
-    commands::search::grep(&client, &uri, &pattern, ignore_case, ctx.output_format, ctx.compact).await
+    commands::search::grep(&client, &uri, &pattern, ignore_case, node_limit, ctx.output_format, ctx.compact).await
 }
 
-async fn handle_glob(pattern: String, uri: String, ctx: CliContext) -> Result<()> {
+
+async fn handle_glob(pattern: String, uri: String, node_limit: i32, ctx: CliContext) -> Result<()> {
+    let params = vec![format!("--uri={}", uri), format!("-n {}", node_limit), format!("\"{}\"", pattern)];
+    print_command_echo("ov glob", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
-    commands::search::glob(&client, &pattern, &uri, ctx.output_format, ctx.compact).await
+    commands::search::glob(&client, &pattern, &uri, node_limit, ctx.output_format, ctx.compact).await
 }
 
 async fn handle_health(ctx: CliContext) -> Result<()> {
