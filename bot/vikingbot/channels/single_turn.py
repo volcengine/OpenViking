@@ -5,6 +5,7 @@
 import asyncio
 from pathlib import Path
 from typing import Any
+import json
 
 from loguru import logger
 
@@ -42,6 +43,7 @@ class SingleTurnChannel(BaseChannel):
         message: str = "",
         session_id: str = "cli__chat__default",
         markdown: bool = True,
+        eval: bool = False,
     ):
         super().__init__(config, bus, workspace_path)
         self.message = message
@@ -49,6 +51,7 @@ class SingleTurnChannel(BaseChannel):
         self.markdown = markdown
         self._response_received = asyncio.Event()
         self._last_response: str | None = None
+        self._eval = eval
 
     async def start(self) -> None:
         """Start the single-turn channel - send message and wait for response."""
@@ -82,5 +85,11 @@ class SingleTurnChannel(BaseChannel):
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message - store final response for later retrieval."""
         if msg.is_normal_message:
+            if self._eval:
+                output = {
+                    "text": msg.content,
+                    "token_usage": msg.token_usage,
+                }
+                msg.content = json.dumps(output, ensure_ascii=False)
             self._last_response = msg.content
             self._response_received.set()

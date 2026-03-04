@@ -89,6 +89,11 @@ class AgentLoop:
 
         self._running = False
         self._register_default_tools()
+        self._token_usage = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        }
 
     async def _publish_thinking_event(
         self, session_key: SessionKey, event_type: OutboundEventType, content: str
@@ -188,6 +193,10 @@ class AgentLoop:
                 model=self.model,
                 session_id=session_key.safe_name(),
             )
+            cur_token = response.usage
+            self._token_usage["prompt_tokens"] += cur_token["prompt_tokens"]
+            self._token_usage["completion_tokens"] += cur_token["completion_tokens"]
+            self._token_usage["total_tokens"] += cur_token["total_tokens"]
 
             if publish_events and response.reasoning_content:
                 await self.bus.publish_outbound(
@@ -374,7 +383,8 @@ class AgentLoop:
         return OutboundMessage(
             session_key=msg.session_key,
             content=final_content,
-            metadata=msg.metadata
+            metadata=msg.metadata,
+            token_usage=self._token_usage
             or {},  # Pass through for channel-specific needs (e.g. Slack thread_ts)
         )
 

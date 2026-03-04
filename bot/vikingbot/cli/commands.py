@@ -419,7 +419,7 @@ def _thinking_ctx(logs: bool):
     return console.status("[dim]vikingbot is thinking...[/dim]", spinner="dots")
 
 
-def prepare_agent_channel(config, bus, mode: str, message: str | None, session_id: str, markdown: bool, logs: bool):
+def prepare_agent_channel(config, bus, mode: str, message: str | None, session_id: str, markdown: bool, logs: bool, eval: bool = False):
     """Prepare channel for agent command."""
     from vikingbot.channels.chat import ChatChannel, ChatChannelConfig
     from vikingbot.channels.stdio import StdioChannel, StdioChannelConfig
@@ -445,6 +445,7 @@ def prepare_agent_channel(config, bus, mode: str, message: str | None, session_i
             message=message,
             session_id=session_id,
             markdown=markdown,
+            eval=eval,
         )
         channels.add_channel(channel)
     else:
@@ -476,6 +477,9 @@ def chat(
     mode: str = typer.Option(
         "direct", "--mode", help="Mode: direct (interactive), stdio (JSON IPC)"
     ),
+    eval: bool = typer.Option(
+        False, "--eval", "-e", help="Run evaluation mode, output JSON results"
+    ),
 ):
     """Interact with the agent directly."""
     if message is not None:
@@ -497,7 +501,7 @@ def chat(
     if session_id is None:
         session_id = "cli__chat__default"
     cron = prepare_cron(bus, quiet=is_single_turn)
-    channels = prepare_agent_channel(config, bus, mode, message, session_id, markdown, logs)
+    channels = prepare_agent_channel(config, bus, mode, message, session_id, markdown, logs, eval)
     agent_loop = prepare_agent_loop(config, bus, session_manager, cron, quiet=is_single_turn)
 
     async def run():
