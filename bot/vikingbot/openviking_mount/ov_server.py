@@ -450,17 +450,17 @@ async def main_test():
 
 
 async def account_test():
-    client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="a2c93b162c5c89afdfcba2bd58ce7d4b1bd2d7f02ac5303f19343a67d63341ad")
+    client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="test")
     await client.initialize()
 
-    res = await client.admin_list_users("eval")
+    # res = await client.admin_list_users("eval")
     # res = await client.admin_remove_user("default", "ou_69e48b1314d1400af9d40fe3e4c24b8a")
     # res = await client.admin_remove_user("default", "admin")
     # res = await client.admin_list_accounts()
-    # res = await client.admin_create_account("eval", "default")
+    res = await client.admin_create_account("eval", "default")
     print(res)
 
 
 if __name__ == "__main__":
-    asyncio.run(main_test())
-    # asyncio.run(account_test())
+    # asyncio.run(main_test())
+    asyncio.run(account_test())

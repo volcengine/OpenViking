@@ -60,7 +60,7 @@ class SingleTurnChannel(BaseChannel):
         # Send the message
         msg = InboundMessage(
             session_key=SessionKey.from_safe_name(self.session_id),
-            sender_id="user",
+            sender_id="default",
             content=self.message,
         )
         await self.bus.publish_inbound(msg)
