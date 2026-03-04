@@ -203,8 +203,8 @@ def _make_provider(config, langfuse_client:  None = None):
 
 @app.command()
 def gateway(
-    port: int = typer.Option(18790, "--port", "-p", help="Gateway port"),
-    console_port: int = typer.Option(18791, "--console-port", help="Console web UI port"),
+    port: int = typer.Option(18791, "--port", "-p", help="Gateway port"),
+    # console_port: int = typer.Option(18791, "--console-port", help="Console web UI port"),
     enable_console: bool = typer.Option(
         True, "--console/--no-console", help="Enable console web UI"
     ),
@@ -225,19 +225,50 @@ def gateway(
     _init_bot_data(config)
     session_manager = SessionManager(config.bot_data_path)
 
+    # Create FastAPI app for OpenAPI
+    from fastapi import FastAPI
+    fastapi_app = FastAPI(
+        title="Vikingbot OpenAPI",
+        description="HTTP API for Vikingbot chat",
+        version="1.0.0",
+    )
+
     cron = prepare_cron(bus)
-    channels = prepare_channel(config, bus)
+    channels = prepare_channel(config, bus, fastapi_app=fastapi_app, enable_openapi=True, openapi_port=port)
     agent_loop = prepare_agent_loop(config, bus, session_manager, cron)
     heartbeat = prepare_heartbeat(config, agent_loop, session_manager)
 
     async def run():
+        import uvicorn
+
+        # Setup OpenAPI routes before starting
+        openapi_channel = None
+        for name, channel in channels.channels.items():
+            if hasattr(channel, 'name') and channel.name == "openapi":
+                openapi_channel = channel
+                break
+
+        if openapi_channel is not None and hasattr(openapi_channel, '_setup_routes'):
+            openapi_channel._setup_routes()
+            logger.info("OpenAPI routes registered")
+
+        # Start uvicorn server for OpenAPI
+        config_uvicorn = uvicorn.Config(
+            fastapi_app,
+            host="0.0.0.0",
+            port=port,
+            log_level="info",
+        )
+        server = uvicorn.Server(config_uvicorn)
+
         tasks = []
         tasks.append(cron.start())
         tasks.append(heartbeat.start())
         tasks.append(channels.start_all())
         tasks.append(agent_loop.run())
-        if enable_console:
-            tasks.append(start_console(console_port))
+        tasks.append(server.serve())  # Start HTTP server
+        # if enable_console:
+        #     tasks.append(start_console(console_port))
 
         await asyncio.gather(*tasks)
 
@@ -255,9 +286,8 @@ def prepare_agent_loop(config, bus, session_manager, cron, quiet: bool = False):
 
     # Initialize Langfuse if enabled
     langfuse_client = None
-    logger.info(f"[LANGFUSE] Config check: has langfuse attr={hasattr(config, 'langfuse')}")
-    if hasattr(config, "langfuse"):
-        logger.info(f"[LANGFUSE] Config check: enabled={config.langfuse.enabled}, base_url={config.langfuse.base_url}")
+    # logger.info(f"[LANGFUSE] Config check: has langfuse attr={hasattr(config, 'langfuse')}")
+
     if hasattr(config, "langfuse") and config.langfuse.enabled:
         langfuse_client = LangfuseClient(
             enabled=config.langfuse.enabled,
@@ -325,10 +355,36 @@ def prepare_cron(bus, quiet: bool = False) -> CronService:
     return cron
 
 
-def prepare_channel(config, bus):
+def prepare_channel(config, bus, fastapi_app=None, enable_openapi: bool = False, openapi_port: int = 18790):
+    """Prepare channels for the bot.
 
+    Args:
+        config: Bot configuration
+        bus: Message bus for communication
+        fastapi_app: External FastAPI app to register OpenAPI routes on
+        enable_openapi: Whether to enable OpenAPI channel for gateway mode
+        openapi_port: Port for OpenAPI channel (default: 18790)
+    """
     channels = ChannelManager(bus)
     channels.load_channels_from_config(config)
+
+    # Enable OpenAPI channel for gateway mode if requested
+    if enable_openapi and fastapi_app is not None:
+        from vikingbot.channels.openapi import OpenAPIChannel, OpenAPIChannelConfig
+
+        openapi_config = OpenAPIChannelConfig(
+            enabled=True,
+            port=openapi_port,
+            api_key="",  # No auth required by default
+        )
+        openapi_channel = OpenAPIChannel(
+            openapi_config,
+            bus,
+            app=fastapi_app,  # Pass the external FastAPI app
+        )
+        channels.add_channel(openapi_channel)
+        logger.info(f"OpenAPI channel enabled on port {openapi_port}")
+
     if channels.enabled_channels:
         console.print(f"[green]✓[/green] Channels enabled: {', '.join(channels.enabled_channels)}")
     else:
