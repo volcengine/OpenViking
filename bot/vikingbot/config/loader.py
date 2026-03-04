@@ -112,6 +112,10 @@ def _merge_vlm_model_config(bot_data: dict, vlm_data: dict) -> None:
     Only sets model - provider config is read directly from OpenVikingConfig.
     """
     # Set default model from vlm.model
+    if "agents" in bot_data:
+        agents = bot_data["agents"]
+        if "model" in agents and agents["model"]:
+            return
     if vlm_data.get("model"):
         if "agents" not in bot_data:
             bot_data["agents"] = {}
