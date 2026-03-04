@@ -4,6 +4,7 @@ import json
 import os
 from typing import Any
 
+from loguru import logger
 import litellm
 from litellm import acompletion
 
@@ -186,11 +187,24 @@ class LiteLLMProvider(LLMProvider):
                 }
 
                 if llm_response.usage:
-                    update_kwargs["usage"] = {
-                        "prompt_tokens": llm_response.usage.get("prompt_tokens", 0),
-                        "completion_tokens": llm_response.usage.get("completion_tokens", 0),
-                        "total_tokens": llm_response.usage.get("total_tokens", 0),
+                    # Langfuse v3 SDK expects "usage_details" with "input" and "output" keys
+                    usage_details: dict[str, Any] = {
+                        "input": llm_response.usage.get("prompt_tokens", 0),
+                        "output": llm_response.usage.get("completion_tokens", 0),
                     }
+
+                    # Add cache read tokens if available (OpenAI/Anthropic prompt caching)
+                    # Try multiple possible field names for cached tokens
+                    cache_read_tokens = (
+                        llm_response.usage.get("cache_read_input_tokens") or
+                        llm_response.usage.get("prompt_tokens_details", {}).get("cached_tokens")
+                    )
+                    if cache_read_tokens:
+                        usage_details["cache_read_input_tokens"] = cache_read_tokens
+
+                    update_kwargs["usage_details"] = usage_details
+                    # Log the usage details being sent to Langfuse
+                    # logger.info(f"[LANGFUSE] Updating generation with usage_details: {usage_details}")
 
                 langfuse_generation.update(**update_kwargs)
                 langfuse_generation.end()
@@ -241,6 +255,29 @@ class LiteLLMProvider(LLMProvider):
                 "completion_tokens": response.usage.completion_tokens,
                 "total_tokens": response.usage.total_tokens,
             }
+
+            # Debug: log the raw usage object to see what fields are available
+            logger.debug(f"[LANGFUSE] Raw usage object: {response.usage}")
+            if hasattr(response.usage, "prompt_tokens_details"):
+                logger.debug(f"[LANGFUSE] prompt_tokens_details: {response.usage.prompt_tokens_details}")
+            if hasattr(response.usage, "cache_read_input_tokens"):
+                logger.debug(f"[LANGFUSE] cache_read_input_tokens: {response.usage.cache_read_input_tokens}")
+
+            # Extract cached tokens from various provider formats
+            # OpenAI style: prompt_tokens_details.cached_tokens
+            if hasattr(response.usage, "prompt_tokens_details"):
+                details = response.usage.prompt_tokens_details
+                if details and hasattr(details, "cached_tokens"):
+                    cached = details.cached_tokens
+                    if cached:
+                        usage["cache_read_input_tokens"] = cached
+                        logger.info(f"[LANGFUSE] Found cached_tokens: {cached}")
+            # Anthropic style: cache_read_input_tokens
+            elif hasattr(response.usage, "cache_read_input_tokens"):
+                cached = response.usage.cache_read_input_tokens
+                if cached:
+                    usage["cache_read_input_tokens"] = cached
+                    logger.info(f"[LANGFUSE] Found cache_read_input_tokens: {cached}")
 
         reasoning_content = getattr(message, "reasoning_content", None)
 
