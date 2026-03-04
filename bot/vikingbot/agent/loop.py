@@ -312,7 +312,11 @@ class AgentLoop:
         session = self.sessions.get_or_create(session_key, skip_heartbeat=skip_heartbeat)
 
         # Handle slash commands
-        cmd = msg.content.strip().lower()
+        is_group_chat = msg.metadata.get("chat_type") == "group" if msg.metadata else False
+        if is_group_chat:
+            cmd = msg.content.replace(f"@{msg.sender_id}", "").strip().lower()
+        else:
+            cmd = msg.content.strip().lower()
         if cmd == "/new":
             await self._consolidate_memory(session, archive_all=True)
             session.clear()
@@ -336,7 +340,6 @@ class AgentLoop:
             message_workspace = self.workspace
 
         from vikingbot.agent.context import ContextBuilder
-        is_group_chat = msg.metadata.get("chat_type") == "group" if msg.metadata else False
         message_context = ContextBuilder(
             message_workspace, sandbox_manager=self.sandbox_manager, sender_id=msg.sender_id, is_group_chat=is_group_chat
         )
