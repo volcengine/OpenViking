@@ -195,10 +195,11 @@ class AgentLoop:
                 model=self.model,
                 session_id=session_key.safe_name(),
             )
-            cur_token = response.usage
-            self._token_usage["prompt_tokens"] += cur_token["prompt_tokens"]
-            self._token_usage["completion_tokens"] += cur_token["completion_tokens"]
-            self._token_usage["total_tokens"] += cur_token["total_tokens"]
+            if  response.usage:
+                cur_token = response.usage
+                self._token_usage["prompt_tokens"] += cur_token["prompt_tokens"]
+                self._token_usage["completion_tokens"] += cur_token["completion_tokens"]
+                self._token_usage["total_tokens"] += cur_token["total_tokens"]
 
             if publish_events and response.reasoning_content:
                 await self.bus.publish_outbound(
