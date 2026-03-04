@@ -13,7 +13,7 @@ Before using OpenViking, ensure your environment meets the following requirement
 ## Installation
 
 ```bash
-pip install openviking
+pip install openviking --upgrade --force-reinstall
 ```
 
 ## Model Preparation

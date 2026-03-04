@@ -66,7 +66,7 @@ openclaw --version
 
 ### 1.5 Check Go (>= 1.25) — only for source install on Linux
 
-> Skip this check if the user will install via `pip install openviking` (PyPI pre-built package).
+> Skip this check if the user will install via `pip install openviking --upgrade --force-reinstall` (PyPI pre-built package).
 
 ```bash
 go version
@@ -95,7 +95,7 @@ Two options — choose based on the user's needs:
 #### Option A: Install from PyPI (recommended, no Go needed)
 
 ```bash
-python3 -m pip install openviking
+python3 -m pip install openviking --upgrade --force-reinstall
 ```
 
 #### Option B: Install from Source (developer mode)
@@ -105,17 +105,17 @@ Requires Go >= 1.25 on Linux (check passed in Step 1.5).
 **Linux / macOS:**
 
 ```bash
-python3 -m pip install -e .
+python3 -m pip install -e . --force-reinstall
 ```
 
 **Windows:**
 
 ```powershell
-python -m pip install -e .
+python -m pip install -e . --force-reinstall
 ```
 
 > If pip downloads are slow, suggest using a mirror:
-> `python3 -m pip install openviking -i https://pypi.tuna.tsinghua.edu.cn/simple`
+> `python3 -m pip install openviking --upgrade --force-reinstall -i https://pypi.tuna.tsinghua.edu.cn/simple`
 
 ### 2.3 Verify Installation
 
@@ -132,7 +132,7 @@ python -c "import openviking; print('openviking module: ok')"
 ```
 
 - **Pass:** Prints `openviking module: ok`.
-- **Fail — multiple Python versions:** Ask the user which Python to use, then install with that path: `/path/to/python3.11 -m pip install openviking`
+- **Fail — multiple Python versions:** Ask the user which Python to use, then install with that path: `/path/to/python3.11 -m pip install openviking --upgrade --force-reinstall`
 - **Fail — `TypeError: unsupported operand type(s) for |`:** Python version is below 3.10. The user needs to upgrade.
 - **Fail — `Go compiler not found`:** Go is not installed (source install only). See Step 1.5.
 

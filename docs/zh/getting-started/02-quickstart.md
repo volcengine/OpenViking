@@ -13,7 +13,7 @@
 ## 安装
 
 ```bash
-pip install openviking
+pip install openviking --upgrade --force-reinstall
 ```
 
 ## 模型准备

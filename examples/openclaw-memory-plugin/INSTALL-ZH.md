@@ -62,8 +62,8 @@ copy examples\openclaw-memory-plugin\skills\install-openviking-memory\SKILL.md ^
 | **火山引擎 Ark API Key** | — | Embedding + VLM 模型调用 | 是 |
 
 > **PyPI 安装 vs 源码安装：**
-> - `pip install openviking`（PyPI 预编译包）：只需 Python、cmake、g++，**不需要 Go**
-> - `pip install -e .`（源码安装）：需要 Python、cmake、g++ **以及 Go >= 1.25**（Linux 上编译 AGFS）
+> - `pip install openviking --upgrade --force-reinstall`（PyPI 预编译包）：只需 Python、cmake、g++，**不需要 Go**
+> - `pip install -e . --force-reinstall`（源码安装）：需要 Python、cmake、g++ **以及 Go >= 1.25**（Linux 上编译 AGFS）
 > - **Windows** 用户可直接使用预编译 wheel 包，无需 Go
 
 ### 快速检查
@@ -211,7 +211,7 @@ npm -v
 ### 3.4 安装 Go >= 1.25（仅源码安装需要）
 
 > 已安装？运行 `go version`，如果显示 >= go1.25 则跳过此步。
-> 使用 `pip install openviking`（PyPI 预编译包）的用户也可跳过。
+> 使用 `pip install openviking --upgrade --force-reinstall`（PyPI 预编译包）的用户也可跳过。
 
 Linux 源码安装 OpenViking 时需要 Go 编译 AGFS 服务端。
 
@@ -285,7 +285,7 @@ cd OpenViking
 #### 方式 A：从 PyPI 安装（推荐，无需 Go）
 
 ```bash
-python3 -m pip install openviking
+python3 -m pip install openviking --upgrade --force-reinstall
 ```
 
 #### 方式 B：从源码安装（开发者模式，需要 Go）
@@ -627,7 +627,7 @@ python3 -m pip config set global.trusted-host pypi.tuna.tsinghua.edu.cn
 单次安装时临时指定：
 
 ```bash
-python3 -m pip install openviking -i https://pypi.tuna.tsinghua.edu.cn/simple
+python3 -m pip install openviking --upgrade --force-reinstall -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
 ### npm 镜像

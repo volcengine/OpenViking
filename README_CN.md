@@ -67,7 +67,7 @@
 #### Python 包
 
 ```bash
-pip install openviking
+pip install openviking --upgrade --force-reinstall
 ```
 
 #### Rust CLI（可选）

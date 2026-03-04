@@ -7,7 +7,7 @@ OpenViking plugin for [OpenCode](https://opencode.ai). Injects your indexed code
 Install the latest OpenViking and configure `~/.openviking/ov.conf`:
 
 ```bash
-pip install openviking --upgrade
+pip install openviking --upgrade --force-reinstall
 ```
 
 ```json
