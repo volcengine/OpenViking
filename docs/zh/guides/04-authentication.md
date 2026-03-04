@@ -28,7 +28,7 @@ OpenViking 使用两层 API Key 体系：
 启动服务：
 
 ```bash
-python -m openviking serve
+openviking-server
 ```
 
 ## 管理账户和用户

@@ -309,6 +309,9 @@ enum Commands {
         /// Search root URI
         #[arg(short, long, default_value = "viking://")]
         uri: String,
+        /// Maximum number of results
+        #[arg(short = 'n', long = "node-limit", alias = "limit", default_value = "256")]
+        node_limit: i32,
     },
     /// Add memory in one shot (creates session, adds messages, commits)
     AddMemory {
@@ -610,8 +613,8 @@ async fn main() {
             handle_grep(uri, pattern, ignore_case, node_limit, ctx).await
         }
 
-        Commands::Glob { pattern, uri } => {
-            handle_glob(pattern, uri, ctx).await
+        Commands::Glob { pattern, uri, node_limit } => {
+            handle_glob(pattern, uri, node_limit, ctx).await
         }
     };
 
@@ -903,6 +906,12 @@ async fn handle_find(
     threshold: Option<f64>,
     ctx: CliContext,
 ) -> Result<()> {
+    let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
+    if let Some(t) = threshold {
+        params.push(format!("--threshold {}", t));
+    }
+    params.push(format!("\"{}\"", query));
+    print_command_echo("ov find", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
     commands::search::find(&client, &query, &uri, node_limit, threshold, ctx.output_format, ctx.compact).await
 }
@@ -915,6 +924,15 @@ async fn handle_search(
     threshold: Option<f64>,
     ctx: CliContext,
 ) -> Result<()> {
+    let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
+    if let Some(s) = &session_id {
+        params.push(format!("--session-id {}", s));
+    }
+    if let Some(t) = threshold {
+        params.push(format!("--threshold {}", t));
+    }
+    params.push(format!("\"{}\"", query));
+    print_command_echo("ov search", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
     commands::search::search(&client, &query, &uri, session_id, node_limit, threshold, ctx.output_format, ctx.compact).await
 }
@@ -978,14 +996,20 @@ async fn handle_stat(uri: String, ctx: CliContext) -> Result<()> {
 }
 
 async fn handle_grep(uri: String, pattern: String, ignore_case: bool, node_limit: i32, ctx: CliContext) -> Result<()> {
+    let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
+    if ignore_case { params.push("-i".to_string()); }
+    params.push(format!("\"{}\"", pattern));
+    print_command_echo("ov grep", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
     commands::search::grep(&client, &uri, &pattern, ignore_case, node_limit, ctx.output_format, ctx.compact).await
 }
 
 
-async fn handle_glob(pattern: String, uri: String, ctx: CliContext) -> Result<()> {
+async fn handle_glob(pattern: String, uri: String, node_limit: i32, ctx: CliContext) -> Result<()> {
+    let params = vec![format!("--uri={}", uri), format!("-n {}", node_limit), format!("\"{}\"", pattern)];
+    print_command_echo("ov glob", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
-    commands::search::glob(&client, &pattern, &uri, ctx.output_format, ctx.compact).await
+    commands::search::glob(&client, &pattern, &uri, node_limit, ctx.output_format, ctx.compact).await
 }
 
 async fn handle_health(ctx: CliContext) -> Result<()> {

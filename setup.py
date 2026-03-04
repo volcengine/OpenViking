@@ -271,6 +271,9 @@ class CMakeBuildExtension(build_ext):
 
         if sys.platform == "darwin":
             cmake_args.append("-DCMAKE_OSX_DEPLOYMENT_TARGET=10.15")
+            target_arch = os.environ.get("CMAKE_OSX_ARCHITECTURES")
+            if target_arch:
+                cmake_args.append(f"-DCMAKE_OSX_ARCHITECTURES={target_arch}")
         elif sys.platform == "win32":
             cmake_args.extend(["-G", "MinGW Makefiles"])
 

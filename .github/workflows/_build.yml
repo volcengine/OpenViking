@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       os_json:
-        description: 'JSON string of OS to build on'
+        description: 'JSON string of runner labels to build on (ubuntu-latest=x86_64, macos-latest=arm64, macos-15-intel=x86_64, windows-latest=x86_64)'
         required: false
         type: string
         default: '["ubuntu-latest", "macos-latest", "macos-15-intel", "windows-latest"]'
@@ -36,7 +36,7 @@ on:
         type: boolean
         default: true
       os_json:
-        description: 'JSON string of OS to build on'
+        description: 'JSON string of runner labels to build on (ubuntu-latest=x86_64, macos-latest=arm64, macos-15-intel=x86_64, windows-latest=x86_64)'
         required: false
         default: '["ubuntu-latest", "macos-latest", "macos-15-intel", "windows-latest"]'
       python_json:
@@ -46,7 +46,7 @@ on:
 
 jobs:
   build-sdist:
-    name: Build source distribution
+    name: Build source distribution py3.12
     if: inputs.build_sdist
     runs-on: ubuntu-latest
     steps:
@@ -277,7 +277,7 @@ jobs:
         echo "::notice::Build Wheel Version (Linux py${{ matrix.python-version }}): $VERSION"
 
   build-other:
-    name: Build distribution on ${{ matrix.os }}
+    name: Build distribution on ${{ matrix.os == 'macos-latest' && 'macOS arm64 (macos-latest)' || matrix.os == 'macos-15-intel' && 'macOS x86_64 (macos-15-intel)' || matrix.os == 'windows-latest' && 'Windows x86_64 (windows-latest)' || matrix.os }} py${{ matrix.python-version }}
     # Filter out ubuntu-latest from this job since it's handled by build-linux
     if: inputs.build_wheels
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
@@ -303,6 +303,30 @@ jobs:
       uses: actions/setup-python@v6
       with:
         python-version: ${{ matrix.python-version }}
+
+    - name: Configure macOS wheel architecture tag
+      if: runner.os == 'macOS'
+      shell: bash
+      run: |
+        if [[ "${{ matrix.os }}" == "macos-15-intel" ]]; then
+          TARGET_ARCH="x86_64"
+        else
+          TARGET_ARCH="arm64"
+        fi
+
+        MACOS_VERSION="$(python - <<'PY'
+        import platform
+        ver = platform.mac_ver()[0].split(".")
+        major = ver[0] if ver and ver[0] else "15"
+        minor = ver[1] if len(ver) > 1 else "0"
+        print(f"{major}.{minor}")
+        PY
+        )"
+
+        echo "ARCHFLAGS=-arch ${TARGET_ARCH}" >> "$GITHUB_ENV"
+        echo "CMAKE_OSX_ARCHITECTURES=${TARGET_ARCH}" >> "$GITHUB_ENV"
+        echo "_PYTHON_HOST_PLATFORM=macosx-${MACOS_VERSION}-${TARGET_ARCH}" >> "$GITHUB_ENV"
+        echo "Configured macOS wheel platform: macosx-${MACOS_VERSION}-${TARGET_ARCH}"
 
     - name: Set up Go
       uses: actions/setup-go@v6
@@ -380,7 +404,7 @@ jobs:
     - name: Store the distribution packages
       uses: actions/upload-artifact@v6
       with:
-        name: python-package-distributions-${{ matrix.os }}-${{ matrix.python-version }}
+        name: python-package-distributions-${{ matrix.os == 'macos-latest' && 'macos-arm64' || matrix.os == 'macos-15-intel' && 'macos-x86_64' || matrix.os == 'windows-latest' && 'windows-x86_64' || matrix.os }}-${{ matrix.python-version }}
         path: dist/
 
     - name: Display built wheel version
@@ -389,4 +413,4 @@ jobs:
       run: |
         VERSION=$(ls dist/*.whl | head -n 1 | xargs basename | cut -d- -f2)
         echo "Build Version: $VERSION"
-        echo "::notice::Build Wheel Version (${{ matrix.os }} py${{ matrix.python-version }}): $VERSION"
+        echo "::notice::Build Wheel Version (${{ matrix.os == 'macos-latest' && 'macOS arm64 (macos-latest)' || matrix.os == 'macos-15-intel' && 'macOS x86_64 (macos-15-intel)' || matrix.os == 'windows-latest' && 'Windows x86_64 (windows-latest)' || matrix.os }} py${{ matrix.python-version }}): $VERSION"

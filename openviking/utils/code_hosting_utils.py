@@ -179,6 +179,12 @@ def is_git_repo_url(url: str) -> bool:
         # Strip .git suffix from last part for counting
         if path_parts and path_parts[-1].endswith(".git"):
             path_parts[-1] = path_parts[-1][:-4]
-        return len(path_parts) == 2
+        # owner/repo
+        if len(path_parts) == 2:
+            return True
+        # owner/repo/tree/<ref> (branch name or commit SHA)
+        if len(path_parts) == 4 and path_parts[2] == "tree":
+            return True
+        return False
 
     return False

@@ -150,7 +150,7 @@ curl http://localhost:1933/api/v1/search/find \
   -d '{"query": "how to use openviking"}'
 ```
 
-- Server runs as standalone process (`python -m openviking serve`)
+- Server runs as standalone process (`openviking-server`)
 - Clients connect via HTTP API
 - Supports any language that can make HTTP requests
 - See [Server Deployment](../guides/03-deployment.md) for setup

@@ -63,11 +63,11 @@ cp ov.conf.example ov.conf
 
 ```bash
 # 方式一：指定配置文件
-python -m openviking serve --config ./ov.conf
+openviking-server --config ./ov.conf
 
 # 方式二：放到默认路径
 cp ov.conf ~/.openviking/ov.conf
-python -m openviking serve
+openviking-server
 
 # 验证
 curl http://localhost:1933/health

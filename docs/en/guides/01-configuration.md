@@ -548,7 +548,7 @@ export OPENVIKING_CONFIG_FILE=/path/to/ov.conf
 export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 
 # Option 2: Command-line argument (serve command only)
-python -m openviking serve --config /path/to/ov.conf
+openviking-server --config /path/to/ov.conf
 ```
 
 ### ov.conf

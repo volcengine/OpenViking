@@ -149,7 +149,7 @@ curl http://localhost:1933/api/v1/search/find \
   -d '{"query": "how to use openviking"}'
 ```
 
-- Server 作为独立进程运行（`python -m openviking serve`）
+- Server 作为独立进程运行（`openviking-server`）
 - 客户端通过 HTTP API 连接
 - 支持任何能发起 HTTP 请求的语言
 - 参见 [服务部署](../guides/03-deployment.md) 了解配置方法

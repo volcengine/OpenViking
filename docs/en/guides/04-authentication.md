@@ -28,7 +28,7 @@ Configure the root API key in the `server` section of `ov.conf`:
 Start the server:
 
 ```bash
-python -m openviking serve
+openviking-server
 ```
 
 ## Managing Accounts and Users

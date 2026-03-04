@@ -15,7 +15,6 @@ import json
 import os
 import shutil
 import subprocess
-import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -63,11 +62,7 @@ def _health_check(url: str, timeout: float = 1.2) -> bool:
 
 
 def _resolve_local_data_path(project_dir: Path, ov_conf: Dict[str, Any]) -> str:
-    raw = (
-        ov_conf.get("storage", {})
-        .get("vectordb", {})
-        .get("path", "./data")
-    )
+    raw = ov_conf.get("storage", {}).get("vectordb", {}).get("path", "./data")
     if not raw:
         raw = "./data"
     p = Path(str(raw)).expanduser()
@@ -134,8 +129,14 @@ class OVClient:
     def create_session(self) -> Dict[str, Any]:
         return self.client.create_session()
 
-    def add_message(self, session_id: str, role: str, content: str) -> Dict[str, Any]:
-        return self.client.add_message(session_id, role, content)
+    def add_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str | None = None,
+        parts: list[dict] | None = None,
+    ) -> Dict[str, Any]:
+        return self.client.add_message(session_id, role, content, parts)
 
     def commit_session(self, session_id: str) -> Dict[str, Any]:
         return self.client.commit_session(session_id)
@@ -623,7 +624,9 @@ def cmd_recall(args: argparse.Namespace) -> int:
             uri = item.get("uri", "")
             if not uri:
                 continue
-            if uri not in dedup or float(item.get("score", 0.0)) > float(dedup[uri].get("score", 0.0)):
+            if uri not in dedup or float(item.get("score", 0.0)) > float(
+                dedup[uri].get("score", 0.0)
+            ):
                 dedup[uri] = item
 
         ranked = sorted(

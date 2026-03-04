@@ -410,10 +410,11 @@ impl HttpClient {
     }
 
 
-    pub async fn glob(&self, pattern: &str, uri: &str) -> Result<serde_json::Value> {
+    pub async fn glob(&self, pattern: &str, uri: &str, node_limit: i32) -> Result<serde_json::Value> {
         let body = serde_json::json!({
             "pattern": pattern,
             "uri": uri,
+            "node_limit": node_limit,
         });
         self.post("/api/v1/search/glob", &body).await
     }

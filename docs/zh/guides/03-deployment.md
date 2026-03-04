@@ -6,10 +6,10 @@ OpenViking 可以作为独立的 HTTP 服务器运行，允许多个客户端通
 
 ```bash
 # 配置文件在默认路径 ~/.openviking/ov.conf 时，直接启动
-python -m openviking serve
+openviking-server
 
 # 配置文件在其他位置时，通过 --config 指定
-python -m openviking serve --config /path/to/ov.conf
+openviking-server --config /path/to/ov.conf
 
 # 验证服务器是否运行
 curl http://localhost:1933/health
@@ -28,13 +28,13 @@ curl http://localhost:1933/health
 
 ```bash
 # 使用默认配置
-python -m openviking serve
+openviking-server
 
 # 使用自定义端口
-python -m openviking serve --port 8000
+openviking-server --port 8000
 
 # 指定配置文件、主机地址和端口
-python -m openviking serve --config /path/to/ov.conf --host 127.0.0.1 --port 8000
+openviking-server --config /path/to/ov.conf --host 127.0.0.1 --port 8000
 ```
 
 ## 配置
@@ -76,7 +76,7 @@ python -m openviking serve --config /path/to/ov.conf --host 127.0.0.1 --port 800
 ```
 
 ```bash
-python -m openviking serve
+openviking-server
 ```
 
 ### 混合模式（远程存储）
@@ -93,7 +93,7 @@ python -m openviking serve
 ```
 
 ```bash
-python -m openviking serve
+openviking-server
 ```
 
 ## 使用 Systemd 部署服务（推荐）
