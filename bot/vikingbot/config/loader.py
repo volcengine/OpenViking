@@ -83,7 +83,7 @@ def load_config(config_path: Path | None = None) -> Config:
             if isinstance(storage_data, dict) and "workspace" in storage_data:
                 bot_data["storage_workspace"] = storage_data["workspace"]
             else:
-                bot_data["storage_workspace"] = "~/.openviking_data"
+                bot_data["storage_workspace"] = "~/.openviking/data"
 
             # Extract and merge vlm config for model settings only
             # Provider config is directly read from OpenVikingConfig at runtime
