@@ -52,6 +52,7 @@ class MarkdownParser(BaseParser):
     DEFAULT_MAX_SECTION_SIZE = 1024  # Maximum tokens per section
     DEFAULT_MIN_SECTION_TOKENS = 512  # Minimum tokens to create a separate section
     MAX_MERGED_FILENAME_LENGTH = 32  # Maximum length for merged section filenames
+    MAX_CHILDREN_PER_DIR = 50  # Maximum files per directory
 
     def __init__(
         self,
@@ -399,10 +400,24 @@ class MarkdownParser(BaseParser):
         if not headings:
             logger.info("[MarkdownParser] No headings, splitting by paragraphs")
             parts = self._smart_split_content(content, max_size)
-            for part_idx, part in enumerate(parts, 1):
-                part_file = f"{root_dir}/{doc_name}_{part_idx}.md"
-                await viking_fs.write_file(part_file, part)
-            logger.debug(f"[MarkdownParser] Split into {len(parts)} parts")
+            max_children = self.config.max_children_per_dir or self.MAX_CHILDREN_PER_DIR
+            groups = self._auto_group_sections(parts, doc_name, max_children)
+
+            for group_idx, (subdir_name, group_parts) in enumerate(groups):
+                if subdir_name:
+                    subdir_path = f"{root_dir}/{subdir_name}"
+                    await viking_fs.mkdir(subdir_path)
+                    base_path = subdir_path
+                else:
+                    base_path = root_dir
+
+                offset = group_idx * max_children
+                for part_idx, part in enumerate(group_parts, offset + 1):
+                    await viking_fs.write_file(f"{base_path}/{doc_name}_{part_idx}.md", part)
+
+            logger.debug(
+                f"[MarkdownParser] Split into {len(parts)} parts across {len(groups)} groups"
+            )
             return
 
         # Build virtual section list (pre-heading content as first virtual section)
@@ -450,8 +465,6 @@ class MarkdownParser(BaseParser):
         min_size: int,
     ) -> None:
         """Process sections with small section merge logic."""
-        viking_fs = self._get_viking_fs()
-
         # Expand section info
         expanded = [
             section
@@ -459,6 +472,39 @@ class MarkdownParser(BaseParser):
             else self._get_section_info(content, headings, section["heading_idx"])
             for section in sections
         ]
+
+        # Auto-group when too many sibling sections into subdirectories
+        max_children = self.config.max_children_per_dir or self.MAX_CHILDREN_PER_DIR
+        if len(expanded) > max_children:
+            viking_fs = self._get_viking_fs()
+            for i in range(0, len(expanded), max_children):
+                chunk = expanded[i : i + max_children]
+                first_name = chunk[0]["name"]
+                last_name = chunk[-1]["name"]
+                subdir_name = self._sanitize_for_path(f"{first_name}_to_{last_name}")
+                subdir_path = f"{parent_dir}/{subdir_name}"
+                await viking_fs.mkdir(subdir_path, exist_ok=True)
+                await self._process_expanded_sections(
+                    content, headings, subdir_path, chunk, parent_name, max_size, min_size
+                )
+            return
+
+        await self._process_expanded_sections(
+            content, headings, parent_dir, expanded, parent_name, max_size, min_size
+        )
+
+    async def _process_expanded_sections(
+        self,
+        content: str,
+        headings: List[Tuple[int, int, str, int]],
+        parent_dir: str,
+        expanded: List[Dict[str, Any]],
+        parent_name: str,
+        max_size: int,
+        min_size: int,
+    ) -> None:
+        """Process a list of already-expanded sections with merge logic."""
+        viking_fs = self._get_viking_fs()
 
         pending = []
         for sec in expanded:
@@ -689,3 +735,29 @@ class MarkdownParser(BaseParser):
         cjk_chars = len(re.findall(r"[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]", content))
         other_chars = len(re.findall(r"[^\s]", content)) - cjk_chars
         return int(cjk_chars * 0.7 + other_chars * 0.3)
+
+    def _auto_group_sections(
+        self, parts: List[str], doc_name: str, group_size: int
+    ) -> List[Tuple[str, List[str]]]:
+        """Group flat parts into subdirectories.
+
+        Args:
+            parts: List of content parts
+            doc_name: Document name
+            group_size: Maximum number of files per group
+
+        Returns:
+            List of (subdir_name, parts) tuples.
+            Empty subdir_name means no subdirectory needed.
+        """
+        if len(parts) <= group_size:
+            return [("", parts)]
+
+        groups = []
+        for i in range(0, len(parts), group_size):
+            chunk = parts[i : i + group_size]
+            start = i + 1
+            end = i + len(chunk)
+            subdir = f"{doc_name}_{start:03d}-{end:03d}"
+            groups.append((subdir, chunk))
+        return groups

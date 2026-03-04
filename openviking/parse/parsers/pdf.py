@@ -14,6 +14,7 @@ to the MarkdownParser after conversion.
 
 import logging
 import time
+from collections import defaultdict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -190,73 +191,54 @@ class PDFParser(BaseParser):
 
     def _extract_bookmarks(self, pdf) -> List[Dict[str, Any]]:
         """
-        Extract PDF bookmarks/outlines and map them to page numbers.
-
-        Uses pdfplumber's underlying pdfminer to access the PDF document
-        outline (table of contents). Each bookmark entry is mapped to a
-        page number by resolving its destination object.
-
-        Args:
-            pdf: An open pdfplumber PDF object
-
-        Returns:
-            List of dicts with keys: title, level, page_num (1-based).
-            Empty list if no bookmarks are found or extraction fails.
+        Returns: [{level: int, title: str, page_num: int(1-based)}]
         """
-        bookmarks: List[Dict[str, Any]] = []
-
         try:
-            # Access pdfminer's document object through pdfplumber
-            doc = pdf.doc
-            if not hasattr(doc, "get_outlines"):
+            if not hasattr(pdf, "doc") or not hasattr(pdf.doc, "get_outlines"):
+                return []
+
+            outlines = pdf.doc.get_outlines()
+            if not outlines:
                 return []
 
             # Build a mapping from pdfminer page objects to page numbers
-            # pdfplumber pages are 0-indexed internally
-            objid_to_pagenum: Dict[int, int] = {}
-            for i, page in enumerate(pdf.pages):
-                if hasattr(page, "page_obj") and hasattr(page.page_obj, "objid"):
-                    objid_to_pagenum[page.page_obj.objid] = i + 1  # 1-based
+            objid_to_pagenum = {
+                page.page_obj.objid: i + 1
+                for i, page in enumerate(pdf.pages)
+                if hasattr(page, "page_obj") and hasattr(page.page_obj, "objid")
+            }
 
-            for level, title, dest, _a, _se in doc.get_outlines():
+            bookmarks = []
+            for level, title, dest, _action, _se in outlines:
                 if not title or not title.strip():
                     continue
 
                 page_num = None
-
-                # Resolve destination to page number
-                # dest can be various types depending on the PDF structure
-                if dest:
-                    try:
-                        # dest is typically a list where first element is a page reference
-                        if isinstance(dest, (list, tuple)) and len(dest) > 0:
-                            page_ref = dest[0]
-                            if hasattr(page_ref, "objid"):
-                                page_num = objid_to_pagenum.get(page_ref.objid)
-                            elif hasattr(page_ref, "resolve"):
-                                resolved = page_ref.resolve()
-                                if hasattr(resolved, "objid"):
-                                    page_num = objid_to_pagenum.get(resolved.objid)
-                    except Exception:
-                        pass  # Best-effort resolution
-
-                # Cap heading level to 1-6 for markdown compatibility
-                md_level = min(max(level, 1), 6)
+                try:
+                    if dest and len(dest) > 0:
+                        page_ref = dest[0]
+                        if hasattr(page_ref, "objid"):
+                            page_num = objid_to_pagenum.get(page_ref.objid)
+                        elif hasattr(page_ref, "resolve"):
+                            resolved = page_ref.resolve()
+                            if hasattr(resolved, "objid"):
+                                page_num = objid_to_pagenum.get(resolved.objid)
+                except Exception:
+                    pass
 
                 bookmarks.append(
                     {
+                        "level": min(max(level, 1), 6),
                         "title": title.strip(),
-                        "level": md_level,
-                        "page_num": page_num,  # May be None if resolution failed
+                        "page_num": page_num,
                     }
                 )
 
-            logger.info(f"Extracted {len(bookmarks)} bookmarks from PDF outline")
+            return bookmarks
 
         except Exception as e:
-            logger.debug(f"Bookmark extraction failed (PDF may have no outlines): {e}")
-
-        return bookmarks
+            logger.warning(f"Failed to extract bookmarks: {e}")
+            return []
 
     async def _convert_local(
         self, pdf_path: Path, storage=None, resource_name: Optional[str] = None
@@ -306,24 +288,23 @@ class PDFParser(BaseParser):
             with pdfplumber.open(str(pdf_path)) as pdf:
                 meta["total_pages"] = len(pdf.pages)
 
-                # Step 1: Extract bookmarks and group by page number
+                # Extract bookmarks and group by page number
                 bookmarks = self._extract_bookmarks(pdf)
                 meta["bookmarks_extracted"] = len(bookmarks)
+                logger.info(f"Extracted {len(bookmarks)} bookmarks")
 
-                # Build a lookup: page_num -> list of bookmarks to inject before that page's content
-                bookmarks_by_page: Dict[int, List[Dict[str, Any]]] = {}
+                # Build a lookup: page_num -> list of bookmarks
+                bookmarks_by_page = defaultdict(list)
                 for bm in bookmarks:
-                    pg = bm.get("page_num")
-                    if pg is not None:
-                        bookmarks_by_page.setdefault(pg, []).append(bm)
+                    if bm["page_num"]:
+                        bookmarks_by_page[bm["page_num"]].append(bm)
 
-                # Step 2: Extract content page by page, injecting bookmark headings
                 for page_num, page in enumerate(pdf.pages, 1):
-                    # Inject bookmark headings for this page (before page content)
-                    if page_num in bookmarks_by_page:
-                        for bm in bookmarks_by_page[page_num]:
-                            heading_prefix = "#" * bm["level"]
-                            parts.append(f"{heading_prefix} {bm['title']}")
+                    # Inject bookmark headings for this page
+                    page_bookmarks = bookmarks_by_page.get(page_num, [])
+                    for bm in page_bookmarks:
+                        heading_prefix = "#" * bm["level"]
+                        parts.append(f"\n{heading_prefix} {bm['title']}\n")
 
                     # Extract text
                     text = page.extract_text()

@@ -37,6 +37,9 @@ class ParserConfig:
     max_section_size: int = 1000  # Maximum tokens per section before splitting
     section_size_flexibility: float = 0.3  # Allow 30% overflow to maintain coherence
 
+    # Directory structure configuration
+    max_children_per_dir: int = 50  # Maximum files per directory (0=unlimited)
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ParserConfig":
         """
