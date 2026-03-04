@@ -55,6 +55,38 @@ class AgentLoop:
         sandbox_manager: SandboxManager | None = None,
         config: Config = None,
     ):
+        """
+        Initialize the AgentLoop with all required dependencies and configuration.
+
+        Args:
+            bus: MessageBus instance for publishing and subscribing to messages.
+            provider: LLMProvider instance for making LLM calls.
+            workspace: Path to the workspace directory for file operations.
+            model: Optional model identifier. If not provided, uses the provider's default.
+            max_iterations: Maximum number of tool execution iterations per message (default: 50).
+            memory_window: Maximum number of messages to keep in session memory (default: 50).
+            brave_api_key: Optional API key for Brave search integration.
+            exa_api_key: Optional API key for Exa search integration.
+            gen_image_model: Optional model identifier for image generation (default: openai/doubao-seedream-4-5-251128).
+            exec_config: Optional configuration for the exec tool (command execution).
+            cron_service: Optional CronService for scheduled task management.
+            session_manager: Optional SessionManager for session persistence. If not provided, a new one is created.
+            sandbox_manager: Optional SandboxManager for sandboxed operations.
+            config: Optional Config object with full configuration. Used if other parameters are not provided.
+
+        Note:
+            The AgentLoop creates its own ContextBuilder, SessionManager (if not provided),
+            ToolRegistry, and SubagentManager during initialization.
+
+        Example:
+            >>> loop = AgentLoop(
+            ...     bus=message_bus,
+            ...     provider=llm_provider,
+            ...     workspace=Path("/path/to/workspace"),
+            ...     model="gpt-4",
+            ...     max_iterations=30,
+            ... )
+        """
         from vikingbot.config.schema import ExecToolConfig
 
         self.bus = bus
@@ -93,7 +125,29 @@ class AgentLoop:
     async def _publish_thinking_event(
         self, session_key: SessionKey, event_type: OutboundEventType, content: str
     ) -> None:
-        """Publish a thinking event to the bus."""
+        """
+        Publish a thinking event to the message bus.
+
+        Thinking events are used to communicate the agent's internal processing
+        state to the user, such as when the agent is executing a tool or
+        processing a complex request.
+
+        Args:
+            session_key: The session key identifying the conversation.
+            event_type: The type of thinking event (e.g., THINKING, TOOL_START).
+            content: The message content to display to the user.
+
+        Note:
+            This is an internal method used by the agent loop to communicate
+            progress to users during long-running operations.
+
+        Example:
+            >>> await self._publish_thinking_event(
+            ...     session_key=SessionKey(channel="telegram", chat_id="123"),
+            ...     event_type=OutboundEventType.TOOL_START,
+            ...     content="Executing web search..."
+            ... )
+        """
         await self.bus.publish_outbound(
             OutboundMessage(
                 session_key=session_key,
