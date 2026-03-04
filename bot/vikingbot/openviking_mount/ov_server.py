@@ -3,6 +3,7 @@ import hashlib
 from typing import List, Dict, Any, Optional
 
 from loguru import logger
+import time
 
 import openviking as ov
 from vikingbot.config.loader import load_config
@@ -346,6 +347,7 @@ class VikingClient:
 
         # For remote mode, try to get user's API key and create a dedicated client
         client = self.client
+        start = time.time()
         if self.mode == "remote" and user_id and user_id != self.admin_user_id and self._apikey_manager:
             user_api_key = await self._get_or_create_user_apikey(user_id)
             if user_api_key:
@@ -419,6 +421,7 @@ class VikingClient:
         result = await session.commit()
         if client is not self.client:
             await client.close()
+        logger.info(f"time spent: {time.time() - start}")
         logger.debug(f"Message add ed to OpenViking session {session_id}, user: {user_id}")
         return {"success": result["status"]}
 
@@ -430,17 +433,17 @@ class VikingClient:
 async def main_test():
     client = await VikingClient.create(agent_id="shared")
     # res = client.list_resources()
-    res = await client.search("头有点疼", target_uri="viking://user/memories/")
+    # res = await client.search("头有点疼", target_uri="viking://user/memories/")
     # res = await client.get_viking_memory_context("123", current_message="头疼", history=[])
     # res = await client.search_memory("你好", "user_1")
     # res = await client.list_resources("viking://resources/")
     # res = await client.read_content("viking://user/memories/profile.md", level="read")
     # res = await client.add_resource("/Users/bytedance/Documents/论文/吉比特年报.pdf", "吉比特年报")
-    # res = await client.commit(
-    #     session_id="99999",
-    #     messages=[{"role": "user", "content": "我叫吴彦祖"}],
-    #     user_id="1010101010",
-    # )
+    res = await client.commit(
+        session_id="99999",
+        messages=[{"role": "user", "content": "你好"}],
+        user_id="1010101010",
+    )
     # res = await client.commit("1234", [{"role": "user", "content": "帮我搜索 Python asyncio 教程"}
     #                                    ,{"role": "assistant", "content": "我来帮你r搜索 Python asyncio 相关的教程。"}])
     print(res)
@@ -462,5 +465,5 @@ async def account_test():
 
 
 if __name__ == "__main__":
-    # asyncio.run(main_test())
-    asyncio.run(account_test())
+    asyncio.run(main_test())
+    # asyncio.run(account_test())
