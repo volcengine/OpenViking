@@ -119,8 +119,9 @@ class UnifiedResourceProcessor:
         **kwargs,
     ) -> ParseResult:
         """Process file with unified parsing."""
-        # Check if it's a zip file
-        if zipfile.is_zipfile(file_path):
+        ext = file_path.suffix.lower()
+        # Only treat .zip files as archives to extract.
+        if ext == ".zip" and zipfile.is_zipfile(file_path):
             temp_dir = Path(tempfile.mkdtemp())
             try:
                 with zipfile.ZipFile(file_path, "r") as zipf:
