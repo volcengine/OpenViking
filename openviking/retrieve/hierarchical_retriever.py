@@ -16,6 +16,7 @@ from openviking.retrieve.memory_lifecycle import hotness_score
 from openviking.server.identity import RequestContext, Role
 from openviking.storage import VikingVectorIndexBackend
 from openviking.storage.viking_fs import get_viking_fs
+from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.retrieve.types import (
     ContextType,
     MatchedContext,
@@ -398,7 +399,7 @@ class HierarchicalRetriever:
             updated_at_raw = c.get("updated_at")
             if isinstance(updated_at_raw, str):
                 try:
-                    updated_at_val = datetime.fromisoformat(updated_at_raw)
+                    updated_at_val = parse_iso_datetime(updated_at_raw)
                 except (ValueError, TypeError):
                     updated_at_val = None
             elif isinstance(updated_at_raw, datetime):

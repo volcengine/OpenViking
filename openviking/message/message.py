@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from typing import List, Literal, Optional
 
 from openviking.message.part import ContextPart, Part, TextPart, ToolPart
-from openviking.utils.time_utils import format_iso8601
+from openviking.utils.time_utils import format_iso8601, parse_iso_datetime
 
 
 @dataclass
@@ -108,7 +108,7 @@ class Message:
             id=data["id"],
             role=data["role"],
             parts=parts,
-            created_at=datetime.fromisoformat(data["created_at"]),
+            created_at=parse_iso_datetime(data["created_at"]),
         )
 
     @classmethod
