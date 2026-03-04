@@ -140,10 +140,12 @@ def trace(
                 session_id = get_current_session_id()
                 logger.debug(f"[TRACE] No session_id extracted, using context: {session_id}")
             else:
-                logger.info(f"[TRACE] Extracted session_id: {session_id}")
+                #logger.info(f"[TRACE] Extracted session_id: {session_id}")
+                pass
 
             if user_id:
-                logger.info(f"[TRACE] Extracted user_id: {user_id}")
+                #logger.info(f"[TRACE] Extracted user_id: {user_id}")
+                pass
 
             # Use context manager to set session_id for nested operations
             if session_id:
@@ -153,9 +155,9 @@ def trace(
 
                     langfuse = LangfuseClient.get_instance()
                     has_propagate = hasattr(langfuse, "propagate_attributes")
-                    logger.info(f"[LANGFUSE] Client status: enabled={langfuse.enabled}, has_propagate_attributes={has_propagate}")
+                    # logger.info(f"[LANGFUSE] Client status: enabled={langfuse.enabled}, has_propagate_attributes={has_propagate}")
                     if langfuse.enabled and has_propagate:
-                        logger.info(f"[LANGFUSE] Starting trace with attributes: session_id={session_id}, user_id={user_id}")
+                        # logger.info(f"[LANGFUSE] Starting trace with attributes: session_id={session_id}, user_id={user_id}")
                         with langfuse.propagate_attributes(session_id=session_id, user_id=user_id):
                             return await wrapped_func(*args, **kwargs)
                     else:

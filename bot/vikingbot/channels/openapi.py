@@ -85,16 +85,24 @@ class OpenAPIChannel(BaseChannel):
         config: OpenAPIChannelConfig,
         bus: MessageBus,
         workspace_path: Path | None = None,
+        app: "FastAPI | None" = None,
     ):
         super().__init__(config, bus, workspace_path)
         self.config = config
         self._pending: Dict[str, PendingResponse] = {}
         self._sessions: Dict[str, Dict[str, Any]] = {}
         self._router: Optional[APIRouter] = None
+        self._app = app  # External FastAPI app to register routes on
+        self._server: Optional[asyncio.Task] = None  # Server task
 
     async def start(self) -> None:
-        """Start the channel - nothing to do as HTTP routes are handled externally."""
+        """Start the channel - register routes to external FastAPI app if provided."""
         self._running = True
+
+        # Register routes to external FastAPI app
+        if self._app is not None:
+            self._setup_routes()
+
         logger.info("OpenAPI channel started")
 
     async def stop(self) -> None:
@@ -245,6 +253,18 @@ class OpenAPIChannel(BaseChannel):
             return {"deleted": True}
 
         return router
+
+    def _setup_routes(self) -> None:
+        """Setup routes on the external FastAPI app."""
+        if self._app is None:
+            logger.warning("No external FastAPI app provided, cannot setup routes")
+            return
+
+        # Get the router and include it at root path
+        # Note: openviking-server adds its own /bot/v1 prefix when proxying
+        router = self.get_router()
+        self._app.include_router(router, prefix="/bot/v1")
+        logger.info("OpenAPI routes registered at root path")
 
     async def _handle_chat(self, request: ChatRequest) -> ChatResponse:
         """Handle a chat request."""

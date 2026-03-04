@@ -26,23 +26,96 @@ class ToolRegistry:
         self.langfuse = LangfuseClient.get_instance()
 
     def register(self, tool: Tool) -> None:
-        """Register a tool."""
+        """
+        Register a tool in the registry.
+
+        Adds the tool to the internal registry dictionary, using the tool's name
+        as the key. If a tool with the same name already exists, it will be
+        silently overwritten.
+
+        Args:
+            tool: The Tool instance to register. Must have a unique name property.
+
+        Note:
+            Currently, duplicate registration silently overwrites the existing tool.
+            Consider checking for duplicates if this behavior is not desired.
+
+        Example:
+            >>> registry = ToolRegistry()
+            >>> tool = MyTool()
+            >>> registry.register(tool)
+            >>> assert registry.has(tool.name)
+        """
         self._tools[tool.name] = tool
 
     def unregister(self, name: str) -> None:
-        """Unregister a tool by name."""
+        """
+        Unregister a tool by name.
+
+        Removes the tool with the specified name from the registry. If no tool
+        with that name exists, this operation is a no-op (no error is raised).
+
+        Args:
+            name: The name of the tool to unregister.
+
+        Example:
+            >>> registry.register(my_tool)
+            >>> registry.unregister(my_tool.name)
+            >>> assert not registry.has(my_tool.name)
+        """
         self._tools.pop(name, None)
 
     def get(self, name: str) -> Tool | None:
-        """Get a tool by name."""
+        """
+        Get a tool by name.
+
+        Retrieves the tool with the specified name from the registry.
+
+        Args:
+            name: The name of the tool to retrieve.
+
+        Returns:
+            The Tool instance if found, or None if no tool with that name exists.
+
+        Example:
+            >>> tool = registry.get("read_file")
+            >>> if tool:
+            ...     print(f"Found tool: {tool.description}")
+        """
         return self._tools.get(name)
 
     def has(self, name: str) -> bool:
-        """Check if a tool is registered."""
+        """
+        Check if a tool is registered.
+
+        Args:
+            name: The name of the tool to check.
+
+        Returns:
+            True if a tool with the given name is registered, False otherwise.
+
+        Example:
+            >>> if registry.has("read_file"):
+            ...     print("Read file tool is available")
+        """
         return name in self._tools
 
     def get_definitions(self) -> list[dict[str, Any]]:
-        """Get all tool definitions in OpenAI format."""
+        """
+        Get all tool definitions in OpenAI format.
+
+        Converts all registered tools to the OpenAI function schema format,
+        suitable for use with OpenAI's function calling API.
+
+        Returns:
+            List of tool schemas in OpenAI format, where each schema contains
+            the tool's type, name, description, and parameters.
+
+        Example:
+            >>> definitions = registry.get_definitions()
+            >>> for defn in definitions:
+            ...     print(f"Tool: {defn['function']['name']}")
+        """
         return [tool.to_schema() for tool in self._tools.values()]
 
     async def execute(

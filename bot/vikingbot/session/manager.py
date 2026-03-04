@@ -67,9 +67,29 @@ class Session:
 
 class SessionManager:
     """
-    Manages conversation sessions.
+    Manages conversation sessions with persistence and caching.
 
-    Sessions are stored as JSONL files in sessions directory.
+    SessionManager handles the lifecycle of conversation sessions, including
+    creation, retrieval, caching, and persistent storage. Sessions are stored
+    as JSONL files in a designated directory for durability.
+
+    The manager maintains an in-memory cache of active sessions to improve
+    performance and reduce disk I/O. Sessions are automatically persisted when
+    modified.
+
+    Attributes:
+        bot_data_path: Path to the bot's data directory.
+        workspace: Path to the workspace directory within bot_data.
+        sessions_dir: Path where session JSONL files are stored.
+        _cache: In-memory cache mapping SessionKey to Session objects.
+        sandbox_manager: Optional sandbox manager for isolated operations.
+
+    Example:
+        >>> manager = SessionManager(Path("/path/to/bot/data"))
+        >>> session_key = SessionKey(channel="telegram", chat_id="12345")
+        >>> session = manager.get_or_create(session_key)
+        >>> session.add_message("user", "Hello!")
+        >>> await manager.save(session)
     """
 
     def __init__(
