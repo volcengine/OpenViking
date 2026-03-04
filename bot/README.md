@@ -787,7 +787,7 @@ You only need to add sandbox configuration when you want to change these default
 ```json
 {
   "sandbox": {
-    "backend": "opensandbox",
+    "backend": "srt",
     "mode": "per-session"
   }
 }
@@ -797,10 +797,8 @@ You only need to add sandbox configuration when you want to change these default
 | Backend | Description |
 |---------|-------------|
 | `direct` | (Default) Runs code directly on the host |
-| `docker` | Uses Docker containers for isolation |
 | `opensandbox` | Uses OpenSandbox service |
 | `srt` | Uses Anthropic's SRT sandbox runtime |
-| `aiosandbox` | Uses AIO Sandbox service |
 
 **Available Modes:**
 | Mode | Description |
@@ -861,7 +859,6 @@ You only need to add sandbox configuration when you want to change these default
     "backend": "srt",
     "backends": {
       "srt": {
-        "settingsPath": "~/.vikingbot/srt-settings.json",
         "nodePath": "node",
         "network": {
           "allowedDomains": [],

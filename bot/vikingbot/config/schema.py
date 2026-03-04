@@ -500,7 +500,6 @@ class DirectBackendConfig(BaseModel):
 class SrtBackendConfig(BaseModel):
     """SRT backend configuration."""
 
-    settings_path: str = "~/.vikingbot/srt-settings.json"
     node_path: str = "node"
     network: SandboxNetworkConfig = Field(default_factory=SandboxNetworkConfig)
     filesystem: SandboxFilesystemConfig = Field(default_factory=SandboxFilesystemConfig)
