@@ -603,8 +603,11 @@ async fn handle_add_resource(
     no_directly_upload_media: bool,
     ctx: CliContext,
 ) -> Result<()> {
-    // Validate path: if it's a local path, check if it exists
-    if !path.starts_with("http://") && !path.starts_with("https://") {
+    let is_url = path.starts_with("http://") 
+        || path.starts_with("https://")
+        || path.starts_with("git@");
+    
+    if !is_url {
         use std::path::Path;
         
         // Unescape path: replace backslash followed by space with just space
