@@ -58,6 +58,9 @@ class SkillProcessor:
             Processing result with status and metadata
         """
 
+        if data is None:
+            raise ValueError("Skill data cannot be None")
+
         config = get_openviking_config()
 
         skill_dict, auxiliary_files, base_path = self._parse_skill(data)
@@ -115,6 +118,9 @@ class SkillProcessor:
 
     def _parse_skill(self, data: Any) -> tuple[Dict[str, Any], List[Path], Optional[Path]]:
         """Parse skill data from various formats."""
+        if data is None:
+            raise ValueError("Skill data cannot be None")
+
         auxiliary_files = []
         base_path = None
 
