@@ -31,6 +31,7 @@ class ContextBuilder:
         sandbox_manager: SandboxManager | None = None,
         sender_id: str = None,
         is_group_chat: bool = False,
+        eval: bool = False,
     ):
         self.workspace = workspace
         self._templates_ensured = False
@@ -39,6 +40,7 @@ class ContextBuilder:
         self._skills = None
         self._sender_id = sender_id
         self._is_group_chat = is_group_chat
+        self._eval = eval
 
     @property
     def memory(self):
@@ -234,7 +236,8 @@ Always be helpful, accurate, and concise. When using tools, think step by step: 
         # logger.debug(f"system_prompt: {system_prompt}")
 
         # History
-        messages.extend(history)
+        if not self._eval:
+            messages.extend(history)
 
         # Current message (with optional image attachments)
         user_content = self._build_user_content(current_message, media)

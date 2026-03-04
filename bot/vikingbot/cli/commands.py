@@ -244,7 +244,7 @@ def gateway(
     asyncio.run(run())
 
 
-def prepare_agent_loop(config, bus, session_manager, cron, quiet: bool = False):
+def prepare_agent_loop(config, bus, session_manager, cron, quiet: bool = False, eval: bool = False):
     sandbox_parent_path = config.bot_data_path
     source_workspace_path = get_source_workspace_path()
     sandbox_manager = SandboxManager(config, sandbox_parent_path, source_workspace_path)
@@ -285,6 +285,7 @@ def prepare_agent_loop(config, bus, session_manager, cron, quiet: bool = False):
         session_manager=session_manager,
         sandbox_manager=sandbox_manager,
         config=config,
+        eval=eval
     )
     # Set the agent reference in cron if it uses the holder pattern
     if hasattr(cron, '_agent_holder'):
@@ -502,7 +503,7 @@ def chat(
         session_id = "cli__chat__default"
     cron = prepare_cron(bus, quiet=is_single_turn)
     channels = prepare_agent_channel(config, bus, mode, message, session_id, markdown, logs, eval)
-    agent_loop = prepare_agent_loop(config, bus, session_manager, cron, quiet=is_single_turn)
+    agent_loop = prepare_agent_loop(config, bus, session_manager, cron, quiet=is_single_turn, eval=eval)
 
     async def run():
         if is_single_turn:

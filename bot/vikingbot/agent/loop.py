@@ -54,6 +54,7 @@ class AgentLoop:
         session_manager: SessionManager | None = None,
         sandbox_manager: SandboxManager | None = None,
         config: Config = None,
+        eval: bool = False,
     ):
         from vikingbot.config.schema import ExecToolConfig
 
@@ -78,6 +79,7 @@ class AgentLoop:
             self.config.bot_data_path, sandbox_manager=sandbox_manager
         )
         self.tools = ToolRegistry()
+        self._eval = eval
         self.subagents = SubagentManager(
             provider=provider,
             workspace=workspace,
@@ -350,7 +352,7 @@ class AgentLoop:
 
         from vikingbot.agent.context import ContextBuilder
         message_context = ContextBuilder(
-            message_workspace, sandbox_manager=self.sandbox_manager, sender_id=msg.sender_id, is_group_chat=is_group_chat
+            message_workspace, sandbox_manager=self.sandbox_manager, sender_id=msg.sender_id, is_group_chat=is_group_chat, eval=self._eval
         )
 
         # Build initial messages (use get_history for LLM-formatted messages)
