@@ -120,6 +120,23 @@
 
 ---
 
+## Step 6：反射加载模型
+
+对于没有提交到仓库，或者在第三方仓库的adapter，可以在`from_config`中动态加载。
+
+例如：想要加载 tests.storage.mock_backend.MockCollectionAdapter
+则需要在配置中加入
+```
+class MockConfig:
+    def __init__(self):
+    self.backend = "tests.storage.mock_backend.MockCollectionAdapter"
+    self.name = "mock_test_collection"
+    self.custom_param1 = "val1"
+    self.custom_param2 = 123
+```
+
+---
+
 ## 5. Filter 与查询兼容规则
 
 - Adapter 需要兼容统一过滤表达。

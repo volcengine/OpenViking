@@ -1,5 +1,10 @@
-
 import unittest
+import sys
+import os
+
+# Add open_test path to ensure modules can be found
+sys.path.insert(0, "/cloudide/workspace/open_test")
+
 from openviking.storage.vectordb.project.vikingdb_project import get_or_create_vikingdb_project, VikingDBProject
 from openviking.storage.vectordb.collection.vikingdb_collection import VikingDBCollection
 
@@ -13,22 +18,14 @@ class TestDynamicLoading(unittest.TestCase):
 
     def test_explicit_loading(self):
         # Test with explicit configuration pointing to MockJoiner
-        # MockJoiner is in tests/mock_joiner.py, so we need to make sure tests module is importable
-        # or use a path that python can find.
-        # Assuming tests package is available or we use relative import if possible, 
-        # but dynamic loader uses importlib.import_module which needs module path.
+        # MockJoiner is now in tests.storage.mock_backend
         
-        # We'll use the MockJoiner we just created.
-        # Since 'tests' might not be a package in installed environment, but here we are in source.
-        # We might need to adjust python path or assume tests is importable.
-        import sys
-        import os
-        sys.path.append(os.getcwd())
-
+        # We assume tests package structure is available from /cloudide/workspace/open_test
+        
         config = {
             "Host": "test_host", 
             "Headers": {"Auth": "Token"},
-            "CollectionClass": "tests.mock_joiner.MockJoiner",
+            "CollectionClass": "tests.storage.mock_backend.MockCollection",
             "CollectionArgs": {
                 "custom_param1": "custom_val",
                 "custom_param2": 123
@@ -36,8 +33,8 @@ class TestDynamicLoading(unittest.TestCase):
         }
         project = get_or_create_vikingdb_project(config=config)
         
-        from tests.mock_joiner import MockJoiner
-        self.assertEqual(project.CollectionClass, MockJoiner)
+        from tests.storage.mock_backend import MockCollection
+        self.assertEqual(project.CollectionClass, MockCollection)
         self.assertEqual(project.host, "test_host")
         self.assertEqual(project.headers, {"Auth": "Token"})
         self.assertEqual(project.collection_args, {"custom_param1": "custom_val", "custom_param2": 123})
@@ -68,13 +65,13 @@ class TestDynamicLoading(unittest.TestCase):
         self.assertEqual(collection_instance.kwargs.get("host"), "test_host")
         self.assertEqual(collection_instance.kwargs.get("headers"), {"Auth": "Token"})
         
-        print("Explicit loading test passed (MockJoiner with custom params)")
+        print("Explicit loading test passed (MockCollection with custom params)")
 
     def test_kwargs_loading(self):
         # Test with CollectionArgs
         config = {
             "Host": "test_host", 
-            "CollectionClass": "tests.mock_joiner.MockJoiner",
+            "CollectionClass": "tests.storage.mock_backend.MockCollection",
             "CollectionArgs": {
                 "custom_param1": "extra_value",
                 "custom_param2": 456
