@@ -430,17 +430,17 @@ class VikingClient:
 async def main_test():
     client = await VikingClient.create(agent_id="shared")
     # res = client.list_resources()
-    # res = await client.search("头有点疼", target_uri="viking://user/memories/")
+    res = await client.search("头有点疼", target_uri="viking://user/memories/")
     # res = await client.get_viking_memory_context("123", current_message="头疼", history=[])
     # res = await client.search_memory("你好", "user_1")
     # res = await client.list_resources("viking://resources/")
     # res = await client.read_content("viking://user/memories/profile.md", level="read")
     # res = await client.add_resource("/Users/bytedance/Documents/论文/吉比特年报.pdf", "吉比特年报")
-    res = await client.commit(
-        session_id="99999",
-        messages=[{"role": "user", "content": "我叫吴彦祖"}],
-        user_id="1010101010",
-    )
+    # res = await client.commit(
+    #     session_id="99999",
+    #     messages=[{"role": "user", "content": "我叫吴彦祖"}],
+    #     user_id="1010101010",
+    # )
     # res = await client.commit("1234", [{"role": "user", "content": "帮我搜索 Python asyncio 教程"}
     #                                    ,{"role": "assistant", "content": "我来帮你r搜索 Python asyncio 相关的教程。"}])
     print(res)
@@ -450,12 +450,14 @@ async def main_test():
 
 
 async def account_test():
-    client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="test")
+    client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="a2c93b162c5c89afdfcba2bd58ce7d4b1bd2d7f02ac5303f19343a67d63341ad")
     await client.initialize()
 
-    # res = await client.admin_list_users("default")
-    res = await client.admin_remove_user("default", "ou_69e48b1314d1400af9d40fe3e4c24b8a")
+    res = await client.admin_list_users("eval")
+    # res = await client.admin_remove_user("default", "ou_69e48b1314d1400af9d40fe3e4c24b8a")
     # res = await client.admin_remove_user("default", "admin")
+    # res = await client.admin_list_accounts()
+    # res = await client.admin_create_account("eval", "default")
     print(res)
 
 

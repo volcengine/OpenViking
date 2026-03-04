@@ -437,7 +437,7 @@ class OpenVikingConfig(BaseModel):
     server_url: str = ""
     root_api_key: str = ""
     account_id: str = "default"
-    admin_user_id: str = "admin"
+    admin_user_id: str = "default"
     agent_id: str = ""
 
 
