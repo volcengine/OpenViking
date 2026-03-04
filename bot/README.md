@@ -78,7 +78,7 @@ vikingbot gateway
 ```
 
 This will automatically:
-- Create a default config at `~/.vikingbot/config.json`
+- Create a default config at `~/.openviking/ov.conf`
 - Start the Console Web UI at http://localhost:18791
 
 **2. Configure via Console**
@@ -91,7 +91,17 @@ Open http://localhost:18791 in your browser and:
 **3. Chat**
 
 ```bash
+# Send a single message directly
 vikingbot chat -m "What is 2+2?"
+
+# Enter interactive chat mode (supports multi-turn conversations)
+vikingbot chat
+
+# Show plain-text replies (no Markdown rendering)
+vikingbot chat --no-markdown
+
+# Show runtime logs during chat (useful for debugging)
+vikingbot chat --logs
 ```
 
 That's it! You have a working AI assistant in 2 minutes.
@@ -100,17 +110,6 @@ That's it! You have a working AI assistant in 2 minutes.
 
 You can also deploy vikingbot using Docker for easier setup and isolation.
 
-## ☁️ Volcengine VKE Deployment
-
-If you want to deploy vikingbot on Volcengine Kubernetes Engine (VKE), see the detailed deployment guide:
-
-👉 [VKE Deployment Guide (Chinese)](deploy/vke/README.md)
-
-The guide includes:
-- Complete prerequisites
-- How to create Volcengine account, VKE cluster, container registry, and TOS bucket
-- One-click deployment script usage
-- Configuration details and troubleshooting
 ### Prerequisites
 
 First, install Docker:
@@ -123,7 +122,6 @@ Verify Docker installation:
 docker --version
 ```
 
-### Quick Volcengine Registry Deploy (Recommended)
 ### Quick Docker Deploy
 
 ```bash
@@ -135,7 +133,7 @@ docker run -d \
     --name vikingbot \
     --restart unless-stopped \
     --platform linux/amd64 \
-    -v ~/.vikingbot:/root/.vikingbot \
+    -v ~/.openviking:/root/.openviking \
     -p 18791:18791 \
     vikingbot-cn-beijing.cr.volces.com/vikingbot/vikingbot:latest \
     gateway
@@ -191,14 +189,16 @@ Talk to your vikingbot through Telegram, Discord, WhatsApp, Feishu, Mochat, Ding
 
 ```json
 {
-  "channels": [
-    {
-      "type": "telegram",
-      "enabled": true,
-      "token": "YOUR_BOT_TOKEN",
-      "allowFrom": ["YOUR_USER_ID"]
-    }
-  ]
+  "bot": {
+    "channels": [
+      {
+        "type": "telegram",
+        "enabled": true,
+        "token": "YOUR_BOT_TOKEN",
+        "allowFrom": ["YOUR_USER_ID"]
+      }
+    ]
+  }
 }
 ```
 
@@ -227,7 +227,7 @@ Simply send this message to vikingbot (replace `xxx@xxx` with your real email):
 Read https://raw.githubusercontent.com/HKUDS/MoChat/refs/heads/main/skills/vikingbot/skill.md and register on MoChat. My Email account is xxx@xxx Bind me as your owner and DM me on MoChat.
 ```
 
-vikingbot will automatically register, configure `~/.vikingbot/config.json`, and connect to Mochat.
+vikingbot will automatically register, configure `~/.openviking/ov.conf`, and connect to Mochat.
 
 **2. Restart gateway**
 
@@ -242,27 +242,29 @@ That's it — vikingbot handles the rest!
 <details>
 <summary>Manual configuration (advanced)</summary>
 
-If you prefer to configure manually, add the following to `~/.vikingbot/config.json`:
+If you prefer to configure manually, add the following to `~/.openviking/ov.conf`:
 
 > Keep `claw_token` private. It should only be sent in `X-Claw-Token` header to your Mochat API endpoint.
 
 ```json
 {
-  "channels": [
-    {
-      "type": "mochat",
-      "enabled": true,
-      "base_url": "https://mochat.io",
-      "socket_url": "https://mochat.io",
-      "socket_path": "/socket.io",
-      "claw_token": "claw_xxx",
-      "agent_user_id": "6982abcdef",
-      "sessions": ["*"],
-      "panels": ["*"],
-      "reply_delay_mode": "non-mention",
-      "reply_delay_ms": 120000
-    }
-  ]
+  "bot": {
+    "channels": [
+      {
+        "type": "mochat",
+        "enabled": true,
+        "base_url": "https://mochat.io",
+        "socket_url": "https://mochat.io",
+        "socket_path": "/socket.io",
+        "claw_token": "claw_xxx",
+        "agent_user_id": "6982abcdef",
+        "sessions": ["*"],
+        "panels": ["*"],
+        "reply_delay_mode": "non-mention",
+        "reply_delay_ms": 120000
+      }
+    ]
+  }
 }
 ```
 
@@ -292,14 +294,16 @@ If you prefer to configure manually, add the following to `~/.vikingbot/config.j
 
 ```json
 {
-  "channels": [
-    {
-      "type": "discord",
-      "enabled": true,
-      "token": "YOUR_BOT_TOKEN",
-      "allowFrom": ["YOUR_USER_ID"]
-    }
-  ]
+  "bot": {
+    "channels": [
+      {
+        "type": "discord",
+        "enabled": true,
+        "token": "YOUR_BOT_TOKEN",
+        "allowFrom": ["YOUR_USER_ID"]
+      }
+    ]
+  }
 }
 ```
 
@@ -333,13 +337,15 @@ vikingbot channels login
 
 ```json
 {
-  "channels": [
-    {
-      "type": "whatsapp",
-      "enabled": true,
-      "allowFrom": ["+1234567890"]
-    }
-  ]
+  "bot": {
+    "channels": [
+      {
+        "type": "whatsapp",
+        "enabled": true,
+        "allowFrom": ["+1234567890"]
+      }
+    ]
+  }
 }
 ```
 
@@ -373,17 +379,19 @@ Uses **WebSocket** long connection — no public IP required.
 
 ```json
 {
-  "channels": [
-    {
-      "type": "feishu",
-      "enabled": true,
-      "appId": "cli_xxx",
-      "appSecret": "xxx",
-      "encryptKey": "",
-      "verificationToken": "",
-      "allowFrom": []
-    }
-  ]
+  "bot": {
+    "channels": [
+      {
+        "type": "feishu",
+        "enabled": true,
+        "appId": "cli_xxx",
+        "appSecret": "xxx",
+        "encryptKey": "",
+        "verificationToken": "",
+        "allowFrom": []
+      }
+    ]
+  }
 }
 ```
 
@@ -423,15 +431,17 @@ Uses **botpy SDK** with WebSocket — no public IP required. Currently supports 
 
 ```json
 {
-  "channels": [
-    {
-      "type": "qq",
-      "enabled": true,
-      "appId": "YOUR_APP_ID",
-      "secret": "YOUR_APP_SECRET",
-      "allowFrom": []
-    }
-  ]
+  "bot": {
+    "channels": [
+      {
+        "type": "qq",
+        "enabled": true,
+        "appId": "YOUR_APP_ID",
+        "secret": "YOUR_APP_SECRET",
+        "allowFrom": []
+      }
+    ]
+  }
 }
 ```
 
@@ -463,15 +473,17 @@ Uses **Stream Mode** — no public IP required.
 
 ```json
 {
-  "channels": [
-    {
-      "type": "dingtalk",
-      "enabled": true,
-      "clientId": "YOUR_APP_KEY",
-      "clientSecret": "YOUR_APP_SECRET",
-      "allowFrom": []
-    }
-  ]
+  "bot": {
+    "channels": [
+      {
+        "type": "dingtalk",
+        "enabled": true,
+        "clientId": "YOUR_APP_KEY",
+        "clientSecret": "YOUR_APP_SECRET",
+        "allowFrom": []
+      }
+    ]
+  }
 }
 ```
 
@@ -505,15 +517,17 @@ Uses **Socket Mode** — no public URL required.
 
 ```json
 {
-  "channels": [
-    {
-      "type": "slack",
-      "enabled": true,
-      "botToken": "xoxb-...",
-      "appToken": "xapp-...",
-      "groupPolicy": "mention"
-    }
-  ]
+  "bot": {
+    "channels": [
+      {
+        "type": "slack",
+        "enabled": true,
+        "botToken": "xoxb-...",
+        "appToken": "xapp-...",
+        "groupPolicy": "mention"
+      }
+    ]
+  }
 }
 ```
 
@@ -550,23 +564,25 @@ Give vikingbot its own email account. It polls **IMAP** for incoming mail and re
 
 ```json
 {
-  "channels": [
-    {
-      "type": "email",
-      "enabled": true,
-      "consentGranted": true,
-      "imapHost": "imap.gmail.com",
-      "imapPort": 993,
-      "imapUsername": "my-vikingbot@gmail.com",
-      "imapPassword": "your-app-password",
-      "smtpHost": "smtp.gmail.com",
-      "smtpPort": 587,
-      "smtpUsername": "my-vikingbot@gmail.com",
-      "smtpPassword": "your-app-password",
-      "fromAddress": "my-vikingbot@gmail.com",
-      "allowFrom": ["your-real-email@gmail.com"]
-    }
-  ]
+  "bot": {
+    "channels": [
+      {
+        "type": "email",
+        "enabled": true,
+        "consentGranted": true,
+        "imapHost": "imap.gmail.com",
+        "imapPort": 993,
+        "imapUsername": "my-vikingbot@gmail.com",
+        "imapPassword": "your-app-password",
+        "smtpHost": "smtp.gmail.com",
+        "smtpPort": 587,
+        "smtpUsername": "my-vikingbot@gmail.com",
+        "smtpPassword": "your-app-password",
+        "fromAddress": "my-vikingbot@gmail.com",
+        "allowFrom": ["your-real-email@gmail.com"]
+      }
+    ]
+  }
 }
 ```
 
@@ -592,11 +608,15 @@ Simply send the command above to your vikingbot (via CLI or any chat channel), a
 
 ## ⚙️ Configuration
 
-Config file: `~/.vikingbot/config.json`
+Config file: `~/.openviking/ov.conf`
 
 > [!IMPORTANT]
 > After modifying the configuration (either via Console UI or by editing the file directly),
 > you need to restart the gateway service for changes to take effect.
+
+> [!NOTE]
+> Configuration has been migrated from `~/.vikingbot/config.json` to `~/.openviking/ov.conf`.
+> The configuration is now nested under the `bot` key.
 
 ### Manual Configuration (Advanced)
 
@@ -604,18 +624,15 @@ If you prefer to edit the config file directly instead of using the Console UI:
 
 ```json
 {
-  "providers": {
-    "openai": {
-      "apiKey": "sk-xxx"
-    }
-  },
-  "agents": {
-    "defaults": {
+  "bot": {
+    "agents": {
       "model": "openai/doubao-seed-2-0-pro-260215"
     }
   }
 }
 ```
+
+Provider configuration is read from OpenViking config (`vlm` section in `ov.conf`).
 
 ### Providers
 
@@ -698,34 +715,52 @@ That's it! Environment variables, model prefixing, config matching, and `vikingb
 <details>
 <summary><b>Langfuse Configuration</b></summary>
 
-1. **Install with Langfuse support:**
-   ```bash
-   uv pip install -e ".[langfuse]"
-   ```
+**Option 1: Local Deployment (Recommended for testing)**
 
-2. **Add configuration to `~/.openviking/ov.conf`:**
-   ```json
-   {
-     "bot": {
-       "langfuse": {
-         "enabled": true,
-         "secret_key": "sk-lf-xxxxxxxx",
-         "public_key": "pk-lf-xxxxxxxx",
-         "base_url": "https://cloud.langfuse.com"
-       }
-     }
-   }
-   ```
+Deploy Langfuse locally using Docker:
 
-3. **Get your API keys:**
-   - Sign up at [langfuse.com](https://langfuse.com)
-   - Create a new project
-   - Copy the **Secret Key** and **Public Key** from project settings
+```bash
+# Navigate to the deployment script
+cd deploy/docker
 
-4. **Restart vikingbot:**
-   ```bash
-   vikingbot gateway
-   ```
+# Run the deployment script
+./deploy_langfuse.sh
+```
+
+This will start Langfuse locally at `http://localhost:3000` with pre-configured credentials.
+
+**Option 2: Langfuse Cloud**
+
+1. Sign up at [langfuse.com](https://langfuse.com)
+2. Create a new project
+3. Copy the **Secret Key** and **Public Key** from project settings
+
+**Configuration**
+
+Add to `~/.openviking/ov.conf`:
+
+```json
+{
+  "langfuse": {
+    "enabled": true,
+    "secret_key": "sk-lf-vikingbot-secret-key-2026",
+    "public_key": "pk-lf-vikingbot-public-key-2026",
+    "base_url": "http://localhost:3000"
+  }
+}
+```
+
+For Langfuse Cloud, use `https://cloud.langfuse.com` as the `base_url`.
+
+**Install Langfuse support:**
+```bash
+uv pip install -e ".[langfuse]"
+```
+
+**Restart vikingbot:**
+```bash
+vikingbot gateway
+```
 
 **Features enabled:**
 - Automatic trace creation for each conversation
@@ -751,11 +786,9 @@ You only need to add sandbox configuration when you want to change these default
 **To use a different backend or mode:**
 ```json
 {
-  "bot": {
-    "sandbox": {
-      "backend": "opensandbox",
-      "mode": "per-session"
-    }
+  "sandbox": {
+    "backend": "opensandbox",
+    "mode": "per-session"
   }
 }
 ```
@@ -780,12 +813,10 @@ You only need to add sandbox configuration when you want to change these default
 **Direct Backend:**
 ```json
 {
-  "bot": {
-    "sandbox": {
-      "backends": {
-        "direct": {
-          "restrictToWorkspace": false
-        }
+  "sandbox": {
+    "backends": {
+      "direct": {
+        "restrictToWorkspace": false
       }
     }
   }
@@ -795,15 +826,13 @@ You only need to add sandbox configuration when you want to change these default
 **OpenSandbox Backend:**
 ```json
 {
-  "bot": {
-    "sandbox": {
-      "backend": "opensandbox",
-      "backends": {
-        "opensandbox": {
-          "serverUrl": "http://localhost:18792",
-          "apiKey": "",
-          "defaultImage": "opensandbox/code-interpreter:v1.0.1"
-        }
+  "sandbox": {
+    "backend": "opensandbox",
+    "backends": {
+      "opensandbox": {
+        "serverUrl": "http://localhost:18792",
+        "apiKey": "",
+        "defaultImage": "opensandbox/code-interpreter:v1.0.1"
       }
     }
   }
@@ -813,14 +842,12 @@ You only need to add sandbox configuration when you want to change these default
 **Docker Backend:**
 ```json
 {
-  "bot": {
-    "sandbox": {
-      "backend": "docker",
-      "backends": {
-        "docker": {
-          "image": "python:3.11-slim",
-          "networkMode": "bridge"
-        }
+  "sandbox": {
+    "backend": "docker",
+    "backends": {
+      "docker": {
+        "image": "python:3.11-slim",
+        "networkMode": "bridge"
       }
     }
   }
@@ -830,27 +857,25 @@ You only need to add sandbox configuration when you want to change these default
 **SRT Backend:**
 ```json
 {
-  "bot": {
-    "sandbox": {
-      "backend": "srt",
-      "backends": {
-        "srt": {
-          "settingsPath": "~/.vikingbot/srt-settings.json",
-          "nodePath": "node",
-          "network": {
-            "allowedDomains": [],
-            "deniedDomains": [],
-            "allowLocalBinding": false
-          },
-          "filesystem": {
-            "denyRead": [],
-            "allowWrite": [],
-            "denyWrite": []
-          },
-          "runtime": {
-            "cleanupOnExit": true,
-            "timeout": 300
-          }
+  "sandbox": {
+    "backend": "srt",
+    "backends": {
+      "srt": {
+        "settingsPath": "~/.vikingbot/srt-settings.json",
+        "nodePath": "node",
+        "network": {
+          "allowedDomains": [],
+          "deniedDomains": [],
+          "allowLocalBinding": false
+        },
+        "filesystem": {
+          "denyRead": [],
+          "allowWrite": [],
+          "denyWrite": []
+        },
+        "runtime": {
+          "cleanupOnExit": true,
+          "timeout": 300
         }
       }
     }
@@ -861,13 +886,11 @@ You only need to add sandbox configuration when you want to change these default
 **AIO Sandbox Backend:**
 ```json
 {
-  "bot": {
-    "sandbox": {
-      "backend": "aiosandbox",
-      "backends": {
-        "aiosandbox": {
-          "baseUrl": "http://localhost:18794"
-        }
+  "sandbox": {
+    "backend": "aiosandbox",
+    "backends": {
+      "aiosandbox": {
+        "baseUrl": "http://localhost:18794"
       }
     }
   }

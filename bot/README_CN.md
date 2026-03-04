@@ -7,11 +7,11 @@
 
 Vikingbot 深度集成 OpenViking，提供强大的知识管理和记忆检索能力：
 
-- **本地/远程双模式**：支持本地存储（`~/.vikingbot/ov_data/`）和远程服务器模式
+- **本地/远程双模式**：支持本地存储（`~/.vikingbot/ov_data/`）和远程服务器模式（默认远程模式，通过 `bot.ov_server.server_url` 配置）
 - **7 个专用 Agent 工具**：资源管理、语义搜索、正则搜索、通配符搜索、记忆搜索
 - **三级内容访问**：L0（摘要）、L1（概览）、L2（完整内容）
 - **会话记忆自动提交**：对话历史自动保存到 OpenViking
-- **火山引擎 TOS 集成**：远程模式下支持云存储
+- **模型配置**：从 OpenViking 配置（`vlm` 部分）读取，无需在 bot 配置中单独设置 provider
 
 ## 📦 安装
 
@@ -87,7 +87,7 @@ vikingbot gateway
 ```
 
 这将自动：
-- 在 `~/.vikingbot/config.json` 创建默认配置
+- 在 `~/.openviking/ov.conf` 创建默认配置
 - 在 http://localhost:18791 启动控制台 Web UI
 
 **2. 通过控制台配置**
@@ -100,7 +100,17 @@ vikingbot gateway
 **3. 聊天**
 
 ```bash
+# 直接发送单条消息
 vikingbot chat -m "What is 2+2?"
+
+# 进入交互式聊天模式（支持多轮对话）
+vikingbot chat
+
+# 显示纯文本回复（不渲染 Markdown）
+vikingbot chat --no-markdown
+
+# 聊天时显示运行时日志（便于调试）
+vikingbot chat --logs
 ```
 
 就这么简单！您只需 2 分钟就能拥有一个可用的 AI 助手。
@@ -108,18 +118,6 @@ vikingbot chat -m "What is 2+2?"
 ## 🐳 Docker 部署
 
 您也可以使用 Docker 部署 vikingbot，以便更轻松地设置和隔离。
-
-## ☁️ 火山引擎 VKE 部署
-
-如果您想在火山引擎容器服务（VKE）上部署 vikingbot，请查看详细的部署文档：
-
-👉 [VKE 部署指南](deploy/vke/README.md)
-
-该指南包含：
-- 完整的前置准备步骤
-- 火山引擎账号、VKE 集群、镜像仓库、TOS 存储桶的创建方法
-- 一键部署脚本使用说明
-- 配置详解和故障排查
 
 ### 前置要求
 
@@ -237,7 +235,7 @@ vikingbot gateway
 Read https://raw.githubusercontent.com/HKUDS/MoChat/refs/heads/main/skills/vikingbot/skill.md and register on MoChat. My Email account is xxx@xxx Bind me as your owner and DM me on MoChat.
 ```
 
-vikingbot 将自动注册、配置 `~/.vikingbot/config.json` 并连接到 Mochat。
+vikingbot 将自动注册、配置 `~/.openviking/ov.conf` 并连接到 Mochat。
 
 **2. 重启网关**
 
@@ -252,7 +250,7 @@ vikingbot gateway
 <details>
 <summary>手动配置（高级）</summary>
 
-如果您更喜欢手动配置，请将以下内容添加到 `~/.vikingbot/config.json`：
+如果您更喜欢手动配置，请将以下内容添加到 `~/.openviking/ov.conf`：
 
 > 请保密 `claw_token`。它只应在 `X-Claw-Token` 头中发送到您的 Mochat API 端点。
 
@@ -601,7 +599,7 @@ vikingbot gateway
 
 ## ⚙️ 配置
 
-配置文件：`~/.vikingbot/config.json`
+配置文件：`~/.openviking/ov.conf`
 
 > [!IMPORTANT]
 > 修改配置后（无论是通过控制台 UI 还是直接编辑文件），
@@ -674,18 +672,15 @@ Vikingbot 默认启用 OpenViking 钩子：
 
 ```json
 {
-  "providers": {
-    "openai": {
-      "apiKey": "sk-xxx"
-    }
-  },
-  "agents": {
-    "defaults": {
+  "bot": {
+    "agents": {
       "model": "openai/doubao-seed-2-0-pro-260215"
     }
   }
 }
 ```
+
+Provider 配置从 OpenViking 配置（`ov.conf` 的 `vlm` 部分）读取。
 
 ### 提供商
 
@@ -753,6 +748,70 @@ class ProvidersConfig(BaseModel):
 
 </details>
 
+
+### 可观测性（可选）
+
+**Langfuse** 集成，用于 LLM 可观测性和追踪。
+
+<details>
+<summary><b>Langfuse 配置</b></summary>
+
+**方式 1：本地部署（测试推荐）**
+
+使用 Docker 在本地部署 Langfuse：
+
+```bash
+# 进入部署脚本目录
+cd deploy/docker
+
+# 运行部署脚本
+./deploy_langfuse.sh
+```
+
+这将在 `http://localhost:3000` 启动 Langfuse，并使用预配置的凭据。
+
+**方式 2：Langfuse Cloud**
+
+1. 在 [langfuse.com](https://langfuse.com) 注册
+2. 创建新项目
+3. 从项目设置中复制 **Secret Key** 和 **Public Key**
+
+**配置**
+
+添加到 `~/.openviking/ov.conf`：
+
+```json
+{
+  "bot": {
+    "langfuse": {
+      "enabled": true,
+      "secret_key": "sk-lf-vikingbot-secret-key-2026",
+      "public_key": "pk-lf-vikingbot-public-key-2026",
+      "base_url": "http://localhost:3000"
+    }
+  }
+}
+```
+
+对于 Langfuse Cloud，使用 `https://cloud.langfuse.com` 作为 `base_url`。
+
+**安装 Langfuse 支持：**
+```bash
+uv pip install -e ".[langfuse]"
+```
+
+**重启 vikingbot：**
+```bash
+vikingbot gateway
+```
+
+**启用的功能：**
+- 每次对话自动创建 trace
+- Session 和 User 追踪
+- LLM 调用监控
+- Token 使用量追踪
+
+</details>
 
 ### 安全
 
