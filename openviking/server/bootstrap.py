@@ -44,6 +44,18 @@ def main():
         action="store_true",
         help="Also start vikingbot gateway after server starts",
     )
+    parser.add_argument(
+        "--with-bot",
+        action="store_true",
+        dest="with_bot",
+        help="Enable Bot API proxy to Vikingbot (requires Vikingbot running)",
+    )
+    parser.add_argument(
+        "--bot-url",
+        default="http://localhost:18790",
+        dest="bot_url",
+        help="Vikingbot OpenAPIChannel URL (default: http://localhost:18790)",
+    )
 
     args = parser.parse_args()
 
@@ -60,6 +72,10 @@ def main():
         config.host = args.host
     if args.port is not None:
         config.port = args.port
+    if args.with_bot:
+        config.with_bot = True
+    if args.bot_url:
+        config.bot_api_url = args.bot_url
 
     # Configure logging for Uvicorn
     configure_uvicorn_logging()
@@ -67,10 +83,12 @@ def main():
     # Create and run app
     app = create_app(config)
     print(f"OpenViking HTTP Server is running on {config.host}:{config.port}")
+    if config.with_bot:
+        print(f"Bot API proxy enabled, forwarding to {config.bot_api_url}")
 
-    # Start vikingbot gateway if --bot flag is set
+    # Start vikingbot gateway if --with-bot is set
     bot_process = None
-    if args.bot:
+    if args.with_bot:
         bot_process = _start_vikingbot_gateway()
 
     try:

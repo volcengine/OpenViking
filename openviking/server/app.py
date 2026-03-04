@@ -16,6 +16,7 @@ from openviking.server.dependencies import set_service
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
 from openviking.server.routers import (
     admin_router,
+    bot_router,
     content_router,
     debug_router,
     filesystem_router,
@@ -147,6 +148,14 @@ def create_app(
             ).model_dump(),
         )
 
+    # Configure Bot API if --with-bot is enabled
+    if config.with_bot:
+        import openviking.server.routers.bot as bot_module
+        bot_module.set_bot_api_url(config.bot_api_url)
+        logger.info(f"Bot API proxy enabled, forwarding to {config.bot_api_url}")
+    else:
+        logger.info("Bot API proxy disabled (use --with-bot to enable)")
+
     # Register routers
     app.include_router(system_router)
     app.include_router(admin_router)
@@ -159,5 +168,6 @@ def create_app(
     app.include_router(pack_router)
     app.include_router(debug_router)
     app.include_router(observer_router)
+    app.include_router(bot_router, prefix="/bot/v1")
 
     return app

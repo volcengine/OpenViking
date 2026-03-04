@@ -25,6 +25,8 @@ class ServerConfig:
     port: int = 1933
     root_api_key: Optional[str] = None
     cors_origins: List[str] = field(default_factory=lambda: ["*"])
+    with_bot: bool = False  # Enable Bot API proxy to Vikingbot
+    bot_api_url: str = "http://localhost:18790"  # Vikingbot OpenAPIChannel URL (default port)
 
 
 def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
