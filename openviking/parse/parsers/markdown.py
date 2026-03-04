@@ -400,8 +400,7 @@ class MarkdownParser(BaseParser):
             logger.info("[MarkdownParser] No headings, splitting by paragraphs")
             parts = self._smart_split_content(content, max_size)
             for part_idx, part in enumerate(parts, 1):
-                part_file = f"{root_dir}/{doc_name}_{part_idx}.md"
-                await viking_fs.write_file(part_file, part)
+                await viking_fs.write_file(f"{root_dir}/{doc_name}_{part_idx}.md", part)
             logger.debug(f"[MarkdownParser] Split into {len(parts)} parts")
             return
 

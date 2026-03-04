@@ -12,7 +12,10 @@ def parse_iso_datetime(value: str) -> datetime:
     where the fractional seconds exceed Python's 6-digit microsecond limit.
     This helper truncates the excess digits before parsing.
     """
-    return datetime.fromisoformat(_EXCESS_FRAC_RE.sub(r"\1", value))
+    normalized = _EXCESS_FRAC_RE.sub(r"\1", value)
+    if normalized.endswith("Z"):
+        normalized = normalized[:-1] + "+00:00"
+    return datetime.fromisoformat(normalized)
 
 
 def format_iso8601(dt: datetime) -> str:

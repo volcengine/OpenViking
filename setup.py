@@ -170,7 +170,9 @@ class CMakeBuildExtension(build_ext):
                         print(f"Build stderr: {e.stderr.decode('utf-8', errors='replace')}")
 
         else:
-            if not agfs_server_dir.exists():
+            if agfs_target_binary.exists():
+                print(f"[Info] Go compiler not found, but AGFS binary exists at {agfs_target_binary}. Skipping build.")
+            elif not agfs_server_dir.exists():
                 print(f"[Warning] AGFS source directory not found at {agfs_server_dir}")
             else:
                 print("[Warning] Go compiler not found. Cannot build AGFS from source.")

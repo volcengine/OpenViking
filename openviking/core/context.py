@@ -7,7 +7,7 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from openviking.utils.time_utils import format_iso8601
+from openviking.utils.time_utils import format_iso8601, parse_iso_datetime
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -199,12 +199,12 @@ class Context:
             context_type=data.get("context_type"),
             category=data.get("category"),
             created_at=(
-                datetime.fromisoformat(data["created_at"])
+                parse_iso_datetime(data["created_at"])
                 if isinstance(data.get("created_at"), str)
                 else data.get("created_at")
             ),
             updated_at=(
-                datetime.fromisoformat(data["updated_at"])
+                parse_iso_datetime(data["updated_at"])
                 if isinstance(data.get("updated_at"), str)
                 else data.get("updated_at")
             ),

@@ -6,7 +6,7 @@ Resource Service for OpenViking.
 Provides resource management operations: add_resource, add_skill, wait_processed.
 """
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager
@@ -71,6 +71,8 @@ class ResourceService:
         instruction: str = "",
         wait: bool = False,
         timeout: Optional[float] = None,
+        build_index: bool = True,
+        summarize: bool = False,
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking (only supports resources scope).
@@ -82,9 +84,9 @@ class ResourceService:
             instruction: Processing instruction
             wait: Whether to wait for semantic extraction and vectorization to complete
             timeout: Wait timeout in seconds
-            **kwargs: Extra options forwarded to the parser chain, e.g.
-                ``strict``, ``ignore_dirs``, ``include``, ``exclude``
-                (used by ``DirectoryParser``).
+            build_index: Whether to build vector index immediately (default: True).
+            summarize: Whether to generate summary (default: False).
+            **kwargs: Extra options forwarded to the parser chain.
 
         Returns:
             Processing result
@@ -106,6 +108,8 @@ class ResourceService:
             instruction=instruction,
             scope="resources",
             target=target,
+            build_index=build_index,
+            summarize=summarize,
             **kwargs,
         )
 
@@ -167,6 +171,42 @@ class ResourceService:
             }
 
         return result
+
+    async def build_index(
+        self,
+        resource_uris: List[str],
+        ctx: RequestContext,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Manually trigger index building.
+
+        Args:
+            resource_uris: List of resource URIs to index.
+            ctx: Request context.
+
+        Returns:
+            Processing result
+        """
+        self._ensure_initialized()
+        return await self._resource_processor.build_index(resource_uris, ctx, **kwargs)
+
+    async def summarize(
+        self,
+        resource_uris: List[str],
+        ctx: RequestContext,
+        **kwargs
+    ) -> Dict[str, Any]:
+        """Manually trigger summarization.
+
+        Args:
+            resource_uris: List of resource URIs to summarize.
+            ctx: Request context.
+
+        Returns:
+            Processing result
+        """
+        self._ensure_initialized()
+        return await self._resource_processor.summarize(resource_uris, ctx, **kwargs)
 
     async def wait_processed(self, timeout: Optional[float] = None) -> Dict[str, Any]:
         """Wait for all queued processing to complete.

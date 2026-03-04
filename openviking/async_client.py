@@ -6,6 +6,7 @@ Async OpenViking client implementation (embedded mode only).
 For HTTP mode, use AsyncHTTPClient or SyncHTTPClient.
 """
 
+from __future__ import annotations
 import threading
 from typing import Any, Dict, List, Optional, Union
 
@@ -177,17 +178,24 @@ class AsyncOpenViking:
         instruction: str = "",
         wait: bool = False,
         timeout: float = None,
+        build_index: bool = True,
+        summarize: bool = False,
         **kwargs,
     ) -> Dict[str, Any]:
-        """Add resource to OpenViking (only supports resources scope).
+        """
+        Add a resource (file/URL) to OpenViking.
 
         Args:
-            wait: Whether to wait for semantic extraction and vectorization to complete
-            timeout: Wait timeout in seconds
-            **kwargs: Extra options forwarded to the parser chain, e.g.
-                ``strict``, ``ignore_dirs``, ``include``, ``exclude``.
+            path: Local file path or URL.
+            reason: Context/reason for adding this resource.
+            instruction: Specific instruction for processing.
+            wait: If True, wait for processing to complete.
+            target: Target path in VikingFS (e.g., "kb/docs").
+            build_index: Whether to build vector index immediately (default: True).
+            summarize: Whether to generate summary (default: False).
         """
         await self._ensure_initialized()
+
         return await self._client.add_resource(
             path=path,
             target=target,
@@ -195,6 +203,8 @@ class AsyncOpenViking:
             instruction=instruction,
             wait=wait,
             timeout=timeout,
+            build_index=build_index,
+            summarize=summarize,
             **kwargs,
         )
 
@@ -202,6 +212,34 @@ class AsyncOpenViking:
         """Wait for all queued processing to complete."""
         await self._ensure_initialized()
         return await self._client.wait_processed(timeout=timeout)
+
+    async def build_index(
+        self,
+        resource_uris: Union[str, List[str]],
+        **kwargs
+    ) -> Dict[str, Any]:
+        """
+        Manually trigger index building for resources.
+        
+        Args:
+            resource_uris: Single URI or list of URIs to index.
+        """
+        await self._ensure_initialized()
+        return await self._client.build_index(resource_uris, **kwargs)
+
+    async def summarize(
+        self,
+        resource_uris: Union[str, List[str]],
+        **kwargs
+    ) -> Dict[str, Any]:
+        """
+        Manually trigger summarization for resources.
+        
+        Args:
+            resource_uris: Single URI or list of URIs to summarize.
+        """
+        await self._ensure_initialized()
+        return await self._client.summarize(resource_uris, **kwargs)
 
     async def add_skill(
         self,

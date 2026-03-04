@@ -146,6 +146,11 @@ class PDFConfig(ParserConfig):
     mineru_timeout: float = 300.0  # Request timeout in seconds (5 minutes)
     mineru_params: Optional[dict] = None  # Additional API parameters
 
+    # Heading detection configuration
+    heading_detection: str = "auto"  # "bookmarks" | "font" | "auto" | "none"
+    font_heading_min_delta: float = 1.5  # Minimum font size delta from body text (pt)
+    max_heading_levels: int = 4  # Maximum heading levels for font analysis
+
     def validate(self) -> None:
         """
         Validate configuration.
@@ -168,6 +173,12 @@ class PDFConfig(ParserConfig):
 
         if self.mineru_timeout <= 0:
             raise ValueError("mineru_timeout must be positive")
+
+        if self.heading_detection not in ("bookmarks", "font", "auto", "none"):
+            raise ValueError(f"Invalid heading_detection: {self.heading_detection}")
+
+        if self.font_heading_min_delta <= 0:
+            raise ValueError("font_heading_min_delta must be positive")
 
 
 @dataclass
