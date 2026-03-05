@@ -150,8 +150,8 @@ async function checkGo() {
   const m = out.match(/go([0-9]+)\.([0-9]+)/);
   if (!m) return { ok: false, version: null, msg: "Cannot parse Go version" };
   const [, major, minor] = m.map(Number);
-  if (major < 1 || (major === 1 && minor < 25))
-    return { ok: false, version: `${major}.${minor}`, msg: `Go ${major}.${minor} too old, need >= 1.25` };
+  if (major < 1 || (major === 1 && minor < 19))
+    return { ok: false, version: `${major}.${minor}`, msg: `Go ${major}.${minor} too old, need >= 1.19` };
   return { ok: true, version: `${major}.${minor}`, msg: `${major}.${minor}` };
 }
 
@@ -606,7 +606,7 @@ Env vars:
     log(`Go: ${goResult.msg}`, "ok");
   } else if (IS_LINUX) {
     log(`Go: ${goResult.msg}`, "err");
-    missing.push({ name: "Go >= 1.25", detail: goResult.msg });
+    missing.push({ name: "Go >= 1.19", detail: goResult.msg });
   } else {
     log(`Go: not found (not required on ${process.platform})`, "warn");
   }
@@ -632,7 +632,7 @@ Env vars:
         console.log("    #   See INSTALL-ZH.md 'Linux Environment Setup' section");
       }
       if (needGo) {
-        console.log("    # Install Go >= 1.25:");
+        console.log("    # Install Go >= 1.19:");
         console.log("    wget https://go.dev/dl/go1.25.6.linux-amd64.tar.gz");
         console.log("    sudo rm -rf /usr/local/go");
         console.log("    sudo tar -C /usr/local -xzf go1.25.6.linux-amd64.tar.gz");
@@ -653,7 +653,7 @@ Env vars:
         console.log("    sudo apt install -y python3.11 python3.11-dev python3.11-venv");
       }
       if (needGo) {
-        console.log("    # Install Go >= 1.25:");
+        console.log("    # Install Go >= 1.19:");
         console.log("    wget https://go.dev/dl/go1.25.6.linux-amd64.tar.gz");
         console.log("    sudo rm -rf /usr/local/go");
         console.log("    sudo tar -C /usr/local -xzf go1.25.6.linux-amd64.tar.gz");
@@ -663,7 +663,7 @@ Env vars:
         console.log("    go env -w GOPROXY=https://goproxy.cn,direct");
       }
     } else {
-      console.log("    Please install: cmake, g++, Python >= 3.10, Go >= 1.25");
+      console.log("    Please install: cmake, g++, Python >= 3.10, Go >= 1.19");
       console.log("    See INSTALL-ZH.md for detailed instructions.");
     }
 
