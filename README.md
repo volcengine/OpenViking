@@ -437,6 +437,21 @@ ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/zh
 
 Congratulations! You have successfully run OpenViking 🎉
 
+### VikingBot Quick Start
+
+VikingBot is an AI agent framework built on top of OpenViking. Here's how to get started:
+
+```bash
+# Install VikingBot from source (in OpenViking root directory)
+uv pip install -e bot/
+
+# Start OpenViking server with Bot enabled
+openviking-server --with-bot
+
+# In another terminal, start interactive chat
+ov chat
+```
+
 ---
 
 ## Server Deployment Details
