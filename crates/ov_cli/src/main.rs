@@ -477,14 +477,6 @@ enum ConfigCommands {
 
 #[tokio::main]
 async fn main() {
-    // Check for chat command first - handle it directly to bypass clap global args
-    // but we keep it in Cli enum so it shows up in help
-    let args: Vec<String> = std::env::args().collect();
-    if args.len() >= 2 && args[1] == "chat" {
-        handle_chat_direct(&args[2..]).await;
-        return;
-    }
-
     let cli = Cli::parse();
 
     let output_format = cli.output;
@@ -583,7 +575,7 @@ async fn main() {
         Commands::Tui { uri } => {
             handle_tui(uri, ctx).await
         }
-        Commands::Chat { message, session, markdown, logs } => {
+        Commands::Chat { message, session, markdown, logs: _ } => {
             let cmd = commands::chat::ChatCommand {
                 endpoint: std::env::var("VIKINGBOT_ENDPOINT").unwrap_or_else(|_| "http://localhost:18790/api/v1/openapi".to_string()),
                 api_key: std::env::var("VIKINGBOT_API_KEY").ok(),
@@ -1024,69 +1016,6 @@ async fn handle_health(ctx: CliContext) -> Result<()> {
         std::process::exit(1);
     }
     Ok(())
-}
-
-async fn handle_chat_direct(args: &[String]) {
-    use tokio::process::Command;
-
-    // First check if vikingbot is available
-    let vikingbot_available = which::which("vikingbot").is_ok() || {
-        // Also check if we can import the module
-        let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_string());
-        let check = Command::new(&python)
-            .args(["-c", "import vikingbot; print('ok')"])
-            .output()
-            .await;
-        check.map(|o| o.status.success()).unwrap_or(false)
-    };
-
-    if !vikingbot_available {
-        eprintln!("Error: vikingbot not found. Please install vikingbot first:");
-        eprintln!();
-        eprintln!("  Option 1: Install from local source (recommended for development)");
-        eprintln!("    cd bot");
-        eprintln!("    uv pip install -e \".[dev]\"");
-        eprintln!();
-        eprintln!("  Option 2: Install from PyPI (coming soon)");
-        eprintln!("    pip install vikingbot");
-        eprintln!();
-        std::process::exit(1);
-    }
-
-    // Try to find vikingbot executable first
-    let (cmd, mut vikingbot_args) = if let Ok(vikingbot) = which::which("vikingbot") {
-        (vikingbot, vec!["chat".to_string()])
-    } else {
-        let python = std::env::var("PYTHON").unwrap_or_else(|_| "python3".to_string());
-        (
-            std::path::PathBuf::from(python),
-            vec!["-m".to_string(), "vikingbot.cli.commands".to_string(), "chat".to_string()],
-        )
-    };
-
-    // Always add our default session first
-    vikingbot_args.push("--session".to_string());
-    vikingbot_args.push("cli__chat__default".to_string());
-
-    // Now add all user args - if user provided --session it will override the default
-    vikingbot_args.extend(args.iter().cloned());
-
-    // Execute and pass through all signals
-    let status = Command::new(&cmd)
-        .args(&vikingbot_args)
-        .status()
-        .await;
-
-    match status {
-        Ok(s) if !s.success() => {
-            std::process::exit(s.code().unwrap_or(1));
-        }
-        Err(e) => {
-            eprintln!("Error: {}", e);
-            std::process::exit(1);
-        }
-        _ => {}
-    }
 }
 
 async fn handle_tui(uri: String, ctx: CliContext) -> Result<()> {
