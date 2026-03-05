@@ -605,6 +605,24 @@ export OPENVIKING_PYTHON=python3.11
 npx ./examples/openclaw-memory-plugin/setup-helper
 ```
 
+#### Error: `externally-managed-environment` / `This environment is externally managed`
+
+On Ubuntu, Debian and similar systems, the system Python is managed (PEP 668) and does not allow installing packages with `pip` into the system environment. Two options:
+
+1. **Recommended:** Use the one-line install script; it will create a venv at `~/.openviking/venv` and install OpenViking there automatically.
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-memory-plugin/install.sh | bash
+   ```
+
+2. **Manual install:** Install `python3-venv`, create a venv, and install OpenViking inside it:
+   ```bash
+   sudo apt install -y python3-venv   # or python3-full
+   python3 -m venv ~/.openviking/venv
+   ~/.openviking/venv/bin/pip install openviking
+   export OPENVIKING_PYTHON=~/.openviking/venv/bin/python
+   ```
+   Alternatively use pipx: `pipx install openviking` (install pipx first: `apt install pipx`).
+
 ---
 
 ## 8. Network Acceleration (Mirrors & Proxies)

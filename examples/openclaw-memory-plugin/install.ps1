@@ -325,10 +325,11 @@ function Configure-OpenClawPlugin {
   $cfg["plugins"]["allow"] = @("memory-openviking")
   $cfg["plugins"]["slots"]["memory"] = "memory-openviking"
   $cfg["plugins"]["load"]["paths"] = $mergedPaths
+  $ovConfPath = Join-Path $OpenVikingDir "ov.conf"
   $cfg["plugins"]["entries"]["memory-openviking"] = @{
     config = @{
       mode = "local"
-      configPath = "~/.openviking/ov.conf"
+      configPath = $ovConfPath
       port = $ServerPort
       targetUri = "viking://"
       autoRecall = $true

@@ -13,10 +13,18 @@
 #   PIP_INDEX_URL=url             - pip index URL (default: https://pypi.tuna.tsinghua.edu.cn/simple)
 #   OPENVIKING_VLM_API_KEY        - VLM model API key (optional)
 #   OPENVIKING_EMBEDDING_API_KEY  - Embedding model API key (optional)
-#   OPENVIKING_ARK_API_KEY        - legacy fallback for both keys
+#   OPENVIKING_ARK_API_KEY       - legacy fallback for both keys
+#   OPENVIKING_ALLOW_BREAK_SYSTEM_PACKAGES=1 - if venv unavailable (PEP 668 only), allow pip --break-system-packages (opt-in, default off)
+#   GET_PIP_URL=url                 - URL for get-pip.py when using venv --without-pip (default: auto)
+#
+# On Debian/Ubuntu (PEP 668), the script installs OpenViking into a venv at
+# ~/.openviking/venv to avoid "externally-managed-environment" errors.
 #
 
 set -e
+
+# Set by install_openviking when using venv (e.g. on Debian/Ubuntu); used by write_openviking_env
+OPENVIKING_PYTHON_PATH=""
 
 REPO="${REPO:-volcengine/OpenViking}"
 BRANCH="${BRANCH:-main}"
@@ -258,14 +266,119 @@ install_openviking() {
     info "$(tr "Skipping OpenViking install (SKIP_OPENVIKING=1)" "跳过 OpenViking 安装 (SKIP_OPENVIKING=1)")"
     return 0
   fi
+  local py="${OPENVIKING_PYTHON:-python3}"
   info "$(tr "Installing OpenViking from PyPI..." "正在安装 OpenViking (PyPI)...")"
   info "$(tr "Using pip index: ${PIP_INDEX_URL}" "使用 pip 镜像源: ${PIP_INDEX_URL}")"
-  python3 -m pip install --upgrade pip -q -i "${PIP_INDEX_URL}"
-  python3 -m pip install openviking -i "${PIP_INDEX_URL}" || {
-    err "$(tr "OpenViking install failed. Check Python version (>=3.10) and pip." "OpenViking 安装失败，请检查 Python 版本 (需 >= 3.10) 及 pip")"
-    exit 1
-  }
-  info "$(tr "OpenViking installed ✓" "OpenViking 安装完成 ✓")"
+
+  # Try system-wide pip first (works on many systems)
+  local err_out
+  err_out=$("$py" -m pip install --upgrade pip -q -i "${PIP_INDEX_URL}" 2>&1) || true
+  if err_out=$("$py" -m pip install openviking -i "${PIP_INDEX_URL}" 2>&1); then
+    OPENVIKING_PYTHON_PATH="$(command -v "$py" || true)"
+    [[ -z "$OPENVIKING_PYTHON_PATH" ]] && OPENVIKING_PYTHON_PATH="$py"
+    info "$(tr "OpenViking installed ✓" "OpenViking 安装完成 ✓")"
+    return 0
+  fi
+
+  # When system has no pip, or PEP 668 (Debian/Ubuntu): use a venv
+  if echo "$err_out" | grep -q "externally-managed-environment\|externally managed\|No module named pip"; then
+    if echo "$err_out" | grep -q "No module named pip"; then
+      info "$(tr "System Python has no pip. Using a venv at ~/.openviking/venv" "系统 Python 未安装 pip，将使用 ~/.openviking/venv 虚拟环境")"
+    else
+      # Opt-in: allow install with --break-system-packages when venv is not available (PEP 668 only, default off)
+      if [[ "${OPENVIKING_ALLOW_BREAK_SYSTEM_PACKAGES}" == "1" ]]; then
+        info "$(tr "Installing OpenViking with --break-system-packages (OPENVIKING_ALLOW_BREAK_SYSTEM_PACKAGES=1)" "正在以 --break-system-packages 安装 OpenViking（已设置 OPENVIKING_ALLOW_BREAK_SYSTEM_PACKAGES=1）")"
+        if "$py" -m pip install --break-system-packages openviking -i "${PIP_INDEX_URL}"; then
+          OPENVIKING_PYTHON_PATH="$(command -v "$py" || true)"
+          [[ -z "$OPENVIKING_PYTHON_PATH" ]] && OPENVIKING_PYTHON_PATH="$py"
+          info "$(tr "OpenViking installed ✓ (system)" "OpenViking 安装完成 ✓（系统）")"
+          return 0
+        fi
+      fi
+      info "$(tr "System Python is externally managed (PEP 668). Using a venv at ~/.openviking/venv" "检测到系统 Python 受管 (PEP 668)，将使用 ~/.openviking/venv 虚拟环境")"
+    fi
+    mkdir -p "${OPENVIKING_DIR}"
+    local venv_dir="${OPENVIKING_DIR}/venv"
+    local venv_py="${venv_dir}/bin/python"
+
+    # Reuse existing venv if it has openviking (avoid repeated create on re-run)
+    if [[ -x "${venv_py}" ]] && "${venv_py}" -c "import openviking" 2>/dev/null; then
+      info "$(tr "Using existing venv with openviking: ${venv_dir}" "复用已有虚拟环境（已装 openviking）: ${venv_dir}")"
+      "${venv_py}" -m pip install -q -U openviking -i "${PIP_INDEX_URL}" 2>/dev/null || true
+      OPENVIKING_PYTHON_PATH="${venv_dir}/bin/python"
+      info "$(tr "OpenViking installed ✓ (venv)" "OpenViking 安装完成 ✓（虚拟环境）")"
+      return 0
+    fi
+
+    local venv_ok=0
+    # Try 1: stdlib venv with ensurepip (needs python3-venv); errors suppressed to avoid confusing "ensurepip not available" message
+    if "$py" -m venv "${venv_dir}" 2>/dev/null; then
+      venv_ok=1
+    fi
+
+    # Try 2: venv --without-pip then bootstrap pip via get-pip.py (no ensurepip needed; works when Try 1 fails)
+    if [[ "$venv_ok" -eq 0 ]]; then
+      rm -rf "${venv_dir}" 2>/dev/null || true
+      info "$(tr "Creating venv without system pip, then installing pip..." "正在创建无系统 pip 的虚拟环境并安装 pip...")"
+      if "$py" -m venv --without-pip "${venv_dir}" 2>/dev/null; then
+        info "$(tr "Venv created without pip; bootstrapping pip (using index: ${PIP_INDEX_URL})..." "已创建无 pip 的虚拟环境，正在安装 pip（使用镜像: ${PIP_INDEX_URL}）...")"
+        local get_pip get_pip_url
+        get_pip=$(mktemp -t get-pip.XXXXXX.py 2>/dev/null || echo "/tmp/get-pip.py")
+        # Prefer mirror for get-pip.py when PIP_INDEX_URL is in China to avoid slow/timeout
+        if [[ -n "${GET_PIP_URL}" ]]; then
+          get_pip_url="${GET_PIP_URL}"
+        elif echo "${PIP_INDEX_URL}" | grep -q "tuna.tsinghua\|pypi.tuna"; then
+          get_pip_url="https://mirrors.tuna.tsinghua.edu.cn/pypi/web/static/get-pip.py"
+        else
+          get_pip_url="https://bootstrap.pypa.io/get-pip.py"
+        fi
+        if ! curl -fsSL --connect-timeout 15 --max-time 120 "${get_pip_url}" -o "${get_pip}" 2>/dev/null; then
+          if [[ "${get_pip_url}" != "https://bootstrap.pypa.io/get-pip.py" ]]; then
+            curl -fsSL --connect-timeout 15 --max-time 120 "https://bootstrap.pypa.io/get-pip.py" -o "${get_pip}" 2>/dev/null || true
+          fi
+        fi
+        if [[ -s "${get_pip}" ]] && PIP_INDEX_URL="${PIP_INDEX_URL}" "$venv_py" "${get_pip}" -q 2>/dev/null; then
+          venv_ok=1
+        fi
+        rm -f "${get_pip}" 2>/dev/null || true
+      fi
+    fi
+
+    # Try 3: virtualenv (if already installed or installable with --user)
+    if [[ "$venv_ok" -eq 0 ]]; then
+      rm -rf "${venv_dir}" 2>/dev/null || true
+      if "$py" -m virtualenv "${venv_dir}" 2>/dev/null; then
+        venv_ok=1
+      elif "$py" -m pip install --user virtualenv -i "${PIP_INDEX_URL}" -q 2>/dev/null && "$py" -m virtualenv "${venv_dir}" 2>/dev/null; then
+        venv_ok=1
+      fi
+    fi
+
+    if [[ "$venv_ok" -eq 0 ]]; then
+      rm -rf "${venv_dir}" 2>/dev/null || true
+      local py_ver
+      py_ver=$("$py" -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')" 2>/dev/null || echo "3")
+      err "$(tr "Could not create venv. Install venv then re-run:" "无法创建虚拟环境。请先安装 venv 后重新执行：")"
+      echo "  sudo apt install python${py_ver}-venv   # or python3-full"
+      echo ""
+      echo "$(tr "Or (may conflict with system packages):" "或允许安装到系统（可能与系统包冲突）：")"
+      echo "  OPENVIKING_ALLOW_BREAK_SYSTEM_PACKAGES=1 curl -fsSL ... | bash"
+      exit 1
+    fi
+
+    "$venv_py" -m pip install --upgrade pip -q -i "${PIP_INDEX_URL}"
+    if ! "$venv_py" -m pip install openviking -i "${PIP_INDEX_URL}"; then
+      err "$(tr "OpenViking install failed in venv." "在虚拟环境中安装 OpenViking 失败。")"
+      exit 1
+    fi
+    OPENVIKING_PYTHON_PATH="${venv_dir}/bin/python"
+    info "$(tr "OpenViking installed ✓ (venv)" "OpenViking 安装完成 ✓（虚拟环境）")"
+    return 0
+  fi
+
+  err "$(tr "OpenViking install failed. Check Python version (>=3.10) and pip." "OpenViking 安装失败，请检查 Python 版本 (需 >= 3.10) 及 pip")"
+  echo "$err_out" >&2
+  exit 1
 }
 
 configure_openviking_conf() {
@@ -357,18 +470,39 @@ download_plugin() {
     "examples/openclaw-memory-plugin/package-lock.json"
     "examples/openclaw-memory-plugin/.gitignore"
   )
+  local total=${#files[@]}
+  local i=0
 
   mkdir -p "${PLUGIN_DEST}"
-  info "$(tr "Downloading memory-openviking plugin..." "正在下载 memory-openviking 插件...")"
-  info "$(tr "Plugin source: ${REPO}@${BRANCH}" "插件来源: ${REPO}@${BRANCH}")"
+  info "$(tr "Downloading memory-openviking plugin from ${REPO}@${BRANCH} (${total} files)..." "正在从 ${REPO}@${BRANCH} 下载 memory-openviking 插件（共 ${total} 个文件）...")"
+  local max_retries=3
   for rel in "${files[@]}"; do
+    i=$((i + 1))
     local name="${rel##*/}"
     local url="${gh_raw}/${rel}"
-    curl -fsSL -o "${PLUGIN_DEST}/${name}" "${url}" || {
-      err "$(tr "Download failed: ${url}" "下载失败: ${url}")"
+    local ok=0
+    echo -n "  [${i}/${total}] ${name} "
+    local attempt=1
+    while [[ "$attempt" -le "${max_retries}" ]]; do
+      if curl -fsSL --connect-timeout 15 --max-time 120 -# -o "${PLUGIN_DEST}/${name}" "${url}" 2>/dev/null; then
+        ok=1
+        break
+      fi
+      [[ "$attempt" -lt "${max_retries}" ]] && sleep 2
+      attempt=$((attempt + 1))
+    done
+    if [[ "$ok" -eq 1 ]]; then
+      echo "✓"
+    elif [[ "$name" == ".gitignore" ]]; then
+      echo "$(tr "(retries failed, using minimal .gitignore)" "（重试失败，使用最小 .gitignore）")"
+      echo "node_modules/" > "${PLUGIN_DEST}/${name}"
+    else
+      echo ""
+      err "$(tr "Download failed after ${max_retries} retries: ${url}" "下载失败（已重试 ${max_retries} 次）: ${url}")"
       exit 1
-    }
+    fi
   done
+  info "$(tr "Installing plugin npm dependencies (may take 1-2 min, npm will show progress)..." "正在安装插件 npm 依赖（约 1–2 分钟，npm 会显示进度）...")"
   (cd "${PLUGIN_DEST}" && npm install --no-audit --no-fund) || {
     err "$(tr "Plugin dependency install failed: ${PLUGIN_DEST}" "插件依赖安装失败: ${PLUGIN_DEST}")"
     exit 1
@@ -378,7 +512,8 @@ download_plugin() {
 
 configure_openclaw_plugin() {
   local server_port="${SELECTED_SERVER_PORT}"
-  local config_path="~/.openviking/ov.conf"
+  # Use absolute path so openclaw works when started from any cwd (e.g. root from /root)
+  local config_path="${OPENVIKING_DIR}/ov.conf"
   info "$(tr "Configuring OpenClaw plugin..." "正在配置 OpenClaw 插件...")"
 
   openclaw config set plugins.enabled true
@@ -397,7 +532,11 @@ configure_openclaw_plugin() {
 
 write_openviking_env() {
   local py_path
-  py_path="$(command -v python3 || command -v python || true)"
+  if [[ -n "${OPENVIKING_PYTHON_PATH}" ]]; then
+    py_path="${OPENVIKING_PYTHON_PATH}"
+  else
+    py_path="$(command -v python3 || command -v python || true)"
+  fi
   mkdir -p "${OPENCLAW_DIR}"
   cat > "${OPENCLAW_DIR}/openviking.env" <<EOF
 export OPENVIKING_PYTHON='${py_path}'

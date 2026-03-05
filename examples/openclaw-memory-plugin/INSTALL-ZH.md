@@ -605,6 +605,35 @@ export OPENVIKING_PYTHON=python3.11
 npx ./examples/openclaw-memory-plugin/setup-helper
 ```
 
+#### Q: 报错 `externally-managed-environment` / `This environment is externally managed`
+
+Ubuntu、Debian 等系统的 Python 受 PEP 668 保护，不允许直接用 `pip` 安装到系统环境。可选做法：
+
+1. **推荐**：使用本仓库的一键安装脚本，脚本会尝试用 venv/virtualenv 在 `~/.openviking/venv` 安装；若系统没有 venv，会提示安装对应版本的包。
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-memory-plugin/install.sh | bash
+   ```
+
+2. **安装 venv**：请使用与当前 Python 版本一致的包（很多系统没有 `python3-venv` 只有版本号包）：
+   ```bash
+   python3 --version   # 例如 Python 3.12.x
+   sudo apt install -y python3.12-venv   # 把 3.12 换成你的版本；或试 python3-full
+   ```
+   然后重新执行上述 curl 安装命令。
+
+3. **无法安装 venv 时**（如部分云镜像无 python3.x-venv）：允许安装到系统（不推荐，可能影响系统 Python）：
+   ```bash
+   OPENVIKING_ALLOW_BREAK_SYSTEM_PACKAGES=1 curl -fsSL .../install.sh | bash
+   ```
+
+4. 手动创建虚拟环境并安装：
+   ```bash
+   sudo apt install -y python3.12-venv   # 版本号与 python3 --version 一致
+   python3 -m venv ~/.openviking/venv
+   ~/.openviking/venv/bin/pip install openviking
+   export OPENVIKING_PYTHON=~/.openviking/venv/bin/python
+   ```
+
 ---
 
 ## 八、网络加速（镜像与代理配置）

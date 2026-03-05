@@ -442,10 +442,11 @@ async function configureOpenclawViaJson(pluginPath, serverPort) {
   if (!paths.includes(pluginPath)) paths.push(pluginPath);
   cfg.plugins.load.paths = paths;
   if (!cfg.plugins.entries) cfg.plugins.entries = {};
+  const ovConfPath = join(OPENVIKING_DIR, "ov.conf");
   cfg.plugins.entries["memory-openviking"] = {
     config: {
       mode: "local",
-      configPath: "~/.openviking/ov.conf",
+      configPath: ovConfPath,
       port: serverPort,
       targetUri: "viking://user/memories",
       autoRecall: true,
@@ -474,7 +475,8 @@ async function configureOpenclawViaCli(pluginPath, serverPort, mode) {
   await runNoShell("openclaw", ["config", "set", "gateway.mode", "local"]);
   await runNoShell("openclaw", ["config", "set", "plugins.slots.memory", "memory-openviking"]);
   await runNoShell("openclaw", ["config", "set", "plugins.entries.memory-openviking.config.mode", "local"]);
-  await runNoShell("openclaw", ["config", "set", "plugins.entries.memory-openviking.config.configPath", "~/.openviking/ov.conf"]);
+  const ovConfPath = join(OPENVIKING_DIR, "ov.conf");
+  await runNoShell("openclaw", ["config", "set", "plugins.entries.memory-openviking.config.configPath", ovConfPath]);
   await runNoShell("openclaw", ["config", "set", "plugins.entries.memory-openviking.config.port", String(serverPort)]);
   await runNoShell("openclaw", ["config", "set", "plugins.entries.memory-openviking.config.targetUri", "viking://user/memories"]);
   await runNoShell("openclaw", ["config", "set", "plugins.entries.memory-openviking.config.autoRecall", "true", "--json"]);
