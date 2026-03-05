@@ -38,7 +38,7 @@ class ChatRequest(BaseModel):
     """Request body for chat endpoint."""
 
     message: str = Field(..., description="User message to send", min_length=1)
-    session_id: Optional[str] = Field(default=None, description="Session ID (optional, will create new if not provided)")
+    session_id: Optional[str] = Field(default="default", description="Session ID (optional, will create new if not provided)")
     user_id: Optional[str] = Field(default=None, description="User identifier (optional)")
     stream: bool = Field(default=False, description="Whether to stream the response")
     context: Optional[List[ChatMessage]] = Field(default=None, description="Additional context messages")

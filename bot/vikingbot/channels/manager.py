@@ -63,6 +63,7 @@ class ChannelManager:
                     channel_config,
                     self.bus,
                     groq_api_key=additional_deps.get("groq_api_key"),
+                    workspace_path=workspace_path,
                 )
 
             elif channel_config.type == ChannelType.FEISHU:

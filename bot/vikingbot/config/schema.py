@@ -250,9 +250,10 @@ class OpenAPIChannelConfig(BaseChannelConfig):
     api_key: str = ""  # If empty, no auth required
     allow_from: list[str] = Field(default_factory=list)
     max_concurrent_requests: int = 100
+    _channel_id: str = "default"
 
     def channel_id(self) -> str:
-        return "openapi"
+        return self._channel_id
 
 
 class ChannelsConfig(BaseModel):

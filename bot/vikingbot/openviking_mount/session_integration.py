@@ -1,7 +1,7 @@
 """
 OpenViking FUSE 会话集成
 
-提供与会话管理器的集成，自动在 .vikingbot/workspace/{session}/ 挂载 OpenViking
+提供与会话管理器的集成，自动在配置的 workspace/{session}/ 挂载 OpenViking
 每个session直接在自己的workspace下管理内容
 """
 
@@ -15,6 +15,7 @@ from typing import Dict, Optional, Any
 
 from loguru import logger
 
+from vikingbot.utils.helpers import get_workspace_path
 # 相对导入同一包内的模块
 from .mount import OpenVikingMount, MountConfig, MountScope
 from .viking_fuse import mount_fuse, FUSEMountManager, FUSE_AVAILABLE
@@ -35,7 +36,7 @@ class SessionOpenVikingManager:
             base_workspace: 基础工作区路径
         """
         if base_workspace is None:
-            base_workspace = Path.home() / ".vikingbot" / "workspace"
+            base_workspace = get_workspace_path()
 
         self.base_workspace = base_workspace
         self.base_workspace.mkdir(parents=True, exist_ok=True)
@@ -58,7 +59,7 @@ class SessionOpenVikingManager:
             session_key: 会话键
 
         Returns:
-            工作区路径: .vikingbot/workspace/{session}/
+            工作区路径: {workspace}/.vikingbot/workspace/{session}/
         """
         safe_session_key = session_key.replace(":", "__")
         return self.base_workspace / safe_session_key
@@ -71,7 +72,7 @@ class SessionOpenVikingManager:
             session_key: 会话键
 
         Returns:
-            数据存储路径: .vikingbot/workspace/{session}/.ov_data/
+            数据存储路径: {workspace}/{session}/.ov_data/
         """
         return self.get_session_workspace(session_key) / ".ov_data"
 

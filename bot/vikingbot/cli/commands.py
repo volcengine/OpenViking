@@ -276,7 +276,7 @@ def gateway(
 
 
 def prepare_agent_loop(config, bus, session_manager, cron, quiet: bool = False, eval: bool = False):
-    sandbox_parent_path = config.bot_data_path
+    sandbox_parent_path = config.workspace_path
     source_workspace_path = get_source_workspace_path()
     sandbox_manager = SandboxManager(config, sandbox_parent_path, source_workspace_path)
     if config.sandbox.backend == "direct":
@@ -479,23 +479,13 @@ def _thinking_ctx(logs: bool):
     return console.status("[dim]vikingbot is thinking...[/dim]", spinner="dots")
 
 
-def prepare_agent_channel(config, bus, mode: str, message: str | None, session_id: str, markdown: bool, logs: bool, eval: bool = False):
+def prepare_agent_channel(config, bus, message: str | None, session_id: str, markdown: bool, logs: bool, eval: bool = False):
     """Prepare channel for agent command."""
     from vikingbot.channels.chat import ChatChannel, ChatChannelConfig
-    from vikingbot.channels.stdio import StdioChannel, StdioChannelConfig
     from vikingbot.channels.single_turn import SingleTurnChannel, SingleTurnChannelConfig
 
     channels = ChannelManager(bus)
-
-    if mode == "stdio":
-        channel_config = StdioChannelConfig()
-        channel = StdioChannel(
-            channel_config,
-            bus,
-            workspace_path=config.workspace_path,
-        )
-        channels.add_channel(channel)
-    elif message is not None:
+    if message is not None:
         # Single message mode - use SingleTurnChannel for clean output
         channel_config = SingleTurnChannelConfig()
         channel = SingleTurnChannel(
@@ -534,9 +524,6 @@ def chat(
     logs: bool = typer.Option(
         False, "--logs/--no-logs", help="Show vikingbot runtime logs during chat"
     ),
-    mode: str = typer.Option(
-        "direct", "--mode", help="Mode: direct (interactive), stdio (JSON IPC)"
-    ),
     eval: bool = typer.Option(
         False, "--eval", "-e", help="Run evaluation mode, output JSON results"
     ),
@@ -559,9 +546,9 @@ def chat(
     is_single_turn = message is not None
     # Use unified default session ID
     if session_id is None:
-        session_id = "cli__chat__default"
+        session_id = "default"
     cron = prepare_cron(bus, quiet=is_single_turn)
-    channels = prepare_agent_channel(config, bus, mode, message, session_id, markdown, logs, eval)
+    channels = prepare_agent_channel(config, bus, message, session_id, markdown, logs, eval)
     agent_loop = prepare_agent_loop(config, bus, session_manager, cron, quiet=is_single_turn, eval=eval)
 
     async def run():
@@ -830,7 +817,7 @@ def cron_add(
     store_path = get_data_dir() / "cron" / "jobs.json"
     service = CronService(store_path)
 
-    session_key = SessionKey.from_safe_name()
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="default")
 
     job = service.add_job(
         name=name,

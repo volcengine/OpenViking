@@ -41,9 +41,10 @@ class OpenAPIChannelConfig(BaseChannelConfig):
     api_key: str = ""  # If empty, no auth required
     allow_from: list[str] = []
     max_concurrent_requests: int = 100
+    _channel_id: str = "default"
 
     def channel_id(self) -> str:
-        return "openapi"
+        return self._channel_id
 
 
 class PendingResponse:
@@ -293,7 +294,7 @@ class OpenAPIChannel(BaseChannel):
         try:
             # Build session key
             session_key = SessionKey(
-                type="openapi",
+                type="cli",
                 channel_id=self.config.channel_id(),
                 chat_id=session_id,
             )
@@ -362,7 +363,7 @@ class OpenAPIChannel(BaseChannel):
             try:
                 # Build session key and send message
                 session_key = SessionKey(
-                    type="openapi",
+                    type="cli",
                     channel_id=self.config.channel_id(),
                     chat_id=session_id,
                 )

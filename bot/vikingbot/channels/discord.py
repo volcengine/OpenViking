@@ -204,11 +204,12 @@ class DiscordChannel(BaseChannel):
 
         content_parts = [content] if content else []
         media_paths: list[str] = []
+        from vikingbot.utils.helpers import get_media_path
+
         if self.workspace_path:
             media_dir = self.workspace_path / "media"
         else:
-            # Fallback to ~/.vikingbot/media if workspace not available
-            media_dir = Path.home() / ".vikingbot" / "media"
+            media_dir = get_media_path()
 
         for attachment in payload.get("attachments") or []:
             url = attachment.get("url")
