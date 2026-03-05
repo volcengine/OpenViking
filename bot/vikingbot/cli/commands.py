@@ -336,7 +336,7 @@ def prepare_agent_loop(config, bus, session_manager, cron, quiet: bool = False, 
     source_workspace_path = get_source_workspace_path()
     sandbox_manager = SandboxManager(config, sandbox_parent_path, source_workspace_path)
     if config.sandbox.backend == "direct":
-        logger.warning("Sandbox: disabled (using DIRECT mode - commands run directly on host)")
+        logger.warning("[SANDBOX] disabled (using DIRECT mode - commands run directly on host)")
     else:
         logger.info(f"Sandbox: enabled (backend={config.sandbox.backend}, mode={config.sandbox.mode})")
 

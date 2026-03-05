@@ -161,8 +161,6 @@ def trace(
                         with langfuse.propagate_attributes(session_id=session_id, user_id=user_id):
                             return await wrapped_func(*args, **kwargs)
                     else:
-                        if not langfuse.enabled:
-                            logger.warning(f"[LANGFUSE] Client not enabled")
                         if not has_propagate:
                             logger.warning(f"[LANGFUSE] propagate_attributes not available")
                     return await wrapped_func(*args, **kwargs)

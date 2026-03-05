@@ -61,7 +61,7 @@ class LangfuseClient:
     def get_instance(cls) -> "LangfuseClient":
         """Get the singleton instance."""
         if cls._instance is None:
-            logger.warning("[LANGFUSE] No instance set, creating default (disabled) instance")
+            logger.warning("[LANGFUSE] disabled")
             cls._instance = LangfuseClient(enabled=False)
         return cls._instance
 
