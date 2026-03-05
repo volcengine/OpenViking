@@ -28,9 +28,21 @@ def main():
     极简入口点：查找 ov 二进制并执行
 
     按优先级查找：
+    0. ./target/release/ov（开发环境）
     1. Wheel 自带：{package_dir}/openviking/bin/ov
     2. PATH 查找：系统全局安装的 ov
     """
+    # 0. 检查开发环境（仅在直接运行脚本时有效）
+    try:
+        # __file__ is openviking_cli/rust_cli.py, so parent is openviking_cli directory
+        dev_binary = Path(__file__).parent.parent / "target" / "release" / "ov"
+        if dev_binary.exists() and os.access(dev_binary, os.X_OK):
+            # 找到后立即 execv，不返回
+            args = [str(dev_binary)] + sys.argv[1:]
+            os.execv(str(dev_binary), args)
+    except Exception:
+        pass
+
     # 1. 检查 Wheel 自带（不导入 openviking，避免额外开销）
     try:
         # __file__ is openviking_cli/rust_cli.py, so parent is openviking_cli directory
