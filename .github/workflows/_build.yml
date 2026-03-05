@@ -99,7 +99,7 @@ jobs:
       run: uv run --frozen python -m build --sdist
 
     - name: Store the distribution packages
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v7
       with:
         name: python-package-distributions-sdist
         path: dist/*.tar.gz
@@ -264,7 +264,7 @@ jobs:
         rmdir dist_fixed
 
     - name: Store the distribution packages
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v7
       with:
         name: python-package-distributions-linux-${{ matrix.python-version }}
         path: dist/
@@ -402,7 +402,7 @@ jobs:
       run: uv run --frozen python -m build --wheel
 
     - name: Store the distribution packages
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v7
       with:
         name: python-package-distributions-${{ matrix.os == 'macos-latest' && 'macos-arm64' || matrix.os == 'macos-15-intel' && 'macos-x86_64' || matrix.os == 'windows-latest' && 'windows-x86_64' || matrix.os }}-${{ matrix.python-version }}
         path: dist/
