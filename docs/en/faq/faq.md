@@ -56,10 +56,24 @@ viking://
 ### What are the environment requirements?
 
 - **Python Version**: 3.10 or higher
+- **Build Tools** (if installing from source or on unsupported platforms): Go 1.19+, GCC 9+ or Clang 11+
 - **Required Dependencies**: Embedding model (Volcengine Doubao recommended)
 - **Optional Dependencies**:
   - VLM (Vision Language Model): For multimodal content processing and semantic extraction
   - Rerank model: For improved retrieval precision
+
+### What are `binding-client` and `http-client`? Which one should I choose?
+
+- **`binding-client` (Default)**: Runs AGFS logic directly within the Python process via CGO bindings. Advantages: extremely high performance, zero network latency; Disadvantages: requires a compiled AGFS shared library locally.
+- **`http-client`**: Communicates with a standalone `agfs-server` via HTTP. Advantages: decoupled deployment, no local Go compilation needed; Disadvantages: some network communication overhead.
+
+If your environment supports Go compilation or you've installed a Wheel package containing pre-compiled libraries, the default `binding-client` is recommended.
+
+### What should I do if I encounter "AGFS binding library not found"?
+
+This usually means the AGFS shared library is not pre-built in your environment. You can:
+1. **Re-compile and install**: Run `pip install -e . --force-reinstall` in the project root (requires Go environment).
+2. **Switch to HTTP mode**: Set `storage.agfs.mode = "http-client"` in your `ov.conf` and ensure an `agfs-server` is running.
 
 ### How do I install/upgrade OpenViking?
 

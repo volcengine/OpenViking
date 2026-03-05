@@ -51,7 +51,7 @@ source .venv/bin/activate  # Linux/macOS
 
 #### 本地开发与 AGFS 编译
 
-如果你修改了 **AGFS (Go)** 代码或 **C++ 扩展**，你需要重新编译并安装它们，以使更改在本地环境中生效。在项目根目录下运行以下命令：
+OpenViking 默认使用 `binding-client` 模式，这需要一个预先构建的共享库。如果你修改了 **AGFS (Go)** 代码或 **C++ 扩展**，或者预编译库未找到，你需要重新编译并安装它们，以使更改在本地环境中生效。在项目根目录下运行以下命令：
 
 ```bash
 uv pip install -e . --force-reinstall
