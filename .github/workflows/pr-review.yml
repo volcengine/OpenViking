@@ -25,7 +25,6 @@ jobs:
           github_action_config.auto_review: "true"
           github_action_config.auto_describe: "false"
           github_action_config.auto_improve: "true"
-          pr_reviewer.num_code_suggestions: "4"
           pr_reviewer.extra_instructions: >
             Classify each finding with a severity tag:
             [Bug] = Must fix: behavioral regression, logic error, security vulnerability, data loss/corruption, resource leak, API contract violation.
