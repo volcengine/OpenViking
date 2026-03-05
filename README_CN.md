@@ -448,7 +448,7 @@ uv pip install -e bot/
 openviking-server --with-bot
 
 # 在另一个终端启动交互式聊天
-vikingbot chat
+ov chat
 ```
 
 ---
