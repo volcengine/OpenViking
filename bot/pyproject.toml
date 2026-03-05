@@ -41,6 +41,7 @@ dependencies = [
     "openviking>=0.1.18",
     "ddgs>=9.0.0",
     "gradio>=6.6.0",
+    "py-machineid>=1.0.0",
 ]
 
 [project.optional-dependencies]

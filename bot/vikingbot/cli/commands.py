@@ -49,38 +49,22 @@ EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
 
 
 def get_or_create_machine_id() -> str:
-    """Get or create a unique machine ID.
+    """Get a unique machine ID using py-machineid.
 
-    This function will:
-    1. Try to read an existing machine ID from the config directory
-    2. If not found, generate a new UUID v4 and store it
-
-    The logic is kept consistent with the Rust implementation.
+    Uses the system's machine ID, falls back to "default" if unavailable.
     """
-    import uuid
-    home = Path.home()
-    machine_id_path = home / ".openviking" / "machine_id"
-
-    # Try to read existing machine ID
-    if machine_id_path.exists():
-        try:
-            content = machine_id_path.read_text().strip()
-            if content:
-                return content
-        except Exception:
-            pass
-
-    # Generate a new UUID v4
-    new_id = str(uuid.uuid4())
-
-    # Save it for future use
-    machine_id_path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        machine_id_path.write_text(new_id)
+        from machineid import machine_id
+        return machine_id()
+    except ImportError:
+        # Fallback if py-machineid is not installed
+        pass
     except Exception:
         pass
 
-    return new_id
+    # Default fallback
+    return "default"
+
 
 
 def _init_bot_data(config):

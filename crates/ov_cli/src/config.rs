@@ -99,34 +99,12 @@ pub fn default_config_path() -> Result<PathBuf> {
     Ok(home.join(".openviking").join("ovcli.conf"))
 }
 
-/// Get or create a unique machine ID.
+/// Get a unique machine ID using machine-uid crate.
 ///
-/// This function will:
-/// 1. Try to read an existing machine ID from the config directory
-/// 2. If not found, generate a new UUID v4 and store it
+/// Uses the system's machine ID, falls back to "default" if unavailable.
 pub fn get_or_create_machine_id() -> Result<String> {
-    let home = dirs::home_dir()
-        .ok_or_else(|| Error::Config("Could not determine home directory".to_string()))?;
-    let machine_id_path = home.join(".openviking").join("machine_id");
-
-    // Try to read existing machine ID
-    if machine_id_path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&machine_id_path) {
-            let trimmed = content.trim();
-            if !trimmed.is_empty() {
-                return Ok(trimmed.to_string());
-            }
-        }
+    match machine_uid::get() {
+        Ok(id) => Ok(id),
+        Err(_) => Ok("default".to_string()),
     }
-
-    // Generate a new UUID v4
-    let new_id = uuid::Uuid::new_v4().to_string();
-
-    // Save it for future use
-    if let Some(parent) = machine_id_path.parent() {
-        let _ = std::fs::create_dir_all(parent);
-    }
-    let _ = std::fs::write(&machine_id_path, &new_id);
-
-    Ok(new_id)
 }

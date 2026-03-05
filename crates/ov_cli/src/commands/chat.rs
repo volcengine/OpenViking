@@ -142,13 +142,13 @@ impl ChatCommand {
                         "reasoning" => {
                             let content = data.as_str().unwrap_or("");
                             if !self.no_format {
-                                println!("\t\x1b[2mThink: {}...\x1b[0m", truncate_utf8(content, 100));
+                                println!("  \x1b[2mThink: {}...\x1b[0m", truncate_utf8(content, 100));
                             }
                         }
                         "tool_call" => {
                             let content = data.as_str().unwrap_or("");
                             if !self.no_format {
-                                println!("\t\x1b[2m├─ Calling: {}\x1b[0m", content);
+                                println!("  \x1b[2m├─ Calling: {}\x1b[0m", content);
                             }
                         }
                         "tool_result" => {
@@ -159,7 +159,7 @@ impl ChatCommand {
                                 } else {
                                     content.to_string()
                                 };
-                                println!("\t\x1b[2m└─ Result: {}\x1b[0m", truncated);
+                                println!("  \x1b[2m└─ Result: {}\x1b[0m", truncated);
                             }
                         }
                         _ => {}
