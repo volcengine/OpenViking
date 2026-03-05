@@ -365,6 +365,7 @@ class AgentLoop:
         """
         # Handle system messages (subagent announces)
         # The chat_id contains the original "channel:chat_id" to route back to
+        start_time = time.time()
         if msg.session_key.type == "system":
             return await self._process_system_message(msg)
 
@@ -437,11 +438,13 @@ class AgentLoop:
         )
         await self.sessions.save(session)
 
+        time_cost = round(time.time() - start_time, 2)
         return OutboundMessage(
             session_key=msg.session_key,
             content=final_content,
             metadata=msg.metadata,
-            token_usage=self._token_usage
+            token_usage=self._token_usage,
+            time_cost=time_cost
             or {},  # Pass through for channel-specific needs (e.g. Slack thread_ts)
         )
 
