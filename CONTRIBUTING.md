@@ -14,7 +14,7 @@ Thank you for your interest in OpenViking! We welcome contributions of all kinds
 ### Prerequisites
 
 - **Python**: 3.10+
-- **Go**: 1.19.1+ (Required for building AGFS components from source)
+- **Go**: 1.22+ (Required for building AGFS components from source)
 - **C++ Compiler**: GCC 9+ or Clang 11+ (Required for building core extensions, must support C++17)
 - **CMake**: 3.12+
 
