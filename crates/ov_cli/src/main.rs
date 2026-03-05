@@ -337,9 +337,6 @@ enum Commands {
         /// Render assistant output as Markdown
         #[arg(long = "markdown", default_value = "true")]
         markdown: bool,
-        /// Show vikingbot runtime logs during chat
-        #[arg(long = "logs", default_value = "false")]
-        logs: bool,
     },
     /// Configuration management
     Config {
@@ -575,7 +572,7 @@ async fn main() {
         Commands::Tui { uri } => {
             handle_tui(uri, ctx).await
         }
-        Commands::Chat { message, session, markdown, logs: _ } => {
+        Commands::Chat { message, session, markdown } => {
             let session_id = session.or_else(|| config::get_or_create_machine_id().ok());
             let cmd = commands::chat::ChatCommand {
                 endpoint: std::env::var("VIKINGBOT_ENDPOINT").unwrap_or_else(|_| "http://localhost:1933/bot/v1".to_string()),
