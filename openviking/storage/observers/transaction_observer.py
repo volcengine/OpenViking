@@ -12,7 +12,7 @@ from typing import Any, Dict
 from openviking.storage.observers.base_observer import BaseObserver
 from openviking.storage.transaction import TransactionManager
 from openviking.storage.transaction.transaction_record import TransactionStatus
-from openviking_cli.utils import run_async
+from openviking_cli.utils import LoopType, run_async
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -55,7 +55,7 @@ class TransactionObserver(BaseObserver):
         Returns:
             Formatted table string showing transaction status
         """
-        return run_async(self.get_status_table_async())
+        return run_async(self.get_status_table_async(), loop_type=LoopType.OBSERVER)
 
     def __str__(self) -> str:
         """String representation returns status table.

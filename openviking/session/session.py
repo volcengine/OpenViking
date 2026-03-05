@@ -16,7 +16,7 @@ from openviking.message import Message, Part
 from openviking.server.identity import RequestContext, Role
 from openviking.utils.time_utils import get_current_timestamp
 from openviking_cli.session.user_id import UserIdentifier
-from openviking_cli.utils import get_logger, run_async
+from openviking_cli.utils import LoopType, get_logger, run_async
 from openviking_cli.utils.config import get_openviking_config
 
 if TYPE_CHECKING:
@@ -265,7 +265,8 @@ class Session:
                     user=self.user,
                     session_id=self.session_id,
                     ctx=self.ctx,
-                )
+                ),
+                loop_type=LoopType.BACKGROUND,
             )
             logger.info(f"Extracted {len(memories)} memories")
             result["memories_extracted"] = len(memories)
@@ -301,7 +302,10 @@ class Session:
 
         uris = [usage.uri for usage in self._usage_records if usage.uri]
         try:
-            updated = run_async(self._vikingdb_manager.increment_active_count(self.ctx, uris))
+            updated = run_async(
+                self._vikingdb_manager.increment_active_count(self.ctx, uris),
+                loop_type=LoopType.BACKGROUND,
+            )
         except Exception as e:
             logger.debug(f"Could not update active_count for usage URIs: {e}")
             updated = 0
@@ -396,7 +400,7 @@ class Session:
                     "compression.structured_summary",
                     {"messages": formatted},
                 )
-                return run_async(vlm.get_completion_async(prompt))
+                return run_async(vlm.get_completion_async(prompt), loop_type=LoopType.BACKGROUND)
             except Exception as e:
                 logger.warning(f"LLM summary failed: {e}")
 
@@ -424,14 +428,17 @@ class Session:
                 uri=f"{archive_uri}/messages.jsonl",
                 content="\n".join(lines) + "\n",
                 ctx=self.ctx,
-            )
+            ),
+            loop_type=LoopType.BACKGROUND,
         )
 
         run_async(
-            viking_fs.write_file(uri=f"{archive_uri}/.abstract.md", content=abstract, ctx=self.ctx)
+            viking_fs.write_file(uri=f"{archive_uri}/.abstract.md", content=abstract, ctx=self.ctx),
+            loop_type=LoopType.BACKGROUND,
         )
         run_async(
-            viking_fs.write_file(uri=f"{archive_uri}/.overview.md", content=overview, ctx=self.ctx)
+            viking_fs.write_file(uri=f"{archive_uri}/.overview.md", content=overview, ctx=self.ctx),
+            loop_type=LoopType.BACKGROUND,
         )
 
         logger.debug(f"Written archive: {archive_uri}")
@@ -455,7 +462,8 @@ class Session:
                 uri=f"{self._session_uri}/messages.jsonl",
                 content=content,
                 ctx=self.ctx,
-            )
+            ),
+            loop_type=LoopType.BACKGROUND,
         )
 
         # Update L0/L1
@@ -464,14 +472,16 @@ class Session:
                 uri=f"{self._session_uri}/.abstract.md",
                 content=abstract,
                 ctx=self.ctx,
-            )
+            ),
+            loop_type=LoopType.BACKGROUND,
         )
         run_async(
             viking_fs.write_file(
                 uri=f"{self._session_uri}/.overview.md",
                 content=overview,
                 ctx=self.ctx,
-            )
+            ),
+            loop_type=LoopType.BACKGROUND,
         )
 
     def _append_to_jsonl(self, msg: Message) -> None:
@@ -483,7 +493,8 @@ class Session:
                 f"{self._session_uri}/messages.jsonl",
                 msg.to_jsonl() + "\n",
                 ctx=self.ctx,
-            )
+            ),
+            loop_type=LoopType.BACKGROUND,
         )
 
     def _update_message_in_jsonl(self) -> None:
@@ -498,7 +509,8 @@ class Session:
                 f"{self._session_uri}/messages.jsonl",
                 content,
                 ctx=self.ctx,
-            )
+            ),
+            loop_type=LoopType.BACKGROUND,
         )
 
     def _save_tool_result(
@@ -533,7 +545,8 @@ class Session:
                 f"{self._session_uri}/tools/{tool_id}/tool.json",
                 json.dumps(tool_data, ensure_ascii=False),
                 ctx=self.ctx,
-            )
+            ),
+            loop_type=LoopType.BACKGROUND,
         )
 
     def _generate_abstract(self) -> str:
@@ -576,7 +589,10 @@ class Session:
         viking_fs = self._viking_fs
         for usage in self._usage_records:
             try:
-                run_async(viking_fs.link(self._session_uri, usage.uri, ctx=self.ctx))
+                run_async(
+                    viking_fs.link(self._session_uri, usage.uri, ctx=self.ctx),
+                    loop_type=LoopType.BACKGROUND,
+                )
                 logger.debug(f"Created relation: {self._session_uri} -> {usage.uri}")
             except Exception as e:
                 logger.warning(f"Failed to create relation to {usage.uri}: {e}")

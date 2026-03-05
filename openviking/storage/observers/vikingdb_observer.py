@@ -10,7 +10,7 @@ from typing import Dict
 
 from openviking.storage.observers.base_observer import BaseObserver
 from openviking.storage.vikingdb_manager import VikingDBManager
-from openviking_cli.utils import run_async
+from openviking_cli.utils import LoopType, run_async
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -37,7 +37,7 @@ class VikingDBObserver(BaseObserver):
         return self._format_status_as_table(statuses)
 
     def get_status_table(self) -> str:
-        return run_async(self.get_status_table_async())
+        return run_async(self.get_status_table_async(), loop_type=LoopType.OBSERVER)
 
     def __str__(self) -> str:
         return self.get_status_table()
@@ -125,7 +125,7 @@ class VikingDBObserver(BaseObserver):
         try:
             if not self._vikingdb_manager:
                 return True
-            run_async(self._vikingdb_manager.health_check())
+            run_async(self._vikingdb_manager.health_check(), loop_type=LoopType.OBSERVER)
             return False
         except Exception as e:
             logger.error(f"VikingDB health check failed: {e}")

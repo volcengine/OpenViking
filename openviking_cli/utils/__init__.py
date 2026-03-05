@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Utility functions and helpers."""
 
-from openviking_cli.utils.async_utils import run_async
+from openviking_cli.utils.async_utils import LoopType, run_async
 from openviking_cli.utils.llm import StructuredLLM, parse_json_from_response, parse_json_to_model
 from openviking_cli.utils.logger import default_logger, get_logger
 from openviking_cli.utils.uri import VikingURI
@@ -15,4 +15,5 @@ __all__ = [
     "parse_json_from_response",
     "parse_json_to_model",
     "run_async",
+    "LoopType",
 ]
