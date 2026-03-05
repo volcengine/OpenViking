@@ -37,7 +37,7 @@ class OpenAPIChannelConfig(BaseChannelConfig):
     """Configuration for OpenAPI channel."""
 
     enabled: bool = True
-    type: str = "openapi"
+    type: str = "cli"
     api_key: str = ""  # If empty, no auth required
     allow_from: list[str] = []
     max_concurrent_requests: int = 100

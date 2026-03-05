@@ -6,6 +6,8 @@ import os
 import select
 import signal
 import sys
+import hashlib
+import time
 from pathlib import Path
 
 import typer
@@ -44,6 +46,60 @@ app = typer.Typer(
 
 console = Console()
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
+
+
+def get_or_create_machine_id() -> str:
+    """Get or create a unique machine ID.
+
+    This function will:
+    1. Try to get the hostname from environment variables
+    2. If that fails, generate a random ID and store it in the config directory
+
+    The logic is kept consistent with the Rust implementation.
+    """
+    home = Path.home()
+    machine_id_path = home / ".openviking" / "machine_id"
+
+    # Try to read existing machine ID
+    if machine_id_path.exists():
+        try:
+            content = machine_id_path.read_text().strip()
+            if content:
+                return content
+        except Exception:
+            pass
+
+    # Try to get hostname from environment variables
+    for env_var in ("HOSTNAME", "COMPUTERNAME"):
+        hostname = os.environ.get(env_var)
+        if hostname:
+            trimmed = hostname.strip()
+            if trimmed:
+                # Save it for future use
+                machine_id_path.parent.mkdir(parents=True, exist_ok=True)
+                try:
+                    machine_id_path.write_text(trimmed)
+                except Exception:
+                    pass
+                return trimmed
+
+    # Generate a random ID as a last resort
+    hasher = hashlib.sha256()
+    # Mix current timestamp
+    hasher.update(str(time.time_ns()).encode())
+    # Mix process ID
+    hasher.update(str(os.getpid()).encode())
+    # Take first 16 hex chars and prepend with "cli_"
+    random_id = f"cli_{hasher.hexdigest()[:16]}"
+
+    # Save it for future use
+    machine_id_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        machine_id_path.write_text(random_id)
+    except Exception:
+        pass
+
+    return random_id
 
 
 def _init_bot_data(config):
@@ -241,16 +297,16 @@ def gateway(
     async def run():
         import uvicorn
 
-        # Setup OpenAPI routes before starting
-        openapi_channel = None
-        for name, channel in channels.channels.items():
-            if hasattr(channel, 'name') and channel.name == "openapi":
-                openapi_channel = channel
-                break
-
-        if openapi_channel is not None and hasattr(openapi_channel, '_setup_routes'):
-            openapi_channel._setup_routes()
-            logger.info("OpenAPI routes registered")
+        # # Setup OpenAPI routes before starting
+        # openapi_channel = None
+        # for name, channel in channels.channels.items():
+        #     if hasattr(channel, 'name') and channel.name == "openapi":
+        #         openapi_channel = channel
+        #         break
+        #
+        # if openapi_channel is not None and hasattr(openapi_channel, '_setup_routes'):
+        #     openapi_channel._setup_routes()
+        #     logger.info("OpenAPI routes registered")
 
         # Start uvicorn server for OpenAPI
         config_uvicorn = uvicorn.Config(
@@ -546,7 +602,7 @@ def chat(
     is_single_turn = message is not None
     # Use unified default session ID
     if session_id is None:
-        session_id = "default"
+        session_id = get_or_create_machine_id()
     cron = prepare_cron(bus, quiet=is_single_turn)
     channels = prepare_agent_channel(config, bus, message, session_id, markdown, logs, eval)
     agent_loop = prepare_agent_loop(config, bus, session_manager, cron, quiet=is_single_turn, eval=eval)
