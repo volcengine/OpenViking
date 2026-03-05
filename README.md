@@ -449,7 +449,7 @@ uv pip install -e bot/
 openviking-server --with-bot
 
 # In another terminal, start interactive chat
-ov chat
+vikingbot chat
 ```
 
 ---
