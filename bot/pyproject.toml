@@ -42,6 +42,7 @@ dependencies = [
     "ddgs>=9.0.0",
     "gradio>=6.6.0",
     "py-machineid>=1.0.0",
+    "ruff>=0.15.1",
 ]
 
 [project.optional-dependencies]
