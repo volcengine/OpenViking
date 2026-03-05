@@ -11,6 +11,7 @@ lerna-debug.log*
 
 #eval
 result/
+test_data/
 
 # OS
 .DS_Store
