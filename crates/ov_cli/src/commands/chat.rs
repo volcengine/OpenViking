@@ -162,13 +162,13 @@ impl ChatCommand {
                         "reasoning" => {
                             let content = data.as_str().unwrap_or("");
                             if !self.no_format {
-                                println!("\x1b[2mThink: {}...\x1b[0m", truncate_utf8(content, 100));
+                                println!("\t\x1b[2mThink: {}...\x1b[0m", truncate_utf8(content, 100));
                             }
                         }
                         "tool_call" => {
                             let content = data.as_str().unwrap_or("");
                             if !self.no_format {
-                                println!("\x1b[2m├─ Calling: {}\x1b[0m", content);
+                                println!("\t\x1b[2m├─ Calling: {}\x1b[0m", content);
                             }
                         }
                         "tool_result" => {
@@ -179,7 +179,7 @@ impl ChatCommand {
                                 } else {
                                     content.to_string()
                                 };
-                                println!("\x1b[2m└─ Result: {}\x1b[0m", truncated);
+                                println!("\t\x1b[2m└─ Result: {}\x1b[0m", truncated);
                             }
                         }
                         _ => {}
@@ -272,13 +272,13 @@ impl ChatCommand {
                                                 "reasoning" => {
                                                     let content = data.as_str().unwrap_or("");
                                                     if content.len() > 100 {
-                                                        println!("\x1b[2mThink: {}...\x1b[0m", truncate_utf8(content, 100));
+                                                        println!("\t\x1b[2mThink: {}...\x1b[0m", truncate_utf8(content, 100));
                                                     } else {
-                                                        println!("\x1b[2mThink: {}\x1b[0m", content);
+                                                        println!("\t\x1b[2mThink: {}\x1b[0m", content);
                                                     }
                                                 }
                                                 "tool_call" => {
-                                                    println!("\x1b[2m├─ Calling: {}\x1b[0m", data.as_str().unwrap_or(""));
+                                                    println!("\t\x1b[2m├─ Calling: {}\x1b[0m", data.as_str().unwrap_or(""));
                                                 }
                                                 "tool_result" => {
                                                     let content = data.as_str().unwrap_or("");
@@ -287,7 +287,7 @@ impl ChatCommand {
                                                     } else {
                                                         content.to_string()
                                                     };
-                                                    println!("\x1b[2m└─ Result: {}\x1b[0m", truncated);
+                                                    println!("\t\x1b[2m└─ Result: {}\x1b[0m", truncated);
                                                 }
                                                 _ => {}
                                             }
