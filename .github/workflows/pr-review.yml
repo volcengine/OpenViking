@@ -18,7 +18,7 @@ jobs:
         uses: qodo-ai/pr-agent@main
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OPENAI.KEY: ${{ secrets.DOUBAO_API_KEY }}
+          OPENAI_KEY: ${{ secrets.DOUBAO_API_KEY }}
           OPENAI.API_BASE: "https://ark.cn-beijing.volces.com/api/v3"
           config.model: "openai/doubao-seed-2-0-code-preview-260215"
           config.custom_model_max_tokens: 131072
