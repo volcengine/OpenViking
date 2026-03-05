@@ -2,6 +2,7 @@
 
 from pathlib import Path
 from datetime import datetime
+from loguru import logger
 
 
 def ensure_dir(path: Path) -> Path:

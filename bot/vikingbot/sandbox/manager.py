@@ -4,6 +4,7 @@ import asyncio
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from openviking.async_client import logger
 from vikingbot.sandbox.base import SandboxBackend, SandboxDisabledError, UnsupportedBackendError
 from vikingbot.sandbox.backends import get_backend
 
@@ -47,7 +48,8 @@ class SandboxManager:
             import traceback
 
             traceback.print_exc()
-        await self._copy_bootstrap_files(workspace)
+        if not workspace.exists():
+            await self._copy_bootstrap_files(workspace)
         return instance
 
     async def _copy_bootstrap_files(self, sandbox_workspace: Path) -> None:
