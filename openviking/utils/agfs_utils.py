@@ -30,11 +30,13 @@ def create_agfs_client(agfs_config: Any) -> Any:
 
     if mode == "binding-client":
         # Import binding client if mode is binding-client
-        try:
-            from pyagfs import AGFSBindingClient
-        except ImportError:
+        from pyagfs import AGFSBindingClient
+
+        if AGFSBindingClient is None:
             raise ImportError(
-                "AGFS binding client not found. Please run 'pip install -e .' in the project root to install the AGFS SDK."
+                "AGFS binding client is not available. The native library (libagfsbinding) "
+                "could not be loaded. Please run 'pip install -e .' in the project root "
+                "to build and install the AGFS SDK with native bindings."
             )
 
         lib_path = getattr(agfs_config, "lib_path", None)
@@ -83,9 +85,8 @@ def mount_agfs_backend(agfs: Any, agfs_config: Any) -> None:
 
     from openviking.agfs_manager import AGFSManager
 
-    # Only binding-client needs manual mounting, but we can also do it for HTTP client
-    # if it supports it. Usually, HTTP server handles its own mounting.
-    if not isinstance(agfs, AGFSBindingClient):
+    # Only binding-client needs manual mounting. HTTP server handles its own mounting.
+    if AGFSBindingClient is None or not isinstance(agfs, AGFSBindingClient):
         return
 
     # 1. Mount standard plugins to align with HTTP server behavior
