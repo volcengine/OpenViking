@@ -19,7 +19,7 @@ Create `~/.openviking/ov.conf` in your project directory:
   "vlm": {
     "provider": "volcengine",
     "api_key": "your-api-key",
-    "model": "doubao-seed-1-8-251228"
+    "model": "doubao-seed-2-0-pro-260215"
   },
   "rerank": {
     "provider": "volcengine",
@@ -55,7 +55,7 @@ Create `~/.openviking/ov.conf` in your project directory:
     "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
     "api_key"  : "your-volcengine-api-key",
     "provider" : "volcengine",
-    "model"    : "doubao-seed-1-8-251228"
+    "model"    : "doubao-seed-2-0-pro-260215"
   }
 }
 ```
@@ -252,7 +252,7 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 {
   "vlm": {
     "api_key": "your-api-key",
-    "model": "doubao-seed-1-8-251228",
+    "model": "doubao-seed-2-0-pro-260215",
     "api_base": "https://ark.cn-beijing.volces.com/api/v3"
   }
 }
@@ -272,7 +272,7 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 
 | Model | Notes |
 |-------|-------|
-| `doubao-seed-1-8-251228` | Recommended for semantic extraction |
+| `doubao-seed-2-0-pro-260215` | Recommended for semantic extraction |
 | `doubao-pro-32k` | For longer context |
 
 When resources are added, VLM generates:

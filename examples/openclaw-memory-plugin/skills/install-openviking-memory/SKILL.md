@@ -150,7 +150,7 @@ The helper will interactively prompt for:
 
 1. **Workspace path** — data storage location (default: absolute path of `~/.openviking/data`, auto-detected)
 2. **Volcengine Ark API Key** — **[ASK USER]** Direct them to https://console.volcengine.com/ark if they don't have one
-3. **VLM model** — default `doubao-seed-1-8-251228`, press Enter to accept
+3. **VLM model** — default `doubao-seed-2-0-pro-260215`, press Enter to accept
 4. **Embedding model** — default `doubao-embedding-vision-250615`, press Enter to accept
 5. **Server ports** — default 1933 (HTTP) and 1833 (AGFS), press Enter to accept
 

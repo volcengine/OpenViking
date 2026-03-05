@@ -329,7 +329,7 @@ The helper will walk you through:
 3. **Interactive configuration** — prompts for:
    - Data storage path (defaults to absolute path, e.g. `/home/yourname/.openviking/data`)
    - Volcengine Ark API Key
-   - VLM model name (default: `doubao-seed-1-8-251228`)
+   - VLM model name (default: `doubao-seed-2-0-pro-260215`)
    - Embedding model name (default: `doubao-embedding-vision-250615`)
    - Server ports (default: 1933 / 1833)
 4. **Generate config** — creates `~/.openviking/ov.conf`
@@ -433,7 +433,7 @@ The plugin automatically starts and stops the OpenViking server.
   "vlm": {
     "backend": "volcengine",
     "api_key": "<your-api-key>",
-    "model": "doubao-seed-1-8-251228",
+    "model": "doubao-seed-2-0-pro-260215",
     "api_base": "https://ark.cn-beijing.volces.com/api/v3",
     "temperature": 0.1,
     "max_retries": 3
@@ -587,7 +587,7 @@ Model configuration in `ov.conf` is incorrect. Check:
 
 - `embedding.dense.api_key` is a valid Volcengine Ark API key
 - `vlm.api_key` is set (usually the same key)
-- `vlm.model` is a model name (e.g. `doubao-seed-1-8-251228`), **not** the API key
+- `vlm.model` is a model name (e.g. `doubao-seed-2-0-pro-260215`), **not** the API key
 
 ### Python Version Issues
 

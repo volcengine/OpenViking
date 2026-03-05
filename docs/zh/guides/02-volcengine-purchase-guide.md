@@ -8,7 +8,7 @@ OpenViking 需要以下模型服务：
 
 | 模型类型 | 用途 | 推荐模型 |
 |---------|------|---------|
-| VLM（视觉语言模型） | 内容理解、语义生成 | `doubao-seed-1-8-251228` |
+| VLM（视觉语言模型） | 内容理解、语义生成 | `doubao-seed-2-0-pro-260215` |
 | Embedding | 向量化、语义检索 | `doubao-embedding-vision-250615` |
 
 ## 前置条件
@@ -68,7 +68,7 @@ OpenViking 需要以下模型服务：
 <img src="../../images/activate_vlm_model.gif" width="80%">
 </div>
 
-开通后可直接使用模型 ID：`doubao-seed-1-8-251228`
+开通后可直接使用模型 ID：`doubao-seed-2-0-pro-260215`
 
 ### 5. 开通 Embedding 模型
 
@@ -123,7 +123,7 @@ OpenViking 需要以下模型服务：
 |------|------|------|------|
 | `provider` | string | 是 | 模型服务提供商，火山引擎填 `"volcengine"` |
 | `api_key` | string | 是 | 火山方舟 API Key |
-| `model` | string | 是 | 模型 ID，如 `doubao-seed-1-8-251228` |
+| `model` | string | 是 | 模型 ID，如 `doubao-seed-2-0-pro-260215` |
 | `api_base` | string | 否 | API 端点地址，默认为北京区域端点，具体可见附录-区域端点 |
 | `temperature` | float | 否 | 生成温度，控制输出随机性，范围 0-1，推荐 0.1 |
 | `max_retries` | int | 否 | 请求失败时的重试次数，推荐 3 |
@@ -148,7 +148,7 @@ OpenViking 需要以下模型服务：
   "vlm": {
     "provider": "volcengine",
     "api_key": "sk-1234567890abcdef1234567890abcdef",
-    "model": "doubao-seed-1-8-251228",
+    "model": "doubao-seed-2-0-pro-260215",
     "api_base": "https://ark.cn-beijing.volces.com/api/v3",
     "temperature": 0.1,
     "max_retries": 3
@@ -279,7 +279,7 @@ Error: Connection timeout
 
 | 模型名称 | 当前版本 | 发布日期 |
 |---------|---------|---------|
-| Doubao-Seed-1.8 | `doubao-seed-1-8-251228` | 2025-12-28 |
+| Doubao-Seed-1.8 | `doubao-seed-2-0-pro-260215` | 2025-12-28 |
 | Doubao-Embedding-Vision | `doubao-embedding-vision-250615` | 2025-06-15 |
 
 > 注：模型版本可能更新，请以火山方舟控制台显示为准。

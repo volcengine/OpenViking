@@ -185,7 +185,7 @@ async function checkOvvConf() {
 
 const DEFAULT_SERVER_PORT = 1933;
 const DEFAULT_AGFS_PORT = 1833;
-const DEFAULT_VLM_MODEL = "doubao-seed-1-8-251228";
+const DEFAULT_VLM_MODEL = "doubao-seed-2-0-pro-260215";
 const DEFAULT_EMBEDDING_MODEL = "doubao-embedding-vision-250615";
 
 const DEFAULT_WORKSPACE = join(HOME, ".openviking", "data");

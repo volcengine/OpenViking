@@ -77,7 +77,7 @@ uv pip install -e . --force-reinstall
   },
   "vlm": {
     "api_key": "your-api-key",
-    "model": "doubao-seed-1-8-251228",
+    "model": "doubao-seed-2-0-pro-260215",
     "api_base": "https://ark.cn-beijing.volces.com/api/v3"
   }
 }

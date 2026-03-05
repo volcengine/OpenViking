@@ -247,7 +247,7 @@ vim ~/.openviking/ov.conf
     "api_key"    : "<your-api-key>",   
     "provider"   : "<provider-type>",  
     "max_retries": 2,
-    "model"      : "<model-name>"      // e.g., doubao-seed-1-8-251228 or gpt-4-vision-preview
+    "model"      : "<model-name>"      // e.g., doubao-seed-2-0-pro-260215 or gpt-4-vision-preview
   }
 }
 

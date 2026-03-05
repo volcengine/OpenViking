@@ -329,7 +329,7 @@ npx ./examples/openclaw-memory-plugin/setup-helper
 3. **交互配置** — 提示输入以下信息：
    - 数据存储路径（默认为绝对路径，如 `/home/yourname/.openviking/data`）
    - 火山引擎 Ark API Key
-   - VLM 模型名称（默认 `doubao-seed-1-8-251228`）
+   - VLM 模型名称（默认 `doubao-seed-2-0-pro-260215`）
    - Embedding 模型名称（默认 `doubao-embedding-vision-250615`）
    - 服务端口（默认 1933 / 1833）
 4. **生成配置** — 创建 `~/.openviking/ov.conf`
@@ -433,7 +433,7 @@ call "%USERPROFILE%\.openclaw\openviking.env.bat" && openclaw gateway
   "vlm": {
     "backend": "volcengine",
     "api_key": "<your-api-key>",
-    "model": "doubao-seed-1-8-251228",
+    "model": "doubao-seed-2-0-pro-260215",
     "api_base": "https://ark.cn-beijing.volces.com/api/v3",
     "temperature": 0.1,
     "max_retries": 3
@@ -587,7 +587,7 @@ call "%USERPROFILE%\.openclaw\openviking.env.bat" && openclaw gateway
 
 - `embedding.dense.api_key` 为有效的火山引擎 Ark API Key
 - `vlm.api_key` 已设置（通常与 embedding 相同）
-- `vlm.model` 为模型名称（如 `doubao-seed-1-8-251228`），**不是** API Key
+- `vlm.model` 为模型名称（如 `doubao-seed-2-0-pro-260215`），**不是** API Key
 
 ### Python 版本问题
 

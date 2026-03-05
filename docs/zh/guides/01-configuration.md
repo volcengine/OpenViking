@@ -60,7 +60,7 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
     "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
     "api_key"  : "your-volcengine-api-key",
     "provider" : "volcengine",
-    "model"    : "doubao-seed-1-8-251228"
+    "model"    : "doubao-seed-2-0-pro-260215"
   }
 }
 ```
@@ -259,7 +259,7 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
   "vlm": {
     "provider": "volcengine",
     "api_key": "your-api-key",
-    "model": "doubao-seed-1-8-251228",
+    "model": "doubao-seed-2-0-pro-260215",
     "api_base": "https://ark.cn-beijing.volces.com/api/v3"
   }
 }
@@ -279,7 +279,7 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 
 | 模型 | 说明 |
 |------|------|
-| `doubao-seed-1-8-251228` | 推荐用于语义提取 |
+| `doubao-seed-2-0-pro-260215` | 推荐用于语义提取 |
 | `doubao-pro-32k` | 用于更长上下文 |
 
 添加资源时，VLM 生成：

@@ -39,7 +39,7 @@ $PluginDest = Join-Path $OpenClawDir "extensions\memory-openviking"
 
 $DefaultServerPort = 1933
 $DefaultAgfsPort = 1833
-$DefaultVlmModel = "doubao-seed-1-8-251228"
+$DefaultVlmModel = "doubao-seed-2-0-pro-260215"
 $DefaultEmbeddingModel = "doubao-embedding-vision-250615"
 
 function Get-PythonCommand {
