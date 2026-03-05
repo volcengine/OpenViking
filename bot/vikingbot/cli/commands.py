@@ -52,11 +52,12 @@ def get_or_create_machine_id() -> str:
     """Get or create a unique machine ID.
 
     This function will:
-    1. Try to get the hostname from environment variables
-    2. If that fails, generate a random ID and store it in the config directory
+    1. Try to read an existing machine ID from the config directory
+    2. If not found, generate a new UUID v4 and store it
 
     The logic is kept consistent with the Rust implementation.
     """
+    import uuid
     home = Path.home()
     machine_id_path = home / ".openviking" / "machine_id"
 
@@ -69,37 +70,17 @@ def get_or_create_machine_id() -> str:
         except Exception:
             pass
 
-    # Try to get hostname from environment variables
-    for env_var in ("HOSTNAME", "COMPUTERNAME"):
-        hostname = os.environ.get(env_var)
-        if hostname:
-            trimmed = hostname.strip()
-            if trimmed:
-                # Save it for future use
-                machine_id_path.parent.mkdir(parents=True, exist_ok=True)
-                try:
-                    machine_id_path.write_text(trimmed)
-                except Exception:
-                    pass
-                return trimmed
-
-    # Generate a random ID as a last resort
-    hasher = hashlib.sha256()
-    # Mix current timestamp
-    hasher.update(str(time.time_ns()).encode())
-    # Mix process ID
-    hasher.update(str(os.getpid()).encode())
-    # Take first 16 hex chars and prepend with "cli_"
-    random_id = f"cli_{hasher.hexdigest()[:16]}"
+    # Generate a new UUID v4
+    new_id = str(uuid.uuid4())
 
     # Save it for future use
     machine_id_path.parent.mkdir(parents=True, exist_ok=True)
     try:
-        machine_id_path.write_text(random_id)
+        machine_id_path.write_text(new_id)
     except Exception:
         pass
 
-    return random_id
+    return new_id
 
 
 def _init_bot_data(config):
@@ -296,17 +277,6 @@ def gateway(
 
     async def run():
         import uvicorn
-
-        # # Setup OpenAPI routes before starting
-        # openapi_channel = None
-        # for name, channel in channels.channels.items():
-        #     if hasattr(channel, 'name') and channel.name == "openapi":
-        #         openapi_channel = channel
-        #         break
-        #
-        # if openapi_channel is not None and hasattr(openapi_channel, '_setup_routes'):
-        #     openapi_channel._setup_routes()
-        #     logger.info("OpenAPI routes registered")
 
         # Start uvicorn server for OpenAPI
         config_uvicorn = uvicorn.Config(

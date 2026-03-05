@@ -102,8 +102,8 @@ pub fn default_config_path() -> Result<PathBuf> {
 /// Get or create a unique machine ID.
 ///
 /// This function will:
-/// 1. Try to get the hostname from environment variables
-/// 2. If that fails, generate a random ID and store it in the config directory
+/// 1. Try to read an existing machine ID from the config directory
+/// 2. If not found, generate a new UUID v4 and store it
 pub fn get_or_create_machine_id() -> Result<String> {
     let home = dirs::home_dir()
         .ok_or_else(|| Error::Config("Could not determine home directory".to_string()))?;
@@ -119,37 +119,14 @@ pub fn get_or_create_machine_id() -> Result<String> {
         }
     }
 
-    // Try to get hostname from environment variables
-    if let Ok(hostname) = std::env::var("HOSTNAME").or_else(|_| std::env::var("COMPUTERNAME")) {
-        let trimmed = hostname.trim();
-        if !trimmed.is_empty() {
-            // Save it for future use
-            if let Some(parent) = machine_id_path.parent() {
-                let _ = std::fs::create_dir_all(parent);
-            }
-            let _ = std::fs::write(&machine_id_path, trimmed);
-            return Ok(trimmed.to_string());
-        }
-    }
-
-    // Generate a random ID as a last resort
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    use std::time::{SystemTime, UNIX_EPOCH};
-
-    let mut hasher = DefaultHasher::new();
-    if let Ok(n) = SystemTime::now().duration_since(UNIX_EPOCH) {
-        n.hash(&mut hasher);
-    }
-    let pid = std::process::id();
-    pid.hash(&mut hasher);
-    let random_id = format!("cli_{:x}", hasher.finish());
+    // Generate a new UUID v4
+    let new_id = uuid::Uuid::new_v4().to_string();
 
     // Save it for future use
     if let Some(parent) = machine_id_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
-    let _ = std::fs::write(&machine_id_path, &random_id);
+    let _ = std::fs::write(&machine_id_path, &new_id);
 
-    Ok(random_id)
+    Ok(new_id)
 }
