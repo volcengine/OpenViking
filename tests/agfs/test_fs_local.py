@@ -15,7 +15,12 @@ from openviking_cli.utils.config.agfs_config import AGFSConfig
 
 # 1. Direct configuration for testing
 AGFS_CONF = AGFSConfig(
-    path="/tmp/ov-test", backend="local", port=1833, url="http://localhost:1833", timeout=10
+    path="/tmp/ov-test",
+    backend="local",
+    port=1833,
+    mode="http-client",
+    url="http://localhost:1833",
+    timeout=10,
 )
 
 # clean up test directory if it exists

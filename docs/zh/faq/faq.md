@@ -56,10 +56,24 @@ viking://
 ### 环境要求是什么？
 
 - **Python 版本**：3.10 或更高
+- **编译工具**（如果从源码安装或在不支持的平台上）：Go 1.19+, GCC 9+ 或 Clang 11+
 - **必需依赖**：Embedding 模型（推荐火山引擎 Doubao）
 - **可选依赖**：
   - VLM（视觉语言模型）：用于多模态内容处理和语义提取
   - Rerank 模型：用于提升检索精度
+
+### 什么是 `binding-client` 和 `http-client`？我该选哪个？
+
+- **`binding-client`（默认值）**：通过 CGO 绑定直接在 Python 进程内运行 AGFS 逻辑。优点是性能极高，无网络延迟；缺点是需要本地有编译好的 AGFS 共享库。
+- **`http-client`**：通过 HTTP 协议与独立的 `agfs-server` 通信。优点是部署解耦，不需要本地编译 Go 代码；缺点是有一定的网络通信开销。
+
+如果你的环境支持编译 Go 代码，或者安装了包含预编译库的 Wheel 包，推荐使用默认的 `binding-client`。
+
+### 遇到 "AGFS binding library not found" 错误怎么办？
+
+这通常是因为本地没有编译好的 AGFS 共享库。你可以：
+1. **重新编译安装**：在项目根目录运行 `pip install -e . --force-reinstall`（需要 Go 环境）。
+2. **切换到 HTTP 模式**：在 `ov.conf` 中设置 `storage.agfs.mode = "http-client"`，并确保有一个正在运行的 `agfs-server`。
 
 ### 如何安装 OpenViking？
 

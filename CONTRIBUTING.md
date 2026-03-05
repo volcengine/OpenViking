@@ -51,7 +51,7 @@ source .venv/bin/activate  # Linux/macOS
 
 #### Local Development & AGFS Compilation
 
-If you modify the **AGFS (Go)** code or **C++ extensions**, you need to re-compile and re-install them to make the changes take effect in your environment. Run the following command in the project root:
+OpenViking defaults to `binding-client` mode for AGFS, which requires a pre-built shared library. If you modify the **AGFS (Go)** code or **C++ extensions**, or if the pre-built library is not found, you need to re-compile and re-install them. Run the following command in the project root:
 
 ```bash
 uv pip install -e . --force-reinstall

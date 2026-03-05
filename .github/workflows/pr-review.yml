@@ -1,0 +1,41 @@
+name: PR Review (Doubao)
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+  issue_comment:
+
+jobs:
+  pr_review:
+    if: ${{ github.event.sender.type != 'Bot' }}
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      pull-requests: write
+      contents: write
+    steps:
+      - name: PR Agent
+        uses: qodo-ai/pr-agent@main
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          OPENAI_KEY: ${{ secrets.DOUBAO_API_KEY }}
+          OPENAI.API_BASE: "https://ark.cn-beijing.volces.com/api/v3"
+          config.model: "openai/doubao-seed-2-0-code-preview-260215"
+          config.custom_model_max_tokens: 131072
+          github_action_config.auto_review: "true"
+          github_action_config.auto_describe: "false"
+          github_action_config.auto_improve: "true"
+          pr_reviewer.extra_instructions: >
+            Classify each finding with a severity tag:
+            [Bug] = Must fix: behavioral regression, logic error, security vulnerability, data loss/corruption, resource leak, API contract violation.
+            [Suggestion] = Recommended: missing tests, dead code, inconsistency, poor observability, unclear intent, unrelated changes, performance issues (N+1 queries, redundant computation in loops, unnecessary large object copies, unbounded collection growth).
+
+            Review focus areas:
+            1. Control Flow - are all branches reachable? errors propagated correctly? unintended fall-through?
+            2. Data Flow - input validated at boundaries? implicit type coercion? null/empty handled?
+            3. Integration Points - API changes backward compatible? config defaults sensible? dependencies pinned?
+            4. Concurrency - shared state synchronized? execution order assumptions valid? cleanup in all paths?
+
+            Be specific: reference exact variable names, function calls, conditions.
+            When suggesting a fix, include a code block with the recommended change.
+            Match the language of the PR (Chinese PR = Chinese comments, English PR = English comments).
