@@ -3,28 +3,8 @@
 use std::io::{BufRead, Write};
 use std::time::Duration;
 
-/// Safely truncate a string at a UTF-8 character boundary
-fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
-    if s.len() <= max_bytes {
-        return s;
-    }
-
-    // Find the last valid UTF-8 character boundary before or at max_bytes
-    let mut boundary = max_bytes;
-    while boundary > 0 && !s.is_char_boundary(boundary) {
-        boundary -= 1;
-    }
-
-    // If we couldn't find a boundary (unlikely), just return empty string
-    // Otherwise return up to the boundary
-    if boundary == 0 {
-        ""
-    } else {
-        &s[..boundary]
-    }
-}
-
 use clap::Parser;
+use crate::utils::truncate_utf8;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 

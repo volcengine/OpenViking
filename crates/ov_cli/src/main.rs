@@ -4,6 +4,7 @@ mod config;
 mod error;
 mod output;
 mod tui;
+mod utils;
 
 use clap::{Parser, Subcommand};
 use config::Config;

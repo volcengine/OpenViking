@@ -1,6 +1,6 @@
-
 //! Chat command for interacting with Vikingbot via OpenAPI (v2 with rustyline)
 
+use std::path::PathBuf;
 use std::time::Duration;
 
 use clap::Parser;
@@ -10,26 +10,9 @@ use rustyline::error::ReadlineError;
 use rustyline::{Editor, history::FileHistory};
 
 use crate::error::{Error, Result};
+use crate::utils::truncate_utf8;
 
 const DEFAULT_ENDPOINT: &str = "http://localhost:1933/bot/v1";
-
-/// Safely truncate a string at a UTF-8 character boundary
-fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
-    if s.len() <= max_bytes {
-        return s;
-    }
-
-    let mut boundary = max_bytes;
-    while boundary > 0 && !s.is_char_boundary(boundary) {
-        boundary -= 1;
-    }
-
-    if boundary == 0 {
-        ""
-    } else {
-        &s[..boundary]
-    }
-}
 
 #[derive(Debug, Parser)]
 pub struct ChatCommand {
@@ -195,7 +178,8 @@ impl ChatCommand {
         let mut rl: Editor<(), FileHistory> = Editor::new()
             .map_err(|e| Error::Client(format!("Failed to create line editor: {}", e)))?;
 
-        let _ = rl.load_history("ov_chat_history.txt");
+        let history_path = get_chat_history_path()?;
+        let _ = rl.load_history(&history_path);
 
         loop {
             let readline = rl.readline("\x1b[1;32mYou:\x1b[0m ");
@@ -205,7 +189,7 @@ impl ChatCommand {
                     let trimmed = line.trim().to_string();
                     if !trimmed.is_empty() {
                         let _ = rl.add_history_entry(line);
-                        let _ = rl.save_history("ov_chat_history.txt");
+                        let _ = rl.save_history(&history_path);
                     }
                     trimmed
                 }
@@ -313,15 +297,11 @@ impl ChatCommand {
         println!("\nGoodbye!");
         Ok(())
     }
-}
 
-impl ChatCommand {
     pub async fn run(&self) -> Result<()> {
         self.execute().await
     }
-}
 
-impl ChatCommand {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         endpoint: String,
@@ -344,3 +324,11 @@ impl ChatCommand {
     }
 }
 
+fn get_chat_history_path() -> Result<PathBuf> {
+    let home = dirs::home_dir()
+        .ok_or_else(|| Error::Config("Could not determine home directory".to_string()))?;
+    let config_dir = home.join(".openviking");
+    std::fs::create_dir_all(&config_dir)
+        .map_err(|e| Error::Config(format!("Failed to create config directory: {}", e)))?;
+    Ok(config_dir.join("ov_chat_history.txt"))
+}
