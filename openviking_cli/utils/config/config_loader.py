@@ -82,6 +82,7 @@ def load_json_config(path: Path) -> Dict[str, Any]:
 
     with open(path, "r", encoding="utf-8") as f:
         try:
+            print(f"Loading config file: {path}")
             return json.load(f)
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON in config file {path}: {e}") from e
