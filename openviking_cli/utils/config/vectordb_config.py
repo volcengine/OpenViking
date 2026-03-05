@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
-from typing import Dict, Optional
+from typing import Any, Dict, Optional
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -99,14 +99,27 @@ class VectorDBBackendConfig(BaseModel):
         description="VikingDB private deployment configuration for 'vikingdb' type",
     )
 
+    custom_params: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Custom parameters for custom backend adapters",
+    )
+
     model_config = {"extra": "forbid"}
 
     @model_validator(mode="after")
     def validate_config(self):
         """Validate configuration completeness and consistency"""
-        if self.backend not in ["local", "http", "volcengine", "vikingdb"]:
+        standard_backends = ["local", "http", "volcengine", "vikingdb"]
+        
+        # Allow custom backend classes (containing dot) without standard validation
+        if "." in self.backend:
+            logger.info("Using custom VectorDB backend: %s", self.backend)
+            return self
+
+        if self.backend not in standard_backends:
             raise ValueError(
-                f"Invalid VectorDB backend: '{self.backend}'. Must be one of: 'local', 'http', 'volcengine', 'vikingdb'"
+                f"Invalid VectorDB backend: '{self.backend}'. Must be one of: {standard_backends} "
+                "or a valid Python class path."
             )
 
         if self.backend == "local":

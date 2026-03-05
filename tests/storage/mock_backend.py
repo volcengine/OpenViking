@@ -19,10 +19,11 @@ class MockCollectionAdapter(CollectionAdapter):
 
     @classmethod
     def from_config(cls, config: Any) -> "MockCollectionAdapter":
+        custom_params = getattr(config, "custom_params", {})
         return cls(
             collection_name=config.name or "mock_collection",
-            custom_param1=getattr(config, "custom_param1", ""),
-            custom_param2=getattr(config, "custom_param2", 0)
+            custom_param1=custom_params.get("custom_param1", ""),
+            custom_param2=custom_params.get("custom_param2", 0)
         )
 
     def _load_existing_collection_if_needed(self) -> None:
