@@ -111,18 +111,14 @@ After=network.target
 
 [Service]
 Type=simple
-# Replace with the user running OpenViking
-User=your-username
-# Replace with the user group
-Group=your-group
 # Replace with your working directory
-WorkingDirectory=/home/your-username/openviking_workspace
+WorkingDirectory=/var/lib/openviking
 # Choose one of the following start methods
-ExecStart=/path/to/your/python/bin/openviking-server
+ExecStart=/usr/bin/openviking-server
 Restart=always
 RestartSec=5
 # Path to config file
-Environment="OPENVIKING_CONFIG_FILE=/home/your-username/.openviking/ov.conf"
+Environment="OPENVIKING_CONFIG_FILE=/etc/openviking/ov.conf"
 
 [Install]
 WantedBy=multi-user.target

@@ -59,6 +59,8 @@
 在开始使用 OpenViking 之前，请确保您的环境满足以下要求：
 
 - **Python 版本**：3.10 或更高版本
+- **Go 版本**：1.19 或更高（从源码构建 AGFS 组件需要）
+- **C++ 编译器**：GCC 9+ 或 Clang 11+（构建核心扩展需要，必须支持 C++17）
 - **操作系统**：Linux、macOS、Windows
 - **网络连接**：需要稳定的网络连接（用于下载依赖和访问模型服务）
 
@@ -113,7 +115,7 @@ Volcengine 支持模型名称和端点 ID。为简单起见，建议使用模型
 {
   "vlm": {
     "provider": "volcengine",
-    "model": "doubao-seed-1-6-240615",
+    "model": "doubao-seed-2-0-pro-260215",
     "api_key": "your-api-key",
     "api_base": "https://ark.cn-beijing.volces.com/api/v3"
   }
@@ -264,7 +266,7 @@ ollama serve
     "api_base" : "<api-endpoint>",     // API 端点地址
     "api_key"  : "<your-api-key>",     // 模型服务 API Key
     "provider" : "<provider-type>",    // 提供商类型 (volcengine, openai, deepseek, anthropic 等)
-    "model"    : "<model-name>",       // VLM 模型名称（如 doubao-seed-1-8-251228 或 gpt-4-vision-preview）
+    "model"    : "<model-name>",       // VLM 模型名称（如 doubao-seed-2-0-pro-260215 或 gpt-4-vision-preview）
     "max_concurrent": 100              // 语义处理的最大并发 LLM 调用（默认：100）
   }
 }
@@ -302,7 +304,7 @@ ollama serve
     "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
     "api_key"  : "your-volcengine-api-key",
     "provider" : "volcengine",
-    "model"    : "doubao-seed-1-8-251228",
+    "model"    : "doubao-seed-2-0-pro-260215",
     "max_concurrent": 100
   }
 }

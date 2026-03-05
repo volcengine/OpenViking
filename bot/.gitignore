@@ -9,6 +9,10 @@ yarn-debug.log*
 yarn-error.log*
 lerna-debug.log*
 
+#eval
+result/
+test_data/
+
 # OS
 .DS_Store
 Thumbs.db

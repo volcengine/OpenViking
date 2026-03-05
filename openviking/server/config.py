@@ -8,10 +8,14 @@ from typing import List, Optional
 
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.config_loader import (
-    DEFAULT_OV_CONF,
-    OPENVIKING_CONFIG_ENV,
     load_json_config,
     resolve_config_path,
+)
+from openviking_cli.utils.config.consts import (
+    DEFAULT_CONFIG_DIR,
+    DEFAULT_OV_CONF,
+    OPENVIKING_CONFIG_ENV,
+    SYSTEM_CONFIG_DIR,
 )
 
 logger = get_logger(__name__)
@@ -52,12 +56,11 @@ def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
     """
     path = resolve_config_path(config_path, OPENVIKING_CONFIG_ENV, DEFAULT_OV_CONF)
     if path is None:
-        from openviking_cli.utils.config.config_loader import DEFAULT_CONFIG_DIR
-
-        default_path = DEFAULT_CONFIG_DIR / DEFAULT_OV_CONF
+        default_path_user = DEFAULT_CONFIG_DIR / DEFAULT_OV_CONF
+        default_path_system = SYSTEM_CONFIG_DIR / DEFAULT_OV_CONF
         raise FileNotFoundError(
             f"OpenViking configuration file not found.\n"
-            f"Please create {default_path} or set {OPENVIKING_CONFIG_ENV}.\n"
+            f"Please create {default_path_user} or {default_path_system}, or set {OPENVIKING_CONFIG_ENV}.\n"
             f"See: https://openviking.dev/docs/guides/configuration"
         )
 

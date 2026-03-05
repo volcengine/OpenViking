@@ -64,7 +64,7 @@ openclaw --version
 - **Pass:** Shows version output.
 - **Fail:** Tell the user: "OpenClaw is required. Install with: `npm install -g openclaw` (if downloads are slow: `npm install -g openclaw --registry=https://registry.npmmirror.com`). After installing, run `openclaw onboard` to configure your LLM."
 
-### 1.5 Check Go (>= 1.25) — only for source install on Linux
+### 1.5 Check Go (>= 1.19) — only for source install on Linux
 
 > Skip this check if the user will install via `pip install openviking --upgrade --force-reinstall` (PyPI pre-built package).
 
@@ -72,8 +72,8 @@ openclaw --version
 go version
 ```
 
-- **Pass:** Output shows `go1.25.x` or higher.
-- **Fail:** Tell the user: "Go >= 1.25 is required for source installation on Linux (to compile AGFS). Download from https://go.dev/dl/ — see INSTALL.md for detailed steps."
+- **Pass:** Output shows `go1.19.x` or higher.
+- **Fail:** Tell the user: "Go >= 1.19 is required for source installation on Linux (to compile AGFS). Download from https://go.dev/dl/ — see INSTALL.md for detailed steps."
 
 ---
 
@@ -100,7 +100,7 @@ python3 -m pip install openviking --upgrade --force-reinstall
 
 #### Option B: Install from Source (developer mode)
 
-Requires Go >= 1.25 on Linux (check passed in Step 1.5).
+Requires Go >= 1.19 on Linux (check passed in Step 1.5).
 
 **Linux / macOS:**
 
@@ -150,7 +150,7 @@ The helper will interactively prompt for:
 
 1. **Workspace path** — data storage location (default: absolute path of `~/.openviking/data`, auto-detected)
 2. **Volcengine Ark API Key** — **[ASK USER]** Direct them to https://console.volcengine.com/ark if they don't have one
-3. **VLM model** — default `doubao-seed-1-8-251228`, press Enter to accept
+3. **VLM model** — default `doubao-seed-2-0-pro-260215`, press Enter to accept
 4. **Embedding model** — default `doubao-embedding-vision-250615`, press Enter to accept
 5. **Server ports** — default 1933 (HTTP) and 1833 (AGFS), press Enter to accept
 
@@ -211,7 +211,7 @@ The **Memory** line should show: `enabled (plugin memory-openviking)`
 |---------|-------|-----|
 | `cmake not found` during npm install | Missing build tools | `sudo dnf install -y gcc gcc-c++ cmake make` |
 | `Python.h: No such file or directory` | Missing Python dev headers | `sudo dnf install -y python3-devel` (or `python3.11-devel`) |
-| `Go compiler not found` | Go not installed | Install Go >= 1.25 from https://go.dev/dl/ |
+| `Go compiler not found` | Go not installed | Install Go >= 1.19 from https://go.dev/dl/ |
 | `dial tcp: i/o timeout` (Go modules) | Network issue | `go env -w GOPROXY=https://goproxy.cn,direct` |
 | `ERR_INVALID_URL` (npm) | Proxy missing `http://` prefix | `export https_proxy=http://host:port` |
 | `extracted 0 memories` | Wrong API key or model name | Check `api_key` and `model` in `~/.openviking/ov.conf` |

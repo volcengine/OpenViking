@@ -58,12 +58,12 @@ For manual installation, continue reading.
 | **Node.js** | >= 22 | OpenClaw runtime + setup helper | Yes |
 | **cmake** | — | Compile C++ extensions (OpenViking + OpenClaw's node-llama-cpp) | Yes |
 | **g++ (gcc-c++)** | — | C++ compiler | Yes |
-| **Go** | >= 1.25 | Compile AGFS server (Linux source install only) | Source install only |
+| **Go** | >= 1.19 | Compile AGFS server (Linux source install only) | Source install only |
 | **Volcengine Ark API Key** | — | Embedding + VLM model calls | Yes |
 
 > **PyPI vs Source install:**
 > - `pip install openviking --upgrade --force-reinstall` (pre-built package): needs Python, cmake, g++ — **no Go required**
-> - `pip install -e . --force-reinstall` (source install): needs Python, cmake, g++ **and Go >= 1.25** (to compile AGFS on Linux)
+> - `pip install -e . --force-reinstall` (source install): needs Python, cmake, g++ **and Go >= 1.19** (to compile AGFS on Linux)
 > - **Windows** users can use pre-built wheel packages without Go
 
 ### Quick Check
@@ -208,7 +208,7 @@ node -v   # >= v22
 npm -v
 ```
 
-### 3.4 Install Go >= 1.25 (source install only)
+### 3.4 Install Go >= 1.19 (source install only)
 
 > Already installed? Run `go version` — if it shows >= go1.25, skip this step.
 > Also skippable if using `pip install openviking --upgrade --force-reinstall` (pre-built package).
@@ -303,7 +303,7 @@ python3 -m pip install -e .
 python -m pip install -e .
 ```
 
-> **Note:** Go >= 1.25 is **required** on Linux for source install (to compile AGFS). To force-skip (advanced users only):
+> **Note:** Go >= 1.19 is **required** on Linux for source install (to compile AGFS). To force-skip (advanced users only):
 > ```bash
 > OPENVIKING_SKIP_AGFS_BUILD=1 python3 -m pip install -e .
 > ```
@@ -329,7 +329,7 @@ The helper will walk you through:
 3. **Interactive configuration** — prompts for:
    - Data storage path (defaults to absolute path, e.g. `/home/yourname/.openviking/data`)
    - Volcengine Ark API Key
-   - VLM model name (default: `doubao-seed-1-8-251228`)
+   - VLM model name (default: `doubao-seed-2-0-pro-260215`)
    - Embedding model name (default: `doubao-embedding-vision-250615`)
    - Server ports (default: 1933 / 1833)
 4. **Generate config** — creates `~/.openviking/ov.conf`
@@ -433,7 +433,7 @@ The plugin automatically starts and stops the OpenViking server.
   "vlm": {
     "backend": "volcengine",
     "api_key": "<your-api-key>",
-    "model": "doubao-seed-1-8-251228",
+    "model": "doubao-seed-2-0-pro-260215",
     "api_base": "https://ark.cn-beijing.volces.com/api/v3",
     "temperature": 0.1,
     "max_retries": 3
@@ -517,10 +517,10 @@ sudo apt install -y python3-dev     # or python3.11-dev
 
 #### `Go compiler not found` / AGFS build failure
 
-Go >= 1.25 is **required** on Linux for source install. See [3.4 Install Go](#34-install-go--125-source-install-only).
+Go >= 1.19 is **required** on Linux for source install. See [3.4 Install Go](#34-install-go--119-source-install-only).
 
 ```bash
-go version              # Confirm >= 1.25
+go version              # Confirm >= 1.19
 python3 -m pip install -e .
 ```
 
@@ -587,7 +587,7 @@ Model configuration in `ov.conf` is incorrect. Check:
 
 - `embedding.dense.api_key` is a valid Volcengine Ark API key
 - `vlm.api_key` is set (usually the same key)
-- `vlm.model` is a model name (e.g. `doubao-seed-1-8-251228`), **not** the API key
+- `vlm.model` is a model name (e.g. `doubao-seed-2-0-pro-260215`), **not** the API key
 
 ### Python Version Issues
 
@@ -604,6 +604,24 @@ python3.11 -m pip install -e .
 export OPENVIKING_PYTHON=python3.11
 npx ./examples/openclaw-memory-plugin/setup-helper
 ```
+
+#### Error: `externally-managed-environment` / `This environment is externally managed`
+
+On Ubuntu, Debian and similar systems, the system Python is managed (PEP 668) and does not allow installing packages with `pip` into the system environment. Two options:
+
+1. **Recommended:** Use the one-line install script; it will create a venv at `~/.openviking/venv` and install OpenViking there automatically.
+   ```bash
+   curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-memory-plugin/install.sh | bash
+   ```
+
+2. **Manual install:** Install `python3-venv`, create a venv, and install OpenViking inside it:
+   ```bash
+   sudo apt install -y python3-venv   # or python3-full
+   python3 -m venv ~/.openviking/venv
+   ~/.openviking/venv/bin/pip install openviking
+   export OPENVIKING_PYTHON=~/.openviking/venv/bin/python
+   ```
+   Alternatively use pipx: `pipx install openviking` (install pipx first: `apt install pipx`).
 
 ---
 

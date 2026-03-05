@@ -14,7 +14,7 @@
 ### 前置要求
 
 - **Python**: 3.10+
-- **Go**: 1.25.1+ (从源码构建 AGFS 组件需要)
+- **Go**: 1.19+ (从源码构建 AGFS 组件需要)
 - **C++ 编译器**: GCC 9+ 或 Clang 11+ (构建核心扩展需要，必须支持 C++17)
 - **CMake**: 3.12+
 
@@ -51,7 +51,7 @@ source .venv/bin/activate  # Linux/macOS
 
 #### 本地开发与 AGFS 编译
 
-如果你修改了 **AGFS (Go)** 代码或 **C++ 扩展**，你需要重新编译并安装它们，以使更改在本地环境中生效。在项目根目录下运行以下命令：
+OpenViking 默认使用 `binding-client` 模式，这需要一个预先构建的共享库。如果你修改了 **AGFS (Go)** 代码或 **C++ 扩展**，或者预编译库未找到，你需要重新编译并安装它们，以使更改在本地环境中生效。在项目根目录下运行以下命令：
 
 ```bash
 uv pip install -e . --force-reinstall
@@ -77,7 +77,7 @@ uv pip install -e . --force-reinstall
   },
   "vlm": {
     "api_key": "your-api-key",
-    "model": "doubao-seed-1-8-251228",
+    "model": "doubao-seed-2-0-pro-260215",
     "api_base": "https://ark.cn-beijing.volces.com/api/v3"
   }
 }

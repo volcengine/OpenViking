@@ -31,7 +31,7 @@ openviking:
         dimension: "1024"
         backend: "volcengine"
     vlm:
-      model: "doubao-seed-1-8-251228"
+      model: "doubao-seed-2-0-pro-260215"
       api_key: null
       api_base: "https://ark.cn-beijing.volces.com/api/v3"
       backend: "volcengine"

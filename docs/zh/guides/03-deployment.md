@@ -116,13 +116,13 @@ User=your-username
 # 替换为用户组
 Group=your-group
 # 替换为工作目录
-WorkingDirectory=/home/your-username/openviking_workspace
+WorkingDirectory=/var/lib/openviking
 # 以下两种启动方式二选一
 ExecStart=/path/to/your/python/bin/openviking-server
 Restart=always
 RestartSec=5
 # 配置文件路径
-Environment="OPENVIKING_CONFIG_FILE=/home/your-username/.openviking/ov.conf"
+Environment="OPENVIKING_CONFIG_FILE=/etc/openviking/ov.conf"
 
 [Install]
 WantedBy=multi-user.target

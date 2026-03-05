@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Integration test for ov chat command."""
 
-import sys
 import subprocess
+import sys
 from pathlib import Path
 
 # Add root to path

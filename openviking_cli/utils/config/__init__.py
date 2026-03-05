@@ -2,14 +2,17 @@
 # SPDX-License-Identifier: Apache-2.0
 from .agfs_config import AGFSConfig
 from .config_loader import (
+    load_json_config,
+    require_config,
+    resolve_config_path,
+)
+from .consts import (
     DEFAULT_CONFIG_DIR,
     DEFAULT_OV_CONF,
     DEFAULT_OVCLI_CONF,
     OPENVIKING_CLI_CONFIG_ENV,
     OPENVIKING_CONFIG_ENV,
-    load_json_config,
-    require_config,
-    resolve_config_path,
+    SYSTEM_CONFIG_DIR,
 )
 from .embedding_config import EmbeddingConfig
 from .log_config import LogConfig
@@ -42,7 +45,7 @@ from .vlm_config import VLMConfig
 
 __all__ = [
     "AGFSConfig",
-    "DEFAULT_CONFIG_DIR",
+    "SYSTEM_CONFIG_DIR",
     "DEFAULT_OV_CONF",
     "DEFAULT_OVCLI_CONF",
     "EmbeddingConfig",

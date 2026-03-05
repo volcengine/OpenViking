@@ -71,6 +71,10 @@ func (fs *LocalFS) resolvePath(path string) string {
 	return filepath.Join(fs.basePath, relativePath)
 }
 
+func (fs *LocalFS) ResolvePath(path string) string {
+	return fs.resolvePath(path)
+}
+
 func (fs *LocalFS) Create(path string) error {
 	localPath := fs.resolvePath(path)
 

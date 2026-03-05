@@ -35,10 +35,12 @@ from openviking_cli.retrieve.types import FindResult
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import run_async
 from openviking_cli.utils.config.config_loader import (
-    DEFAULT_OVCLI_CONF,
-    OPENVIKING_CLI_CONFIG_ENV,
     load_json_config,
     resolve_config_path,
+)
+from openviking_cli.utils.config.consts import (
+    DEFAULT_OVCLI_CONF,
+    OPENVIKING_CLI_CONFIG_ENV,
 )
 from openviking_cli.utils.uri import VikingURI
 
@@ -143,8 +145,8 @@ class AsyncHTTPClient(BaseClient):
             timeout: HTTP request timeout in seconds. Default 60.0.
         """
         if url is None:
-            print(f'OPENVIKING_CLI_CONFIG_ENV={OPENVIKING_CLI_CONFIG_ENV}')
-            print(f'DEFAULT_OVCLI_CONF={DEFAULT_OVCLI_CONF}')
+            # print(f"OPENVIKING_CLI_CONFIG_ENV={OPENVIKING_CLI_CONFIG_ENV}")
+            # print(f"DEFAULT_OVCLI_CONF={DEFAULT_OVCLI_CONF}")
             config_path = resolve_config_path(None, OPENVIKING_CLI_CONFIG_ENV, DEFAULT_OVCLI_CONF)
             if config_path:
                 cfg = load_json_config(config_path)

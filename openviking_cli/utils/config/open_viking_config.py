@@ -9,10 +9,12 @@ from pydantic import BaseModel, Field
 
 from openviking_cli.session.user_id import UserIdentifier
 
-from .config_loader import (
+from .config_loader import resolve_config_path
+from .consts import (
+    DEFAULT_CONFIG_DIR,
     DEFAULT_OV_CONF,
     OPENVIKING_CONFIG_ENV,
-    resolve_config_path,
+    SYSTEM_CONFIG_DIR,
 )
 from .embedding_config import EmbeddingConfig
 from .log_config import LogConfig
@@ -168,7 +170,8 @@ class OpenVikingConfigSingleton:
       1. Explicit path passed to initialize()
       2. OPENVIKING_CONFIG_FILE environment variable
       3. ~/.openviking/ov.conf
-      4. Error with clear guidance
+      4. /etc/openviking/ov.conf
+      5. Error with clear guidance
     """
 
     _instance: Optional[OpenVikingConfig] = None
@@ -187,12 +190,11 @@ class OpenVikingConfigSingleton:
                     if config_path is not None:
                         cls._instance = cls._load_from_file(str(config_path))
                     else:
-                        from .config_loader import DEFAULT_CONFIG_DIR
-
-                        default_path = DEFAULT_CONFIG_DIR / DEFAULT_OV_CONF
+                        default_path_user = DEFAULT_CONFIG_DIR / DEFAULT_OV_CONF
+                        default_path_system = SYSTEM_CONFIG_DIR / DEFAULT_OV_CONF
                         raise FileNotFoundError(
                             f"OpenViking configuration file not found.\n"
-                            f"Please create {default_path} or set {OPENVIKING_CONFIG_ENV}.\n"
+                            f"Please create {default_path_user} or {default_path_system}, or set {OPENVIKING_CONFIG_ENV}.\n"
                             f"See: https://openviking.dev/docs/guides/configuration"
                         )
         return cls._instance
@@ -217,12 +219,11 @@ class OpenVikingConfigSingleton:
                 if path is not None:
                     cls._instance = cls._load_from_file(str(path))
                 else:
-                    from .config_loader import DEFAULT_CONFIG_DIR
-
-                    default_path = DEFAULT_CONFIG_DIR / DEFAULT_OV_CONF
+                    default_path_user = DEFAULT_CONFIG_DIR / DEFAULT_OV_CONF
+                    default_path_system = SYSTEM_CONFIG_DIR / DEFAULT_OV_CONF
                     raise FileNotFoundError(
                         f"OpenViking configuration file not found.\n"
-                        f"Please create {default_path} or set {OPENVIKING_CONFIG_ENV}.\n"
+                        f"Please create {default_path_user} or {default_path_system}, or set {OPENVIKING_CONFIG_ENV}.\n"
                         f"See: https://openviking.dev/docs/guides/configuration"
                     )
         return cls._instance

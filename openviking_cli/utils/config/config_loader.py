@@ -2,10 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """Configuration file loading utilities.
 
-Provides a three-level resolution chain for locating config files:
+Provides a four-level resolution chain for locating config files:
   1. Explicit path (constructor parameter / --config)
   2. Environment variable
   3. Default path (~/.openviking/)
+  4. System path (/etc/openviking/)
 """
 
 import json
@@ -13,13 +14,10 @@ import os
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-DEFAULT_CONFIG_DIR = Path.home() / ".openviking"
-
-OPENVIKING_CONFIG_ENV = "OPENVIKING_CONFIG_FILE"
-OPENVIKING_CLI_CONFIG_ENV = "OPENVIKING_CLI_CONFIG_FILE"
-
-DEFAULT_OV_CONF = "ov.conf"
-DEFAULT_OVCLI_CONF = "ovcli.conf"
+from .consts import (
+    DEFAULT_CONFIG_DIR,
+    SYSTEM_CONFIG_DIR,
+)
 
 
 def resolve_config_path(
@@ -27,12 +25,13 @@ def resolve_config_path(
     env_var: str,
     default_filename: str,
 ) -> Optional[Path]:
-    """Resolve a config file path using the three-level chain.
+    """Resolve a config file path using the four-level chain.
 
     Resolution order:
       1. ``explicit_path`` (if provided and exists)
       2. Path from environment variable ``env_var``
       3. ``~/.openviking/<default_filename>``
+      4. ``/etc/openviking/<default_filename>``
 
     Returns:
         Path to the config file, or None if not found at any level.
@@ -52,8 +51,13 @@ def resolve_config_path(
             return p
         return None
 
-    # Level 3: default directory
+    # Level 3: default directory (~/.openviking)
     p = DEFAULT_CONFIG_DIR / default_filename
+    if p.exists():
+        return p
+
+    # Level 4: system directory (/etc/openviking)
+    p = SYSTEM_CONFIG_DIR / default_filename
     if p.exists():
         return p
 
@@ -78,6 +82,7 @@ def load_json_config(path: Path) -> Dict[str, Any]:
 
     with open(path, "r", encoding="utf-8") as f:
         try:
+            print(f"Loading config file: {path}")
             return json.load(f)
         except json.JSONDecodeError as e:
             raise ValueError(f"Invalid JSON in config file {path}: {e}") from e
@@ -105,10 +110,11 @@ def require_config(
     """
     path = resolve_config_path(explicit_path, env_var, default_filename)
     if path is None:
-        default_path = DEFAULT_CONFIG_DIR / default_filename
+        default_path_user = DEFAULT_CONFIG_DIR / default_filename
+        default_path_system = SYSTEM_CONFIG_DIR / default_filename
         raise FileNotFoundError(
             f"OpenViking {purpose} configuration file not found.\n"
-            f"Please create {default_path} or set {env_var}.\n"
+            f"Please create {default_path_user} or {default_path_system}, or set {env_var}.\n"
             f"See: https://openviking.dev/docs/guides/configuration"
         )
     return load_json_config(path)

@@ -89,14 +89,19 @@ class ContextBuilder:
         if self.sandbox_manager:
             sandbox_cwd = await self.sandbox_manager.get_sandbox_cwd(session_key)
             parts.append(
-                f"## Sandbox Environment\n\nYou are running in a sandboxed environment. All file operations and command execution are restricted to the sandbox directory.\nThe sandbox root directory is `{sandbox_cwd}` (use relative paths for all operations)."
+                f"## Sandbox Environment\nYou are running in a sandboxed environment. All file operations and command execution are restricted to the sandbox directory.\nThe sandbox root directory is `{sandbox_cwd}` (use relative paths for all operations)."
             )
 
-        # Add group chat context if applicable
-        if self._is_group_chat:
-            parts.append(
-                f"\n\n## Group Chat Context\nThis is a group chat session. Multiple users can participate in this conversation. Each user message is prefixed with the user ID in brackets like @<user_id>. "
-                f"You should pay attention to who is speaking to understand the context. Current user ID: {self._sender_id}")
+        # Add session context
+        session_context ="## Current Session"
+        if session_key and session_key.type:
+            session_context += f"\nChannel: {session_key.type}"
+            if self._is_group_chat:
+                session_context += (
+                    f"\n**Group chat session.** Current user ID: {self._sender_id}\n"
+                    f"Multiple users can participate in this conversation. Each user message is prefixed with the user ID in brackets like @<user_id>. "
+                    f"You should pay attention to who is speaking to understand the context. ")
+        parts.append(session_context)
 
         # Viking user profile
         profile = await self.memory.get_viking_user_profile(
@@ -160,7 +165,6 @@ Skills with available="false" need dependencies installed first - you can try in
             workspace_display = workspace_path
 
         return f"""# vikingbot 🐈
-
 You are VikingBot, an AI assistant built based on the OpenViking context database.
 When acquiring information, data, and knowledge, you **prioritize using openviking tools to read and search OpenViking (a context database) above all other sources**.
 You have access to tools that allow you to:
@@ -193,7 +197,7 @@ Always be helpful, accurate, and concise. When using tools, think step by step: 
 
 ## Memory
 - Remember important facts: using openviking_memory_commit tool to commit
-- Recall past events: prioritize using user_memory_search tool to search history, or grep {workspace_display}/memory/HISTORY.md"""
+- Recall past events: prioritize using user_memory_search tool to search history"""
 
     def _load_bootstrap_files(self) -> str:
         """Load all bootstrap files from workspace."""
@@ -203,7 +207,8 @@ Always be helpful, accurate, and concise. When using tools, think step by step: 
             file_path = self.workspace / filename
             if file_path.exists():
                 content = file_path.read_text(encoding="utf-8")
-                parts.append(f"## {filename}\n\n{content}")
+                if content:
+                    parts.append(f"## {filename}\n\n{content}")
 
         return "\n\n".join(parts) if parts else ""
 
@@ -230,8 +235,6 @@ Always be helpful, accurate, and concise. When using tools, think step by step: 
 
         # System prompt
         system_prompt = await self.build_system_prompt(session_key, current_message, history)
-        if session_key and session_key.channel_id and session_key.chat_id:
-            system_prompt += f"\n\n## Current Session\nChannel: {session_key.type}:{session_key.channel_id}\nChat ID: {session_key.chat_id}"
         messages.append({"role": "system", "content": system_prompt})
         # logger.debug(f"system_prompt: {system_prompt}")
 

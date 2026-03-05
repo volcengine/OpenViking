@@ -94,6 +94,7 @@ class SingleTurnChannel(BaseChannel):
                 output = {
                     "text": msg.content,
                     "token_usage": msg.token_usage,
+                    "time_cost": msg.time_cost,
                 }
                 msg.content = json.dumps(output, ensure_ascii=False)
             self._last_response = msg.content

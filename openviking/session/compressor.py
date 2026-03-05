@@ -67,13 +67,15 @@ class SessionCompressor:
         self.extractor = MemoryExtractor()
         self.deduplicator = MemoryDeduplicator(vikingdb=vikingdb)
 
-    async def _index_memory(self, memory: Context) -> bool:
-        """Add memory to vectorization queue."""
+    async def _index_memory(self, memory: Context, ctx: RequestContext) -> bool:
+        """Add memory to vectorization queue and trigger parent directory semantic generation."""
         from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 
         embedding_msg = EmbeddingMsgConverter.from_context(memory)
         await self.vikingdb.enqueue_embedding_msg(embedding_msg)
         logger.info(f"Enqueued memory for vectorization: {memory.uri}")
+
+        await self.extractor._enqueue_semantic_for_parent(memory.uri, ctx)
         return True
 
     async def _merge_into_existing(
@@ -106,7 +108,7 @@ class SessionCompressor:
                 "Merged memory %s with abstract %s", target_memory.uri, target_memory.abstract
             )
             target_memory.set_vectorize(Vectorize(text=payload.content))
-            await self._index_memory(target_memory)
+            await self._index_memory(target_memory, ctx)
             return True
         except Exception as e:
             logger.error(f"Failed to merge memory {target_memory.uri}: {e}")
@@ -162,7 +164,7 @@ class SessionCompressor:
                 if memory:
                     memories.append(memory)
                     stats.created += 1
-                    await self._index_memory(memory)
+                    await self._index_memory(memory, ctx)
                 else:
                     stats.skipped += 1
                 continue
@@ -170,7 +172,9 @@ class SessionCompressor:
             # Tool/Skill Memory: 特殊合并逻辑
             if candidate.category in TOOL_SKILL_CATEGORIES:
                 if isinstance(candidate, ToolSkillCandidateMemory):
-                    tool_name, skill_name, tool_status = self._get_tool_skill_info(candidate, tool_parts)
+                    tool_name, skill_name, tool_status = self._get_tool_skill_info(
+                        candidate, tool_parts
+                    )
                     candidate.tool_status = tool_status
                     if skill_name:
                         memory = await self.extractor._merge_skill_memory(
@@ -187,7 +191,7 @@ class SessionCompressor:
                     if memory:
                         memories.append(memory)
                         stats.merged += 1
-                        await self._index_memory(memory)
+                        await self._index_memory(memory, ctx)
                 continue
 
             # Dedup check for other categories
@@ -250,7 +254,7 @@ class SessionCompressor:
                 if memory:
                     memories.append(memory)
                     stats.created += 1
-                    await self._index_memory(memory)
+                    await self._index_memory(memory, ctx)
                 else:
                     stats.skipped += 1
 
@@ -316,7 +320,6 @@ class SessionCompressor:
                         calibrated_tool = candidate_tool
                 else:
                     calibrated_tool = part.tool_name
-                
 
         if calibrated_skill:
             return ("", calibrated_skill, tool_status)
@@ -346,6 +349,7 @@ class SessionCompressor:
             return True
 
         from difflib import SequenceMatcher
+
         ratio = SequenceMatcher(None, n1, n2).ratio()
         return ratio >= 0.7
 

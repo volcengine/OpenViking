@@ -40,6 +40,7 @@ class OutboundMessage:
     media: list[str] = field(default_factory=list)
     metadata: dict[str, Any] = field(default_factory=dict)
     token_usage: dict[str, int] = field(default_factory=dict)
+    time_cost: float = field(default_factory=float)
 
     @property
     def channel(self) -> str:

@@ -14,7 +14,7 @@ Thank you for your interest in OpenViking! We welcome contributions of all kinds
 ### Prerequisites
 
 - **Python**: 3.10+
-- **Go**: 1.25.1+ (Required for building AGFS components from source)
+- **Go**: 1.19.1+ (Required for building AGFS components from source)
 - **C++ Compiler**: GCC 9+ or Clang 11+ (Required for building core extensions, must support C++17)
 - **CMake**: 3.12+
 
@@ -51,7 +51,7 @@ source .venv/bin/activate  # Linux/macOS
 
 #### Local Development & AGFS Compilation
 
-If you modify the **AGFS (Go)** code or **C++ extensions**, you need to re-compile and re-install them to make the changes take effect in your environment. Run the following command in the project root:
+OpenViking defaults to `binding-client` mode for AGFS, which requires a pre-built shared library. If you modify the **AGFS (Go)** code or **C++ extensions**, or if the pre-built library is not found, you need to re-compile and re-install them. Run the following command in the project root:
 
 ```bash
 uv pip install -e . --force-reinstall
@@ -77,7 +77,7 @@ Create a configuration file `~/.openviking/ov.conf`:
   },
   "vlm": {
     "api_key": "your-api-key",
-    "model": "doubao-seed-1-8-251228",
+    "model": "doubao-seed-2-0-pro-260215",
     "api_base": "https://ark.cn-beijing.volces.com/api/v3"
   }
 }

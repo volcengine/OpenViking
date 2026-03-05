@@ -66,8 +66,8 @@ class ToolSkillCandidateMemory(CandidateMemory):
     duration_ms: int = 0  # 执行耗时（毫秒）
     prompt_tokens: int = 0  # 输入 Token
     completion_tokens: int = 0  # 输出 Token
-    call_time: int = 0 # 调用次数
-    success_time: int = 0 # 成功调用次数
+    call_time: int = 0  # 调用次数
+    success_time: int = 0  # 成功调用次数
 
 
 @dataclass
@@ -241,7 +241,6 @@ class MemoryExtractor:
 
         messages = context["messages"]
 
-
         tool_stats_map = self._collect_tool_stats_from_messages(messages)
 
         # logger.warning(f"tool_stats_map={tool_stats_map}")
@@ -315,8 +314,8 @@ class MemoryExtractor:
                             language=output_language,
                             tool_name=tool_name,
                             skill_name=skill_name,
-                            call_time=stats.get("call_count",0),
-                            success_time=stats.get("success_time",0),
+                            call_time=stats.get("call_count", 0),
+                            success_time=stats.get("success_time", 0),
                             duration_ms=stats.get("duration_ms", 0),
                             prompt_tokens=stats.get("prompt_tokens", 0),
                             completion_tokens=stats.get("completion_tokens", 0),
@@ -563,7 +562,7 @@ class MemoryExtractor:
             new_stats = self._parse_tool_statistics(candidate.content)
             if new_stats["total_calls"] == 0:
                 new_stats["total_calls"] = 1
-                tool_status = getattr(candidate, 'tool_status', 'completed')
+                tool_status = getattr(candidate, "tool_status", "completed")
                 if tool_status == "error":
                     new_stats["fail_count"] = 1
                     new_stats["success_count"] = 0
@@ -575,14 +574,12 @@ class MemoryExtractor:
             merged_stats = self._compute_statistics_derived(new_stats)
             merged_content = self._generate_tool_memory_content(tool_name, merged_stats, candidate)
             await viking_fs.write_file(uri=uri, content=merged_content, ctx=ctx)
-            await self._enqueue_semantic_for_parent(uri, ctx)
             return self._create_tool_context(uri, candidate, ctx)
 
         existing_stats = self._parse_tool_statistics(existing)
         merged_stats = self._merge_tool_statistics(existing_stats, new_stats)
         merged_content = self._generate_tool_memory_content(tool_name, merged_stats, candidate)
         await viking_fs.write_file(uri=uri, content=merged_content, ctx=ctx)
-        await self._enqueue_semantic_for_parent(uri, ctx)
         return self._create_tool_context(uri, candidate, ctx)
 
     async def _enqueue_semantic_for_parent(self, file_uri: str, ctx: "RequestContext") -> None:
@@ -680,11 +677,11 @@ class MemoryExtractor:
             first_nonzero = -1
             s = f"{value_ms:.20f}"
             for i, c in enumerate(s):
-                if c not in ('0', '.'):
+                if c not in ("0", "."):
                     first_nonzero = i
                     break
             if first_nonzero > 0:
-                decimals_needed = first_nonzero - s.index('.') + 1
+                decimals_needed = first_nonzero - s.index(".") + 1
                 formatted = f"{value_ms:.{decimals_needed}f}"
         return f"{formatted}ms"
 
@@ -760,14 +757,12 @@ class MemoryExtractor:
                 skill_name, merged_stats, candidate
             )
             await viking_fs.write_file(uri=uri, content=merged_content, ctx=ctx)
-            await self._enqueue_semantic_for_parent(uri, ctx)
             return self._create_skill_context(uri, candidate, ctx)
 
         existing_stats = self._parse_skill_statistics(existing)
         merged_stats = self._merge_skill_statistics(existing_stats, new_stats)
         merged_content = self._generate_skill_memory_content(skill_name, merged_stats, candidate)
         await viking_fs.write_file(uri=uri, content=merged_content, ctx=ctx)
-        await self._enqueue_semantic_for_parent(uri, ctx)
         return self._create_skill_context(uri, candidate, ctx)
 
     def _compute_skill_statistics_derived(self, stats: dict) -> dict:

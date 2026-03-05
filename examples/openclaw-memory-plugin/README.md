@@ -58,7 +58,7 @@ Env vars:
   "vlm": {
     "backend": "volcengine",
     "api_key": "<your-api-key>",
-    "model": "doubao-seed-1-8-251228",
+    "model": "doubao-seed-2-0-pro-260215",
     "api_base": "https://ark.cn-beijing.volces.com/api/v3",
     "temperature": 0.1,
     "max_retries": 3

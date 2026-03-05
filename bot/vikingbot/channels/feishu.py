@@ -45,6 +45,7 @@ try:
         GetMessageResourceRequest,
         ReplyMessageRequest,
         ReplyMessageRequestBody,
+        GetChatRequest,
     )
 
     FEISHU_AVAILABLE = True
@@ -87,6 +88,7 @@ class FeishuChannel(BaseChannel):
         self._loop: asyncio.AbstractEventLoop | None = None
         self._tenant_access_token: str | None = None
         self._token_expire_time: float = 0
+        self._chat_mode_cache: dict[str, str] = {}  # 缓存群类型：group(普通群)/thread(话题群)
 
     async def _get_tenant_access_token(self) -> str:
         """Get tenant access token for Feishu API."""
@@ -176,6 +178,28 @@ class FeishuChannel(BaseChannel):
             temp_path = f.name
 
         return temp_path
+
+    async def _get_chat_mode(self, chat_id: str) -> str:
+        """获取群类型：group(普通群)/thread(话题群)"""
+        if chat_id in self._chat_mode_cache:
+            return self._chat_mode_cache[chat_id]
+
+        if not self._client:
+            return "group"  # 默认普通群
+
+        try:
+            request = GetChatRequest.builder().chat_id(chat_id).build()
+            response = await self._client.im.v1.chat.aget(request)
+            if response.success():
+                chat_mode = getattr(response.data, "chat_mode", "group")
+                mode = "thread" if chat_mode == "topic" else "group"
+                self._chat_mode_cache[chat_id] = mode
+                return mode
+            logger.warning(f"Failed to get chat mode for {chat_id}: {response.msg}")
+        except Exception as e:
+            logger.warning(f"Error getting chat mode: {e}")
+
+        return "group"  # 失败默认普通群
 
     async def start(self) -> None:
         """Start the Feishu bot with WebSocket long connection."""
@@ -454,7 +478,8 @@ class FeishuChannel(BaseChannel):
         try:
             # Determine receive_id_type based on chat_id format
             # open_id starts with "ou_", chat_id starts with "oc_"
-            if msg.session_key.chat_id.startswith("oc_"):
+            reply_to = msg.metadata.get("reply_to")
+            if reply_to.startswith("oc_"):
                 receive_id_type = "chat_id"
             else:
                 receive_id_type = "open_id"
@@ -493,14 +518,16 @@ class FeishuChannel(BaseChannel):
 
             # Add @mention for the original sender when replying
             original_sender_id = None
+            chat_type = "group"
             if reply_to_message_id and msg.metadata:
                 original_sender_id = msg.metadata.get("sender_id")
+                chat_type = msg.metadata.get("chat_type", "group")
 
             # Build content line: [@mention, text content]
             content_line = []
 
-            # Add @mention element for original sender when replying
-            if original_sender_id:
+            # Add @mention element for original sender when replying (only in group chats)
+            if original_sender_id and chat_type == "group":
                 content_line.append({"tag": "at", "user_id": original_sender_id})
 
             # Add text content
@@ -557,7 +584,7 @@ class FeishuChannel(BaseChannel):
                     .receive_id_type(receive_id_type)
                     .request_body(
                         CreateMessageRequestBody.builder()
-                        .receive_id(msg.session_key.chat_id)
+                        .receive_id(reply_to)
                         .msg_type("post")
                         .content(content)
                         .build()
@@ -713,14 +740,22 @@ class FeishuChannel(BaseChannel):
             reply_to = chat_id if chat_type == "group" else sender_id
             logger.info(f"Received message from Feishu: {content}")
 
+            # 话题群处理：如果是话题群，首次消息root_id为空时，将当前消息id设为root_id
+            if chat_type == "group":
+                chat_mode = await self._get_chat_mode(chat_id)
+                if chat_mode == "thread" and not message.root_id:
+                    message.root_id = message.message_id
+                if message.root_id:
+                    chat_id = f"{reply_to}#{message.root_id}"
             await self._handle_message(
                 sender_id=sender_id,
-                chat_id=reply_to,
+                chat_id=chat_id,
                 content=content,
                 media=media if media else None,
                 metadata={
                     "message_id": message_id,
                     "chat_type": chat_type,
+                    "reply_to": reply_to,
                     "msg_type": msg_type,
                     "root_id": message.root_id,  # Topic/thread ID for topic groups
                     "sender_id": sender_id,  # Original message sender ID for @mention in replies

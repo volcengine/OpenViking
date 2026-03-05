@@ -457,7 +457,7 @@ async def account_test():
     await client.initialize()
 
     # res = await client.admin_list_users("eval")
-    # res = await client.admin_remove_user("default", "ou_69e48b1314d1400af9d40fe3e4c24b8a")
+    # res = await client.admin_remove_user("default", "")
     # res = await client.admin_remove_user("default", "admin")
     # res = await client.admin_list_accounts()
     res = await client.admin_create_account("eval", "default")
@@ -465,5 +465,5 @@ async def account_test():
 
 
 if __name__ == "__main__":
-    asyncio.run(main_test())
-    # asyncio.run(account_test())
+    # asyncio.run(main_test())
+    asyncio.run(account_test())

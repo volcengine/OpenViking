@@ -67,6 +67,7 @@ dependencies = [
     "tree-sitter-rust>=0.23.0",
     "tree-sitter-go>=0.23.0",
     "tree-sitter-c-sharp>=0.23.0",
+    "loguru>=0.7.3",
 ]
 
 [tool.uv.sources]

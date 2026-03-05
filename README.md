@@ -60,6 +60,8 @@ With OpenViking, developers can build an Agent's brain just like managing local 
 Before starting with OpenViking, please ensure your environment meets the following requirements:
 
 - **Python Version**: 3.10 or higher
+- **Go Version**: 1.19 or higher (Required for building AGFS components)
+- **C++ Compiler**: GCC 9+ or Clang 11+ (Required for building core extensions)
 - **Operating System**: Linux, macOS, Windows
 - **Network Connection**: A stable network connection is required (for downloading dependencies and accessing model services)
 
@@ -114,7 +116,7 @@ Volcengine supports both model names and endpoint IDs. Using model names is reco
 {
   "vlm": {
     "provider": "volcengine",
-    "model": "doubao-seed-1-6-240615",
+    "model": "doubao-seed-2-0-pro-260215",
     "api_key": "your-api-key",
     "api_base": "https://ark.cn-beijing.volces.com/api/v3"
   }
@@ -265,7 +267,7 @@ Create a configuration file `~/.openviking/ov.conf`, remove the comments before 
     "api_base" : "<api-endpoint>",     // API endpoint address
     "api_key"  : "<your-api-key>",     // Model service API Key
     "provider" : "<provider-type>",    // Provider type (volcengine, openai, deepseek, anthropic, etc.)
-    "model"    : "<model-name>",       // VLM model name (e.g., doubao-seed-1-8-251228 or gpt-4-vision-preview)
+    "model"    : "<model-name>",       // VLM model name (e.g., doubao-seed-2-0-pro-260215 or gpt-4-vision-preview)
     "max_concurrent": 100              // Max concurrent LLM calls for semantic processing (default: 100)
   }
 }
@@ -303,7 +305,7 @@ Create a configuration file `~/.openviking/ov.conf`, remove the comments before 
     "api_base" : "https://ark.cn-beijing.volces.com/api/v3",
     "api_key"  : "your-volcengine-api-key",
     "provider" : "volcengine",
-    "model"    : "doubao-seed-1-8-251228",
+    "model"    : "doubao-seed-2-0-pro-260215",
     "max_concurrent": 100
   }
 }

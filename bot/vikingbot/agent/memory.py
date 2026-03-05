@@ -48,7 +48,7 @@ class MemoryStore:
     async def get_viking_memory_context(self, current_message: str, workspace_id: str) -> str:
         client = await VikingClient.create(agent_id=workspace_id)
         admin_user_id = load_config().ov_server.admin_user_id
-        result = await client.search_memory(current_message, user_id=admin_user_id, limit=5)
+        result = await client.search_memory(current_message, user_id=admin_user_id, limit=3)
         if not result:
             return ""
         user_memory = self._parse_viking_memory(result["user_memory"])

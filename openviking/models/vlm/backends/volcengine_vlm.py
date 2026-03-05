@@ -27,7 +27,7 @@ class VolcEngineVLM(OpenAIVLM):
         if not self.api_base:
             self.api_base = "https://ark.cn-beijing.volces.com/api/v3"
         if not self.model:
-            self.model = "doubao-seed-1-8-251228"
+            self.model = "doubao-seed-2-0-pro-260215"
 
     def get_client(self):
         """Get sync client"""
@@ -63,7 +63,7 @@ class VolcEngineVLM(OpenAIVLM):
         """Get text completion"""
         client = self.get_client()
         kwargs = {
-            "model": self.model or "doubao-seed-1-8-251228",
+            "model": self.model or "doubao-seed-2-0-pro-260215",
             "messages": [{"role": "user", "content": prompt}],
             "temperature": self.temperature,
             "thinking": {"type": "disabled" if not thinking else "enabled"},
@@ -79,7 +79,7 @@ class VolcEngineVLM(OpenAIVLM):
         """Get text completion asynchronously"""
         client = self.get_async_client()
         kwargs = {
-            "model": self.model or "doubao-seed-1-8-251228",
+            "model": self.model or "doubao-seed-2-0-pro-260215",
             "messages": [{"role": "user", "content": prompt}],
             "temperature": self.temperature,
             "thinking": {"type": "disabled" if not thinking else "enabled"},
@@ -230,7 +230,7 @@ class VolcEngineVLM(OpenAIVLM):
         content.append({"type": "text", "text": prompt})
 
         kwargs = {
-            "model": self.model or "doubao-seed-1-8-251228",
+            "model": self.model or "doubao-seed-2-0-pro-260215",
             "messages": [{"role": "user", "content": content}],
             "temperature": self.temperature,
             "thinking": {"type": "disabled" if not thinking else "enabled"},
@@ -255,7 +255,7 @@ class VolcEngineVLM(OpenAIVLM):
         content.append({"type": "text", "text": prompt})
 
         kwargs = {
-            "model": self.model or "doubao-seed-1-8-251228",
+            "model": self.model or "doubao-seed-2-0-pro-260215",
             "messages": [{"role": "user", "content": content}],
             "temperature": self.temperature,
             "thinking": {"type": "disabled" if not thinking else "enabled"},
