@@ -331,7 +331,7 @@ function Configure-OpenClawPlugin {
       mode = "local"
       configPath = $ovConfPath
       port = $ServerPort
-      targetUri = "viking://"
+      targetUri = "viking://user/memories"
       autoRecall = $true
       autoCapture = $true
     }

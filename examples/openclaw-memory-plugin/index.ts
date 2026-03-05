@@ -1,6 +1,7 @@
 import { spawn, execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
+import { Socket } from "node:net";
 import { join } from "node:path";
 import { homedir, tmpdir, platform } from "node:os";
 
@@ -901,6 +902,90 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutMessage: 
   });
 }
 
+function quickTcpProbe(host: string, port: number, timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = new Socket();
+    let done = false;
+    const finish = (ok: boolean) => {
+      if (done) {
+        return;
+      }
+      done = true;
+      socket.destroy();
+      resolve(ok);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once("connect", () => finish(true));
+    socket.once("timeout", () => finish(false));
+    socket.once("error", () => finish(false));
+    try {
+      socket.connect(port, host);
+    } catch {
+      finish(false);
+    }
+  });
+}
+
+async function quickHealthCheck(baseUrl: string, timeoutMs: number): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${baseUrl}/health`, {
+      method: "GET",
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      return false;
+    }
+    const body = (await response.json().catch(() => ({}))) as { status?: string };
+    return body.status === "ok";
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function quickRecallPrecheck(
+  mode: "local" | "remote",
+  baseUrl: string,
+  defaultPort: number,
+  localProcess: ReturnType<typeof spawn> | null,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const healthOk = await quickHealthCheck(baseUrl, 500);
+  if (healthOk) {
+    return { ok: true };
+  }
+
+  let host = "127.0.0.1";
+  let port = defaultPort;
+  try {
+    const parsed = new URL(baseUrl);
+    if (parsed.hostname) {
+      host = parsed.hostname;
+    }
+    if (parsed.port) {
+      const parsedPort = Number(parsed.port);
+      if (Number.isFinite(parsedPort) && parsedPort > 0) {
+        port = parsedPort;
+      }
+    }
+  } catch {
+    // Keep defaults when baseUrl is malformed.
+  }
+
+  if (mode === "local") {
+    const portOk = await quickTcpProbe(host, port, 200);
+    if (!portOk) {
+      return { ok: false, reason: `local port unavailable (${host}:${port})` };
+    }
+    if (localProcess && (localProcess.killed || localProcess.exitCode !== null || localProcess.signalCode !== null)) {
+      return { ok: false, reason: "local process is not running" };
+    }
+  }
+  return { ok: false, reason: "health check failed" };
+}
+
 const memoryPlugin = {
   id: "memory-openviking",
   name: "Memory (OpenViking)",
@@ -1196,54 +1281,49 @@ const memoryPlugin = {
         const prependContextParts: string[] = [];
 
         if (cfg.autoRecall && queryText.length >= 5) {
-          if (cfg.mode === "local" && localUnavailableReason) {
+          const precheck = await quickRecallPrecheck(cfg.mode, cfg.baseUrl, cfg.port, localProcess);
+          if (!precheck.ok) {
             api.logger.info?.(
-              `memory-openviking: skipping auto-recall because local mode is unavailable (${localUnavailableReason})`,
+              `memory-openviking: skipping auto-recall because precheck failed (${precheck.reason})`,
             );
           } else {
-          try {
-            const candidateLimit = Math.max(cfg.recallLimit * 4, cfg.recallLimit);
-            const result = await withTimeout(
-              getClient().then((client) =>
-                client.find(queryText, {
-                  targetUri: cfg.targetUri,
-                  limit: candidateLimit,
-                  scoreThreshold: 0,
-                }),
-              ),
-              autoRecallTimeoutMs,
-              `OpenViking auto-recall timeout after ${autoRecallTimeoutMs}ms`,
-            );
-            const processed = postProcessMemories(result.memories ?? [], {
-              limit: candidateLimit,
-              scoreThreshold: cfg.recallScoreThreshold,
-            });
-            const memories = pickMemoriesForInjection(processed, cfg.recallLimit, queryText);
-            if (memories.length > 0) {
-              const memoryContext = memories
-                .map((item) => `- [${item.category ?? "memory"}] ${item.abstract ?? item.uri}`)
-                .join("\n");
-              api.logger.info?.(
-                `memory-openviking: injecting ${memories.length} memories into context`,
+            try {
+              const candidateLimit = Math.max(cfg.recallLimit * 4, cfg.recallLimit);
+              const result = await withTimeout(
+                getClient().then((client) =>
+                  client.find(queryText, {
+                    targetUri: cfg.targetUri,
+                    limit: candidateLimit,
+                    scoreThreshold: 0,
+                  }),
+                ),
+                autoRecallTimeoutMs,
+                `OpenViking auto-recall timeout after ${autoRecallTimeoutMs}ms`,
               );
-              api.logger.info?.(
-                `memory-openviking: inject-detail ${toJsonLog({ count: memories.length, memories: summarizeInjectionMemories(memories) })}`,
-              );
-              prependContextParts.push(
-                "<relevant-memories>\nThe following OpenViking memories may be relevant:\n" +
-                  `${memoryContext}\n` +
-                "</relevant-memories>",
-              );
-            }
-          } catch (err) {
-            if (cfg.mode === "local") {
-              const message = String(err).toLowerCase();
-              if (message.includes("timeout") || message.includes("unavailable")) {
-                markLocalUnavailable("auto-recall timeout", err);
+              const processed = postProcessMemories(result.memories ?? [], {
+                limit: candidateLimit,
+                scoreThreshold: cfg.recallScoreThreshold,
+              });
+              const memories = pickMemoriesForInjection(processed, cfg.recallLimit, queryText);
+              if (memories.length > 0) {
+                const memoryContext = memories
+                  .map((item) => `- [${item.category ?? "memory"}] ${item.abstract ?? item.uri}`)
+                  .join("\n");
+                api.logger.info?.(
+                  `memory-openviking: injecting ${memories.length} memories into context`,
+                );
+                api.logger.info?.(
+                  `memory-openviking: inject-detail ${toJsonLog({ count: memories.length, memories: summarizeInjectionMemories(memories) })}`,
+                );
+                prependContextParts.push(
+                  "<relevant-memories>\nThe following OpenViking memories may be relevant:\n" +
+                    `${memoryContext}\n` +
+                  "</relevant-memories>",
+                );
               }
+            } catch (err) {
+              api.logger.warn(`memory-openviking: auto-recall failed: ${String(err)}`);
             }
-            api.logger.warn(`memory-openviking: auto-recall failed: ${String(err)}`);
-          }
           }
         }
 
