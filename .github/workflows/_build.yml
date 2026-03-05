@@ -79,6 +79,9 @@ jobs:
       run: |
         git reset --hard HEAD
         git clean -fd
+        # For sdist, ensure local runtime binaries are not packaged even if present
+        rm -rf openviking/bin openviking/lib third_party/agfs/bin || true
+        rm -f openviking/storage/vectordb/*.so openviking/storage/vectordb/*.dylib openviking/storage/vectordb/*.dll openviking/storage/vectordb/*.exe || true
         rm -rf openviking/_version.py openviking.egg-info
         # Ignore uv.lock changes to avoid dirty state in setuptools_scm
         git update-index --assume-unchanged uv.lock || true
