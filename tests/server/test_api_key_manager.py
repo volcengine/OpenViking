@@ -37,7 +37,7 @@ async def manager_service(temp_dir):
 @pytest_asyncio.fixture(scope="function")
 async def manager(manager_service):
     """Fresh APIKeyManager instance, loaded."""
-    mgr = APIKeyManager(root_key=ROOT_KEY, agfs_url=manager_service._agfs_url)
+    mgr = APIKeyManager(root_key=ROOT_KEY, agfs_client=manager_service._agfs)
     await mgr.load()
     return mgr
 
@@ -207,14 +207,14 @@ async def test_get_users(manager: APIKeyManager):
 
 async def test_persistence_across_reload(manager_service):
     """Keys should survive manager reload from AGFS."""
-    mgr1 = APIKeyManager(root_key=ROOT_KEY, agfs_url=manager_service._agfs_url)
+    mgr1 = APIKeyManager(root_key=ROOT_KEY, agfs_client=manager_service._agfs)
     await mgr1.load()
 
     acct = _uid()
     key = await mgr1.create_account(acct, "alice")
 
     # Create new manager instance and reload
-    mgr2 = APIKeyManager(root_key=ROOT_KEY, agfs_url=manager_service._agfs_url)
+    mgr2 = APIKeyManager(root_key=ROOT_KEY, agfs_client=manager_service._agfs)
     await mgr2.load()
 
     identity = mgr2.resolve(key)
