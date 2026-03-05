@@ -306,8 +306,9 @@ class VikingFS:
         """Content search by pattern or keywords."""
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
-        result = self.agfs.grep(
-            path, pattern, True, case_insensitive, stream=False, node_limit=node_limit
+        result =  await asyncio.to_thread(
+            self.agfs.grep,
+            path, pattern, True, case_insensitive, False, node_limit=node_limit
         )
         if result.get("matches", None) is None:
             result["matches"] = []

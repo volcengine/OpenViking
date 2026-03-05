@@ -39,7 +39,7 @@ async def admin_app(admin_service):
     app = create_app(config=config, service=admin_service)
     set_service(admin_service)
 
-    manager = APIKeyManager(root_key=ROOT_KEY, agfs_url=admin_service._agfs_url)
+    manager = APIKeyManager(root_key=ROOT_KEY, agfs_client=admin_service._agfs)
     await manager.load()
     app.state.api_key_manager = manager
 

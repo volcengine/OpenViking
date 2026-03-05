@@ -44,7 +44,7 @@ async def auth_app(auth_service):
     set_service(auth_service)
 
     # Manually initialize APIKeyManager (lifespan not triggered in ASGI tests)
-    manager = APIKeyManager(root_key=ROOT_KEY, agfs_url=auth_service._agfs_url)
+    manager = APIKeyManager(root_key=ROOT_KEY, agfs_client=auth_service._agfs)
     await manager.load()
     app.state.api_key_manager = manager
 

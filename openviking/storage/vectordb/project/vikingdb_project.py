@@ -2,12 +2,14 @@
 # SPDX-License-Identifier: Apache-2.0
 from typing import Any, Dict, List, Optional
 
-from openviking.storage.vectordb.collection.collection import Collection
+from openviking.storage.vectordb.collection.collection import (
+    Collection,
+    load_collection_class,
+)
 from openviking.storage.vectordb.collection.vikingdb_clients import (
     VIKINGDB_APIS,
     VikingDBClient,
 )
-from openviking.storage.vectordb.collection.vikingdb_collection import VikingDBCollection
 from openviking_cli.utils.logger import default_logger as logger
 
 
@@ -22,6 +24,8 @@ def get_or_create_vikingdb_project(
         config: Configuration dict with keys:
             - Host: VikingDB service host
             - Headers: Custom headers for authentication/context
+            - CollectionClass: Class path for collection implementation
+            - CollectionArgs: Optional dictionary of arguments to pass to collection constructor
 
     Returns:
         VikingDBProject instance
@@ -31,11 +35,23 @@ def get_or_create_vikingdb_project(
 
     host = config.get("Host")
     headers = config.get("Headers")
+    collection_class_path = config.get(
+        "CollectionClass",
+        "openviking.storage.vectordb.collection.vikingdb_collection.VikingDBCollection",
+    )
+    # Extract any other arguments that might be needed for collection initialization
+    collection_args = config.get("CollectionArgs", {})
 
     if not host:
         raise ValueError("config must contain 'Host'")
 
-    return VikingDBProject(host=host, headers=headers, project_name=project_name)
+    return VikingDBProject(
+        host=host,
+        headers=headers,
+        project_name=project_name,
+        collection_class_path=collection_class_path,
+        collection_args=collection_args,
+    )
 
 
 class VikingDBProject:
@@ -45,7 +61,12 @@ class VikingDBProject:
     """
 
     def __init__(
-        self, host: str, headers: Optional[Dict[str, str]] = None, project_name: str = "default"
+        self,
+        host: str,
+        headers: Optional[Dict[str, str]] = None,
+        project_name: str = "default",
+        collection_class_path: str = "openviking.storage.vectordb.collection.vikingdb_collection.VikingDBCollection",
+        collection_args: Optional[Dict[str, Any]] = None,
     ):
         """
         Initialize VikingDB project.
@@ -54,12 +75,19 @@ class VikingDBProject:
             host: VikingDB service host
             headers: Custom headers for requests
             project_name: Project name
+            collection_class_path: Python path to the collection class
+            collection_args: Optional dictionary of arguments to pass to collection constructor
         """
         self.host = host
         self.headers = headers
         self.project_name = project_name
+        self.collection_class_path = collection_class_path
+        self.CollectionClass = load_collection_class(self.collection_class_path)
+        self.collection_args = collection_args or {}
 
-        logger.info(f"Initialized VikingDB project: {project_name} with host {host}")
+        logger.info(
+            f"Initialized VikingDB project: {project_name} with host {host} and collection class {collection_class_path}"
+        )
 
     def close(self):
         """Close project"""
@@ -87,9 +115,17 @@ class VikingDBProject:
             meta_data = result.get("Result", {})
             if not meta_data:
                 return None
-            vikingdb_collection = VikingDBCollection(
-                host=self.host, headers=self.headers, meta_data=meta_data
-            )
+            # Prepare arguments for collection constructor
+            # Default arguments
+            kwargs = {
+                "host": self.host,
+                "headers": self.headers,
+                "meta_data": meta_data,
+            }
+            # Update with user-provided arguments (can override defaults if needed, though usually additive)
+            kwargs.update(self.collection_args)
+            
+            vikingdb_collection = self.CollectionClass(**kwargs)
             return Collection(vikingdb_collection)
         except Exception:
             return None
@@ -118,12 +154,24 @@ class VikingDBProject:
     def get_collections(self) -> Dict[str, Collection]:
         """Get all collections from server"""
         colls = self._get_collections()
-        return {
-            c["CollectionName"]: Collection(
-                VikingDBCollection(host=self.host, headers=self.headers, meta_data=c)
-            )
-            for c in colls
+        
+        # Prepare base arguments
+        base_kwargs = {
+            "host": self.host,
+            "headers": self.headers,
         }
+        
+        collections = {}
+        for c in colls:
+            kwargs = base_kwargs.copy()
+            kwargs["meta_data"] = c
+            kwargs.update(self.collection_args)
+            
+            collections[c["CollectionName"]] = Collection(
+                self.CollectionClass(**kwargs)
+            )
+            
+        return collections
 
     def create_collection(self, collection_name: str, meta_data: Dict[str, Any]) -> Collection:
         """collection should be pre-created"""

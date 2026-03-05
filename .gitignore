@@ -102,6 +102,7 @@ Temporary Items
 /benchmark_data/*
 .claude
 .openviking
+*.code-workspace
 
 # AI Coding
 CLAUDE.md

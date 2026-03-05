@@ -20,7 +20,22 @@ _ADAPTER_REGISTRY: dict[str, type[CollectionAdapter]] = {
 
 def create_collection_adapter(config) -> CollectionAdapter:
     """Unified factory entrypoint for backend-specific collection adapters."""
-    adapter_cls = _ADAPTER_REGISTRY.get(config.backend)
+    backend = config.backend
+    adapter_cls = _ADAPTER_REGISTRY.get(backend)
+
+    # If not in registry, try to load dynamically as a class path
+    if adapter_cls is None and "." in backend:
+        try:
+            import importlib
+            module_name, class_name = backend.rsplit(".", 1)
+            module = importlib.import_module(module_name)
+            potential_cls = getattr(module, class_name)
+            if issubclass(potential_cls, CollectionAdapter):
+                adapter_cls = potential_cls
+        except (ImportError, AttributeError, TypeError):
+            # Fallback to raising error if dynamic loading fails
+            pass
+
     if adapter_cls is None:
         raise ValueError(
             f"Vector backend {config.backend} is not supported. "

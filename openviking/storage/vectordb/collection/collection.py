@@ -1,10 +1,21 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
+import importlib
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Type
 
 from openviking.storage.vectordb.collection.result import AggregateResult, SearchResult
 from openviking.storage.vectordb.index.index import IIndex
+
+
+def load_collection_class(class_path: str) -> Type["ICollection"]:
+    """Load collection class from string path"""
+    try:
+        module_name, class_name = class_path.rsplit(".", 1)
+        module = importlib.import_module(module_name)
+        return getattr(module, class_name)
+    except (ImportError, AttributeError) as e:
+        raise ImportError(f"Could not load collection class {class_path}: {e}")
 
 
 class ICollection(ABC):
