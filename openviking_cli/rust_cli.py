@@ -67,7 +67,7 @@ def main():
         请选择以下方式之一安装：
 
         1. 使用预构建 wheel（推荐）：
-   pip install openviking
+   pip install openviking --upgrade --force-reinstall
 
         2. 使用官方安装脚本（零 Python 开销）：
    curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/crates/ov_cli/install.sh | bash

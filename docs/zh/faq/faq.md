@@ -64,7 +64,7 @@ viking://
 ### 如何安装 OpenViking？
 
 ```bash
-pip install openviking
+pip install openviking --upgrade --force-reinstall
 ```
 
 ### 如何配置 OpenViking？

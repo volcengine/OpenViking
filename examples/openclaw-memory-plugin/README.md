@@ -14,7 +14,7 @@ The setup helper checks the environment, creates `~/.openviking/ov.conf`, deploy
 
 ## Manual Setup
 
-Prerequisites: **OpenClaw** (`npm install -g openclaw`), **Python >= 3.10** with `openviking` (`pip install openviking`).
+Prerequisites: **OpenClaw** (`npm install -g openclaw`), **Python >= 3.10** with `openviking` (`pip install openviking --upgrade --force-reinstall`).
 
 ```bash
 # Install plugin

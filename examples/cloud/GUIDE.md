@@ -19,7 +19,7 @@
 ## 前置条件
 
 - 火山引擎账号（[注册地址](https://console.volcengine.com/)）
-- 已安装 OpenViking（`pip install openviking` 或从源码安装）
+- 已安装 OpenViking（`pip install openviking --upgrade --force-reinstall` 或从源码安装）
 - Python 3.11+
 
 ---
@@ -164,7 +164,7 @@ cp examples/cloud/ov.conf.example examples/cloud/ov.conf
 
 > **开发调试**：如果只是本地快速验证，可以直接运行：
 > ```bash
-> pip install openviking
+> pip install openviking --upgrade --force-reinstall
 >
 > # 方式 A：放到默认路径
 > mkdir -p ~/.openviking && cp examples/cloud/ov.conf ~/.openviking/ov.conf
@@ -181,7 +181,7 @@ cp examples/cloud/ov.conf.example examples/cloud/ov.conf
 1. 安装 OpenViking：
 
 ```bash
-pip install openviking
+pip install openviking --upgrade --force-reinstall
 ```
 
 2. 将配置文件放到固定路径：

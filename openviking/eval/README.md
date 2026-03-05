@@ -66,7 +66,7 @@ class BaseEvaluator(ABC):
 
 ```bash
 # 基础安装
-pip install openviking
+pip install openviking --upgrade --force-reinstall
 
 # RAGAS 评估支持
 pip install ragas datasets

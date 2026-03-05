@@ -61,10 +61,11 @@ viking://
   - VLM (Vision Language Model): For multimodal content processing and semantic extraction
   - Rerank model: For improved retrieval precision
 
-### How do I install OpenViking?
+### How do I install/upgrade OpenViking?
 
 ```bash
-pip install openviking
+pip install openviking --upgrade --force-reinstall
+
 ```
 
 ### How do I configure OpenViking?

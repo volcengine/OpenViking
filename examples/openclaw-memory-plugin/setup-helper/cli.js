@@ -719,8 +719,8 @@ Env vars:
         await installOpenviking(repo);
       } else {
         log("Please install openviking manually and re-run this script.", "err");
-        if (repo) console.log(`    cd ${repo} && python3.11 -m pip install -e .`);
-        else console.log("    python3.11 -m pip install openviking");
+        if (repo) console.log(`    cd ${repo} && python3 -m pip install -e .`);
+        else console.log("    python3.11 -m pip install openviking --upgrade --force-reinstall");
         process.exit(1);
       }
     }

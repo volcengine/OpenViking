@@ -105,7 +105,7 @@ This permanently deletes the repo and all its indexed content. Confirm with the 
 
 ## Error Handling
 
-**`command not found: ov`** → Tell user: `pip install openviking --upgrade`. Stop.
+**`command not found: ov`** → Tell user: `pip install openviking --upgrade --force-reinstall`. Stop.
 
 **`url is required` / `CLI_CONFIG` error** → Auto-create config and retry:
 ```bash

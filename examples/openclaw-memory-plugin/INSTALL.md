@@ -62,8 +62,8 @@ For manual installation, continue reading.
 | **Volcengine Ark API Key** | — | Embedding + VLM model calls | Yes |
 
 > **PyPI vs Source install:**
-> - `pip install openviking` (pre-built package): needs Python, cmake, g++ — **no Go required**
-> - `pip install -e .` (source install): needs Python, cmake, g++ **and Go >= 1.25** (to compile AGFS on Linux)
+> - `pip install openviking --upgrade --force-reinstall` (pre-built package): needs Python, cmake, g++ — **no Go required**
+> - `pip install -e . --force-reinstall` (source install): needs Python, cmake, g++ **and Go >= 1.25** (to compile AGFS on Linux)
 > - **Windows** users can use pre-built wheel packages without Go
 
 ### Quick Check
@@ -211,7 +211,7 @@ npm -v
 ### 3.4 Install Go >= 1.25 (source install only)
 
 > Already installed? Run `go version` — if it shows >= go1.25, skip this step.
-> Also skippable if using `pip install openviking` (pre-built package).
+> Also skippable if using `pip install openviking --upgrade --force-reinstall` (pre-built package).
 
 Go is required on Linux to compile the AGFS server when installing from source.
 
@@ -285,7 +285,7 @@ cd OpenViking
 #### Option A: Install from PyPI (recommended, no Go needed)
 
 ```bash
-python3 -m pip install openviking
+python3 -m pip install openviking --upgrade --force-reinstall
 ```
 
 #### Option B: Install from Source (developer mode, requires Go)
@@ -627,7 +627,7 @@ python3 -m pip config set global.trusted-host pypi.tuna.tsinghua.edu.cn
 Single-use:
 
 ```bash
-python3 -m pip install openviking -i https://pypi.tuna.tsinghua.edu.cn/simple
+python3 -m pip install openviking --upgrade --force-reinstall -i https://pypi.tuna.tsinghua.edu.cn/simple
 ```
 
 ### npm Mirror

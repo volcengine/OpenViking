@@ -68,7 +68,7 @@ Before starting with OpenViking, please ensure your environment meets the follow
 #### Python Package
 
 ```bash
-pip install openviking
+pip install openviking --upgrade --force-reinstall
 ```
 
 #### Rust CLI (Optional)
