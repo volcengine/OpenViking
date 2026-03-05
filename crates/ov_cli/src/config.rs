@@ -98,3 +98,58 @@ pub fn default_config_path() -> Result<PathBuf> {
         .ok_or_else(|| Error::Config("Could not determine home directory".to_string()))?;
     Ok(home.join(".openviking").join("ovcli.conf"))
 }
+
+/// Get or create a unique machine ID.
+///
+/// This function will:
+/// 1. Try to get the hostname from environment variables
+/// 2. If that fails, generate a random ID and store it in the config directory
+pub fn get_or_create_machine_id() -> Result<String> {
+    let home = dirs::home_dir()
+        .ok_or_else(|| Error::Config("Could not determine home directory".to_string()))?;
+    let machine_id_path = home.join(".openviking").join("machine_id");
+
+    // Try to read existing machine ID
+    if machine_id_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&machine_id_path) {
+            let trimmed = content.trim();
+            if !trimmed.is_empty() {
+                return Ok(trimmed.to_string());
+            }
+        }
+    }
+
+    // Try to get hostname from environment variables
+    if let Ok(hostname) = std::env::var("HOSTNAME").or_else(|_| std::env::var("COMPUTERNAME")) {
+        let trimmed = hostname.trim();
+        if !trimmed.is_empty() {
+            // Save it for future use
+            if let Some(parent) = machine_id_path.parent() {
+                let _ = std::fs::create_dir_all(parent);
+            }
+            let _ = std::fs::write(&machine_id_path, trimmed);
+            return Ok(trimmed.to_string());
+        }
+    }
+
+    // Generate a random ID as a last resort
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let mut hasher = DefaultHasher::new();
+    if let Ok(n) = SystemTime::now().duration_since(UNIX_EPOCH) {
+        n.hash(&mut hasher);
+    }
+    let pid = std::process::id();
+    pid.hash(&mut hasher);
+    let random_id = format!("cli_{:x}", hasher.finish());
+
+    // Save it for future use
+    if let Some(parent) = machine_id_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+    let _ = std::fs::write(&machine_id_path, &random_id);
+
+    Ok(random_id)
+}

@@ -437,7 +437,7 @@ def get_openapi_router(bus: MessageBus, config: Config) -> APIRouter:
 
     # Register channel's send method as subscriber for outbound messages
     bus.subscribe_outbound(
-        f"openapi__{openapi_config.channel_id()}",
+        f"cli__{openapi_config.channel_id()}",
         channel.send,
     )
 

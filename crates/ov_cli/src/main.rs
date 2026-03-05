@@ -331,9 +331,9 @@ enum Commands {
         /// Message to send to the agent
         #[arg(short, long)]
         message: Option<String>,
-        /// Session ID
-        #[arg(short, long, default_value = "cli__chat__default")]
-        session: String,
+        /// Session ID (defaults to machine unique ID)
+        #[arg(short, long)]
+        session: Option<String>,
         /// Render assistant output as Markdown
         #[arg(long = "markdown", default_value = "true")]
         markdown: bool,
@@ -576,10 +576,11 @@ async fn main() {
             handle_tui(uri, ctx).await
         }
         Commands::Chat { message, session, markdown, logs: _ } => {
-            let cmd = commands::chat_v2::ChatCommand {
+            let session_id = session.or_else(|| config::get_or_create_machine_id().ok());
+            let cmd = commands::chat::ChatCommand {
                 endpoint: std::env::var("VIKINGBOT_ENDPOINT").unwrap_or_else(|_| "http://localhost:1933/bot/v1".to_string()),
                 api_key: std::env::var("VIKINGBOT_API_KEY").ok(),
-                session: Some(session),
+                session: session_id,
                 user: "cli_user".to_string(),
                 message,
                 stream: false,
