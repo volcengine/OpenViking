@@ -92,12 +92,17 @@ class ContextBuilder:
                 f"## Sandbox Environment\n\nYou are running in a sandboxed environment. All file operations and command execution are restricted to the sandbox directory.\nThe sandbox root directory is `{sandbox_cwd}` (use relative paths for all operations)."
             )
 
-        # Add group chat context if applicable
-        if self._is_group_chat:
-            parts.append(
-                f"\n\n## Group Chat Context\nThis is a group chat session. Multiple users can participate in this conversation. Each user message is prefixed with the user ID in brackets like @<user_id>. "
-                f"You should pay attention to who is speaking to understand the context. Current user ID: {self._sender_id}"
-            )
+        # Add session context
+        session_context = "## Current Session"
+        if session_key and session_key.type:
+            session_context += f"\nChannel: {session_key.type}"
+            if self._is_group_chat:
+                session_context += (
+                    f"\n**Group chat session.** Current user ID: {self._sender_id}\n"
+                    f"Multiple users can participate in this conversation. Each user message is prefixed with the user ID in brackets like @<user_id>. "
+                    f"You should pay attention to who is speaking to understand the context. "
+                )
+        parts.append(session_context)
 
         # Viking user profile
         profile = await self.memory.get_viking_user_profile(

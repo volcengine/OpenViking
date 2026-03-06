@@ -7,9 +7,7 @@ import httpx
 
 
 async def test_ls_root(client: httpx.AsyncClient):
-    resp = await client.get(
-        "/api/v1/fs/ls", params={"uri": "viking://"}
-    )
+    resp = await client.get("/api/v1/fs/ls", params={"uri": "viking://"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
@@ -62,9 +60,7 @@ async def test_mkdir_and_ls(client: httpx.AsyncClient):
 
 
 async def test_tree(client: httpx.AsyncClient):
-    resp = await client.get(
-        "/api/v1/fs/tree", params={"uri": "viking://"}
-    )
+    resp = await client.get("/api/v1/fs/tree", params={"uri": "viking://"})
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
@@ -72,9 +68,7 @@ async def test_tree(client: httpx.AsyncClient):
 
 async def test_stat_after_add_resource(client_with_resource):
     client, uri = client_with_resource
-    resp = await client.get(
-        "/api/v1/fs/stat", params={"uri": uri}
-    )
+    resp = await client.get("/api/v1/fs/stat", params={"uri": uri})
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
@@ -92,9 +86,7 @@ async def test_stat_not_found(client: httpx.AsyncClient):
 
 async def test_rm_resource(client_with_resource):
     client, uri = client_with_resource
-    resp = await client.request(
-        "DELETE", "/api/v1/fs", params={"uri": uri, "recursive": True}
-    )
+    resp = await client.request("DELETE", "/api/v1/fs", params={"uri": uri, "recursive": True})
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
 

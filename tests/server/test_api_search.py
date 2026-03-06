@@ -66,9 +66,7 @@ async def test_search_basic(client_with_resource):
 async def test_search_with_session(client_with_resource):
     client, uri = client_with_resource
     # Create a session first
-    sess_resp = await client.post(
-        "/api/v1/sessions", json={"user": "test"}
-    )
+    sess_resp = await client.post("/api/v1/sessions", json={"user": "test"})
     session_id = sess_resp.json()["result"]["session_id"]
 
     resp = await client.post(

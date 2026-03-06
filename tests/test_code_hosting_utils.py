@@ -34,7 +34,9 @@ except Exception:
     sys.modules[_config_mod_name].get_openviking_config = _mock_config  # type: ignore[attr-defined]
 
 # Load code_hosting_utils directly from file to avoid the heavy openviking/__init__.py chain
-_module_path = Path(__file__).resolve().parents[1] / "openviking" / "utils" / "code_hosting_utils.py"
+_module_path = (
+    Path(__file__).resolve().parents[1] / "openviking" / "utils" / "code_hosting_utils.py"
+)
 _spec = importlib.util.spec_from_file_location("openviking.utils.code_hosting_utils", _module_path)
 _module = importlib.util.module_from_spec(_spec)
 sys.modules["openviking.utils.code_hosting_utils"] = _module

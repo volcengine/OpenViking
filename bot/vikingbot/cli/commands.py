@@ -6,6 +6,8 @@ import os
 import select
 import signal
 import sys
+import hashlib
+import time
 from pathlib import Path
 
 import typer
@@ -34,7 +36,12 @@ from vikingbot.config.loader import load_config
 # Create sandbox manager
 from vikingbot.sandbox.manager import SandboxManager
 from vikingbot.session.manager import SessionManager
-from vikingbot.utils.helpers import get_source_workspace_path, set_bot_data_path, get_history_path, get_bridge_path
+from vikingbot.utils.helpers import (
+    get_source_workspace_path,
+    set_bot_data_path,
+    get_history_path,
+    get_bridge_path,
+)
 
 app = typer.Typer(
     name="vikingbot",
@@ -44,6 +51,25 @@ app = typer.Typer(
 
 console = Console()
 EXIT_COMMANDS = {"exit", "quit", "/exit", "/quit", ":q"}
+
+
+def get_or_create_machine_id() -> str:
+    """Get a unique machine ID using py-machineid.
+
+    Uses the system's machine ID, falls back to "default" if unavailable.
+    """
+    try:
+        from machineid import machine_id
+
+        return machine_id()
+    except ImportError:
+        # Fallback if py-machineid is not installed
+        pass
+    except Exception:
+        pass
+
+    # Default fallback
+    return "default"
 
 
 def _init_bot_data(config):
@@ -169,10 +195,9 @@ def main(
     pass
 
 
-def _make_provider(config, langfuse_client:  None = None):
+def _make_provider(config, langfuse_client: None = None):
     """Create LiteLLMProvider from config. Allows starting without API key."""
     from vikingbot.providers.litellm_provider import LiteLLMProvider
-
 
     config = load_config()
     p = config.agents
@@ -227,6 +252,7 @@ def gateway(
 
     # Create FastAPI app for OpenAPI
     from fastapi import FastAPI
+
     fastapi_app = FastAPI(
         title="Vikingbot OpenAPI",
         description="HTTP API for Vikingbot chat",
@@ -234,23 +260,14 @@ def gateway(
     )
 
     cron = prepare_cron(bus)
-    channels = prepare_channel(config, bus, fastapi_app=fastapi_app, enable_openapi=True, openapi_port=port)
+    channels = prepare_channel(
+        config, bus, fastapi_app=fastapi_app, enable_openapi=True, openapi_port=port
+    )
     agent_loop = prepare_agent_loop(config, bus, session_manager, cron)
     heartbeat = prepare_heartbeat(config, agent_loop, session_manager)
 
     async def run():
         import uvicorn
-
-        # Setup OpenAPI routes before starting
-        openapi_channel = None
-        for name, channel in channels.channels.items():
-            if hasattr(channel, 'name') and channel.name == "openapi":
-                openapi_channel = channel
-                break
-
-        if openapi_channel is not None and hasattr(openapi_channel, '_setup_routes'):
-            openapi_channel._setup_routes()
-            logger.info("OpenAPI routes registered")
 
         # Start uvicorn server for OpenAPI
         config_uvicorn = uvicorn.Config(
@@ -276,13 +293,15 @@ def gateway(
 
 
 def prepare_agent_loop(config, bus, session_manager, cron, quiet: bool = False, eval: bool = False):
-    sandbox_parent_path = config.bot_data_path
+    sandbox_parent_path = config.workspace_path
     source_workspace_path = get_source_workspace_path()
     sandbox_manager = SandboxManager(config, sandbox_parent_path, source_workspace_path)
     if config.sandbox.backend == "direct":
-        logger.warning("Sandbox: disabled (using DIRECT mode - commands run directly on host)")
+        logger.warning("[SANDBOX] disabled (using DIRECT mode - commands run directly on host)")
     else:
-        logger.info(f"Sandbox: enabled (backend={config.sandbox.backend}, mode={config.sandbox.mode})")
+        logger.info(
+            f"Sandbox: enabled (backend={config.sandbox.backend}, mode={config.sandbox.mode})"
+        )
 
     # Initialize Langfuse if enabled
     langfuse_client = None
@@ -318,11 +337,11 @@ def prepare_agent_loop(config, bus, session_manager, cron, quiet: bool = False, 
         session_manager=session_manager,
         sandbox_manager=sandbox_manager,
         config=config,
-        eval=eval
+        eval=eval,
     )
     # Set the agent reference in cron if it uses the holder pattern
-    if hasattr(cron, '_agent_holder'):
-        cron._agent_holder['agent'] = agent
+    if hasattr(cron, "_agent_holder"):
+        cron._agent_holder["agent"] = agent
     return agent
 
 
@@ -383,7 +402,9 @@ Reminder message to deliver:
     return cron
 
 
-def prepare_channel(config, bus, fastapi_app=None, enable_openapi: bool = False, openapi_port: int = 18790):
+def prepare_channel(
+    config, bus, fastapi_app=None, enable_openapi: bool = False, openapi_port: int = 18790
+):
     """Prepare channels for the bot.
 
     Args:
@@ -475,27 +496,26 @@ def _thinking_ctx(logs: bool):
     """Return a context manager for showing thinking spinner."""
     if logs:
         from contextlib import nullcontext
+
         return nullcontext()
     return console.status("[dim]vikingbot is thinking...[/dim]", spinner="dots")
 
 
-def prepare_agent_channel(config, bus, mode: str, message: str | None, session_id: str, markdown: bool, logs: bool, eval: bool = False):
+def prepare_agent_channel(
+    config,
+    bus,
+    message: str | None,
+    session_id: str,
+    markdown: bool,
+    logs: bool,
+    eval: bool = False,
+):
     """Prepare channel for agent command."""
     from vikingbot.channels.chat import ChatChannel, ChatChannelConfig
-    from vikingbot.channels.stdio import StdioChannel, StdioChannelConfig
     from vikingbot.channels.single_turn import SingleTurnChannel, SingleTurnChannelConfig
 
     channels = ChannelManager(bus)
-
-    if mode == "stdio":
-        channel_config = StdioChannelConfig()
-        channel = StdioChannel(
-            channel_config,
-            bus,
-            workspace_path=config.workspace_path,
-        )
-        channels.add_channel(channel)
-    elif message is not None:
+    if message is not None:
         # Single message mode - use SingleTurnChannel for clean output
         channel_config = SingleTurnChannelConfig()
         channel = SingleTurnChannel(
@@ -534,9 +554,6 @@ def chat(
     logs: bool = typer.Option(
         False, "--logs/--no-logs", help="Show vikingbot runtime logs during chat"
     ),
-    mode: str = typer.Option(
-        "direct", "--mode", help="Mode: direct (interactive), stdio (JSON IPC)"
-    ),
     eval: bool = typer.Option(
         False, "--eval", "-e", help="Run evaluation mode, output JSON results"
     ),
@@ -559,10 +576,12 @@ def chat(
     is_single_turn = message is not None
     # Use unified default session ID
     if session_id is None:
-        session_id = "cli__chat__default"
+        session_id = get_or_create_machine_id()
     cron = prepare_cron(bus, quiet=is_single_turn)
-    channels = prepare_agent_channel(config, bus, mode, message, session_id, markdown, logs, eval)
-    agent_loop = prepare_agent_loop(config, bus, session_manager, cron, quiet=is_single_turn, eval=eval)
+    channels = prepare_agent_channel(config, bus, message, session_id, markdown, logs, eval)
+    agent_loop = prepare_agent_loop(
+        config, bus, session_manager, cron, quiet=is_single_turn, eval=eval
+    )
 
     async def run():
         if is_single_turn:
@@ -572,10 +591,7 @@ def chat(
             task_agent = asyncio.create_task(agent_loop.run())
 
             # Wait for channels to complete (it will complete after getting response)
-            done, pending = await asyncio.wait(
-                [task_channels],
-                return_when=asyncio.FIRST_COMPLETED
-            )
+            done, pending = await asyncio.wait([task_channels], return_when=asyncio.FIRST_COMPLETED)
 
             # Cancel all other tasks
             for task in pending:
@@ -830,7 +846,7 @@ def cron_add(
     store_path = get_data_dir() / "cron" / "jobs.json"
     service = CronService(store_path)
 
-    session_key = SessionKey.from_safe_name()
+    session_key = SessionKey(type="cli", channel_id="default", chat_id="default")
 
     job = service.add_job(
         name=name,
@@ -952,6 +968,7 @@ def status():
 
 try:
     from vikingbot.cli.test_commands import test_app
+
     app.add_typer(test_app, name="test")
 except ImportError:
     # If test commands not available, don't add them

@@ -1,0 +1,29 @@
+name: First Release to PyPI
+
+on:
+  workflow_dispatch:  # 手动触发
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: bot
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install build dependencies
+        run: pip install build
+
+      - name: Build package
+        run: python -m build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          password: ${{ secrets.VIKINGBOT_PYPI_API_TOKEN }}
+          packages-dir: bot/dist/

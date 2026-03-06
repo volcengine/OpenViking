@@ -9,7 +9,7 @@ from openviking.parse.parsers.code.ast.skeleton import ClassSkeleton, CodeSkelet
 
 
 def _node_text(node, content_bytes: bytes) -> str:
-    return content_bytes[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
+    return content_bytes[node.start_byte : node.end_byte].decode("utf-8", errors="replace")
 
 
 def _parse_jsdoc(raw: str) -> str:
@@ -49,7 +49,7 @@ def _first_string_in_body(body_node, content_bytes: bytes) -> str:
                     raw = _node_text(sub, content_bytes).strip()
                     for q in ('"""', "'''", '"', "'", "`"):
                         if raw.startswith(q) and raw.endswith(q) and len(raw) >= 2 * len(q):
-                            return raw[len(q):-len(q)].strip()
+                            return raw[len(q) : -len(q)].strip()
                     return raw
             break
     return ""
@@ -64,7 +64,9 @@ def _extract_params(params_node, content_bytes: bytes) -> str:
     return raw.strip()
 
 
-def _extract_function(node, content_bytes: bytes, lang_name: str, docstring: str = "") -> FunctionSig:
+def _extract_function(
+    node, content_bytes: bytes, lang_name: str, docstring: str = ""
+) -> FunctionSig:
     name = ""
     params = ""
     return_type = ""
@@ -80,7 +82,7 @@ def _extract_function(node, content_bytes: bytes, lang_name: str, docstring: str
         elif child.type == "type_annotation":
             # TypeScript return type annotation
             for sub in child.children:
-                if sub.type not in (":", ):
+                if sub.type not in (":",):
                     return_type = _node_text(sub, content_bytes).strip()
                     break
         elif child.type == "statement_block":
@@ -91,7 +93,9 @@ def _extract_function(node, content_bytes: bytes, lang_name: str, docstring: str
     return FunctionSig(name=name, params=params, return_type=return_type, docstring=docstring)
 
 
-def _extract_class(node, content_bytes: bytes, lang_name: str, docstring: str = "") -> ClassSkeleton:
+def _extract_class(
+    node, content_bytes: bytes, lang_name: str, docstring: str = ""
+) -> ClassSkeleton:
     name = ""
     bases: List[str] = []
     body_node = None
@@ -144,12 +148,15 @@ class JsTsExtractor(LanguageExtractor):
         if lang == "javascript":
             import tree_sitter_javascript as tsjs
             from tree_sitter import Language, Parser
+
             self._language = Language(tsjs.language())
         else:
             import tree_sitter_typescript as tsts
             from tree_sitter import Language, Parser
+
             self._language = Language(tsts.language_typescript())
         from tree_sitter import Parser
+
         self._parser = Parser(self._language)
 
     def extract(self, file_name: str, content: str) -> CodeSkeleton:
@@ -168,7 +175,7 @@ class JsTsExtractor(LanguageExtractor):
                 # from "module"
                 for sub in child.children:
                     if sub.type == "string":
-                        raw = _node_text(sub, content_bytes).strip().strip('"\'')
+                        raw = _node_text(sub, content_bytes).strip().strip("\"'")
                         if raw not in _seen_imports:
                             imports.append(raw)
                             _seen_imports.add(raw)
@@ -178,17 +185,23 @@ class JsTsExtractor(LanguageExtractor):
                 classes.append(_extract_class(child, content_bytes, self._lang_name, docstring=doc))
             elif child.type in ("function_declaration", "generator_function_declaration"):
                 doc = _preceding_doc(siblings, idx, content_bytes)
-                functions.append(_extract_function(child, content_bytes, self._lang_name, docstring=doc))
+                functions.append(
+                    _extract_function(child, content_bytes, self._lang_name, docstring=doc)
+                )
             elif child.type == "export_statement":
                 # export default class / export function
                 for sub in child.children:
                     if sub.type == "class_declaration":
                         doc = _preceding_doc(siblings, idx, content_bytes)
-                        classes.append(_extract_class(sub, content_bytes, self._lang_name, docstring=doc))
+                        classes.append(
+                            _extract_class(sub, content_bytes, self._lang_name, docstring=doc)
+                        )
                         break
                     elif sub.type in ("function_declaration", "generator_function_declaration"):
                         doc = _preceding_doc(siblings, idx, content_bytes)
-                        functions.append(_extract_function(sub, content_bytes, self._lang_name, docstring=doc))
+                        functions.append(
+                            _extract_function(sub, content_bytes, self._lang_name, docstring=doc)
+                        )
                         break
             elif child.type == "lexical_declaration":
                 # const foo = () => ...
@@ -200,7 +213,9 @@ class JsTsExtractor(LanguageExtractor):
                                 fn_name = _node_text(s2, content_bytes)
                             elif s2.type == "arrow_function":
                                 doc = _preceding_doc(siblings, idx, content_bytes)
-                                fn = _extract_function(s2, content_bytes, self._lang_name, docstring=doc)
+                                fn = _extract_function(
+                                    s2, content_bytes, self._lang_name, docstring=doc
+                                )
                                 fn.name = fn_name
                                 functions.append(fn)
 

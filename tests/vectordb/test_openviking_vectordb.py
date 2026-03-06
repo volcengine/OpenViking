@@ -288,9 +288,11 @@ class TestOpenVikingVectorDB(unittest.TestCase):
                 },
             ),
             self._expected_ids(
-                lambda item: item["context_type"] == "text"
-                and "tag_b" in item["tags"]
-                and item["is_leaf"] is False
+                lambda item: (
+                    item["context_type"] == "text"
+                    and "tag_b" in item["tags"]
+                    and item["is_leaf"] is False
+                )
             ),
         )
         self.assertEqual(

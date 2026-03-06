@@ -11,9 +11,12 @@ from typing import AsyncGenerator, Optional
 import httpx
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
-from loguru import logger
+
+from openviking_cli.utils.logger import get_logger
 
 router = APIRouter(prefix="", tags=["bot"])
+
+logger = get_logger(__name__)
 
 # Bot API configuration - set when --with-bot is enabled
 BOT_API_URL: Optional[str] = None  # e.g., "http://localhost:18791"
@@ -61,7 +64,7 @@ async def health_check(request: Request):
 
     try:
         async with httpx.AsyncClient() as client:
-            print(f'url={f"{bot_url}/bot/v1/health"}')
+            print(f"url={f'{bot_url}/bot/v1/health'}")
             # Forward to Vikingbot OpenAPIChannel health endpoint
             response = await client.get(
                 f"{bot_url}/bot/v1/health",

@@ -26,7 +26,7 @@ class MessageBus:
 
     async def publish_inbound(self, msg: InboundMessage) -> None:
         """Publish a message from a channel to the agent."""
-        #print(f'publish_inbound={msg}')
+        # print(f'publish_inbound={msg}')
         await self.inbound.put(msg)
 
     async def consume_inbound(self) -> InboundMessage:
@@ -35,7 +35,7 @@ class MessageBus:
 
     async def publish_outbound(self, msg: OutboundMessage) -> None:
         """Publish a response from the agent to channels."""
-        #print(f'publish_outbound={msg}')
+        # print(f'publish_outbound={msg}')
         await self.outbound.put(msg)
 
     async def consume_outbound(self) -> OutboundMessage:

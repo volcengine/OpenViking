@@ -1,15 +1,16 @@
 //! Chat command for interacting with Vikingbot via OpenAPI
 
-use std::io::Write;
+use std::io::{BufRead, Write};
 use std::time::Duration;
 
 use clap::Parser;
+use crate::utils::truncate_utf8;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 use crate::error::{Error, Result};
 
-const DEFAULT_ENDPOINT: &str = "http://localhost:18790/api/v1/openapi";
+const DEFAULT_ENDPOINT: &str = "http://localhost:1933/bot/v1";
 
 /// Chat with Vikingbot via OpenAPI
 #[derive(Debug, Parser)]
@@ -141,24 +142,24 @@ impl ChatCommand {
                         "reasoning" => {
                             let content = data.as_str().unwrap_or("");
                             if !self.no_format {
-                                println!("\x1b[2mThink: {}...\x1b[0m", &content[..content.len().min(100)]);
+                                println!("  \x1b[2mThink: {}...\x1b[0m", truncate_utf8(content, 100));
                             }
                         }
                         "tool_call" => {
                             let content = data.as_str().unwrap_or("");
                             if !self.no_format {
-                                println!("\x1b[2m├─ Calling: {}\x1b[0m", content);
+                                println!("  \x1b[2m├─ Calling: {}\x1b[0m", content);
                             }
                         }
                         "tool_result" => {
                             let content = data.as_str().unwrap_or("");
                             if !self.no_format {
                                 let truncated = if content.len() > 150 {
-                                    format!("{}...", &content[..150])
+                                    format!("{}...", truncate_utf8(content, 150))
                                 } else {
                                     content.to_string()
                                 };
-                                println!("\x1b[2m└─ Result: {}\x1b[0m", truncated);
+                                println!("  \x1b[2m└─ Result: {}\x1b[0m", truncated);
                             }
                         }
                         _ => {}
@@ -194,11 +195,14 @@ impl ChatCommand {
         loop {
             // Read input
             print!("\x1b[1;32mYou:\x1b[0m ");
-            std::io::stdout().flush().map_err(|e| Error::Io(e))?;
+            std::io::stdout().flush()?;
 
-            let mut input = String::new();
-            std::io::stdin().read_line(&mut input).map_err(|e| Error::Io(e))?;
-            let input = input.trim();
+            // Read input as bytes first to handle invalid UTF-8 gracefully
+            let mut buf = Vec::new();
+            let stdin = std::io::stdin();
+            let mut reader = stdin.lock();
+            reader.read_until(b'\n', &mut buf)?;
+            let input = String::from_utf8_lossy(&buf).trim().to_string();
 
             if input.is_empty() {
                 continue;
@@ -248,22 +252,22 @@ impl ChatCommand {
                                                 "reasoning" => {
                                                     let content = data.as_str().unwrap_or("");
                                                     if content.len() > 100 {
-                                                        println!("\x1b[2mThink: {}...\x1b[0m", &content[..100]);
+                                                        println!("\t\x1b[2mThink: {}...\x1b[0m", truncate_utf8(content, 100));
                                                     } else {
-                                                        println!("\x1b[2mThink: {}\x1b[0m", content);
+                                                        println!("\t\x1b[2mThink: {}\x1b[0m", content);
                                                     }
                                                 }
                                                 "tool_call" => {
-                                                    println!("\x1b[2m├─ Calling: {}\x1b[0m", data.as_str().unwrap_or(""));
+                                                    println!("\t\x1b[2m├─ Calling: {}\x1b[0m", data.as_str().unwrap_or(""));
                                                 }
                                                 "tool_result" => {
                                                     let content = data.as_str().unwrap_or("");
                                                     let truncated = if content.len() > 150 {
-                                                        format!("{}...", &content[..150])
+                                                        format!("{}...", truncate_utf8(content, 150))
                                                     } else {
                                                         content.to_string()
                                                     };
-                                                    println!("\x1b[2m└─ Result: {}\x1b[0m", truncated);
+                                                    println!("\t\x1b[2m└─ Result: {}\x1b[0m", truncated);
                                                 }
                                                 _ => {}
                                             }

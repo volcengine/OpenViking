@@ -30,7 +30,6 @@ def get_current_session_id() -> str | None:
     return _session_id.get()
 
 
-
 @contextmanager
 def set_session_id(session_id: str | None) -> Generator[None, None, None]:
     """
@@ -85,6 +84,7 @@ def trace(
             # session_id and user_id are automatically propagated
             return await handle(msg)
     """
+
     def decorator(func: Callable[..., T]) -> Callable[..., T]:
         span_name = name or func.__name__
 
@@ -101,11 +101,15 @@ def trace(
                 try:
                     # Inspect the extractor's signature to determine how to call it
                     import inspect
+
                     sig = inspect.signature(extract_session_id)
-                    param_count = len([
-                        p for p in sig.parameters.values()
-                        if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
-                    ])
+                    param_count = len(
+                        [
+                            p
+                            for p in sig.parameters.values()
+                            if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+                        ]
+                    )
 
                     if param_count == 1 and len(args) >= 1:
                         # Extractor expects single arg (e.g., lambda msg: ...)
@@ -122,11 +126,15 @@ def trace(
             if extract_user_id:
                 try:
                     import inspect
+
                     sig = inspect.signature(extract_user_id)
-                    param_count = len([
-                        p for p in sig.parameters.values()
-                        if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
-                    ])
+                    param_count = len(
+                        [
+                            p
+                            for p in sig.parameters.values()
+                            if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD)
+                        ]
+                    )
 
                     if param_count == 1 and len(args) >= 1:
                         user_id = extract_user_id(args[-1])
@@ -140,11 +148,11 @@ def trace(
                 session_id = get_current_session_id()
                 logger.debug(f"[TRACE] No session_id extracted, using context: {session_id}")
             else:
-                #logger.info(f"[TRACE] Extracted session_id: {session_id}")
+                # logger.info(f"[TRACE] Extracted session_id: {session_id}")
                 pass
 
             if user_id:
-                #logger.info(f"[TRACE] Extracted user_id: {user_id}")
+                # logger.info(f"[TRACE] Extracted user_id: {user_id}")
                 pass
 
             # Use context manager to set session_id for nested operations
@@ -161,8 +169,6 @@ def trace(
                         with langfuse.propagate_attributes(session_id=session_id, user_id=user_id):
                             return await wrapped_func(*args, **kwargs)
                     else:
-                        if not langfuse.enabled:
-                            logger.warning(f"[LANGFUSE] Client not enabled")
                         if not has_propagate:
                             logger.warning(f"[LANGFUSE] propagate_attributes not available")
                     return await wrapped_func(*args, **kwargs)

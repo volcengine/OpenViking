@@ -475,10 +475,8 @@ vikingbot 支持沙箱执行以增强安全性。
 | 后端 | 描述 |
 |---------|-------------|
 | `direct` | （默认）直接在主机上运行代码 |
-| `docker` | 使用 Docker 容器进行隔离 |
 | `opensandbox` | 使用 OpenSandbox 服务 |
 | `srt` | 使用 Anthropic 的 SRT 沙箱运行时 |
-| `aiosandbox` | 使用 AIO Sandbox 服务 |
 
 **可用模式：**
 | 模式 | 描述 |
@@ -521,23 +519,6 @@ vikingbot 支持沙箱执行以增强安全性。
 }
 ```
 
-**Docker 后端：**
-```json
-{
-  "bot": {
-    "sandbox": {
-      "backend": "docker",
-      "backends": {
-        "docker": {
-          "image": "python:3.11-slim",
-          "networkMode": "bridge"
-        }
-      }
-    }
-  }
-}
-```
-
 **SRT 后端：**
 ```json
 {
@@ -546,7 +527,6 @@ vikingbot 支持沙箱执行以增强安全性。
       "backend": "srt",
       "backends": {
         "srt": {
-          "settingsPath": "~/.vikingbot/srt-settings.json",
           "nodePath": "node",
           "network": {
             "allowedDomains": [],
@@ -562,22 +542,6 @@ vikingbot 支持沙箱执行以增强安全性。
             "cleanupOnExit": true,
             "timeout": 300
           }
-        }
-      }
-    }
-  }
-}
-```
-
-**AIO Sandbox 后端：**
-```json
-{
-  "bot": {
-    "sandbox": {
-      "backend": "aiosandbox",
-      "backends": {
-        "aiosandbox": {
-          "baseUrl": "http://localhost:18794"
         }
       }
     }

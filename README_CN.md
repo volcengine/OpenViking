@@ -436,6 +436,21 @@ ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/zh
 
 恭喜！您已成功运行 OpenViking 🎉
 
+### VikingBot 快速开始
+
+VikingBot 是构建在 OpenViking 之上的 AI 智能体框架。以下是快速开始指南：
+
+```bash
+# 在 OpenViking 源码根目录下安装 VikingBot
+uv pip install -e bot/
+
+# 启动 OpenViking 服务器（同时启动 Bot）
+openviking-server --with-bot
+
+# 在另一个终端启动交互式聊天
+ov chat
+```
+
 ---
 
 ## 服务器部署详情

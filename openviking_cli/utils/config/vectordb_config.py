@@ -110,7 +110,7 @@ class VectorDBBackendConfig(BaseModel):
     def validate_config(self):
         """Validate configuration completeness and consistency"""
         standard_backends = ["local", "http", "volcengine", "vikingdb"]
-        
+
         # Allow custom backend classes (containing dot) without standard validation
         if "." in self.backend:
             logger.info("Using custom VectorDB backend: %s", self.backend)

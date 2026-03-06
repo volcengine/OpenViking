@@ -129,6 +129,7 @@ def _merge_vlm_model_config(bot_data: dict, vlm_data: dict) -> None:
         bot_data["agents"]["api_base"] = vlm_data.get("api_base", "")
         bot_data["agents"]["api_key"] = vlm_data.get("api_key", "")
 
+
 def _merge_ov_server_config(bot_data: dict, ov_data: dict) -> None:
     """
     Merge ov_server config into bot config.
@@ -143,6 +144,7 @@ def _merge_ov_server_config(bot_data: dict, ov_data: dict) -> None:
         bot_data["mode"] = "remote"
     else:
         bot_data["mode"] = "local"
+
 
 def save_config(config: Config, config_path: Path | None = None) -> None:
     """

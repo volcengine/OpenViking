@@ -78,15 +78,20 @@ class ResourceProcessor:
             )
         return self._media_processor
 
-    async def build_index(self, resource_uris: List[str], ctx: RequestContext, **kwargs) -> Dict[str, Any]:
+    async def build_index(
+        self, resource_uris: List[str], ctx: RequestContext, **kwargs
+    ) -> Dict[str, Any]:
         """Expose index building as a standalone method."""
         for uri in resource_uris:
             await index_resource(uri, ctx)
         return {"status": "success", "message": f"Indexed {len(resource_uris)} resources"}
 
-    async def summarize(self, resource_uris: List[str], ctx: RequestContext, **kwargs) -> Dict[str, Any]:
+    async def summarize(
+        self, resource_uris: List[str], ctx: RequestContext, **kwargs
+    ) -> Dict[str, Any]:
         """Expose summarization as a standalone method."""
         return await self._get_summarizer().summarize(resource_uris, ctx, **kwargs)
+
     async def process_resource(
         self,
         path: str,
@@ -195,32 +200,29 @@ class ResourceProcessor:
 
         # ============ Phase 4: Optional Steps ============
         if summarize:
-             # Explicit summarization request.
-             # If build_index is ALSO True, we want vectorization.
-             # If build_index is False, we skip vectorization.
-             skip_vec = not build_index
-             try:
+            # Explicit summarization request.
+            # If build_index is ALSO True, we want vectorization.
+            # If build_index is False, we skip vectorization.
+            skip_vec = not build_index
+            try:
                 await self._get_summarizer().summarize(
                     resource_uris=[result["root_uri"]],
                     ctx=ctx,
                     skip_vectorization=skip_vec,
-                    **kwargs
+                    **kwargs,
                 )
-             except Exception as e:
+            except Exception as e:
                 logger.error(f"Summarization failed: {e}")
                 result["warnings"] = result.get("warnings", []) + [f"Summarization failed: {e}"]
 
         elif build_index:
-             # Standard compatibility mode: "Just Index it" usually implies ingestion flow.
-             # We assume this means "Ingest and Index", which requires summarization.
-             try:
+            # Standard compatibility mode: "Just Index it" usually implies ingestion flow.
+            # We assume this means "Ingest and Index", which requires summarization.
+            try:
                 await self._get_summarizer().summarize(
-                    resource_uris=[result["root_uri"]],
-                    ctx=ctx,
-                    skip_vectorization=False,
-                    **kwargs
+                    resource_uris=[result["root_uri"]], ctx=ctx, skip_vectorization=False, **kwargs
                 )
-             except Exception as e:
+            except Exception as e:
                 logger.error(f"Auto-index failed: {e}")
                 result["warnings"] = result.get("warnings", []) + [f"Auto-index failed: {e}"]
 

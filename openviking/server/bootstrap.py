@@ -10,9 +10,18 @@ import time
 
 import uvicorn
 
+from dataclasses import dataclass
+from typing import Optional
+
 from openviking.server.app import create_app
 from openviking.server.config import load_server_config
 from openviking_cli.utils.logger import configure_uvicorn_logging
+
+
+@dataclass
+class BotProcess:
+    process: subprocess.Popen
+    log_file: Optional[object] = None
 
 
 def _get_version() -> str:
@@ -70,6 +79,25 @@ def main():
         dest="bot_url",
         help="Vikingbot OpenAPIChannel URL (default: http://localhost:18790)",
     )
+    parser.add_argument(
+        "--enable-bot-logging",
+        action="store_true",
+        dest="enable_bot_logging",
+        default=None,
+        help="Enable logging vikingbot output to files (default: True when --with-bot is used)",
+    )
+    parser.add_argument(
+        "--disable-bot-logging",
+        action="store_false",
+        dest="enable_bot_logging",
+        help="Disable logging vikingbot output to files",
+    )
+    parser.add_argument(
+        "--bot-log-dir",
+        type=str,
+        default=os.path.expanduser("~/.openviking/data/bot/logs"),
+        help="Directory to store vikingbot log files",
+    )
 
     args = parser.parse_args()
 
@@ -100,10 +128,15 @@ def main():
     if config.with_bot:
         print(f"Bot API proxy enabled, forwarding to {config.bot_api_url}")
 
+    # Determine if bot logging should be enabled
+    enable_bot_logging = args.enable_bot_logging
+    if enable_bot_logging is None:
+        enable_bot_logging = args.with_bot
+
     # Start vikingbot gateway if --with-bot is set
-    bot_process = None
+    bot_process: Optional[BotProcess] = None
     if args.with_bot:
-        bot_process = _start_vikingbot_gateway()
+        bot_process = _start_vikingbot_gateway(enable_bot_logging, args.bot_log_dir)
 
     try:
         uvicorn.run(app, host=config.host, port=config.port, log_config=None)
@@ -113,7 +146,7 @@ def main():
             _stop_vikingbot_gateway(bot_process)
 
 
-def _start_vikingbot_gateway() -> subprocess.Popen:
+def _start_vikingbot_gateway(enable_logging: bool, log_dir: str) -> Optional[BotProcess]:
     """Start vikingbot gateway as a subprocess."""
     print("Starting vikingbot gateway...")
 
@@ -126,9 +159,7 @@ def _start_vikingbot_gateway() -> subprocess.Popen:
         python_cmd = sys.executable
         try:
             result = subprocess.run(
-                [python_cmd, "-m", "vikingbot", "--help"],
-                capture_output=True,
-                timeout=5
+                [python_cmd, "-m", "vikingbot", "--help"], capture_output=True, timeout=5
             )
             if result.returncode == 0:
                 vikingbot_cmd = [python_cmd, "-m", "vikingbot", "gateway"]
@@ -140,6 +171,29 @@ def _start_vikingbot_gateway() -> subprocess.Popen:
         print("  cd bot && uv pip install -e '.[dev]'")
         return None
 
+    # Prepare logging
+    log_file = None
+    stdout_handler = subprocess.PIPE
+    stderr_handler = subprocess.PIPE
+    log_file_path = None
+
+    if enable_logging:
+        try:
+            os.makedirs(log_dir, exist_ok=True)
+            log_filename = "vikingbot.log"
+            log_file_path = os.path.join(log_dir, log_filename)
+            log_file = open(log_file_path, "a")
+            stdout_handler = log_file
+            stderr_handler = log_file
+            print(f"Vikingbot logs will be written to: {log_file_path}")
+        except Exception as e:
+            print(f"Warning: Failed to setup bot logging: {e}")
+            if log_file:
+                log_file.close()
+                log_file = None
+            stdout_handler = subprocess.PIPE
+            stderr_handler = subprocess.PIPE
+
     # Start vikingbot gateway process
     try:
         # Set environment to ensure it uses the same Python environment
@@ -147,8 +201,8 @@ def _start_vikingbot_gateway() -> subprocess.Popen:
 
         process = subprocess.Popen(
             vikingbot_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stdout=stdout_handler,
+            stderr=stderr_handler,
             text=True,
             env=env,
         )
@@ -157,40 +211,59 @@ def _start_vikingbot_gateway() -> subprocess.Popen:
         time.sleep(2)
         if process.poll() is not None:
             # Process exited early
-            stdout, stderr = process.communicate(timeout=1)
-            print(f"Warning: vikingbot gateway exited early (code {process.returncode})")
-            if stderr:
-                print(f"Error: {stderr[:500]}")
+            if log_file:
+                log_file.close()
+                if log_file_path:
+                    with open(log_file_path, "r") as f:
+                        output = f.read()
+                    print(f"Warning: vikingbot gateway exited early (code {process.returncode})")
+                    if output:
+                        print(f"Output: {output[:500]}")
+            else:
+                stdout, stderr = process.communicate(timeout=1)
+                print(f"Warning: vikingbot gateway exited early (code {process.returncode})")
+                if stderr:
+                    print(f"Error: {stderr[:500]}")
             return None
 
         print(f"Vikingbot gateway started (PID: {process.pid})")
-        return process
+
+        return BotProcess(process=process, log_file=log_file)
 
     except Exception as e:
+        if log_file:
+            log_file.close()
         print(f"Warning: Failed to start vikingbot gateway: {e}")
         return None
 
 
-def _stop_vikingbot_gateway(process: subprocess.Popen) -> None:
+def _stop_vikingbot_gateway(bot_process: BotProcess) -> None:
     """Stop the vikingbot gateway subprocess."""
-    if process is None:
+    if bot_process is None:
         return
 
-    print(f"\nStopping vikingbot gateway (PID: {process.pid})...")
+    print(f"\nStopping vikingbot gateway (PID: {bot_process.process.pid})...")
 
     try:
         # Try graceful termination first
-        process.terminate()
+        bot_process.process.terminate()
         try:
-            process.wait(timeout=5)
+            bot_process.process.wait(timeout=5)
             print("Vikingbot gateway stopped gracefully.")
         except subprocess.TimeoutExpired:
             # Force kill if it doesn't stop in time
-            process.kill()
-            process.wait()
+            bot_process.process.kill()
+            bot_process.process.wait()
             print("Vikingbot gateway force killed.")
     except Exception as e:
         print(f"Error stopping vikingbot gateway: {e}")
+    finally:
+        # Close the log file if it exists
+        if bot_process.log_file is not None:
+            try:
+                bot_process.log_file.close()
+            except Exception as e:
+                print(f"Error closing bot log file: {e}")
 
 
 if __name__ == "__main__":

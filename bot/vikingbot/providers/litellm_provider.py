@@ -195,10 +195,9 @@ class LiteLLMProvider(LLMProvider):
 
                     # Add cache read tokens if available (OpenAI/Anthropic prompt caching)
                     # Try multiple possible field names for cached tokens
-                    cache_read_tokens = (
-                        llm_response.usage.get("cache_read_input_tokens") or
-                        llm_response.usage.get("prompt_tokens_details", {}).get("cached_tokens")
-                    )
+                    cache_read_tokens = llm_response.usage.get(
+                        "cache_read_input_tokens"
+                    ) or llm_response.usage.get("prompt_tokens_details", {}).get("cached_tokens")
                     if cache_read_tokens:
                         usage_details["cache_read_input_tokens"] = cache_read_tokens
 

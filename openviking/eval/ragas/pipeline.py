@@ -157,7 +157,9 @@ class RAGQueryPipeline:
         if search_result and "results" in search_result:
             for item in search_result["results"]:
                 uri = item.get("uri", "")
-                content = item.get("content", "") or item.get("overview", "") or item.get("abstract", "")
+                content = (
+                    item.get("content", "") or item.get("overview", "") or item.get("abstract", "")
+                )
                 if content:
                     contexts.append(content)
                     retrieved_uris.append(uri)

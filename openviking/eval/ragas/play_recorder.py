@@ -33,9 +33,6 @@ from .record_analysis import (
 logger = get_logger(__name__)
 
 
-
-
-
 def print_playback_stats(stats: PlaybackStats) -> None:
     """Print playback statistics."""
     print(f"\n{'=' * 60}")
@@ -45,7 +42,11 @@ def print_playback_stats(stats: PlaybackStats) -> None:
     print(f"\nTotal Records: {stats.total_records}")
     print(f"Successful: {stats.success_count}")
     print(f"Failed: {stats.error_count}")
-    print(f"Success Rate: {stats.success_count / stats.total_records * 100:.1f}%" if stats.total_records > 0 else "N/A")
+    print(
+        f"Success Rate: {stats.success_count / stats.total_records * 100:.1f}%"
+        if stats.total_records > 0
+        else "N/A"
+    )
 
     print("\nPerformance:")
     print(f"  Original Total Latency: {stats.total_original_latency_ms:.2f} ms")
@@ -56,7 +57,7 @@ def print_playback_stats(stats: PlaybackStats) -> None:
         if speedup > 1:
             print(f"  Speedup: {speedup:.2f}x (playback is faster)")
         else:
-            print(f"  Slowdown: {1/speedup:.2f}x (playback is slower)")
+            print(f"  Slowdown: {1 / speedup:.2f}x (playback is slower)")
 
     if stats.total_viking_fs_operations > 0:
         stats_dict = stats.to_dict()
@@ -66,7 +67,9 @@ def print_playback_stats(stats: PlaybackStats) -> None:
         print("\nVikingFS Detailed Stats:")
         print(f"  Total VikingFS Operations: {viking_fs_stats.get('total_operations', 0)}")
         print(f"  VikingFS Success Rate: {viking_fs_stats.get('success_rate_percent', 0):.1f}%")
-        print(f"  Average AGFS Calls per VikingFS Operation: {viking_fs_stats.get('avg_agfs_calls_per_operation', 0):.2f}")
+        print(
+            f"  Average AGFS Calls per VikingFS Operation: {viking_fs_stats.get('avg_agfs_calls_per_operation', 0):.2f}"
+        )
 
         print("\nAGFS FS Detailed Stats:")
         print(f"  Total AGFS Calls: {agfs_fs_stats.get('total_calls', 0)}")

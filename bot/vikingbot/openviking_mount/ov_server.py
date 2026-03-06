@@ -19,9 +19,7 @@ class VikingClient:
         self.openviking_config = openviking_config
         self.ov_path = config.ov_data_path
         if openviking_config.mode == "local":
-            self.client = ov.AsyncHTTPClient(
-                url=openviking_config.server_url
-            )
+            self.client = ov.AsyncHTTPClient(url=openviking_config.server_url)
             self.agent_id = "default"
             self.account_id = "default"
             self.admin_user_id = "default"
@@ -348,7 +346,12 @@ class VikingClient:
         # For remote mode, try to get user's API key and create a dedicated client
         client = self.client
         start = time.time()
-        if self.mode == "remote" and user_id and user_id != self.admin_user_id and self._apikey_manager:
+        if (
+            self.mode == "remote"
+            and user_id
+            and user_id != self.admin_user_id
+            and self._apikey_manager
+        ):
             user_api_key = await self._get_or_create_user_apikey(user_id)
             if user_api_key:
                 # Create a new HTTP client with user's API key
@@ -360,7 +363,7 @@ class VikingClient:
                 await client.initialize()
 
         create_res = await client.create_session()
-        session_id = create_res['session_id']
+        session_id = create_res["session_id"]
         session = client.session(session_id)
 
         for message in messages:

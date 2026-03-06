@@ -524,7 +524,7 @@ configure_openclaw_plugin() {
   openclaw config set plugins.entries.memory-openviking.config.mode local
   openclaw config set plugins.entries.memory-openviking.config.configPath "${config_path}"
   openclaw config set plugins.entries.memory-openviking.config.port "${server_port}"
-  openclaw config set plugins.entries.memory-openviking.config.targetUri viking://
+  openclaw config set plugins.entries.memory-openviking.config.targetUri viking://user/memories
   openclaw config set plugins.entries.memory-openviking.config.autoRecall true --json
   openclaw config set plugins.entries.memory-openviking.config.autoCapture true --json
   info "$(tr "OpenClaw plugin configured" "OpenClaw 插件配置完成")"

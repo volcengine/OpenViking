@@ -22,5 +22,6 @@ def get_record_stats(record_file: str) -> dict:
         stacklevel=2,
     )
     from openviking.eval.record_analysis import analyze_records
+
     stats = analyze_records(record_file)
     return stats.to_dict()

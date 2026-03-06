@@ -58,14 +58,20 @@ class OpenVikingCompactHook(Hook):
 
         try:
             allow_from = self._get_channel_allow_from(session_id)
-            filtered_messages = self._filter_messages_by_sender(vikingbot_session.messages, allow_from)
+            filtered_messages = self._filter_messages_by_sender(
+                vikingbot_session.messages, allow_from
+            )
 
             if not filtered_messages:
-                logger.info(f"No messages to commit openviking for session {session_id} (allow_from filter applied)")
+                logger.info(
+                    f"No messages to commit openviking for session {session_id} (allow_from filter applied)"
+                )
                 return {"success": True, "message": "No messages matched allow_from filter"}
 
             client = await self._get_client(context.workspace_id)
-            result = await client.commit(session_id, filtered_messages, load_config().ov_server.admin_user_id)
+            result = await client.commit(
+                session_id, filtered_messages, load_config().ov_server.admin_user_id
+            )
             return result
         except Exception as e:
             logger.exception(f"Failed to add message to OpenViking: {e}")

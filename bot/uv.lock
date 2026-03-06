@@ -1,5 +1,5 @@
 version = 1
-revision = 2
+revision = 3
 requires-python = ">=3.11, <=3.14"
 resolution-markers = [
     "python_full_version >= '3.14'",
@@ -2525,6 +2525,18 @@ wheels = [
 ]
 
 [[package]]
+name = "py-machineid"
+version = "1.0.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "winregistry", marker = "sys_platform == 'win32'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/f4/b0/c7fa6de7298a8f4e544929b97fa028304c0e11a4bc9500eff8689821bdbb/py_machineid-1.0.0.tar.gz", hash = "sha256:8a902a00fae8c6d6433f463697c21dc4ce98c6e55a2e0535c0273319acb0047a", size = 4629, upload-time = "2025-12-02T16:12:54.286Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/be/76/1ed8375cb1212824c57eb706e1f09f3f2ca4ed12b8d56b28a160e2d53505/py_machineid-1.0.0-py3-none-any.whl", hash = "sha256:910df0d5f2663bcf6739d835c4949f4e9cc6bb090a58b3dd766e12e5f768e3b9", size = 4926, upload-time = "2025-12-02T16:12:20.584Z" },
+]
+
+[[package]]
 name = "pyagfs"
 version = "1.4.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3633,7 +3645,7 @@ wheels = [
 
 [[package]]
 name = "vikingbot"
-version = "0.1.1"
+version = "0.1.2"
 source = { editable = "." }
 dependencies = [
     { name = "beautifulsoup4" },
@@ -3648,6 +3660,7 @@ dependencies = [
     { name = "msgpack" },
     { name = "openviking" },
     { name = "prompt-toolkit" },
+    { name = "py-machineid" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
     { name = "pygments" },
@@ -3655,6 +3668,7 @@ dependencies = [
     { name = "python-socks" },
     { name = "readability-lxml" },
     { name = "rich" },
+    { name = "ruff" },
     { name = "socksio" },
     { name = "typer" },
     { name = "uvicorn" },
@@ -3741,6 +3755,7 @@ requires-dist = [
     { name = "opensandbox-server", marker = "extra == 'sandbox'", specifier = ">=0.1.0" },
     { name = "openviking", specifier = ">=0.1.18" },
     { name = "prompt-toolkit", specifier = ">=3.0.0" },
+    { name = "py-machineid", specifier = ">=1.0.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pydantic-settings", specifier = ">=2.0.0" },
     { name = "pygments", specifier = ">=2.16.0" },
@@ -3754,6 +3769,7 @@ requires-dist = [
     { name = "qq-botpy", marker = "extra == 'qq'", specifier = ">=1.0.0" },
     { name = "readability-lxml", specifier = ">=0.8.0" },
     { name = "rich", specifier = ">=13.0.0" },
+    { name = "ruff", specifier = ">=0.15.1" },
     { name = "ruff", marker = "extra == 'dev'", specifier = ">=0.1.0" },
     { name = "slack-sdk", marker = "extra == 'full'", specifier = ">=3.26.0" },
     { name = "slack-sdk", marker = "extra == 'slack'", specifier = ">=3.26.0" },
@@ -3899,6 +3915,15 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/b3/8f/705086c9d734d3b663af0e9bb3d4de6578d08f46b1b101c2442fd9aecaa2/win32_setctime-1.2.0.tar.gz", hash = "sha256:ae1fdf948f5640aae05c511ade119313fb6a30d7eabe25fef9764dca5873c4c0", size = 4867, upload-time = "2024-12-07T15:28:28.314Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e1/07/c6fe3ad3e685340704d314d765b7912993bcb8dc198f0e7a89382d37974b/win32_setctime-1.2.0-py3-none-any.whl", hash = "sha256:95d644c4e708aba81dc3704a116d8cbc974d70b3bdb8be1d150e36be6e9d1390", size = 4083, upload-time = "2024-12-07T15:28:26.465Z" },
+]
+
+[[package]]
+name = "winregistry"
+version = "2.1.4"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/46/ab/6c646e9b2b6bd30c10fa69bf6733cc6eb519611552f0915c18e1522ac743/winregistry-2.1.4.tar.gz", hash = "sha256:c557e6ec26a2827625451bbcee394b2d4c1fbccb6d7dca066335f397c0be1f89", size = 9877, upload-time = "2026-02-15T09:54:06.131Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e8/73/de41b09e8988451f7911ee31c39ba0fc6430ba60667110006b324e96a50b/winregistry-2.1.4-py3-none-any.whl", hash = "sha256:8a2ead541bf9737d2cf4aa7c36363054a792a9f5c8fdaf0f7e3739ff9ddb092f", size = 8906, upload-time = "2026-02-15T09:54:05.355Z" },
 ]
 
 [[package]]

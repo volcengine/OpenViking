@@ -20,6 +20,7 @@ from openviking_cli.utils import VikingURI, get_logger
 
 logger = get_logger(__name__)
 
+
 def _owner_space_for_uri(uri: str, ctx: RequestContext) -> str:
     """Derive owner_space from a URI."""
     if uri.startswith("viking://agent/"):
@@ -28,15 +29,31 @@ def _owner_space_for_uri(uri: str, ctx: RequestContext) -> str:
         return ctx.user.user_space_name()
     return ""
 
+
 def get_resource_content_type(file_name: str) -> ResourceContentType:
     """Determine resource content type based on file extension."""
     file_name = file_name.lower()
-    
-    text_extensions = {".txt", ".md", ".csv", ".json", ".xml", ".py", ".js", ".ts", ".java", ".cpp", ".c", ".h", ".go", ".rs"}
+
+    text_extensions = {
+        ".txt",
+        ".md",
+        ".csv",
+        ".json",
+        ".xml",
+        ".py",
+        ".js",
+        ".ts",
+        ".java",
+        ".cpp",
+        ".c",
+        ".h",
+        ".go",
+        ".rs",
+    }
     image_extensions = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".webp"}
     video_extensions = {".mp4", ".avi", ".mov", ".wmv", ".flv"}
     audio_extensions = {".mp3", ".wav", ".aac", ".flac"}
-    
+
     if any(file_name.endswith(ext) for ext in text_extensions):
         return ResourceContentType.TEXT
     elif any(file_name.endswith(ext) for ext in image_extensions):
@@ -45,8 +62,9 @@ def get_resource_content_type(file_name: str) -> ResourceContentType:
         return ResourceContentType.VIDEO
     elif any(file_name.endswith(ext) for ext in audio_extensions):
         return ResourceContentType.AUDIO
-    
+
     return ResourceContentType.UNKNOWN
+
 
 async def vectorize_directory_meta(
     uri: str,
@@ -57,7 +75,7 @@ async def vectorize_directory_meta(
 ) -> None:
     """
     Vectorize directory metadata (.abstract.md and .overview.md).
-    
+
     Creates Context objects for abstract and overview and enqueues them.
     """
     if not ctx:
@@ -66,7 +84,7 @@ async def vectorize_directory_meta(
 
     queue_manager = get_queue_manager()
     embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING)
-    
+
     parent_uri = VikingURI(uri).parent.uri
     owner_space = _owner_space_for_uri(uri, ctx)
 
@@ -106,6 +124,7 @@ async def vectorize_directory_meta(
         await embedding_queue.enqueue(msg_overview)
         logger.debug(f"Enqueued directory L1 (overview) for vectorization: {uri}")
 
+
 async def vectorize_file(
     file_path: str,
     summary_dict: Dict[str, str],
@@ -115,7 +134,7 @@ async def vectorize_file(
 ) -> None:
     """
     Vectorize a single file.
-    
+
     Creates Context object for the file and enqueues it.
     Reads content for TEXT files, otherwise uses summary.
     """
@@ -152,7 +171,9 @@ async def vectorize_file(
                     content = content.decode("utf-8", errors="replace")
                 context.set_vectorize(Vectorize(text=content))
             except Exception as e:
-                logger.warning(f"Failed to read file content for {file_path}, falling back to summary: {e}")
+                logger.warning(
+                    f"Failed to read file content for {file_path}, falling back to summary: {e}"
+                )
                 if summary:
                     context.set_vectorize(Vectorize(text=summary))
                 else:
@@ -168,12 +189,13 @@ async def vectorize_file(
         embedding_msg = EmbeddingMsgConverter.from_context(context)
         if not embedding_msg:
             return
-            
+
         await embedding_queue.enqueue(embedding_msg)
         logger.debug(f"Enqueued file for vectorization: {file_path}")
-        
+
     except Exception as e:
         logger.error(f"Failed to vectorize file {file_path}: {e}", exc_info=True)
+
 
 async def index_resource(
     uri: str,
@@ -181,56 +203,53 @@ async def index_resource(
 ) -> None:
     """
     Build vector index for a resource directory.
-    
+
     1. Reads .abstract.md and .overview.md and vectorizes them.
     2. Scans files in the directory and vectorizes them.
     """
     viking_fs = get_viking_fs()
-    
+
     # 1. Index Directory Metadata
     abstract_uri = f"{uri}/.abstract.md"
     overview_uri = f"{uri}/.overview.md"
-    
+
     abstract = ""
     overview = ""
-    
+
     if await viking_fs.exists(abstract_uri):
         content = await viking_fs.read_file(abstract_uri)
         if isinstance(content, bytes):
             abstract = content.decode("utf-8")
-            
+
     if await viking_fs.exists(overview_uri):
         content = await viking_fs.read_file(overview_uri)
         if isinstance(content, bytes):
             overview = content.decode("utf-8")
-            
+
     if abstract or overview:
         await vectorize_directory_meta(uri, abstract, overview, ctx=ctx)
-        
+
     # 2. Index Files
     try:
         files = await viking_fs.ls(uri, ctx=ctx)
         for file_info in files:
             file_name = file_info["name"]
-            
+
             # Skip hidden files (like .abstract.md)
             if file_name.startswith("."):
                 continue
-                
+
             if file_info.get("type") == "directory" or file_info.get("isDir"):
                 # TODO: Recursive indexing? For now, skip subdirectories to match previous behavior
                 continue
-            
+
             file_uri = file_info.get("uri") or f"{uri}/{file_name}"
-            
+
             # For direct indexing, we might not have summaries.
             # We pass empty summary_dict, vectorize_file will try to read content for text files.
             await vectorize_file(
-                file_path=file_uri,
-                summary_dict={"name": file_name},
-                parent_uri=uri,
-                ctx=ctx
+                file_path=file_uri, summary_dict={"name": file_name}, parent_uri=uri, ctx=ctx
             )
-            
+
     except Exception as e:
         logger.error(f"Failed to scan directory {uri} for indexing: {e}")

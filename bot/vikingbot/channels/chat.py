@@ -23,9 +23,10 @@ class ChatChannelConfig(BaseChannelConfig):
 
     enabled: bool = True
     type: Any = "cli"
+    _channel_id: str = "default"
 
     def channel_id(self) -> str:
-        return "chat"
+        return self._channel_id
 
 
 class ChatChannel(BaseChannel):
@@ -44,7 +45,7 @@ class ChatChannel(BaseChannel):
         config: BaseChannelConfig,
         bus: MessageBus,
         workspace_path: Path | None = None,
-        session_id: str = "cli__chat__default",
+        session_id: str = "default",
         markdown: bool = True,
         logs: bool = False,
     ):
@@ -81,7 +82,12 @@ class ChatChannel(BaseChannel):
             console.print("[bold red]Bot:[/bold red]")
             from rich.markdown import Markdown
             from rich.text import Text
-            body = Markdown(content, style="red") if self.markdown else Text(content, style=Style(color="red"))
+
+            body = (
+                Markdown(content, style="red")
+                if self.markdown
+                else Text(content, style=Style(color="red"))
+            )
 
             console.print(body)
             console.print()
@@ -144,7 +150,11 @@ class ChatChannel(BaseChannel):
                 self._last_response = None
 
                 msg = InboundMessage(
-                    session_key=SessionKey.from_safe_name(self.session_id),
+                    session_key=SessionKey(
+                        type="cli",
+                        channel_id=self.config.channel_id(),
+                        chat_id=self.session_id,
+                    ),
                     sender_id="user",
                     content=user_input,
                 )

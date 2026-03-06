@@ -6,9 +6,7 @@
 
 async def test_get_relations_empty(client_with_resource):
     client, uri = client_with_resource
-    resp = await client.get(
-        "/api/v1/relations", params={"uri": uri}
-    )
+    resp = await client.get("/api/v1/relations", params={"uri": uri})
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
@@ -41,9 +39,7 @@ async def test_link_and_get_relations(client_with_resource):
     assert resp.json()["status"] == "ok"
 
     # Verify link exists
-    resp = await client.get(
-        "/api/v1/relations", params={"uri": uri}
-    )
+    resp = await client.get("/api/v1/relations", params={"uri": uri})
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
