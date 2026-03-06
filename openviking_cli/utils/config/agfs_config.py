@@ -85,7 +85,7 @@ class AGFSConfig(BaseModel):
     )
 
     mode: str = Field(
-        default="binding-client",
+        default="http-client",
         description="AGFS client mode: 'http-client' | 'binding-client'",
     )
 
