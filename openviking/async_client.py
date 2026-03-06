@@ -7,6 +7,7 @@ For HTTP mode, use AsyncHTTPClient or SyncHTTPClient.
 """
 
 from __future__ import annotations
+
 import threading
 from typing import Any, Dict, List, Optional, Union
 
@@ -173,7 +174,8 @@ class AsyncOpenViking:
     async def add_resource(
         self,
         path: str,
-        target: Optional[str] = None,
+        to: Optional[str] = None,
+        parent: Optional[str] = None,
         reason: str = "",
         instruction: str = "",
         wait: bool = False,
@@ -190,15 +192,21 @@ class AsyncOpenViking:
             reason: Context/reason for adding this resource.
             instruction: Specific instruction for processing.
             wait: If True, wait for processing to complete.
-            target: Target path in VikingFS (e.g., "kb/docs").
+            to: Exact target URI (must not exist yet).
+            parent: Target parent URI (must already exist).
             build_index: Whether to build vector index immediately (default: True).
             summarize: Whether to generate summary (default: False).
         """
         await self._ensure_initialized()
 
+        # Validate that only one of 'to' or 'parent' is set
+        if to and parent:
+            raise ValueError("Cannot specify both 'to' and 'parent' at the same time.")
+
         return await self._client.add_resource(
             path=path,
-            target=target,
+            to=to,
+            parent=parent,
             reason=reason,
             instruction=instruction,
             wait=wait,
