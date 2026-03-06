@@ -14,6 +14,13 @@ Vikingbot is deeply integrated with OpenViking, providing powerful knowledge man
 
 ## 📦 Install
 
+**Option 1: Install from PyPI (Simplest)**
+```bash
+pip install vikingbot
+```
+
+**Option 2: Install from source (for development)**
+
 **Prerequisites**
 
 First, install [uv](https://github.com/astral-sh/uv) (an extremely fast Python package installer):

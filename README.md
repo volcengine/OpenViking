@@ -442,7 +442,10 @@ Congratulations! You have successfully run OpenViking 🎉
 VikingBot is an AI agent framework built on top of OpenViking. Here's how to get started:
 
 ```bash
-# Install VikingBot from source (in OpenViking root directory)
+# Option 1: Install VikingBot from PyPI (recommended for most users)
+pip install openviking[bot]
+
+# Option 2: Install VikingBot from source (for development)
 uv pip install -e bot/
 
 # Start OpenViking server with Bot enabled
