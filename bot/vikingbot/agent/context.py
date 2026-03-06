@@ -6,8 +6,6 @@ import platform
 from pathlib import Path
 from typing import Any
 
-from loguru import logger
-
 from vikingbot.agent.memory import MemoryStore
 from vikingbot.agent.skills import SkillsLoader
 from vikingbot.config.schema import SessionKey
@@ -150,8 +148,8 @@ Skills with available="false" need dependencies installed first - you can try in
 
     async def _get_identity(self, session_key: SessionKey) -> str:
         """Get the core identity section."""
-        from datetime import datetime
         import time as _time
+        from datetime import datetime
 
         now = datetime.now().strftime("%Y-%m-%d %H:%M (%A)")
         tz = _time.strftime("%Z") or "UTC"
@@ -199,7 +197,7 @@ Always be helpful, accurate, and concise. When using tools, think step by step: 
 
 ## Memory
 - Remember important facts: using openviking_memory_commit tool to commit
-- Recall past events: prioritize using user_memory_search tool to search history, or grep {workspace_display}/memory/HISTORY.md"""
+- Recall past events: prioritize using user_memory_search tool to search history"""
 
     def _load_bootstrap_files(self) -> str:
         """Load all bootstrap files from workspace."""
@@ -209,7 +207,8 @@ Always be helpful, accurate, and concise. When using tools, think step by step: 
             file_path = self.workspace / filename
             if file_path.exists():
                 content = file_path.read_text(encoding="utf-8")
-                parts.append(f"## {filename}\n\n{content}")
+                if content:
+                    parts.append(f"## {filename}\n\n{content}")
 
         return "\n\n".join(parts) if parts else ""
 
@@ -236,8 +235,6 @@ Always be helpful, accurate, and concise. When using tools, think step by step: 
 
         # System prompt
         system_prompt = await self.build_system_prompt(session_key, current_message, history)
-        if session_key and session_key.channel_id and session_key.chat_id:
-            system_prompt += f"\n\n## Current Session\nChannel: {session_key.type}:{session_key.channel_id}\nChat ID: {session_key.chat_id}"
         messages.append({"role": "system", "content": system_prompt})
         # logger.debug(f"system_prompt: {system_prompt}")
 
