@@ -29,6 +29,7 @@ class ServerConfig:
     port: int = 1933
     root_api_key: Optional[str] = None
     cors_origins: List[str] = field(default_factory=lambda: ["*"])
+    workers: int = 1  # Number of uvicorn worker processes
     with_bot: bool = False  # Enable Bot API proxy to Vikingbot
     bot_api_url: str = "http://localhost:18790"  # Vikingbot OpenAPIChannel URL (default port)
 
@@ -72,6 +73,7 @@ def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
         port=server_data.get("port", 1933),
         root_api_key=server_data.get("root_api_key"),
         cors_origins=server_data.get("cors_origins", ["*"]),
+        workers=server_data.get("workers", 1),
     )
 
     return config
@@ -96,6 +98,14 @@ def validate_server_config(config: ServerConfig) -> None:
     Raises:
         SystemExit: If the configuration is unsafe.
     """
+    if config.workers < 1:
+        logger.error(
+            "server.workers must be >= 1, got %d. "
+            "Set server.workers >= 1 in ov.conf or use --workers >= 1.",
+            config.workers,
+        )
+        sys.exit(1)
+
     if config.root_api_key:
         return
 

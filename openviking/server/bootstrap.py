@@ -80,6 +80,19 @@ def main():
         help="Vikingbot OpenAPIChannel URL (default: http://localhost:18790)",
     )
     parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        metavar="N",
+        help=(
+            "Number of uvicorn worker processes (default: 1). "
+            "Use N > 1 in production to prevent a single slow request from "
+            "stalling the entire HTTP server. "
+            "When N > 1 the app is loaded independently in each worker "
+            "process; --bot is not supported in this mode."
+        ),
+    )
+    parser.add_argument(
         "--enable-bot-logging",
         action="store_true",
         dest="enable_bot_logging",
@@ -118,15 +131,46 @@ def main():
         config.with_bot = True
     if args.bot_url:
         config.bot_api_url = args.bot_url
+    if args.workers is not None:
+        config.workers = args.workers
 
     # Configure logging for Uvicorn
     configure_uvicorn_logging()
 
-    # Create and run app
-    app = create_app(config)
     print(f"OpenViking HTTP Server is running on {config.host}:{config.port}")
+    if config.workers > 1:
+        print(f"Workers: {config.workers} (multi-process mode)")
     if config.with_bot:
         print(f"Bot API proxy enabled, forwarding to {config.bot_api_url}")
+
+    if config.workers > 1:
+        # Multi-process mode: pass the app as an import string so each worker
+        # process can independently import and initialise it.  The config file
+        # path is propagated via the OPENVIKING_CONFIG_FILE environment
+        # variable that was set earlier in this function.
+        #
+        # --bot / vikingbot gateway is not supported with workers > 1 because
+        # the bot subprocess is managed by the parent process only.
+        if config.with_bot:
+            print(
+                "Warning: --with-bot is not supported when --workers > 1; "
+                "bot proxy will be disabled.  Run a separate openviking-server "
+                "instance with workers=1 if you need the bot proxy."
+            )
+        uvicorn.run(
+            "openviking.server.app:create_app",
+            factory=True,
+            host=config.host,
+            port=config.port,
+            workers=config.workers,
+            log_config=None,
+        )
+        return
+
+    # Single-worker mode (default): create the app in this process and hand it
+    # directly to uvicorn.  This is the original behaviour and supports the
+    # vikingbot gateway subprocess.
+    app = create_app(config)
 
     # Determine if bot logging should be enabled
     enable_bot_logging = args.enable_bot_logging
