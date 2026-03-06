@@ -107,6 +107,7 @@ class OpenVikingPostCallHook(Hook):
                 skill_memory_uri = (
                     f"viking://agent/{agent_space_name}/memories/skills/{skill_name}.md"
                 )
+            print(f'skill_memory_uri={skill_memory_uri}')
             content = await ov_client.read_content(skill_memory_uri, level="read")
             # print(f'content={content}')
             # logger.warning(f"content={content}")
