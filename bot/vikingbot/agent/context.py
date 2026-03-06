@@ -242,7 +242,7 @@ Always be helpful, accurate, and concise. When using tools, think step by step: 
         # System prompt
         system_prompt = await self.build_system_prompt(session_key, current_message, history)
         messages.append({"role": "system", "content": system_prompt})
-        logger.debug(f"system_prompt: {system_prompt}")
+        # logger.debug(f"system_prompt: {system_prompt}")
 
         # History
         if not self._eval:
