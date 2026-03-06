@@ -173,14 +173,14 @@ class VikingAddResourceTool(OVFileTool):
 
     @property
     def description(self) -> str:
-        return "Add a local file or url as a resource to OpenViking."
+        return "Add a resource(url or local file path) to OpenViking."
 
     @property
     def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
             "properties": {
-                "path": {"type": "string", "description": "Path to the local file to add"},
+                "path": {"type": "string", "description": "Url or local file path"},
                 "description": {"type": "string", "description": "Description of the resource"},
                 "wait": {
                     "type": "boolean",
