@@ -173,7 +173,7 @@ class VikingAddResourceTool(OVFileTool):
 
     @property
     def description(self) -> str:
-        return "Add a resource(url or local file path) to OpenViking.This is a asynchronous operation."
+        return "Add a resource (url like pic, git code or local file path) to OpenViking.This is a asynchronous operation."
 
     @property
     def parameters(self) -> dict[str, Any]:
