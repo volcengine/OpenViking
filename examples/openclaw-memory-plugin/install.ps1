@@ -40,7 +40,7 @@ $PluginDest = Join-Path $OpenClawDir "extensions\memory-openviking"
 $DefaultServerPort = 1933
 $DefaultAgfsPort = 1833
 $DefaultVlmModel = "doubao-seed-2-0-pro-260215"
-$DefaultEmbeddingModel = "doubao-embedding-vision-250615"
+$DefaultEmbeddingModel = "doubao-embedding-vision-251215"
 
 function Get-PythonCommand {
   if ($env:OPENVIKING_PYTHON) { return $env:OPENVIKING_PYTHON }
@@ -229,7 +229,7 @@ function Configure-OvConf {
     }
     embedding = @{
       dense = @{
-        backend = "volcengine"
+        provider = "volcengine"
         api_key = $(if ($embeddingApiKey) { $embeddingApiKey } else { $null })
         model = $embeddingModel
         api_base = "https://ark.cn-beijing.volces.com/api/v3"
@@ -238,7 +238,7 @@ function Configure-OvConf {
       }
     }
     vlm = @{
-      backend = "volcengine"
+      provider = "volcengine"
       api_key = $(if ($vlmApiKey) { $vlmApiKey } else { $null })
       model = $vlmModel
       api_base = "https://ark.cn-beijing.volces.com/api/v3"
