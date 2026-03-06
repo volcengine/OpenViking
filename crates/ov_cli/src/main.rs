@@ -335,9 +335,12 @@ enum Commands {
         /// Session ID (defaults to machine unique ID)
         #[arg(short, long)]
         session: Option<String>,
-        /// Render assistant output as Markdown
-        #[arg(long = "markdown", default_value = "true")]
-        markdown: bool,
+        /// Disable rich formatting / markdown rendering
+        #[arg(long)]
+        no_format: bool,
+        /// Disable command history
+        #[arg(long)]
+        no_history: bool,
     },
     /// Configuration management
     Config {
@@ -573,7 +576,7 @@ async fn main() {
         Commands::Tui { uri } => {
             handle_tui(uri, ctx).await
         }
-        Commands::Chat { message, session, markdown } => {
+        Commands::Chat { message, session, no_format, no_history } => {
             let session_id = session.or_else(|| config::get_or_create_machine_id().ok());
             let cmd = commands::chat::ChatCommand {
                 endpoint: std::env::var("VIKINGBOT_ENDPOINT").unwrap_or_else(|_| "http://localhost:1933/bot/v1".to_string()),
@@ -582,7 +585,8 @@ async fn main() {
                 user: "cli_user".to_string(),
                 message,
                 stream: false,
-                no_format: !markdown,
+                no_format,
+                no_history,
             };
             cmd.run().await
         }

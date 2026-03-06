@@ -32,3 +32,4 @@ walkdir = "2.5"
 rustyline = "14.0"
 uuid = { version = "1.0", features = ["v4", "serde"] }
 machine-uid = "0.5"
+termimad = "0.34"
