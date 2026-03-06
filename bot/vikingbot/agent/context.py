@@ -131,12 +131,28 @@ Skills with available="false" need dependencies installed first - you can try in
 
 {skills_summary}""")
 
+        return "\n\n---\n\n".join(parts)
+
+    async def _build_user_memory(
+                self, session_key: SessionKey, current_message: str, history: list[dict[str, Any]]
+        ) -> str:
+        """
+        Build the system prompt from bootstrap files, memory, and skills.
+
+        Args:
+            skill_names: Optional list of skills to include.
+
+        Returns:
+            Complete system prompt.
+        """
+        parts = []
         import time as _time
         from datetime import datetime
         now = datetime.now().strftime("%Y-%m-%d %H:%M (%A)")
         tz = _time.strftime("%Z") or "UTC"
         parts.append(f"## Current Time: {now} ({tz})")
 
+        workspace_id = self.sandbox_manager.to_workspace_id(session_key)
         # Viking user profile
         start = _time.time()
         profile = await self.memory.get_viking_user_profile(
@@ -148,14 +164,14 @@ Skills with available="false" need dependencies installed first - you can try in
             parts.append(f"## Current user's information\n{profile}")
 
         # Viking agent memory
-        start = _time.time()
-        viking_memory = await self.memory.get_viking_memory_context(
-            current_message=current_message, workspace_id=workspace_id
-        )
-        cost = round(_time.time() - start, 2)
-        logger.info(f"[READ_USER_MEMORY]: cost {cost}s, memory={viking_memory[:50] if viking_memory else 'None'}")
-        if viking_memory:
-            parts.append(f"## Your memories. Using tools to read more details.\n{viking_memory}")
+        # start = _time.time()
+        # viking_memory = await self.memory.get_viking_memory_context(
+        #     current_message=current_message, workspace_id=workspace_id
+        # )
+        # cost = round(_time.time() - start, 2)
+        # logger.info(f"[READ_USER_MEMORY]: cost {cost}s, memory={viking_memory[:50] if viking_memory else 'None'}")
+        # if viking_memory:
+        #     parts.append(f"## Your memories about the current conversation. If you need to know more details, please use the tools.\n{viking_memory}")
 
         return "\n\n---\n\n".join(parts)
 
@@ -251,6 +267,10 @@ Always be helpful, accurate, and concise. When using tools, think step by step: 
         # Current message (with optional image attachments)
         user_content = self._build_user_content(current_message, media)
         messages.append({"role": "user", "content": user_content})
+
+        # User
+        user_info = await self._build_user_memory(session_key, current_message, history)
+        # messages.append({"role": "system", "content": user_info})
 
         return messages
 
