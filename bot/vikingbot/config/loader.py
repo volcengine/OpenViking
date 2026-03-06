@@ -177,6 +177,24 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
     with open(path, "w") as f:
         json.dump(full_data, f, indent=2)
 
+def save_init_config(config: Config, config_path: Path | None = None) -> None:
+    """
+    Save configuration to file.
+
+    Args:
+        config: Configuration to save.
+        config_path: Optional path to save to. Uses default if not provided.
+    """
+    path = config_path or get_config_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Convert to camelCase format
+    data = config.model_dump()
+    data = convert_to_camel(data)
+
+    with open(path, "w") as f:
+        json.dump(data, f, indent=2)
+
 
 def convert_keys(data: Any) -> Any:
     """Convert camelCase keys to snake_case for Pydantic."""
