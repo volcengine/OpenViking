@@ -133,6 +133,10 @@ Skills with available="false" need dependencies installed first - you can try in
 
 {skills_summary}""")
 
+        now = datetime.now().strftime("%Y-%m-%d %H:%M (%A)")
+        tz = _time.strftime("%Z") or "UTC"
+        parts.append(f"## Current Time: {now} ({tz})")
+
         # Viking user profile
         start = _time.time()
         profile = await self.memory.get_viking_user_profile(
@@ -265,7 +269,7 @@ Always be helpful, accurate, and concise. When using tools, think step by step: 
         # System prompt
         system_prompt = await self.build_system_prompt(session_key, current_message, history)
         messages.append({"role": "system", "content": system_prompt})
-        # logger.debug(f"system_prompt: {system_prompt}")
+        logger.debug(f"system_prompt: {system_prompt}")
 
         # History
         if not self._eval:
