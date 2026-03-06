@@ -9,7 +9,7 @@ from openviking.parse.parsers.code.ast.skeleton import ClassSkeleton, CodeSkelet
 
 
 def _node_text(node, content_bytes: bytes) -> str:
-    return content_bytes[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
+    return content_bytes[node.start_byte : node.end_byte].decode("utf-8", errors="replace")
 
 
 def _preceding_doc(siblings: list, idx: int, content_bytes: bytes) -> str:
@@ -92,7 +92,9 @@ class GoExtractor(LanguageExtractor):
                             if s2.type == "import_spec":
                                 for s3 in s2.children:
                                     if s3.type == "interpreted_string_literal":
-                                        imports.append(_node_text(s3, content_bytes).strip().strip('"'))
+                                        imports.append(
+                                            _node_text(s3, content_bytes).strip().strip('"')
+                                        )
             elif child.type in ("function_declaration", "method_declaration"):
                 doc = _preceding_doc(siblings, idx, content_bytes)
                 functions.append(_extract_function(child, content_bytes, docstring=doc))

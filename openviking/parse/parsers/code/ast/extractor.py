@@ -1,4 +1,4 @@
-    # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 """ASTExtractor: language detection + dispatch to per-language extractors."""
 
@@ -33,8 +33,16 @@ _EXT_MAP: Dict[str, str] = {
 # Language key → (module path, class name, constructor kwargs)
 _EXTRACTOR_REGISTRY: Dict[str, tuple] = {
     "python": ("openviking.parse.parsers.code.ast.languages.python", "PythonExtractor", {}),
-    "javascript": ("openviking.parse.parsers.code.ast.languages.js_ts", "JsTsExtractor", {"lang": "javascript"}),
-    "typescript": ("openviking.parse.parsers.code.ast.languages.js_ts", "JsTsExtractor", {"lang": "typescript"}),
+    "javascript": (
+        "openviking.parse.parsers.code.ast.languages.js_ts",
+        "JsTsExtractor",
+        {"lang": "javascript"},
+    ),
+    "typescript": (
+        "openviking.parse.parsers.code.ast.languages.js_ts",
+        "JsTsExtractor",
+        {"lang": "typescript"},
+    ),
     "java": ("openviking.parse.parsers.code.ast.languages.java", "JavaExtractor", {}),
     "cpp": ("openviking.parse.parsers.code.ast.languages.cpp", "CppExtractor", {}),
     "rust": ("openviking.parse.parsers.code.ast.languages.rust", "RustExtractor", {}),
@@ -71,11 +79,15 @@ class ASTExtractor:
             self._cache[lang] = extractor
             return extractor
         except Exception as e:
-            logger.warning("AST extractor unavailable for language '%s', falling back to LLM: %s", lang, e)
+            logger.warning(
+                "AST extractor unavailable for language '%s', falling back to LLM: %s", lang, e
+            )
             self._cache[lang] = None
             return None
 
-    def extract_skeleton(self, file_name: str, content: str, verbose: bool = False) -> Optional[str]:
+    def extract_skeleton(
+        self, file_name: str, content: str, verbose: bool = False
+    ) -> Optional[str]:
         """Extract skeleton text from source code.
 
         Returns None for unsupported languages or on extraction failure,
@@ -94,7 +106,12 @@ class ASTExtractor:
             skeleton: CodeSkeleton = extractor.extract(file_name, content)
             return skeleton.to_text(verbose=verbose)
         except Exception as e:
-            logger.warning("AST extraction failed for '%s' (language: %s), falling back to LLM: %s", file_name, lang, e)
+            logger.warning(
+                "AST extraction failed for '%s' (language: %s), falling back to LLM: %s",
+                file_name,
+                lang,
+                e,
+            )
             return None
 
 

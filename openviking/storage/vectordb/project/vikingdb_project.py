@@ -124,7 +124,7 @@ class VikingDBProject:
             }
             # Update with user-provided arguments (can override defaults if needed, though usually additive)
             kwargs.update(self.collection_args)
-            
+
             vikingdb_collection = self.CollectionClass(**kwargs)
             return Collection(vikingdb_collection)
         except Exception:
@@ -154,23 +154,21 @@ class VikingDBProject:
     def get_collections(self) -> Dict[str, Collection]:
         """Get all collections from server"""
         colls = self._get_collections()
-        
+
         # Prepare base arguments
         base_kwargs = {
             "host": self.host,
             "headers": self.headers,
         }
-        
+
         collections = {}
         for c in colls:
             kwargs = base_kwargs.copy()
             kwargs["meta_data"] = c
             kwargs.update(self.collection_args)
-            
-            collections[c["CollectionName"]] = Collection(
-                self.CollectionClass(**kwargs)
-            )
-            
+
+            collections[c["CollectionName"]] = Collection(self.CollectionClass(**kwargs))
+
         return collections
 
     def create_collection(self, collection_name: str, meta_data: Dict[str, Any]) -> Collection:

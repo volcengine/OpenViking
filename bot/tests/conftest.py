@@ -194,4 +194,3 @@ async def client_with_resource(
     result = await client.add_resource(path=str(sample_markdown_file), reason="Test resource")
     uri = result.get("root_uri", "")
     yield client, uri
-

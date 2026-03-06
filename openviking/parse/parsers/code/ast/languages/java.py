@@ -9,7 +9,7 @@ from openviking.parse.parsers.code.ast.skeleton import ClassSkeleton, CodeSkelet
 
 
 def _node_text(node, content_bytes: bytes) -> str:
-    return content_bytes[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
+    return content_bytes[node.start_byte : node.end_byte].decode("utf-8", errors="replace")
 
 
 def _parse_block_comment(raw: str) -> str:
@@ -44,9 +44,15 @@ def _extract_method(node, content_bytes: bytes, docstring: str = "") -> Function
         if child.type == "identifier" and not name:
             if return_type:
                 name = _node_text(child, content_bytes)
-        elif child.type in ("type_identifier", "void_type", "integral_type",
-                            "floating_point_type", "boolean_type", "array_type",
-                            "generic_type"):
+        elif child.type in (
+            "type_identifier",
+            "void_type",
+            "integral_type",
+            "floating_point_type",
+            "boolean_type",
+            "array_type",
+            "generic_type",
+        ):
             if not return_type:
                 return_type = _node_text(child, content_bytes)
         elif child.type == "formal_parameters":

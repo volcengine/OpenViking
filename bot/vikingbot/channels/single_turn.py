@@ -77,6 +77,7 @@ class SingleTurnChannel(BaseChannel):
                 from vikingbot.cli.commands import console
                 from rich.markdown import Markdown
                 from rich.text import Text
+
                 content = self._last_response or ""
                 body = Markdown(content) if self.markdown else Text(content)
                 console.print(body)

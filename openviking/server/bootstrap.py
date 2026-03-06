@@ -159,9 +159,7 @@ def _start_vikingbot_gateway(enable_logging: bool, log_dir: str) -> Optional[Bot
         python_cmd = sys.executable
         try:
             result = subprocess.run(
-                [python_cmd, "-m", "vikingbot", "--help"],
-                capture_output=True,
-                timeout=5
+                [python_cmd, "-m", "vikingbot", "--help"], capture_output=True, timeout=5
             )
             if result.returncode == 0:
                 vikingbot_cmd = [python_cmd, "-m", "vikingbot", "gateway"]

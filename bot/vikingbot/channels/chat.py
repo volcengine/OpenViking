@@ -82,7 +82,12 @@ class ChatChannel(BaseChannel):
             console.print("[bold red]Bot:[/bold red]")
             from rich.markdown import Markdown
             from rich.text import Text
-            body = Markdown(content, style="red") if self.markdown else Text(content, style=Style(color="red"))
+
+            body = (
+                Markdown(content, style="red")
+                if self.markdown
+                else Text(content, style=Style(color="red"))
+            )
 
             console.print(body)
             console.print()

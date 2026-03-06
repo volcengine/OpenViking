@@ -46,12 +46,7 @@ class BaseEvaluator(ABC):
     def _summarize(self, name: str, results: List[EvalResult]) -> SummaryResult:
         """Aggregate results into a summary."""
         if not results:
-            return SummaryResult(
-                dataset_name=name,
-                sample_count=0,
-                mean_scores={},
-                results=[]
-            )
+            return SummaryResult(dataset_name=name, sample_count=0, mean_scores={}, results=[])
 
         metric_sums: Dict[str, float] = {}
         for res in results:
@@ -62,8 +57,5 @@ class BaseEvaluator(ABC):
         mean_scores = {m: s / count for m, s in metric_sums.items()}
 
         return SummaryResult(
-            dataset_name=name,
-            sample_count=count,
-            mean_scores=mean_scores,
-            results=results
+            dataset_name=name, sample_count=count, mean_scores=mean_scores, results=results
         )

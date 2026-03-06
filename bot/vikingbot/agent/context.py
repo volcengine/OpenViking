@@ -93,14 +93,15 @@ class ContextBuilder:
             )
 
         # Add session context
-        session_context ="## Current Session"
+        session_context = "## Current Session"
         if session_key and session_key.type:
             session_context += f"\nChannel: {session_key.type}"
             if self._is_group_chat:
                 session_context += (
                     f"\n**Group chat session.** Current user ID: {self._sender_id}\n"
                     f"Multiple users can participate in this conversation. Each user message is prefixed with the user ID in brackets like @<user_id>. "
-                    f"You should pay attention to who is speaking to understand the context. ")
+                    f"You should pay attention to who is speaking to understand the context. "
+                )
         parts.append(session_context)
 
         # Viking user profile

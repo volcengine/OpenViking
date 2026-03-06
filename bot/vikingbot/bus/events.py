@@ -10,6 +10,7 @@ from vikingbot.config.schema import SessionKey
 
 class OutboundEventType(str, Enum):
     """Type of outbound message/event."""
+
     RESPONSE = "response"  # Normal response message
     TOOL_CALL = "tool_call"  # Tool being called
     TOOL_RESULT = "tool_result"  # Result from tool execution

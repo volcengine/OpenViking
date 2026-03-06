@@ -222,9 +222,7 @@ def _finalize_operation_stats(stats_dict: Dict[str, OperationStats]) -> None:
     for stats in stats_dict.values():
         if stats.count > 0:
             stats.avg_latency_ms = stats.total_latency_ms / stats.count
-            stats.success_rate_percent = (
-                stats.success_count / stats.count * 100
-            )
+            stats.success_rate_percent = stats.success_count / stats.count * 100
         else:
             stats.avg_latency_ms = 0.0
             stats.min_latency_ms = 0.0
@@ -308,9 +306,7 @@ def analyze_records(
 
         agfs_total = viking_fs_stats.agfs_success_count + viking_fs_stats.agfs_error_count
         if agfs_total > 0:
-            viking_fs_stats.agfs_avg_latency_ms = (
-                viking_fs_stats.agfs_total_latency_ms / agfs_total
-            )
+            viking_fs_stats.agfs_avg_latency_ms = viking_fs_stats.agfs_total_latency_ms / agfs_total
             viking_fs_stats.agfs_success_rate_percent = (
                 viking_fs_stats.agfs_success_count / agfs_total * 100
             )

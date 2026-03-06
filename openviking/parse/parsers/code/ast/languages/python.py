@@ -9,7 +9,7 @@ from openviking.parse.parsers.code.ast.skeleton import ClassSkeleton, CodeSkelet
 
 
 def _node_text(node, content_bytes: bytes) -> str:
-    return content_bytes[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
+    return content_bytes[node.start_byte : node.end_byte].decode("utf-8", errors="replace")
 
 
 def _first_string_child(body_node, content_bytes: bytes) -> str:
@@ -24,7 +24,7 @@ def _first_string_child(body_node, content_bytes: bytes) -> str:
                     # Strip quotes
                     for q in ('"""', "'''", '"', "'"):
                         if raw.startswith(q) and raw.endswith(q) and len(raw) >= 2 * len(q):
-                            return raw[len(q):-len(q)].strip()
+                            return raw[len(q) : -len(q)].strip()
                     return raw
             break  # only check first expression_statement
     return ""
@@ -153,7 +153,7 @@ class PythonExtractor(LanguageExtractor):
                         raw = _node_text(sub, content_bytes).strip()
                         for q in ('"""', "'''", '"', "'"):
                             if raw.startswith(q) and raw.endswith(q) and len(raw) >= 2 * len(q):
-                                module_doc = raw[len(q):-len(q)].strip()
+                                module_doc = raw[len(q) : -len(q)].strip()
                                 break
                         else:
                             module_doc = raw

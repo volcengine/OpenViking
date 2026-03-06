@@ -10,7 +10,12 @@ from openviking.session.memory_deduplicator import (
     MemoryActionDecision,
     MemoryDeduplicator,
 )
-from openviking.session.memory_extractor import CandidateMemory, MemoryCategory, MemoryExtractor, ToolSkillCandidateMemory
+from openviking.session.memory_extractor import (
+    CandidateMemory,
+    MemoryCategory,
+    MemoryExtractor,
+    ToolSkillCandidateMemory,
+)
 from openviking.session.session import Session, SessionCompression, SessionStats
 
 __all__ = [

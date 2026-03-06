@@ -9,7 +9,7 @@ from openviking.parse.parsers.code.ast.skeleton import ClassSkeleton, CodeSkelet
 
 
 def _node_text(node, content_bytes: bytes) -> str:
-    return content_bytes[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
+    return content_bytes[node.start_byte : node.end_byte].decode("utf-8", errors="replace")
 
 
 def _parse_block_comment(raw: str) -> str:
@@ -65,8 +65,13 @@ def _extract_function(node, content_bytes: bytes, docstring: str = "") -> Functi
     for child in node.children:
         if child.type == "function_declarator":
             name, params = _extract_function_declarator(child, content_bytes)
-        elif child.type in ("type_specifier", "primitive_type", "type_identifier",
-                            "qualified_identifier", "auto"):
+        elif child.type in (
+            "type_specifier",
+            "primitive_type",
+            "type_identifier",
+            "qualified_identifier",
+            "auto",
+        ):
             if not return_type:
                 return_type = _node_text(child, content_bytes)
         elif child.type == "pointer_declarator":
@@ -104,15 +109,27 @@ def _extract_class(node, content_bytes: bytes, docstring: str = "") -> ClassSkel
                 fn_name = ""
                 fn_params = ""
                 for sub in child.children:
-                    if sub.type in ("type_specifier", "primitive_type", "type_identifier",
-                                    "qualified_identifier") and not ret_type:
+                    if (
+                        sub.type
+                        in (
+                            "type_specifier",
+                            "primitive_type",
+                            "type_identifier",
+                            "qualified_identifier",
+                        )
+                        and not ret_type
+                    ):
                         ret_type = _node_text(sub, content_bytes)
                     elif sub.type == "function_declarator":
                         fn_name, fn_params = _extract_function_declarator(sub, content_bytes)
                         break
                 if fn_name:
                     doc = _preceding_doc(siblings, idx, content_bytes)
-                    methods.append(FunctionSig(name=fn_name, params=fn_params, return_type=ret_type, docstring=doc))
+                    methods.append(
+                        FunctionSig(
+                            name=fn_name, params=fn_params, return_type=ret_type, docstring=doc
+                        )
+                    )
 
     return ClassSkeleton(name=name, bases=bases, docstring=docstring, methods=methods)
 
@@ -157,7 +174,9 @@ class CppExtractor(LanguageExtractor):
                                 classes.append(_extract_class(s2, content_bytes, docstring=doc))
                             elif s2.type == "function_definition":
                                 doc = _preceding_doc(inner, i2, content_bytes)
-                                functions.append(_extract_function(s2, content_bytes, docstring=doc))
+                                functions.append(
+                                    _extract_function(s2, content_bytes, docstring=doc)
+                                )
 
         return CodeSkeleton(
             file_name=file_name,

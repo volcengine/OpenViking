@@ -15,9 +15,9 @@ def _compact_params(params: str) -> str:
 @dataclass
 class FunctionSig:
     name: str
-    params: str       # raw parameter string, e.g. "source, instruction, **kwargs"
+    params: str  # raw parameter string, e.g. "source, instruction, **kwargs"
     return_type: str  # e.g. "ParseResult" or ""
-    docstring: str    # first line only
+    docstring: str  # first line only
 
 
 @dataclass
@@ -33,9 +33,9 @@ class CodeSkeleton:
     file_name: str
     language: str
     module_doc: str
-    imports: List[str]              # flattened, e.g. ["asyncio", "os", "typing.Optional"]
+    imports: List[str]  # flattened, e.g. ["asyncio", "os", "typing.Optional"]
     classes: List[ClassSkeleton]
-    functions: List[FunctionSig]    # top-level functions only
+    functions: List[FunctionSig]  # top-level functions only
 
     def to_text(self, verbose: bool = False) -> str:
         """Generate skeleton text.
@@ -44,6 +44,7 @@ class CodeSkeleton:
             verbose: If True, include full docstrings (for ast_llm mode / LLM input).
                      If False, only keep the first line (for ast mode / direct embedding).
         """
+
         def _doc(raw: str, indent: str) -> List[str]:
             if not raw:
                 return []
@@ -54,9 +55,11 @@ class CodeSkeleton:
             doc_lines = raw.strip().split("\n")
             if len(doc_lines) == 1:
                 return [f'{indent}"""{first}"""']
-            return [f'{indent}"""{doc_lines[0]}'] + \
-                   [f'{indent}{l.strip()}' for l in doc_lines[1:]] + \
-                   [f'{indent}"""']
+            return (
+                [f'{indent}"""{doc_lines[0]}']
+                + [f"{indent}{l.strip()}" for l in doc_lines[1:]]
+                + [f'{indent}"""']
+            )
 
         lines: List[str] = []
 

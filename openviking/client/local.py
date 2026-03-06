@@ -93,21 +93,13 @@ class LocalClient(BaseClient):
         """Wait for all processing to complete."""
         return await self._service.resources.wait_processed(timeout=timeout)
 
-    async def build_index(
-        self,
-        resource_uris: Union[str, List[str]],
-        **kwargs
-    ) -> Dict[str, Any]:
+    async def build_index(self, resource_uris: Union[str, List[str]], **kwargs) -> Dict[str, Any]:
         """Manually trigger index building."""
         if isinstance(resource_uris, str):
             resource_uris = [resource_uris]
         return await self._service.resources.build_index(resource_uris, ctx=self._ctx, **kwargs)
 
-    async def summarize(
-        self,
-        resource_uris: Union[str, List[str]],
-        **kwargs
-    ) -> Dict[str, Any]:
+    async def summarize(self, resource_uris: Union[str, List[str]], **kwargs) -> Dict[str, Any]:
         """Manually trigger summarization."""
         if isinstance(resource_uris, str):
             resource_uris = [resource_uris]

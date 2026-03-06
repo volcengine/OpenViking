@@ -100,7 +100,7 @@ class FeishuChannelConfig(BaseChannelConfig):
     app_secret: str = ""
     encrypt_key: str = ""
     verification_token: str = ""
-    allow_from: list[str] = Field(default_factory=list) ## 允许更新Agent对话的Feishu用户ID列表
+    allow_from: list[str] = Field(default_factory=list)  ## 允许更新Agent对话的Feishu用户ID列表
 
     def channel_id(self) -> str:
         # Use app_id directly as the ID
@@ -582,7 +582,9 @@ class Config(BaseSettings):
 
     agents: AgentsConfig = Field(default_factory=AgentsConfig)
     channels: list[Any] = Field(default_factory=list)
-    providers: ProvidersConfig = Field(default_factory=ProvidersConfig, deprecated=True)  # Deprecated: Use ov.conf vlm config instead
+    providers: ProvidersConfig = Field(
+        default_factory=ProvidersConfig, deprecated=True
+    )  # Deprecated: Use ov.conf vlm config instead
     gateway: GatewayConfig = Field(default_factory=GatewayConfig)
     tools: ToolsConfig = Field(default_factory=ToolsConfig)
     ov_server: OpenVikingConfig = Field(default_factory=OpenVikingConfig)
@@ -629,6 +631,7 @@ class Config(BaseSettings):
     def _get_vlm_config(self) -> Optional[Dict[str, Any]]:
         """Get vlm config from OpenVikingConfig. Returns (vlm_config_dict)."""
         from openviking_cli.utils.config import get_openviking_config
+
         ov_config = get_openviking_config()
 
         if hasattr(ov_config, "vlm"):

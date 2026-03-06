@@ -213,28 +213,20 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         return await self._client.wait_processed(timeout=timeout)
 
-    async def build_index(
-        self,
-        resource_uris: Union[str, List[str]],
-        **kwargs
-    ) -> Dict[str, Any]:
+    async def build_index(self, resource_uris: Union[str, List[str]], **kwargs) -> Dict[str, Any]:
         """
         Manually trigger index building for resources.
-        
+
         Args:
             resource_uris: Single URI or list of URIs to index.
         """
         await self._ensure_initialized()
         return await self._client.build_index(resource_uris, **kwargs)
 
-    async def summarize(
-        self,
-        resource_uris: Union[str, List[str]],
-        **kwargs
-    ) -> Dict[str, Any]:
+    async def summarize(self, resource_uris: Union[str, List[str]], **kwargs) -> Dict[str, Any]:
         """
         Manually trigger summarization for resources.
-        
+
         Args:
             resource_uris: Single URI or list of URIs to summarize.
         """

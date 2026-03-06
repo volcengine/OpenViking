@@ -43,9 +43,7 @@ class SrtBackend(SandboxBackend):
 
         # Place settings file in workspace/sandboxes/ directory
         settings_path = (
-            self._workspace
-            / "sandboxes"
-            / f"{self.session_key.safe_name()}-srt-settings.json"
+            self._workspace / "sandboxes" / f"{self.session_key.safe_name()}-srt-settings.json"
         )
         settings_path.parent.mkdir(parents=True, exist_ok=True)
 

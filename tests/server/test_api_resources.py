@@ -8,9 +8,7 @@ import httpx
 from tests.server.conftest import SAMPLE_MD_CONTENT
 
 
-async def test_add_resource_success(
-    client: httpx.AsyncClient, sample_markdown_file
-):
+async def test_add_resource_success(client: httpx.AsyncClient, sample_markdown_file):
     resp = await client.post(
         "/api/v1/resources",
         json={
@@ -26,9 +24,7 @@ async def test_add_resource_success(
     assert body["result"]["root_uri"].startswith("viking://")
 
 
-async def test_add_resource_with_wait(
-    client: httpx.AsyncClient, sample_markdown_file
-):
+async def test_add_resource_with_wait(client: httpx.AsyncClient, sample_markdown_file):
     resp = await client.post(
         "/api/v1/resources",
         json={
@@ -54,9 +50,7 @@ async def test_add_resource_file_not_found(client: httpx.AsyncClient):
     assert "errors" in body["result"] and len(body["result"]["errors"]) > 0
 
 
-async def test_add_resource_with_target(
-    client: httpx.AsyncClient, sample_markdown_file
-):
+async def test_add_resource_with_target(client: httpx.AsyncClient, sample_markdown_file):
     resp = await client.post(
         "/api/v1/resources",
         json={
@@ -81,9 +75,7 @@ async def test_wait_processed_empty_queue(client: httpx.AsyncClient):
     assert body["status"] == "ok"
 
 
-async def test_wait_processed_after_add(
-    client: httpx.AsyncClient, sample_markdown_file
-):
+async def test_wait_processed_after_add(client: httpx.AsyncClient, sample_markdown_file):
     await client.post(
         "/api/v1/resources",
         json={"path": str(sample_markdown_file), "reason": "test"},

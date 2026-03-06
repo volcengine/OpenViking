@@ -15,21 +15,19 @@ import json
 import shutil
 import tempfile
 
+
 class TestAdapterLoading(unittest.TestCase):
     def setUp(self):
         self.test_dir = tempfile.mkdtemp()
         self.config_path = os.path.join(self.test_dir, "ov.conf")
-        
+
         # Create a valid config file
         config_data = {
             "storage": {
                 "vectordb": {
                     "backend": "tests.storage.mock_backend.MockCollectionAdapter",
                     "name": "mock_test_collection",
-                    "custom_params": {
-                        "custom_param1": "val1",
-                        "custom_param2": 123
-                    }
+                    "custom_params": {"custom_param1": "val1", "custom_param2": 123},
                 }
             },
             "embedding": {
@@ -37,9 +35,9 @@ class TestAdapterLoading(unittest.TestCase):
                     "provider": "openai",
                     "model": "text-embedding-3-small",
                     "api_key": "mock-key",
-                    "dimension": 1536
+                    "dimension": 1536,
                 }
-            }
+            },
         }
         with open(self.config_path, "w") as f:
             json.dump(config_data, f)
@@ -57,7 +55,7 @@ class TestAdapterLoading(unittest.TestCase):
         """
         # Load config from the temporary file
         OpenVikingConfigSingleton.initialize(config_path=self.config_path)
-        
+
         config = get_openviking_config().storage.vectordb
 
         # Verify that custom params are loaded
@@ -67,23 +65,25 @@ class TestAdapterLoading(unittest.TestCase):
 
         try:
             adapter = create_collection_adapter(config)
-            
+
             self.assertEqual(adapter.__class__.__name__, "MockCollectionAdapter")
             self.assertEqual(adapter.mode, "mock")
             self.assertEqual(adapter.collection_name, "mock_test_collection")
             self.assertEqual(adapter.custom_param1, "val1")
             self.assertEqual(adapter.custom_param2, 123)
-            
+
             # Verify internal behavior
             exists = adapter.collection_exists()
             self.assertTrue(exists)
-            
+
             print("Successfully loaded MockCollectionAdapter dynamically from config file.")
-            
+
         except Exception as e:
             import traceback
+
             traceback.print_exc()
             self.fail(f"Failed to load adapter dynamically: {e}")
+
 
 if __name__ == "__main__":
     unittest.main()

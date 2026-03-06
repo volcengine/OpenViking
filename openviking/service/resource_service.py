@@ -173,10 +173,7 @@ class ResourceService:
         return result
 
     async def build_index(
-        self,
-        resource_uris: List[str],
-        ctx: RequestContext,
-        **kwargs
+        self, resource_uris: List[str], ctx: RequestContext, **kwargs
     ) -> Dict[str, Any]:
         """Manually trigger index building.
 
@@ -191,10 +188,7 @@ class ResourceService:
         return await self._resource_processor.build_index(resource_uris, ctx, **kwargs)
 
     async def summarize(
-        self,
-        resource_uris: List[str],
-        ctx: RequestContext,
-        **kwargs
+        self, resource_uris: List[str], ctx: RequestContext, **kwargs
     ) -> Dict[str, Any]:
         """Manually trigger summarization.
 

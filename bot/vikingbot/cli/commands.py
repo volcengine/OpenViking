@@ -36,7 +36,12 @@ from vikingbot.config.loader import load_config
 # Create sandbox manager
 from vikingbot.sandbox.manager import SandboxManager
 from vikingbot.session.manager import SessionManager
-from vikingbot.utils.helpers import get_source_workspace_path, set_bot_data_path, get_history_path, get_bridge_path
+from vikingbot.utils.helpers import (
+    get_source_workspace_path,
+    set_bot_data_path,
+    get_history_path,
+    get_bridge_path,
+)
 
 app = typer.Typer(
     name="vikingbot",
@@ -55,6 +60,7 @@ def get_or_create_machine_id() -> str:
     """
     try:
         from machineid import machine_id
+
         return machine_id()
     except ImportError:
         # Fallback if py-machineid is not installed
@@ -64,7 +70,6 @@ def get_or_create_machine_id() -> str:
 
     # Default fallback
     return "default"
-
 
 
 def _init_bot_data(config):
@@ -190,10 +195,9 @@ def main(
     pass
 
 
-def _make_provider(config, langfuse_client:  None = None):
+def _make_provider(config, langfuse_client: None = None):
     """Create LiteLLMProvider from config. Allows starting without API key."""
     from vikingbot.providers.litellm_provider import LiteLLMProvider
-
 
     config = load_config()
     p = config.agents
@@ -248,6 +252,7 @@ def gateway(
 
     # Create FastAPI app for OpenAPI
     from fastapi import FastAPI
+
     fastapi_app = FastAPI(
         title="Vikingbot OpenAPI",
         description="HTTP API for Vikingbot chat",
@@ -255,7 +260,9 @@ def gateway(
     )
 
     cron = prepare_cron(bus)
-    channels = prepare_channel(config, bus, fastapi_app=fastapi_app, enable_openapi=True, openapi_port=port)
+    channels = prepare_channel(
+        config, bus, fastapi_app=fastapi_app, enable_openapi=True, openapi_port=port
+    )
     agent_loop = prepare_agent_loop(config, bus, session_manager, cron)
     heartbeat = prepare_heartbeat(config, agent_loop, session_manager)
 
@@ -292,7 +299,9 @@ def prepare_agent_loop(config, bus, session_manager, cron, quiet: bool = False, 
     if config.sandbox.backend == "direct":
         logger.warning("[SANDBOX] disabled (using DIRECT mode - commands run directly on host)")
     else:
-        logger.info(f"Sandbox: enabled (backend={config.sandbox.backend}, mode={config.sandbox.mode})")
+        logger.info(
+            f"Sandbox: enabled (backend={config.sandbox.backend}, mode={config.sandbox.mode})"
+        )
 
     # Initialize Langfuse if enabled
     langfuse_client = None
@@ -328,11 +337,11 @@ def prepare_agent_loop(config, bus, session_manager, cron, quiet: bool = False, 
         session_manager=session_manager,
         sandbox_manager=sandbox_manager,
         config=config,
-        eval=eval
+        eval=eval,
     )
     # Set the agent reference in cron if it uses the holder pattern
-    if hasattr(cron, '_agent_holder'):
-        cron._agent_holder['agent'] = agent
+    if hasattr(cron, "_agent_holder"):
+        cron._agent_holder["agent"] = agent
     return agent
 
 
@@ -393,7 +402,9 @@ Reminder message to deliver:
     return cron
 
 
-def prepare_channel(config, bus, fastapi_app=None, enable_openapi: bool = False, openapi_port: int = 18790):
+def prepare_channel(
+    config, bus, fastapi_app=None, enable_openapi: bool = False, openapi_port: int = 18790
+):
     """Prepare channels for the bot.
 
     Args:
@@ -485,11 +496,20 @@ def _thinking_ctx(logs: bool):
     """Return a context manager for showing thinking spinner."""
     if logs:
         from contextlib import nullcontext
+
         return nullcontext()
     return console.status("[dim]vikingbot is thinking...[/dim]", spinner="dots")
 
 
-def prepare_agent_channel(config, bus, message: str | None, session_id: str, markdown: bool, logs: bool, eval: bool = False):
+def prepare_agent_channel(
+    config,
+    bus,
+    message: str | None,
+    session_id: str,
+    markdown: bool,
+    logs: bool,
+    eval: bool = False,
+):
     """Prepare channel for agent command."""
     from vikingbot.channels.chat import ChatChannel, ChatChannelConfig
     from vikingbot.channels.single_turn import SingleTurnChannel, SingleTurnChannelConfig
@@ -559,7 +579,9 @@ def chat(
         session_id = get_or_create_machine_id()
     cron = prepare_cron(bus, quiet=is_single_turn)
     channels = prepare_agent_channel(config, bus, message, session_id, markdown, logs, eval)
-    agent_loop = prepare_agent_loop(config, bus, session_manager, cron, quiet=is_single_turn, eval=eval)
+    agent_loop = prepare_agent_loop(
+        config, bus, session_manager, cron, quiet=is_single_turn, eval=eval
+    )
 
     async def run():
         if is_single_turn:
@@ -569,10 +591,7 @@ def chat(
             task_agent = asyncio.create_task(agent_loop.run())
 
             # Wait for channels to complete (it will complete after getting response)
-            done, pending = await asyncio.wait(
-                [task_channels],
-                return_when=asyncio.FIRST_COMPLETED
-            )
+            done, pending = await asyncio.wait([task_channels], return_when=asyncio.FIRST_COMPLETED)
 
             # Cancel all other tasks
             for task in pending:
@@ -949,6 +968,7 @@ def status():
 
 try:
     from vikingbot.cli.test_commands import test_app
+
     app.add_typer(test_app, name="test")
 except ImportError:
     # If test commands not available, don't add them

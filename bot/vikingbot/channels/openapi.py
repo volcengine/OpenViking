@@ -389,10 +389,7 @@ class OpenAPIChannel(BaseChannel):
 
             except Exception as e:
                 logger.exception(f"Error in stream generator: {e}")
-                error_event = ChatStreamEvent(
-                    event=EventType.RESPONSE,
-                    data={"error": str(e)}
-                )
+                error_event = ChatStreamEvent(event=EventType.RESPONSE, data={"error": str(e)})
                 yield f"data: {error_event.model_dump_json()}\n\n"
             finally:
                 self._pending.pop(session_id, None)

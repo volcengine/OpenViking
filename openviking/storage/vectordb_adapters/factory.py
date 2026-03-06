@@ -27,6 +27,7 @@ def create_collection_adapter(config) -> CollectionAdapter:
     if adapter_cls is None and "." in backend:
         try:
             import importlib
+
             module_name, class_name = backend.rsplit(".", 1)
             module = importlib.import_module(module_name)
             potential_cls = getattr(module, class_name)

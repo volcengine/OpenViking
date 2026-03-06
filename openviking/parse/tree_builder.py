@@ -180,7 +180,9 @@ class TreeBuilder:
                 await self._enqueue_semantic_generation(final_uri, "resource", ctx=ctx)
                 logger.info(f"[TreeBuilder] Enqueued semantic generation for: {final_uri}")
             except Exception as e:
-                logger.error(f"[TreeBuilder] Failed to enqueue semantic generation: {e}", exc_info=True)
+                logger.error(
+                    f"[TreeBuilder] Failed to enqueue semantic generation: {e}", exc_info=True
+                )
 
         # 7. Return simple BuildingTree (no scanning needed)
         tree = BuildingTree(
@@ -188,7 +190,7 @@ class TreeBuilder:
             source_format=source_format,
         )
         tree._root_uri = final_uri
-        
+
         # Create a minimal Context object for the root so that tree.root is not None
         root_context = Context(uri=final_uri)
         tree.add_context(root_context)
