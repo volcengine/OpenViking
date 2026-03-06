@@ -63,6 +63,12 @@ def main():
         help="Path to ov.conf config file",
     )
     parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Number of uvicorn worker processes (default: 1, or server.workers in ov.conf)",
+    )
+    parser.add_argument(
         "--bot",
         action="store_true",
         help="Also start vikingbot gateway after server starts",
@@ -114,6 +120,8 @@ def main():
         config.host = args.host
     if args.port is not None:
         config.port = args.port
+    if args.workers is not None:
+        config.workers = args.workers
     if args.with_bot:
         config.with_bot = True
     if args.bot_url:
@@ -124,7 +132,8 @@ def main():
 
     # Create and run app
     app = create_app(config)
-    print(f"OpenViking HTTP Server is running on {config.host}:{config.port}")
+    workers_info = f" (workers: {config.workers})" if config.workers > 1 else ""
+    print(f"OpenViking HTTP Server is running on {config.host}:{config.port}{workers_info}")
     if config.with_bot:
         print(f"Bot API proxy enabled, forwarding to {config.bot_api_url}")
 
@@ -139,7 +148,22 @@ def main():
         bot_process = _start_vikingbot_gateway(enable_bot_logging, args.bot_log_dir)
 
     try:
-        uvicorn.run(app, host=config.host, port=config.port, log_config=None)
+        workers = config.workers
+        if workers > 1:
+            # Multi-worker mode requires an import string so each worker
+            # can independently import the application.  We stash the
+            # resolved config path in an env-var so that the factory can
+            # pick it up (ServerConfig already reads OPENVIKING_CONFIG_FILE).
+            uvicorn.run(
+                "openviking.server.app:create_app",
+                factory=True,
+                host=config.host,
+                port=config.port,
+                workers=workers,
+                log_config=None,
+            )
+        else:
+            uvicorn.run(app, host=config.host, port=config.port, log_config=None)
     finally:
         # Cleanup vikingbot process on shutdown
         if bot_process is not None:
