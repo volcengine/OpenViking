@@ -442,7 +442,7 @@ class AgentLoop:
             media=msg.media if msg.media else None,
             session_key=msg.session_key,
         )
-        # logger.info(f"New messages: {messages}")
+        logger.info(f"New messages: {messages}")
 
         # Run agent loop
         final_content, tools_used = await self._run_agent_loop(
