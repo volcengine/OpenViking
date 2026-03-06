@@ -312,9 +312,9 @@ class CMakeBuildExtension(build_ext):
 
 
 setup(
-    install_requires=[
-        f"pyagfs @ file://localhost/{os.path.abspath('third_party/agfs/agfs-sdk/python')}"
-    ],
+    # install_requires=[
+    #     f"pyagfs @ file://localhost/{os.path.abspath('third_party/agfs/agfs-sdk/python')}"
+    # ],
     ext_modules=[
         Extension(
             name="openviking.storage.vectordb.engine",

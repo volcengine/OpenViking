@@ -30,7 +30,7 @@ def create_agfs_client(agfs_config: Any) -> Any:
 
     if mode == "binding-client":
         # Import binding client if mode is binding-client
-        from pyagfs import AGFSBindingClient
+        from openviking.pyagfs import AGFSBindingClient
 
         if AGFSBindingClient is None:
             raise ImportError(
@@ -47,7 +47,7 @@ def create_agfs_client(agfs_config: Any) -> Any:
 
         # Check if binding library exists
         try:
-            from pyagfs.binding_client import _find_library
+            from openviking.pyagfs.binding_client import _find_library
 
             actual_lib_path = _find_library()
         except Exception:
@@ -56,7 +56,7 @@ def create_agfs_client(agfs_config: Any) -> Any:
             )
 
         client = AGFSBindingClient()
-        logger.debug(f"[AGFSUtils] Created AGFSBindingClient (lib_path={actual_lib_path})")
+        logger.info(f"[AGFSUtils] Created AGFSBindingClient (lib_path={actual_lib_path})")
 
         # Automatically mount backend for binding client
         mount_agfs_backend(client, agfs_config)
@@ -64,7 +64,7 @@ def create_agfs_client(agfs_config: Any) -> Any:
         return client
     else:
         # Default to http-client
-        from pyagfs import AGFSClient
+        from openviking.pyagfs import AGFSClient
 
         url = getattr(agfs_config, "url", "http://localhost:8080")
         timeout = getattr(agfs_config, "timeout", 10)
@@ -81,9 +81,8 @@ def mount_agfs_backend(agfs: Any, agfs_config: Any) -> None:
         agfs: AGFS client instance (HTTP or Binding).
         agfs_config: AGFS configuration object containing backend settings.
     """
-    from pyagfs import AGFSBindingClient
-
     from openviking.agfs_manager import AGFSManager
+    from openviking.pyagfs import AGFSBindingClient
 
     # Only binding-client needs manual mounting. HTTP server handles its own mounting.
     if AGFSBindingClient is None or not isinstance(agfs, AGFSBindingClient):

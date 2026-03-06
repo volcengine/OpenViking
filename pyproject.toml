@@ -46,7 +46,6 @@ dependencies = [
     "apscheduler>=3.11.0",
     "volcengine>=1.0.216",
     "volcengine-python-sdk[ark]>=5.0.3",
-    "pyagfs",
     "fastapi>=0.128.0",
     "uvicorn>=0.39.0",
     "xxhash>=3.0.0",

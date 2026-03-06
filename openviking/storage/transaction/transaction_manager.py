@@ -11,8 +11,7 @@ import threading
 import time
 from typing import Any, Dict, Optional
 
-from pyagfs import AGFSClient
-
+from openviking.pyagfs import AGFSClient
 from openviking.storage.transaction.path_lock import PathLock
 from openviking.storage.transaction.transaction_record import (
     TransactionRecord,
