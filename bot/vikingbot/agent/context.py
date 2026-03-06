@@ -5,6 +5,7 @@ import mimetypes
 import platform
 from pathlib import Path
 from typing import Any
+from loguru import logger
 
 from vikingbot.agent.memory import MemoryStore
 from vikingbot.agent.skills import SkillsLoader
@@ -102,20 +103,6 @@ class ContextBuilder:
                 )
         parts.append(session_context)
 
-        # Viking user profile
-        profile = await self.memory.get_viking_user_profile(
-            workspace_id=workspace_id, user_id=self._sender_id
-        )
-        if profile:
-            parts.append(f"## Current user's information\n{profile}")
-
-        # Viking agent memory
-        viking_memory = await self.memory.get_viking_memory_context(
-            current_message=current_message, workspace_id=workspace_id
-        )
-        if viking_memory:
-            parts.append(f"## Your memories. Using tools to read more details.\n{viking_memory}")
-
         # Bootstrap files
         bootstrap = self._load_bootstrap_files()
         if bootstrap:
@@ -144,15 +131,37 @@ Skills with available="false" need dependencies installed first - you can try in
 
 {skills_summary}""")
 
+        import time as _time
+        from datetime import datetime
+        now = datetime.now().strftime("%Y-%m-%d %H:%M (%A)")
+        tz = _time.strftime("%Z") or "UTC"
+        parts.append(f"## Current Time: {now} ({tz})")
+
+        # Viking user profile
+        start = _time.time()
+        profile = await self.memory.get_viking_user_profile(
+            workspace_id=workspace_id, user_id=self._sender_id
+        )
+        cost = round(_time.time() - start, 2)
+        logger.info(f"[READ_USER_PROFILE]: cost {cost}s, profile={profile[:50] if profile else 'None'}")
+        if profile:
+            parts.append(f"## Current user's information\n{profile}")
+
+        # Viking agent memory
+        start = _time.time()
+        viking_memory = await self.memory.get_viking_memory_context(
+            current_message=current_message, workspace_id=workspace_id
+        )
+        cost = round(_time.time() - start, 2)
+        logger.info(f"[READ_USER_MEMORY]: cost {cost}s, memory={viking_memory[:50] if viking_memory else 'None'}")
+        if viking_memory:
+            parts.append(f"## Your memories. Using tools to read more details.\n{viking_memory}")
+
         return "\n\n---\n\n".join(parts)
 
     async def _get_identity(self, session_key: SessionKey) -> str:
         """Get the core identity section."""
-        import time as _time
-        from datetime import datetime
 
-        now = datetime.now().strftime("%Y-%m-%d %H:%M (%A)")
-        tz = _time.strftime("%Z") or "UTC"
         workspace_path = str(self.workspace.expanduser().resolve())
         system = platform.system()
         runtime = f"{'macOS' if system == 'Darwin' else system} {platform.machine()}, Python {platform.python_version()}"
@@ -174,9 +183,6 @@ You have access to tools that allow you to:
 - Search the web and fetch web pages
 - Send messages to users on chat channels
 - Spawn subagents for complex background tasks
-
-## Current Time
-{now} ({tz})
 
 ## Runtime
 {runtime}
@@ -236,7 +242,7 @@ Always be helpful, accurate, and concise. When using tools, think step by step: 
         # System prompt
         system_prompt = await self.build_system_prompt(session_key, current_message, history)
         messages.append({"role": "system", "content": system_prompt})
-        # logger.debug(f"system_prompt: {system_prompt}")
+        logger.debug(f"system_prompt: {system_prompt}")
 
         # History
         if not self._eval:
