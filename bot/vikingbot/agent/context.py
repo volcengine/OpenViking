@@ -270,7 +270,7 @@ Always be helpful, accurate, and concise. When using tools, think step by step: 
 
         # User
         user_info = await self._build_user_memory(session_key, current_message, history)
-        # messages.append({"role": "system", "content": user_info})
+        messages.append({"role": "system", "content": user_info})
 
         return messages
 
