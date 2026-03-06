@@ -442,14 +442,22 @@ class VikingVectorIndexBackend:
         new_uri: str,
         new_parent_uri: str,
     ) -> bool:
+        # A directory URI may have multiple records (e.g. L0 abstract + L1 overview),
+        # so fetch and update all of them.
         records = await self.filter(
             filter=And([Eq("uri", uri), Eq("account_id", ctx.account_id)]),
-            limit=1,
+            limit=100,
         )
-        if not records or "id" not in records[0]:
+        if not records:
             return False
-        updated = {**records[0], "uri": new_uri, "parent_uri": new_parent_uri}
-        return bool(await self.upsert(updated))
+        success = False
+        for record in records:
+            if "id" not in record:
+                continue
+            updated = {**record, "uri": new_uri, "parent_uri": new_parent_uri}
+            if await self.upsert(updated):
+                success = True
+        return success
 
     async def increment_active_count(self, ctx: RequestContext, uris: List[str]) -> int:
         updated = 0

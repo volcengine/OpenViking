@@ -133,9 +133,23 @@ class AGFSManager:
                         "version": "1.0.0",
                     },
                 },
+                # TODO(multi-node): SQLite backend is single-node only. Each AGFS instance
+                # gets its own isolated queue.db under its own data_path, so messages
+                # enqueued on node A are invisible to node B. For multi-node deployments,
+                # switch backend to "tidb" or "mysql" so all nodes share the same queue.
+                #
+                # Additionally, the TiDB backend currently uses immediate soft-delete on
+                # Dequeue (no two-phase status='processing' transition), meaning there is
+                # no at-least-once guarantee: a worker crash loses the in-flight message.
+                # The TiDB backend's Ack() and RecoverStale() are both no-ops and must be
+                # implemented before it can be used safely in production.
                 "queuefs": {
                     "enabled": True,
                     "path": "/queue",
+                    "config": {
+                        "backend": "sqlite",
+                        "db_path": str(self.data_path / "_system" / "queue" / "queue.db"),
+                    },
                 },
             },
         }
@@ -196,6 +210,7 @@ class AGFSManager:
         self._check_port_available()
 
         self.vikingfs_path.mkdir(parents=True, exist_ok=True)
+        (self.data_path / "_system" / "queue").mkdir(parents=True, exist_ok=True)
         # NOTICE: should use viking://temp/ instead of self.vikingfs_path / "temp"
         # Create temp directory for Parser use
         # (self.vikingfs_path / "temp").mkdir(exist_ok=True)

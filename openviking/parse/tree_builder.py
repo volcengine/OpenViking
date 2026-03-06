@@ -163,9 +163,53 @@ class TreeBuilder:
         else:
             logger.info(f"[TreeBuilder] Finalizing from temp: {final_uri}")
 
-        # 4. Move directory tree from temp to final location in AGFS
-        await self._move_temp_to_dest(viking_fs, temp_doc_uri, final_uri, ctx=ctx)
-        logger.info(f"[TreeBuilder] Moved temp tree: {temp_doc_uri} -> {final_uri}")
+        # 4. Move directory tree from temp to final location in AGFS (transactional)
+        from openviking.storage.transaction import TransactionContext, get_transaction_manager
+
+        tx_manager = get_transaction_manager()
+        final_path = viking_fs._uri_to_path(final_uri, ctx=ctx)
+        # Lock parent directory (final_path doesn't exist yet)
+        parent_path = final_path.rsplit("/", 1)[0] if "/" in final_path else final_path
+
+        if tx_manager:
+            # Ensure parent directories exist before locking
+            await self._ensure_parent_dirs(final_uri, ctx=ctx)
+
+            async with TransactionContext(
+                tx_manager, "finalize_from_temp", [parent_path], lock_mode="point"
+            ) as tx:
+                # Move temp to final
+                seq = tx.record_undo("fs_write_new", {"uri": final_path})
+                await self._move_temp_to_dest(viking_fs, temp_doc_uri, final_uri, ctx=ctx)
+                tx.mark_completed(seq)
+                logger.info(f"[TreeBuilder] Moved temp tree: {temp_doc_uri} -> {final_uri}")
+
+                # Register semantic enqueue as post_action
+                tx.add_post_action(
+                    "enqueue_semantic",
+                    {
+                        "uri": final_uri,
+                        "context_type": "resource",
+                        "account_id": ctx.account_id,
+                        "user_id": ctx.user.user_id,
+                        "agent_id": ctx.user.agent_id,
+                        "role": ctx.role.value,
+                    },
+                )
+
+                await tx.commit()
+        else:
+            # Fallback: no transaction support
+            await self._move_temp_to_dest(viking_fs, temp_doc_uri, final_uri, ctx=ctx)
+            logger.info(f"[TreeBuilder] Moved temp tree: {temp_doc_uri} -> {final_uri}")
+
+            try:
+                await self._enqueue_semantic_generation(final_uri, "resource", ctx=ctx)
+                logger.info(f"[TreeBuilder] Enqueued semantic generation for: {final_uri}")
+            except Exception as e:
+                logger.error(
+                    f"[TreeBuilder] Failed to enqueue semantic generation: {e}", exc_info=True
+                )
 
         # 5. Cleanup temporary root directory
         try:
@@ -174,21 +218,13 @@ class TreeBuilder:
         except Exception as e:
             logger.warning(f"[TreeBuilder] Failed to cleanup temp root: {e}")
 
-        # 6. Enqueue to SemanticQueue for async semantic generation
-        if trigger_semantic:
-            try:
-                await self._enqueue_semantic_generation(final_uri, "resource", ctx=ctx)
-                logger.info(f"[TreeBuilder] Enqueued semantic generation for: {final_uri}")
-            except Exception as e:
-                logger.error(f"[TreeBuilder] Failed to enqueue semantic generation: {e}", exc_info=True)
-
-        # 7. Return simple BuildingTree (no scanning needed)
+        # 6. Return simple BuildingTree (no scanning needed)
         tree = BuildingTree(
             source_path=source_path,
             source_format=source_format,
         )
         tree._root_uri = final_uri
-        
+
         # Create a minimal Context object for the root so that tree.root is not None
         root_context = Context(uri=final_uri)
         tree.add_context(root_context)

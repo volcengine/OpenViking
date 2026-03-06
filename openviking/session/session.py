@@ -219,7 +219,14 @@ class Session:
         self._update_message_in_jsonl()
 
     def commit(self) -> Dict[str, Any]:
-        """Commit session: create archive, extract memories, persist."""
+        """Commit session: two-phase transaction with checkpoint.
+
+        Phase 1 (Archive): Lock session, write archive, clear messages, write checkpoint.
+        LLM call (no transaction): Extract long-term memories.
+        Phase 2 (Memory): Lock session, write memories + relations, update checkpoint.
+        """
+        from openviking.storage.transaction import get_transaction_manager
+
         result = {
             "session_id": self.session_id,
             "status": "committed",
@@ -231,7 +238,10 @@ class Session:
         if not self._messages:
             return result
 
-        # 1. Archive current messages
+        tx_manager = get_transaction_manager()
+        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
+
+        # ===== Phase 1: Archive =====
         self._compression.compression_index += 1
         messages_to_archive = self._messages.copy()
 
@@ -239,22 +249,35 @@ class Session:
         archive_abstract = self._extract_abstract_from_summary(summary)
         archive_overview = summary
 
-        self._write_archive(
-            index=self._compression.compression_index,
-            messages=messages_to_archive,
-            abstract=archive_abstract,
-            overview=archive_overview,
-        )
+        if tx_manager:
+            run_async(
+                self._phase1_archive_async(
+                    tx_manager,
+                    session_path,
+                    self._compression.compression_index,
+                    messages_to_archive,
+                    archive_abstract,
+                    archive_overview,
+                )
+            )
+        else:
+            self._write_archive(
+                index=self._compression.compression_index,
+                messages=messages_to_archive,
+                abstract=archive_abstract,
+                overview=archive_overview,
+            )
+            self._write_to_agfs(messages=[])
 
         self._compression.original_count += len(messages_to_archive)
         result["archived"] = True
-
         self._messages.clear()
         logger.info(
-            f"Archived: {len(messages_to_archive)} messages → history/archive_{self._compression.compression_index:03d}/"
+            f"Archived: {len(messages_to_archive)} messages → "
+            f"history/archive_{self._compression.compression_index:03d}/"
         )
 
-        # 2. Extract long-term memories
+        # ===== LLM call (no transaction) =====
         if self._session_compressor:
             logger.info(
                 f"Starting memory extraction from {len(messages_to_archive)} archived messages"
@@ -271,17 +294,18 @@ class Session:
             result["memories_extracted"] = len(memories)
             self._stats.memories_extracted += len(memories)
 
-        # 3. Write current messages to AGFS
-        self._write_to_agfs(self._messages)
+        # ===== Phase 2: Memory write =====
+        if tx_manager:
+            run_async(self._phase2_memory_async(tx_manager, session_path))
+        else:
+            self._write_to_agfs(self._messages)
+            self._write_relations()
 
-        # 4. Create relations
-        self._write_relations()
-
-        # 5. Update active_count
+        # Update active_count
         active_count_updated = self._update_active_counts()
         result["active_count_updated"] = active_count_updated
 
-        # 6. Update statistics
+        # Update statistics
         self._stats.compression_count = self._compression.compression_index
         result["stats"] = {
             "total_turns": self._stats.total_turns,
@@ -293,6 +317,58 @@ class Session:
         self._stats.total_tokens = 0
         logger.info(f"Session {self.session_id} committed")
         return result
+
+    async def _phase1_archive_async(
+        self,
+        tx_manager: Any,
+        session_path: str,
+        compression_index: int,
+        messages_to_archive: list,
+        archive_abstract: str,
+        archive_overview: str,
+    ) -> None:
+        """Phase 1 of commit: archive messages inside a transaction."""
+        from openviking.storage.transaction import TransactionContext
+
+        async with TransactionContext(
+            tx_manager, "session_archive", [session_path], lock_mode="point"
+        ) as tx:
+            seq = tx.record_undo("fs_write_new", {"uri": session_path})
+            self._write_archive(
+                index=compression_index,
+                messages=messages_to_archive,
+                abstract=archive_abstract,
+                overview=archive_overview,
+            )
+            self._write_to_agfs(messages=[])
+            self._write_checkpoint({"status": "archived", "archive_index": compression_index})
+            tx.mark_completed(seq)
+            await tx.commit()
+
+    async def _phase2_memory_async(self, tx_manager: Any, session_path: str) -> None:
+        """Phase 2 of commit: write memories inside a transaction."""
+        from openviking.storage.transaction import TransactionContext
+
+        async with TransactionContext(
+            tx_manager, "session_memory", [session_path], lock_mode="point"
+        ) as tx:
+            seq = tx.record_undo("fs_write_new", {"uri": session_path})
+            self._write_to_agfs(self._messages)
+            self._write_relations()
+            self._write_checkpoint({"status": "completed"})
+            tx.mark_completed(seq)
+            tx.add_post_action(
+                "enqueue_semantic",
+                {
+                    "uri": self._session_uri,
+                    "context_type": "memory",
+                    "account_id": self.ctx.account_id,
+                    "user_id": self.ctx.user.user_id,
+                    "agent_id": self.ctx.user.agent_id,
+                    "role": self.ctx.role.value,
+                },
+            )
+            await tx.commit()
 
     def _update_active_counts(self) -> int:
         """Update active_count for used contexts/skills."""
@@ -580,6 +656,39 @@ class Session:
                 logger.debug(f"Created relation: {self._session_uri} -> {usage.uri}")
             except Exception as e:
                 logger.warning(f"Failed to create relation to {usage.uri}: {e}")
+
+    def _write_checkpoint(self, data: Dict[str, Any]) -> None:
+        """Write a commit checkpoint file for crash recovery."""
+        if not self._viking_fs:
+            return
+
+        checkpoint = {
+            **data,
+            "session_id": self.session_id,
+            "compression_index": self._compression.compression_index,
+            "timestamp": get_current_timestamp(),
+        }
+        run_async(
+            self._viking_fs.write_file(
+                f"{self._session_uri}/.commit_checkpoint.json",
+                json.dumps(checkpoint, ensure_ascii=False),
+                ctx=self.ctx,
+            )
+        )
+
+    def _read_checkpoint(self) -> Optional[Dict[str, Any]]:
+        """Read commit checkpoint file if it exists."""
+        if not self._viking_fs:
+            return None
+        try:
+            content = run_async(
+                self._viking_fs.read_file(
+                    f"{self._session_uri}/.commit_checkpoint.json", ctx=self.ctx
+                )
+            )
+            return json.loads(content)
+        except Exception:
+            return None
 
     # ============= Properties =============
 

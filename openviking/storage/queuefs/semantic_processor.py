@@ -237,33 +237,56 @@ class SemanticProcessor(DequeueHandlerBase):
         file_paths: List[str],
     ) -> None:
         """Process single directory, generate .abstract.md and .overview.md."""
+        from openviking.storage.errors import LockAcquisitionError
+        from openviking.storage.transaction import TransactionContext, get_transaction_manager
+
         viking_fs = get_viking_fs()
+        dir_path = viking_fs._uri_to_path(uri, ctx=self._current_ctx)
 
-        # 1. Collect .abstract.md from subdirectories (already processed earlier)
-        children_abstracts = await self._collect_children_abstracts(children_uris)
-
-        # 2. Concurrently generate summaries for files in directory
-        file_summaries = await self._generate_file_summaries(
-            file_paths, context_type=context_type, parent_uri=uri, enqueue_files=True
-        )
-
-        # 3. Generate .overview.md (contains brief description)
-        overview = await self._generate_overview(uri, file_summaries, children_abstracts)
-
-        # 4. Extract abstract from overview
-        abstract = self._extract_abstract_from_overview(overview)
-
-        # 5. Write files
-        await viking_fs.write_file(f"{uri}/.overview.md", overview, ctx=self._current_ctx)
-        await viking_fs.write_file(f"{uri}/.abstract.md", abstract, ctx=self._current_ctx)
-
-        logger.debug(f"Generated overview and abstract for {uri}")
-
-        # 6. Vectorize directory
         try:
-            await self._vectorize_directory_simple(uri, context_type, abstract, overview)
-        except Exception as e:
-            logger.error(f"Failed to vectorize directory {uri}: {e}", exc_info=True)
+            async with TransactionContext(
+                get_transaction_manager(), "semantic", [dir_path], lock_mode="point"
+            ) as tx:
+                # 1. Collect .abstract.md from subdirectories
+                children_abstracts = await self._collect_children_abstracts(children_uris)
+
+                # 2. Generate file summaries (vectorize inline, not via enqueue)
+                file_summaries = await self._generate_file_summaries(
+                    file_paths, context_type=context_type, parent_uri=uri, enqueue_files=False
+                )
+
+                # 3. Generate .overview.md
+                overview = await self._generate_overview(uri, file_summaries, children_abstracts)
+
+                # 4. Extract abstract from overview
+                abstract = self._extract_abstract_from_overview(overview)
+
+                # 5. Write files
+                await viking_fs.write_file(f"{uri}/.overview.md", overview, ctx=self._current_ctx)
+                await viking_fs.write_file(f"{uri}/.abstract.md", abstract, ctx=self._current_ctx)
+
+                logger.debug(f"Generated overview and abstract for {uri}")
+
+                # 6. Vectorize directory and files (all inside the lock)
+                try:
+                    await self._vectorize_directory_simple(uri, context_type, abstract, overview)
+                except Exception as e:
+                    logger.error(f"Failed to vectorize directory {uri}: {e}", exc_info=True)
+
+                for fp, summary in zip(file_paths, file_summaries):
+                    try:
+                        await self._vectorize_single_file(
+                            parent_uri=uri,
+                            context_type=context_type,
+                            file_path=fp,
+                            summary_dict=summary,
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to vectorize file {fp}: {e}", exc_info=True)
+
+                await tx.commit()
+        except LockAcquisitionError:
+            logger.info(f"[SemanticProcessor] {uri} does not exist or is locked, skipping")
 
     async def _collect_children_abstracts(self, children_uris: List[str]) -> List[Dict[str, str]]:
         """Collect .abstract.md from subdirectories."""

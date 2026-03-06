@@ -238,6 +238,9 @@ class SemanticDagExecutor:
         return results
 
     async def _overview_task(self, dir_uri: str) -> None:
+        from openviking.storage.errors import LockAcquisitionError
+        from openviking.storage.transaction import TransactionContext, get_transaction_manager
+
         node = self._nodes.get(dir_uri)
         if not node:
             return
@@ -246,26 +249,30 @@ class SemanticDagExecutor:
             file_summaries = self._finalize_file_summaries(node)
             children_abstracts = self._finalize_children_abstracts(node)
 
-        try:
-            async with self._llm_sem:
-                overview = await self._processor._generate_overview(
-                    dir_uri, file_summaries, children_abstracts
-                )
-            abstract = self._processor._extract_abstract_from_overview(overview)
+        abstract = ""
+        dir_path = self._viking_fs._uri_to_path(dir_uri, ctx=self._ctx)
 
-            try:
+        try:
+            async with TransactionContext(
+                get_transaction_manager(), "semantic_dag", [dir_path], lock_mode="point"
+            ) as tx:
+                async with self._llm_sem:
+                    overview = await self._processor._generate_overview(
+                        dir_uri, file_summaries, children_abstracts
+                    )
+                abstract = self._processor._extract_abstract_from_overview(overview)
                 await self._viking_fs.write_file(f"{dir_uri}/.overview.md", overview, ctx=self._ctx)
                 await self._viking_fs.write_file(f"{dir_uri}/.abstract.md", abstract, ctx=self._ctx)
-            except Exception as e:
-                logger.warning(f"Failed to write overview/abstract for {dir_uri}: {e}")
-
-            try:
-                await self._processor._vectorize_directory_simple(
-                    dir_uri, self._context_type, abstract, overview, ctx=self._ctx
-                )
-            except Exception as e:
-                logger.error(f"Failed to vectorize directory {dir_uri}: {e}", exc_info=True)
-
+                try:
+                    await self._processor._vectorize_directory_simple(
+                        dir_uri, self._context_type, abstract, overview, ctx=self._ctx
+                    )
+                except Exception as e:
+                    logger.error(f"Failed to vectorize directory {dir_uri}: {e}", exc_info=True)
+                await tx.commit()
+        except LockAcquisitionError:
+            logger.info(f"[SemanticDag] {dir_uri} does not exist or is locked, skipping")
+            abstract = ""
         except Exception as e:
             logger.error(f"Failed to generate overview for {dir_uri}: {e}", exc_info=True)
             abstract = ""
