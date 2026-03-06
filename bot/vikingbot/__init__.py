@@ -1,7 +1,6 @@
 """
 vikingbot - A lightweight AI agent framework
 """
-
 import warnings
 
 __version__ = "0.1.3"
