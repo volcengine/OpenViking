@@ -12,11 +12,10 @@ from vikingbot.agent.memory import MemoryStore
 from vikingbot.agent.subagent import SubagentManager
 from vikingbot.agent.tools import register_default_tools
 from vikingbot.agent.tools.registry import ToolRegistry
-from vikingbot.bus.events import InboundMessage, OutboundMessage, OutboundEventType
+from vikingbot.bus.events import InboundMessage, OutboundEventType, OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.config import load_config
-from vikingbot.config.schema import Config
-from vikingbot.config.schema import SessionKey
+from vikingbot.config.schema import Config, SessionKey
 from vikingbot.hooks import HookContext
 from vikingbot.hooks.manager import hook_manager
 from vikingbot.providers.base import LLMProvider
@@ -385,11 +384,31 @@ class AgentLoop:
         else:
             cmd = msg.content.strip().lower()
         if cmd == "/new":
-            await self._consolidate_memory(session, archive_all=True)
+            # Copy old messages for background memory consolidation
+            old_messages = list(session.messages) if session.messages else []
+            # Sync: immediately clear and save session to avoid race conditions
             session.clear()
             await self.sessions.save(session)
+
+            # Async: run memory consolidation in background
+            if old_messages:
+                async def background_task():
+                    try:
+                        # Call the consolidation method directly with the old messages
+                        await self._consolidate_memory(
+                            old_messages,
+                            archive_all=True,
+                            keep_count=0,
+                            session_key=session.key
+                        )
+                        logger.info(f"Background memory consolidation done for {session.key}")
+                    except Exception as e:
+                        logger.exception(f"Background memory consolidation failed: {e}")
+
+                asyncio.create_task(background_task())
+
             return OutboundMessage(
-                session_key=msg.session_key, content="🐈 New session started. Memory consolidated."
+                session_key=msg.session_key, content="🐈 New session started. Memory being consolidated in background."
             )
         if cmd == "/help":
             return OutboundMessage(
@@ -399,7 +418,29 @@ class AgentLoop:
 
         # Consolidate memory before processing if session is too large
         if len(session.messages) > self.memory_window:
-            await self._consolidate_memory(session)
+            # Calculate messages to consolidate and keep
+            keep_count = min(10, max(2, self.memory_window // 2))
+            old_messages = list(session.messages[:-keep_count]) if keep_count else list(session.messages)
+
+            # Sync: immediately trim and save session to avoid race conditions
+            session.messages = session.messages[-keep_count:] if keep_count else []
+            await self.sessions.save(session)
+
+            # Async: run memory consolidation in background
+            if old_messages:
+                async def background_task():
+                    try:
+                        await self._consolidate_memory(
+                            old_messages,
+                            archive_all=False,
+                            keep_count=keep_count,
+                            session_key=session.key
+                        )
+                        logger.info(f"Background memory consolidation done for {session.key}")
+                    except Exception as e:
+                        logger.exception(f"Background memory consolidation failed: {e}")
+
+                asyncio.create_task(background_task())
 
         if self.sandbox_manager:
             message_workspace = self.sandbox_manager.get_workspace_path(session_key)
@@ -489,39 +530,67 @@ class AgentLoop:
 
         return OutboundMessage(session_key=msg.session_key, content=final_content)
 
-    async def _consolidate_memory(self, session, archive_all: bool = False) -> None:
-        """Consolidate old messages into MEMORY.md + HISTORY.md, then trim session."""
-        if not session.messages:
+    async def _consolidate_memory(self, session_or_messages, archive_all: bool = False, keep_count: int = 0, session_key = None) -> None:
+        """Consolidate old messages into MEMORY.md + HISTORY.md.
+
+        Args:
+            session_or_messages: Either a Session object or a list of messages to consolidate
+            archive_all: If True, archive all messages (used for /new command)
+            keep_count: Number of messages to keep (only used when session_or_messages is a list)
+            session_key: Session key (required when session_or_messages is a list)
+        """
+        from vikingbot.session.manager import Session
+
+        # Determine if we're working with a session or just messages
+        is_session = not isinstance(session_or_messages, list)
+        if is_session:
+            session = session_or_messages
+            messages = session.messages
+            if not messages:
+                return
+            if archive_all:
+                old_messages = messages
+                keep_count = 0
+            else:
+                keep_count = min(10, max(2, self.memory_window // 2))
+                old_messages = messages[:-keep_count]
+            current_session_key = session.key
+            hook_session = session
+        else:
+            old_messages = session_or_messages
+            current_session_key = session_key
+            if not old_messages:
+                return
+            # Create a temporary Session object for hooks
+            hook_session = Session(
+                key=current_session_key,
+                messages=list(old_messages)
+            )
+
+        if not old_messages:
             return
+
+        logger.info(
+            f"Memory consolidation started: archiving {len(old_messages)} messages"
+        )
 
         # use openviking tools to extract memory
         await hook_manager.execute_hooks(
             context=HookContext(
                 event_type="message.compact",
-                session_id=session.key.safe_name(),
-                workspace_id=self.sandbox_manager.to_workspace_id(session.key),
-                session_key=session.key,
+                session_id=current_session_key.safe_name(),
+                workspace_id=self.sandbox_manager.to_workspace_id(current_session_key),
+                session_key=current_session_key,
             ),
-            session=session,
+            session=hook_session,
         )
 
         if self.sandbox_manager:
-            memory_workspace = self.sandbox_manager.get_workspace_path(session.key)
+            memory_workspace = self.sandbox_manager.get_workspace_path(current_session_key)
         else:
             memory_workspace = self.workspace
 
         memory = MemoryStore(memory_workspace)
-        if archive_all:
-            old_messages = session.messages
-            keep_count = 0
-        else:
-            keep_count = min(10, max(2, self.memory_window // 2))
-            old_messages = session.messages[:-keep_count]
-        if not old_messages:
-            return
-        logger.info(
-            f"Memory consolidation started: {len(session.messages)} messages, archiving {len(old_messages)}, keeping {keep_count}"
-        )
 
         # Format messages for LLM (include tool names when available)
         lines = []
@@ -566,7 +635,7 @@ Respond with ONLY valid JSON, no markdown fences."""
                     {"role": "user", "content": prompt},
                 ],
                 model=self.model,
-                session_id=session.key.safe_name(),
+                session_id=current_session_key.safe_name(),
             )
             text = (response.content or "").strip()
             if text.startswith("```"):
@@ -579,10 +648,9 @@ Respond with ONLY valid JSON, no markdown fences."""
                 if load_config().use_local_memory and update != current_memory:
                     memory.write_long_term(update)
 
-            session.messages = session.messages[-keep_count:] if keep_count else []
-            await self.sessions.save(session)
+            # Session trimming and saving is now handled by the caller before calling _consolidate_memory
             logger.info(
-                f"Memory consolidation done, session trimmed to {len(session.messages)} messages"
+                "Memory consolidation done"
             )
         except Exception as e:
             logger.exception(f"Memory consolidation failed: {e}")
