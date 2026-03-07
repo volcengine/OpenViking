@@ -2,9 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 """Sessions endpoints for OpenViking HTTP Server."""
 
+import asyncio
+import logging
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, Path
+from fastapi import APIRouter, Depends, Path, Query
 from pydantic import BaseModel, model_validator
 
 from openviking.message.part import TextPart, part_from_dict
@@ -14,6 +16,7 @@ from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
+logger = logging.getLogger(__name__)
 
 
 class TextPartRequest(BaseModel):
@@ -141,12 +144,46 @@ async def delete_session(
 @router.post("/{session_id}/commit")
 async def commit_session(
     session_id: str = Path(..., description="Session ID"),
+    wait: bool = Query(
+        True,
+        description="If False, commit runs in background and returns immediately",
+    ),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Commit a session (archive and extract memories)."""
+    """Commit a session (archive and extract memories).
+
+    When wait=False, the commit is processed in the background.
+    This is useful for avoiding blocking when the commit involves
+    LLM calls for memory extraction.
+    """
     service = get_service()
-    result = await service.sessions.commit(session_id, _ctx)
-    return Response(status="ok", result=result)
+    if wait:
+        result = await service.sessions.commit_async(session_id, _ctx)
+        return Response(status="ok", result=result)
+
+    asyncio.create_task(_background_commit(service, session_id, _ctx))
+    return Response(
+        status="ok",
+        result={
+            "session_id": session_id,
+            "status": "accepted",
+            "message": "Commit is processing in the background",
+        },
+    )
+
+
+async def _background_commit(service, session_id: str, ctx: RequestContext) -> None:
+    """Run session commit in background."""
+    try:
+        result = await service.sessions.commit_async(session_id, ctx)
+        memories = result.get("memories_extracted", 0)
+        logger.info(
+            "Background commit completed: session=%s, memories=%d",
+            session_id,
+            memories,
+        )
+    except Exception:
+        logger.exception("Background commit failed: session=%s", session_id)
 
 
 @router.post("/{session_id}/extract")
