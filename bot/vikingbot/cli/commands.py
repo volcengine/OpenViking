@@ -25,7 +25,7 @@ from vikingbot import __logo__, __version__
 from vikingbot.agent.loop import AgentLoop
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.manager import ChannelManager
-from vikingbot.config.loader import ensure_config, get_config_path, get_data_dir, load_config
+from vikingbot.config.loader import ensure_config, get_config_path, get_data_dir, load_config, save_init_config
 from vikingbot.config.schema import SessionKey
 from vikingbot.cron.service import CronService
 from vikingbot.cron.types import CronJob
@@ -193,6 +193,30 @@ def main(
 ):
     """vikingbot - Personal AI Assistant."""
     pass
+
+@app.command()
+def onboard():
+    """Initialize vikingbot configuration and workspace."""
+    from vikingbot.config.loader import get_config_path, save_config
+    from vikingbot.config.schema import Config
+
+    config_path = get_config_path()
+
+    if config_path.exists():
+        console.print(f"[yellow]Config already exists at {config_path}[/yellow]")
+        if not typer.confirm("Overwrite?"):
+            raise typer.Exit()
+
+    # Create default config
+    config = Config()
+    save_init_config(config)
+    console.print(f"[green]✓[/green] Created config at {config_path}")
+
+    console.print(f"\n{__logo__} vikingbot is ready!")
+    console.print("\nNext steps:")
+    console.print("  1. Add your API key to [cyan]~/.openviking/ov.conf[/cyan]")
+    console.print("     Get one at: https://openrouter.ai/keys")
+    console.print("  2. Chat: [cyan]vikingbot agent -m \"Hello!\"[/cyan]")
 
 
 def _make_provider(config, langfuse_client: None = None):
