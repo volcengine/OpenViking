@@ -63,9 +63,12 @@ enum Commands {
     AddResource {
         /// Local path or URL to import
         path: String,
-        /// Target URI
+        /// Exact target URI (must not exist yet) (cannot be used with --parent)
         #[arg(long)]
         to: Option<String>,
+        /// Target parent URI (must already exist and be a directory) (cannot be used with --to)
+        #[arg(long)]
+        parent: Option<String>,
         /// Reason for import
         #[arg(long, default_value = "")]
         reason: String,
@@ -495,6 +498,7 @@ async fn main() {
         Commands::AddResource {
             path,
             to,
+            parent,
             reason,
             instruction,
             wait,
@@ -508,6 +512,7 @@ async fn main() {
             handle_add_resource(
                 path,
                 to,
+                parent,
                 reason,
                 instruction,
                 wait,
@@ -622,6 +627,7 @@ async fn main() {
 async fn handle_add_resource(
     mut path: String,
     to: Option<String>,
+    parent: Option<String>,
     reason: String,
     instruction: String,
     wait: bool,
@@ -663,7 +669,13 @@ async fn handle_add_resource(
         }
         path = unescaped_path;
     }
-    
+
+    // Check that only one of --to or --parent is set
+    if to.is_some() && parent.is_some() {
+        eprintln!("Error: Cannot specify both --to and --parent at the same time.");
+        std::process::exit(1);
+    }
+
     let strict = !no_strict;
     let directly_upload_media = !no_directly_upload_media;
 
@@ -672,6 +684,7 @@ async fn handle_add_resource(
         &client,
         &path,
         to,
+        parent,
         reason,
         instruction,
         wait,

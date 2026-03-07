@@ -100,8 +100,8 @@ class ResourceProcessor:
         instruction: str = "",
         scope: str = "resources",
         user: Optional[str] = None,
-        target: Optional[str] = None,
-        build_index: bool = True,
+        to: Optional[str] = None,
+        parent: Optional[str] = None,
         summarize: bool = False,
         **kwargs,
     ) -> Dict[str, Any]:
@@ -163,15 +163,7 @@ class ResourceProcessor:
         # - temp_dir_path: Temporary directory path (Parser wrote all files)
         # - source_path, source_format
 
-        # ============ Phase 2: Determine target location ============
-        located_uri = None
-        if target:
-            if target.startswith("viking://"):
-                located_uri = target
-            else:
-                located_uri = f"viking://resources/{target}"
-            logger.info(f"Using target location: {located_uri}")
-
+        # ============ Phase 2: Pass to and parent directly to TreeBuilder ============
         # ============ Phase 3: TreeBuilder finalizes from temp (scan + move to AGFS) ============
         try:
             with get_viking_fs().bind_request_context(ctx):
@@ -179,7 +171,8 @@ class ResourceProcessor:
                     temp_dir_path=parse_result.temp_dir_path,
                     ctx=ctx,
                     scope=scope,
-                    base_uri=located_uri,
+                    to_uri=to,
+                    parent_uri=parent,
                     source_path=parse_result.source_path,
                     source_format=parse_result.source_format,
                 )
@@ -199,6 +192,7 @@ class ResourceProcessor:
             return result
 
         # ============ Phase 4: Optional Steps ============
+        build_index = kwargs.get("build_index", True)
         if summarize:
             # Explicit summarization request.
             # If build_index is ALSO True, we want vectorization.

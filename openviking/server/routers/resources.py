@@ -14,6 +14,7 @@ from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
+from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.utils.config.open_viking_config import get_openviking_config
 
 router = APIRouter(prefix="/api/v1", tags=["resources"])
@@ -24,7 +25,8 @@ class AddResourceRequest(BaseModel):
 
     path: Optional[str] = None
     temp_path: Optional[str] = None
-    target: Optional[str] = None
+    to: Optional[str] = None
+    parent: Optional[str] = None
     reason: str = ""
     instruction: str = ""
     wait: bool = False
@@ -95,16 +97,23 @@ async def add_resource(
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Add resource to OpenViking."""
+    # Validate request: only one of 'to' or 'parent' can be set
+    if request.to and request.parent:
+        raise InvalidArgumentError("Cannot specify both 'to' and 'parent' at the same time.")
+
     service = get_service()
 
     path = request.path
     if request.temp_path:
         path = request.temp_path
+    if path is None:
+        raise InvalidArgumentError("Either 'path' or 'temp_path' must be provided.")
 
     result = await service.resources.add_resource(
         path=path,
         ctx=_ctx,
-        target=request.target,
+        to=request.to,
+        parent=request.parent,
         reason=request.reason,
         instruction=request.instruction,
         wait=request.wait,

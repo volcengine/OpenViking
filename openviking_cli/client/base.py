@@ -33,8 +33,8 @@ class BaseClient(ABC):
     async def add_resource(
         self,
         path: str,
-        target: Optional[str] = None,
-        reason: str = "",
+        to: Optional[str] = None,
+        parent: Optional[str] = None,
         instruction: str = "",
         wait: bool = False,
         timeout: Optional[float] = None,
