@@ -276,6 +276,19 @@ function updateConnectionHint() {
     : "No API key in session.";
 }
 
+function truncateText(value, maxLength = 4000) {
+  const text = String(value || "");
+  if (text.length <= maxLength) {
+    return text;
+  }
+  return `${text.slice(0, maxLength)}\n... (truncated, ${text.length} chars total)`;
+}
+
+function isJsonLikeContentType(contentType) {
+  const value = (contentType || "").toLowerCase();
+  return value.includes("application/json") || value.includes("+json");
+}
+
 async function callConsole(path, options = {}) {
   const headers = {
     ...(options.headers || {}),
@@ -290,24 +303,61 @@ async function callConsole(path, options = {}) {
     headers["X-API-Key"] = apiKey;
   }
 
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers,
-  });
+  let response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`NETWORK_ERROR: ${message}`);
+  }
 
-  const payload = await response.json().catch(() => ({
-    status: "error",
-    error: {
-      code: "BAD_RESPONSE",
-      message: "Invalid JSON response from console",
-    },
-  }));
+  const contentType = response.headers.get("content-type") || "";
+  const status = response.status;
+
+  let payload = null;
+  let rawText = "";
+
+  if (status === 204 || status === 205) {
+    payload = { status: "ok", result: null };
+  } else if (isJsonLikeContentType(contentType)) {
+    const clone = response.clone();
+    try {
+      payload = await response.json();
+    } catch (_error) {
+      rawText = await clone.text().catch(() => "");
+      payload = response.ok
+        ? { status: "ok", result: rawText }
+        : {
+            status: "error",
+            error: {
+              code: "BAD_RESPONSE",
+              message: "Invalid JSON response from console",
+              detail: truncateText(rawText, 2000),
+            },
+          };
+    }
+  } else {
+    rawText = await response.text().catch(() => "");
+    payload = response.ok
+      ? { status: "ok", result: rawText }
+      : {
+          status: "error",
+          error: {
+            code: "HTTP_ERROR",
+            message: rawText ? truncateText(rawText, 2000) : `Request failed with status ${status}`,
+          },
+        };
+  }
 
   if (!response.ok) {
-    const code = payload.error?.code || "ERROR";
-    const message = payload.error?.message || `Request failed with status ${response.status}`;
+    const code = payload?.error?.code || "ERROR";
+    const message =
+      payload?.error?.message || `Request failed with status ${response.status} ${response.statusText}`;
     const missingApiKey =
-      code === "UNAUTHENTICATED" && message.toLowerCase().includes("missing api key");
+      code === "UNAUTHENTICATED" && String(message).toLowerCase().includes("missing api key");
     const hint = missingApiKey ? " Please go to Settings and set X-API-Key." : "";
     throw new Error(`${code}: ${message}${hint}`);
   }

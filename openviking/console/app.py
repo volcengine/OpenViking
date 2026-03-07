@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
@@ -29,6 +30,17 @@ _ALLOWED_FORWARD_HEADERS = {
     "content-type",
 }
 
+_ALLOWED_FORWARD_RESPONSE_HEADERS = {
+    # Content negotiation / caching / downloads
+    "content-type",
+    "content-disposition",
+    "cache-control",
+    "etag",
+    "last-modified",
+    # Observability
+    "x-request-id",
+}
+
 
 def _error_response(status_code: int, code: str, message: str, details: Optional[dict] = None):
     return JSONResponse(
@@ -48,6 +60,14 @@ def _copy_forward_headers(request: Request) -> dict[str, str]:
     headers: dict[str, str] = {}
     for key, value in request.headers.items():
         if key.lower() in _ALLOWED_FORWARD_HEADERS:
+            headers[key] = value
+    return headers
+
+
+def _copy_forward_response_headers(upstream_response: httpx.Response) -> dict[str, str]:
+    headers: dict[str, str] = {}
+    for key, value in upstream_response.headers.items():
+        if key.lower() in _ALLOWED_FORWARD_RESPONSE_HEADERS:
             headers[key] = value
     return headers
 
@@ -76,6 +96,7 @@ async def _forward_request(request: Request, upstream_path: str) -> Response:
         content=upstream_response.content,
         status_code=upstream_response.status_code,
         media_type=content_type,
+        headers=_copy_forward_response_headers(upstream_response),
     )
 
 
@@ -261,10 +282,20 @@ def create_console_app(
     static_dir = Path(__file__).resolve().parent / "static"
     index_file = static_dir / "index.html"
 
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        try:
+            yield
+        finally:
+            client: httpx.AsyncClient = app.state.upstream_client
+            if not client.is_closed:
+                await client.aclose()
+
     app = FastAPI(
         title="OpenViking Console",
         description="Standalone console for OpenViking HTTP APIs",
         version="0.1.0",
+        lifespan=lifespan,
     )
 
     app.state.console_config = config
@@ -279,7 +310,8 @@ def create_console_app(
         allow_origins=config.cors_origins,
         allow_methods=["*"],
         allow_headers=["*"],
-        allow_credentials=True,
+        # Avoid invalid/unsafe combination: allow_credentials + wildcard origin.
+        allow_credentials=("*" not in config.cors_origins),
     )
 
     app.include_router(_create_proxy_router())
@@ -301,7 +333,16 @@ def create_console_app(
         if path.startswith("api/"):
             return _error_response(status_code=404, code="NOT_FOUND", message="Not found")
 
-        requested_file = static_dir / path
+        # Prevent directory traversal (e.g. /console/%2e%2e/...)
+        static_root = static_dir.resolve()
+        try:
+            requested_file = (static_dir / path).resolve()
+        except OSError:
+            return _error_response(status_code=404, code="NOT_FOUND", message="Not found")
+
+        if not requested_file.is_relative_to(static_root):
+            return _error_response(status_code=404, code="NOT_FOUND", message="Not found")
+
         if requested_file.exists() and requested_file.is_file():
             return FileResponse(requested_file)
         return FileResponse(index_file)

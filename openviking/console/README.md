@@ -14,10 +14,10 @@ It is not wired into release packaging or CLI commands.
 ## Quick start
 
 1. Start OpenViking server (default: `http://127.0.0.1:1933`)
-2. Start this console example:
+2. Start the console service:
 
 ```bash
-python examples/console/run_console.py \
+python -m openviking.console.run_console \
   --host 127.0.0.1 \
   --port 8020 \
   --openviking-url http://127.0.0.1:1933
@@ -48,10 +48,9 @@ start with `--write-enabled`.
 Example:
 
 ```bash
-python examples/console/run_console.py \
+python -m openviking.console.run_console \
   --host 127.0.0.1 \
   --port 8020 \
   --openviking-url http://127.0.0.1:1933 \
   --write-enabled
 ```
-
