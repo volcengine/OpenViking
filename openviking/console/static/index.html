@@ -22,6 +22,7 @@
             UI Ready
           </span>
           <span id="writeBadge" class="badge">Readonly</span>
+          <button id="resultToggleBtn" class="topbar-result-toggle" type="button">Hide Result</button>
           <div class="theme-toggle" role="group" aria-label="Theme mode">
             <button type="button" class="theme-btn" data-theme-mode="system" aria-pressed="false">System</button>
             <button type="button" class="theme-btn" data-theme-mode="dark" aria-pressed="false">Dark</button>
@@ -58,18 +59,9 @@
 
         <main class="content-area">
           <section class="content">
-            <div class="content-header tabs-top">
-              <div class="title-block">
-                <h1>OpenViking Operations Console</h1>
-                <p class="subtitle">Inspect resources, manage tenants, and check runtime state from one place.</p>
-              </div>
-              <button id="resultToggleBtn" class="ghost" type="button">Hide Result</button>
-            </div>
-
             <div class="panel-stack">
               <section id="panel-filesystem" class="panel active">
                 <h2>FileSystem</h2>
-                <p class="panel-subtitle">Browse viking:// paths.</p>
                 <div class="fs-toolbar">
                   <div class="fs-toolbar-nav">
                     <button id="fsBackBtn" class="ghost fs-nav-btn" title="Back">←</button>
@@ -121,11 +113,20 @@
 
               <section id="panel-find" class="panel">
                 <h2>Find</h2>
-                <p class="panel-subtitle">Run semantic find against a scope and inspect matched results.</p>
-                <label for="findQuery">Query</label>
-                <input id="findQuery" type="text" placeholder="Search query" />
-                <label for="findTarget">Target URI (optional)</label>
-                <input id="findTarget" type="text" placeholder="viking://resources/" />
+                <div class="find-controls">
+                  <div class="find-field find-field-query">
+                    <label for="findQuery">Query</label>
+                    <input id="findQuery" type="text" placeholder="Search query" />
+                  </div>
+                  <div class="find-field">
+                    <label for="findTarget">Target URI (optional)</label>
+                    <input id="findTarget" type="text" placeholder="viking://resources/" />
+                  </div>
+                  <div class="find-field find-field-limit">
+                    <label for="findLimit">Limit</label>
+                    <input id="findLimit" type="number" min="1" step="1" placeholder="10" />
+                  </div>
+                </div>
                 <button id="findBtn">Run Find</button>
                 <div class="find-table-wrap">
                   <table class="find-table">
@@ -137,11 +138,35 @@
 
               <section id="panel-add-resource" class="panel">
                 <h2>Add Resource</h2>
-                <p class="panel-subtitle">Submit add-resource with local path or upload a file first.</p>
-                <label for="addResourcePath">Path on OpenViking server (optional)</label>
-                <input id="addResourcePath" type="text" placeholder="/abs/path/on/server/or/dir" />
-                <label for="addResourceFile">Upload file for temp path (optional)</label>
-                <input id="addResourceFile" type="file" />
+                <div class="add-resource-mode-toggle" role="tablist" aria-label="Add Resource input mode">
+                  <button
+                    id="addResourceModePathBtn"
+                    class="active"
+                    type="button"
+                    role="tab"
+                    aria-selected="true"
+                    aria-controls="addResourcePathPane"
+                  >
+                    Path
+                  </button>
+                  <button
+                    id="addResourceModeUploadBtn"
+                    type="button"
+                    role="tab"
+                    aria-selected="false"
+                    aria-controls="addResourceUploadPane"
+                  >
+                    Upload
+                  </button>
+                </div>
+                <div id="addResourcePathPane" class="add-resource-input-pane" role="tabpanel">
+                  <label for="addResourcePath">Path on OpenViking server</label>
+                  <input id="addResourcePath" type="text" placeholder="/abs/path/on/server/or/dir" />
+                </div>
+                <div id="addResourceUploadPane" class="add-resource-input-pane" role="tabpanel" hidden>
+                  <label for="addResourceFile">Upload file for temp path</label>
+                  <input id="addResourceFile" type="file" />
+                </div>
                 <label for="addResourceTarget">Target URI (optional)</label>
                 <input id="addResourceTarget" type="text" placeholder="viking://resources/" />
                 <div class="row wrap checks">
@@ -175,15 +200,13 @@
                   placeholder="How should OpenViking process this resource?"
                 ></textarea>
                 <div class="row wrap">
-                  <button id="addResourceBtn">Add by Path</button>
-                  <button id="addResourceUploadBtn" class="ghost">Upload &amp; Add</button>
+                  <button id="addResourceSubmitBtn">Add Resource</button>
                 </div>
-                <p class="muted">Use either path or upload. Result panel will show backend response.</p>
+                <p class="muted">Use the tabs to choose either a server path or a local upload. Result panel will show backend response.</p>
               </section>
 
               <section id="panel-add-memory" class="panel">
                 <h2>Add Memory</h2>
-                <p class="panel-subtitle">Store text or conversations as persistent memories.</p>
                 <label for="addMemoryInput">Content</label>
                 <textarea
                   id="addMemoryInput"
@@ -195,7 +218,6 @@
 
               <section id="panel-tenants" class="panel">
                 <h2>Tenants</h2>
-                <p class="panel-subtitle">Manage accounts and users with guarded write operations.</p>
                 <div class="tenant-layout">
                   <section class="tenant-pane">
                     <div class="tenant-pane-head">
@@ -208,7 +230,7 @@
                     <div class="row tenant-inline-form">
                       <input id="tenantCreateAccountId" type="text" placeholder="new account_id" />
                       <input id="tenantCreateAdminUserId" type="text" value="admin" placeholder="first admin user_id" />
-                      <button id="tenantCreateAccountBtn" class="danger" data-tenant-write>Create</button>
+                      <button id="tenantCreateAccountBtn" class="tenant-create-btn" data-tenant-write>Create</button>
                     </div>
                     <div class="tenant-table-wrap">
                       <table class="tenant-table">
@@ -287,7 +309,6 @@
 
               <section id="panel-monitor" class="panel">
                 <h2>Monitor</h2>
-                <p class="panel-subtitle">Check runtime status and observer health snapshots.</p>
                 <div class="row">
                   <button id="systemBtn">System Status</button>
                   <button id="observerBtn">Observer(System)</button>
@@ -297,9 +318,6 @@
 
               <section id="panel-settings" class="panel">
                 <h2>Settings</h2>
-                <p class="panel-subtitle">
-                  Configure console session values and set X-API-Key used by all API requests.
-                </p>
                 <label for="apiKeyInput">X-API-Key</label>
                 <input id="apiKeyInput" type="password" placeholder="Paste key for this browser session" />
                 <div class="row">
@@ -317,7 +335,7 @@
                 <h2>Result</h2>
                 <button id="clearOutputBtn" class="ghost" type="button">Clear</button>
               </div>
-              <pre id="output">Ready.</pre>
+              <pre id="output"></pre>
             </section>
           </section>
         </main>

@@ -2,38 +2,7 @@ const API_BASE = "/console/api/v1";
 const SESSION_KEY = "ov_console_api_key";
 const THEME_MODE_KEY = "ov_console_theme_mode";
 const NAV_COLLAPSED_KEY = "ov_console_nav_collapsed";
-const RESULT_COLLAPSED_KEY = "ov_console_result_collapsed";
-
-const PANEL_META = {
-  filesystem: {
-    title: "FileSystem",
-    subtitle: "Browse viking:// paths.",
-  },
-  find: {
-    title: "Find",
-    subtitle: "Run semantic retrieval and inspect matched records.",
-  },
-  "add-resource": {
-    title: "Add Resource",
-    subtitle: "Submit path or upload data into viking:// resources.",
-  },
-  "add-memory": {
-    title: "Add Memory",
-    subtitle: "Store text or conversations as persistent memories.",
-  },
-  tenants: {
-    title: "Tenants",
-    subtitle: "Manage accounts and users with explicit write confirmation.",
-  },
-  monitor: {
-    title: "Monitor",
-    subtitle: "Inspect runtime and observer status snapshots.",
-  },
-  settings: {
-    title: "Settings",
-    subtitle: "Configure session credentials and connection behavior.",
-  },
-};
+const RESULT_COLLAPSED_KEY = "ov_console_result_collapsed_v2";
 
 const state = {
   activePanel: "filesystem",
@@ -48,6 +17,7 @@ const state = {
   findRows: [],
   findSortField: "",
   findSortDirection: "asc",
+  addResourceMode: "path",
   tenantAccounts: [],
   tenantFilteredAccounts: [],
   tenantUsers: [],
@@ -67,7 +37,6 @@ const elements = {
   workspace: document.querySelector(".workspace"),
   shell: document.querySelector(".shell"),
   content: document.querySelector(".content"),
-  tabsTop: document.querySelector(".tabs-top"),
   panelStack: document.querySelector(".panel-stack"),
   sidebar: document.querySelector(".sidebar"),
   resultCard: document.querySelector(".result-card"),
@@ -95,11 +64,16 @@ const elements = {
   fsTree: document.getElementById("fsTree"),
   findQuery: document.getElementById("findQuery"),
   findTarget: document.getElementById("findTarget"),
+  findLimit: document.getElementById("findLimit"),
   findBtn: document.getElementById("findBtn"),
   findResultsHead: document.getElementById("findResultsHead"),
   findResultsBody: document.getElementById("findResultsBody"),
   addResourcePath: document.getElementById("addResourcePath"),
   addResourceFile: document.getElementById("addResourceFile"),
+  addResourceModePathBtn: document.getElementById("addResourceModePathBtn"),
+  addResourceModeUploadBtn: document.getElementById("addResourceModeUploadBtn"),
+  addResourcePathPane: document.getElementById("addResourcePathPane"),
+  addResourceUploadPane: document.getElementById("addResourceUploadPane"),
   addResourceTarget: document.getElementById("addResourceTarget"),
   addResourceWait: document.getElementById("addResourceWait"),
   addResourceStrict: document.getElementById("addResourceStrict"),
@@ -110,8 +84,7 @@ const elements = {
   addResourceExclude: document.getElementById("addResourceExclude"),
   addResourceReason: document.getElementById("addResourceReason"),
   addResourceInstruction: document.getElementById("addResourceInstruction"),
-  addResourceBtn: document.getElementById("addResourceBtn"),
-  addResourceUploadBtn: document.getElementById("addResourceUploadBtn"),
+  addResourceSubmitBtn: document.getElementById("addResourceSubmitBtn"),
   addMemoryInput: document.getElementById("addMemoryInput"),
   addMemoryBtn: document.getElementById("addMemoryBtn"),
   tenantAccountSearch: document.getElementById("tenantAccountSearch"),
@@ -142,15 +115,13 @@ const elements = {
   resultToggleBtn: document.getElementById("resultToggleBtn"),
   clearOutputBtn: document.getElementById("clearOutputBtn"),
   themeButtons: document.querySelectorAll("[data-theme-mode]"),
-  contentTitle: document.querySelector(".title-block h1"),
-  contentSubtitle: document.querySelector(".title-block .subtitle"),
 };
 
 const layoutLimits = {
   minSidebar: 200,
   maxSidebar: 560,
-  minPanel: 0,
-  minResult: 48,
+  minPanel: 180,
+  minResult: 56,
 };
 
 function readLocalStorage(key) {
@@ -229,9 +200,17 @@ function setResultCollapsed(collapsed, { persist = true } = {}) {
   }
 }
 
+function syncResultEmptyState() {
+  const isEmpty = !elements.output.textContent.trim();
+  elements.shell.classList.toggle("shell--result-empty", isEmpty);
+  elements.resultCard.classList.toggle("result-card--empty", isEmpty);
+  elements.output.dataset.empty = isEmpty ? "true" : "false";
+}
+
 function setOutput(value) {
   const content = typeof value === "string" ? value : JSON.stringify(value, null, 2);
   elements.output.textContent = content;
+  syncResultEmptyState();
 }
 
 function setActivePanel(panel) {
@@ -241,12 +220,6 @@ function setActivePanel(panel) {
   }
   for (const panelNode of elements.panels) {
     panelNode.classList.toggle("active", panelNode.id === `panel-${panel}`);
-  }
-
-  const meta = PANEL_META[panel];
-  if (meta && elements.contentTitle && elements.contentSubtitle) {
-    elements.contentTitle.textContent = `OpenViking ${meta.title}`;
-    elements.contentSubtitle.textContent = meta.subtitle;
   }
 
   if (window.matchMedia("(max-width: 900px)").matches) {
@@ -276,6 +249,19 @@ function updateConnectionHint() {
     : "No API key in session.";
 }
 
+function truncateText(value, maxLength = 4000) {
+  const text = String(value || "");
+  if (text.length <= maxLength) {
+    return text;
+  }
+  return `${text.slice(0, maxLength)}\n... (truncated, ${text.length} chars total)`;
+}
+
+function isJsonLikeContentType(contentType) {
+  const value = (contentType || "").toLowerCase();
+  return value.includes("application/json") || value.includes("+json");
+}
+
 async function callConsole(path, options = {}) {
   const headers = {
     ...(options.headers || {}),
@@ -290,24 +276,61 @@ async function callConsole(path, options = {}) {
     headers["X-API-Key"] = apiKey;
   }
 
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers,
-  });
+  let response;
+  try {
+    response = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`NETWORK_ERROR: ${message}`);
+  }
 
-  const payload = await response.json().catch(() => ({
-    status: "error",
-    error: {
-      code: "BAD_RESPONSE",
-      message: "Invalid JSON response from console",
-    },
-  }));
+  const contentType = response.headers.get("content-type") || "";
+  const status = response.status;
+
+  let payload = null;
+  let rawText = "";
+
+  if (status === 204 || status === 205) {
+    payload = { status: "ok", result: null };
+  } else if (isJsonLikeContentType(contentType)) {
+    const clone = response.clone();
+    try {
+      payload = await response.json();
+    } catch (_error) {
+      rawText = await clone.text().catch(() => "");
+      payload = response.ok
+        ? { status: "ok", result: rawText }
+        : {
+            status: "error",
+            error: {
+              code: "BAD_RESPONSE",
+              message: "Invalid JSON response from console",
+              detail: truncateText(rawText, 2000),
+            },
+          };
+    }
+  } else {
+    rawText = await response.text().catch(() => "");
+    payload = response.ok
+      ? { status: "ok", result: rawText }
+      : {
+          status: "error",
+          error: {
+            code: "HTTP_ERROR",
+            message: rawText ? truncateText(rawText, 2000) : `Request failed with status ${status}`,
+          },
+        };
+  }
 
   if (!response.ok) {
-    const code = payload.error?.code || "ERROR";
-    const message = payload.error?.message || `Request failed with status ${response.status}`;
+    const code = payload?.error?.code || "ERROR";
+    const message =
+      payload?.error?.message || `Request failed with status ${response.status} ${response.statusText}`;
     const missingApiKey =
-      code === "UNAUTHENTICATED" && message.toLowerCase().includes("missing api key");
+      code === "UNAUTHENTICATED" && String(message).toLowerCase().includes("missing api key");
     const hint = missingApiKey ? " Please go to Settings and set X-API-Key." : "";
     throw new Error(`${code}: ${message}${hint}`);
   }
@@ -891,6 +914,44 @@ function formatFindCellValue(value) {
   return JSON.stringify(value);
 }
 
+function renderFindCellContent(td, column, value) {
+  const expandableColumns = new Set(["abstract", "overview"]);
+  const formattedValue = formatFindCellValue(value);
+  if (!expandableColumns.has(column) || formattedValue === "-") {
+    td.textContent = formattedValue;
+    return;
+  }
+
+  td.classList.add("find-cell-expandable");
+  td.classList.add("find-col-abstract");
+
+  const wrapper = document.createElement("div");
+  wrapper.className = "find-cell-content";
+
+  const text = document.createElement("span");
+  text.className = "find-cell-text";
+  text.textContent = formattedValue;
+
+  const toggle = document.createElement("button");
+  toggle.type = "button";
+  toggle.className = "find-cell-expand-btn";
+  toggle.textContent = "Expand";
+
+  let expanded = false;
+  toggle.addEventListener("click", () => {
+    expanded = !expanded;
+    text.classList.toggle("expanded", expanded);
+    wrapper.classList.toggle("expanded", expanded);
+    toggle.textContent = expanded ? "Collapse" : "Expand";
+    toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+  });
+  toggle.setAttribute("aria-expanded", "false");
+
+  wrapper.appendChild(text);
+  wrapper.appendChild(toggle);
+  td.appendChild(wrapper);
+}
+
 function toFindComparable(value) {
   if (value === null || value === undefined || value === "") {
     return { missing: true, type: "missing", value: "" };
@@ -1021,7 +1082,7 @@ function renderFindTable(rows) {
     for (const column of columns) {
       const td = document.createElement("td");
       const cellValue = isRecord(row) ? row[column] : undefined;
-      td.textContent = formatFindCellValue(cellValue);
+      renderFindCellContent(td, column, cellValue);
       tr.appendChild(td);
     }
     elements.findResultsBody.appendChild(tr);
@@ -1117,22 +1178,22 @@ function initResizablePanes() {
 
       const onMove = (moveEvent) => {
         const contentHeight = elements.content?.getBoundingClientRect().height || window.innerHeight;
-        const tabsHeight = elements.tabsTop?.getBoundingClientRect().height || 0;
         const resizerHeight = elements.outputResizer.getBoundingClientRect().height || 8;
         const rowGap = Number.parseFloat(
           window.getComputedStyle(elements.content || document.body).rowGap || "0"
         );
-        const totalGap = Number.isFinite(rowGap) ? rowGap * 3 : 0;
-        const maxPanel = Math.max(
-          layoutLimits.minPanel,
-          contentHeight - tabsHeight - resizerHeight - layoutLimits.minResult - totalGap
+        const totalGap = Number.isFinite(rowGap) ? rowGap * 2 : 0;
+        const availableHeight = Math.max(
+          layoutLimits.minPanel + layoutLimits.minResult,
+          contentHeight - resizerHeight - totalGap
         );
-        const nextHeight = clamp(
+        const maxPanel = Math.max(layoutLimits.minPanel, availableHeight - layoutLimits.minResult);
+        const nextPanelHeight = clamp(
           startHeight + (moveEvent.clientY - startY),
           layoutLimits.minPanel,
           maxPanel
         );
-        rootStyle.setProperty("--panel-height", `${nextHeight}px`);
+        rootStyle.setProperty("--panel-height", `${nextPanelHeight}px`);
       };
 
       const onUp = () => {
@@ -1310,7 +1371,6 @@ async function loadFilesystem(uri, { pushHistory = false } = {}) {
     await renderFsTree();
   }
 
-  setOutput(payload);
 }
 
 async function refreshCapabilities() {
@@ -1319,8 +1379,7 @@ async function refreshCapabilities() {
     state.writeEnabled = Boolean(payload.result?.write_enabled);
     elements.writeBadge.textContent = state.writeEnabled ? "Write Enabled" : "Readonly";
     elements.writeBadge.classList.toggle("write", state.writeEnabled);
-    elements.addResourceBtn.disabled = !state.writeEnabled;
-    elements.addResourceUploadBtn.disabled = !state.writeEnabled;
+    elements.addResourceSubmitBtn.disabled = !state.writeEnabled;
     syncWriteControls();
     renderAccountsTable();
     renderUsersTable();
@@ -1346,7 +1405,7 @@ function bindShellControls() {
 
   if (elements.clearOutputBtn) {
     elements.clearOutputBtn.addEventListener("click", () => {
-      setOutput("Ready.");
+      setOutput("");
     });
   }
 
@@ -1387,7 +1446,7 @@ function initShellState() {
   setNavCollapsed(defaultNavCollapsed, { persist: false });
 
   const storedResult = readLocalStorage(RESULT_COLLAPSED_KEY);
-  setResultCollapsed(storedResult === "1", { persist: false });
+  setResultCollapsed(storedResult === null ? false : storedResult === "1", { persist: false });
 }
 
 function bindTabs() {
@@ -1533,19 +1592,25 @@ function bindFilesystem() {
 function bindFind() {
   elements.findBtn.addEventListener("click", async () => {
     const query = elements.findQuery.value.trim();
+    const rawLimit = elements.findLimit.value.trim();
+    const parsedLimit = Number.parseInt(rawLimit, 10);
     if (!query) {
       setOutput("Query cannot be empty.");
       return;
     }
 
     try {
+      const requestBody = {
+        query,
+        target_uri: elements.findTarget.value.trim(),
+      };
+      if (Number.isInteger(parsedLimit) && parsedLimit > 0) {
+        requestBody.limit = parsedLimit;
+      }
+
       const payload = await callConsole("/ov/search/find", {
         method: "POST",
-        body: JSON.stringify({
-          query,
-          target_uri: elements.findTarget.value.trim(),
-          limit: 10,
-        }),
+        body: JSON.stringify(requestBody),
       });
 
       const rows = normalizeFindRows(payload.result);
@@ -1593,49 +1658,61 @@ function buildAddResourcePayload() {
   return payload;
 }
 
+function renderAddResourceMode() {
+  const isPathMode = state.addResourceMode === "path";
+  elements.addResourceModePathBtn.classList.toggle("active", isPathMode);
+  elements.addResourceModeUploadBtn.classList.toggle("active", !isPathMode);
+  elements.addResourceModePathBtn.setAttribute("aria-selected", String(isPathMode));
+  elements.addResourceModeUploadBtn.setAttribute("aria-selected", String(!isPathMode));
+  elements.addResourcePathPane.hidden = !isPathMode;
+  elements.addResourceUploadPane.hidden = isPathMode;
+}
+
 function bindAddResource() {
-  elements.addResourceBtn.addEventListener("click", async () => {
-    if (!state.writeEnabled) {
-      setOutput("Write mode is disabled on the server.");
-      return;
-    }
-
-    const path = elements.addResourcePath.value.trim();
-    if (!path) {
-      setOutput("Path cannot be empty. Or use Upload & Add.");
-      return;
-    }
-
-    try {
-      const payload = await callConsole("/ov/resources", {
-        method: "POST",
-        body: JSON.stringify({
-          ...buildAddResourcePayload(),
-          path,
-        }),
-      });
-      setOutput(payload);
-    } catch (error) {
-      setOutput(error.message);
-    }
+  elements.addResourceModePathBtn.addEventListener("click", () => {
+    state.addResourceMode = "path";
+    renderAddResourceMode();
   });
 
-  elements.addResourceUploadBtn.addEventListener("click", async () => {
+  elements.addResourceModeUploadBtn.addEventListener("click", () => {
+    state.addResourceMode = "upload";
+    renderAddResourceMode();
+  });
+
+  elements.addResourceSubmitBtn.addEventListener("click", async () => {
     if (!state.writeEnabled) {
       setOutput("Write mode is disabled on the server.");
       return;
     }
 
-    const file = elements.addResourceFile.files?.[0];
-    if (!file) {
-      setOutput("Please select a file first.");
-      return;
-    }
-
-    const formData = new FormData();
-    formData.append("file", file);
-
     try {
+      if (state.addResourceMode === "path") {
+        const path = elements.addResourcePath.value.trim();
+        if (!path) {
+          setOutput("Path cannot be empty.");
+          return;
+        }
+
+        const payload = await callConsole("/ov/resources", {
+          method: "POST",
+          body: JSON.stringify({
+            ...buildAddResourcePayload(),
+            path,
+          }),
+        });
+        setOutput(payload);
+        return;
+      }
+
+      const file = elements.addResourceFile.files?.[0];
+      if (!file) {
+        setOutput("Please select a file first.");
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append("file", file);
+
       setOutput(`Uploading ${file.name} ...`);
       const uploadPayload = await callConsole("/ov/resources/temp_upload", {
         method: "POST",
@@ -2388,9 +2465,11 @@ async function init() {
   bindFind();
   renderFindTable([]);
   bindAddResource();
+  renderAddResourceMode();
   bindAddMemory();
   bindTenants();
   bindMonitor();
+  syncResultEmptyState();
   updateConnectionHint();
   setActivePanel(state.activePanel);
   await refreshCapabilities();

@@ -11,10 +11,12 @@ from pathlib import Path
 import uvicorn
 
 if __package__ in {None, ""}:
+    # Allow running as a script from a source checkout:
+    # python openviking/console/bootstrap.py
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from examples.console.app import create_console_app
-from examples.console.config import load_console_config
+from openviking.console.app import create_console_app
+from openviking.console.config import load_console_config
 
 
 def _build_parser() -> argparse.ArgumentParser:
