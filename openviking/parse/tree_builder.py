@@ -135,7 +135,7 @@ class TreeBuilder:
 
         # 2. Determine base_uri and final document name with org/repo for GitHub/GitLab
         auto_base_uri = self._get_base_uri(scope, source_path, source_format)
-
+        base_uri = parent_uri or auto_base_uri
         # 3. Determine candidate_uri
         if to_uri:
             # Exact target URI: must not exist yet
@@ -150,8 +150,6 @@ class TreeBuilder:
                 pass
             candidate_uri = to_uri
         else:
-            # Use parent_uri or auto_base_uri as parent directory
-            base_uri = parent_uri or auto_base_uri
             if parent_uri:
                 # Parent URI must exist and be a directory
                 try:
@@ -160,12 +158,7 @@ class TreeBuilder:
                         raise ValueError(f"Parent URI is not a directory: {parent_uri}")
                 except Exception as e:
                     raise FileNotFoundError(f"Parent URI does not exist: {parent_uri}") from e
-
-            if "/" in final_doc_name:
-                repo_name_only = final_doc_name.split("/")[-1]
-            else:
-                repo_name_only = final_doc_name
-            candidate_uri = VikingURI(base_uri).join(repo_name_only).uri
+            candidate_uri = VikingURI(base_uri).join(final_doc_name).uri
 
         final_uri = await self._resolve_unique_uri(candidate_uri, ctx=ctx)
 
