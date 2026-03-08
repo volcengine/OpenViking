@@ -13,6 +13,66 @@ import pytest_asyncio
 
 from openviking import AsyncOpenViking
 
+
+# ── Workaround: local .so may lack AGFS_Grep symbol (new in latest source) ──
+def _patch_agfs_grep_if_missing():
+    """Wrap _setup_functions to catch missing AGFS_Grep and skip its binding."""
+    try:
+        from openviking.pyagfs.binding_client import BindingLib
+
+        _orig_setup = BindingLib._setup_functions
+
+        def _safe_setup(self):
+            try:
+                _orig_setup(self)
+            except AttributeError as e:
+                if "AGFS_Grep" not in str(e):
+                    raise
+                # Re-implement _setup_functions but skip AGFS_Grep lines.
+                # We do this by temporarily removing the Grep lines from the
+                # source, but since we can't edit .so, we monkey-patch the lib
+                # object's __getattr__ to not fail on AGFS_Grep.
+                import ctypes
+
+                class _GrepStub:
+                    """Fake ctypes function descriptor for AGFS_Grep."""
+
+                    argtypes = [
+                        ctypes.c_int64,
+                        ctypes.c_char_p,
+                        ctypes.c_char_p,
+                        ctypes.c_int,
+                        ctypes.c_int,
+                        ctypes.c_int,
+                        ctypes.c_int,
+                    ]
+                    restype = ctypes.c_char_p
+
+                    def __call__(self, *args):
+                        return b'{"error":"AGFS_Grep not available in this .so version"}'
+
+                # Patch at the CDLL instance level by overriding __getattr__
+                orig_class = type(self.lib)
+                orig_getattr = orig_class.__getattr__
+
+                def patched_getattr(cdll_self, name):
+                    if name == "AGFS_Grep":
+                        return _GrepStub()
+                    return orig_getattr(cdll_self, name)
+
+                orig_class.__getattr__ = patched_getattr
+                try:
+                    _orig_setup(self)
+                finally:
+                    orig_class.__getattr__ = orig_getattr
+
+        BindingLib._setup_functions = _safe_setup
+    except Exception:
+        pass
+
+
+_patch_agfs_grep_if_missing()
+
 # Test data root directory
 PROJECT_ROOT = Path(__file__).parent.parent
 TEST_TMP_DIR = PROJECT_ROOT / "test_data" / "tmp"
