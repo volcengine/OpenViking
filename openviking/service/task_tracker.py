@@ -181,7 +181,12 @@ class TaskTracker:
         )
         with self._lock:
             self._tasks[task.task_id] = task
-        logger.debug("[TaskTracker] Created task %s type=%s resource=%s", task.task_id, task_type, resource_id)
+        logger.debug(
+            "[TaskTracker] Created task %s type=%s resource=%s",
+            task.task_id,
+            task_type,
+            resource_id,
+        )
         return self._copy(task)
 
     def create_if_no_running(self, task_type: str, resource_id: str) -> Optional[TaskRecord]:
@@ -207,7 +212,12 @@ class TaskTracker:
                 resource_id=resource_id,
             )
             self._tasks[task.task_id] = task
-        logger.debug("[TaskTracker] Created task %s type=%s resource=%s", task.task_id, task_type, resource_id)
+        logger.debug(
+            "[TaskTracker] Created task %s type=%s resource=%s",
+            task.task_id,
+            task_type,
+            resource_id,
+        )
         return self._copy(task)
 
     def start(self, task_id: str) -> None:

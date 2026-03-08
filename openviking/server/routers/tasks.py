@@ -30,7 +30,9 @@ async def get_task(task_id: str):
 @router.get("/tasks")
 async def list_tasks(
     task_type: Optional[str] = Query(None, description="Filter by task type (e.g. session_commit)"),
-    status: Optional[str] = Query(None, description="Filter by status (pending/running/completed/failed)"),
+    status: Optional[str] = Query(
+        None, description="Filter by status (pending/running/completed/failed)"
+    ),
     resource_id: Optional[str] = Query(None, description="Filter by resource ID (e.g. session_id)"),
     limit: int = Query(50, le=200, description="Max results"),
 ):

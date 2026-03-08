@@ -19,6 +19,7 @@ def _patch_agfs_grep_if_missing():
     """Wrap _setup_functions to catch missing AGFS_Grep and skip its binding."""
     try:
         from openviking.pyagfs.binding_client import BindingLib
+
         _orig_setup = BindingLib._setup_functions
 
         def _safe_setup(self):
@@ -35,11 +36,18 @@ def _patch_agfs_grep_if_missing():
 
                 class _GrepStub:
                     """Fake ctypes function descriptor for AGFS_Grep."""
+
                     argtypes = [
-                        ctypes.c_int64, ctypes.c_char_p, ctypes.c_char_p,
-                        ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                        ctypes.c_int64,
+                        ctypes.c_char_p,
+                        ctypes.c_char_p,
+                        ctypes.c_int,
+                        ctypes.c_int,
+                        ctypes.c_int,
+                        ctypes.c_int,
                     ]
                     restype = ctypes.c_char_p
+
                     def __call__(self, *args):
                         return b'{"error":"AGFS_Grep not available in this .so version"}'
 
@@ -61,6 +69,7 @@ def _patch_agfs_grep_if_missing():
         BindingLib._setup_functions = _safe_setup
     except Exception:
         pass
+
 
 _patch_agfs_grep_if_missing()
 

@@ -7,7 +7,6 @@ import asyncio
 from typing import AsyncGenerator, Tuple
 
 import httpx
-import pytest
 import pytest_asyncio
 
 from openviking import AsyncOpenViking
@@ -15,7 +14,7 @@ from openviking.server.app import create_app
 from openviking.server.config import ServerConfig
 from openviking.server.dependencies import set_service
 from openviking.service.core import OpenVikingService
-from openviking.service.task_tracker import get_task_tracker, reset_task_tracker
+from openviking.service.task_tracker import reset_task_tracker
 
 
 @pytest_asyncio.fixture
@@ -64,9 +63,7 @@ async def test_commit_wait_false_returns_task_id(api_client):
 
     service.sessions.commit_async = fake_commit
 
-    resp = await client.post(
-        f"/api/v1/sessions/{session_id}/commit", params={"wait": False}
-    )
+    resp = await client.post(f"/api/v1/sessions/{session_id}/commit", params={"wait": False})
     assert resp.status_code == 200
     body = resp.json()
     assert body["result"]["status"] == "accepted"
@@ -94,9 +91,7 @@ async def test_task_lifecycle_success(api_client):
     service.sessions.commit_async = gated_commit
 
     # Fire background commit
-    resp = await client.post(
-        f"/api/v1/sessions/{session_id}/commit", params={"wait": False}
-    )
+    resp = await client.post(f"/api/v1/sessions/{session_id}/commit", params={"wait": False})
     task_id = resp.json()["result"]["task_id"]
 
     # Wait for commit to start
@@ -132,9 +127,7 @@ async def test_task_lifecycle_failure(api_client):
 
     service.sessions.commit_async = failing_commit
 
-    resp = await client.post(
-        f"/api/v1/sessions/{session_id}/commit", params={"wait": False}
-    )
+    resp = await client.post(f"/api/v1/sessions/{session_id}/commit", params={"wait": False})
     task_id = resp.json()["result"]["task_id"]
 
     await asyncio.sleep(0.2)
@@ -163,15 +156,11 @@ async def test_duplicate_commit_rejected(api_client):
     service.sessions.commit_async = slow_commit
 
     # First commit
-    resp1 = await client.post(
-        f"/api/v1/sessions/{session_id}/commit", params={"wait": False}
-    )
+    resp1 = await client.post(f"/api/v1/sessions/{session_id}/commit", params={"wait": False})
     assert resp1.json()["result"]["status"] == "accepted"
 
     # Second commit should be rejected
-    resp2 = await client.post(
-        f"/api/v1/sessions/{session_id}/commit", params={"wait": False}
-    )
+    resp2 = await client.post(f"/api/v1/sessions/{session_id}/commit", params={"wait": False})
     assert resp2.json()["status"] == "error"
     assert "already has a commit in progress" in resp2.json()["error"]["message"]
 
@@ -242,9 +231,7 @@ async def test_wait_true_still_works(api_client):
 
     service.sessions.commit_async = instant_commit
 
-    resp = await client.post(
-        f"/api/v1/sessions/{session_id}/commit", params={"wait": True}
-    )
+    resp = await client.post(f"/api/v1/sessions/{session_id}/commit", params={"wait": True})
     assert resp.status_code == 200
     body = resp.json()
     assert body["result"]["status"] == "committed"
@@ -264,9 +251,7 @@ async def test_error_sanitized_in_task(api_client):
 
     service.sessions.commit_async = leaky_commit
 
-    resp = await client.post(
-        f"/api/v1/sessions/{session_id}/commit", params={"wait": False}
-    )
+    resp = await client.post(f"/api/v1/sessions/{session_id}/commit", params={"wait": False})
     task_id = resp.json()["result"]["task_id"]
 
     await asyncio.sleep(0.2)

@@ -118,8 +118,8 @@ def test_list_limit(tracker: TaskTracker):
 
 
 def test_list_order_most_recent_first(tracker: TaskTracker):
-    t1 = tracker.create("session_commit", resource_id="first")
-    t2 = tracker.create("session_commit", resource_id="second")
+    tracker.create("session_commit", resource_id="first")
+    tracker.create("session_commit", resource_id="second")
     tasks = tracker.list_tasks()
     assert tasks[0].resource_id == "second"
     assert tasks[1].resource_id == "first"
