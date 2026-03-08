@@ -16,6 +16,7 @@
 [![][license-shield]][license-shield-link]
 [![][last-commit-shield]][last-commit-shield-link]
 
+
 👋 加入我们的社区
 
 📱 <a href="./docs/en/about/01-about-us.md#lark-group">飞书群</a> · <a href="./docs/en/about/01-about-us.md#wechat-group">微信群</a> · <a href="https://discord.com/invite/eHvx8E9XF3">Discord</a> · <a href="https://x.com/openvikingai">X</a>
