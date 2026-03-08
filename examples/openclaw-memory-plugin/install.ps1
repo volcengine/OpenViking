@@ -251,7 +251,6 @@ function Configure-OvConf {
 
   $workspace = Join-Path $OpenVikingDir "data"
   $serverPort = "$DefaultServerPort"
-  $agfsPort = "$DefaultAgfsPort"
   $vlmModel = $DefaultVlmModel
   $embeddingModel = $DefaultEmbeddingModel
 
@@ -263,7 +262,6 @@ function Configure-OvConf {
     Write-Host ""
     $workspace = Prompt-OrDefault (T "OpenViking workspace path" "OpenViking 数据目录") $workspace
     $serverPort = Prompt-OrDefault (T "OpenViking HTTP port" "OpenViking HTTP 端口") $serverPort
-    $agfsPort = Prompt-OrDefault (T "AGFS port" "AGFS 端口") $agfsPort
     $vlmModel = Prompt-OrDefault (T "VLM model" "VLM 模型") $vlmModel
     $embeddingModel = Prompt-OrDefault (T "Embedding model" "Embedding 模型") $embeddingModel
     Write-Host (T "VLM and Embedding API keys can differ. You can leave either empty and edit ov.conf later." "说明：VLM 与 Embedding 的 API Key 可能不同，可分别填写；留空后续可在 ov.conf 修改。")
@@ -285,7 +283,7 @@ function Configure-OvConf {
     storage = @{
       workspace = $workspace
       vectordb = @{ name = "context"; backend = "local"; project = "default" }
-      agfs = @{ port = [int]$agfsPort; log_level = "warn"; backend = "local"; timeout = 10; retry_times = 3 }
+      agfs = @{ log_level = "warn"; backend = "local"; timeout = 10; retry_times = 3 }
     }
     embedding = @{
       dense = @{

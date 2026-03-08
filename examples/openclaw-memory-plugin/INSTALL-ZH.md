@@ -137,7 +137,7 @@ openclaw status
   "storage": {
     "workspace": "/home/yourname/.openviking/data",
     "vectordb": { "backend": "local" },
-    "agfs": { "backend": "local", "port": 1833 }
+    "agfs": { "backend": "local" }
   },
   "embedding": {
     "dense": {

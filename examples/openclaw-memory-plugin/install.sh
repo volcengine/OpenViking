@@ -475,7 +475,6 @@ configure_openviking_conf() {
 
   local workspace="${OPENVIKING_DIR}/data"
   local server_port="${DEFAULT_SERVER_PORT}"
-  local agfs_port="${DEFAULT_AGFS_PORT}"
   local vlm_model="${DEFAULT_VLM_MODEL}"
   local embedding_model="${DEFAULT_EMBED_MODEL}"
   local vlm_api_key="${OPENVIKING_VLM_API_KEY:-${OPENVIKING_ARK_API_KEY:-}}"
@@ -488,7 +487,6 @@ configure_openviking_conf() {
     echo ""
     read -r -p "$(tr "OpenViking workspace path [${workspace}]: " "OpenViking 数据目录 [${workspace}]: ")" _workspace < /dev/tty || true
     read -r -p "$(tr "OpenViking HTTP port [${server_port}]: " "OpenViking HTTP 端口 [${server_port}]: ")" _server_port < /dev/tty || true
-    read -r -p "$(tr "AGFS port [${agfs_port}]: " "AGFS 端口 [${agfs_port}]: ")" _agfs_port < /dev/tty || true
     read -r -p "$(tr "VLM model [${vlm_model}]: " "VLM 模型 [${vlm_model}]: ")" _vlm_model < /dev/tty || true
     read -r -p "$(tr "Embedding model [${embedding_model}]: " "Embedding 模型 [${embedding_model}]: ")" _embedding_model < /dev/tty || true
     echo "$(tr "VLM and Embedding API keys can differ. You can leave either empty and edit ov.conf later." "说明：VLM 与 Embedding 的 API Key 可能不同，可分别填写；留空后续可在 ov.conf 修改。")"
@@ -497,7 +495,6 @@ configure_openviking_conf() {
 
     workspace="${_workspace:-$workspace}"
     server_port="${_server_port:-$server_port}"
-    agfs_port="${_agfs_port:-$agfs_port}"
     vlm_model="${_vlm_model:-$vlm_model}"
     embedding_model="${_embedding_model:-$embedding_model}"
     vlm_api_key="${_vlm_api_key:-$vlm_api_key}"
@@ -523,7 +520,7 @@ configure_openviking_conf() {
   "storage": {
     "workspace": "${workspace}",
     "vectordb": { "name": "context", "backend": "local", "project": "default" },
-    "agfs": { "port": ${agfs_port}, "log_level": "warn", "backend": "local", "timeout": 10, "retry_times": 3 }
+    "agfs": { "log_level": "warn", "backend": "local", "timeout": 10, "retry_times": 3 }
   },
   "embedding": {
     "dense": {
