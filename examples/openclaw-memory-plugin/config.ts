@@ -125,7 +125,7 @@ export const memoryOpenVikingConfigSchema = {
       "memory-openviking config",
     );
 
-    const mode = (cfg.mode === "local" || cfg.mode === "remote" ? cfg.mode : "remote") as
+    const mode = (cfg.mode === "local" || cfg.mode === "remote" ? cfg.mode : "local") as
       | "local"
       | "remote";
     const port = Math.max(1, Math.min(65535, Math.floor(toNumber(cfg.port, DEFAULT_PORT))));
