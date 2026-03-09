@@ -132,6 +132,26 @@ bot-sandbox = [
 bot-fuse = ["fusepy>=3.0.1"]
 bot-opencode = ["opencode-ai>=0.1.0a0"]
 bot-full = [
+    # Core bot dependencies (from 'bot' extra)
+    "pydantic-settings>=2.0.0",
+    "websockets>=12.0",
+    "websocket-client>=1.6.0",
+    "httpx[socks]>=0.25.0",
+    "readability-lxml>=0.8.0",
+    "rich>=13.0.0",
+    "croniter>=2.0.0",
+    "socksio>=1.0.0",
+    "python-socketio>=5.11.0",
+    "msgpack>=1.0.8",
+    "python-socks[asyncio]>=2.4.0",
+    "prompt-toolkit>=3.0.0",
+    "pygments>=2.16.0",
+    "html2text>=2020.1.16",
+    "beautifulsoup4>=4.12.0",
+    "ddgs>=9.0.0",
+    "gradio>=6.6.0",
+    "py-machineid>=1.0.0",
+    # Optional bot features
     "langfuse>=3.0.0",
     "python-telegram-bot[socks]>=21.0",
     "lark-oapi>=1.0.0",
