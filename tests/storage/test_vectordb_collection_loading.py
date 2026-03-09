@@ -1,15 +1,13 @@
-import unittest
 import sys
-import os
+import unittest
 
 # Add open_test path to ensure modules can be found
 sys.path.insert(0, "/cloudide/workspace/open_test")
 
+from openviking.storage.vectordb.collection.vikingdb_collection import VikingDBCollection
 from openviking.storage.vectordb.project.vikingdb_project import (
     get_or_create_vikingdb_project,
-    VikingDBProject,
 )
-from openviking.storage.vectordb.collection.vikingdb_collection import VikingDBCollection
 
 
 class TestDynamicLoading(unittest.TestCase):
@@ -44,7 +42,6 @@ class TestDynamicLoading(unittest.TestCase):
         )
 
         # Test collection creation to verify params are passed
-        collection_name = "test_collection"
         meta_data = {
             "test_verification": True,
             "Host": "metadata_host",

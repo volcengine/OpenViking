@@ -15,7 +15,8 @@ from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.bus.events import InboundMessage, OutboundEventType, OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.config import load_config
-from vikingbot.config.schema import Config, SessionKey
+from vikingbot.config.schema import Config, ExecToolConfig, SessionKey
+from vikingbot.cron.service import CronService
 from vikingbot.hooks import HookContext
 from vikingbot.hooks.manager import hook_manager
 from vikingbot.providers.base import LLMProvider
@@ -48,8 +49,8 @@ class AgentLoop:
         brave_api_key: str | None = None,
         exa_api_key: str | None = None,
         gen_image_model: str | None = None,
-        exec_config: "ExecToolConfig | None" = None,
-        cron_service: "CronService | None" = None,
+        exec_config: ExecToolConfig | None = None,
+        cron_service: CronService | None = None,
         session_manager: SessionManager | None = None,
         sandbox_manager: SandboxManager | None = None,
         config: Config = None,
@@ -305,7 +306,7 @@ class AgentLoop:
                 results = await asyncio.gather(*tool_tasks)
 
                 # Stage 3: Process results sequentially in original order
-                for idx, tool_call, result, tool_execute_duration in results:
+                for _idx, tool_call, result, tool_execute_duration in results:
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                     logger.info(f"[TOOL_CALL]: {tool_call.name}({args_str[:200]})")
                     logger.info(f"[RESULT]: {str(result)[:600]}")

@@ -326,7 +326,10 @@ class FeishuChannel(BaseChannel):
         lines = [l.strip() for l in table_text.strip().split("\n") if l.strip()]
         if len(lines) < 3:
             return None
-        split = lambda l: [c.strip() for c in l.strip("|").split("|")]
+
+        def split(l: str) -> list[str]:
+            return [c.strip() for c in l.strip("|").split("|")]
+
         headers = split(lines[0])
         rows = [split(l) for l in lines[2:]]
         columns = [
@@ -384,7 +387,6 @@ class FeishuChannel(BaseChannel):
             before = protected[last_end : m.start()].strip()
             if before:
                 elements.append({"tag": "markdown", "content": before})
-            level = len(m.group(1))
             text = m.group(2).strip()
             elements.append(
                 {

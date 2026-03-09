@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Python AST extractor using tree-sitter-python."""
 
-from typing import List, Optional
+from typing import List
 
 from openviking.parse.parsers.code.ast.languages.base import LanguageExtractor
 from openviking.parse.parsers.code.ast.skeleton import ClassSkeleton, CodeSkeleton, FunctionSig

@@ -4,9 +4,8 @@
 """Test CodeRepositoryParser functionality and compliance with README.md requirements"""
 
 import os
-import tempfile
-from pathlib import Path
 import sys
+from pathlib import Path
 
 # Add parent directory to path to import openviking
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))

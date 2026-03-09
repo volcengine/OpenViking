@@ -1,10 +1,10 @@
 import argparse
-import json
-import subprocess
-import time
 import csv
+import json
 import os
 import re
+import subprocess
+import time
 
 
 def load_locomo_qa(
@@ -76,7 +76,7 @@ def run_vikingbot_chat(question: str) -> tuple[str, dict, float]:
                 time_cost = resp_json.get("time_cost", time_cost)
             else:
                 raise ValueError("No valid JSON structure found in output")
-        except (json.JSONDecodeError, ValueError) as e:
+        except (json.JSONDecodeError, ValueError):
             response = f"[PARSE ERROR] {output}"
             token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         return response, token_usage, time_cost

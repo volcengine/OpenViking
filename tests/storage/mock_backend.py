@@ -1,10 +1,9 @@
 from typing import Any, Dict, List, Optional
-from openviking.storage.vectordb.collection.collection import ICollection
+
+from openviking.storage.vectordb.collection.collection import Collection, ICollection
 from openviking.storage.vectordb.collection.result import AggregateResult, SearchResult
 from openviking.storage.vectordb.index.index import IIndex
-
 from openviking.storage.vectordb_adapters.base import CollectionAdapter
-from openviking.storage.vectordb.collection.collection import Collection
 
 
 class MockCollectionAdapter(CollectionAdapter):

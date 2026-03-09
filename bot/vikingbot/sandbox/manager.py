@@ -1,15 +1,10 @@
 """Sandbox manager for creating and managing sandbox instances."""
 
-import asyncio
 from pathlib import Path
-from typing import TYPE_CHECKING
 
-from openviking.async_client import logger
-from vikingbot.sandbox.base import SandboxBackend, SandboxDisabledError, UnsupportedBackendError
+from vikingbot.config.schema import Config, SessionKey
 from vikingbot.sandbox.backends import get_backend
-
-
-from vikingbot.config.schema import SandboxConfig, SessionKey, Config
+from vikingbot.sandbox.base import SandboxBackend, UnsupportedBackendError
 
 
 class SandboxManager:
@@ -44,7 +39,7 @@ class SandboxManager:
         instance = self._backend_cls(self.config.sandbox, workspace_id, workspace)
         try:
             await instance.start()
-        except Exception as e:
+        except Exception:
             import traceback
 
             traceback.print_exc()
@@ -54,9 +49,9 @@ class SandboxManager:
 
     async def _copy_bootstrap_files(self, sandbox_workspace: Path) -> None:
         """Copy bootstrap files from source workspace to sandbox workspace."""
-        from vikingbot.agent.context import ContextBuilder
-        from vikingbot.agent.skills import BUILTIN_SKILLS_DIR
         import shutil
+
+        from vikingbot.agent.context import ContextBuilder
 
         # Copy from source workspace init directory (if exists)
         init_dir = self.source_workspace / ContextBuilder.INIT_DIR

@@ -3,6 +3,7 @@
 from abc import ABC
 from pathlib import Path
 from typing import Any, Optional
+
 from loguru import logger
 
 from vikingbot.agent.tools.base import Tool, ToolContext

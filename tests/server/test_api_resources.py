@@ -5,8 +5,6 @@
 
 import httpx
 
-from tests.server.conftest import SAMPLE_MD_CONTENT
-
 
 async def test_add_resource_success(client: httpx.AsyncClient, sample_markdown_file):
     resp = await client.post(

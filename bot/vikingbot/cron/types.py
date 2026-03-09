@@ -3,8 +3,6 @@
 from dataclasses import dataclass, field
 from typing import Literal
 
-from vikingbot.config.schema import SessionKey
-
 
 @dataclass
 class CronSchedule:

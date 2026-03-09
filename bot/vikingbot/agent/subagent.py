@@ -1,5 +1,7 @@
 """Subagent manager for background task execution."""
 
+from __future__ import annotations
+
 import asyncio
 import json
 import uuid
@@ -11,7 +13,7 @@ from loguru import logger
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.bus.events import InboundMessage
 from vikingbot.bus.queue import MessageBus
-from vikingbot.config.schema import SessionKey
+from vikingbot.config.schema import Config, SessionKey
 from vikingbot.providers.base import LLMProvider
 from vikingbot.sandbox.manager import SandboxManager
 
@@ -30,11 +32,10 @@ class SubagentManager:
         provider: LLMProvider,
         workspace: Path,
         bus: MessageBus,
-        config: "Config",
+        config: Config,
         model: str | None = None,
-        sandbox_manager: "SandboxManager | None" = None,
+        sandbox_manager: SandboxManager | None = None,
     ):
-        from vikingbot.config.schema import ExecToolConfig
 
         self.provider = provider
         self.workspace = workspace
@@ -201,8 +202,8 @@ Summarize this naturally for the user. Keep it brief (1-2 sentences). Do not men
 
     def _build_subagent_prompt(self, task: str) -> str:
         """Build a focused system prompt for the subagent."""
-        from datetime import datetime
         import time as _time
+        from datetime import datetime
 
         now = datetime.now().strftime("%Y-%m-%d %H:%M (%A)")
         tz = _time.strftime("%Z") or "UTC"

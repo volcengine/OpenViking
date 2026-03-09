@@ -1,19 +1,19 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
-import unittest
-from unittest.mock import MagicMock, patch
-import sys
 import os
+import sys
+import unittest
 
 # Add paths to sys.path to ensure modules can be found
 # sys.path.insert(0, "/cloudide/workspace/viking_python_client")
 sys.path.insert(0, "/cloudide/workspace/open_test")
 
-from openviking.storage.vectordb_adapters.factory import create_collection_adapter
-from openviking_cli.utils.config import get_openviking_config, OpenVikingConfigSingleton
 import json
 import shutil
 import tempfile
+
+from openviking.storage.vectordb_adapters.factory import create_collection_adapter
+from openviking_cli.utils.config import OpenVikingConfigSingleton, get_openviking_config
 
 
 class TestAdapterLoading(unittest.TestCase):
