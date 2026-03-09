@@ -154,10 +154,10 @@ class TreeBuilder:
                 # Parent URI must exist and be a directory
                 try:
                     stat_result = await viking_fs.stat(parent_uri, ctx=ctx)
-                    if not stat_result.get("isDir"):
-                        raise ValueError(f"Parent URI is not a directory: {parent_uri}")
                 except Exception as e:
                     raise FileNotFoundError(f"Parent URI does not exist: {parent_uri}") from e
+                if not stat_result.get("isDir"):
+                    raise ValueError(f"Parent URI is not a directory: {parent_uri}")
             candidate_uri = VikingURI(base_uri).join(final_doc_name).uri
 
         final_uri = await self._resolve_unique_uri(candidate_uri, ctx=ctx)
