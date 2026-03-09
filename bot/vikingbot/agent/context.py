@@ -139,15 +139,17 @@ Skills with available="false" need dependencies installed first - you can try in
             workspace_id=workspace_id, user_id=self._sender_id
         )
         cost = round(_time.time() - start, 2)
-        logger.info(f"[READ_USER_PROFILE]: cost {cost}s, profile={profile[:50] if profile else 'None'}")
+        logger.info(
+            f"[READ_USER_PROFILE]: cost {cost}s, profile={profile[:50] if profile else 'None'}"
+        )
         if profile:
             parts.append(f"## Current user's information\n{profile}")
 
         return "\n\n---\n\n".join(parts)
 
     async def _build_user_memory(
-                self, session_key: SessionKey, current_message: str, history: list[dict[str, Any]]
-        ) -> str:
+        self, session_key: SessionKey, current_message: str, history: list[dict[str, Any]]
+    ) -> str:
         """
         Build the system prompt from bootstrap files, memory, and skills.
 
@@ -170,9 +172,13 @@ Skills with available="false" need dependencies installed first - you can try in
             current_message=current_message, workspace_id=workspace_id
         )
         cost = round(_time.time() - start, 2)
-        logger.info(f"[READ_USER_MEMORY]: cost {cost}s, memory={viking_memory[:50] if viking_memory else 'None'}")
+        logger.info(
+            f"[READ_USER_MEMORY]: cost {cost}s, memory={viking_memory[:50] if viking_memory else 'None'}"
+        )
         if viking_memory:
-            parts.append(f"## Your memories about the current conversation. If you need to know more details, please use the tools.\n{viking_memory}")
+            parts.append(
+                f"## Your memories about the current conversation. If you need to know more details, please use the tools.\n{viking_memory}"
+            )
 
         return "\n\n---\n\n".join(parts)
 

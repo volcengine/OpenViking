@@ -304,7 +304,6 @@ class AgentLoop:
                 ]
                 results = await asyncio.gather(*tool_tasks)
 
-
                 # Stage 3: Process results sequentially in original order
                 for idx, tool_call, result, tool_execute_duration in results:
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)

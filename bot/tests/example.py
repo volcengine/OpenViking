@@ -11,9 +11,9 @@ try:
     add_result = client.add_resource(
         path="/Users/bytedance/Downloads/exp/experience_data_mini.json",
         resource_type="json",  # 明确指定类型
-        tags=["large_data", "agent_context", "structured"]
+        tags=["large_data", "agent_context", "structured"],
     )
-    root_uri = add_result['root_uri']
+    root_uri = add_result["root_uri"]
 
     # Explore the resource tree structure
     ls_result = client.ls(root_uri)
@@ -21,8 +21,8 @@ try:
 
     # Use glob to find markdown files
     glob_result = client.glob(pattern="**/*.md", uri=root_uri)
-    if glob_result['matches']:
-        content = client.read(glob_result['matches'][0])
+    if glob_result["matches"]:
+        content = client.read(glob_result["matches"][0])
         print(f"Content preview: {content[:200]}...\n")
 
     # Wait for semantic processing to complete

@@ -1,6 +1,7 @@
 """
 vikingbot - A lightweight AI agent framework
 """
+
 import warnings
 
 __version__ = "0.1.3"
@@ -13,12 +14,13 @@ __logo__ = "🐈"
 warnings.filterwarnings(
     "ignore",
     message="urllib3 (.*) or chardet (.*)/charset_normalizer (.*) doesn't match a supported version!",
-    module="requests"
+    module="requests",
 )
 
 # Then try to add a more precise filter using the actual warning class
 try:
     from requests.exceptions import RequestsDependencyWarning
+
     warnings.filterwarnings("ignore", category=RequestsDependencyWarning, module="requests")
 except ImportError:
     pass
