@@ -180,7 +180,7 @@ async def chat_stream(request: Request):
                     async for line in response.aiter_lines():
                         if line:
                             # Forward the SSE line with proper event separator
-                            yield f"{line}\n\n"
+                            yield f"{line}\n"
         except httpx.RequestError as e:
             logger.error(f"Failed to connect to bot service: {e}")
             error_event = {

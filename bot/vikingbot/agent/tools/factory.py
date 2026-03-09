@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 
-from vikingbot.agent.subagent import SubagentManager
 from vikingbot.agent.tools.cron import CronTool
 from vikingbot.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from vikingbot.agent.tools.image import ImageGenerationTool
@@ -22,18 +21,21 @@ from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.agent.tools.shell import ExecTool
 from vikingbot.agent.tools.web import WebFetchTool
 from vikingbot.agent.tools.websearch import WebSearchTool
-from vikingbot.bus.events import OutboundMessage
 from vikingbot.config.loader import load_config
-from vikingbot.config.schema import Config
-from vikingbot.cron.service import CronService
+
+if TYPE_CHECKING:
+    from vikingbot.agent.subagent import SubagentManager
+    from vikingbot.bus.events import OutboundMessage
+    from vikingbot.config.schema import Config
+    from vikingbot.cron.service import CronService
 
 
 def register_default_tools(
     registry: ToolRegistry,
-    config: Config,
-    send_callback: Callable[[OutboundMessage], None] | None = None,
-    subagent_manager: SubagentManager | None = None,
-    cron_service: CronService | None = None,
+    config: "Config",
+    send_callback: "Callable[[OutboundMessage], None] | None" = None,
+    subagent_manager: "SubagentManager | None" = None,
+    cron_service: "CronService | None" = None,
     include_message_tool: bool = True,
     include_spawn_tool: bool = True,
     include_cron_tool: bool = True,
@@ -125,7 +127,7 @@ def register_default_tools(
 
 def register_subagent_tools(
     registry: ToolRegistry,
-    config: Config,
+    config: "Config",
 ) -> None:
     """
     Register tools for subagents (limited set).
