@@ -137,7 +137,6 @@ Skills with available="false" need dependencies installed first - you can try in
         now = datetime.now().strftime("%Y-%m-%d %H:%M (%A)")
         tz = _time.strftime("%Z") or "UTC"
         parts.append(f"## Current Time: {now} ({tz})")
-
         # Viking user profile
         start = _time.time()
         profile = await self.memory.get_viking_user_profile(
