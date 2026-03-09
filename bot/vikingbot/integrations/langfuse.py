@@ -94,12 +94,12 @@ class LangfuseClient:
             user_id: Optional user ID to associate with all nested observations
         """
         if not self.enabled:
-            logger.warning(f"[LANGFUSE] propagate_attributes skipped: Langfuse client not enabled")
+            logger.warning("[LANGFUSE] propagate_attributes skipped: Langfuse client not enabled")
             yield
             return
         if not self._client:
             logger.warning(
-                f"[LANGFUSE] propagate_attributes skipped: Langfuse client not initialized"
+                "[LANGFUSE] propagate_attributes skipped: Langfuse client not initialized"
             )
             yield
             return
@@ -123,7 +123,7 @@ class LangfuseClient:
                     yield
             else:
                 logger.warning(
-                    f"[LANGFUSE] propagate_attributes not available (SDK version may not support it)"
+                    "[LANGFUSE] propagate_attributes not available (SDK version may not support it)"
                 )
                 yield
         except Exception as e:

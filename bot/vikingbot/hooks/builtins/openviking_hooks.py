@@ -11,7 +11,6 @@ from ..base import Hook, HookContext
 
 try:
     import openviking as ov
-
     from vikingbot.openviking_mount.ov_server import VikingClient
 
     HAS_OPENVIKING = True

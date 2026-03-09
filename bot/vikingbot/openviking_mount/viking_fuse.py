@@ -16,14 +16,14 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from loguru import logger
 
-from .mount import OpenVikingMount, MountConfig
+from .mount import MountConfig, OpenVikingMount
 
 # 尝试导入fusepy
 try:
     from fuse import FUSE, FuseOSError, Operations
 
     FUSE_AVAILABLE = True
-except (ImportError, OSError) as e:
+except (ImportError, OSError):
     FUSE_AVAILABLE = False
     # 创建占位符
     Operations = object
@@ -33,9 +33,9 @@ except (ImportError, OSError) as e:
 
 # 只有当 FUSE 可用时才定义完整的实现
 if FUSE_AVAILABLE:
+    import errno
     import os
     import stat
-    import errno
     from datetime import datetime
 
     class OpenVikingFUSE(Operations):
@@ -405,7 +405,7 @@ if FUSE_AVAILABLE:
         logger.info(f"Mounting OpenViking FUSE at: {config.mount_point}")
         logger.info(f"  Scope: {config.scope.value}")
         logger.info(f"  Read-only: {config.read_only}")
-        logger.info(f"  Press Ctrl+C to unmount")
+        logger.info("  Press Ctrl+C to unmount")
 
         try:
             FUSE(
