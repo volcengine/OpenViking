@@ -1,6 +1,8 @@
 """Base class for agent tools."""
 
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
+from typing import Any
 
 from vikingbot.config.schema import SessionKey
 from vikingbot.sandbox.manager import SandboxManager
@@ -35,12 +37,6 @@ class ToolContext:
     sandbox_manager: SandboxManager | None = None
     workspace_id: str = sandbox_manager.to_workspace_id(session_key) if sandbox_manager else None
     sender_id: str | None = None
-
-
-"""Base class for agent tools."""
-
-from abc import ABC, abstractmethod
-from typing import Any
 
 
 class Tool(ABC):

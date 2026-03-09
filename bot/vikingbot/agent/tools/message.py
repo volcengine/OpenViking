@@ -1,8 +1,10 @@
 """Message tool for sending messages to users."""
 
+from __future__ import annotations
+
 from typing import Any, Awaitable, Callable
 
-from vikingbot.agent.tools.base import Tool
+from vikingbot.agent.tools.base import Tool, ToolContext
 from vikingbot.bus.events import OutboundMessage
 
 
@@ -37,7 +39,7 @@ class MessageTool(Tool):
             "required": ["content"],
         }
 
-    async def execute(self, tool_context: "ToolContext", **kwargs: Any) -> str:
+    async def execute(self, tool_context: ToolContext, **kwargs: Any) -> str:
 
         content = kwargs.get("content")
 

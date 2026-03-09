@@ -1,9 +1,11 @@
 """Spawn tool for creating background subagents."""
 
+from __future__ import annotations
+
 from typing import Any
 
 from vikingbot.agent.subagent import SubagentManager
-from vikingbot.agent.tools.base import Tool
+from vikingbot.agent.tools.base import Tool, ToolContext
 
 
 class SpawnTool(Tool):
@@ -14,7 +16,7 @@ class SpawnTool(Tool):
     to the main agent when complete.
     """
 
-    def __init__(self, manager: "SubagentManager"):
+    def __init__(self, manager: SubagentManager):
         self._manager = manager
 
     @property
@@ -47,7 +49,7 @@ class SpawnTool(Tool):
         }
 
     async def execute(
-        self, tool_context: "ToolContext", task: str, label: str | None = None, **kwargs: Any
+        self, tool_context: ToolContext, task: str, label: str | None = None, **kwargs: Any
     ) -> str:
         """Spawn a subagent to execute the given task."""
         return await self._manager.spawn(

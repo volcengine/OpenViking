@@ -10,9 +10,11 @@ To add a new backend:
 NO NEED TO MODIFY THIS CLASS!
 """
 
+from __future__ import annotations
+
 from typing import Any, Optional, Union
 
-from vikingbot.agent.tools.base import Tool
+from vikingbot.agent.tools.base import Tool, ToolContext
 
 # Import backends to register them
 from . import brave, ddgs, exa
@@ -96,7 +98,7 @@ class WebSearchTool(Tool):
         return self._backend
 
     async def execute(
-        self, tool_context: "ToolContext", query: str, count: Optional[int] = None, **kwargs: Any
+        self, tool_context: ToolContext, query: str, count: Optional[int] = None, **kwargs: Any
     ) -> str:
         n = min(max(count or self.max_results, 1), 20)
         return await self._backend.search(query, n, **kwargs)

@@ -1,8 +1,10 @@
 """File system tools: read, write, edit."""
 
+from __future__ import annotations
+
 from typing import Any
 
-from vikingbot.agent.tools.base import Tool
+from vikingbot.agent.tools.base import Tool, ToolContext
 
 
 class ReadFileTool(Tool):
@@ -24,7 +26,7 @@ class ReadFileTool(Tool):
             "required": ["path"],
         }
 
-    async def execute(self, tool_context: "ToolContext", path: str, **kwargs: Any) -> str:
+    async def execute(self, tool_context: ToolContext, path: str, **kwargs: Any) -> str:
         try:
             sandbox = await tool_context.sandbox_manager.get_sandbox(tool_context.session_key)
             content = await sandbox.read_file(path)
@@ -60,7 +62,7 @@ class WriteFileTool(Tool):
         }
 
     async def execute(
-        self, tool_context: "ToolContext", path: str, content: str, **kwargs: Any
+        self, tool_context: ToolContext, path: str, content: str, **kwargs: Any
     ) -> str:
         try:
             sandbox = await tool_context.sandbox_manager.get_sandbox(tool_context.session_key)
@@ -96,7 +98,7 @@ class EditFileTool(Tool):
         }
 
     async def execute(
-        self, tool_context: "ToolContext", path: str, old_text: str, new_text: str, **kwargs: Any
+        self, tool_context: ToolContext, path: str, old_text: str, new_text: str, **kwargs: Any
     ) -> str:
         try:
             sandbox = await tool_context.sandbox_manager.get_sandbox(tool_context.session_key)
@@ -140,7 +142,7 @@ class ListDirTool(Tool):
             "required": ["path"],
         }
 
-    async def execute(self, tool_context: "ToolContext", path: str, **kwargs: Any) -> str:
+    async def execute(self, tool_context: ToolContext, path: str, **kwargs: Any) -> str:
         try:
             sandbox = await tool_context.sandbox_manager.get_sandbox(tool_context.session_key)
             items = await sandbox.list_dir(path)
