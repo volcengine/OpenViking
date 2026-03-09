@@ -26,8 +26,7 @@ class DDGSBackend(WebSearchBackend):
     @property
     def is_available(self) -> bool:
         try:
-            from ddgs import DDGS
-
+            __import__("ddgs")
             return True
         except ImportError:
             return False

@@ -1,8 +1,11 @@
 """Cron tool for scheduling reminders and tasks."""
 
+from __future__ import annotations
+
 from typing import Any
 
-from vikingbot.agent.tools.base import Tool
+from vikingbot.agent.tools.base import Tool, ToolContext
+from vikingbot.config.schema import SessionKey
 from vikingbot.cron.service import CronService
 from vikingbot.cron.types import CronSchedule
 
@@ -52,7 +55,7 @@ class CronTool(Tool):
 
     async def execute(
         self,
-        tool_context: "ToolContext",
+        tool_context: ToolContext,
         action: str,
         name: str = "",
         message: str = "",
@@ -79,7 +82,7 @@ class CronTool(Tool):
         every_seconds: int | None,
         cron_expr: str | None,
         at: str | None,
-        session_key: "SessionKey",
+        session_key: SessionKey,
     ) -> str:
         if not message:
             return "Error: message is required for add"

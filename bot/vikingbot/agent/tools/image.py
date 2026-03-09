@@ -1,5 +1,7 @@
 """Image generation tool using LiteLLM's image generation capabilities."""
 
+from __future__ import annotations
+
 import base64
 import logging
 import mimetypes
@@ -11,7 +13,7 @@ from typing import Any, Awaitable, Callable
 import httpx
 import litellm
 
-from vikingbot.agent.tools.base import Tool
+from vikingbot.agent.tools.base import Tool, ToolContext
 from vikingbot.bus.events import OutboundMessage
 from vikingbot.utils import get_data_path
 
@@ -185,7 +187,7 @@ class ImageGenerationTool(Tool):
 
     async def execute(
         self,
-        tool_context: "ToolContext",
+        tool_context: ToolContext,
         mode: str = "generate",
         prompt: str | None = None,
         base_image: str | None = None,

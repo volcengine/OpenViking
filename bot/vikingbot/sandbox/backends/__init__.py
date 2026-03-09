@@ -29,4 +29,4 @@ def list_backends() -> list[str]:
 
 # Import backends to register them (avoid circular import)
 
-from vikingbot.sandbox.backends import aiosandbox, direct, opensandbox, srt
+from vikingbot.sandbox.backends import aiosandbox, direct, opensandbox, srt  # noqa: E402

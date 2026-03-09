@@ -1,5 +1,7 @@
 """Web tools: web_fetch."""
 
+from __future__ import annotations
+
 import html
 import json
 import re
@@ -8,7 +10,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from vikingbot.agent.tools.base import Tool
+from vikingbot.agent.tools.base import Tool, ToolContext
 
 # Shared constants
 USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_7_2) AppleWebKit/537.36"
@@ -62,7 +64,7 @@ class WebFetchTool(Tool):
 
     async def execute(
         self,
-        tool_context: "ToolContext",
+        tool_context: ToolContext,
         url: str,
         extractMode: str = "markdown",
         maxChars: int | None = None,

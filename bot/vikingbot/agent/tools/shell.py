@@ -1,8 +1,10 @@
 """Shell execution tool."""
 
+from __future__ import annotations
+
 from typing import Any
 
-from vikingbot.agent.tools.base import Tool
+from vikingbot.agent.tools.base import Tool, ToolContext
 
 
 class ExecTool(Tool):
@@ -35,7 +37,7 @@ class ExecTool(Tool):
 
     async def execute(
         self,
-        tool_context: "ToolContext",
+        tool_context: ToolContext,
         command: str,
         working_dir: str | None = None,
         **kwargs: Any,
