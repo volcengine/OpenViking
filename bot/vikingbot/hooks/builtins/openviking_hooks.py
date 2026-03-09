@@ -1,3 +1,4 @@
+import asyncio
 import re
 from typing import Any
 
@@ -21,13 +22,16 @@ except Exception:
 
 # Global singleton client
 _global_client: VikingClient | None = None
+_global_client_lock = asyncio.Lock()
 
 
 async def get_global_client() -> VikingClient:
     """Get or create the global singleton VikingClient."""
     global _global_client
     if _global_client is None:
-        _global_client = await VikingClient.create(None)
+        async with _global_client_lock:
+            if _global_client is None:
+                _global_client = await VikingClient.create(None)
     return _global_client
 
 
