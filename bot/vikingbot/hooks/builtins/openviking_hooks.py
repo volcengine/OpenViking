@@ -20,23 +20,24 @@ except Exception:
     VikingClient = None
     ov = None
 
-# Client cache: workspace_id -> VikingClient
-_client_cache: dict[str, VikingClient] = {}
+# Global singleton client
+_global_client: VikingClient | None = None
 
 
-async def get_cached_client(workspace_id: str) -> VikingClient:
-    """Get or create a cached VikingClient for the given workspace_id."""
-    if workspace_id not in _client_cache:
-        _client_cache[workspace_id] = await VikingClient.create(workspace_id)
-    return _client_cache[workspace_id]
+async def get_global_client() -> VikingClient:
+    """Get or create the global singleton VikingClient."""
+    global _global_client
+    if _global_client is None:
+        _global_client = await VikingClient.create(None)
+    return _global_client
 
 
 class OpenVikingCompactHook(Hook):
     name = "openviking_compact"
 
     async def _get_client(self, workspace_id: str) -> VikingClient:
-        # Use cached client to avoid repeated creation
-        return await get_cached_client(workspace_id)
+        # Use global singleton client
+        return await get_global_client()
 
     def _filter_messages_by_sender(self, messages: list[dict], allow_from: list[str]) -> list[dict]:
         """筛选出 sender_id 在 allow_from 列表中的消息"""
@@ -88,8 +89,8 @@ class OpenVikingPostCallHook(Hook):
     is_sync = True
 
     async def _get_client(self, workspace_id: str) -> VikingClient:
-        # Use cached client to avoid repeated creation
-        return await get_cached_client(workspace_id)
+        # Use global singleton client
+        return await get_global_client()
 
     async def _read_skill_memory(self, workspace_id: str, skill_name: str) -> str:
         ov_client = await self._get_client(workspace_id)
