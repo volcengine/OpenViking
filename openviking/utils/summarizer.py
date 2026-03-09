@@ -6,13 +6,14 @@ Summarizer for OpenViking.
 Handles summarization and key information extraction.
 """
 
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
-from openviking_cli.utils import get_logger
+from typing import TYPE_CHECKING, Any, Dict, List
+
 from openviking.storage.queuefs import SemanticMsg, get_queue_manager
+from openviking_cli.utils import get_logger
 
 if TYPE_CHECKING:
-    from openviking.server.identity import RequestContext
     from openviking.parse.vlm import VLMProcessor
+    from openviking.server.identity import RequestContext
 
 logger = get_logger(__name__)
 

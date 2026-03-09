@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException
 from fastapi.responses import StreamingResponse
 from loguru import logger
 
@@ -82,7 +82,7 @@ class OpenAPIChannel(BaseChannel):
         config: OpenAPIChannelConfig,
         bus: MessageBus,
         workspace_path: Path | None = None,
-        app: "FastAPI | None" = None,
+        app: FastAPI | None = None,
     ):
         super().__init__(config, bus, workspace_path)
         self.config = config

@@ -1,6 +1,6 @@
 """Web search backend registry."""
 
-from typing import Dict, List, Type, Optional
+from typing import Dict, List, Optional, Type
 
 from .base import WebSearchBackend
 

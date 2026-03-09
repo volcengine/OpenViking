@@ -4,7 +4,9 @@ import json
 import os
 from pathlib import Path
 from typing import Any
+
 from loguru import logger
+
 from vikingbot.config.schema import Config
 
 

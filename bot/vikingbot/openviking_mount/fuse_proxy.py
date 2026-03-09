@@ -1,22 +1,21 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import sys
-import os
-import stat
 import errno
-import tempfile
+import os
 import shutil
+import stat
+import sys
+import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict
-
-from datetime import datetime
 
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent))
 
 from loguru import logger
 
-from .mount import OpenVikingMount, MountConfig
+from .mount import MountConfig, OpenVikingMount
 
 try:
     from fuse import FUSE, FuseOSError, Operations
@@ -73,7 +72,7 @@ if FUSE_AVAILABLE:
                     "st_mtime": stat_info.st_mtime,
                     "st_ctime": stat_info.st_ctime,
                 }
-            print(f"2222222")
+            print("2222222")
             if path in self._pending_uploads:
                 now = datetime.now().timestamp()
                 return {
@@ -185,7 +184,7 @@ if FUSE_AVAILABLE:
                 data = self._pending_uploads[path]
                 del self._pending_uploads[path]
 
-                path_name = Path(path).name
+                Path(path).name
 
                 self._handle_upload(path, data)
 
@@ -193,7 +192,7 @@ if FUSE_AVAILABLE:
             logger.info(f"Processing PDF upload: {path}")
 
             try:
-                dir_name = Path(path).stem.replace(" ", "_")
+                Path(path).stem.replace(" ", "_")
 
                 with tempfile.NamedTemporaryFile(suffix=".tmp", delete=False) as f:
                     temp_path = Path(f.name)
@@ -230,7 +229,7 @@ if FUSE_AVAILABLE:
                 orig_path.unlink()
                 logger.info(f"Deleted from original files: {orig_path}")
 
-                path_name = Path(path).name
+                Path(path).name
 
                 dir_name = Path(path).stem.replace(" ", "_")
                 try:
@@ -300,7 +299,7 @@ def mount_fuse(config: MountConfig, foreground: bool = True) -> None:
 
     logger.info(f"Mounting OpenViking FUSE Proxy at: {config.mount_point}")
     logger.info(f"  Proxy to: {config.openviking_data_path / '.original_files'}")
-    logger.info(f"  Press Ctrl+C to unmount")
+    logger.info("  Press Ctrl+C to unmount")
 
     try:
         FUSE(

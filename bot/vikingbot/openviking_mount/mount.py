@@ -7,14 +7,14 @@ OpenViking Filesystem Mount Module - Core Implementation
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
-import openviking as ov
+from pathlib import Path
+from typing import List, Optional, Union
 
 from loguru import logger
+
+import openviking as ov
 
 
 class MountScope(Enum):
@@ -371,7 +371,7 @@ class OpenVikingMount:
                     is_dir=False,  # 需要根据实际结果判断
                 )
                 if hasattr(r, "score"):
-                    setattr(file_info, "score", r.score)
+                    file_info.score = r.score
                 file_infos.append(file_info)
 
             return file_infos

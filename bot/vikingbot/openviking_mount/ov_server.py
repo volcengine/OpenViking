@@ -1,9 +1,9 @@
 import asyncio
 import hashlib
-from typing import List, Dict, Any, Optional
+import time
+from typing import Any, Dict, List, Optional
 
 from loguru import logger
-import time
 
 import openviking as ov
 from vikingbot.config.loader import load_config
@@ -335,7 +335,8 @@ class VikingClient:
         """提交会话"""
         import re
         import uuid
-        from openviking.message.part import Part, TextPart, ToolPart
+
+        from openviking.message.part import TextPart, ToolPart
 
         user_exists = await self._check_user_exists(user_id)
         if not user_exists:

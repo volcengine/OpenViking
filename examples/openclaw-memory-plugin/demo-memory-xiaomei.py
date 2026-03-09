@@ -26,7 +26,6 @@ OpenClaw Memory Plugin 演示脚本 — 用户: 小美（日常生活记录）
 """
 
 import argparse
-import sys
 import time
 
 import requests

@@ -1,10 +1,8 @@
-import pytest
-import asyncio
-import os
 import json
-import shutil
-from pathlib import Path
-from unittest.mock import MagicMock, AsyncMock, patch
+import os
+from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from openviking.async_client import AsyncOpenViking
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton

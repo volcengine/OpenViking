@@ -5,8 +5,8 @@ import json
 import os
 import subprocess
 import sys
-import traceback
 import time
+import traceback
 
 from opencode_ai import Opencode
 
@@ -24,7 +24,7 @@ def execute_cmd(cmd):
             check=True,  # 等价于check_output的行为，命令失败会抛异常
         )
         stdout = result.stdout.strip()  # 去除空白符（换行/空格）
-        stderr = result.stderr.strip()
+        result.stderr.strip()
         return stdout
     except subprocess.CalledProcessError as e:
         # 捕获命令执行失败的异常（返回码非0）
@@ -80,7 +80,7 @@ def check_serve_status():
     """测试opencode连接，失败则启动服务并重试"""
     try:
         client = Opencode(base_url="http://127.0.0.1:4096")
-        modes = client.app.modes()
+        client.app.modes()
     except Exception as e:
         print(f"连接opencode失败，错误: {e}")
         # 启动服务

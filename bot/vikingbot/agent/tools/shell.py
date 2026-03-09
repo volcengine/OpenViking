@@ -1,18 +1,8 @@
 """Shell execution tool."""
 
-import asyncio
-import os
-import re
-from pathlib import Path
-from typing import TYPE_CHECKING, Any
-
-from loguru import logger
+from typing import Any
 
 from vikingbot.agent.tools.base import Tool
-from vikingbot.config.schema import SessionKey
-
-
-from vikingbot.sandbox.manager import SandboxManager
 
 
 class ExecTool(Tool):
