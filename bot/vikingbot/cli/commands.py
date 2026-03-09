@@ -258,7 +258,7 @@ def gateway(
 
     cron = prepare_cron(bus)
     channels = prepare_channel(
-        config, bus, fastapi_app=fastapi_app, enable_openapi=True, openapi_port=port
+        config, bus, fastapi_app=fastapi_app, enable_openapi=True
     )
     agent_loop = prepare_agent_loop(config, bus, session_manager, cron)
     heartbeat = prepare_heartbeat(config, agent_loop, session_manager)
@@ -400,7 +400,7 @@ Reminder message to deliver:
 
 
 def prepare_channel(
-    config, bus, fastapi_app=None, enable_openapi: bool = False, openapi_port: int = 18790
+    config, bus, fastapi_app=None, enable_openapi: bool = False
 ):
     """Prepare channels for the bot.
 
@@ -420,7 +420,6 @@ def prepare_channel(
 
         openapi_config = OpenAPIChannelConfig(
             enabled=True,
-            port=openapi_port,
             api_key="",  # No auth required by default
         )
         openapi_channel = OpenAPIChannel(
@@ -429,7 +428,7 @@ def prepare_channel(
             app=fastapi_app,  # Pass the external FastAPI app
         )
         channels.add_channel(openapi_channel)
-        logger.info(f"OpenAPI channel enabled on port {openapi_port}")
+        logger.info(f"OpenAPI channel enabled")
 
     if channels.enabled_channels:
         console.print(f"[green]✓[/green] Channels enabled: {', '.join(channels.enabled_channels)}")
