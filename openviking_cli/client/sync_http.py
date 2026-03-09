@@ -133,6 +133,7 @@ class SyncHTTPClient:
                 to,
                 parent,
                 reason,
+                instruction,
                 wait,
                 timeout,
                 strict,
