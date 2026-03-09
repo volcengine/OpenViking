@@ -1,7 +1,12 @@
+from pathlib import Path
+
 import openviking as ov
 
 # Initialize OpenViking client with data directory
 client = ov.SyncOpenViking(path="./data")
+
+# Path to test data file
+data_path = Path(__file__).parent / "experience_data_mini.json"
 
 try:
     # Initialize the client
@@ -9,7 +14,7 @@ try:
 
     # Add resource (supports URL, file, or directory)
     add_result = client.add_resource(
-        path="/Users/bytedance/Downloads/exp/experience_data_mini.json",
+        path=str(data_path),
         resource_type="json",  # 明确指定类型
         tags=["large_data", "agent_context", "structured"],
     )
