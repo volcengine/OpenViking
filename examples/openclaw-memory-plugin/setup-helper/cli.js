@@ -248,6 +248,7 @@ function buildOvvConfJson(opts = {}) {
   const {
     apiKey = "",
     serverPort = DEFAULT_SERVER_PORT,
+    agfsPort = DEFAULT_AGFS_PORT,
     vlmModel = DEFAULT_VLM_MODEL,
     embeddingModel = DEFAULT_EMBEDDING_MODEL,
     workspace = DEFAULT_WORKSPACE,
@@ -262,7 +263,7 @@ function buildOvvConfJson(opts = {}) {
     storage: {
       workspace,
       vectordb: { name: "context", backend: "local", project: "default" },
-      agfs: { log_level: "warn", backend: "local", timeout: 10, retry_times: 3 },
+      agfs: { port: agfsPort, log_level: "warn", backend: "local", timeout: 10, retry_times: 3 },
     },
     embedding: {
       dense: {
@@ -317,9 +318,10 @@ async function getOvvConfPorts(cfgPath) {
     const cfg = JSON.parse(raw);
     return {
       serverPort: cfg?.server?.port ?? DEFAULT_SERVER_PORT,
+      agfsPort: cfg?.storage?.agfs?.port ?? DEFAULT_AGFS_PORT,
     };
   } catch {
-    return { serverPort: DEFAULT_SERVER_PORT };
+    return { serverPort: DEFAULT_SERVER_PORT, agfsPort: DEFAULT_AGFS_PORT };
   }
 }
 
@@ -360,6 +362,7 @@ async function updateOvvConf(cfgPath, opts = {}) {
     cfg.embedding.dense.model = opts.embeddingModel;
   }
   if (opts.serverPort !== undefined && cfg.server) cfg.server.port = opts.serverPort;
+  if (opts.agfsPort !== undefined && cfg.storage?.agfs) cfg.storage.agfs.port = opts.agfsPort;
   await writeFile(cfgPath, JSON.stringify(cfg, null, 2));
 }
 
@@ -369,6 +372,7 @@ async function collectOvvConfInteractive(nonInteractive) {
   const opts = {
     apiKey: process.env.OPENVIKING_ARK_API_KEY || "",
     serverPort: DEFAULT_SERVER_PORT,
+    agfsPort: DEFAULT_AGFS_PORT,
     vlmModel: DEFAULT_VLM_MODEL,
     embeddingModel: DEFAULT_EMBEDDING_MODEL,
     workspace: DEFAULT_WORKSPACE,
@@ -400,6 +404,8 @@ async function collectOvvConfInteractive(nonInteractive) {
   console.log("\n--- Server Ports ---");
   const serverPortStr = await question(`OpenViking HTTP port`, String(DEFAULT_SERVER_PORT));
   opts.serverPort = parsePort(serverPortStr, DEFAULT_SERVER_PORT);
+  const agfsPortStr = await question(`AGFS port`, String(DEFAULT_AGFS_PORT));
+  opts.agfsPort = parsePort(agfsPortStr, DEFAULT_AGFS_PORT);
 
   return opts;
 }
