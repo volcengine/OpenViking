@@ -175,7 +175,8 @@ def _start_vikingbot_gateway(enable_logging: bool, log_dir: str) -> Optional[Bot
 
     # Check if vikingbot is available
     vikingbot_cmd = None
-    if subprocess.run(["which", "vikingbot"], capture_output=True).returncode == 0:
+    import shutil
+    if shutil.which("vikingbot"):
         vikingbot_cmd = ["vikingbot", "gateway"]
     else:
         # Try python -m vikingbot
