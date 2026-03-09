@@ -3,11 +3,12 @@
 import base64
 import mimetypes
 import platform
-from pathlib import Path
-from typing import Any
-from loguru import logger
 import time as _time
 from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+from loguru import logger
 
 from vikingbot.agent.memory import MemoryStore
 from vikingbot.agent.skills import SkillsLoader

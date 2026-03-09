@@ -35,17 +35,17 @@ from vikingbot.config.schema import FeishuChannelConfig
 try:
     import lark_oapi as lark
     from lark_oapi.api.im.v1 import (
-        CreateMessageRequest,
-        CreateMessageRequestBody,
         CreateMessageReactionRequest,
         CreateMessageReactionRequestBody,
+        CreateMessageRequest,
+        CreateMessageRequestBody,
         Emoji,
-        P2ImMessageReceiveV1,
+        GetChatRequest,
         GetImageRequest,
         GetMessageResourceRequest,
+        P2ImMessageReceiveV1,
         ReplyMessageRequest,
         ReplyMessageRequestBody,
-        GetChatRequest,
     )
 
     FEISHU_AVAILABLE = True
@@ -703,7 +703,6 @@ class FeishuChannel(BaseChannel):
                             image_bytes = await self._download_feishu_image(image_key, message_id)
                             if image_bytes:
                                 # Save to workspace/media directory
-                                from pathlib import Path
 
                                 media_dir = get_data_path() / "received"
 
@@ -762,8 +761,8 @@ class FeishuChannel(BaseChannel):
                 },
             )
 
-        except Exception as e:
-            logger.exception(f"Error processing Feishu message")
+        except Exception:
+            logger.exception("Error processing Feishu message")
 
     async def _extract_and_upload_images(self, content: str) -> tuple[str, list[dict]]:
         """Extract images from markdown content, upload to Feishu, and return cleaned content."""
