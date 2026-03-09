@@ -36,8 +36,8 @@ class OpenVikingCompactHook(Hook):
     name = "openviking_compact"
 
     async def _get_client(self, workspace_id: str) -> VikingClient:
-        # Use global singleton client
-        return await get_global_client()
+        # Always create a new client to avoid shared state issues
+        return await VikingClient.create(workspace_id)
 
     def _filter_messages_by_sender(self, messages: list[dict], allow_from: list[str]) -> list[dict]:
         """筛选出 sender_id 在 allow_from 列表中的消息"""
@@ -89,8 +89,8 @@ class OpenVikingPostCallHook(Hook):
     is_sync = True
 
     async def _get_client(self, workspace_id: str) -> VikingClient:
-        # Use global singleton client
-        return await get_global_client()
+        # Always create a new client to avoid shared state issues
+        return await VikingClient.create(workspace_id)
 
     async def _read_skill_memory(self, workspace_id: str, skill_name: str) -> str:
         ov_client = await self._get_client(workspace_id)
