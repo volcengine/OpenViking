@@ -134,6 +134,102 @@ export async function quickRecallPrecheck(
 
 export interface ProcessLogger {
   info?: (msg: string) => void;
+  warn?: (msg: string) => void;
+}
+
+/**
+ * Prepare a port for local OpenViking startup.
+ *
+ * 1. If the port hosts an OpenViking instance (health check passes) → kill it, return same port.
+ * 2. If the port is occupied by something else → auto-find the next free port.
+ * 3. If the port is free → return it as-is.
+ */
+export async function prepareLocalPort(
+  port: number,
+  logger: ProcessLogger,
+  maxRetries: number = 10,
+): Promise<number> {
+  const isOpenViking = await quickHealthCheck(`http://127.0.0.1:${port}`, 2000);
+  if (isOpenViking) {
+    logger.info?.(`memory-openviking: killing stale OpenViking on port ${port}`);
+    await killProcessOnPort(port, logger);
+    return port;
+  }
+
+  const occupied = await quickTcpProbe("127.0.0.1", port, 500);
+  if (!occupied) {
+    return port;
+  }
+
+  // Port occupied by non-OpenViking process — find next free port
+  logger.warn?.(`memory-openviking: port ${port} is occupied by another process, searching for a free port...`);
+  for (let candidate = port + 1; candidate <= port + maxRetries; candidate++) {
+    if (candidate > 65535) break;
+    const taken = await quickTcpProbe("127.0.0.1", candidate, 300);
+    if (!taken) {
+      logger.info?.(`memory-openviking: using free port ${candidate} instead of ${port}`);
+      return candidate;
+    }
+  }
+  throw new Error(
+    `memory-openviking: port ${port} is occupied and no free port found in range ${port + 1}-${port + maxRetries}`,
+  );
+}
+
+function killProcessOnPort(port: number, logger: ProcessLogger): Promise<void> {
+  return IS_WIN ? killProcessOnPortWin(port, logger) : killProcessOnPortUnix(port, logger);
+}
+
+async function killProcessOnPortWin(port: number, logger: ProcessLogger): Promise<void> {
+  try {
+    const netstatOut = execSync(
+      `netstat -ano | findstr "LISTENING" | findstr ":${port}"`,
+      { encoding: "utf-8", shell: "cmd.exe" },
+    ).trim();
+    if (!netstatOut) return;
+    const pids = new Set<number>();
+    for (const line of netstatOut.split(/\r?\n/)) {
+      const m = line.trim().match(/\s(\d+)\s*$/);
+      if (m) pids.add(Number(m[1]));
+    }
+    for (const pid of pids) {
+      if (pid > 0) {
+        logger.info?.(`memory-openviking: killing pid ${pid} on port ${port}`);
+        try { execSync(`taskkill /PID ${pid} /F`, { shell: "cmd.exe" }); } catch { /* already gone */ }
+      }
+    }
+    if (pids.size) await new Promise((r) => setTimeout(r, 500));
+  } catch { /* netstat not available or no stale process */ }
+}
+
+async function killProcessOnPortUnix(port: number, logger: ProcessLogger): Promise<void> {
+  try {
+    let pids: number[] = [];
+    try {
+      const lsofOut = execSync(`lsof -ti tcp:${port} -s tcp:listen 2>/dev/null || true`, {
+        encoding: "utf-8",
+        shell: "/bin/sh",
+      }).trim();
+      if (lsofOut) pids = lsofOut.split(/\s+/).map((s) => Number(s)).filter((n) => n > 0);
+    } catch { /* lsof not available */ }
+    if (pids.length === 0) {
+      try {
+        const ssOut = execSync(
+          `ss -tlnp 2>/dev/null | awk -v p=":${port}" '$4 ~ p {gsub(/.*pid=/,""); gsub(/,.*/,""); print; exit}'`,
+          { encoding: "utf-8", shell: "/bin/sh" },
+        ).trim();
+        if (ssOut) {
+          const n = Number(ssOut);
+          if (n > 0) pids = [n];
+        }
+      } catch { /* ss not available */ }
+    }
+    for (const pid of pids) {
+      logger.info?.(`memory-openviking: killing pid ${pid} on port ${port}`);
+      try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+    }
+    if (pids.length) await new Promise((r) => setTimeout(r, 500));
+  } catch { /* port check failed */ }
 }
 
 export function resolvePythonCommand(logger: ProcessLogger): string {
@@ -171,7 +267,7 @@ export function resolvePythonCommand(logger: ProcessLogger): string {
   if (!pythonCmd) {
     if (IS_WIN) {
       try {
-        pythonCmd = execSync("where python", { encoding: "utf-8", shell: true }).split(/\r?\n/)[0].trim();
+        pythonCmd = execSync("where python", { encoding: "utf-8", shell: "cmd.exe" }).split(/\r?\n/)[0].trim();
       } catch {
         pythonCmd = "python";
       }
