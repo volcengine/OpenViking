@@ -121,7 +121,7 @@ jobs:
       inputs.build_wheels &&
       (
         contains(inputs.os_json, 'linux') ||
-        contains(inputs.os_json, 'ubuntu-24.04') ||
+        contains(inputs.os_json, '"ubuntu-24.04"') ||
         contains(inputs.os_json, 'ubuntu-24.04-arm')
       )
     runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
@@ -133,7 +133,7 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ${{ fromJson(inputs.python_json) }}
-        arch: ${{ contains(inputs.os_json, 'linux') && fromJson('["x86_64","aarch64"]') || (contains(inputs.os_json, 'ubuntu-24.04') && contains(inputs.os_json, 'ubuntu-24.04-arm')) && fromJson('["x86_64","aarch64"]') || contains(inputs.os_json, 'ubuntu-24.04-arm') && fromJson('["aarch64"]') || fromJson('["x86_64"]') }}
+        arch: ${{ contains(inputs.os_json, 'linux') && fromJson('["x86_64","aarch64"]') || (contains(inputs.os_json, '"ubuntu-24.04"') && contains(inputs.os_json, 'ubuntu-24.04-arm')) && fromJson('["x86_64","aarch64"]') || contains(inputs.os_json, 'ubuntu-24.04-arm') && fromJson('["aarch64"]') || fromJson('["x86_64"]') }}
     
     steps:
     - name: Install system dependencies (Linux)
@@ -291,7 +291,7 @@ jobs:
     name: Build non-Linux distributions
     # Run only when non-Linux runners are explicitly requested
     if: inputs.build_wheels && (contains(inputs.os_json, 'macos') || contains(inputs.os_json, 'windows'))
-    runs-on: ${{ matrix.os || 'ubuntu-24.04' }}
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
