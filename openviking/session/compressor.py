@@ -319,83 +319,23 @@ class SessionCompressor:
         Returns:
             (tool_name, skill_name, tool_status) tuple
         """
-        from difflib import SequenceMatcher
-
-        def _normalize(name: str) -> str:
-            return (
-                (name or "")
-                .lower()
-                .strip()
-                .replace("_", "")
-                .replace("-", "")
-                .replace(" ", "")
-            )
-
-        tool_status = "completed"
+        from .tool_skill_utils import calibrate_skill_name, calibrate_tool_name
 
         if candidate.category == MemoryCategory.TOOLS:
             candidate_tool = (candidate.tool_name or "").strip()
             if not candidate_tool:
-                return ("", "", tool_status)
-
-            candidate_norm = _normalize(candidate_tool)
-            best_ratio = -1.0
-            best_tool_name = ""
-            best_status = "completed"
-
-            for part in tool_parts:
-                part_tool = (getattr(part, "tool_name", "") or "").strip()
-                if not part_tool:
-                    continue
-
-                part_norm = _normalize(part_tool)
-                if part_tool == candidate_tool or (candidate_norm and part_norm == candidate_norm):
-                    return (part_tool, "", part.tool_status or "completed")
-
-                ratio = SequenceMatcher(None, candidate_norm, part_norm).ratio()
-                if ratio > best_ratio or (ratio == best_ratio and ratio >= 0):
-                    best_ratio = ratio
-                    best_tool_name = part_tool
-                    best_status = part.tool_status or "completed"
-
-            if best_ratio >= 0.8 and best_tool_name:
-                return (best_tool_name, "", best_status)
-            return ("", "", tool_status)
+                return ("", "", "completed")
+            calibrated_name, status = calibrate_tool_name(candidate_tool, tool_parts)
+            return (calibrated_name, "", status)
 
         if candidate.category == MemoryCategory.SKILLS:
             candidate_skill = (candidate.skill_name or "").strip()
             if not candidate_skill:
-                return ("", "", tool_status)
+                return ("", "", "completed")
+            calibrated_name, status = calibrate_skill_name(candidate_skill, tool_parts)
+            return ("", calibrated_name, status)
 
-            candidate_norm = _normalize(candidate_skill)
-            best_ratio = -1.0
-            best_skill_name = ""
-            best_status = "completed"
-
-            for part in tool_parts:
-                part_uri = getattr(part, "skill_uri", "")
-                if not part_uri:
-                    continue
-
-                part_skill = self._extract_skill_name_from_uri(part_uri)
-                if not part_skill:
-                    continue
-
-                part_norm = _normalize(part_skill)
-                if part_skill == candidate_skill or (candidate_norm and part_norm == candidate_norm):
-                    return ("", part_skill, part.tool_status or "completed")
-
-                ratio = SequenceMatcher(None, candidate_norm, part_norm).ratio()
-                if ratio > best_ratio or (ratio == best_ratio and ratio >= 0):
-                    best_ratio = ratio
-                    best_skill_name = part_skill
-                    best_status = part.tool_status or "completed"
-
-            if best_ratio >= 0.9 and best_skill_name:
-                return ("", best_skill_name, best_status)
-            return ("", "", tool_status)
-
-        return ("", "", tool_status)
+        return ("", "", "completed")
 
     def _is_similar_name(self, name1: str, name2: str) -> bool:
         """Check if two names are similar enough to be considered the same.
@@ -418,13 +358,6 @@ class SessionCompressor:
 
         ratio = SequenceMatcher(None, n1, n2).ratio()
         return ratio >= 0.7
-
-    def _extract_skill_name_from_uri(self, skill_uri: str) -> str:
-        """从 skill_uri 提取 skill_name
-
-        例如: viking://agent/skills/create_presentation -> create_presentation
-        """
-        return skill_uri.rstrip("/").split("/")[-1]
 
     def _extract_used_uris(self, messages: List[Message]) -> Dict[str, List[str]]:
         """Extract URIs used in messages."""

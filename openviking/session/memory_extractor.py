@@ -204,36 +204,6 @@ class MemoryExtractor:
 
         return "\n".join(lines) if lines else ""
 
-    def _collect_tool_stats_from_messages(self, messages: list) -> dict:
-        """从消息中收集工具统计数据"""
-        from openviking.message.part import ToolPart
-
-        stats_map = {}
-        for msg in messages:
-            parts = getattr(msg, "parts", [])
-            for part in parts:
-                if isinstance(part, ToolPart):
-                    name = part.tool_name
-                    if not name:
-                        continue
-                    if name not in stats_map:
-                        stats_map[name] = {
-                            "duration_ms": 0,
-                            "prompt_tokens": 0,
-                            "completion_tokens": 0,
-                            "success_time": 0,
-                            "call_count": 0,
-                        }
-                    stats_map[name]["call_count"] += 1
-                    if part.duration_ms is not None:
-                        stats_map[name]["duration_ms"] += part.duration_ms
-                    if part.prompt_tokens is not None:
-                        stats_map[name]["prompt_tokens"] += part.prompt_tokens
-                    if part.completion_tokens is not None:
-                        stats_map[name]["completion_tokens"] += part.completion_tokens
-                    if part.tool_status == "completed":
-                        stats_map[name]["success_time"] += 1
-        return stats_map
 
     async def extract(
         self,

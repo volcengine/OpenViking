@@ -52,6 +52,7 @@ def _calibrate_name(
             return (part_name, getattr(part, "tool_status", None) or "completed")
 
         ratio = SequenceMatcher(None, candidate_norm, part_norm).ratio()
+        # tie-break: prefer the last occurrence when multiple parts have the same similarity
         if ratio > best_ratio or (ratio == best_ratio and ratio >= 0):
             best_ratio = ratio
             best_name = part_name
