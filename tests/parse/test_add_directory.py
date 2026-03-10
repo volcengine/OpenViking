@@ -790,7 +790,7 @@ class TestPreserveStructure:
         for uri in fake_fs.files:
             idx = uri.find(f"/{dir_name}/")
             if idx >= 0:
-                rel = uri[idx + len(f"/{dir_name}/"):]
+                rel = uri[idx + len(f"/{dir_name}/") :]
                 rel_paths.add(rel)
 
         assert "top.py" in rel_paths
@@ -810,7 +810,7 @@ class TestPreserveStructure:
         for uri in fake_fs.files:
             idx = uri.find(f"/{dir_name}/")
             if idx >= 0:
-                rel = uri[idx + len(f"/{dir_name}/"):]
+                rel = uri[idx + len(f"/{dir_name}/") :]
                 rel_paths.add(rel)
 
         # All files should be at the top level (no '/' in paths)
@@ -835,7 +835,7 @@ class TestPreserveStructure:
         for uri in fake_fs.files:
             idx = uri.find(f"/{dir_name}/")
             if idx >= 0:
-                rel = uri[idx + len(f"/{dir_name}/"):]
+                rel = uri[idx + len(f"/{dir_name}/") :]
                 rel_paths.add(rel)
 
         # Structure should be preserved by default

@@ -110,13 +110,13 @@ async def add_resource(
     if path is None:
         raise InvalidArgumentError("Either 'path' or 'temp_path' must be provided.")
 
-    kwargs = dict(
-        strict=request.strict,
-        ignore_dirs=request.ignore_dirs,
-        include=request.include,
-        exclude=request.exclude,
-        directly_upload_media=request.directly_upload_media,
-    )
+    kwargs = {
+        "strict": request.strict,
+        "ignore_dirs": request.ignore_dirs,
+        "include": request.include,
+        "exclude": request.exclude,
+        "directly_upload_media": request.directly_upload_media,
+    }
     if request.preserve_structure is not None:
         kwargs["preserve_structure"] = request.preserve_structure
 

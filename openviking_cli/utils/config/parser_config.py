@@ -522,10 +522,7 @@ def get_parser_config(
     """
     if parser_type not in PARSER_CONFIG_REGISTRY:
         supported = list(PARSER_CONFIG_REGISTRY.keys())
-        raise ValueError(
-            f"Unsupported parser type: '{parser_type}'. "
-            f"Supported: {supported}"
-        )
+        raise ValueError(f"Unsupported parser type: '{parser_type}'. Supported: {supported}")
 
     config_class = PARSER_CONFIG_REGISTRY[parser_type]
 

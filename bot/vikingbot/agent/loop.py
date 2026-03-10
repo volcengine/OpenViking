@@ -1,9 +1,12 @@
 """Agent loop: the core processing engine."""
 
+from __future__ import annotations
+
 import asyncio
 import json
 import time
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from loguru import logger
 
@@ -23,6 +26,10 @@ from vikingbot.sandbox import SandboxManager
 from vikingbot.session.manager import SessionManager
 from vikingbot.utils.helpers import cal_str_tokens
 from vikingbot.utils.tracing import trace
+
+if TYPE_CHECKING:
+    from vikingbot.config.schema import ExecToolConfig
+    from vikingbot.cron.service import CronService
 
 
 class AgentLoop:
@@ -87,7 +94,7 @@ class AgentLoop:
             ...     max_iterations=30,
             ... )
         """
-        from vikingbot.config.schema import ExecToolConfig
+        from vikingbot.config.schema import ExecToolConfig  # noqa: F811
 
         self.bus = bus
         self.provider = provider
@@ -305,7 +312,7 @@ class AgentLoop:
                 results = await asyncio.gather(*tool_tasks)
 
                 # Stage 3: Process results sequentially in original order
-                for idx, tool_call, result, tool_execute_duration in results:
+                for _idx, tool_call, result, tool_execute_duration in results:
                     args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
                     logger.info(f"[TOOL_CALL]: {tool_call.name}({args_str[:200]})")
                     logger.info(f"[RESULT]: {str(result)[:600]}")

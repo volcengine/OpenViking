@@ -6,10 +6,9 @@ Embedding utilities for OpenViking.
 Common logic for creating Context objects and enqueuing them to EmbeddingQueue.
 """
 
-import asyncio
 import os
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Dict, Optional
 
 from openviking.core.context import Context, ContextLevel, ResourceContentType, Vectorize
 from openviking.server.identity import RequestContext

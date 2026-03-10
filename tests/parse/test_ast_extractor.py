@@ -2,9 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for AST-based code skeleton extraction."""
 
-import pytest
 from openviking.parse.parsers.code.ast.skeleton import ClassSkeleton, CodeSkeleton, FunctionSig
-
 
 # ---------------------------------------------------------------------------
 # Helpers

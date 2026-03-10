@@ -141,7 +141,17 @@ class OpenVikingConfig(BaseModel):
         parser_configs = {}
         if "parsers" in config_copy:
             parser_configs = config_copy.pop("parsers")
-        parser_types = ["pdf", "code", "image", "audio", "video", "markdown", "html", "text", "directory"]
+        parser_types = [
+            "pdf",
+            "code",
+            "image",
+            "audio",
+            "video",
+            "markdown",
+            "html",
+            "text",
+            "directory",
+        ]
         for parser_type in parser_types:
             if parser_type in config_copy:
                 parser_configs[parser_type] = config_copy.pop(parser_type)
