@@ -333,8 +333,8 @@ class VikingGlobTool(OVFileTool):
             result = await client.glob(pattern, uri=uri or None)
 
             if isinstance(result, dict):
-                matches = result.get("result", {}).get("matches", [])
-                count = result.get("result", {}).get("count", 0)
+                matches = result.get("matches", [])
+                count = result.get("count", 0)
             else:
                 matches = getattr(result, "matches", [])
                 count = getattr(result, "count", 0)

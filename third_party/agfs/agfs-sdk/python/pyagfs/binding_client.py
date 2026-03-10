@@ -387,6 +387,7 @@ class AGFSBindingClient:
         recursive: bool = False,
         case_insensitive: bool = False,
         stream: bool = False,
+        node_limit: Optional[int] = None,
     ):
         """Search for a pattern in files."""
         raise AGFSNotSupportedError("Grep not supported in binding mode")

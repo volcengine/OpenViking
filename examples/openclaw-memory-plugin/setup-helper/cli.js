@@ -10,7 +10,7 @@ import { mkdir, writeFile, access, readFile, rm } from "node:fs/promises";
 import { createInterface } from "node:readline";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { existsSync } from "node:fs";
+import { existsSync, readdirSync } from "node:fs";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const GITHUB_RAW =
@@ -20,10 +20,10 @@ const GITHUB_RAW =
 const IS_WIN = process.platform === "win32";
 const IS_LINUX = process.platform === "linux";
 const HOME = process.env.HOME || process.env.USERPROFILE || "";
-const OPENCLAW_DIR = join(HOME, ".openclaw");
+let OPENCLAW_DIR = join(HOME, ".openclaw");
 const OPENVIKING_DIR = join(HOME, ".openviking");
-const EXT_DIR = join(OPENCLAW_DIR, "extensions");
-const PLUGIN_DEST = join(EXT_DIR, "memory-openviking");
+let EXT_DIR = join(OPENCLAW_DIR, "extensions");
+let PLUGIN_DEST = join(EXT_DIR, "memory-openviking");
 
 // ─── Utility helpers ───
 
@@ -100,6 +100,60 @@ async function questionApiKey(prompt) {
       resolve((answer ?? "").trim());
     });
   });
+}
+
+// ─── Workdir detection & mode selection ───
+
+function detectOpenclawInstances() {
+  const instances = [];
+  try {
+    const entries = readdirSync(HOME, { withFileTypes: true });
+    for (const entry of entries) {
+      if (!entry.isDirectory()) continue;
+      if (entry.name === ".openclaw" || entry.name.startsWith(".openclaw-")) {
+        instances.push(join(HOME, entry.name));
+      }
+    }
+  } catch {}
+  return instances.sort();
+}
+
+async function selectWorkdir(nonInteractive) {
+  const instances = detectOpenclawInstances();
+  if (instances.length <= 1) return; // keep default
+
+  if (nonInteractive) return;
+
+  console.log("\nFound multiple OpenClaw instances:");
+  for (let i = 0; i < instances.length; i++) {
+    console.log(`  ${i + 1}) ${instances[i]}`);
+  }
+  const choice = await question("Select instance number", "1");
+  const idx = parseInt(choice, 10) - 1;
+  if (idx >= 0 && idx < instances.length) {
+    OPENCLAW_DIR = instances[idx];
+  } else {
+    log("Invalid selection, using default", "warn");
+    OPENCLAW_DIR = instances[0];
+  }
+  EXT_DIR = join(OPENCLAW_DIR, "extensions");
+  PLUGIN_DEST = join(EXT_DIR, "memory-openviking");
+}
+
+async function selectMode(nonInteractive) {
+  if (nonInteractive) return "local";
+  const choice = await question("Plugin mode (local/remote)", "local");
+  return choice.toLowerCase() === "remote" ? "remote" : "local";
+}
+
+async function collectRemoteConfig(nonInteractive) {
+  const opts = { baseUrl: "http://127.0.0.1:1933", apiKey: "", agentId: "" };
+  if (nonInteractive) return opts;
+
+  opts.baseUrl = await question("OpenViking server URL", opts.baseUrl);
+  opts.apiKey = (await questionApiKey("API Key (optional, leave blank to skip): ")) || "";
+  opts.agentId = (await questionApiKey("Agent ID (optional, leave blank to skip): ")) || "";
+  return opts;
 }
 
 // ─── Distro detection ───
@@ -428,7 +482,7 @@ async function fixStalePluginPaths(pluginPath) {
   } catch {}
 }
 
-async function configureOpenclawViaJson(pluginPath, serverPort) {
+async function configureOpenclawViaJson(pluginPath, serverPort, pluginMode = "local", remoteOpts = {}) {
   const cfgPath = join(OPENCLAW_DIR, "openclaw.json");
   let cfg = {};
   try { cfg = JSON.parse(await readFile(cfgPath, "utf8")); } catch { /* start fresh */ }
@@ -442,31 +496,41 @@ async function configureOpenclawViaJson(pluginPath, serverPort) {
   if (!paths.includes(pluginPath)) paths.push(pluginPath);
   cfg.plugins.load.paths = paths;
   if (!cfg.plugins.entries) cfg.plugins.entries = {};
-  const ovConfPath = join(OPENVIKING_DIR, "ov.conf");
-  cfg.plugins.entries["memory-openviking"] = {
-    config: {
-      mode: "local",
-      configPath: ovConfPath,
-      port: serverPort,
-      targetUri: "viking://user/memories",
-      autoRecall: true,
-      autoCapture: true,
-    },
+
+  const pluginConfig = {
+    mode: pluginMode,
+    targetUri: "viking://user/memories",
+    autoRecall: true,
+    autoCapture: true,
   };
+  if (pluginMode === "local") {
+    pluginConfig.configPath = join(OPENVIKING_DIR, "ov.conf");
+    pluginConfig.port = serverPort;
+  } else {
+    pluginConfig.baseUrl = remoteOpts.baseUrl || "http://127.0.0.1:1933";
+    if (remoteOpts.apiKey) pluginConfig.apiKey = remoteOpts.apiKey;
+    if (remoteOpts.agentId) pluginConfig.agentId = remoteOpts.agentId;
+  }
+  cfg.plugins.entries["memory-openviking"] = { config: pluginConfig };
+
   if (!cfg.gateway) cfg.gateway = {};
   cfg.gateway.mode = "local";
   await mkdir(OPENCLAW_DIR, { recursive: true });
   await writeFile(cfgPath, JSON.stringify(cfg, null, 2) + "\n");
 }
 
-async function configureOpenclawViaCli(pluginPath, serverPort, mode) {
-  const runNoShell = (cmd, args, opts = {}) => run(cmd, args, { ...opts, shell: false });
-  if (mode === "link") {
+async function configureOpenclawViaCli(pluginPath, serverPort, installMode, pluginMode = "local", remoteOpts = {}) {
+  const extraEnv = OPENCLAW_DIR !== join(HOME, ".openclaw")
+    ? { env: { ...process.env, OPENCLAW_STATE_DIR: OPENCLAW_DIR } }
+    : {};
+  const runNoShell = (cmd, args, opts = {}) => run(cmd, args, { ...opts, ...extraEnv, shell: false });
+
+  if (installMode === "link") {
     if (existsSync(PLUGIN_DEST)) {
       log(`Removing old plugin dir ${PLUGIN_DEST}...`, "info");
       await rm(PLUGIN_DEST, { recursive: true, force: true });
     }
-    await run("openclaw", ["plugins", "install", "-l", pluginPath]);
+    await run("openclaw", ["plugins", "install", "-l", pluginPath], extraEnv);
   } else {
     await runNoShell("openclaw", ["config", "set", "plugins.load.paths", JSON.stringify([pluginPath])], { silent: true }).catch(() => {});
   }
@@ -474,21 +538,32 @@ async function configureOpenclawViaCli(pluginPath, serverPort, mode) {
   await runNoShell("openclaw", ["config", "set", "plugins.allow", JSON.stringify(["memory-openviking"]), "--json"]);
   await runNoShell("openclaw", ["config", "set", "gateway.mode", "local"]);
   await runNoShell("openclaw", ["config", "set", "plugins.slots.memory", "memory-openviking"]);
-  await runNoShell("openclaw", ["config", "set", "plugins.entries.memory-openviking.config.mode", "local"]);
-  const ovConfPath = join(OPENVIKING_DIR, "ov.conf");
-  await runNoShell("openclaw", ["config", "set", "plugins.entries.memory-openviking.config.configPath", ovConfPath]);
-  await runNoShell("openclaw", ["config", "set", "plugins.entries.memory-openviking.config.port", String(serverPort)]);
+  await runNoShell("openclaw", ["config", "set", "plugins.entries.memory-openviking.config.mode", pluginMode]);
   await runNoShell("openclaw", ["config", "set", "plugins.entries.memory-openviking.config.targetUri", "viking://user/memories"]);
   await runNoShell("openclaw", ["config", "set", "plugins.entries.memory-openviking.config.autoRecall", "true", "--json"]);
   await runNoShell("openclaw", ["config", "set", "plugins.entries.memory-openviking.config.autoCapture", "true", "--json"]);
+
+  if (pluginMode === "local") {
+    const ovConfPath = join(OPENVIKING_DIR, "ov.conf");
+    await runNoShell("openclaw", ["config", "set", "plugins.entries.memory-openviking.config.configPath", ovConfPath]);
+    await runNoShell("openclaw", ["config", "set", "plugins.entries.memory-openviking.config.port", String(serverPort)]);
+  } else {
+    await runNoShell("openclaw", ["config", "set", "plugins.entries.memory-openviking.config.baseUrl", remoteOpts.baseUrl || "http://127.0.0.1:1933"]);
+    if (remoteOpts.apiKey) {
+      await runNoShell("openclaw", ["config", "set", "plugins.entries.memory-openviking.config.apiKey", remoteOpts.apiKey]);
+    }
+    if (remoteOpts.agentId) {
+      await runNoShell("openclaw", ["config", "set", "plugins.entries.memory-openviking.config.agentId", remoteOpts.agentId]);
+    }
+  }
 }
 
-async function configureOpenclaw(pluginPath, serverPort = DEFAULT_SERVER_PORT, mode = "link") {
+async function configureOpenclaw(pluginPath, serverPort = DEFAULT_SERVER_PORT, installMode = "link", pluginMode = "local", remoteOpts = {}) {
   await fixStalePluginPaths(pluginPath);
   if (IS_WIN) {
-    await configureOpenclawViaJson(pluginPath, serverPort);
+    await configureOpenclawViaJson(pluginPath, serverPort, pluginMode, remoteOpts);
   } else {
-    await configureOpenclawViaCli(pluginPath, serverPort, mode);
+    await configureOpenclawViaCli(pluginPath, serverPort, installMode, pluginMode, remoteOpts);
   }
   log("OpenClaw plugin config done", "ok");
 }
@@ -535,6 +610,15 @@ async function main() {
   const help = args.includes("--help") || args.includes("-h");
   const nonInteractive = args.includes("--yes") || args.includes("-y");
 
+  // Parse --workdir
+  for (let i = 0; i < args.length; i++) {
+    if (args[i] === "--workdir" && i + 1 < args.length) {
+      OPENCLAW_DIR = args[i + 1];
+      EXT_DIR = join(OPENCLAW_DIR, "extensions");
+      PLUGIN_DEST = join(EXT_DIR, "memory-openviking");
+    }
+  }
+
   if (help) {
     console.log(`
 OpenClaw + OpenViking setup helper
@@ -542,8 +626,9 @@ OpenClaw + OpenViking setup helper
 Usage: npx openclaw-openviking-setup-helper [options]
 
 Options:
-  -y, --yes     Non-interactive, use defaults
-  -h, --help    Show help
+  -y, --yes              Non-interactive, use defaults
+  --workdir <path>       OpenClaw config directory (default: ~/.openclaw)
+  -h, --help             Show help
 
 Steps:
   1. Check OpenClaw
@@ -565,8 +650,21 @@ Env vars:
 
   console.log("\n\ud83e\udd9e OpenClaw + OpenViking setup helper\n");
 
+  // Workdir & mode selection
+  await selectWorkdir(nonInteractive);
+  log(`Target: ${OPENCLAW_DIR}`, "info");
+
+  const pluginMode = await selectMode(nonInteractive);
+  log(`Mode: ${pluginMode}`, "info");
+
+  let remoteOpts = {};
+  if (pluginMode === "remote") {
+    remoteOpts = await collectRemoteConfig(nonInteractive);
+  }
+
   const distro = await detectDistro();
 
+  if (pluginMode === "local") {
   // ════════════════════════════════════════════
   // Phase 1: Check build tools & runtime environment
   //   cmake/g++ must be present before OpenClaw install (node-llama-cpp needs them)
@@ -673,6 +771,7 @@ Env vars:
     console.log("    npx ./examples/openclaw-memory-plugin/setup-helper\n");
     process.exit(1);
   }
+  } // end if pluginMode === "local" (Phase 1)
 
   // ════════════════════════════════════════════
   // Phase 2: Check OpenClaw
@@ -694,6 +793,15 @@ Env vars:
   }
   log("OpenClaw: installed", "ok");
 
+  let ovOpts = {
+    apiKey: process.env.OPENVIKING_ARK_API_KEY || "",
+    serverPort: DEFAULT_SERVER_PORT,
+    agfsPort: DEFAULT_AGFS_PORT,
+    vlmModel: DEFAULT_VLM_MODEL,
+    embeddingModel: DEFAULT_EMBEDDING_MODEL,
+  };
+
+  if (pluginMode === "local") {
   // ════════════════════════════════════════════
   // Phase 3: Check & install openviking module
   // ════════════════════════════════════════════
@@ -742,13 +850,6 @@ Env vars:
 
   const ovConf = await checkOvvConf();
   const ovConfPath = ovConf.path;
-  let ovOpts = {
-    apiKey: process.env.OPENVIKING_ARK_API_KEY || "",
-    serverPort: DEFAULT_SERVER_PORT,
-    agfsPort: DEFAULT_AGFS_PORT,
-    vlmModel: DEFAULT_VLM_MODEL,
-    embeddingModel: DEFAULT_EMBEDDING_MODEL,
-  };
 
   if (!ovConf.ok) {
     log(`ov.conf not found: ${ovConfPath}`, "info");
@@ -790,6 +891,7 @@ Env vars:
       ovOpts = { ...existingPorts, apiKey: existingKey };
     }
   }
+  } // end if pluginMode === "local" (Phase 3 & 4)
 
   // ════════════════════════════════════════════
   // Phase 5: Deploy plugin & finalize
@@ -811,18 +913,28 @@ Env vars:
     pluginPath = PLUGIN_DEST;
   }
 
-  await configureOpenclaw(pluginPath, ovOpts?.serverPort);
-  await writeOpenvikingEnv();
+  const installMode = (repoRoot && existsSync(join(repoRoot, "examples", "openclaw-memory-plugin", "index.ts"))) ? "link" : "download";
+  await configureOpenclaw(pluginPath, ovOpts?.serverPort, installMode, pluginMode, remoteOpts);
+
+  if (pluginMode === "local") {
+    await writeOpenvikingEnv();
+  }
 
   // Done
   console.log("\n╔══════════════════════════════════════════════════════════╗");
   console.log("║                   \u2705 Setup complete!                     ║");
   console.log("╚══════════════════════════════════════════════════════════╝");
-  console.log("\nTo start OpenClaw with memory:");
-  if (IS_WIN) {
-    console.log('  call "%USERPROFILE%\\.openclaw\\openviking.env.bat" && openclaw gateway');
+  if (pluginMode === "local") {
+    console.log("\nTo start OpenClaw with memory:");
+    if (IS_WIN) {
+      console.log('  call "%USERPROFILE%\\.openclaw\\openviking.env.bat" && openclaw gateway');
+    } else {
+      console.log(`  source ${OPENCLAW_DIR}/openviking.env && openclaw gateway`);
+    }
   } else {
-    console.log("  source ~/.openclaw/openviking.env && openclaw gateway");
+    console.log("\nTo start OpenClaw with memory (remote mode):");
+    console.log("  openclaw gateway");
+    console.log(`\nRemote server: ${remoteOpts.baseUrl}`);
   }
   console.log("\nTo verify:");
   console.log("  openclaw status");

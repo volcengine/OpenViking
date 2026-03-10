@@ -4,6 +4,7 @@
 //! - Proper line editing with rustyline (no ^[[D characters)
 //! - Markdown rendering for bot responses
 //! - Command history support
+//! - Streaming response support
 
 use std::time::Duration;
 
@@ -13,6 +14,8 @@ use rustyline::error::ReadlineError;
 use rustyline::DefaultEditor;
 use serde::{Deserialize, Serialize};
 use termimad::MadSkin;
+
+use crate::utils;
 
 use crate::error::{Error, Result};
 
@@ -42,8 +45,8 @@ pub struct ChatCommand {
     #[arg(short = 'M', long)]
     pub message: Option<String>,
 
-    /// Stream the response
-    #[arg(long)]
+    /// Stream the response (default: true)
+    #[arg(long, default_value_t = true)]
     pub stream: bool,
 
     /// Disable rich formatting / markdown rendering
@@ -75,7 +78,7 @@ struct ChatRequest {
     context: Option<Vec<ChatMessage>>,
 }
 
-/// Chat response
+/// Chat response (non-streaming)
 #[derive(Debug, Deserialize)]
 struct ChatResponse {
     session_id: String,
@@ -84,12 +87,12 @@ struct ChatResponse {
     events: Option<Vec<serde_json::Value>>,
 }
 
-/// Stream event - kept for compatibility
-#[allow(dead_code)]
+/// Stream event from SSE
 #[derive(Debug, Deserialize)]
-struct StreamEvent {
-    event: String,
+struct ChatStreamEvent {
+    event: String,  // "reasoning", "tool_call", "tool_result", "response"
     data: serde_json::Value,
+    timestamp: Option<String>,
 }
 
 impl ChatCommand {
@@ -111,6 +114,15 @@ impl ChatCommand {
 
     /// Send a single message and get response
     async fn send_message(&self, client: &Client, message: &str) -> Result<()> {
+        if self.stream {
+            self.send_message_stream(client, message).await
+        } else {
+            self.send_message_non_stream(client, message).await
+        }
+    }
+
+    /// Send a single message with non-streaming response
+    async fn send_message_non_stream(&self, client: &Client, message: &str) -> Result<()> {
         let url = format!("{}/chat", self.endpoint);
 
         let request = ChatRequest {
@@ -152,10 +164,87 @@ impl ChatCommand {
         Ok(())
     }
 
+    /// Send a single message with streaming response
+    async fn send_message_stream(&self, client: &Client, message: &str) -> Result<()> {
+        let url = format!("{}/chat/stream", self.endpoint);
+
+        let request = ChatRequest {
+            message: message.to_string(),
+            session_id: self.session.clone(),
+            user_id: Some(self.user.clone()),
+            stream: true,
+            context: None,
+        };
+
+        let mut req_builder = client.post(&url).json(&request);
+
+        if let Some(api_key) = &self.api_key {
+            req_builder = req_builder.header("X-API-Key", api_key);
+        }
+
+        let response = req_builder
+            .send()
+            .await
+            .map_err(|e| Error::Network(format!("Failed to send request: {}", e)))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(Error::Api(format!("Request failed ({}): {}", status, text)));
+        }
+
+        // Process the SSE stream
+        let mut response = response;
+        let mut buffer = String::new();
+        let mut final_message = String::new();
+
+        while let Some(chunk) = response.chunk().await.map_err(|e| Error::Network(format!("Stream error: {}", e)))? {
+            let chunk_str = String::from_utf8_lossy(&chunk);
+            buffer.push_str(&chunk_str);
+
+            // Process complete lines from buffer
+            while let Some(newline_pos) = buffer.find('\n') {
+                let line = buffer[..newline_pos].trim_end().to_string();
+                buffer = buffer[newline_pos + 1..].to_string();
+
+                if line.is_empty() {
+                    continue;
+                }
+
+                // Parse SSE line: "data: {json}"
+                if let Some(data_str) = line.strip_prefix("data: ") {
+                    if let Ok(event) = serde_json::from_str::<ChatStreamEvent>(data_str) {
+                        self.print_stream_event(&event);
+                        if event.event == "response" {
+                            if let Some(msg) = event.data.as_str() {
+                                final_message = msg.to_string();
+                            } else if let Some(obj) = event.data.as_object() {
+                                if let Some(msg) = obj.get("message").and_then(|m| m.as_str()) {
+                                    final_message = msg.to_string();
+                                } else if let Some(err) = obj.get("error").and_then(|e| e.as_str()) {
+                                    eprintln!("\x1b[1;31mError: {}\x1b[0m", err);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Print final response with markdown if we have it
+        if !final_message.is_empty() {
+            println!();
+            self.print_response(&final_message);
+        }
+
+        Ok(())
+    }
+
     /// Run interactive chat mode with rustyline
     async fn run_interactive(&self, client: &Client) -> Result<()> {
         println!("Vikingbot Chat - Interactive Mode");
         println!("Endpoint: {}", self.endpoint);
+        println!("Streaming: {}", if self.stream { "enabled" } else { "disabled" });
         if let Some(session) = &self.session {
             println!("Session: {}", session);
         }
@@ -240,6 +329,20 @@ impl ChatCommand {
         input: &str,
         session_id: &mut Option<String>,
     ) -> Result<()> {
+        if self.stream {
+            self.send_interactive_message_stream(client, input, session_id).await
+        } else {
+            self.send_interactive_message_non_stream(client, input, session_id).await
+        }
+    }
+
+    /// Send a message in interactive mode (non-streaming)
+    async fn send_interactive_message_non_stream(
+        &self,
+        client: &Client,
+        input: &str,
+        session_id: &mut Option<String>,
+    ) -> Result<()> {
         let url = format!("{}/chat", self.endpoint);
 
         let request = ChatRequest {
@@ -288,7 +391,159 @@ impl ChatCommand {
         Ok(())
     }
 
-    /// Print thinking/events
+    /// Send a message in interactive mode (streaming)
+    async fn send_interactive_message_stream(
+        &self,
+        client: &Client,
+        input: &str,
+        session_id: &mut Option<String>,
+    ) -> Result<()> {
+        let url = format!("{}/chat/stream", self.endpoint);
+
+        let request = ChatRequest {
+            message: input.to_string(),
+            session_id: session_id.clone(),
+            user_id: Some(self.user.clone()),
+            stream: true,
+            context: None,
+        };
+
+        let mut req_builder = client.post(&url).json(&request);
+
+        if let Some(api_key) = &self.api_key {
+            req_builder = req_builder.header("X-API-Key", api_key);
+        }
+
+        let response = req_builder
+            .send()
+            .await
+            .map_err(|e| Error::Network(format!("Failed to send request: {}", e)))?;
+
+        if !response.status().is_success() {
+            let status = response.status();
+            let text = response.text().await.unwrap_or_default();
+            return Err(Error::Api(format!("Request failed ({}): {}", status, text)));
+        }
+
+        // Process the SSE stream
+        let mut response = response;
+        let mut buffer = String::new();
+        let mut final_message = String::new();
+        let mut got_session_id = false;
+
+        while let Some(chunk) = response.chunk().await.map_err(|e| Error::Network(format!("Stream error: {}", e)))? {
+            let chunk_str = String::from_utf8_lossy(&chunk);
+            buffer.push_str(&chunk_str);
+
+            // Process complete lines from buffer
+            while let Some(newline_pos) = buffer.find('\n') {
+                let line = buffer[..newline_pos].trim_end().to_string();
+                buffer = buffer[newline_pos + 1..].to_string();
+
+                if line.is_empty() {
+                    continue;
+                }
+
+                // Parse SSE line: "data: {json}"
+                if let Some(data_str) = line.strip_prefix("data: ") {
+                    if let Ok(event) = serde_json::from_str::<ChatStreamEvent>(data_str) {
+                        // Extract session_id from first response event if needed
+                        if !got_session_id && session_id.is_none() {
+                            if let Some(obj) = event.data.as_object() {
+                                if let Some(sid) = obj.get("session_id").and_then(|s| s.as_str()) {
+                                    *session_id = Some(sid.to_string());
+                                    got_session_id = true;
+                                }
+                            }
+                        }
+
+                        self.print_stream_event(&event);
+                        if event.event == "response" {
+                            if let Some(msg) = event.data.as_str() {
+                                final_message = msg.to_string();
+                            } else if let Some(obj) = event.data.as_object() {
+                                if let Some(msg) = obj.get("message").and_then(|m| m.as_str()) {
+                                    final_message = msg.to_string();
+                                } else if let Some(err) = obj.get("error").and_then(|e| e.as_str()) {
+                                    eprintln!("\x1b[1;31mError: {}\x1b[0m", err);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        // Print final response with markdown
+        if !final_message.is_empty() {
+            println!();
+            self.print_response(&final_message);
+        }
+        println!();
+
+        Ok(())
+    }
+
+    /// Print a single stream event as it arrives
+    fn print_stream_event(&self, event: &ChatStreamEvent) {
+        if self.no_format {
+            return;
+        }
+
+        match event.event.as_str() {
+            "reasoning" => {
+                if let Some(content) = event.data.as_str() {
+                    println!(
+                        "  \x1b[2mThink: {}...\x1b[0m",
+                        utils::truncate_utf8(content, 200)
+                    );
+                }
+            }
+            "tool_call" => {
+                if let Some(content) = event.data.as_str() {
+                    Self::print_tool_call(content);
+                }
+            }
+            "tool_result" => {
+                if let Some(content) = event.data.as_str() {
+                    let truncated = if content.len() > 300 {
+                        format!("{}...", utils::truncate_utf8(content, 300))
+                    } else {
+                        content.to_string()
+                    };
+                    Self::print_tool_result(&truncated);
+                }
+            }
+            "iteration" => {
+                // Ignore iteration events for now
+            }
+            "response" => {
+                // Response is handled separately
+            }
+            _ => {}
+        }
+    }
+
+    /// Parse and print a tool_call with formatted styling
+    fn print_tool_call(content: &str) {
+        if let Some(paren_idx) = content.find('(') {
+            let tool_name = &content[..paren_idx];
+            let args = &content[paren_idx..];
+            print!("  \x1b[2m├─ Calling: \x1b[0m");
+            print!("\x1b[1m{}\x1b[0m", tool_name);
+            println!("\x1b[2m{}\x1b[0m", args);
+        } else {
+            // Fallback if format doesn't match
+            println!("  \x1b[2m├─ Calling: {}\x1b[0m", content);
+        }
+    }
+
+    /// Print a tool_result with formatted styling
+    fn print_tool_result(content: &str) {
+        println!("  \x1b[2m└─ Result: {}\x1b[0m", content);
+    }
+
+    /// Print thinking/events (for non-streaming mode)
     fn print_events(&self, events: &Option<Vec<serde_json::Value>>) {
         if self.no_format {
             return;
@@ -305,21 +560,21 @@ impl ChatCommand {
                             let content = data.as_str().unwrap_or("");
                             println!(
                                 "  \x1b[2mThink: {}...\x1b[0m",
-                                truncate_utf8(content, 100)
+                                utils::truncate_utf8(content, 200)
                             );
                         }
                         "tool_call" => {
                             let content = data.as_str().unwrap_or("");
-                            println!("  \x1b[2m├─ Calling: {}\x1b[0m", content);
+                            Self::print_tool_call(content);
                         }
                         "tool_result" => {
                             let content = data.as_str().unwrap_or("");
-                            let truncated = if content.len() > 150 {
-                                format!("{}...", truncate_utf8(content, 150))
+                            let truncated = if content.len() > 300 {
+                                format!("{}...", utils::truncate_utf8(content, 300))
                             } else {
                                 content.to_string()
                             };
-                            println!("  \x1b[2m└─ Result: {}\x1b[0m", truncated);
+                            Self::print_tool_result(&truncated);
                         }
                         _ => {}
                     }
@@ -385,16 +640,4 @@ impl ChatCommand {
 fn render_markdown(text: &str) {
     let skin = MadSkin::default();
     skin.print_text(text);
-}
-
-/// Truncate UTF-8 string safely
-fn truncate_utf8(s: &str, max_chars: usize) -> &str {
-    if s.chars().count() <= max_chars {
-        return s;
-    }
-    if let Some((idx, _)) = s.char_indices().nth(max_chars) {
-        &s[..idx]
-    } else {
-        s
-    }
 }

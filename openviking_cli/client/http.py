@@ -283,7 +283,8 @@ class AsyncHTTPClient(BaseClient):
     async def add_resource(
         self,
         path: str,
-        target: Optional[str] = None,
+        to: Optional[str] = None,
+        parent: Optional[str] = None,
         reason: str = "",
         instruction: str = "",
         wait: bool = False,
@@ -295,8 +296,13 @@ class AsyncHTTPClient(BaseClient):
         directly_upload_media: bool = True,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
+        # Validate that only one of 'to' or 'parent' is set
+        if to and parent:
+            raise ValueError("Cannot specify both 'to' and 'parent' at the same time.")
+
         request_data = {
-            "target": target,
+            "to": to,
+            "parent": parent,
             "reason": reason,
             "instruction": instruction,
             "wait": wait,

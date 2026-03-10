@@ -127,7 +127,8 @@ class OpenAPIChannel(BaseChannel):
             return
 
         if msg.event_type == OutboundEventType.RESPONSE:
-            # Final response
+            # Final response - add to stream first
+            await pending.add_event("response", msg.content or "")
             pending.set_final(msg.content or "")
             await pending.close_stream()
         elif msg.event_type == OutboundEventType.REASONING:

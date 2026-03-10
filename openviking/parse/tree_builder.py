@@ -89,7 +89,8 @@ class TreeBuilder:
         temp_dir_path: str,
         ctx: RequestContext,
         scope: str = "resources",
-        base_uri: Optional[str] = None,
+        to_uri: Optional[str] = None,
+        parent_uri: Optional[str] = None,
         source_path: Optional[str] = None,
         source_format: Optional[str] = None,
         trigger_semantic: bool = False,
@@ -98,6 +99,8 @@ class TreeBuilder:
         Finalize processing by moving from temp to AGFS.
 
         Args:
+            to_uri: Exact target URI (must not exist)
+            parent_uri: Target parent URI (must exist)
             trigger_semantic: Whether to automatically trigger semantic generation.
                               Default is False (handled by ResourceProcessor/Summarizer).
         """
@@ -132,30 +135,31 @@ class TreeBuilder:
 
         # 2. Determine base_uri and final document name with org/repo for GitHub/GitLab
         auto_base_uri = self._get_base_uri(scope, source_path, source_format)
-
-        # 3. Check if base_uri exists - if it does, use it as parent directory
-        base_exists = False
-        if base_uri:
+        base_uri = parent_uri or auto_base_uri
+        # 3. Determine candidate_uri
+        if to_uri:
+            # Exact target URI: must not exist yet
             try:
-                await viking_fs.stat(base_uri)
-                base_exists = True
+                await viking_fs.stat(to_uri, ctx=ctx)
+                # If we get here, it already exists
+                raise FileExistsError(f"Target URI already exists: {to_uri}")
+            except FileExistsError:
+                raise
             except Exception:
-                base_exists = False
-
-        if base_exists:
-            if "/" in final_doc_name:
-                repo_name_only = final_doc_name.split("/")[-1]
-            else:
-                repo_name_only = final_doc_name
-            candidate_uri = VikingURI(base_uri or auto_base_uri).join(repo_name_only).uri
+                # It doesn't exist, good to use
+                pass
+            candidate_uri = to_uri
         else:
-            if "/" in final_doc_name:
-                parts = final_doc_name.split("/")
-                sanitized_parts = [VikingURI.sanitize_segment(p) for p in parts if p]
-                base_viking_uri = VikingURI(base_uri or auto_base_uri)
-                candidate_uri = VikingURI.build(base_viking_uri.scope, *sanitized_parts)
-            else:
-                candidate_uri = VikingURI(base_uri or auto_base_uri).join(doc_name).uri
+            if parent_uri:
+                # Parent URI must exist and be a directory
+                try:
+                    stat_result = await viking_fs.stat(parent_uri, ctx=ctx)
+                except Exception as e:
+                    raise FileNotFoundError(f"Parent URI does not exist: {parent_uri}") from e
+                if not stat_result.get("isDir"):
+                    raise ValueError(f"Parent URI is not a directory: {parent_uri}")
+            candidate_uri = VikingURI(base_uri).join(final_doc_name).uri
+
         final_uri = await self._resolve_unique_uri(candidate_uri, ctx=ctx)
 
         if final_uri != candidate_uri:

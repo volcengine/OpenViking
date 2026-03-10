@@ -30,8 +30,11 @@ def _owner_space_for_uri(uri: str, ctx: RequestContext) -> str:
     return ""
 
 
-def get_resource_content_type(file_name: str) -> ResourceContentType:
-    """Determine resource content type based on file extension."""
+def get_resource_content_type(file_name: str) -> Optional[ResourceContentType]:
+    """Determine resource content type based on file extension.
+
+    Returns None if the file type is not recognized.
+    """
     file_name = file_name.lower()
 
     text_extensions = {
@@ -49,6 +52,48 @@ def get_resource_content_type(file_name: str) -> ResourceContentType:
         ".h",
         ".go",
         ".rs",
+        ".lua",
+        ".rb",
+        ".php",
+        ".sh",
+        ".bash",
+        ".zsh",
+        ".fish",
+        ".sql",
+        ".kt",
+        ".swift",
+        ".scala",
+        ".r",
+        ".m",
+        ".pl",
+        ".toml",
+        ".yaml",
+        ".yml",
+        ".ini",
+        ".cfg",
+        ".conf",
+        ".tsx",
+        ".jsx",
+        ".cs",
+        ".env",
+        ".properties",
+        ".rst",
+        ".tf",
+        ".proto",
+        ".gradle",
+        ".cc",
+        ".cxx",
+        ".hpp",
+        ".hh",
+        ".dart",
+        ".vue",
+        ".groovy",
+        ".ps1",
+        ".ex",
+        ".exs",
+        ".erl",
+        ".jl",
+        ".mm",
     }
     image_extensions = {".png", ".jpg", ".jpeg", ".gif", ".bmp", ".svg", ".webp"}
     video_extensions = {".mp4", ".avi", ".mov", ".wmv", ".flv"}
@@ -63,7 +108,7 @@ def get_resource_content_type(file_name: str) -> ResourceContentType:
     elif any(file_name.endswith(ext) for ext in audio_extensions):
         return ResourceContentType.AUDIO
 
-    return ResourceContentType.UNKNOWN
+    return None
 
 
 async def vectorize_directory_meta(
@@ -163,7 +208,19 @@ async def vectorize_file(
         )
 
         content_type = get_resource_content_type(file_name)
-        if content_type == ResourceContentType.TEXT:
+        if content_type is None:
+            # Unsupported file type: fall back to summary if available
+            if summary:
+                logger.warning(
+                    f"Unsupported file type for {file_path}, falling back to summary for vectorization"
+                )
+                context.set_vectorize(Vectorize(text=summary))
+            else:
+                logger.warning(
+                    f"Unsupported file type for {file_path} and no summary available, skipping vectorization"
+                )
+                return
+        elif content_type == ResourceContentType.TEXT:
             # For text files, try to read content
             try:
                 content = await viking_fs.read_file(file_path, ctx=ctx)

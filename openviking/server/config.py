@@ -27,6 +27,7 @@ class ServerConfig:
 
     host: str = "127.0.0.1"
     port: int = 1933
+    workers: int = 1
     root_api_key: Optional[str] = None
     cors_origins: List[str] = field(default_factory=lambda: ["*"])
     with_bot: bool = False  # Enable Bot API proxy to Vikingbot
@@ -70,6 +71,7 @@ def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
     config = ServerConfig(
         host=server_data.get("host", "127.0.0.1"),
         port=server_data.get("port", 1933),
+        workers=server_data.get("workers", 1),
         root_api_key=server_data.get("root_api_key"),
         cors_origins=server_data.get("cors_origins", ["*"]),
     )

@@ -54,6 +54,19 @@ template: |
   - Instruction-like user requests about assistant behavior (language/style/format/tooling) are extraction targets.
   - If such a request implies ongoing behavior, extract it as `preferences`; do not drop it as a mere command.
   - **Tool/Skill Call Records**: The conversation may contain `[ToolCall]` entries with tool/skill usage details. When present, extract relevant tool/skill memories.
+  - **Exhaustive extraction**: A single message may contain multiple independent facts.
+    Extract EACH as a separate memory item. Do not merge unrelated facts into one summary.
+    Count the distinct factual claims in each message and ensure each one is captured.
+  - **Detail preservation**: Always preserve specific proper nouns, parameter names, numeric
+    values, version numbers, and technical terms verbatim. The value of a memory lies in its
+    specificity. A memory that says "solved problem X using method Y" is useful; a memory
+    that says "handled problem X" is nearly useless because it loses the solution.
+  - **High recall**: When uncertain whether something is worth extracting, extract it.
+    The downstream deduplication system handles redundancy. Missing a valuable memory is
+    worse than creating a slightly redundant one.
+  - **Temporal precision**: Never use relative time expressions ("today", "recently",
+    "last week") in memory content. Convert to absolute references or omit the time
+    if unknown. Memories persist indefinitely; relative time becomes meaningless.
 
   {% if feedback %}
   ## User Feedback
@@ -68,9 +81,13 @@ template: |
   - ✅ **Specific and clear**: Has concrete details, not vague generalizations
 
   ## What is NOT worth remembering?
-  - ❌ **General knowledge**: "Personalized service is core to romantic vacations" (domain knowledge, not personalized memory)
-  - ❌ **Temporary information**: One-time questions or conversations
-  - ❌ **Vague information**: "User has questions about a feature" (no specific details)
+  - ❌ **General domain knowledge**: Information true for everyone, not specific to this user.
+    Example: "Redis is an in-memory database" is general knowledge.
+    But "User's team uses Redis with 10-minute TTL for product cache" IS personalized.
+  - ❌ **Content-free utterances**: Pure greetings, acknowledgments, or filler with zero
+    informational content ("Hello", "Thanks", "OK").
+  - ❌ **Completely vague statements**: No concrete details at all.
+    "User has some concerns" (what concerns? about what?)
 
   # Memory Classification
 
@@ -115,20 +132,36 @@ template: |
   - This granularity is required so future updates/conflicts can affect only the
     relevant memory without damaging unrelated preferences.
 
-  **entities** - Entities (continuously existing nouns)
-  - Core: Describes "current state of something"
-  - Characteristics: Entities with lifecycle (person/project/organization)
-  - Test: Can it be described as "XXX's state is..."
+  **entities** - Entities (named things with attributes)
+  - Core: Describes "what is this named thing and what are its attributes"
+  - Characteristics: Named entities that exist independently of the user's preferences
+    (people, projects, organizations, systems, teams, technologies-as-systems)
+  - Test: Does it describe a THING (not a preference, not an event, not a problem)?
+  - Includes: project descriptions, system architectures, team compositions,
+    organization structures, named tools/platforms with their configurations
+  - Note: "Our system uses tech stack X" describes the SYSTEM → entities.
+    "I prefer using tool X" describes USER preference → preferences.
 
-  **events** - Events (things that happened)
-  - Core: Describes "what happened"
-  - Characteristics: Has time point, is action completion
-  - Test: Can it be described as "XXX did/completed/happened..."
+  **events** - Events (time-bound activities: past, present, or future)
+  - Core: Describes "what happened", "what is happening", or "what is planned"
+  - Characteristics: Has a time dimension (creation time, occurrence time, or deadline);
+    covers completed, ongoing, and planned activities
+  - Test: Can it be described as "XXX did/is doing/plans to do..."
+  - Includes: past decisions, completed activities, ongoing activities
+    (e.g., currently reading a book), planned future activities, deadlines,
+    goals with timeframes
+  - Note: An ongoing activity like "currently reading book X" is an event
+    (time-bound), not a preference. A plan like "tonight will optimize X"
+    is also an event (has creation time and intended execution time).
 
-  **cases** - Cases (problem + solution)
-  - Core: Describes "how a specific problem was solved"
-  - Characteristics: One-time scenario, specific solution
-  - Test: Does it contain "problem → solution" structure
+  **cases** - Cases (problem → cause/solution/outcome)
+  - Core: Describes a specific problem and how it was diagnosed, caused, or resolved
+  - Characteristics: Contains a concrete problem description AND at least one of:
+    root cause, solution method, workaround, or outcome/impact
+  - Test: Does it follow a "problem → cause/solution/outcome" structure?
+  - Note: Even if the problem seems minor or one-time, extract it if both the
+    problem and its resolution/cause are stated. The specific details
+    (error messages, parameter values, method names) are the most valuable part.
 
   **patterns** - Patterns (reusable processes)
   - Core: Describes "what process to follow in what situation"
@@ -162,6 +195,12 @@ template: |
   - "User prefers X" → preferences (not profile)
   - "Encountered problem A, used solution B" → cases (not events)
   - "General process for handling certain problems" → patterns (not cases)
+  - "We use tool/platform/framework X for purpose Y" → entities (describes a system/setup)
+  - "I prefer/like using tool X" → preferences (personal choice)
+  - "Currently reading/learning/studying X" → events (ongoing time-bound activity)
+  - "Bug: misconfigured parameter X caused issue Y" → cases (problem + cause)
+  - "User's daily routine: do X in morning, Y in afternoon" → preferences (habitual pattern)
+  - "Colleague/teammate X is responsible for Y" → entities (describes a person)
 
   # Three-Level Structure
 

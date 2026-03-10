@@ -669,7 +669,11 @@ class VikingFS:
             TypedQuery,
         )
 
-        session_summary = session_info.get("summary") if session_info else None
+        summary_list = session_info.get("summaries") if session_info else None
+        if isinstance(summary_list, list):
+            session_summary = "\n\n".join(str(item) for item in summary_list if item)
+        else:
+            session_summary = ""
         recent_messages = session_info.get("recent_messages") if session_info else None
 
         query_plan: Optional[QueryPlan] = None

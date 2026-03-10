@@ -63,9 +63,12 @@ enum Commands {
     AddResource {
         /// Local path or URL to import
         path: String,
-        /// Target URI
+        /// Exact target URI (must not exist yet) (cannot be used with --parent)
         #[arg(long)]
         to: Option<String>,
+        /// Target parent URI (must already exist and be a directory) (cannot be used with --to)
+        #[arg(long)]
+        parent: Option<String>,
         /// Reason for import
         #[arg(long, default_value = "")]
         reason: String,
@@ -335,6 +338,9 @@ enum Commands {
         /// Session ID (defaults to machine unique ID)
         #[arg(short, long)]
         session: Option<String>,
+        /// Stream the response (default: true)
+        #[arg(long, default_value_t = true)]
+        stream: bool,
         /// Disable rich formatting / markdown rendering
         #[arg(long)]
         no_format: bool,
@@ -495,6 +501,7 @@ async fn main() {
         Commands::AddResource {
             path,
             to,
+            parent,
             reason,
             instruction,
             wait,
@@ -508,6 +515,7 @@ async fn main() {
             handle_add_resource(
                 path,
                 to,
+                parent,
                 reason,
                 instruction,
                 wait,
@@ -576,7 +584,7 @@ async fn main() {
         Commands::Tui { uri } => {
             handle_tui(uri, ctx).await
         }
-        Commands::Chat { message, session, no_format, no_history } => {
+        Commands::Chat { message, session, stream, no_format, no_history } => {
             let session_id = session.or_else(|| config::get_or_create_machine_id().ok());
             let cmd = commands::chat::ChatCommand {
                 endpoint: std::env::var("VIKINGBOT_ENDPOINT").unwrap_or_else(|_| "http://localhost:1933/bot/v1".to_string()),
@@ -584,7 +592,7 @@ async fn main() {
                 session: session_id,
                 user: "cli_user".to_string(),
                 message,
-                stream: false,
+                stream,
                 no_format,
                 no_history,
             };
@@ -622,6 +630,7 @@ async fn main() {
 async fn handle_add_resource(
     mut path: String,
     to: Option<String>,
+    parent: Option<String>,
     reason: String,
     instruction: String,
     wait: bool,
@@ -663,7 +672,13 @@ async fn handle_add_resource(
         }
         path = unescaped_path;
     }
-    
+
+    // Check that only one of --to or --parent is set
+    if to.is_some() && parent.is_some() {
+        eprintln!("Error: Cannot specify both --to and --parent at the same time.");
+        std::process::exit(1);
+    }
+
     let strict = !no_strict;
     let directly_upload_media = !no_directly_upload_media;
 
@@ -672,6 +687,7 @@ async fn handle_add_resource(
         &client,
         &path,
         to,
+        parent,
         reason,
         instruction,
         wait,

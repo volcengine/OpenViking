@@ -294,6 +294,80 @@ class Session:
         logger.info(f"Session {self.session_id} committed")
         return result
 
+    async def commit_async(self) -> Dict[str, Any]:
+        """Async commit session: create archive, extract memories, persist."""
+        result = {
+            "session_id": self.session_id,
+            "status": "committed",
+            "memories_extracted": 0,
+            "active_count_updated": 0,
+            "archived": False,
+            "stats": None,
+        }
+        if not self._messages:
+            return result
+
+        # 1. Archive current messages
+        self._compression.compression_index += 1
+        messages_to_archive = self._messages.copy()
+
+        summary = await self._generate_archive_summary_async(messages_to_archive)
+        archive_abstract = self._extract_abstract_from_summary(summary)
+        archive_overview = summary
+
+        await self._write_archive_async(
+            index=self._compression.compression_index,
+            messages=messages_to_archive,
+            abstract=archive_abstract,
+            overview=archive_overview,
+        )
+
+        self._compression.original_count += len(messages_to_archive)
+        result["archived"] = True
+
+        self._messages.clear()
+        logger.info(
+            f"Archived: {len(messages_to_archive)} messages → history/archive_{self._compression.compression_index:03d}/"
+        )
+
+        # 2. Extract long-term memories
+        if self._session_compressor:
+            logger.info(
+                f"Starting memory extraction from {len(messages_to_archive)} archived messages"
+            )
+            memories = await self._session_compressor.extract_long_term_memories(
+                messages=messages_to_archive,
+                user=self.user,
+                session_id=self.session_id,
+                ctx=self.ctx,
+            )
+            logger.info(f"Extracted {len(memories)} memories")
+            result["memories_extracted"] = len(memories)
+            self._stats.memories_extracted += len(memories)
+
+        # 3. Write current messages to AGFS
+        await self._write_to_agfs_async(self._messages)
+
+        # 4. Create relations
+        await self._write_relations_async()
+
+        # 5. Update active_count
+        active_count_updated = await self._update_active_counts_async()
+        result["active_count_updated"] = active_count_updated
+
+        # 6. Update statistics
+        self._stats.compression_count = self._compression.compression_index
+        result["stats"] = {
+            "total_turns": self._stats.total_turns,
+            "contexts_used": self._stats.contexts_used,
+            "skills_used": self._stats.skills_used,
+            "memories_extracted": self._stats.memories_extracted,
+        }
+
+        self._stats.total_tokens = 0
+        logger.info(f"Session {self.session_id} committed (async)")
+        return result
+
     def _update_active_counts(self) -> int:
         """Update active_count for used contexts/skills."""
         if not self._vikingdb_manager:
@@ -302,6 +376,22 @@ class Session:
         uris = [usage.uri for usage in self._usage_records if usage.uri]
         try:
             updated = run_async(self._vikingdb_manager.increment_active_count(self.ctx, uris))
+        except Exception as e:
+            logger.debug(f"Could not update active_count for usage URIs: {e}")
+            updated = 0
+
+        if updated > 0:
+            logger.info(f"Updated active_count for {updated} contexts/skills")
+        return updated
+
+    async def _update_active_counts_async(self) -> int:
+        """Async update active_count for used contexts/skills."""
+        if not self._vikingdb_manager:
+            return 0
+
+        uris = [usage.uri for usage in self._usage_records if usage.uri]
+        try:
+            updated = await self._vikingdb_manager.increment_active_count(self.ctx, uris)
         except Exception as e:
             logger.debug(f"Could not update active_count for usage URIs: {e}")
             updated = 0
@@ -403,6 +493,29 @@ class Session:
         turn_count = len([m for m in messages if m.role == "user"])
         return f"# Session Summary\n\n**Overview**: {turn_count} turns, {len(messages)} messages"
 
+    async def _generate_archive_summary_async(self, messages: List[Message]) -> str:
+        """Generate structured summary for archive (async)."""
+        if not messages:
+            return ""
+
+        formatted = "\n".join([f"[{m.role}]: {m.content}" for m in messages])
+
+        vlm = get_openviking_config().vlm
+        if vlm and vlm.is_available():
+            try:
+                from openviking.prompts import render_prompt
+
+                prompt = render_prompt(
+                    "compression.structured_summary",
+                    {"messages": formatted},
+                )
+                return await vlm.get_completion_async(prompt)
+            except Exception as e:
+                logger.warning(f"LLM summary failed: {e}")
+
+        turn_count = len([m for m in messages if m.role == "user"])
+        return f"# Session Summary\n\n**Overview**: {turn_count} turns, {len(messages)} messages"
+
     def _write_archive(
         self,
         index: int,
@@ -432,6 +545,39 @@ class Session:
         )
         run_async(
             viking_fs.write_file(uri=f"{archive_uri}/.overview.md", content=overview, ctx=self.ctx)
+        )
+
+        logger.debug(f"Written archive: {archive_uri}")
+
+    async def _write_archive_async(
+        self,
+        index: int,
+        messages: List[Message],
+        abstract: str,
+        overview: str,
+    ) -> None:
+        """Write archive to history/archive_N/ (async)."""
+        if not self._viking_fs:
+            return
+
+        viking_fs = self._viking_fs
+        archive_uri = f"{self._session_uri}/history/archive_{index:03d}"
+
+        lines = [m.to_jsonl() for m in messages]
+        await viking_fs.write_file(
+            uri=f"{archive_uri}/messages.jsonl",
+            content="\n".join(lines) + "\n",
+            ctx=self.ctx,
+        )
+        await viking_fs.write_file(
+            uri=f"{archive_uri}/.abstract.md",
+            content=abstract,
+            ctx=self.ctx,
+        )
+        await viking_fs.write_file(
+            uri=f"{archive_uri}/.overview.md",
+            content=overview,
+            ctx=self.ctx,
         )
 
         logger.debug(f"Written archive: {archive_uri}")
@@ -472,6 +618,36 @@ class Session:
                 content=overview,
                 ctx=self.ctx,
             )
+        )
+
+    async def _write_to_agfs_async(self, messages: List[Message]) -> None:
+        """Write messages.jsonl to AGFS (async)."""
+        if not self._viking_fs:
+            return
+
+        viking_fs = self._viking_fs
+        turn_count = len([m for m in messages if m.role == "user"])
+
+        abstract = self._generate_abstract()
+        overview = self._generate_overview(turn_count)
+
+        lines = [m.to_jsonl() for m in messages]
+        content = "\n".join(lines) + "\n" if lines else ""
+
+        await viking_fs.write_file(
+            uri=f"{self._session_uri}/messages.jsonl",
+            content=content,
+            ctx=self.ctx,
+        )
+        await viking_fs.write_file(
+            uri=f"{self._session_uri}/.abstract.md",
+            content=abstract,
+            ctx=self.ctx,
+        )
+        await viking_fs.write_file(
+            uri=f"{self._session_uri}/.overview.md",
+            content=overview,
+            ctx=self.ctx,
         )
 
     def _append_to_jsonl(self, msg: Message) -> None:
@@ -577,6 +753,19 @@ class Session:
         for usage in self._usage_records:
             try:
                 run_async(viking_fs.link(self._session_uri, usage.uri, ctx=self.ctx))
+                logger.debug(f"Created relation: {self._session_uri} -> {usage.uri}")
+            except Exception as e:
+                logger.warning(f"Failed to create relation to {usage.uri}: {e}")
+
+    async def _write_relations_async(self) -> None:
+        """Create relations to used contexts/tools (async)."""
+        if not self._viking_fs:
+            return
+
+        viking_fs = self._viking_fs
+        for usage in self._usage_records:
+            try:
+                await viking_fs.link(self._session_uri, usage.uri, ctx=self.ctx)
                 logger.debug(f"Created relation: {self._session_uri} -> {usage.uri}")
             except Exception as e:
                 logger.warning(f"Failed to create relation to {usage.uri}: {e}")

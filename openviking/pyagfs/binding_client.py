@@ -188,6 +188,16 @@ class BindingLib:
         self.lib.AGFS_GetHandleInfo.argtypes = [ctypes.c_int64]
         self.lib.AGFS_GetHandleInfo.restype = ctypes.c_char_p
 
+        self.lib.AGFS_Grep.argtypes = [
+            ctypes.c_int64,  # clientID
+            ctypes.c_char_p,  # path
+            ctypes.c_char_p,  # pattern
+            ctypes.c_int,  # recursive
+            ctypes.c_int,  # caseInsensitive
+            ctypes.c_int,  # stream
+            ctypes.c_int,  # nodeLimit
+        ]
+        self.lib.AGFS_Grep.restype = ctypes.c_char_p
 
 class AGFSBindingClient:
     """Client for interacting with AGFS using Python binding (no HTTP server required).
@@ -387,9 +397,34 @@ class AGFSBindingClient:
         recursive: bool = False,
         case_insensitive: bool = False,
         stream: bool = False,
+        node_limit: Optional[int] = None,
     ):
-        """Search for a pattern in files."""
-        raise AGFSNotSupportedError("Grep not supported in binding mode")
+        """Search for a pattern in files.
+
+        Args:
+            path: Path to file or directory to search
+            pattern: Regular expression pattern to search for
+            recursive: Whether to search recursively in directories (default: False)
+            case_insensitive: Whether to perform case-insensitive matching (default: False)
+            stream: Whether to stream results (not supported in binding mode, default: False)
+            node_limit: Maximum number of results to return (default: None)
+
+        Returns:
+            Dict with 'matches' (list of match objects) and 'count'
+        """
+        if stream:
+            raise AGFSNotSupportedError("Streaming not supported in binding mode")
+
+        result = self._lib.lib.AGFS_Grep(
+            self._client_id,
+            path.encode("utf-8"),
+            pattern.encode("utf-8"),
+            1 if recursive else 0,
+            1 if case_insensitive else 0,
+            0,  # stream not supported
+            node_limit if node_limit is not None else 0,
+        )
+        return self._parse_response(result)
 
     def digest(self, path: str, algorithm: str = "xxh3") -> Dict[str, Any]:
         """Calculate the digest of a file."""

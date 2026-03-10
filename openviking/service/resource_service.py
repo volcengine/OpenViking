@@ -66,7 +66,8 @@ class ResourceService:
         self,
         path: str,
         ctx: RequestContext,
-        target: Optional[str] = None,
+        to: Optional[str] = None,
+        parent: Optional[str] = None,
         reason: str = "",
         instruction: str = "",
         wait: bool = False,
@@ -94,8 +95,14 @@ class ResourceService:
         self._ensure_initialized()
 
         # add_resource only supports resources scope
-        if target and target.startswith("viking://"):
-            parsed = VikingURI(target)
+        if to and to.startswith("viking://"):
+            parsed = VikingURI(to)
+            if parsed.scope != "resources":
+                raise InvalidArgumentError(
+                    f"add_resource only supports resources scope, use dedicated interface to add {parsed.scope} content"
+                )
+        if parent and parent.startswith("viking://"):
+            parsed = VikingURI(parent)
             if parsed.scope != "resources":
                 raise InvalidArgumentError(
                     f"add_resource only supports resources scope, use dedicated interface to add {parsed.scope} content"
@@ -107,7 +114,8 @@ class ResourceService:
             reason=reason,
             instruction=instruction,
             scope="resources",
-            target=target,
+            to=to,
+            parent=parent,
             build_index=build_index,
             summarize=summarize,
             **kwargs,

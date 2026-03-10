@@ -424,7 +424,8 @@ impl HttpClient {
     pub async fn add_resource(
         &self,
         path: &str,
-        target: Option<String>,
+        to: Option<String>,
+        parent: Option<String>,
         reason: &str,
         instruction: &str,
         wait: bool,
@@ -444,7 +445,8 @@ impl HttpClient {
 
                 let body = serde_json::json!({
                     "temp_path": temp_path,
-                    "target": target,
+                    "to": to,
+                    "parent": parent,
                     "reason": reason,
                     "instruction": instruction,
                     "wait": wait,
@@ -462,7 +464,8 @@ impl HttpClient {
 
                 let body = serde_json::json!({
                     "temp_path": temp_path,
-                    "target": target,
+                    "to": to,
+                    "parent": parent,
                     "reason": reason,
                     "instruction": instruction,
                     "wait": wait,
@@ -478,7 +481,8 @@ impl HttpClient {
             } else {
                 let body = serde_json::json!({
                     "path": path,
-                    "target": target,
+                    "to": to,
+                    "parent": parent,
                     "reason": reason,
                     "instruction": instruction,
                     "wait": wait,
@@ -495,7 +499,8 @@ impl HttpClient {
         } else {
             let body = serde_json::json!({
                 "path": path,
-                "target": target,
+                "to": to,
+                "parent": parent,
                 "reason": reason,
                 "instruction": instruction,
                 "wait": wait,

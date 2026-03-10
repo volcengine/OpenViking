@@ -134,15 +134,33 @@ class SessionService:
     async def commit(self, session_id: str, ctx: RequestContext) -> Dict[str, Any]:
         """Commit a session (archive messages and extract memories).
 
+        Delegates to commit_async() for true non-blocking behavior.
+
         Args:
             session_id: Session ID to commit
 
         Returns:
             Commit result
         """
+        return await self.commit_async(session_id, ctx)
+
+    async def commit_async(self, session_id: str, ctx: RequestContext) -> Dict[str, Any]:
+        """Async commit a session without blocking the event loop.
+
+        Unlike the previous implementation which used run_async() (blocking
+        the calling thread during LLM calls), this method uses native async/await
+        throughout, keeping the event loop free to serve other requests.
+
+        Args:
+            session_id: Session ID to commit
+
+        Returns:
+            Commit result with keys: session_id, status, memories_extracted,
+            active_count_updated, archived, stats
+        """
         self._ensure_initialized()
         session = await self.get(session_id, ctx)
-        return session.commit()
+        return await session.commit_async()
 
     async def extract(self, session_id: str, ctx: RequestContext) -> List[Any]:
         """Extract memories from a session.

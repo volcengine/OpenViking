@@ -1,12 +1,12 @@
 ---
 name: opencode
-description: Monitor and manage your OpenCode (ClawCode) tasks using helper scripts.
+description: Monitor and manage your OpenCode tasks using helper scripts.
 metadata: {"vikingbot":{"emoji":"💻","requires":{"bins":["python3"]}}}
 ---
 
 # OpenCode Skill
 
-Use helper scripts to manage your OpenCode (ClawCode) instances.
+Use helper scripts to manage your OpenCode instances.
 
 ## Helper Scripts
 

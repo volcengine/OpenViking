@@ -1,5 +1,6 @@
 """Memory system for persistent agent memory."""
 
+from openviking.async_client import logger
 from vikingbot.config.loader import load_config
 from pathlib import Path
 from typing import Any

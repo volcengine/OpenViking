@@ -7,7 +7,7 @@ set -e
 
 # Default values
 PORT="1933"
-BOT_URL="http://localhost:18791"
+BOT_URL="http://localhost:18790"
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -31,7 +31,7 @@ done
 # Parse Bot URL to extract port
 BOT_PORT=$(echo "$BOT_URL" | sed -n 's/.*:\([0-9]*\).*/\1/p')
 if [ -z "$BOT_PORT" ]; then
-    BOT_PORT="18791"
+    BOT_PORT="18790"
 fi
 
 echo "=========================================="

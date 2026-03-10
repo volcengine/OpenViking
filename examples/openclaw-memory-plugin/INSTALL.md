@@ -18,7 +18,20 @@ Non-interactive mode:
 curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-memory-plugin/install.sh | bash -s -y
 ```
 
-The script will: 1) validate the OpenViking runtime environment (and check that OpenClaw is installed), 2) install OpenViking only, 3) configure and deploy the memory plugin.
+Install to a specific OpenClaw instance:
+
+```bash
+curl -fsSL ... | bash -s -- --workdir ~/.openclaw-openclaw-second
+```
+
+Remote mode (connect to an existing OpenViking server, no Python/OpenViking required):
+
+```bash
+# The script will prompt for mode selection (local/remote)
+curl -fsSL ... | bash
+```
+
+The script will: 1) select target OpenClaw instance (auto-detects multiple instances), 2) select mode (local/remote), 3) validate environment and install (local mode), 4) configure and deploy the memory plugin.
 
 ---
 
@@ -330,7 +343,7 @@ The helper will walk you through:
    - Data storage path (defaults to absolute path, e.g. `/home/yourname/.openviking/data`)
    - Volcengine Ark API Key
    - VLM model name (default: `doubao-seed-2-0-pro-260215`)
-   - Embedding model name (default: `doubao-embedding-vision-250615`)
+   - Embedding model name (default: `doubao-embedding-vision-251215`)
    - Server ports (default: 1933 / 1833)
 4. **Generate config** — creates `~/.openviking/ov.conf`
 5. **Deploy plugin** — registers `memory-openviking` with OpenClaw
@@ -438,16 +451,16 @@ The plugin automatically starts and stops the OpenViking server.
   },
   "embedding": {
     "dense": {
-      "backend": "volcengine",
+      "provider": "volcengine",
       "api_key": "<your-api-key>",
-      "model": "doubao-embedding-vision-250615",
+      "model": "doubao-embedding-vision-251215",
       "api_base": "https://ark.cn-beijing.volces.com/api/v3",
       "dimension": 1024,
       "input": "multimodal"
     }
   },
   "vlm": {
-    "backend": "volcengine",
+    "provider": "volcengine",
     "api_key": "<your-api-key>",
     "model": "doubao-seed-2-0-pro-260215",
     "api_base": "https://ark.cn-beijing.volces.com/api/v3",
@@ -480,14 +493,15 @@ set OPENVIKING_GO_PATH=C:\path\to\go\bin
 ```
 npx ./examples/openclaw-memory-plugin/setup-helper [options]
 
-  -y, --yes     Non-interactive, use defaults
-  -h, --help    Show help
+  -y, --yes              Non-interactive, use defaults
+  --workdir <path>       OpenClaw config directory (default: ~/.openclaw)
+  -h, --help             Show help
 
 Environment variables:
   OPENVIKING_PYTHON       Python interpreter path
   OPENVIKING_CONFIG_FILE  Custom ov.conf path
   OPENVIKING_REPO         Local repo path (auto-detected when run from repo)
-  OPENVIKING_ARK_API_KEY  Skip API key prompt (for CI/scripts)
+  OPENVIKING_ARK_API_KEY  Volcengine API Key (skip prompt in -y mode)
 ```
 
 ---

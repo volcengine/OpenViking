@@ -61,7 +61,7 @@ class QQChannel(BaseChannel):
         """Start the QQ bot."""
         if not QQ_AVAILABLE:
             logger.exception(
-                "QQ SDK not installed. Install with: uv pip install 'vikingbot[qq]' (or uv pip install -e \".[qq]\" for local dev)"
+                "QQ SDK not installed. Install with: uv pip install 'openviking[bot-qq]' (or uv pip install -e \".[bot-qq]\" for local dev)"
             )
             return
 
