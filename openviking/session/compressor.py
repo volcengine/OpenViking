@@ -137,6 +137,7 @@ class SessionCompressor:
         user: Optional["UserIdentifier"] = None,
         session_id: Optional[str] = None,
         ctx: Optional[RequestContext] = None,
+        strict_extract_errors: bool = False,
     ) -> List[Context]:
         """Extract long-term memories from messages."""
         if not messages:
@@ -146,7 +147,10 @@ class SessionCompressor:
         if not ctx:
             return []
 
-        candidates = await self.extractor.extract(context, user, session_id)
+        if strict_extract_errors:
+            candidates = await self.extractor.extract_strict(context, user, session_id)
+        else:
+            candidates = await self.extractor.extract(context, user, session_id)
 
         if not candidates:
             return []

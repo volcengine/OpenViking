@@ -139,6 +139,34 @@ async def test_task_lifecycle_failure(api_client):
     assert "LLM provider timeout" in result["error"]
 
 
+async def test_task_failed_when_memory_extraction_raises(api_client):
+    """Extractor failures should propagate to task error instead of silent completed+0."""
+    client, service = api_client
+    session_id = await _new_session_with_message(client)
+
+    async def failing_extract(_context, _user, _session_id):
+        raise RuntimeError("memory_extraction_failed: synthetic extractor error")
+
+    service.sessions._session_compressor.extractor.extract_strict = failing_extract
+
+    resp = await client.post(f"/api/v1/sessions/{session_id}/commit", params={"wait": False})
+    task_id = resp.json()["result"]["task_id"]
+
+    result = None
+    for _ in range(120):
+        await asyncio.sleep(0.1)
+        task_resp = await client.get(f"/api/v1/tasks/{task_id}")
+        assert task_resp.status_code == 200
+        result = task_resp.json()["result"]
+        if result["status"] in {"completed", "failed"}:
+            break
+
+    assert result is not None
+    assert result["status"] in {"completed", "failed"}
+    assert result["status"] == "failed"
+    assert "memory_extraction_failed" in result["error"]
+
+
 # ── Duplicate commit rejection ──
 
 

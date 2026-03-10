@@ -344,6 +344,121 @@ class MemoryExtractor:
             logger.error(f"Memory extraction failed: {e}")
             return []
 
+    async def extract_strict(
+        self,
+        context: dict,
+        user: UserIdentifier,
+        session_id: str,
+    ) -> List[CandidateMemory]:
+        """Extract memory candidates from messages and raise on extraction errors.
+
+        This is used by async task tracking paths to make extraction failures
+        observable via task status/error instead of silently returning [].
+        """
+        user = user
+        vlm = get_openviking_config().vlm
+        if not vlm or not vlm.is_available():
+            logger.warning("LLM not available, skipping memory extraction")
+            return []
+
+        messages = context["messages"]
+        tool_stats_map = self._collect_tool_stats_from_messages(messages)
+
+        formatted_lines = []
+        for m in messages:
+            msg_content = self._format_message_with_parts(m)
+            if msg_content:
+                formatted_lines.append(f"[{m.role}]: {msg_content}")
+
+        formatted_messages = "\n".join(formatted_lines)
+        if not formatted_messages:
+            logger.warning("No formatted messages, returning empty list")
+            return []
+
+        config = get_openviking_config()
+        fallback_language = (config.language_fallback or "en").strip() or "en"
+        output_language = self._detect_output_language(
+            messages, fallback_language=fallback_language
+        )
+
+        prompt = render_prompt(
+            "compression.memory_extraction",
+            {
+                "summary": "",
+                "recent_messages": formatted_messages,
+                "user": user._user_id,
+                "feedback": "",
+                "output_language": output_language,
+            },
+        )
+
+        from openviking_cli.utils.llm import parse_json_from_response
+
+        request_summary = {
+            "user": user._user_id,
+            "output_language": output_language,
+            "recent_messages_len": len(formatted_messages),
+            "recent_messages": formatted_messages,
+        }
+        logger.debug("Memory extraction LLM request summary: %s", request_summary)
+
+        try:
+            response = await vlm.get_completion_async(prompt)
+            logger.debug("Memory extraction LLM raw response: %s", response)
+            data = parse_json_from_response(response) or {}
+            logger.debug("Memory extraction LLM parsed payload: %s", data)
+        except Exception as e:
+            logger.error(f"Memory extraction failed: {e}")
+            raise RuntimeError(f"memory_extraction_failed: {e}") from e
+
+        candidates = []
+        for mem in data.get("memories", []):
+            category_str = mem.get("category", "patterns")
+            try:
+                category = MemoryCategory(category_str)
+            except ValueError:
+                category = MemoryCategory.PATTERNS
+
+            if category in (MemoryCategory.TOOLS, MemoryCategory.SKILLS):
+                tool_name = mem.get("tool_name", "")
+                skill_name = mem.get("skill_name", "")
+                stats = tool_stats_map.get(tool_name or skill_name, {})
+                candidates.append(
+                    ToolSkillCandidateMemory(
+                        category=category,
+                        abstract=mem.get("abstract", ""),
+                        overview=mem.get("overview", ""),
+                        content=mem.get("content", ""),
+                        source_session=session_id,
+                        user=user,
+                        language=output_language,
+                        tool_name=tool_name,
+                        skill_name=skill_name,
+                        call_time=stats.get("call_count", 0),
+                        success_time=stats.get("success_time", 0),
+                        duration_ms=stats.get("duration_ms", 0),
+                        prompt_tokens=stats.get("prompt_tokens", 0),
+                        completion_tokens=stats.get("completion_tokens", 0),
+                    )
+                )
+            else:
+                candidates.append(
+                    CandidateMemory(
+                        category=category,
+                        abstract=mem.get("abstract", ""),
+                        overview=mem.get("overview", ""),
+                        content=mem.get("content", ""),
+                        source_session=session_id,
+                        user=user,
+                        language=output_language,
+                    )
+                )
+
+        logger.info(
+            f"Extracted {len(candidates)} candidate memories (language={output_language})"
+        )
+        return candidates
+
     async def create_memory(
         self,
         candidate: CandidateMemory,
