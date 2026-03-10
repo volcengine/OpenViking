@@ -148,6 +148,8 @@ class SessionCompressor:
             return []
 
         if strict_extract_errors:
+            # Intentionally let extraction errors bubble up so caller (task tracker)
+            # can mark background commit tasks as failed with an explicit error.
             candidates = await self.extractor.extract_strict(context, user, session_id)
         else:
             candidates = await self.extractor.extract(context, user, session_id)
