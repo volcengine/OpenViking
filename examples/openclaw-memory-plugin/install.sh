@@ -561,6 +561,7 @@ download_plugin() {
     "examples/openclaw-memory-plugin/openclaw.plugin.json"
     "examples/openclaw-memory-plugin/package.json"
     "examples/openclaw-memory-plugin/package-lock.json"
+    "examples/openclaw-memory-plugin/tsconfig.json"
     "examples/openclaw-memory-plugin/.gitignore"
   )
   local total=${#files[@]}

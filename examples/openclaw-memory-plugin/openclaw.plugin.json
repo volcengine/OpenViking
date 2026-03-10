@@ -65,7 +65,7 @@
     },
     "recallLimit": {
       "label": "Recall Limit",
-      "placeholder": "20",
+      "placeholder": "6",
       "advanced": true
     },
     "recallScoreThreshold": {
