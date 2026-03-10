@@ -438,12 +438,13 @@ class AgentLoop:
                 # Run consolidation in background
                 await self._safe_consolidate_memory(session_clone, archive_all=True)
                 return OutboundMessage(
-                    session_key=msg.session_key, content="🐈 New session started. Memory consolidated."
+                    session_key=msg.session_key, content="🐈 New session started. Memory consolidated.", metadata=msg.metadata
                 )
             if cmd == "/help":
                 return OutboundMessage(
                     session_key=msg.session_key,
                     content="🐈 vikingbot commands:\n/new — Start a new conversation\n/help — Show available commands",
+                    metadata=msg.metadata
                 )
 
             # Consolidate memory before processing if session is too large
