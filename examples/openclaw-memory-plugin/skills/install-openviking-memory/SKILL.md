@@ -60,7 +60,7 @@ Example: User says "Forget my phone number"
 | `mode` | `remote` | `local` (start local server) or `remote` (connect to remote) |
 | `baseUrl` | `http://127.0.0.1:1933` | OpenViking server URL (remote mode) |
 | `apiKey` | — | OpenViking API Key (optional) |
-| `agentId` | `openclaw-<hostname>` | Identifies this agent (auto-generated, persisted to `~/.openviking/.agent-id`) |
+| `agentId` | `default` | Identifies this agent to OpenViking |
 | `configPath` | `~/.openviking/ov.conf` | Config file path (local mode) |
 | `port` | `1933` | Local server port (local mode) |
 | `targetUri` | `viking://user/memories` | Default search scope |

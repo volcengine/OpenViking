@@ -482,7 +482,9 @@ async function configureOpenclawViaJson(pluginPath, serverPort, pluginMode = "lo
   try { cfg = JSON.parse(await readFile(cfgPath, "utf8")); } catch { /* start fresh */ }
   if (!cfg.plugins) cfg.plugins = {};
   cfg.plugins.enabled = true;
-  cfg.plugins.allow = ["memory-openviking"];
+  const allow = Array.isArray(cfg.plugins.allow) ? cfg.plugins.allow : [];
+  if (!allow.includes("memory-openviking")) allow.push("memory-openviking");
+  cfg.plugins.allow = allow;
   if (!cfg.plugins.slots) cfg.plugins.slots = {};
   cfg.plugins.slots.memory = "memory-openviking";
   if (!cfg.plugins.load) cfg.plugins.load = {};
@@ -529,7 +531,15 @@ async function configureOpenclawViaCli(pluginPath, serverPort, installMode, plug
     await runNoShell("openclaw", ["config", "set", "plugins.load.paths", JSON.stringify([pluginPath])], { silent: true }).catch(() => {});
   }
   await runNoShell("openclaw", ["config", "set", "plugins.enabled", "true"]);
-  await runNoShell("openclaw", ["config", "set", "plugins.allow", JSON.stringify(["memory-openviking"]), "--json"]);
+  // Merge into existing allow list instead of overwriting
+  let currentAllow = [];
+  try {
+    const raw = await run("openclaw", ["config", "get", "plugins.allow", "--json"], { ...extraEnv, silent: true });
+    currentAllow = JSON.parse(raw.stdout || "[]");
+  } catch {}
+  if (!Array.isArray(currentAllow)) currentAllow = [];
+  if (!currentAllow.includes("memory-openviking")) currentAllow.push("memory-openviking");
+  await runNoShell("openclaw", ["config", "set", "plugins.allow", JSON.stringify(currentAllow), "--json"]);
   await runNoShell("openclaw", ["config", "set", "gateway.mode", "local"]);
   await runNoShell("openclaw", ["config", "set", "plugins.slots.memory", "memory-openviking"]);
   await runNoShell("openclaw", ["config", "set", "plugins.entries.memory-openviking.config.mode", pluginMode]);
