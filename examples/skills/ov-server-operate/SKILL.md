@@ -129,7 +129,7 @@ uv venv --python 3.12 ov-venv
 source ~/.openviking/ov-venv/bin/activate
 
 # Install or upgrade to latest openviking
-pip install --upgrade openviking --force-reinstall
+uv pip install --upgrade openviking --force-reinstall
 
 # Verify installation
 which openviking-server

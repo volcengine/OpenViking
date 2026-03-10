@@ -73,7 +73,7 @@ If you fire and forget, the command will return after the resource is completely
 By default, resources are imported under `viking://resources/`. Use `--to` or `--parent` to specify a target uri.
 
 ```bash
-# The data will be imported as viking://resources/2026/, which should not exist before
+# The data will be imported as viking://resources/2026/2026-01-01/, which should not exist before
 ov add-resource /User/volcengine/Photo/Travels/2026/2026-01-01/ --to "viking://resources/2026/2026-01-01/"
 
 # The data will be imported under viking://resources/2026, which should exist and be a directory
@@ -96,7 +96,7 @@ root_uri  viking://resources/2026/2026-01-01
 
 # OpenViking (OV) `add-memory`
 
-The `ov add-memory` command adds long persistant memory — turning text and structured conversations into searchable, retrievable memories in the OpenViking context database.
+The `ov add-memory` command adds long persistant memory — turning text and structured conversations into searchable, retrievable memories in the OpenViking context database. Use `ov add-memory --help` for latest usage.
 
 ## When to Use
 
