@@ -145,7 +145,7 @@ class SemanticDagExecutor:
                 asyncio.create_task(self._file_summary_task(dir_uri, file_path))
 
             if children_dirs:
-                logger.debug(f"Enqueued {len(children_dirs)} child directories for dispatch")
+                logger.debug(f"Enqueued {dir_uri} child directories for dispatch: {children_dirs}")
             
             for child_uri in children_dirs:
                 asyncio.create_task(self._dispatch_dir(child_uri, dir_uri))
@@ -273,7 +273,7 @@ class SemanticDagExecutor:
         """Generate file summary and notify parent completion."""
         logger.debug(f"Starting summary task for file {file_path}")
         file_name = file_path.split("/")[-1]
-        need_vectorize = not self._incremental_update
+        need_vectorize = True
         try:
             summary_dict = None
             if self._incremental_update:
@@ -353,6 +353,7 @@ class SemanticDagExecutor:
         node = self._nodes.get(dir_uri)
         if not node:
             return
+        logger.debug(f"Scheduling overview task for {dir_uri}")
         if node.overview_scheduled:
             return
         node.overview_scheduled = True
@@ -384,7 +385,7 @@ class SemanticDagExecutor:
         node = self._nodes.get(dir_uri)
         if not node:
             return
-        need_vectorize = not self._incremental_update
+        need_vectorize = True
         try:
             overview = None
             abstract = None
