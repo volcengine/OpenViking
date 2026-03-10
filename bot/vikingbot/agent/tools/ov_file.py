@@ -195,6 +195,7 @@ class VikingAddResourceTool(OVFileTool):
         description: str,
         **kwargs: Any,
     ) -> str:
+        client = None
         try:
             if path and not path.startswith("http"):
                 local_path = Path(path).expanduser().resolve()
@@ -206,7 +207,6 @@ class VikingAddResourceTool(OVFileTool):
             client = await VikingClient.create(tool_context.workspace_id)
             result = await client.add_resource(path, description)
 
-            await client.close()
             if result:
                 root_uri = result.get("root_uri", "")
                 return f"Successfully added resource: {root_uri}"
@@ -217,6 +217,9 @@ class VikingAddResourceTool(OVFileTool):
         except Exception as e:
             logger.warning(f"Error adding resource: {e}")
             return f"Error adding resource to Viking: {str(e)}"
+        finally:
+            if client:
+                await client.close()
 
 
 class VikingGrepTool(OVFileTool):
