@@ -48,14 +48,14 @@ class OpenVikingCompactHook(Hook):
     def _get_channel_allow_from(self, session_key: SessionKey):
         """根据 session_id 获取对应频道的 allow_from 配置"""
         config = load_config()
+        if not config.read_only:
+            return True, []
         allow_from = [config.ov_server.admin_user_id]
         if not session_key or not config.channels:
             return False, allow_from
         # 查找对应类型的 channel config
         for channel_config in config.channels_config.get_all_channels():
             if channel_config and channel_config.type.value == session_key.type:
-                if channel_config.agent_memory_mode == AgentMemoryMode.SHARED:
-                    return True, []
                 if hasattr(channel_config, "allow_from"):
                     allow_from.extend(channel_config.allow_from)
         return False, allow_from

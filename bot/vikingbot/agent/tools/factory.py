@@ -93,7 +93,7 @@ def register_default_tools(
         registry.register(VikingGlobTool())
         registry.register(VikingSearchUserMemoryTool())
         registry.register(VikingMemoryCommitTool())
-        if config.ov_server.allow_add_resource:
+        if not config.read_only:
             registry.register(VikingAddResourceTool())
 
 

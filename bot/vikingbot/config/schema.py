@@ -50,7 +50,6 @@ class BaseChannelConfig(BaseModel):
 
     type: Any = ChannelType.TELEGRAM  # Default for backwards compatibility
     enabled: bool = True
-    agent_memory_mode: Any = AgentMemoryMode.SHARED
 
     def channel_id(self) -> str:
         return "default"
@@ -446,7 +445,6 @@ class OpenVikingConfig(BaseModel):
     account_id: str = "default"
     admin_user_id: str = "default"
     agent_id: str = ""
-    allow_add_resource: bool = False
 
 
 class WebToolsConfig(BaseModel):
@@ -613,6 +611,7 @@ class Config(BaseSettings):
     )
     storage_workspace: str | None = None  # From ov.conf root level storage.workspace
     use_local_memory: bool = False
+    read_only: bool = False
 
     @property
     def channels_config(self) -> ChannelsConfig:

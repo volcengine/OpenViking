@@ -503,6 +503,7 @@ class FeishuChannel(BaseChannel):
             return
 
         try:
+            # logger.info(f"Sending message {msg}")
             # Determine receive_id_type based on chat_id format
             # open_id starts with "ou_", chat_id starts with "oc_"
             reply_to = msg.metadata.get("reply_to")
