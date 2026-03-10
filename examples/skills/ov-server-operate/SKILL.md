@@ -49,6 +49,7 @@ Note 2: Replace the root_api_key with your own root-api-key. Ask the user to set
     "host": "0.0.0.0",
     "port": 1933,
     "root_api_key": "your-root-api-key"
+  },
   "storage": {
     "workspace": "~/.openviking/data/"
   },
