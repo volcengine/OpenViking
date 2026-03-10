@@ -374,10 +374,10 @@ template: |
         "abstract": "Merge types use `[Merge key]: [Description]`, independent types use specific description",
         "overview": "Structured Markdown, use different heading templates by category",
         "content": "Free Markdown, complete narrative",
-        "tool_name": "Only for tools category: the tool name from input [ToolCall] record (must copy exactly)",
-        "skill_name": "Only for skills category: if any [ToolCall] record contains skill_name, copy it exactly; otherwise infer a descriptive skill/workflow name from context",
+        "tool_name": "[REQUIRED for tools] The tool name from [ToolCall] record - MUST copy exactly, no modification",
+        "skill_name": "[REQUIRED for skills] The skill name - copy from [ToolCall] skill_name if present, otherwise infer from context",
         "best_for": "Optional: tools/skills only, what this tool/skill is best used for",
-        "optimal_params": "Optional: tools only, best parameter settings and ranges",
+        "optimal_params": "Optional: tools only, GENERAL parameter ranges/best practices (NOT specific case values)",
         "recommended_flow": "Optional: skills only, recommended execution flow",
         "key_dependencies": "Optional: skills only, prerequisites/inputs needed",
         "common_failures": "Optional: tools/skills only, common failure patterns",
@@ -391,10 +391,10 @@ template: |
   - Only extract truly valuable personalized information
   - If nothing worth recording, return {"memories": []}
   - For preferences, keep each memory as one independently updatable facet; do not combine unrelated facets in one memory
-  - For tools category: tool_name MUST be copied from [ToolCall] tool_name field exactly, do NOT modify it
-  - For skills category: if any [ToolCall] record contains skill_name, skill_name MUST be copied from that field exactly, do NOT translate or add suffix/prefix; only if there is no skill_name in any [ToolCall] record, infer a descriptive skill/workflow name from the full conversation context
+  - **CRITICAL for tools category**: "tool_name" is REQUIRED. You MUST copy the exact tool_name value from the [ToolCall] record. Do NOT omit this field. Do NOT modify the name.
+  - **CRITICAL for skills category**: "skill_name" is REQUIRED. If [ToolCall] contains skill_name, copy it exactly. If not present, infer a descriptive name from context. Do NOT omit this field.
   - For tools/skills category: fill "best_for/common_failures/recommendation" when evidence exists in recent_messages and tool calls; if uncertain, omit the field (do NOT fabricate).
-  - For tools category: fill "optimal_params" when there is evidence (e.g. repeated parameter choices correlated with better outcomes); otherwise omit.
+  - For tools category: "optimal_params" should describe GENERAL best practices (e.g., "max_results=5-20", "timeout>30s for large files"), NOT specific case values (e.g., "command: 'echo hello'", "file: '/path/to/specific/file'"). Only fill when you can extract a reusable pattern.
   - For skills category: fill "recommended_flow/key_dependencies" when there is evidence; otherwise omit.
 
 llm_config:

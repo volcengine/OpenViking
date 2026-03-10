@@ -1,0 +1,38 @@
+metadata:
+  id: "compression.field_compress"
+  name: "Field Content Compression"
+  description: "Compress field content while preserving key information"
+  version: "1.0.0"
+  language: "en"
+  category: "compression"
+
+variables:
+  - name: "field_name"
+    type: "string"
+    description: "Field name (e.g., best_for, optimal_params)"
+    required: true
+  - name: "content"
+    type: "string"
+    description: "Original content to compress"
+    required: true
+  - name: "max_length"
+    type: "integer"
+    description: "Maximum length in characters"
+    required: true
+
+template: |
+  Compress the following "{{ field_name }}" field content to fit within {{ max_length }} characters.
+
+  Original content:
+  {{ content }}
+
+  Requirements:
+  - Preserve the most important and unique information
+  - Remove redundancy and duplicates
+  - Use concise language
+  - Maintain semantic structure (keep items separated by semicolons if applicable)
+  - Output must be <= {{ max_length }} characters
+  - Return compressed content only, no explanation
+
+llm_config:
+  temperature: 0.0

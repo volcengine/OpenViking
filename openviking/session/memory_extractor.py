@@ -25,6 +25,16 @@ from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 
+FIELD_MAX_LENGTH = 1000
+FIELD_MAX_LENGTHS = {
+    "best_for": 500,
+    "optimal_params": 800,
+    "common_failures": 1000,
+    "recommendation": 500,
+    "recommended_flow": 800,
+    "key_dependencies": 500,
+}
+
 
 class MemoryCategory(str, Enum):
     """Memory category enumeration."""
@@ -646,18 +656,19 @@ class MemoryExtractor:
             existing_guidelines = ""
         existing_fields = self._extract_tool_memory_context_fields_from_text(existing)
         merged_fields = {
-            "best_for": self._merge_kv_field(existing_fields.get("best_for", ""), new_fields.get("best_for", "")),
-            "optimal_params": self._merge_kv_field(
-                existing_fields.get("optimal_params", ""), new_fields.get("optimal_params", "")
+            "best_for": await self._merge_kv_field(
+                existing_fields.get("best_for", ""), new_fields.get("best_for", ""), "best_for"
             ),
-            "common_failures": self._merge_kv_field(
-                existing_fields.get("common_failures", ""), new_fields.get("common_failures", "")
+            "optimal_params": await self._merge_kv_field(
+                existing_fields.get("optimal_params", ""), new_fields.get("optimal_params", ""), "optimal_params"
             ),
-            "recommendation": self._merge_kv_field(
-                existing_fields.get("recommendation", ""), new_fields.get("recommendation", "")
+            "common_failures": await self._merge_kv_field(
+                existing_fields.get("common_failures", ""), new_fields.get("common_failures", ""), "common_failures"
+            ),
+            "recommendation": await self._merge_kv_field(
+                existing_fields.get("recommendation", ""), new_fields.get("recommendation", ""), "recommendation"
             ),
         }
-        merged_guidelines = existing_guidelines
         if new_guidelines:
             payload = await self._merge_memory_bundle(
                 existing_abstract="",
@@ -914,7 +925,7 @@ class MemoryExtractor:
                 lines.append(s)
         return "; ".join(lines).strip()
 
-    def _merge_kv_field(self, existing_value: str, new_value: str) -> str:
+    async def _merge_kv_field(self, existing_value: str, new_value: str, field_name: str = "") -> str:
         a = (existing_value or "").strip()
         b = (new_value or "").strip()
         if not a:
@@ -929,10 +940,60 @@ class MemoryExtractor:
                 if p and p not in parts:
                     parts.append(p)
         merged = "; ".join(parts).strip()
-        if len(merged) <= 1000:
+
+        max_length = FIELD_MAX_LENGTHS.get(field_name, FIELD_MAX_LENGTH)
+        if len(merged) <= max_length:
             return merged
-        limited = "; ".join(parts).strip()[:1000]
-        return limited
+
+        compressed = await self._compress_field_content(merged, field_name, max_length)
+        if compressed:
+            return compressed
+        return self._smart_truncate(merged, max_length)
+
+    async def _compress_field_content(self, content: str, field_name: str, max_length: int) -> Optional[str]:
+        vlm = get_openviking_config().vlm
+        if not vlm or not vlm.is_available():
+            return None
+
+        target_length = int(max_length * 0.8)
+        prompt = render_prompt(
+            "compression.field_compress",
+            {
+                "field_name": field_name,
+                "content": content,
+                "max_length": target_length,
+            },
+        )
+
+        try:
+            response = await vlm.get_completion_async(prompt)
+            compressed = response.strip()
+            if len(compressed) <= max_length:
+                logger.info(
+                    "Field compression succeeded: field=%s original=%d compressed=%d target=%d",
+                    field_name, len(content), len(compressed), target_length
+                )
+                return compressed
+            logger.warning(
+                "Compressed content still exceeds max_length: field=%s len=%d max=%d, using fallback",
+                field_name, len(compressed), max_length
+            )
+            return None
+        except Exception as e:
+            logger.warning(f"Field compression failed for {field_name}: {e}")
+            return None
+
+    def _smart_truncate(self, text: str, max_length: int) -> str:
+        if len(text) <= max_length:
+            return text
+        truncated = text[:max_length]
+        last_sep = truncated.rfind(";")
+        if last_sep > max_length * 0.7:
+            return truncated[:last_sep]
+        last_space = truncated.rfind(" ")
+        if last_space > max_length * 0.7:
+            return truncated[:last_space]
+        return truncated
 
     def _extract_tool_memory_context_fields_from_text(self, text: str) -> dict:
         return {
@@ -1157,18 +1218,20 @@ class MemoryExtractor:
         existing_guidelines = self._extract_skill_guidelines(existing) or existing.strip()
         existing_fields = self._extract_skill_memory_context_fields_from_text(existing)
         merged_fields = {
-            "best_for": self._merge_kv_field(existing_fields.get("best_for", ""), new_fields.get("best_for", "")),
-            "recommended_flow": self._merge_kv_field(
-                existing_fields.get("recommended_flow", ""), new_fields.get("recommended_flow", "")
+            "best_for": await self._merge_kv_field(
+                existing_fields.get("best_for", ""), new_fields.get("best_for", ""), "best_for"
             ),
-            "key_dependencies": self._merge_kv_field(
-                existing_fields.get("key_dependencies", ""), new_fields.get("key_dependencies", "")
+            "recommended_flow": await self._merge_kv_field(
+                existing_fields.get("recommended_flow", ""), new_fields.get("recommended_flow", ""), "recommended_flow"
             ),
-            "common_failures": self._merge_kv_field(
-                existing_fields.get("common_failures", ""), new_fields.get("common_failures", "")
+            "key_dependencies": await self._merge_kv_field(
+                existing_fields.get("key_dependencies", ""), new_fields.get("key_dependencies", ""), "key_dependencies"
             ),
-            "recommendation": self._merge_kv_field(
-                existing_fields.get("recommendation", ""), new_fields.get("recommendation", "")
+            "common_failures": await self._merge_kv_field(
+                existing_fields.get("common_failures", ""), new_fields.get("common_failures", ""), "common_failures"
+            ),
+            "recommendation": await self._merge_kv_field(
+                existing_fields.get("recommendation", ""), new_fields.get("recommendation", ""), "recommendation"
             ),
         }
         merged_guidelines = existing_guidelines
