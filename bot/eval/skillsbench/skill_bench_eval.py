@@ -214,9 +214,11 @@ def run_verification(task_dir: Path, work_dir: Path, storage_workspace: Path) ->
         return result
 
     test_sh = tests_dir / "test.sh"
-    test_py = tests_dir / "test_outputs.py"
+    # Collect all test_*.py files
+    test_py_files = sorted(list(tests_dir.rglob("test_*.py")))
+    test_py_files = [f for f in test_py_files if "__pycache__" not in str(f)]
 
-    if not test_sh.exists() and not test_py.exists():
+    if not test_sh.exists() and not test_py_files:
         result["error"] = "no test files found"
         result["verified"] = True
         result["passed"] = True
@@ -246,10 +248,12 @@ def run_verification(task_dir: Path, work_dir: Path, storage_workspace: Path) ->
     work_dir_str = str(work_dir_relative)
     tests_dir_relative = str(task_dir / "tests")
 
-    if test_py.exists():
+    if test_py_files:
         try:
-            with open(test_py, "r", encoding="utf-8") as f:
-                test_content = f.read()
+            local_test_files = []
+            for test_py in test_py_files:
+                with open(test_py, "r", encoding="utf-8") as f:
+                    test_content = f.read()
 
             expected_paths = set(re.findall(r"""['"](/root/[^'"]+)['"]""", test_content))
             expected_paths.update(re.findall(r"""['"](/app/[^'"]+)['"]""", test_content))
@@ -351,11 +355,11 @@ def run_verification(task_dir: Path, work_dir: Path, storage_workspace: Path) ->
                     except Exception:
                         pass
 
-            test_content = rewrite_test_text(test_content)
-
-            local_test_py = work_dir / "test_outputs.py"
-            with open(local_test_py, "w", encoding="utf-8") as f:
-                f.write(test_content)
+                test_content = rewrite_test_text(test_content)
+                local_test_py = work_dir / test_py.name
+                with open(local_test_py, "w", encoding="utf-8") as f:
+                    f.write(test_content)
+                local_test_files.append(str(local_test_py))
 
             env = os.environ.copy()
             env["PYTHONPATH"] = str(work_dir)
@@ -364,9 +368,11 @@ def run_verification(task_dir: Path, work_dir: Path, storage_workspace: Path) ->
                 "python",
                 "-m",
                 "pytest",
-                str(local_test_py),
+                *local_test_files,
                 "-v",
                 "--tb=short",
+                "-W",
+                "ignore::pytest.PytestCollectionWarning",
                 f"--junitxml={logs_dir}/junit.xml",
             ]
 
@@ -381,7 +387,7 @@ def run_verification(task_dir: Path, work_dir: Path, storage_workspace: Path) ->
                 timeout=300,
             )
 
-            result["test_output"] = proc_result.stdout + proc_result.stderr
+            result["test_output"] = str(proc_result.stdout or "") + str(proc_result.stderr or "")
             result["verified"] = True
             result["passed"] = proc_result.returncode == 0
 
