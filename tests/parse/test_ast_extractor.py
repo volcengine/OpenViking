@@ -705,6 +705,120 @@ int add(int a, int b) {
         assert "@param a First operand" in text
         assert "@return Sum of a and b" in text
 
+    def test_typedef_struct_anonymous(self):
+        code = """
+/* A 2D point. */
+typedef struct {
+    float x;
+    float y;
+} Point;
+
+/* An RGB color value. */
+typedef struct {
+    int r;
+    int g;
+    int b;
+} Color;
+"""
+        sk = self.e.extract("types.h", code)
+        names = {c.name for c in sk.classes}
+        assert "Point" in names
+        assert "Color" in names
+
+    def test_typedef_struct_named_tag(self):
+        # typedef struct Node { ... } Node; — tag and alias are the same
+        code = """
+typedef struct Node {
+    int value;
+    struct Node *next;
+} Node;
+"""
+        sk = self.e.extract("list.h", code)
+        names = {c.name for c in sk.classes}
+        assert "Node" in names
+
+    def test_typedef_struct_docstring(self):
+        code = """
+/** Represents a rectangle with width and height. */
+typedef struct {
+    int width;
+    int height;
+} Rect;
+"""
+        sk = self.e.extract("rect.h", code)
+        rect = next((c for c in sk.classes if c.name == "Rect"), None)
+        assert rect is not None
+        assert "Represents a rectangle" in rect.docstring
+
+    def test_function_prototype_top_level(self):
+        # .h header with only function declarations (no bodies)
+        code = """
+#include <stddef.h>
+
+/* Allocate n bytes of memory. */
+void *my_malloc(size_t n);
+
+/* Free previously allocated memory. */
+void my_free(void *ptr);
+"""
+        sk = self.e.extract("mem.h", code)
+        names = {f.name for f in sk.functions}
+        assert "my_malloc" in names
+        assert "my_free" in names
+
+    def test_function_prototype_return_type(self):
+        code = """
+int compute(int a, int b);
+void reset(void);
+"""
+        sk = self.e.extract("utils.h", code)
+        print(sk.to_text())
+        fns = {f.name: f for f in sk.functions}
+        assert fns["compute"].return_type == "int"
+        assert fns["reset"].return_type == "void"
+
+    def test_function_prototype_docstring(self):
+        code = """
+/** Add two integers and return the result. */
+int add(int a, int b);
+"""
+        sk = self.e.extract("math.h", code)
+        fns = {f.name: f for f in sk.functions}
+        assert "Add two integers" in fns["add"].docstring
+
+    def test_namespace_typedef_and_proto(self):
+        code = """
+namespace utils {
+
+typedef struct {
+    int id;
+} Handle;
+
+int create(int flags);
+
+}
+"""
+        sk = self.e.extract("utils.cpp", code)
+        names = {c.name for c in sk.classes}
+        assert "Handle" in names
+        fns = {f.name for f in sk.functions}
+        assert "create" in fns
+
+    def test_declaration_and_definition_both_extracted(self):
+        # Forward declaration + definition in the same file — both appear in skeleton
+        code = """
+/* Forward declaration */
+int add(int a, int b);
+
+/* Definition */
+int add(int a, int b) {
+    return a + b;
+}
+"""
+        sk = self.e.extract("math.cpp", code)
+        names = [f.name for f in sk.functions]
+        assert names.count("add") == 2
+
 
 # ---------------------------------------------------------------------------
 # Rust

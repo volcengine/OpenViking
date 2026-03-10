@@ -495,8 +495,6 @@ class VikingVectorIndexBackend:
                 filters.append(extra_filter)
 
         merged = self._merge_filters(*filters)
-        if merged is None:
-            return RawDSL({"op": "and", "conds": []})
         return merged
 
     @staticmethod

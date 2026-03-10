@@ -28,6 +28,9 @@ class IntentAnalyzer:
     3. Generate multiple TypedQueries for memory/resources/skill
     """
 
+    # Limit content length (about 10000 tokens)
+    MAX_COMPRESSION_SUMMARY_CHARS = 30000
+
     def __init__(self, max_recent_messages: int = 5):
         """Initialize intent analyzer."""
         self.max_recent_messages = max_recent_messages
@@ -106,7 +109,8 @@ class IntentAnalyzer:
     ) -> str:
         """Build prompt for intent analysis."""
         # Format compression info
-        summary = compression_summary if compression_summary else "None"
+        summary = self._truncate_text(compression_summary, self.MAX_COMPRESSION_SUMMARY_CHARS)
+        summary = summary if summary else "None"
 
         # Format recent messages
         recent = messages[-self.max_recent_messages :] if messages else []
@@ -127,6 +131,13 @@ class IntentAnalyzer:
                 "target_abstract": target_abstract,
             },
         )
+
+    @staticmethod
+    def _truncate_text(text: str, max_chars: int) -> str:
+        """Truncate text to avoid oversized prompt context."""
+        if not text or len(text) <= max_chars:
+            return text
+        return text[: max_chars - 15] + "\n...(truncated)"
 
     def _summarize_context(
         self,

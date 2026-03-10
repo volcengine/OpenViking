@@ -41,7 +41,7 @@
 
 **OpenViking** 是专为 AI 智能体设计的开源**上下文数据库**。
 
-我们的目标是为智能体定义一个极简的上下文交互范式，让开发者完全告别上下文管理的烦恼。OpenViking 抛弃了传统 RAG 的碎片化向量存储模型，创新性地采用**"文件系统范式"**来统一组织智能体所需的记忆、资源和技能。
+我们的目标是为智能体定义一个极简的上下文交互范式，让开发者完全告别上下文管理的烦恼。OpenViking 抛弃了传统 RAG 的碎片化向量存储模型，创新性地采用 **"文件系统范式"** 来统一组织智能体所需的记忆、资源和技能。
 
 使用 OpenViking，开发者可以像管理本地文件一样构建智能体的大脑：
 
@@ -443,10 +443,10 @@ VikingBot 是构建在 OpenViking 之上的 AI 智能体框架。以下是快速
 
 ```bash
 # 选项 1：从 PyPI 安装 VikingBot（推荐大多数用户使用）
-pip install openviking[bot]
+pip install "openviking[bot]"
 
 # 选项 2：从源码安装 VikingBot（用于开发）
-uv pip install -e bot/
+uv pip install -e ".[bot]"
 
 # 启动 OpenViking 服务器（同时启动 Bot）
 openviking-server --with-bot

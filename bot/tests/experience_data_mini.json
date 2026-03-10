@@ -1,0 +1,10 @@
+[
+  {
+    "unique_id": "rust-lang/rust169585762",
+    "repo": "rust-lang/rust",
+    "issue_id": "169585762",
+    "bug_description": "Inconsistent error message formatting for duplicate import conflicts in the compiler's resolve phase.",
+    "content_preview": "<issue_start><issue_comment>Title: Updated error message E0252\nusername_0: Fixes #35306 as part of #35233.\n\nr? @username_2\n<issue_comment>username_1: Thanks for the pull request, and welcome! The Rust",
+    "fix_experience": "{\n  \"Signals\": [\"inconsistent\", \"error message\", \"formatting\", \"duplicate\", \"import\"],\n  \"Root Cause\": \"The compiler's resolve phase lacked specific span labels for duplicate import conflicts, leading to unclear error diagnostics.\",\n  \"Fix Strategy\": \"Enhance error diagnostics by adding specific span labels to duplicate import errors to clarify the conflicting import statements.\",\n  \"Patch Digest\": \"Modified E0252 error handling to create structured errors with span labels, added 'already imported' label to conflicting import spans, and updated test cases for new error message format.\",\n  \"Verification\": \"Verify the fix by running updated test cases to ensure the new error message format with additional notes and span labels is correctly displayed for duplicate import conflicts.\"\n}"
+  }
+]

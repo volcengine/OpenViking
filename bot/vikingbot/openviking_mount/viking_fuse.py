@@ -477,7 +477,7 @@ else:
 
     def mount_fuse(*args, **kwargs):
         raise ImportError(
-            "fusepy and libfuse are required. Install with: uv pip install 'vikingbot[fuse]' (or uv pip install -e \".[fuse]\" for local dev) and install libfuse system package"
+            "fusepy and libfuse are required. Install with: uv pip install 'openviking[bot-fuse]' (or uv pip install -e \".[bot-fuse]\" for local dev) and install libfuse system package"
         )
 
     class FUSEMountManager:

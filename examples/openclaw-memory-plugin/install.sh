@@ -561,6 +561,7 @@ download_plugin() {
     "examples/openclaw-memory-plugin/openclaw.plugin.json"
     "examples/openclaw-memory-plugin/package.json"
     "examples/openclaw-memory-plugin/package-lock.json"
+    "examples/openclaw-memory-plugin/tsconfig.json"
     "examples/openclaw-memory-plugin/.gitignore"
   )
   local total=${#files[@]}
@@ -612,10 +613,24 @@ configure_openclaw_plugin() {
   fi
 
   "${oc_env[@]}" openclaw config set plugins.enabled true
-  "${oc_env[@]}" openclaw config set plugins.allow '["memory-openviking"]' --json
+  # Merge into existing allow list instead of overwriting
+  local existing_allow
+  existing_allow=$("${oc_env[@]}" openclaw config get plugins.allow --json 2>/dev/null || echo '[]')
+  if ! echo "$existing_allow" | grep -q '"memory-openviking"'; then
+    existing_allow=$(echo "$existing_allow" | sed 's/]$//' | sed 's/$/,"memory-openviking"]/' | sed 's/\[,/[/')
+  fi
+  "${oc_env[@]}" openclaw config set plugins.allow "$existing_allow" --json
+
   "${oc_env[@]}" openclaw config set gateway.mode local
   "${oc_env[@]}" openclaw config set plugins.slots.memory memory-openviking
-  "${oc_env[@]}" openclaw config set plugins.load.paths "[\"${PLUGIN_DEST}\"]" --json
+
+  # Merge into existing load paths instead of overwriting
+  local existing_paths
+  existing_paths=$("${oc_env[@]}" openclaw config get plugins.load.paths --json 2>/dev/null || echo '[]')
+  if ! echo "$existing_paths" | grep -q "\"${PLUGIN_DEST}\""; then
+    existing_paths=$(echo "$existing_paths" | sed 's/]$//' | sed "s/$/,\"${PLUGIN_DEST}\"]/" | sed 's/\[,/[/')
+  fi
+  "${oc_env[@]}" openclaw config set plugins.load.paths "$existing_paths" --json
   "${oc_env[@]}" openclaw config set plugins.entries.memory-openviking.config.mode "${SELECTED_MODE}"
   "${oc_env[@]}" openclaw config set plugins.entries.memory-openviking.config.targetUri viking://user/memories
   "${oc_env[@]}" openclaw config set plugins.entries.memory-openviking.config.autoRecall true --json

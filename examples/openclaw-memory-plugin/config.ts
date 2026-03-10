@@ -31,30 +31,21 @@ const DEFAULT_TARGET_URI = "viking://user/memories";
 const DEFAULT_TIMEOUT_MS = 15000;
 const DEFAULT_CAPTURE_MODE = "semantic";
 const DEFAULT_CAPTURE_MAX_LENGTH = 24000;
-const DEFAULT_RECALL_LIMIT = 20;
+const DEFAULT_RECALL_LIMIT = 6;
 const DEFAULT_RECALL_SCORE_THRESHOLD = 0.01;
 const DEFAULT_INGEST_REPLY_ASSIST = true;
 const DEFAULT_INGEST_REPLY_ASSIST_MIN_SPEAKER_TURNS = 2;
 const DEFAULT_INGEST_REPLY_ASSIST_MIN_CHARS = 120;
 const DEFAULT_LOCAL_CONFIG_PATH = join(homedir(), ".openviking", "ov.conf");
 
-function generateAgentId(): string {
-  const { hostname } = require("node:os") as typeof import("node:os");
-  const { randomBytes } = require("node:crypto") as typeof import("node:crypto");
-  const host = hostname().split(".")[0]?.toLowerCase().replace(/[^a-z0-9-]/g, "") || "local";
-  const random = randomBytes(4).toString("hex");
-  return `openclaw-${host}-${random}`;
-}
+const DEFAULT_AGENT_ID = "default";
 
 function resolveAgentId(configured: unknown): string {
   if (typeof configured === "string" && configured.trim()) {
     return configured.trim();
   }
-  // 生成随机唯一的默认 ID，不持久化
-  return generateAgentId();
+  return DEFAULT_AGENT_ID;
 }
-
-export { generateAgentId };
 
 function resolveEnvVars(value: string): string {
   return value.replace(/\$\{([^}]+)\}/g, (_, envVar) => {
@@ -218,7 +209,7 @@ export const memoryOpenVikingConfigSchema = {
     agentId: {
       label: "Agent ID",
       placeholder: "auto-generated",
-      help: "Identifies this agent to OpenViking (sent as X-OpenViking-Agent header). A random unique ID is generated per session if not set.",
+      help: "Identifies this agent to OpenViking (sent as X-OpenViking-Agent header). Defaults to \"default\" if not set.",
     },
     apiKey: {
       label: "OpenViking API Key",

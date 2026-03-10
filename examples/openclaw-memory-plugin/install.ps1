@@ -326,6 +326,7 @@ function Download-Plugin {
     "examples/openclaw-memory-plugin/openclaw.plugin.json",
     "examples/openclaw-memory-plugin/package.json",
     "examples/openclaw-memory-plugin/package-lock.json",
+    "examples/openclaw-memory-plugin/tsconfig.json",
     "examples/openclaw-memory-plugin/.gitignore"
   )
 
@@ -386,7 +387,14 @@ function Configure-OpenClawPlugin {
   $mergedPaths = @($existingPaths + @($PluginDest) | Select-Object -Unique)
 
   $cfg["plugins"]["enabled"] = $true
-  $cfg["plugins"]["allow"] = @("memory-openviking")
+  $existingAllow = @()
+  if ($cfg["plugins"].ContainsKey("allow") -and $cfg["plugins"]["allow"]) {
+    $existingAllow = @($cfg["plugins"]["allow"])
+  }
+  if ($existingAllow -notcontains "memory-openviking") {
+    $existingAllow += "memory-openviking"
+  }
+  $cfg["plugins"]["allow"] = $existingAllow
   $cfg["plugins"]["slots"]["memory"] = "memory-openviking"
   $cfg["plugins"]["load"]["paths"] = $mergedPaths
 

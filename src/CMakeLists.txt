@@ -191,9 +191,15 @@ pybind11_add_module(
     pybind11_interface.cpp
 )
 
-set(EXTENSION_SUFFIX ".so")
-if(WIN32)
-    set(EXTENSION_SUFFIX ".pyd")
+if(NOT DEFINED PY_OUTPUT_NAME)
+    set(PY_OUTPUT_NAME "engine")
+endif()
+
+if(NOT DEFINED PY_OUTPUT_SUFFIX)
+    set(PY_OUTPUT_SUFFIX ".so")
+    if(WIN32)
+        set(PY_OUTPUT_SUFFIX ".pyd")
+    endif()
 endif()
 
 set_target_properties(
@@ -201,9 +207,9 @@ set_target_properties(
     PROPERTIES
     LIBRARY_OUTPUT_DIRECTORY "${PY_OUTPUT_DIR}"
     RUNTIME_OUTPUT_DIRECTORY "${PY_OUTPUT_DIR}"
-    SUFFIX "${EXTENSION_SUFFIX}"
+    SUFFIX "${PY_OUTPUT_SUFFIX}"
     PYBIND11_MODULE_NAME "engine"
-    OUTPUT_NAME "engine"
+    OUTPUT_NAME "${PY_OUTPUT_NAME}"
 )
 
 target_include_directories(engine PRIVATE

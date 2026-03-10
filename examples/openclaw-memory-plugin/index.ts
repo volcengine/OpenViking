@@ -28,9 +28,8 @@ import {
   waitForHealth,
   withTimeout,
   quickRecallPrecheck,
-  quickHealthCheck,
-  quickTcpProbe,
   resolvePythonCommand,
+  prepareLocalPort,
 } from "./process-manager.js";
 
 const memoryPlugin = {
@@ -539,34 +538,13 @@ const memoryPlugin = {
       id: "memory-openviking",
       start: async () => {
         if (cfg.mode === "local" && resolveLocalClient) {
-          const baseUrl = cfg.baseUrl;
           const timeoutMs = 60_000;
           const intervalMs = 500;
-          // 1. Check if a healthy OpenViking is already running on this port — reuse it
-          const existingHealthy = await quickHealthCheck(baseUrl, 2000);
-          if (existingHealthy) {
-            const client = new OpenVikingClient(baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs);
-            localClientCache.set(localCacheKey, { client, process: null });
-            resolveLocalClient(client);
-            rejectLocalClient = null;
-            api.logger.info(
-              `memory-openviking: reusing existing server at ${baseUrl}`,
-            );
-            return;
-          }
 
-          // 2. Check if port is occupied by something else
-          const portOccupied = await quickTcpProbe("127.0.0.1", cfg.port, 500);
-          if (portOccupied) {
-            const msg = `memory-openviking: port ${cfg.port} is occupied by another process (not OpenViking). ` +
-              `Change the port in your plugin config or ov.conf, e.g.: ` +
-              `openclaw config set plugins.entries.memory-openviking.config.port 1934`;
-            api.logger.warn(msg);
-            markLocalUnavailable("port occupied", new Error(msg));
-            throw new Error(msg);
-          }
+          // Prepare port: kill stale OpenViking, or auto-find free port if occupied by others
+          const actualPort = await prepareLocalPort(cfg.port, api.logger);
+          const baseUrl = `http://127.0.0.1:${actualPort}`;
 
-          // 3. Port is free — start OpenViking
           const pythonCmd = resolvePythonCommand(api.logger);
 
           // Inherit system environment; optionally override Go/Python paths via env vars
@@ -578,7 +556,7 @@ const memoryPlugin = {
             OPENVIKING_CONFIG_FILE: cfg.configPath,
             OPENVIKING_START_CONFIG: cfg.configPath,
             OPENVIKING_START_HOST: "127.0.0.1",
-            OPENVIKING_START_PORT: String(cfg.port),
+            OPENVIKING_START_PORT: String(actualPort),
             ...(process.env.OPENVIKING_GO_PATH && { PATH: `${process.env.OPENVIKING_GO_PATH}${pathSep}${process.env.PATH || ""}` }),
             ...(process.env.OPENVIKING_GOPATH && { GOPATH: process.env.OPENVIKING_GOPATH }),
             ...(process.env.OPENVIKING_GOPROXY && { GOPROXY: process.env.OPENVIKING_GOPROXY }),

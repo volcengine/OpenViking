@@ -13,6 +13,7 @@ from openviking.models.embedder.base import (
     SparseEmbedderBase,
     truncate_and_normalize,
 )
+from openviking_cli.utils.logger import default_logger as logger
 
 
 def process_sparse_embedding(sparse_data: Any) -> Dict[str, float]:
@@ -164,6 +165,9 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
                 for item in data
             ]
         except Exception as e:
+            logger.error(
+                f"Volcengine batch embedding failed, texts length: {len(texts)}, input_type: {self.input_type}, model_name: {self.model_name}"
+            )
             raise RuntimeError(f"Volcengine batch embedding failed: {str(e)}") from e
 
     def get_dimension(self) -> int:

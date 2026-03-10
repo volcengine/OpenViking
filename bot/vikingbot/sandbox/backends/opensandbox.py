@@ -206,7 +206,7 @@ class OpenSandboxBackend(SandboxBackend):
 
         except ImportError:
             logger.error(
-                "opensandbox SDK not installed. Install with: uv pip install 'vikingbot[sandbox]' (or uv pip install -e \".[sandbox]\" for local dev)"
+                "opensandbox SDK not installed. Install with: uv pip install 'openviking[bot-sandbox]' (or uv pip install -e \".[bot-sandbox]\" for local dev)"
             )
             raise
         except Exception as e:

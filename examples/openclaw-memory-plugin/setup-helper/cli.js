@@ -427,9 +427,14 @@ async function fetchPluginFromGitHub(dest) {
   const files = [
     "examples/openclaw-memory-plugin/index.ts",
     "examples/openclaw-memory-plugin/config.ts",
+    "examples/openclaw-memory-plugin/client.ts",
+    "examples/openclaw-memory-plugin/process-manager.ts",
+    "examples/openclaw-memory-plugin/memory-ranking.ts",
+    "examples/openclaw-memory-plugin/text-utils.ts",
     "examples/openclaw-memory-plugin/openclaw.plugin.json",
     "examples/openclaw-memory-plugin/package.json",
     "examples/openclaw-memory-plugin/package-lock.json",
+    "examples/openclaw-memory-plugin/tsconfig.json",
     "examples/openclaw-memory-plugin/.gitignore",
   ];
   await mkdir(dest, { recursive: true });
@@ -488,7 +493,9 @@ async function configureOpenclawViaJson(pluginPath, serverPort, pluginMode = "lo
   try { cfg = JSON.parse(await readFile(cfgPath, "utf8")); } catch { /* start fresh */ }
   if (!cfg.plugins) cfg.plugins = {};
   cfg.plugins.enabled = true;
-  cfg.plugins.allow = ["memory-openviking"];
+  const allow = Array.isArray(cfg.plugins.allow) ? cfg.plugins.allow : [];
+  if (!allow.includes("memory-openviking")) allow.push("memory-openviking");
+  cfg.plugins.allow = allow;
   if (!cfg.plugins.slots) cfg.plugins.slots = {};
   cfg.plugins.slots.memory = "memory-openviking";
   if (!cfg.plugins.load) cfg.plugins.load = {};
@@ -532,10 +539,26 @@ async function configureOpenclawViaCli(pluginPath, serverPort, installMode, plug
     }
     await run("openclaw", ["plugins", "install", "-l", pluginPath], extraEnv);
   } else {
-    await runNoShell("openclaw", ["config", "set", "plugins.load.paths", JSON.stringify([pluginPath])], { silent: true }).catch(() => {});
+    // Merge into existing load paths instead of overwriting
+    let currentPaths = [];
+    try {
+      const rawPaths = await runCapture("openclaw", ["config", "get", "plugins.load.paths", "--json"], { ...extraEnv });
+      currentPaths = JSON.parse(rawPaths.out || "[]");
+    } catch {}
+    if (!Array.isArray(currentPaths)) currentPaths = [];
+    if (!currentPaths.includes(pluginPath)) currentPaths.push(pluginPath);
+    await runNoShell("openclaw", ["config", "set", "plugins.load.paths", JSON.stringify(currentPaths), "--json"], { silent: true }).catch(() => {});
   }
   await runNoShell("openclaw", ["config", "set", "plugins.enabled", "true"]);
-  await runNoShell("openclaw", ["config", "set", "plugins.allow", JSON.stringify(["memory-openviking"]), "--json"]);
+  // Merge into existing allow list instead of overwriting
+  let currentAllow = [];
+  try {
+    const raw = await runCapture("openclaw", ["config", "get", "plugins.allow", "--json"], { ...extraEnv });
+    currentAllow = JSON.parse(raw.out || "[]");
+  } catch {}
+  if (!Array.isArray(currentAllow)) currentAllow = [];
+  if (!currentAllow.includes("memory-openviking")) currentAllow.push("memory-openviking");
+  await runNoShell("openclaw", ["config", "set", "plugins.allow", JSON.stringify(currentAllow), "--json"]);
   await runNoShell("openclaw", ["config", "set", "gateway.mode", "local"]);
   await runNoShell("openclaw", ["config", "set", "plugins.slots.memory", "memory-openviking"]);
   await runNoShell("openclaw", ["config", "set", "plugins.entries.memory-openviking.config.mode", pluginMode]);

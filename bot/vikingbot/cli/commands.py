@@ -228,7 +228,7 @@ def _make_provider(config, langfuse_client: None = None):
 
 @app.command()
 def gateway(
-    port: int = typer.Option(18791, "--port", "-p", help="Gateway port"),
+    port: int = typer.Option(18790, "--port", "-p", help="Gateway port"),
     # console_port: int = typer.Option(18791, "--console-port", help="Console web UI port"),
     enable_console: bool = typer.Option(
         True, "--console/--no-console", help="Enable console web UI"
@@ -697,7 +697,7 @@ def _get_bridge_dir() -> Path:
 
     if not source:
         console.print("[red]Bridge source not found.[/red]")
-        console.print("Try reinstalling: uv pip install --force-reinstall vikingbot")
+        console.print("Try reinstalling: uv pip install --force-reinstall openviking[bot]")
         raise typer.Exit(1)
 
     console.print(f"{__logo__} Setting up bridge...")

@@ -205,7 +205,7 @@ class FeishuChannel(BaseChannel):
         """Start the Feishu bot with WebSocket long connection."""
         if not FEISHU_AVAILABLE:
             logger.exception(
-                "Feishu SDK not installed. Install with: uv pip install 'vikingbot[feishu]' (or uv pip install -e \".[feishu]\" for local dev)"
+                "Feishu SDK not installed. Install with: uv pip install 'openviking[bot-feishu]' (or uv pip install -e \".[bot-feishu]\" for local dev)"
             )
             return
 

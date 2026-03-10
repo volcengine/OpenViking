@@ -145,8 +145,8 @@ class ChannelManager:
             channel_type = getattr(channel_config.type, "value", str(channel_config.type))
             logger.warning(
                 f"Channel {channel_config.type} not available: {e}. "
-                f"Install with: uv pip install 'vikingbot[{channel_type}]' "
-                f'(or uv pip install -e ".[{channel_type}]" for local dev)'
+                f"Install with: uv pip install 'openviking[bot-{channel_type}]' "
+                f'(or uv pip install -e ".[bot-{channel_type}]" for local dev)'
             )
 
     def load_channels_from_config(

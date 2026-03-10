@@ -170,7 +170,7 @@ async def chat_stream(request: Request):
                 # Forward to Vikingbot OpenAPIChannel stream endpoint
                 async with client.stream(
                     "POST",
-                    f"{bot_url}/chat/stream",
+                    f"{bot_url}/bot/v1/chat/stream",
                     json=body,
                     headers=headers,
                     timeout=300.0,
@@ -180,8 +180,8 @@ async def chat_stream(request: Request):
                     # Stream the response content
                     async for line in response.aiter_lines():
                         if line:
-                            # Forward the SSE line
-                            yield f"{line}\n\n"
+                            # Forward the SSE line as-is
+                            yield f"{line}\n"
         except httpx.RequestError as e:
             logger.error(f"Failed to connect to bot service: {e}")
             error_event = {
