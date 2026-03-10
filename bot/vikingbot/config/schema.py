@@ -440,7 +440,7 @@ class OpenVikingConfig(BaseModel):
     account_id: str = "default"
     admin_user_id: str = "default"
     agent_id: str = ""
-    allow_add_resource: bool = True
+    allow_add_resource: bool = False
 
 
 class WebToolsConfig(BaseModel):
