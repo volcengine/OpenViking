@@ -4,10 +4,10 @@ on:
   workflow_call:
     inputs:
       os_json:
-        description: 'JSON string of runner labels to build on (ubuntu-latest=x86_64, ubuntu-24.04-arm=aarch64, macos-latest=arm64, macos-15-intel=x86_64, windows-latest=x86_64)'
+        description: 'JSON string of runner labels to build on (ubuntu-24.04=x86_64, ubuntu-24.04-arm=aarch64, macos-14=arm64, macos-15-intel=x86_64, windows-latest=x86_64)'
         required: false
         type: string
-        default: '["ubuntu-latest", "ubuntu-24.04-arm", "macos-latest", "macos-15-intel", "windows-latest"]'
+        default: '["ubuntu-24.04", "ubuntu-24.04-arm", "macos-14", "macos-15-intel", "windows-latest"]'
       python_json:
         description: 'JSON string of Python versions'
         required: false
@@ -36,9 +36,9 @@ on:
         type: boolean
         default: true
       os_json:
-        description: 'JSON string of runner labels to build on (ubuntu-latest=x86_64, ubuntu-24.04-arm=aarch64, macos-latest=arm64, macos-15-intel=x86_64, windows-latest=x86_64)'
+        description: 'JSON string of runner labels to build on (ubuntu-24.04=x86_64, ubuntu-24.04-arm=aarch64, macos-14=arm64, macos-15-intel=x86_64, windows-latest=x86_64)'
         required: false
-        default: '["ubuntu-latest", "ubuntu-24.04-arm", "macos-latest", "macos-15-intel", "windows-latest"]'
+        default: '["ubuntu-24.04", "ubuntu-24.04-arm", "macos-14", "macos-15-intel", "windows-latest"]'
       python_json:
         description: 'JSON string of Python versions'
         required: false
@@ -48,7 +48,7 @@ jobs:
   build-sdist:
     name: Build source distribution py3.12
     if: inputs.build_sdist
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
     - uses: actions/checkout@v6
       with:
@@ -121,10 +121,10 @@ jobs:
       inputs.build_wheels &&
       (
         contains(inputs.os_json, 'linux') ||
-        contains(inputs.os_json, 'ubuntu-latest') ||
+        contains(inputs.os_json, 'ubuntu-24.04') ||
         contains(inputs.os_json, 'ubuntu-24.04-arm')
       )
-    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
+    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-24.04' }}
     container: ubuntu:20.04
     env:
       DEBIAN_FRONTEND: noninteractive
@@ -133,7 +133,7 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ${{ fromJson(inputs.python_json) }}
-        arch: ${{ contains(inputs.os_json, 'linux') && fromJson('["x86_64","aarch64"]') || (contains(inputs.os_json, 'ubuntu-latest') && contains(inputs.os_json, 'ubuntu-24.04-arm')) && fromJson('["x86_64","aarch64"]') || contains(inputs.os_json, 'ubuntu-24.04-arm') && fromJson('["aarch64"]') || fromJson('["x86_64"]') }}
+        arch: ${{ contains(inputs.os_json, 'linux') && fromJson('["x86_64","aarch64"]') || (contains(inputs.os_json, 'ubuntu-24.04') && contains(inputs.os_json, 'ubuntu-24.04-arm')) && fromJson('["x86_64","aarch64"]') || contains(inputs.os_json, 'ubuntu-24.04-arm') && fromJson('["aarch64"]') || fromJson('["x86_64"]') }}
     
     steps:
     - name: Install system dependencies (Linux)
@@ -291,16 +291,16 @@ jobs:
     name: Build non-Linux distributions
     # Run only when non-Linux runners are explicitly requested
     if: inputs.build_wheels && (contains(inputs.os_json, 'macos') || contains(inputs.os_json, 'windows'))
-    runs-on: ${{ matrix.os || 'ubuntu-latest' }}
+    runs-on: ${{ matrix.os || 'ubuntu-24.04' }}
     strategy:
       fail-fast: false
       matrix:
         os: ${{ fromJson(inputs.os_json) }}
         python-version: ${{ fromJson(inputs.python_json) }}
-        # Exclude ubuntu-latest from this matrix if it was passed in inputs
+        # Exclude ubuntu-24.04 from this matrix if it was passed in inputs
         exclude:
           - os: linux
-          - os: ubuntu-latest
+          - os: ubuntu-24.04
           - os: ubuntu-24.04-arm
 
     steps:
@@ -321,20 +321,16 @@ jobs:
       if: runner.os == 'macOS'
       shell: bash
       run: |
-        if [[ "${{ matrix.os }}" == "macos-15-intel" ]]; then
-          TARGET_ARCH="x86_64"
-        else
+        if [[ "${{ matrix.os }}" == "macos-14" ]]; then
           TARGET_ARCH="arm64"
+          MACOS_VERSION="14.0"
+        elif [[ "${{ matrix.os }}" == "macos-15-intel" ]]; then
+          TARGET_ARCH="x86_64"
+          MACOS_VERSION="15.0"
+        else
+          echo "Unsupported macOS runner for release wheels: ${{ matrix.os }}"
+          exit 1
         fi
-
-        MACOS_VERSION="$(python - <<'PY'
-        import platform
-        ver = platform.mac_ver()[0].split(".")
-        major = ver[0] if ver and ver[0] else "15"
-        minor = ver[1] if len(ver) > 1 else "0"
-        print(f"{major}.{minor}")
-        PY
-        )"
 
         echo "ARCHFLAGS=-arch ${TARGET_ARCH}" >> "$GITHUB_ENV"
         echo "CMAKE_OSX_ARCHITECTURES=${TARGET_ARCH}" >> "$GITHUB_ENV"
@@ -417,7 +413,7 @@ jobs:
     - name: Store the distribution packages
       uses: actions/upload-artifact@v7
       with:
-        name: python-package-distributions-${{ matrix.os == 'macos-latest' && 'macos-arm64' || matrix.os == 'macos-15-intel' && 'macos-x86_64' || matrix.os == 'windows-latest' && 'windows-x86_64' || matrix.os }}-${{ matrix.python-version }}
+        name: python-package-distributions-${{ matrix.os == 'macos-14' && 'macos-arm64' || matrix.os == 'macos-15-intel' && 'macos-x86_64' || matrix.os == 'windows-latest' && 'windows-x86_64' || matrix.os }}-${{ matrix.python-version }}
         path: dist/
 
     - name: Display built wheel version
@@ -426,4 +422,53 @@ jobs:
       run: |
         VERSION=$(ls dist/*.whl | head -n 1 | xargs basename | cut -d- -f2)
         echo "Build Version: $VERSION"
-        echo "::notice::Build Wheel Version (${{ matrix.os == 'macos-latest' && 'macOS arm64 (macos-latest)' || matrix.os == 'macos-15-intel' && 'macOS x86_64 (macos-15-intel)' || matrix.os == 'windows-latest' && 'Windows x86_64 (windows-latest)' || matrix.os }} py${{ matrix.python-version }}): $VERSION"
+        echo "::notice::Build Wheel Version (${{ matrix.os == 'macos-14' && 'macOS arm64 (macos-14)' || matrix.os == 'macos-15-intel' && 'macOS x86_64 (macos-15-intel)' || matrix.os == 'windows-latest' && 'Windows x86_64 (windows-latest)' || matrix.os }} py${{ matrix.python-version }}): $VERSION"
+
+  verify-macos-14-wheel-on-macos-15:
+    name: Verify macOS 14 arm64 wheel installs on macOS 15
+    needs: [build-other]
+    if: >-
+      inputs.build_wheels &&
+      contains(inputs.os_json, 'macos-14') &&
+      contains(inputs.python_json, '3.12')
+    runs-on: macos-15
+    steps:
+    - name: Set up Python 3.12
+      uses: actions/setup-python@v6
+      with:
+        python-version: '3.12'
+
+    - name: Download macOS arm64 wheel artifact
+      uses: actions/download-artifact@v8
+      with:
+        name: python-package-distributions-macos-arm64-3.12
+        path: dist/
+
+    - name: Install built wheel
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install dist/*.whl
+
+    - name: Smoke test native extension loading
+      shell: bash
+      run: |
+        python - <<'PY'
+        import importlib.util
+        import pathlib
+        import site
+
+        candidates = []
+        for base in site.getsitepackages():
+            candidates.extend(pathlib.Path(base).glob("openviking/storage/vectordb/engine*.so"))
+
+        if not candidates:
+            raise SystemExit("openviking storage engine extension was not installed")
+
+        engine_path = candidates[0]
+        spec = importlib.util.spec_from_file_location("engine", engine_path)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+        spec.loader.exec_module(module)
+        print(f"Loaded native extension from {engine_path}")
+        PY

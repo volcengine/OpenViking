@@ -441,14 +441,14 @@ Runs code style checks (Ruff) and type checks (Mypy). No arguments required.
 Runs fast integration tests, supports custom matrix configuration.
 
 *   **Inputs**:
-    *   `os_json`: JSON string array of OS to run on (e.g., `["ubuntu-latest"]`).
+    *   `os_json`: JSON string array of OS to run on (e.g., `["ubuntu-24.04"]`).
     *   `python_json`: JSON string array of Python versions (e.g., `["3.10"]`).
 
 #### C. Test Suite (Full) (`13. _Test Suite (Full)`)
 Runs the full test suite on all supported platforms (Linux/Mac/Win) and Python versions (3.10-3.13). Supports custom matrix configuration when triggered manually.
 
 *   **Inputs**:
-    *   `os_json`: List of OS to run on (Default: `["ubuntu-latest", "macos-latest", "windows-latest"]`).
+    *   `os_json`: List of OS to run on (Default: `["ubuntu-24.04", "macos-14", "windows-latest"]`).
     *   `python_json`: List of Python versions (Default: `["3.10", "3.11", "3.12", "3.13"]`).
 
 #### D. Security Scan (`14. _CodeQL Scan`)
@@ -458,7 +458,7 @@ Runs CodeQL security analysis. No arguments required.
 Builds Python wheel packages only, does not publish.
 
 *   **Inputs**:
-    *   `os_json`: List of OS to build on (Default: `["ubuntu-latest", "macos-latest", "macos-15-intel", "windows-latest"]`).
+    *   `os_json`: List of OS to build on (Default: `["ubuntu-24.04", "ubuntu-24.04-arm", "macos-14", "macos-15-intel", "windows-latest"]`).
     *   `python_json`: List of Python versions (Default: `["3.10", "3.11", "3.12", "3.13"]`).
     *   `build_sdist`: Whether to build source distribution (Default: `true`).
     *   `build_wheels`: Whether to build wheel distribution (Default: `true`).

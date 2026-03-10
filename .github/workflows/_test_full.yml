@@ -7,7 +7,7 @@ on:
         description: 'JSON string of OS to run on'
         required: false
         type: string
-        default: '["ubuntu-latest", "macos-latest", "windows-latest"]'
+        default: '["ubuntu-24.04", "macos-14", "windows-latest"]'
       python_json:
         description: 'JSON string of Python versions'
         required: false
@@ -18,7 +18,7 @@ on:
       os_json:
         description: 'JSON string of OS to run on'
         required: false
-        default: '["ubuntu-latest", "macos-latest", "windows-latest"]'
+        default: '["ubuntu-24.04", "macos-14", "windows-latest"]'
       python_json:
         description: 'JSON string of Python versions'
         required: false
@@ -31,7 +31,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJson(inputs.os_json || '["ubuntu-latest", "macos-latest", "windows-latest"]') }}
+        os: ${{ fromJson(inputs.os_json || '["ubuntu-24.04", "macos-14", "windows-latest"]') }}
         python-version: ${{ fromJson(inputs.python_json || '["3.10", "3.11", "3.12", "3.13"]') }}
 
     steps:
