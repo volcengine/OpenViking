@@ -74,7 +74,7 @@ def load_answers(input_path: str) -> tuple[list[dict], list[str]]:
 
     with open(input_path, "r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
-        fieldnames = list(reader.fieldnames) if reader.fieldnames is not None else []
+        fieldnames = reader.fieldnames.copy()
         # 新增reasoning列如果不存在
         if "reasoning" not in fieldnames:
             fieldnames.append("reasoning")
@@ -92,23 +92,18 @@ async def main():
         help="Path to QA result csv file, default: ./result/locomo_qa_result.csv",
     )
     parser.add_argument(
-        "--output",
-        default="./result/judge_result.csv",
-        help="Path to output judge result csv file, default: ./result/judge_result.csv",
-    )
-    parser.add_argument(
         "--base-url",
         default="https://ark.cn-beijing.volces.com/api/v3",
         help="Volcengine API base URL, default: https://ark.cn-beijing.volces.com/api/v3",
     )
     parser.add_argument(
         "--token",
-        required=True,
-        help="Volcengine API key, required parameter",
+        default=os.getenv("ARK_API_KEY", os.getenv("OPENAI_API_KEY", "")),
+        help="Volcengine API token, default from ARK_API_KEY or OPENAI_API_KEY env var",
     )
     parser.add_argument(
         "--model",
-        default="ep-20260224000522-sxrg5",
+        default="doubao-seed-2-0-pro-260215",
         help="Judge model name, default: doubao-seed-2-0-pro-260215",
     )
     parser.add_argument(
@@ -120,48 +115,15 @@ async def main():
         print("Error: API token is required, set ARK_API_KEY env var or pass via --token")
         exit(1)
 
-    # 加载输入数据
-    input_rows, fieldnames = load_answers(args.input)
-    # 新增result列如果不存在
-    if "result" not in fieldnames:
-        fieldnames.insert(len(fieldnames) - 1, "result")
-
-    # 加载已有输出结果（如果存在）
-    existing_rows = {}
-    if os.path.exists(args.output):
-        with open(args.output, "r", encoding="utf-8", newline="") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                key = f"{row['sample_id']}||{row['question']}"
-                existing_rows[key] = row
-
-    # 合并数据：已有结果的用已有，没有的用输入数据
-    rows = []
-    for input_row in input_rows:
-        key = f"{input_row['sample_id']}||{input_row['question']}"
-        if key in existing_rows:
-            rows.append(existing_rows[key])
-        else:
-            rows.append(input_row)
-
+    # 加载数据
+    rows, fieldnames = load_answers(args.input)
     total = len(rows)
-    # 筛选未评分的行：同时检查result是否为空，以及sample_id+question是否已处理
-    ungraded = []
-    processed_keys = set(existing_rows.keys())
-    for i, row in enumerate(rows):
-        key = f"{row['sample_id']}||{row['question']}"
-        if key not in processed_keys or not row.get("result"):
-            ungraded.append(i)
+    # 筛选未评分的行
+    ungraded = [i for i, row in enumerate(rows) if not row.get("result")]
     print(f"Total answers: {total}, ungraded: {len(ungraded)}")
 
     if not ungraded:
-        # 统计结果
-        correct = sum(1 for row in rows if row.get("result") == "CORRECT")
-        total_graded = sum(1 for row in rows if row.get("result"))
-        accuracy = correct / total_graded if total_graded > 0 else 0.0
-        print(
-            f"All answers already graded: {correct}/{total_graded} correct, accuracy: {accuracy:.2%}"
-        )
+        print("All answers already graded, exit")
         return
 
     # 初始化OpenAI客户端
@@ -169,7 +131,6 @@ async def main():
 
     # 并发处理
     semaphore = asyncio.Semaphore(args.parallel)
-    write_lock = asyncio.Lock()
 
     async def process_row(idx):
         async with semaphore:
@@ -181,25 +142,23 @@ async def main():
             is_correct, reasoning = await grade_answer(client, args.model, question, gold, response)
             row["result"] = "CORRECT" if is_correct else "WRONG"
             row["reasoning"] = reasoning
-
-            # 每处理完一行就写入文件
-            async with write_lock:
-                with open(args.output, "w", encoding="utf-8", newline="") as f:
-                    writer = csv.DictWriter(f, fieldnames=fieldnames)
-                    writer.writeheader()
-                    writer.writerows(rows)
-                print(f"Saved progress to {args.output} after processing row {idx + 1}")
             return idx, row
 
     tasks = [process_row(idx) for idx in ungraded]
     await asyncio.gather(*tasks)
 
-    # 统计最终结果
+    # 统计结果
     correct = sum(1 for row in rows if row.get("result") == "CORRECT")
     total_graded = sum(1 for row in rows if row.get("result"))
     accuracy = correct / total_graded if total_graded > 0 else 0.0
     print(f"\nGrading completed: {correct}/{total_graded} correct, accuracy: {accuracy:.2%}")
-    print(f"Final results saved to {args.output}")
+
+    # 写回CSV
+    with open(args.input, "w", encoding="utf-8", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"Results saved to {args.input}")
 
 
 if __name__ == "__main__":

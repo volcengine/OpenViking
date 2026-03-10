@@ -46,7 +46,7 @@ EXCLUDED_TASKS = {
 }
 
 PROJECT_ROOT = Path(__file__).parent.resolve()
-BENCH_DATA_DIR = Path("/Users/bytedance/work/space/skills_bench_eval/bench_data")
+BENCH_DATA_DIR = PROJECT_ROOT / "bench_data"
 TASKS_DIR = BENCH_DATA_DIR / "tasks"
 OPENCLAW_WORKSPACE = Path.home() / ".openclaw" / "workspace"
 OPENCLAW_SKILLS_DIR = OPENCLAW_WORKSPACE / "skills"
@@ -251,12 +251,19 @@ def run_verification(task_dir: Path, work_dir: Path, storage_workspace: Path) ->
     if test_py_files:
         try:
             local_test_files = []
+            expected_paths = set()
+            all_test_files = []
+
+            # 收集所有测试文件内容和路径
             for test_py in test_py_files:
                 with open(test_py, "r", encoding="utf-8") as f:
                     test_content = f.read()
+                    all_test_files.append((test_py, test_content))
+                # 累积所有路径
+                expected_paths.update(re.findall(r"""['"](/root/[^'"]+)['"]""", test_content))
+                expected_paths.update(re.findall(r"""['"](/app/[^'"]+)['"]""", test_content))
 
-            expected_paths = set(re.findall(r"""['"](/root/[^'"]+)['"]""", test_content))
-            expected_paths.update(re.findall(r"""['"](/app/[^'"]+)['"]""", test_content))
+            # 处理所有需要复制的路径
             for full_path in sorted(expected_paths):
                 if full_path.endswith("/"):
                     continue
@@ -355,11 +362,13 @@ def run_verification(task_dir: Path, work_dir: Path, storage_workspace: Path) ->
                     except Exception:
                         pass
 
-                test_content = rewrite_test_text(test_content)
-                local_test_py = work_dir / test_py.name
-                with open(local_test_py, "w", encoding="utf-8") as f:
-                    f.write(test_content)
-                local_test_files.append(str(local_test_py))
+                # 处理每个测试文件
+                for test_py, test_content in all_test_files:
+                    rewritten_content = rewrite_test_text(test_content)
+                    local_test_py = work_dir / test_py.name
+                    with open(local_test_py, "w", encoding="utf-8") as f:
+                        f.write(rewritten_content)
+                    local_test_files.append(str(local_test_py))
 
             env = os.environ.copy()
             env["PYTHONPATH"] = str(work_dir)
@@ -458,7 +467,7 @@ def run_task(
             # Keep original values, only update verification
             result["verification"] = None
             result["end_time"] = time.time()
-        except:
+        except Exception:
             # Fallback to new result if existing is invalid
             result = {
                 "task": task_name,
@@ -531,10 +540,14 @@ def run_task(
 
         instruction = re.sub(r"(^|(?<=[\s\'\"`(]))/root/", r"\1/", instruction)
 
-        # Write modified content back to original instruction.md
-        with open(instruction_file, "w", encoding="utf-8") as f:
+        # Write modified content to session directory, avoid modifying original file
+        modified_instruction_path = target_session_dir / "instruction.md"
+        with open(modified_instruction_path, "w", encoding="utf-8") as f:
             f.write(instruction)
-        print(f"    [updated] original instruction.md modified", file=sys.stderr)
+        print(
+            f"    [updated] modified instruction saved to {modified_instruction_path}",
+            file=sys.stderr,
+        )
 
         if not verify_only:
             # Run vikingbot command
@@ -580,7 +593,7 @@ def run_task(
                     if token_match:
                         try:
                             token_usage = json.loads(token_match.group(1), strict=False)
-                        except:
+                        except Exception:
                             pass
 
                     bot_result = {"text": text, "token_usage": token_usage}
@@ -902,7 +915,7 @@ def main():
     )
     run_parser.add_argument(
         "--ov-config-path",
-        default="/Users/bytedance/.openviking_2/ov.conf",
+        default=str(Path.home() / ".openviking" / "ov.conf"),
         help="Path to OpenViking configuration file",
     )
 

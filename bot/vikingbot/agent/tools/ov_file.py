@@ -183,7 +183,7 @@ class VikingAddResourceTool(OVFileTool):
             "type": "object",
             "properties": {
                 "path": {"type": "string", "description": "Url or local file path"},
-                "description": {"type": "string", "description": "Description of the resource"}
+                "description": {"type": "string", "description": "Description of the resource"},
             },
             "required": ["path", "description"],
         }
@@ -193,8 +193,6 @@ class VikingAddResourceTool(OVFileTool):
         tool_context: "ToolContext",
         path: str,
         description: str,
-        target_path: str = "",
-        wait: bool = False,
         **kwargs: Any,
     ) -> str:
         try:
@@ -206,9 +204,7 @@ class VikingAddResourceTool(OVFileTool):
                     return f"Error: Not a file: {path}"
 
             client = await VikingClient.create(tool_context.workspace_id)
-            result = await client.add_resource(
-                path, description
-            )
+            result = await client.add_resource(path, description)
 
             await client.close()
             if result:
@@ -217,7 +213,7 @@ class VikingAddResourceTool(OVFileTool):
             else:
                 return "Failed to add resource"
         except httpx.ReadTimeout:
-            return f"Successfully added resource task, task is running."
+            return f"Request timed out. The resource addition task may still be processing on the server side."
         except Exception as e:
             logger.warning(f"Error adding resource: {e}")
             return f"Error adding resource to Viking: {str(e)}"
