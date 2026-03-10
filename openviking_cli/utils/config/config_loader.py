@@ -80,7 +80,7 @@ def load_json_config(path: Path) -> Dict[str, Any]:
     if not path.exists():
         raise FileNotFoundError(f"Config file does not exist: {path}")
 
-    with open(path, "r", encoding="utf-8") as f:
+    with open(path, "r", encoding="utf-8-sig") as f:
         try:
             print(f"Loading config file: {path}")
             return json.load(f)

@@ -6,6 +6,7 @@ pub async fn add_resource(
     client: &HttpClient,
     path: &str,
     to: Option<String>,
+    parent: Option<String>,
     reason: String,
     instruction: String,
     wait: bool,
@@ -22,6 +23,7 @@ pub async fn add_resource(
         .add_resource(
             path,
             to,
+            parent,
             &reason,
             &instruction,
             wait,

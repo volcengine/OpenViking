@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1.9
 
-# Stage 1: provide Go toolchain (required by setup.py -> build_agfs -> make build)
+# Stage 1: provide Go toolchain (required by setup.py -> build_agfs_artifacts -> make build)
 FROM golang:1.26-trixie AS go-toolchain
 
 # Stage 2: build Python environment with uv (builds AGFS + C++ extension from source)
@@ -23,14 +23,14 @@ ENV UV_LINK_MODE=copy
 ENV UV_NO_DEV=1
 WORKDIR /app
 
-# Copy source required for setup.py build_agfs() and CMake extension build.
+# Copy source required for setup.py artifact builds and native extension build.
 COPY pyproject.toml uv.lock setup.py README.md ./
 COPY openviking/ openviking/
 COPY openviking_cli/ openviking_cli/
 COPY src/ src/
 COPY third_party/ third_party/
 
-# Install project and dependencies (triggers setup.py build_agfs + build_extension).
+# Install project and dependencies (triggers setup.py artifact builds + build_extension).
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --no-editable
 

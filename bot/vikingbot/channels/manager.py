@@ -63,6 +63,7 @@ class ChannelManager:
                     channel_config,
                     self.bus,
                     groq_api_key=additional_deps.get("groq_api_key"),
+                    workspace_path=workspace_path,
                 )
 
             elif channel_config.type == ChannelType.FEISHU:
@@ -144,8 +145,8 @@ class ChannelManager:
             channel_type = getattr(channel_config.type, "value", str(channel_config.type))
             logger.warning(
                 f"Channel {channel_config.type} not available: {e}. "
-                f"Install with: uv pip install 'vikingbot[{channel_type}]' "
-                f"(or uv pip install -e \".[{channel_type}]\" for local dev)"
+                f"Install with: uv pip install 'openviking[bot-{channel_type}]' "
+                f'(or uv pip install -e ".[bot-{channel_type}]" for local dev)'
             )
 
     def load_channels_from_config(
@@ -161,7 +162,9 @@ class ChannelManager:
             self.add_channel_from_config(
                 channel_config,
                 workspace_path=workspace_path,
-                groq_api_key=config.providers.groq.api_key if hasattr(config.providers, "groq") else None,
+                groq_api_key=config.providers.groq.api_key
+                if hasattr(config.providers, "groq")
+                else None,
             )
 
     async def _start_channel(self, name: str, channel: BaseChannel) -> None:

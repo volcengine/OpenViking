@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 
 from loguru import logger
 
+from vikingbot.utils.helpers import get_mounts_path, get_bot_data_path
 from .mount import OpenVikingMount, MountConfig, MountScope
 
 
@@ -41,8 +42,8 @@ class OpenVikingMountManager:
             base_mount_dir: 基础挂载目录，所有挂载点将在此目录下创建
         """
         if base_mount_dir is None:
-            # 默认在用户目录下创建
-            base_mount_dir = Path.home() / ".vikingbot" / "mounts"
+            # 默认从配置路径获取
+            base_mount_dir = get_mounts_path()
 
         self.base_mount_dir = base_mount_dir
         self._mounts: Dict[str, MountPoint] = {}
@@ -218,7 +219,7 @@ class OpenVikingMountManager:
         """
         if openviking_data_path is None:
             # 默认使用vikingbot的openviking数据目录
-            openviking_data_path = Path.home() / ".vikingbot" / "openviking_data"
+            openviking_data_path = get_bot_data_path() / "ov_data"
 
         return self.create_mount(
             mount_id=mount_id,

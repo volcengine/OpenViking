@@ -9,8 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, Optional
 
-from pyagfs import AGFSClient
-
+from openviking.pyagfs import AGFSClient
 from openviking.server.identity import ResolvedIdentity, Role
 from openviking_cli.exceptions import (
     AlreadyExistsError,

@@ -138,7 +138,9 @@ class BaseChannel(ABC):
 
         msg = InboundMessage(
             session_key=SessionKey(
-                type=str(getattr(self.channel_type, 'value', self.channel_type)), channel_id=self.channel_id, chat_id=chat_id
+                type=str(getattr(self.channel_type, "value", self.channel_type)),
+                channel_id=self.channel_id,
+                chat_id=chat_id,
             ),
             sender_id=str(sender_id),
             content=content,

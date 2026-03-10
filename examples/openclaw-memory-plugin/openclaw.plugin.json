@@ -22,6 +22,11 @@
       "placeholder": "http://127.0.0.1:1933",
       "help": "HTTP URL when mode is remote (or ${OPENVIKING_BASE_URL})"
     },
+    "agentId": {
+      "label": "Agent ID",
+      "placeholder": "random unique ID",
+      "help": "Identifies this agent to OpenViking. A random unique ID is generated if not set."
+    },
     "apiKey": {
       "label": "OpenViking API Key",
       "sensitive": true,
@@ -60,7 +65,7 @@
     },
     "recallLimit": {
       "label": "Recall Limit",
-      "placeholder": "6",
+      "placeholder": "20",
       "advanced": true
     },
     "recallScoreThreshold": {
@@ -100,6 +105,9 @@
         "type": "number"
       },
       "baseUrl": {
+        "type": "string"
+      },
+      "agentId": {
         "type": "string"
       },
       "apiKey": {

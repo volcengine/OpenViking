@@ -27,8 +27,10 @@ from openviking.server.routers import (
     search_router,
     sessions_router,
     system_router,
+    tasks_router,
 )
 from openviking.service.core import OpenVikingService
+from openviking.service.task_tracker import get_task_tracker
 from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.utils import get_logger
 
@@ -83,9 +85,14 @@ def create_app(
                 config.host,
             )
 
+        # Start TaskTracker cleanup loop
+        task_tracker = get_task_tracker()
+        task_tracker.start_cleanup_loop()
+
         yield
 
         # Cleanup
+        task_tracker.stop_cleanup_loop()
         if service:
             await service.close()
             logger.info("OpenVikingService closed")
@@ -136,7 +143,7 @@ def create_app(
     # Catch-all for unhandled exceptions so clients always get JSON
     @app.exception_handler(Exception)
     async def general_error_handler(request: Request, exc: Exception):
-        logger.exception("Unhandled exception in request handler")
+        logger.warning("Unhandled exception: %s", exc)
         return JSONResponse(
             status_code=500,
             content=Response(
@@ -169,6 +176,7 @@ def create_app(
     app.include_router(pack_router)
     app.include_router(debug_router)
     app.include_router(observer_router)
+    app.include_router(tasks_router)
     app.include_router(bot_router, prefix="/bot/v1")
 
     return app

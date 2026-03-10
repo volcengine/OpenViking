@@ -340,7 +340,7 @@ def create_recording_agfs_client(agfs_client: Any, record_file: Optional[str] = 
 
     Usage:
         from openviking.eval.recorder import init_recorder, create_recording_agfs_client
-        from pyagfs import AGFSClient
+        from openviking.pyagfs import AGFSClient
 
         # Initialize recorder
         init_recorder(enabled=True)

@@ -31,17 +31,23 @@ class ChatMessage(BaseModel):
 
     role: MessageRole = Field(..., description="Role of the message sender")
     content: str = Field(..., description="Message content")
-    timestamp: Optional[datetime] = Field(default_factory=datetime.now, description="Message timestamp")
+    timestamp: Optional[datetime] = Field(
+        default_factory=datetime.now, description="Message timestamp"
+    )
 
 
 class ChatRequest(BaseModel):
     """Request body for chat endpoint."""
 
     message: str = Field(..., description="User message to send", min_length=1)
-    session_id: Optional[str] = Field(default=None, description="Session ID (optional, will create new if not provided)")
+    session_id: Optional[str] = Field(
+        default="default", description="Session ID (optional, will create new if not provided)"
+    )
     user_id: Optional[str] = Field(default=None, description="User identifier (optional)")
     stream: bool = Field(default=False, description="Whether to stream the response")
-    context: Optional[List[ChatMessage]] = Field(default=None, description="Additional context messages")
+    context: Optional[List[ChatMessage]] = Field(
+        default=None, description="Additional context messages"
+    )
 
 
 class ChatResponse(BaseModel):
@@ -49,7 +55,9 @@ class ChatResponse(BaseModel):
 
     session_id: str = Field(..., description="Session ID")
     message: str = Field(..., description="Assistant's response message")
-    events: Optional[List[Dict[str, Any]]] = Field(default=None, description="Intermediate events (thinking, tool calls)")
+    events: Optional[List[Dict[str, Any]]] = Field(
+        default=None, description="Intermediate events (thinking, tool calls)"
+    )
     timestamp: datetime = Field(default_factory=datetime.now, description="Response timestamp")
 
 
@@ -74,7 +82,9 @@ class SessionCreateRequest(BaseModel):
     """Request to create a new session."""
 
     user_id: Optional[str] = Field(default=None, description="User identifier")
-    metadata: Optional[Dict[str, Any]] = Field(default=None, description="Optional session metadata")
+    metadata: Optional[Dict[str, Any]] = Field(
+        default=None, description="Optional session metadata"
+    )
 
 
 class SessionCreateResponse(BaseModel):

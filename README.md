@@ -97,13 +97,13 @@ OpenViking supports three VLM providers:
 
 | Provider | Description | Get API Key |
 |----------|-------------|-------------|
-| `volcengine` | 火山引擎豆包模型 | [Volcengine Console](https://console.volcengine.com/ark) |
-| `openai` | OpenAI 官方 API | [OpenAI Platform](https://platform.openai.com) |
-| `litellm` | 统一调用多种第三方模型 (Anthropic, DeepSeek, Gemini, vLLM, Ollama, etc.) | See [LiteLLM Providers](https://docs.litellm.ai/docs/providers) |
+| `volcengine` | Volcengine Doubao Models | [Volcengine Console](https://console.volcengine.com/ark) |
+| `openai` | OpenAI Official API | [OpenAI Platform](https://platform.openai.com) |
+| `litellm` | Unified access to various third-party models (Anthropic, DeepSeek, Gemini, vLLM, Ollama, etc.) | See [LiteLLM Providers](https://docs.litellm.ai/docs/providers) |
 
-> 💡 **Tip**: 
-> - `litellm` 支持通过统一接口调用多种模型，model 字段需遵循 [LiteLLM 格式规范](https://docs.litellm.ai/docs/providers)
-> - 系统自动检测常见模型（如 `claude-*`, `deepseek-*`, `gemini-*`, `hosted_vllm/*`, `ollama/*` 等），其他模型需按 LiteLLM 格式填写完整前缀
+> 💡 **Tip**:
+> - `litellm` supports unified access to various models. The `model` field must follow the [LiteLLM format specification](https://docs.litellm.ai/docs/providers)
+> - The system auto-detects common models (e.g., `claude-*`, `deepseek-*`, `gemini-*`, `hosted_vllm/*`, `ollama/*`, etc.). For other models, use the full prefix according to LiteLLM format
 
 #### Provider-Specific Notes
 
@@ -436,6 +436,24 @@ ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/zh
 ```
 
 Congratulations! You have successfully run OpenViking 🎉
+
+### VikingBot Quick Start
+
+VikingBot is an AI agent framework built on top of OpenViking. Here's how to get started:
+
+```bash
+# Option 1: Install VikingBot from PyPI (recommended for most users)
+pip install "openviking[bot]"
+
+# Option 2: Install VikingBot from source (for development)
+uv pip install -e ".[bot]"
+
+# Start OpenViking server with Bot enabled
+openviking-server --with-bot
+
+# In another terminal, start interactive chat
+ov chat
+```
 
 ---
 

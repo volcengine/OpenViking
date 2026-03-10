@@ -14,6 +14,13 @@ Vikingbot is deeply integrated with OpenViking, providing powerful knowledge man
 
 ## 📦 Install
 
+**Option 1: Install from PyPI (Simplest)**
+```bash
+pip install "openviking[bot]"
+```
+
+**Option 2: Install from source (for development)**
+
 **Prerequisites**
 
 First, install [uv](https://github.com/astral-sh/uv) (an extremely fast Python package installer):
@@ -30,7 +37,7 @@ powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
 
 ```bash
 git clone https://github.com/volcengine/OpenViking
-cd OpenViking/bot
+cd OpenViking
 
 # Create a virtual environment using Python 3.11 or higher
 uv venv --python 3.11
@@ -40,10 +47,10 @@ source .venv/bin/activate  # macOS/Linux
 # .venv\Scripts\activate   # Windows
 
 # Install dependencies (minimal)
-uv pip install -e .
+uv pip install -e ".[bot]"
 
 # Or install with optional features
-uv pip install -e ".[langfuse,telegram,console]"
+uv pip install -e ".[bot,bot-langfuse,bot-telegram]"
 ```
 
 ### Optional Dependencies
@@ -52,25 +59,25 @@ Install only the features you need:
 
 | Feature Group | Install Command | Description |
 |---------------|-----------------|-------------|
-| **Full** | `uv pip install -e ".[full]"` | All features included |
-| **Langfuse** | `uv pip install -e ".[langfuse]"` | LLM observability and tracing |
-| **FUSE** | `uv pip install -e ".[fuse]"` | OpenViking filesystem mount |
-| **Sandbox** | `uv pip install -e ".[sandbox]"` | Code execution sandbox |
-| **OpenCode** | `uv pip install -e ".[opencode]"` | OpenCode AI integration |
+| **Full** | `uv pip install -e ".[bot-full]"` | All features included |
+| **Langfuse** | `uv pip install -e ".[bot-langfuse]"` | LLM observability and tracing |
+| **FUSE** | `uv pip install -e ".[bot-fuse]"` | OpenViking filesystem mount |
+| **Sandbox** | `uv pip install -e ".[bot-sandbox]"` | Code execution sandbox |
+| **OpenCode** | `uv pip install -e ".[bot-opencode]"` | OpenCode AI integration |
 
 #### Channels (chat apps)
 
 | Channel | Install Command |
 |---------|-----------------|
-| **Telegram** | `uv pip install -e ".[telegram]"` |
-| **Feishu/Lark** | `uv pip install -e ".[feishu]"` |
-| **DingTalk** | `uv pip install -e ".[dingtalk]"` |
-| **Slack** | `uv pip install -e ".[slack]"` |
-| **QQ** | `uv pip install -e ".[qq]"` |
+| **Telegram** | `uv pip install -e ".[bot-telegram]"` |
+| **Feishu/Lark** | `uv pip install -e ".[bot-feishu]"` |
+| **DingTalk** | `uv pip install -e ".[bot-dingtalk]"` |
+| **Slack** | `uv pip install -e ".[bot-slack]"` |
+| **QQ** | `uv pip install -e ".[bot-qq]"` |
 
 Multiple features can be combined:
 ```bash
-uv pip install -e ".[langfuse,telegram,console]"
+uv pip install -e ".[bot,bot-langfuse,bot-telegram]"
 ```
 
 ## 🚀 Quick Start
@@ -427,7 +434,7 @@ For Langfuse Cloud, use `https://cloud.langfuse.com` as the `base_url`.
 
 **Install Langfuse support:**
 ```bash
-uv pip install -e ".[langfuse]"
+uv pip install -e ".[bot-langfuse]"
 ```
 
 **Restart vikingbot:**
@@ -461,7 +468,7 @@ You only need to add sandbox configuration when you want to change these default
 {
   "bot": {
     "sandbox": {
-      "backend": "opensandbox",
+      "backend": "srt",
       "mode": "per-session"
     }
   }
@@ -472,10 +479,8 @@ You only need to add sandbox configuration when you want to change these default
 | Backend | Description |
 |---------|-------------|
 | `direct` | (Default) Runs code directly on the host |
-| `docker` | Uses Docker containers for isolation |
 | `opensandbox` | Uses OpenSandbox service |
 | `srt` | Uses Anthropic's SRT sandbox runtime |
-| `aiosandbox` | Uses AIO Sandbox service |
 
 **Available Modes:**
 | Mode | Description |
@@ -543,7 +548,6 @@ You only need to add sandbox configuration when you want to change these default
       "backend": "srt",
       "backends": {
         "srt": {
-          "settingsPath": "~/.vikingbot/srt-settings.json",
           "nodePath": "node",
           "network": {
             "allowedDomains": [],

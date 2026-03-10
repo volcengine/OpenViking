@@ -1,5 +1,6 @@
 """Memory system for persistent agent memory."""
 
+from openviking.async_client import logger
 from vikingbot.config.loader import load_config
 from pathlib import Path
 from typing import Any
@@ -53,10 +54,7 @@ class MemoryStore:
             return ""
         user_memory = self._parse_viking_memory(result["user_memory"])
         agent_memory = self._parse_viking_memory(result["agent_memory"])
-        return (
-            f"### user memories:\n{user_memory}\n"
-            f"### agent memories:\n{agent_memory}"
-        )
+        return f"### user memories:\n{user_memory}\n### agent memories:\n{agent_memory}"
 
     async def get_viking_user_profile(self, workspace_id: str, user_id: str) -> str:
         client = await VikingClient.create(agent_id=workspace_id)

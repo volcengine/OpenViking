@@ -56,7 +56,8 @@ class LocalClient(BaseClient):
     async def add_resource(
         self,
         path: str,
-        target: Optional[str] = None,
+        to: Optional[str] = None,
+        parent: Optional[str] = None,
         reason: str = "",
         instruction: str = "",
         wait: bool = False,
@@ -64,10 +65,15 @@ class LocalClient(BaseClient):
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
+        # Validate that only one of 'to' or 'parent' is set
+        if to and parent:
+            raise ValueError("Cannot specify both 'to' and 'parent' at the same time.")
+
         return await self._service.resources.add_resource(
             path=path,
             ctx=self._ctx,
-            target=target,
+            to=to,
+            parent=parent,
             reason=reason,
             instruction=instruction,
             wait=wait,
@@ -93,21 +99,13 @@ class LocalClient(BaseClient):
         """Wait for all processing to complete."""
         return await self._service.resources.wait_processed(timeout=timeout)
 
-    async def build_index(
-        self,
-        resource_uris: Union[str, List[str]],
-        **kwargs
-    ) -> Dict[str, Any]:
+    async def build_index(self, resource_uris: Union[str, List[str]], **kwargs) -> Dict[str, Any]:
         """Manually trigger index building."""
         if isinstance(resource_uris, str):
             resource_uris = [resource_uris]
         return await self._service.resources.build_index(resource_uris, ctx=self._ctx, **kwargs)
 
-    async def summarize(
-        self,
-        resource_uris: Union[str, List[str]],
-        **kwargs
-    ) -> Dict[str, Any]:
+    async def summarize(self, resource_uris: Union[str, List[str]], **kwargs) -> Dict[str, Any]:
         """Manually trigger summarization."""
         if isinstance(resource_uris, str):
             resource_uris = [resource_uris]

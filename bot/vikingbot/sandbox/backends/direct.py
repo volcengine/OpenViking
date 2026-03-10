@@ -29,7 +29,7 @@ class DirectBackend(SandboxBackend):
         """Start the backend (no-op for direct backend)."""
         self._workspace.mkdir(parents=True, exist_ok=True)
         self._running = True
-        #logger.info("Direct backend started")
+        # logger.info("Direct backend started")
 
     async def execute(self, command: str, timeout: int = 60, **kwargs: Any) -> str:
         """Execute a command directly on the host."""

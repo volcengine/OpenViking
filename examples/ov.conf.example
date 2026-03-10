@@ -99,7 +99,7 @@
       "code_hosting_domains": ["github.com", "gitlab.com"],
       "github_domains": ["github.com", "www.github.com"],
       "gitlab_domains": ["gitlab.com", "www.gitlab.com"]
-    }
+    },
     "image": {
       "enable_ocr": false,
       "enable_vlm": true,
@@ -134,7 +134,7 @@
       "code_hosting_domains": ["github.com", "gitlab.com"],
       "github_domains": ["github.com", "www.github.com"],
       "gitlab_domains": ["gitlab.com", "www.gitlab.com"]
-    }
+    },
     "text": {
       "detect_language": true,
       "split_by_paragraphs": true,

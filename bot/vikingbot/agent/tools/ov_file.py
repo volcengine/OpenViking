@@ -218,7 +218,7 @@ class VikingAddResourceTool(OVFileTool):
             )
 
             if result:
-                root_uri = result.get("result", {}).get("root_uri", "unknown")
+                root_uri = result.get("root_uri", "unknown")
                 return f"Successfully added resource: {root_uri}"
             else:
                 return "Failed to add resource"
@@ -272,8 +272,8 @@ class VikingGrepTool(OVFileTool):
             result = await client.grep(uri, pattern, case_insensitive=case_insensitive)
 
             if isinstance(result, dict):
-                matches = result.get("result", {}).get("matches", [])
-                count = result.get("result", {}).get("count", 0)
+                matches = result.get("matches", [])
+                count = result.get("count", 0)
             else:
                 matches = getattr(result, "matches", [])
                 count = getattr(result, "count", 0)
@@ -336,8 +336,8 @@ class VikingGlobTool(OVFileTool):
             result = await client.glob(pattern, uri=uri or None)
 
             if isinstance(result, dict):
-                matches = result.get("result", {}).get("matches", [])
-                count = result.get("result", {}).get("count", 0)
+                matches = result.get("matches", [])
+                count = result.get("count", 0)
             else:
                 matches = getattr(result, "matches", [])
                 count = getattr(result, "count", 0)

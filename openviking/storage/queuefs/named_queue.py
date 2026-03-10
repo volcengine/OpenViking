@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 from openviking_cli.utils.logger import get_logger
 
 if TYPE_CHECKING:
-    from pyagfs import AGFSClient
+    from openviking.pyagfs import AGFSClient
 
 logger = get_logger(__name__)
 

@@ -26,10 +26,10 @@ on:
         type: boolean
         default: true
       os_json:
-        description: 'JSON string of runner labels to build on (Manual only; ubuntu-latest=x86_64, macos-latest=arm64, macos-15-intel=x86_64, windows-latest=x86_64)'
+        description: 'JSON string of runner labels to build on (Manual only; ubuntu-latest=x86_64, ubuntu-24.04-arm=aarch64, macos-latest=arm64, macos-15-intel=x86_64, windows-latest=x86_64)'
         required: false
         type: string
-        default: '["ubuntu-latest", "macos-latest", "macos-15-intel", "windows-latest"]'
+        default: '["ubuntu-latest", "ubuntu-24.04-arm", "macos-latest", "macos-15-intel", "windows-latest"]'
       python_json:
         description: 'JSON string of Python versions (Manual only)'
         required: false
@@ -47,7 +47,7 @@ jobs:
     if: "!startsWith(github.event.release.tag_name, 'cli-')"
     uses: ./.github/workflows/_build.yml
     with:
-      os_json: ${{ inputs.os_json || '["ubuntu-latest", "macos-latest", "macos-15-intel", "windows-latest"]' }}
+      os_json: ${{ inputs.os_json || '["ubuntu-latest", "ubuntu-24.04-arm", "macos-latest", "macos-15-intel", "windows-latest"]' }}
       python_json: ${{ inputs.python_json || '["3.10", "3.11", "3.12", "3.13"]' }}
       build_sdist: ${{ github.event_name == 'release' || inputs.build_sdist != false }}
       build_wheels: ${{ github.event_name == 'release' || inputs.build_wheels != false }}

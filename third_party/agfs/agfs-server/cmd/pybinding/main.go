@@ -8,8 +8,12 @@ package main
 import "C"
 
 import (
+	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
+	"path"
+	"regexp"
 	"sync"
 	"time"
 	"unsafe"
@@ -32,6 +36,7 @@ import (
 	"github.com/c4pt0r/agfs/agfs-server/pkg/plugins/sqlfs"
 	"github.com/c4pt0r/agfs/agfs-server/pkg/plugins/streamfs"
 	"github.com/c4pt0r/agfs/agfs-server/pkg/plugins/streamrotatefs"
+	log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -652,6 +657,137 @@ func AGFS_GetPluginLoader() unsafe.Pointer {
 
 	l := fs.GetPluginLoader()
 	return unsafe.Pointer(l)
+}
+
+// GrepMatch represents a single match result
+type GrepMatch struct {
+	File    string `json:"file"`
+	Line    int    `json:"line"`
+	Content string `json:"content"`
+}
+
+// GrepResponse represents the grep search results
+type GrepResponse struct {
+	Matches []GrepMatch `json:"matches"`
+	Count   int         `json:"count"`
+}
+
+func grepFile(fs *mountablefs.MountableFS, path string, re *regexp.Regexp, nodeLimit int) ([]GrepMatch, error) {
+	data, err := fs.Read(path, 0, -1)
+	if err != nil && err.Error() != "EOF" {
+		return nil, err
+	}
+
+	var matches []GrepMatch
+	scanner := bufio.NewScanner(bytes.NewReader(data))
+	lineNum := 1
+
+	for scanner.Scan() {
+		if nodeLimit > 0 && len(matches) >= nodeLimit {
+			break
+		}
+		line := scanner.Text()
+		if re.MatchString(line) {
+			matches = append(matches, GrepMatch{
+				File:    path,
+				Line:    lineNum,
+				Content: line,
+			})
+		}
+		lineNum++
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, err
+	}
+
+	return matches, nil
+}
+
+func grepDirectory(fs *mountablefs.MountableFS, dirPath string, re *regexp.Regexp, nodeLimit int) ([]GrepMatch, error) {
+	var allMatches []GrepMatch
+
+	entries, err := fs.ReadDir(dirPath)
+	if err != nil {
+		return nil, err
+	}
+
+	for _, entry := range entries {
+		if nodeLimit > 0 && len(allMatches) >= nodeLimit {
+			break
+		}
+		fullPath := path.Join(dirPath, entry.Name)
+
+		if entry.IsDir {
+			subMatches, err := grepDirectory(fs, fullPath, re, nodeLimit-len(allMatches))
+			if err != nil {
+				log.Warnf("failed to search directory %s: %v", fullPath, err)
+				continue
+			}
+			allMatches = append(allMatches, subMatches...)
+		} else {
+			matches, err := grepFile(fs, fullPath, re, nodeLimit-len(allMatches))
+			if err != nil {
+				log.Warnf("failed to search file %s: %v", fullPath, err)
+				continue
+			}
+			allMatches = append(allMatches, matches...)
+		}
+	}
+
+	return allMatches, nil
+}
+
+//export AGFS_Grep
+func AGFS_Grep(clientID int64, path *C.char, pattern *C.char, recursive C.int, caseInsensitive C.int, stream C.int, nodeLimit C.int) *C.char {
+	p := C.GoString(path)
+	pat := C.GoString(pattern)
+	nodeLim := int(nodeLimit)
+
+	globalFSMu.RLock()
+	defer globalFSMu.RUnlock()
+	fs := globalFS
+
+	info, err := fs.Stat(p)
+	if err != nil {
+		errorID := storeError(err)
+		return C.CString(fmt.Sprintf(`{"error_id": %d}`, errorID))
+	}
+
+	var re *regexp.Regexp
+	if caseInsensitive != 0 {
+		re, err = regexp.Compile("(?i)" + pat)
+	} else {
+		re, err = regexp.Compile(pat)
+	}
+	if err != nil {
+		errorID := storeError(err)
+		return C.CString(fmt.Sprintf(`{"error_id": %d}`, errorID))
+	}
+
+	var matches []GrepMatch
+	if info.IsDir {
+		if recursive == 0 {
+			errorID := storeError(fmt.Errorf("path is a directory, use recursive=true to search"))
+			return C.CString(fmt.Sprintf(`{"error_id": %d}`, errorID))
+		}
+		matches, err = grepDirectory(fs, p, re, nodeLim)
+	} else {
+		matches, err = grepFile(fs, p, re, nodeLim)
+	}
+
+	if err != nil {
+		errorID := storeError(err)
+		return C.CString(fmt.Sprintf(`{"error_id": %d}`, errorID))
+	}
+
+	response := GrepResponse{
+		Matches: matches,
+		Count:   len(matches),
+	}
+
+	data, _ := json.Marshal(response)
+	return C.CString(string(data))
 }
 
 func GetMountableFS() *mountablefs.MountableFS {

@@ -10,35 +10,41 @@ from openviking.parse.parsers.code.ast.skeleton import ClassSkeleton, CodeSkelet
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _python_extractor():
     from openviking.parse.parsers.code.ast.languages.python import PythonExtractor
+
     return PythonExtractor()
 
 
 def _js_extractor():
     from openviking.parse.parsers.code.ast.languages.js_ts import JsTsExtractor
+
     return JsTsExtractor(lang="javascript")
 
 
 def _go_extractor():
     from openviking.parse.parsers.code.ast.languages.go import GoExtractor
+
     return GoExtractor()
 
 
 def _ts_extractor():
     from openviking.parse.parsers.code.ast.languages.js_ts import JsTsExtractor
+
     return JsTsExtractor(lang="typescript")
 
 
 def _csharp_extractor():
     from openviking.parse.parsers.code.ast.languages.csharp import CSharpExtractor
-    return CSharpExtractor()
 
+    return CSharpExtractor()
 
 
 # ---------------------------------------------------------------------------
 # Python
 # ---------------------------------------------------------------------------
+
 
 class TestPythonExtractor:
     SAMPLE = '''"""Module for parsing things.
@@ -128,7 +134,9 @@ def standalone(text: str) -> str:
         # raw params may contain newlines, but to_text() must compact them
         assert "encoding" in methods["parse_async"].params
         text = sk.to_text()
-        assert "\n  +" not in text.split("parse_async")[1].split("\n")[0]  # no newline inside the signature line
+        assert (
+            "\n  +" not in text.split("parse_async")[1].split("\n")[0]
+        )  # no newline inside the signature line
 
     def test_top_level_function(self):
         sk = self.e.extract("test.py", self.SAMPLE)
@@ -163,8 +171,9 @@ def standalone(text: str) -> str:
 # JavaScript
 # ---------------------------------------------------------------------------
 
+
 class TestJavaScriptExtractor:
-    SAMPLE = '''
+    SAMPLE = """
 import React from "react";
 import { useState, useEffect } from "react";
 
@@ -194,7 +203,7 @@ class Counter extends React.Component {
 function add(a, b) {
   return a + b;
 }
-'''
+"""
 
     def setup_method(self):
         self.e = _js_extractor()
@@ -249,7 +258,7 @@ function add(a, b) {
         assert "Maintains an internal count and exposes increment/decrement" in text
 
     def test_export_class(self):
-        code = '''
+        code = """
 /** Base utility class.
  *
  * Provides shared helper methods.
@@ -258,7 +267,7 @@ export class Utils {
   /** Log a message to the console. */
   log(msg) { console.log(msg); }
 }
-'''
+"""
         sk = self.e.extract("utils.js", code)
         names = {c.name for c in sk.classes}
         assert "Utils" in names
@@ -267,13 +276,13 @@ export class Utils {
         assert any(m.name == "log" for m in cls.methods)
 
     def test_arrow_function(self):
-        code = '''
+        code = """
 /** Double a number. */
 const double = (n) => n * 2;
 
 /** Negate a boolean. */
 const negate = (b) => !b;
-'''
+"""
         sk = self.e.extract("math.js", code)
         names = {f.name for f in sk.functions}
         assert "double" in names
@@ -286,8 +295,9 @@ const negate = (b) => !b;
 # Go
 # ---------------------------------------------------------------------------
 
+
 class TestGoExtractor:
-    SAMPLE = '''
+    SAMPLE = """
 package main
 
 import (
@@ -312,7 +322,7 @@ func (s *Server) Start() error {
     fmt.Println("starting")
     return nil
 }
-'''
+"""
 
     def setup_method(self):
         self.e = _go_extractor()
@@ -343,7 +353,9 @@ func (s *Server) Start() error {
     def test_docstring_extracted(self):
         sk = self.e.extract("main.go", self.SAMPLE)
         fns = {f.name: f for f in sk.functions}
-        assert "NewServer creates a Server with the given host and port." in fns["NewServer"].docstring
+        assert (
+            "NewServer creates a Server with the given host and port." in fns["NewServer"].docstring
+        )
         assert "Returns a pointer to the initialized Server." in fns["NewServer"].docstring
         structs = {c.name: c for c in sk.classes}
         assert "Server" in structs
@@ -369,13 +381,15 @@ func (s *Server) Start() error {
 # Java
 # ---------------------------------------------------------------------------
 
+
 def _java_extractor():
     from openviking.parse.parsers.code.ast.languages.java import JavaExtractor
+
     return JavaExtractor()
 
 
 class TestJavaExtractor:
-    SAMPLE = '''
+    SAMPLE = """
 import java.util.List;
 import java.util.Optional;
 
@@ -408,7 +422,7 @@ public class Calculator {
         return a - b;
     }
 }
-'''
+"""
 
     def setup_method(self):
         self.e = _java_extractor()
@@ -460,6 +474,7 @@ public class Calculator {
 # ---------------------------------------------------------------------------
 # C#
 # ---------------------------------------------------------------------------
+
 
 class TestCSharpExtractor:
     SAMPLE = """
@@ -546,7 +561,7 @@ namespace MyApp.Services
         assert "First operand" in text
 
     def test_file_scoped_namespace(self):
-        code = '''
+        code = """
 using System;
 
 namespace MyApp.Services;
@@ -558,13 +573,13 @@ public class Calculator
         return a + b;
     }
 }
-'''
+"""
         sk = self.e.extract("Calculator.cs", code)
         names = {c.name for c in sk.classes}
         assert "Calculator" in names
 
     def test_property_accessor_signature(self):
-        code = '''
+        code = """
 public class Calculator
 {
     /// <summary>
@@ -572,7 +587,7 @@ public class Calculator
     /// </summary>
     public int Result { get; set; }
 }
-'''
+"""
         sk = self.e.extract("Calculator.cs", code)
         cls = next(c for c in sk.classes if c.name == "Calculator")
         methods = {m.name: m for m in cls.methods}
@@ -585,13 +600,15 @@ public class Calculator
 # C/C++
 # ---------------------------------------------------------------------------
 
+
 def _cpp_extractor():
     from openviking.parse.parsers.code.ast.languages.cpp import CppExtractor
+
     return CppExtractor()
 
 
 class TestCppExtractor:
-    SAMPLE = '''
+    SAMPLE = """
 #include <string>
 #include <vector>
 
@@ -627,7 +644,7 @@ public:
 int add(int a, int b) {
     return a + b;
 }
-'''
+"""
 
     def setup_method(self):
         self.e = _cpp_extractor()
@@ -688,18 +705,134 @@ int add(int a, int b) {
         assert "@param a First operand" in text
         assert "@return Sum of a and b" in text
 
+    def test_typedef_struct_anonymous(self):
+        code = """
+/* A 2D point. */
+typedef struct {
+    float x;
+    float y;
+} Point;
+
+/* An RGB color value. */
+typedef struct {
+    int r;
+    int g;
+    int b;
+} Color;
+"""
+        sk = self.e.extract("types.h", code)
+        names = {c.name for c in sk.classes}
+        assert "Point" in names
+        assert "Color" in names
+
+    def test_typedef_struct_named_tag(self):
+        # typedef struct Node { ... } Node; — tag and alias are the same
+        code = """
+typedef struct Node {
+    int value;
+    struct Node *next;
+} Node;
+"""
+        sk = self.e.extract("list.h", code)
+        names = {c.name for c in sk.classes}
+        assert "Node" in names
+
+    def test_typedef_struct_docstring(self):
+        code = """
+/** Represents a rectangle with width and height. */
+typedef struct {
+    int width;
+    int height;
+} Rect;
+"""
+        sk = self.e.extract("rect.h", code)
+        rect = next((c for c in sk.classes if c.name == "Rect"), None)
+        assert rect is not None
+        assert "Represents a rectangle" in rect.docstring
+
+    def test_function_prototype_top_level(self):
+        # .h header with only function declarations (no bodies)
+        code = """
+#include <stddef.h>
+
+/* Allocate n bytes of memory. */
+void *my_malloc(size_t n);
+
+/* Free previously allocated memory. */
+void my_free(void *ptr);
+"""
+        sk = self.e.extract("mem.h", code)
+        names = {f.name for f in sk.functions}
+        assert "my_malloc" in names
+        assert "my_free" in names
+
+    def test_function_prototype_return_type(self):
+        code = """
+int compute(int a, int b);
+void reset(void);
+"""
+        sk = self.e.extract("utils.h", code)
+        print(sk.to_text())
+        fns = {f.name: f for f in sk.functions}
+        assert fns["compute"].return_type == "int"
+        assert fns["reset"].return_type == "void"
+
+    def test_function_prototype_docstring(self):
+        code = """
+/** Add two integers and return the result. */
+int add(int a, int b);
+"""
+        sk = self.e.extract("math.h", code)
+        fns = {f.name: f for f in sk.functions}
+        assert "Add two integers" in fns["add"].docstring
+
+    def test_namespace_typedef_and_proto(self):
+        code = """
+namespace utils {
+
+typedef struct {
+    int id;
+} Handle;
+
+int create(int flags);
+
+}
+"""
+        sk = self.e.extract("utils.cpp", code)
+        names = {c.name for c in sk.classes}
+        assert "Handle" in names
+        fns = {f.name for f in sk.functions}
+        assert "create" in fns
+
+    def test_declaration_and_definition_both_extracted(self):
+        # Forward declaration + definition in the same file — both appear in skeleton
+        code = """
+/* Forward declaration */
+int add(int a, int b);
+
+/* Definition */
+int add(int a, int b) {
+    return a + b;
+}
+"""
+        sk = self.e.extract("math.cpp", code)
+        names = [f.name for f in sk.functions]
+        assert names.count("add") == 2
+
 
 # ---------------------------------------------------------------------------
 # Rust
 # ---------------------------------------------------------------------------
 
+
 def _rust_extractor():
     from openviking.parse.parsers.code.ast.languages.rust import RustExtractor
+
     return RustExtractor()
 
 
 class TestRustExtractor:
-    SAMPLE = '''
+    SAMPLE = """
 use std::collections::HashMap;
 use std::io::{self, Read};
 
@@ -736,7 +869,7 @@ impl Store {
 pub fn factorial(n: u64) -> u64 {
     if n == 0 { 1 } else { n * factorial(n - 1) }
 }
-'''
+"""
 
     def setup_method(self):
         self.e = _rust_extractor()
@@ -792,10 +925,10 @@ pub fn factorial(n: u64) -> u64 {
         assert "Panics if n is negative." in text
 
 
-
 # ---------------------------------------------------------------------------
 # Skeleton.to_text() — verbose vs compact
 # ---------------------------------------------------------------------------
+
 
 class TestSkeletonToText:
     MULTILINE_DOC = "First line summary.\n\nMore details here.\nArgs:\n    x: an integer."
@@ -808,9 +941,10 @@ class TestSkeletonToText:
             imports=["os", "sys"],
             classes=[
                 ClassSkeleton(
-                    name="Foo", bases=["Base"],
+                    name="Foo",
+                    bases=["Base"],
                     docstring=self.MULTILINE_DOC,
-                    methods=[FunctionSig("run", "self", "None", self.MULTILINE_DOC)]
+                    methods=[FunctionSig("run", "self", "None", self.MULTILINE_DOC)],
                 )
             ],
             functions=[FunctionSig("helper", "x: int", "bool", self.MULTILINE_DOC)],
@@ -818,8 +952,12 @@ class TestSkeletonToText:
 
     def test_empty_skeleton(self):
         sk = CodeSkeleton(
-            file_name="empty.py", language="Python",
-            module_doc="", imports=[], classes=[], functions=[]
+            file_name="empty.py",
+            language="Python",
+            module_doc="",
+            imports=[],
+            classes=[],
+            functions=[],
         )
         assert "# empty.py [Python]" in sk.to_text()
 
@@ -844,7 +982,8 @@ class TestSkeletonToText:
 
     def test_verbose_single_line_doc_no_extra_quotes(self):
         sk = CodeSkeleton(
-            file_name="bar.py", language="Python",
+            file_name="bar.py",
+            language="Python",
             module_doc="Single line.",
             imports=[],
             classes=[ClassSkeleton("Bar", [], "One liner.", [])],
@@ -862,8 +1001,9 @@ class TestSkeletonToText:
 # TypeScript
 # ---------------------------------------------------------------------------
 
+
 class TestTypeScriptExtractor:
-    SAMPLE = '''
+    SAMPLE = """
 import { Observable } from "rxjs";
 import { HttpClient } from "@angular/common/http";
 
@@ -898,7 +1038,7 @@ class TodoService {
 function validate(title: string): boolean {
   return title.length > 0 && title.length < 100;
 }
-'''
+"""
 
     def setup_method(self):
         self.e = _ts_extractor()
@@ -965,9 +1105,11 @@ function validate(title: string): boolean {
 # ASTExtractor dispatch
 # ---------------------------------------------------------------------------
 
+
 class TestASTExtractorDispatch:
     def setup_method(self):
         from openviking.parse.parsers.code.ast.extractor import ASTExtractor
+
         self.extractor = ASTExtractor()
 
     def test_python_dispatch(self):
@@ -977,13 +1119,13 @@ class TestASTExtractorDispatch:
         assert "def foo" in text
 
     def test_go_dispatch(self):
-        code = 'package main\n\n// Run starts the app.\nfunc Run() error {\n    return nil\n}\n'
+        code = "package main\n\n// Run starts the app.\nfunc Run() error {\n    return nil\n}\n"
         text = self.extractor.extract_skeleton("main.go", code)
         assert "# main.go [Go]" in text
         assert "Run" in text
 
     def test_csharp_dispatch(self):
-        code = 'namespace Demo;\n\npublic class Util { public int Add(int a, int b) { return a + b; } }\n'
+        code = "namespace Demo;\n\npublic class Util { public int Add(int a, int b) { return a + b; } }\n"
         text = self.extractor.extract_skeleton("util.cs", code)
         assert "# util.cs [C#]" in text
         assert "class Util" in text

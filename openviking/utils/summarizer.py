@@ -16,11 +16,12 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+
 class Summarizer:
     """
     Handles summarization of resources.
     """
-    
+
     def __init__(self, vlm_processor: "VLMProcessor"):
         self.vlm_processor = vlm_processor
 
@@ -29,7 +30,7 @@ class Summarizer:
         resource_uris: List[str],
         ctx: "RequestContext",
         skip_vectorization: bool = False,
-        **kwargs
+        **kwargs,
     ) -> Dict[str, Any]:
         """
         Summarize the given resources.
@@ -37,7 +38,7 @@ class Summarizer:
         """
         queue_manager = get_queue_manager()
         semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
-        
+
         enqueued_count = 0
         for uri in resource_uris:
             # Determine context_type based on URI
@@ -46,7 +47,7 @@ class Summarizer:
                 context_type = "memory"
             elif uri.startswith("viking://agent/skills/"):
                 context_type = "skill"
-                
+
             msg = SemanticMsg(
                 uri=uri,
                 context_type=context_type,
@@ -58,6 +59,8 @@ class Summarizer:
             )
             await semantic_queue.enqueue(msg)
             enqueued_count += 1
-            logger.info(f"Enqueued semantic generation for: {uri} (skip_vectorization={skip_vectorization})")
-            
+            logger.info(
+                f"Enqueued semantic generation for: {uri} (skip_vectorization={skip_vectorization})"
+            )
+
         return {"status": "success", "enqueued_count": enqueued_count}

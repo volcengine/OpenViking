@@ -6,11 +6,13 @@ from openviking.storage.vectordb.index.index import IIndex
 from openviking.storage.vectordb_adapters.base import CollectionAdapter
 from openviking.storage.vectordb.collection.collection import Collection
 
+
 class MockCollectionAdapter(CollectionAdapter):
     """
     Mock adapter for testing dynamic loading.
     Inherits from CollectionAdapter and wraps MockCollection.
     """
+
     def __init__(self, collection_name: str, custom_param1: str = "", custom_param2: int = 0):
         super().__init__(collection_name=collection_name)
         self.mode = "mock"
@@ -23,32 +25,41 @@ class MockCollectionAdapter(CollectionAdapter):
         return cls(
             collection_name=config.name or "mock_collection",
             custom_param1=custom_params.get("custom_param1", ""),
-            custom_param2=custom_params.get("custom_param2", 0)
+            custom_param2=custom_params.get("custom_param2", 0),
         )
 
     def _load_existing_collection_if_needed(self) -> None:
         if self._collection is None:
-             # Create a dummy collection wrapping MockCollection
-             self._collection = MockCollection(self.custom_param1, self.custom_param2)
+            # Create a dummy collection wrapping MockCollection
+            self._collection = MockCollection(self.custom_param1, self.custom_param2)
 
     def _create_backend_collection(self, meta: Dict[str, Any]) -> Collection:
         return MockCollection(self.custom_param1, self.custom_param2)
 
+
 class MockCollection(ICollection):
-    def __init__(self, custom_param1: str, custom_param2: int, meta_data: Optional[Dict[str, Any]] = None, **kwargs):
+    def __init__(
+        self,
+        custom_param1: str,
+        custom_param2: int,
+        meta_data: Optional[Dict[str, Any]] = None,
+        **kwargs,
+    ):
         super().__init__()
         self.meta_data = meta_data if meta_data is not None else {}
-        
+
         self.custom_param1 = custom_param1
         self.custom_param2 = custom_param2
-        
+
         # Store extra kwargs (including host/headers if passed but not used explicitly)
         self.kwargs = kwargs
-        
+
         # Verify that we can access values passed during initialization
         if self.meta_data and "test_verification" in self.meta_data:
-            print(f"MockCollection initialized with custom_param1={self.custom_param1}, custom_param2={self.custom_param2}, kwargs={kwargs}")
-        
+            print(
+                f"MockCollection initialized with custom_param1={self.custom_param1}, custom_param2={self.custom_param2}, kwargs={kwargs}"
+            )
+
     def update(self, fields: Optional[Dict[str, Any]] = None, description: Optional[str] = None):
         raise NotImplementedError("MockCollection.update is not supported")
 

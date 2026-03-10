@@ -98,3 +98,13 @@ pub fn default_config_path() -> Result<PathBuf> {
         .ok_or_else(|| Error::Config("Could not determine home directory".to_string()))?;
     Ok(home.join(".openviking").join("ovcli.conf"))
 }
+
+/// Get a unique machine ID using machine-uid crate.
+///
+/// Uses the system's machine ID, falls back to "default" if unavailable.
+pub fn get_or_create_machine_id() -> Result<String> {
+    match machine_uid::get() {
+        Ok(id) => Ok(id),
+        Err(_) => Ok("default".to_string()),
+    }
+}

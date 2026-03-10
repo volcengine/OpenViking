@@ -8,10 +8,7 @@ on:
         required: true
         type: string
   push:
-    branches: [ "main" ]
     tags: [ "v*.*.*" ]
-  pull_request:
-    branches: [ "main" ]
 
 env:
   REGISTRY: ghcr.io

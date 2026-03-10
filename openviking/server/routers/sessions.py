@@ -2,18 +2,22 @@
 # SPDX-License-Identifier: Apache-2.0
 """Sessions endpoints for OpenViking HTTP Server."""
 
+import asyncio
+import logging
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, Path
+from fastapi import APIRouter, Depends, Path, Query
 from pydantic import BaseModel, model_validator
 
 from openviking.message.part import TextPart, part_from_dict
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
-from openviking.server.models import Response
+from openviking.server.models import ErrorInfo, Response
+from openviking.service.task_tracker import get_task_tracker
 
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
+logger = logging.getLogger(__name__)
 
 
 class TextPartRequest(BaseModel):
@@ -141,12 +145,85 @@ async def delete_session(
 @router.post("/{session_id}/commit")
 async def commit_session(
     session_id: str = Path(..., description="Session ID"),
+    wait: bool = Query(
+        True,
+        description="If False, commit runs in background and returns immediately",
+    ),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Commit a session (archive and extract memories)."""
+    """Commit a session (archive and extract memories).
+
+    When wait=False, the commit is processed in the background and a
+    ``task_id`` is returned.  Use ``GET /tasks/{task_id}`` to poll for
+    completion status, results, or errors.
+
+    When wait=True (default), the commit blocks until complete and
+    returns the full result inline.
+    """
     service = get_service()
-    result = await service.sessions.commit(session_id, _ctx)
-    return Response(status="ok", result=result)
+    tracker = get_task_tracker()
+
+    if wait:
+        # Reject if same session already has a background commit running
+        if tracker.has_running("session_commit", session_id):
+            return Response(
+                status="error",
+                error=ErrorInfo(
+                    code="CONFLICT",
+                    message=f"Session {session_id} already has a commit in progress",
+                ),
+            )
+        result = await service.sessions.commit_async(session_id, _ctx)
+        return Response(status="ok", result=result)
+
+    # Atomically check + create to prevent race conditions
+    task = tracker.create_if_no_running("session_commit", session_id)
+    if task is None:
+        return Response(
+            status="error",
+            error=ErrorInfo(
+                code="CONFLICT",
+                message=f"Session {session_id} already has a commit in progress",
+            ),
+        )
+    asyncio.create_task(_background_commit_tracked(service, session_id, _ctx, task.task_id))
+
+    return Response(
+        status="ok",
+        result={
+            "session_id": session_id,
+            "status": "accepted",
+            "task_id": task.task_id,
+            "message": "Commit is processing in the background",
+        },
+    )
+
+
+async def _background_commit_tracked(
+    service, session_id: str, ctx: RequestContext, task_id: str
+) -> None:
+    """Run session commit in background with task tracking."""
+    tracker = get_task_tracker()
+    tracker.start(task_id)
+    try:
+        result = await service.sessions.commit_async(session_id, ctx)
+        tracker.complete(
+            task_id,
+            {
+                "session_id": session_id,
+                "memories_extracted": result.get("memories_extracted", 0),
+                "archived": result.get("archived", False),
+            },
+        )
+        logger.info(
+            "Background commit completed: session=%s task=%s memories=%d",
+            session_id,
+            task_id,
+            result.get("memories_extracted", 0),
+        )
+    except Exception as exc:
+        tracker.fail(task_id, str(exc))
+        logger.exception("Background commit failed: session=%s task=%s", session_id, task_id)
 
 
 @router.post("/{session_id}/extract")

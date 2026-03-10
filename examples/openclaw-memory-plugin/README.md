@@ -10,16 +10,18 @@ npx ./examples/openclaw-memory-plugin/setup-helper
 openclaw gateway
 ```
 
-The setup helper checks the environment, creates `~/.openviking/ov.conf`, deploys the plugin, and configures OpenClaw automatically.
+The setup helper checks the environment, creates `~/.openviking/ov.conf`, deploys the plugin, and configures OpenClaw automatically. It supports both **local** and **remote** modes and auto-detects multiple OpenClaw instances.
 
 ## Manual Setup
+
+### Local Mode
 
 Prerequisites: **OpenClaw** (`npm install -g openclaw`), **Python >= 3.10** with `openviking` (`pip install openviking --upgrade --force-reinstall`).
 
 ```bash
 # Install plugin
 mkdir -p ~/.openclaw/extensions/memory-openviking
-cp examples/openclaw-memory-plugin/{index.ts,config.ts,openclaw.plugin.json,package.json,.gitignore} \
+cp examples/openclaw-memory-plugin/{index.ts,config.ts,client.ts,process-manager.ts,memory-ranking.ts,text-utils.ts,openclaw.plugin.json,package.json,.gitignore} \
    ~/.openclaw/extensions/memory-openviking/
 cd ~/.openclaw/extensions/memory-openviking && npm install
 
@@ -33,6 +35,22 @@ openclaw config set plugins.entries.memory-openviking.config.autoRecall true --j
 openclaw config set plugins.entries.memory-openviking.config.autoCapture true --json
 
 # Start
+source ~/.openclaw/openviking.env && openclaw gateway
+```
+
+### Remote Mode
+
+Prerequisites: **OpenClaw** only. No Python/OpenViking needed.
+
+```bash
+openclaw config set plugins.enabled true
+openclaw config set plugins.slots.memory memory-openviking
+openclaw config set plugins.entries.memory-openviking.config.mode "remote"
+openclaw config set plugins.entries.memory-openviking.config.baseUrl "http://your-server:1933"
+openclaw config set plugins.entries.memory-openviking.config.apiKey "your-api-key"  # optional
+openclaw config set plugins.entries.memory-openviking.config.autoRecall true --json
+openclaw config set plugins.entries.memory-openviking.config.autoCapture true --json
+
 openclaw gateway
 ```
 
@@ -41,8 +59,9 @@ openclaw gateway
 ```
 npx openclaw-openviking-setup-helper [options]
 
-  -y, --yes     Non-interactive, use defaults
-  -h, --help    Show help
+  -y, --yes              Non-interactive, use defaults
+  --workdir <path>       OpenClaw config directory (default: ~/.openclaw)
+  -h, --help             Show help
 
 Env vars:
   OPENVIKING_PYTHON       Python path
@@ -56,7 +75,7 @@ Env vars:
 ```json
 {
   "vlm": {
-    "backend": "volcengine",
+    "provider": "volcengine",
     "api_key": "<your-api-key>",
     "model": "doubao-seed-2-0-pro-260215",
     "api_base": "https://ark.cn-beijing.volces.com/api/v3",
@@ -65,9 +84,9 @@ Env vars:
   },
   "embedding": {
     "dense": {
-      "backend": "volcengine",
+      "provider": "volcengine",
       "api_key": "<your-api-key>",
-      "model": "doubao-embedding-vision-250615",
+      "model": "doubao-embedding-vision-251215",
       "api_base": "https://ark.cn-beijing.volces.com/api/v3",
       "dimension": 1024,
       "input": "multimodal"

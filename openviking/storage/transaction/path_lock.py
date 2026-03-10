@@ -33,8 +33,7 @@ import asyncio
 import time
 from typing import Optional, Tuple
 
-from pyagfs import AGFSClient
-
+from openviking.pyagfs import AGFSClient
 from openviking.storage.transaction.transaction_record import TransactionRecord
 from openviking_cli.utils.logger import get_logger
 

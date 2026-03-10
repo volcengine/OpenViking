@@ -46,7 +46,6 @@ dependencies = [
     "apscheduler>=3.11.0",
     "volcengine>=1.0.216",
     "volcengine-python-sdk[ark]>=5.0.3",
-    "pyagfs",
     "fastapi>=0.128.0",
     "uvicorn>=0.39.0",
     "xxhash>=3.0.0",
@@ -97,6 +96,44 @@ eval = [
     "datasets>=2.0.0",
     "pandas>=2.0.0",
 ]
+# vikingbot core dependencies
+bot = [
+    "pydantic-settings>=2.0.0",
+    "websockets>=12.0",
+    "websocket-client>=1.6.0",
+    "httpx[socks]>=0.25.0",
+    "readability-lxml>=0.8.0",
+    "rich>=13.0.0",
+    "croniter>=2.0.0",
+    "socksio>=1.0.0",
+    "python-socketio>=5.11.0",
+    "msgpack>=1.0.8",
+    "python-socks[asyncio]>=2.4.0",
+    "prompt-toolkit>=3.0.0",
+    "pygments>=2.16.0",
+    "html2text>=2020.1.16",
+    "beautifulsoup4>=4.12.0",
+    "ddgs>=9.0.0",
+    "gradio>=6.6.0",
+    "py-machineid>=1.0.0",
+]
+# vikingbot optional features
+bot-langfuse = ["langfuse>=3.0.0"]
+bot-telegram = ["python-telegram-bot[socks]>=21.0"]
+bot-feishu = ["lark-oapi>=1.0.0"]
+bot-dingtalk = ["dingtalk-stream>=0.4.0"]
+bot-slack = ["slack-sdk>=3.26.0"]
+bot-qq = ["qq-botpy>=1.0.0"]
+bot-sandbox = [
+    "opensandbox>=0.1.0",
+    "opensandbox-server>=0.1.0",
+    "agent-sandbox>=0.0.23",
+]
+bot-fuse = ["fusepy>=3.0.1"]
+bot-opencode = ["opencode-ai>=0.1.0a0"]
+bot-full = [
+    "openviking[bot,bot-langfuse,bot-telegram,bot-feishu,bot-dingtalk,bot-slack,bot-qq,bot-sandbox,bot-fuse,bot-opencode]",
+]
 
 [project.urls]
 Homepage = "https://github.com/volcengine/openviking"
@@ -107,7 +144,8 @@ Issues = "https://github.com/volcengine/openviking/issues"
 [project.scripts]
 ov = "openviking_cli.rust_cli:main"  # Rust CLI 入口（极简包装器）
 openviking = "openviking_cli.rust_cli:main"  # Rust CLI 入口（放弃 python CLI）
-openviking-server = "openviking.server.bootstrap:main"
+openviking-server = "openviking_cli.server_bootstrap:main"
+vikingbot = "vikingbot.cli.commands:app"
 
 [tool.setuptools_scm]
 write_to = "openviking/_version.py"
@@ -115,8 +153,8 @@ local_scheme = "no-local-version"
 tag_regex = "^(?:v)?(?:[a-zA-Z0-9_]+@)?(?P<version>[0-9]+(?:\\.[0-9]+)*)$"
 
 [tool.setuptools.packages.find]
-where = ["."]
-include = ["openviking*"]
+where = [".", "bot"]
+include = ["openviking*", "vikingbot*"]
 exclude = ["tests*", "docs*", "examples*"]
 
 [tool.setuptools.package-data]
@@ -129,6 +167,13 @@ openviking = [
     "lib/libagfsbinding.dll",
     "bin/ov",
     "bin/ov.exe"
+]
+vikingbot = [
+    "**/*.mjs",
+    "skills/**/*.md",
+    "skills/**/*.sh",
+    "console/static/**/*",
+    "bridge/**/*",
 ]
 
 [tool.mypy]

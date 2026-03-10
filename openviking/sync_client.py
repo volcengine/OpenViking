@@ -5,6 +5,7 @@ Synchronous OpenViking client implementation.
 """
 
 from __future__ import annotations
+
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 if TYPE_CHECKING:
@@ -79,7 +80,8 @@ class SyncOpenViking:
     def add_resource(
         self,
         path: str,
-        target: Optional[str] = None,
+        to: Optional[str] = None,
+        parent: Optional[str] = None,
         reason: str = "",
         instruction: str = "",
         wait: bool = False,
@@ -99,7 +101,8 @@ class SyncOpenViking:
         return run_async(
             self._async_client.add_resource(
                 path=path,
-                target=target,
+                to=to,
+                parent=parent,
                 reason=reason,
                 instruction=instruction,
                 wait=wait,

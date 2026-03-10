@@ -41,11 +41,9 @@ class SrtBackend(SandboxBackend):
         """Generate SRT configuration file."""
         srt_config = self._load_config()
 
+        # Place settings file in workspace/sandboxes/ directory
         settings_path = (
-            Path.home()
-            / ".vikingbot"
-            / "sandboxes"
-            / f"{self.session_key.safe_name()}-srt-settings.json"
+            self._workspace / "sandboxes" / f"{self.session_key.safe_name()}-srt-settings.json"
         )
         settings_path.parent.mkdir(parents=True, exist_ok=True)
 
