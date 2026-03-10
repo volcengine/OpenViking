@@ -241,7 +241,7 @@ class VikingGrepTool(OVFileTool):
             "properties": {
                 "uri": {
                     "type": "string",
-                    "description": "The whole Viking URI to search within (e.g., viking://resources/path/)",
+                    "description": "The whole Viking URI to search within (e.g., viking://resources/)",
                 },
                 "pattern": {
                     "type": "string",
@@ -269,8 +269,8 @@ class VikingGrepTool(OVFileTool):
             result = await client.grep(uri, pattern, case_insensitive=case_insensitive)
 
             if isinstance(result, dict):
-                matches = result.get("result", {}).get("matches", [])
-                count = result.get("result", {}).get("count", 0)
+                matches = result.get("matches", [])
+                count = result.get("count", 0)
             else:
                 matches = getattr(result, "matches", [])
                 count = getattr(result, "count", 0)

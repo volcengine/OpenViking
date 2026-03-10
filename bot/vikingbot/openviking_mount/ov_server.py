@@ -327,7 +327,7 @@ class VikingClient:
 
     async def grep(self, uri: str, pattern: str, case_insensitive: bool = False) -> Dict[str, Any]:
         """通过模式（正则表达式）搜索内容"""
-        return await self.client.grep(uri, pattern, case_insensitive=case_insensitive)
+        return await self.client.grep(uri, pattern, case_insensitive=case_insensitive, node_limit=10)
 
     async def glob(self, pattern: str, uri: Optional[str] = None) -> Dict[str, Any]:
         """通过 glob 模式匹配文件"""
@@ -443,8 +443,8 @@ async def main_test():
     # res = await client.search_memory("你好", "user_1")
     # res = await client.list_resources("viking://resources/")
     # res = await client.read_content("viking://user/memories/profile.md", level="read")
-    res = await client.add_resource("https://github.com/volcengine/OpenViking", "ov代码")
-    # res = await client.grep("viking://user/default/memories", "running", True)
+    # res = await client.add_resource("https://github.com/volcengine/OpenViking", "ov代码")
+    res = await client.grep("viking://resources/", "viking", True)
     # res = await client.commit(
     #     session_id="99999",
     #     messages=[{"role": "user", "content": "你好"}],

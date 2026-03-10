@@ -8,7 +8,7 @@ from ..base import Hook, HookContext
 from ...session import Session
 
 from vikingbot.config.loader import load_config
-from vikingbot.config.schema import SessionKey
+from vikingbot.config.schema import SessionKey, AgentMemoryMode
 
 try:
     from vikingbot.openviking_mount.ov_server import VikingClient
@@ -46,9 +46,9 @@ class OpenVikingCompactHook(Hook):
         if not session_key or not config.channels:
             return False, allow_from
         # 查找对应类型的 channel config
-        for channel_config in config.channels:
-            if hasattr(channel_config, "type") and channel_config.type == session_key.channel_id:
-                if channel_config.agent_memory_mode == "shared":
+        for channel_config in config.channels_config.get_all_channels():
+            if channel_config and channel_config.type.value == session_key.type:
+                if channel_config.agent_memory_mode == AgentMemoryMode.SHARED:
                     return True, []
                 if hasattr(channel_config, "allow_from"):
                     allow_from.extend(channel_config.allow_from)
@@ -59,7 +59,7 @@ class OpenVikingCompactHook(Hook):
         session_id = context.session_key.safe_name()
 
         try:
-            is_shared, allow_from = self._get_channel_allow_from(session_id)
+            is_shared, allow_from = self._get_channel_allow_from(context.session_key)
             filtered_messages = vikingbot_session.messages
             if not is_shared:
                 filtered_messages = self._filter_messages_by_sender(vikingbot_session.messages, allow_from)

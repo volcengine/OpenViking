@@ -376,7 +376,7 @@ class AgentLoop:
             emoji_index = 0
 
             while not long_running_notified and emoji_index < len(EMOJIS):
-                await asyncio.sleep(30)
+                await asyncio.sleep(40)
                 if long_running_notified:
                     break
                 if msg.session_key.type == "feishu" and msg.metadata:

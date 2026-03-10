@@ -39,13 +39,18 @@ class SandboxMode(str, Enum):
     PER_SESSION = "per-session"
     SHARED = "shared"
 
+class AgentMemoryMode(str, Enum):
+    """Agent memory mode enumeration."""
+    PER_SESSION = "per-session"
+    SHARED = "shared"
+
 
 class BaseChannelConfig(BaseModel):
     """Base channel configuration."""
 
     type: Any = ChannelType.TELEGRAM  # Default for backwards compatibility
     enabled: bool = True
-    agent_memory_mode: str = "shared"
+    agent_memory_mode: Any = AgentMemoryMode.SHARED
 
     def channel_id(self) -> str:
         return "default"
