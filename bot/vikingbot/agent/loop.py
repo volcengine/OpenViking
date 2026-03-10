@@ -368,36 +368,36 @@ class AgentLoop:
         start_time = time.time()
         long_running_notified = False
 
-        # 监控处理时长，每5秒按顺序发不同表情提示
+        # 监控处理时长，每50秒发送处理中提示事件
         async def check_long_running():
             nonlocal long_running_notified
-            # 飞书官方支持的表情列表，按顺序发送不重复
-            EMOJIS = ["StatusInFlight", "OneSecond", "Typing", "OnIt", "Coffee", "OnIt", "EatingFood"]
-            emoji_index = 0
+            tick_count = 0
+            # 最多发送7次提示
+            max_ticks = 7
 
-            while not long_running_notified and emoji_index < len(EMOJIS):
+            while not long_running_notified and tick_count < max_ticks:
                 await asyncio.sleep(40)
                 if long_running_notified:
                     break
-                if msg.session_key.type == "feishu" and msg.metadata:
+                if msg.metadata:
                     message_id = msg.metadata.get("message_id")
                     if message_id:
                         try:
-                            # 发送添加表情事件到消息总线
+                            # 发送处理中tick事件，对应channel会自行处理展示逻辑
                             await self.bus.publish_outbound(
                                 OutboundMessage(
                                     session_key=msg.session_key,
                                     content="",
                                     metadata={
-                                        "action": "add_reaction",
-                                        "emoji": EMOJIS[emoji_index],
+                                        "action": "processing_tick",
+                                        "tick_count": tick_count,
                                         "message_id": message_id,
                                     },
                                 )
                             )
-                            emoji_index += 1
+                            tick_count += 1
                         except Exception as e:
-                            logger.debug(f"Failed to add long running reaction: {e}")
+                            logger.debug(f"Failed to send processing tick: {e}")
 
         monitor_task = asyncio.create_task(check_long_running())
 

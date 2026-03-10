@@ -77,6 +77,16 @@ class FeishuChannel(BaseChannel):
     """
 
     name = "feishu"
+    # 飞书官方支持的处理中表情列表，按顺序发送
+    PROCESSING_EMOJIS = [
+        "StatusInFlight",
+        "OneSecond",
+        "Typing",
+        "OnIt",
+        "Coffee",
+        "OnIt",
+        "EatingFood",
+    ]
 
     def __init__(self, config: FeishuChannelConfig, bus: MessageBus, **kwargs):
         super().__init__(config, bus, **kwargs)
@@ -310,6 +320,20 @@ class FeishuChannel(BaseChannel):
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._add_reaction_sync, message_id, emoji_type)
 
+    async def send_processing_reaction(self, message_id: str, emoji: str) -> None:
+        """
+        Send processing reaction emoji implementation for Feishu.
+        """
+        await self._add_reaction(message_id, emoji)
+
+    async def handle_processing_tick(self, message_id: str, tick_count: int) -> None:
+        """
+        Handle processing tick event, send corresponding emoji reaction.
+        """
+        if 0 <= tick_count < len(self.PROCESSING_EMOJIS):
+            emoji = self.PROCESSING_EMOJIS[tick_count]
+            await self.send_processing_reaction(message_id, emoji)
+
     # Regex to match markdown tables (header + separator + data rows)
     _TABLE_RE = re.compile(
         r"((?:^[ \t]*\|.+\|[ \t]*\n)(?:^[ \t]*\|[-:\s|]+\|[ \t]*\n)(?:^[ \t]*\|.+\|[ \t]*\n?)+)",
@@ -466,18 +490,13 @@ class FeishuChannel(BaseChannel):
 
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message through Feishu."""
+        # 先调用基类处理通用动作
+        if await super().send(msg):
+            return
 
         if not self._client:
             logger.warning("Feishu client not initialized")
             return
-
-        # 处理添加表情的自定义动作
-        if msg.metadata and msg.metadata.get("action") == "add_reaction":
-            message_id = msg.metadata.get("message_id")
-            emoji = msg.metadata.get("emoji")
-            if message_id and emoji:
-                await self._add_reaction(message_id, emoji)
-                return
 
         # Only send normal response messages, skip thinking/tool_call/etc.
         if not msg.is_normal_message:
