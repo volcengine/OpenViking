@@ -10,14 +10,7 @@ Number = Union[int, float]
 
 
 def normalize_name(name: str) -> str:
-    return (
-        (name or "")
-        .lower()
-        .strip()
-        .replace("_", "")
-        .replace("-", "")
-        .replace(" ", "")
-    )
+    return (name or "").lower().strip().replace("_", "").replace("-", "").replace(" ", "")
 
 
 def extract_skill_name_from_uri(uri: str) -> str:

@@ -7,7 +7,9 @@ from openviking.session.compressor import SessionCompressor
 from openviking.session.memory_extractor import MemoryCategory, ToolSkillCandidateMemory
 
 
-def _candidate(category: MemoryCategory, tool_name: str = "", skill_name: str = "") -> ToolSkillCandidateMemory:
+def _candidate(
+    category: MemoryCategory, tool_name: str = "", skill_name: str = ""
+) -> ToolSkillCandidateMemory:
     return ToolSkillCandidateMemory(
         category=category,
         abstract="a",
@@ -79,4 +81,3 @@ class TestToolSkillCalibration:
         assert tool_name == "abcdeYghij"
         assert skill_name == ""
         assert status == "error"
-

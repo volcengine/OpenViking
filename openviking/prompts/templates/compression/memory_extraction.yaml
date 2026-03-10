@@ -338,12 +338,12 @@ template: |
     "category": "tools",
     "tool_name": "web_search",
     "abstract": "web_search: Technical docs search optimal, needs specific query terms",
-    "best_for": "Technical documentation, tutorials",
-    "optimal_params": "max_results=5-20, language='en'",
-    "common_failures": "Generic queries timeout; max_results>50 unreliable",
-    "recommendation": "Use specific multi-word queries; add qualifiers like 'tutorial' or 'guide'",
-    "overview": "## Tool Info\\n- **Name**: web_search\\n- **Type**: external_api\\n\\n## Statistics\\n- **Success Rate**: 92%\\n- **Avg Time**: 2.3s\\n\\n## Tool Memory Context\\n- Best for: Technical documentation, tutorials\\n- Optimal params: max_results=5-20, language='en'\\n- Common failures: Generic queries timeout; max_results>50 unreliable\\n- Recommendation: Use specific multi-word queries; add qualifiers like 'tutorial' or 'guide'",
-    "content": "## Guidelines\\n\\n### Query Optimization\\n- Use specific multi-word queries\\n- Add qualifiers like 'tutorial', 'guide'\\n\\n## Good Cases\\n- 'Python asyncio tutorial' → 3 high-quality results\\n\\n## Bad Cases\\n- 'programming' → timeout (too broad)"
+    "best_for": "Technical documentation, tutorials, API references",
+    "optimal_params": "max_results: 5-20 (larger values may timeout); language: 'en' for better results; query: specific multi-word phrases with qualifiers",
+    "common_failures": "Single-word queries return irrelevant results; max_results>50 causes timeout; non-English queries have lower quality",
+    "recommendation": "Use specific multi-word queries like 'Python asyncio tutorial'; add qualifiers like 'guide', 'docs', 'example'",
+    "overview": "## Tool Info\\n- **Name**: web_search\\n- **Type**: external_api\\n\\n## Statistics\\n- **Success Rate**: 92%\\n- **Avg Time**: 2.3s\\n\\n## Tool Memory Context\\n- Best for: Technical documentation, tutorials, API references\\n- Optimal params: max_results: 5-20; language: 'en'; query: specific multi-word phrases\\n- Common failures: Single-word queries; max_results>50 timeout\\n- Recommendation: Use specific multi-word queries with qualifiers",
+    "content": "## Guidelines\\n\\n### Query Optimization\\n- Use specific multi-word queries (e.g., 'FastAPI dependency injection guide')\\n- Add qualifiers: 'tutorial', 'guide', 'docs', 'example'\\n- Prefer English for technical content\\n\\n### Good Cases\\n- Query: 'Python asyncio tutorial for beginners' → Found 3 high-quality beginner tutorials\\n- Query: 'FastAPI dependency injection docs' → Located official documentation accurately\\n\\n### Bad Cases\\n- Query: 'programming' → Timeout, results too broad\\n- Query: 'how to code' → Irrelevant results, no specific context"
   }
   ```
 
@@ -354,13 +354,13 @@ template: |
     "category": "skills",
     "skill_name": "create_presentation",
     "abstract": "create_presentation: Collect materials first for better efficiency",
-    "best_for": "Slide creation tasks with clear topic and audience",
-    "recommended_flow": "Collect materials → Outline → Create slides → Refine",
-    "key_dependencies": "Clear topic; target audience",
-    "common_failures": "Missing topic/audience causes rework",
-    "recommendation": "Collect reference materials before generating slides",
-    "overview": "## Skill Info\\n- **Name**: create_presentation\\n- **Type**: workflow\\n\\n## Statistics\\n- **Success Rate**: 85%\\n\\n## Skill Memory Context\\n- Best for: Slide creation tasks with clear topic and audience\\n- Recommended flow: Collect materials → Outline → Create slides → Refine\\n- Key dependencies: Clear topic; target audience\\n- Common failures: Missing topic/audience causes rework\\n- Recommendation: Collect reference materials before generating slides",
-    "content": "## Guidelines\\n\\n### Preparation\\n1. Confirm topic and audience\\n2. Collect reference materials\\n\\n## Good Cases\\n- Tech sharing: collected asyncio docs first → high quality\\n\\n## Bad Cases\\n- 'Make a PPT' without topic → multiple reworks needed"
+    "best_for": "Slide creation tasks with clear topic and target audience",
+    "recommended_flow": "1. Confirm topic and audience → 2. Collect reference materials → 3. Generate outline → 4. Create slides → 5. Refine content",
+    "key_dependencies": "Clear topic (e.g., 'Q3 project update', 'Python tutorial'); Target audience (e.g., 'executives', 'beginners'); Reference materials (optional but recommended)",
+    "common_failures": "Vague topic like 'make a PPT' leads to multiple rework cycles; Missing audience info causes style mismatch; No reference materials results in generic content",
+    "recommendation": "Always confirm topic and audience before starting; Collect 2-3 reference materials for better quality",
+    "overview": "## Skill Info\\n- **Name**: create_presentation\\n- **Type**: workflow\\n\\n## Statistics\\n- **Success Rate**: 85%\\n\\n## Skill Memory Context\\n- Best for: Slide creation with clear topic and audience\\n- Recommended flow: Confirm → Collect → Outline → Create → Refine\\n- Key dependencies: Clear topic; target audience; reference materials\\n- Common failures: Vague topic; missing audience; no references\\n- Recommendation: Confirm topic/audience first; collect reference materials",
+    "content": "## Guidelines\\n\\n### Preparation\\n1. Confirm topic (e.g., 'Q3 Sales Report', 'Python Basics Tutorial')\\n2. Identify audience (e.g., executives, beginners, engineers)\\n3. Collect 2-3 reference materials or examples\\n\\n### Good Cases\\n- Topic: 'Python asyncio tutorial for beginners' + Audience: 'developers new to async' → Collected official docs first, generated 10 slides with code examples, completed in 90s\\n- Topic: 'Q3 project update' + Audience: 'stakeholders' → Gathered metrics first, created data-driven slides, positive feedback\\n\\n### Bad Cases\\n- Request: 'Make a PPT' (no topic specified) → Generated generic content, required 3 rounds of rework\\n- Request: 'Create presentation' (no audience) → Style mismatch, had to regenerate for different audience"
   }
   ```
 
@@ -393,9 +393,9 @@ template: |
   - For preferences, keep each memory as one independently updatable facet; do not combine unrelated facets in one memory
   - **CRITICAL for tools category**: "tool_name" is REQUIRED. You MUST copy the exact tool_name value from the [ToolCall] record. Do NOT omit this field. Do NOT modify the name.
   - **CRITICAL for skills category**: "skill_name" is REQUIRED. If [ToolCall] contains skill_name, copy it exactly. If not present, infer a descriptive name from context. Do NOT omit this field.
-  - For tools/skills category: fill "best_for/common_failures/recommendation" when evidence exists in recent_messages and tool calls; if uncertain, omit the field (do NOT fabricate).
-  - For tools category: "optimal_params" should describe GENERAL best practices (e.g., "max_results=5-20", "timeout>30s for large files"), NOT specific case values (e.g., "command: 'echo hello'", "file: '/path/to/specific/file'"). Only fill when you can extract a reusable pattern.
-  - For skills category: fill "recommended_flow/key_dependencies" when there is evidence; otherwise omit.
+  - **CRITICAL for tools/skills content field**: The "content" field MUST include structured sections with EXACT English headings: `## Guidelines` (with best practices), `### Good Cases` (successful usage examples), and `### Bad Cases` (failed usage examples). The section content can be in {{ output_language }}, but the headings MUST remain in English.
+  - For tools/skills category: Fill "best_for/recommended_flow/key_dependencies/common_failures/recommendation" based on observed usage patterns. Infer reasonable values from the tool/skill nature when direct evidence is limited.
+  - For tools category: "optimal_params" should describe GENERAL best practices (e.g., "max_results=5-20", "timeout>30s for large files"), NOT specific case values (e.g., "command: 'echo hello'", "file: '/path/to/specific/file'").
 
 llm_config:
   temperature: 0.0

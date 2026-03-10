@@ -112,7 +112,9 @@ async def test_merge_tool_memory_not_found_allows_create(monkeypatch):
 async def test_merge_tool_memory_monotonic_violation_skips_write(monkeypatch):
     extractor = MemoryExtractor()
     fs = SimpleNamespace(
-        read_file=AsyncMock(return_value="总调用次数: 10\n成功率: 100.0%\n平均耗时: 1ms\n平均Token: 1\n"),
+        read_file=AsyncMock(
+            return_value="总调用次数: 10\n成功率: 100.0%\n平均耗时: 1ms\n平均Token: 1\n"
+        ),
         write_file=AsyncMock(),
     )
     monkeypatch.setattr("openviking.session.memory_extractor.get_viking_fs", lambda: fs)
@@ -230,7 +232,7 @@ async def test_merge_tool_memory_content_format_parses_and_merges(monkeypatch):
     existing = (
         "Tool: tool_x\n\n"
         "Static Description:\n"
-        "\"static desc\"\n\n"
+        '"static desc"\n\n'
         "Tool Memory Context:\n"
         "Based on 3 historical calls:\n"
         "- Success rate: 66.7% (2 successful, 1 failed)\n"

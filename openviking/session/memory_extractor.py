@@ -214,7 +214,6 @@ class MemoryExtractor:
 
         return "\n".join(lines) if lines else ""
 
-
     async def extract(
         self,
         context: dict,
@@ -310,18 +309,14 @@ class MemoryExtractor:
                     stats = {}
 
                     if category == MemoryCategory.TOOLS:
-                        canonical_tool_name, _ = calibrate_tool_name(
-                            llm_tool_name, tool_parts
-                        )
+                        canonical_tool_name, _ = calibrate_tool_name(llm_tool_name, tool_parts)
                         if not canonical_tool_name:
                             continue
                         tool_name = canonical_tool_name
                         stats = tool_stats_map.get(tool_name, {})
 
                     if category == MemoryCategory.SKILLS:
-                        canonical_skill_name, _ = calibrate_skill_name(
-                            llm_skill_name, tool_parts
-                        )
+                        canonical_skill_name, _ = calibrate_skill_name(llm_skill_name, tool_parts)
                         if not canonical_skill_name:
                             continue
                         skill_name = canonical_skill_name
@@ -660,13 +655,19 @@ class MemoryExtractor:
                 existing_fields.get("best_for", ""), new_fields.get("best_for", ""), "best_for"
             ),
             "optimal_params": await self._merge_kv_field(
-                existing_fields.get("optimal_params", ""), new_fields.get("optimal_params", ""), "optimal_params"
+                existing_fields.get("optimal_params", ""),
+                new_fields.get("optimal_params", ""),
+                "optimal_params",
             ),
             "common_failures": await self._merge_kv_field(
-                existing_fields.get("common_failures", ""), new_fields.get("common_failures", ""), "common_failures"
+                existing_fields.get("common_failures", ""),
+                new_fields.get("common_failures", ""),
+                "common_failures",
             ),
             "recommendation": await self._merge_kv_field(
-                existing_fields.get("recommendation", ""), new_fields.get("recommendation", ""), "recommendation"
+                existing_fields.get("recommendation", ""),
+                new_fields.get("recommendation", ""),
+                "recommendation",
             ),
         }
         if new_guidelines:
@@ -925,7 +926,9 @@ class MemoryExtractor:
                 lines.append(s)
         return "; ".join(lines).strip()
 
-    async def _merge_kv_field(self, existing_value: str, new_value: str, field_name: str = "") -> str:
+    async def _merge_kv_field(
+        self, existing_value: str, new_value: str, field_name: str = ""
+    ) -> str:
         a = (existing_value or "").strip()
         b = (new_value or "").strip()
         if not a:
@@ -950,7 +953,9 @@ class MemoryExtractor:
             return compressed
         return self._smart_truncate(merged, max_length)
 
-    async def _compress_field_content(self, content: str, field_name: str, max_length: int) -> Optional[str]:
+    async def _compress_field_content(
+        self, content: str, field_name: str, max_length: int
+    ) -> Optional[str]:
         vlm = get_openviking_config().vlm
         if not vlm or not vlm.is_available():
             return None
@@ -971,12 +976,17 @@ class MemoryExtractor:
             if len(compressed) <= max_length:
                 logger.info(
                     "Field compression succeeded: field=%s original=%d compressed=%d target=%d",
-                    field_name, len(content), len(compressed), target_length
+                    field_name,
+                    len(content),
+                    len(compressed),
+                    target_length,
                 )
                 return compressed
             logger.warning(
                 "Compressed content still exceeds max_length: field=%s len=%d max=%d, using fallback",
-                field_name, len(compressed), max_length
+                field_name,
+                len(compressed),
+                max_length,
             )
             return None
         except Exception as e:
@@ -997,11 +1007,15 @@ class MemoryExtractor:
 
     def _extract_tool_memory_context_fields_from_text(self, text: str) -> dict:
         return {
-            "best_for": self._extract_content_field(text, ["Best for", "Best scenarios", "最佳场景", "适用场景"]),
+            "best_for": self._extract_content_field(
+                text, ["Best for", "Best scenarios", "最佳场景", "适用场景"]
+            ),
             "optimal_params": self._extract_content_field(
                 text, ["Optimal params", "Optimal parameters", "最优参数", "推荐参数"]
             ),
-            "common_failures": self._extract_content_field(text, ["Common failures", "常见失败", "失败模式"]),
+            "common_failures": self._extract_content_field(
+                text, ["Common failures", "常见失败", "失败模式"]
+            ),
             "recommendation": self._extract_content_field(
                 text, ["Recommendation", "Recommendations", "推荐", "建议"]
             ),
@@ -1016,7 +1030,9 @@ class MemoryExtractor:
             "key_dependencies": self._extract_content_field(
                 text, ["Key dependencies", "Key Dependencies", "关键依赖", "前置条件"]
             ),
-            "common_failures": self._extract_content_field(text, ["Common failures", "常见失败", "失败模式"]),
+            "common_failures": self._extract_content_field(
+                text, ["Common failures", "常见失败", "失败模式"]
+            ),
             "recommendation": self._extract_content_field(
                 text, ["Recommendation", "Recommendations", "推荐", "建议"]
             ),
@@ -1033,43 +1049,47 @@ class MemoryExtractor:
         recommendation = (fields.get("recommendation") or "").strip()
 
         if not best_for:
-            best_for = (
-                self._extract_content_field(guidelines, ["Best for", "Best scenarios", "最佳场景", "适用场景"])
-                or self._compact_block(
-                    self._extract_content_section(guidelines, ["Best Scenarios", "Best for", "最佳场景"])
+            best_for = self._extract_content_field(
+                guidelines, ["Best for", "Best scenarios", "最佳场景", "适用场景"]
+            ) or self._compact_block(
+                self._extract_content_section(
+                    guidelines, ["Best Scenarios", "Best for", "最佳场景"]
                 )
             )
         if not optimal_params:
-            optimal_params = (
-                self._extract_content_field(guidelines, ["Optimal params", "Optimal parameters", "最优参数", "推荐参数"])
-                or self._compact_block(
-                    self._extract_content_section(guidelines, ["Optimal Parameters", "Optimal params", "最优参数"])
+            optimal_params = self._extract_content_field(
+                guidelines, ["Optimal params", "Optimal parameters", "最优参数", "推荐参数"]
+            ) or self._compact_block(
+                self._extract_content_section(
+                    guidelines, ["Optimal Parameters", "Optimal params", "最优参数"]
                 )
             )
         if not common_failures:
-            common_failures = (
-                self._extract_content_field(guidelines, ["Common failures", "常见失败", "失败模式"])
-                or self._compact_block(self._extract_content_section(guidelines, ["Common Failures", "常见失败"]))
+            common_failures = self._extract_content_field(
+                guidelines, ["Common failures", "常见失败", "失败模式"]
+            ) or self._compact_block(
+                self._extract_content_section(guidelines, ["Common Failures", "常见失败"])
             )
         if not recommendation:
-            recommendation = (
-                self._extract_content_field(guidelines, ["Recommendation", "Recommendations", "推荐", "建议"])
-                or self._compact_block(
-                    self._extract_content_section(guidelines, ["Recommendations", "Recommendation", "推荐"])
+            recommendation = self._extract_content_field(
+                guidelines, ["Recommendation", "Recommendations", "推荐", "建议"]
+            ) or self._compact_block(
+                self._extract_content_section(
+                    guidelines, ["Recommendations", "Recommendation", "推荐"]
                 )
             )
 
-        best_for = best_for or "N/A"
-        optimal_params = optimal_params or "N/A"
-        common_failures = common_failures or "N/A"
-        recommendation = recommendation or "N/A"
+        best_for = best_for or ""
+        optimal_params = optimal_params or ""
+        common_failures = common_failures or ""
+        recommendation = recommendation or ""
 
         return (
             "Tool: "
             + str(tool_name)
             + "\n\n"
             + "Static Description:\n"
-            + f"\"{static_desc}\"\n\n"
+            + f'"{static_desc}"\n\n'
             + "Tool Memory Context:\n"
             + f"Based on {stats['total_calls']} historical calls:\n"
             + f"- Success rate: {stats['success_rate'] * 100:.1f}% ({stats['success_count']} successful, {stats['fail_count']} failed)\n"
@@ -1078,7 +1098,6 @@ class MemoryExtractor:
             + f"- Optimal params: {optimal_params}\n"
             + f"- Common failures: {common_failures}\n"
             + f"- Recommendation: {recommendation}\n\n"
-            + "Guidelines:\n"
             + (guidelines or "").strip()
             + "\n"
         )
@@ -1222,16 +1241,24 @@ class MemoryExtractor:
                 existing_fields.get("best_for", ""), new_fields.get("best_for", ""), "best_for"
             ),
             "recommended_flow": await self._merge_kv_field(
-                existing_fields.get("recommended_flow", ""), new_fields.get("recommended_flow", ""), "recommended_flow"
+                existing_fields.get("recommended_flow", ""),
+                new_fields.get("recommended_flow", ""),
+                "recommended_flow",
             ),
             "key_dependencies": await self._merge_kv_field(
-                existing_fields.get("key_dependencies", ""), new_fields.get("key_dependencies", ""), "key_dependencies"
+                existing_fields.get("key_dependencies", ""),
+                new_fields.get("key_dependencies", ""),
+                "key_dependencies",
             ),
             "common_failures": await self._merge_kv_field(
-                existing_fields.get("common_failures", ""), new_fields.get("common_failures", ""), "common_failures"
+                existing_fields.get("common_failures", ""),
+                new_fields.get("common_failures", ""),
+                "common_failures",
             ),
             "recommendation": await self._merge_kv_field(
-                existing_fields.get("recommendation", ""), new_fields.get("recommendation", ""), "recommendation"
+                existing_fields.get("recommendation", ""),
+                new_fields.get("recommendation", ""),
+                "recommendation",
             ),
         }
         merged_guidelines = existing_guidelines
@@ -1343,44 +1370,49 @@ class MemoryExtractor:
         recommendation = (fields.get("recommendation") or "").strip()
 
         if not best_for:
-            best_for = (
-                self._extract_content_field(guidelines, ["Best for", "最佳场景", "适用场景"])
-                or self._compact_block(
-                    self._extract_content_section(guidelines, ["Best for", "Best Scenarios", "最佳场景"])
+            best_for = self._extract_content_field(
+                guidelines, ["Best for", "最佳场景", "适用场景"]
+            ) or self._compact_block(
+                self._extract_content_section(
+                    guidelines, ["Best for", "Best Scenarios", "最佳场景"]
                 )
             )
         if not recommended_flow:
-            recommended_flow = (
-                self._extract_content_field(guidelines, ["Recommended flow", "推荐流程", "推荐步骤"])
-                or self._compact_block(
-                    self._extract_content_section(guidelines, ["Recommended Flow", "推荐流程", "推荐步骤"])
+            recommended_flow = self._extract_content_field(
+                guidelines, ["Recommended flow", "推荐流程", "推荐步骤"]
+            ) or self._compact_block(
+                self._extract_content_section(
+                    guidelines, ["Recommended Flow", "推荐流程", "推荐步骤"]
                 )
             )
         if not key_dependencies:
-            key_dependencies = (
-                self._extract_content_field(guidelines, ["Key dependencies", "关键依赖", "前置条件"])
-                or self._compact_block(
-                    self._extract_content_section(guidelines, ["Key Dependencies", "关键依赖", "前置条件"])
+            key_dependencies = self._extract_content_field(
+                guidelines, ["Key dependencies", "关键依赖", "前置条件"]
+            ) or self._compact_block(
+                self._extract_content_section(
+                    guidelines, ["Key Dependencies", "关键依赖", "前置条件"]
                 )
             )
         if not common_failures:
-            common_failures = (
-                self._extract_content_field(guidelines, ["Common failures", "常见失败", "失败模式"])
-                or self._compact_block(self._extract_content_section(guidelines, ["Common Failures", "常见失败"]))
+            common_failures = self._extract_content_field(
+                guidelines, ["Common failures", "常见失败", "失败模式"]
+            ) or self._compact_block(
+                self._extract_content_section(guidelines, ["Common Failures", "常见失败"])
             )
         if not recommendation:
-            recommendation = (
-                self._extract_content_field(guidelines, ["Recommendation", "Recommendations", "推荐", "建议"])
-                or self._compact_block(
-                    self._extract_content_section(guidelines, ["Recommendations", "Recommendation", "推荐"])
+            recommendation = self._extract_content_field(
+                guidelines, ["Recommendation", "Recommendations", "推荐", "建议"]
+            ) or self._compact_block(
+                self._extract_content_section(
+                    guidelines, ["Recommendations", "Recommendation", "推荐"]
                 )
             )
 
-        best_for = best_for or "N/A"
-        recommended_flow = recommended_flow or "N/A"
-        key_dependencies = key_dependencies or "N/A"
-        common_failures = common_failures or "N/A"
-        recommendation = recommendation or "N/A"
+        best_for = best_for or ""
+        recommended_flow = recommended_flow or ""
+        key_dependencies = key_dependencies or ""
+        common_failures = common_failures or ""
+        recommendation = recommendation or ""
 
         return (
             "Skill: "
@@ -1394,7 +1426,6 @@ class MemoryExtractor:
             + f"- Key dependencies: {key_dependencies}\n"
             + f"- Common failures: {common_failures}\n"
             + f"- Recommendation: {recommendation}\n\n"
-            + "Guidelines:\n"
             + (guidelines or "").strip()
             + "\n"
         )

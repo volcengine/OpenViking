@@ -188,7 +188,9 @@ class SessionCompressor:
                     if tool_name and candidate.call_time == 0:
                         tool_stats = tool_stats_map.get(tool_name, {})
                         candidate.call_time = tool_stats.get("call_count", candidate.call_time)
-                        candidate.success_time = tool_stats.get("success_time", candidate.success_time)
+                        candidate.success_time = tool_stats.get(
+                            "success_time", candidate.success_time
+                        )
                         candidate.duration_ms = tool_stats.get("duration_ms", candidate.duration_ms)
                         candidate.prompt_tokens = tool_stats.get(
                             "prompt_tokens", candidate.prompt_tokens
