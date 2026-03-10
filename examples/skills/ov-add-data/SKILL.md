@@ -1,6 +1,6 @@
 ---
 name: ov-add-data
-description: This skill adds data(like resources) to OpenViking Context Database (aka. ov). Use when an agent needs to add files, data from URLs, or external knowledge during interactions. Trigger this tool when 1. is explicitly requested adding files or knowledge; 2. identifies valuable resources worth importing; 3. the user memtioned adding to OV/OpenViking/Context Database. This skill helps how to use CLI like `ov add-resource`, `ov add-skill` and `ov add-memory` to add resource data, skill files, memory files to OpenViking.
+description: This skill adds data(like resources) to OpenViking Context Database (aka. ov). Use when an agent needs to add files, data from URLs, or external knowledge during interactions. Trigger this tool when 1. is explicitly requested adding files or knowledge; 2. identifies valuable resources worth importing; 3. the user mentioned adding to OV/OpenViking/Context Database. This skill helps how to use CLI like `ov add-resource`, `ov add-skill` and `ov add-memory` to add resource data, skill files, memory files to OpenViking.
 compatibility: OpenViking CLI configured at `~/.openviking/ovcli.conf`
 ---
 
