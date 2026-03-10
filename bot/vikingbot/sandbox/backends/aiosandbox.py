@@ -36,7 +36,7 @@ class AioSandboxBackend(SandboxBackend):
             logger.info("[AioSandbox] Connected successfully")
         except ImportError:
             logger.error(
-                "agent-sandbox SDK not installed. Install with: uv pip install 'vikingbot[sandbox]' (or uv pip install -e \".[sandbox]\" for local dev)"
+                "agent-sandbox SDK not installed. Install with: uv pip install 'openviking[bot-sandbox]' (or uv pip install -e \".[bot-sandbox]\" for local dev)"
             )
             raise
         except Exception as e:

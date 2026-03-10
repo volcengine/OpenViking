@@ -1,18 +1,18 @@
+import re
 from typing import Any
 
 from loguru import logger
-import re
-
-from vikingbot.config.loader import get_data_dir
-from ..base import Hook, HookContext
-from ...session import Session
 
 from vikingbot.config.loader import load_config
 from vikingbot.config.schema import SessionKey
 
+from ...session import Session
+from ..base import Hook, HookContext
+
 try:
-    from vikingbot.openviking_mount.ov_server import VikingClient
     import openviking as ov
+
+    from vikingbot.openviking_mount.ov_server import VikingClient
 
     HAS_OPENVIKING = True
 except Exception:
@@ -20,18 +20,24 @@ except Exception:
     VikingClient = None
     ov = None
 
+# Global singleton client
+_global_client: VikingClient | None = None
+
+
+async def get_global_client() -> VikingClient:
+    """Get or create the global singleton VikingClient."""
+    global _global_client
+    if _global_client is None:
+        _global_client = await VikingClient.create(None)
+    return _global_client
+
 
 class OpenVikingCompactHook(Hook):
     name = "openviking_compact"
 
-    def __init__(self):
-        self._client = None
-
     async def _get_client(self, workspace_id: str) -> VikingClient:
-        if not self._client:
-            client = await VikingClient.create(workspace_id)
-            self._client = client
-        return self._client
+        # Use global singleton client
+        return await get_global_client()
 
     def _filter_messages_by_sender(self, messages: list[dict], allow_from: list[str]) -> list[dict]:
         """筛选出 sender_id 在 allow_from 列表中的消息"""
@@ -57,11 +63,11 @@ class OpenVikingCompactHook(Hook):
         session_id = context.session_key.safe_name()
 
         try:
-            allow_from = self._get_channel_allow_from(session_id)
-            filtered_messages = self._filter_messages_by_sender(
-                vikingbot_session.messages, allow_from
-            )
-
+            # allow_from = self._get_channel_allow_from(session_id)
+            # filtered_messages = self._filter_messages_by_sender(
+            #     vikingbot_session.messages, allow_from
+            # )
+            filtered_messages = vikingbot_session.messages
             if not filtered_messages:
                 logger.info(
                     f"No messages to commit openviking for session {session_id} (allow_from filter applied)"
@@ -82,19 +88,15 @@ class OpenVikingPostCallHook(Hook):
     name = "openviking_post_call"
     is_sync = True
 
-    def __init__(self):
-        self._client = None
-
     async def _get_client(self, workspace_id: str) -> VikingClient:
-        if not self._client:
-            client = await VikingClient.create(workspace_id)
-            self._client = client
-        return self._client
+        # Use global singleton client
+        return await get_global_client()
 
     async def _read_skill_memory(self, workspace_id: str, skill_name: str) -> str:
         ov_client = await self._get_client(workspace_id)
         config = load_config()
         openviking_config = config.ov_server
+        # (f'openviking_config.mode={openviking_config.mode}')
         if not skill_name:
             return ""
         try:
@@ -106,6 +108,7 @@ class OpenVikingPostCallHook(Hook):
                     f"viking://agent/{agent_space_name}/memories/skills/{skill_name}.md"
                 )
             content = await ov_client.read_content(skill_memory_uri, level="read")
+            # print(f'content={content}')
             # logger.warning(f"content={content}")
             return f"\n\n---\n## Skill Memory\n{content}" if content else ""
         except Exception as e:

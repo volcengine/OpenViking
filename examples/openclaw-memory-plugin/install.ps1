@@ -1,6 +1,7 @@
 param(
   [switch]$Yes,
-  [switch]$Zh
+  [switch]$Zh,
+  [string]$Workdir = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -33,9 +34,10 @@ $NpmRegistry = if ($env:NPM_REGISTRY) { $env:NPM_REGISTRY } else { "https://regi
 $PipIndexUrl = if ($env:PIP_INDEX_URL) { $env:PIP_INDEX_URL } else { "https://pypi.tuna.tsinghua.edu.cn/simple" }
 
 $HomeDir = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
-$OpenClawDir = Join-Path $HomeDir ".openclaw"
+$OpenClawDir = if ($Workdir) { $Workdir } else { Join-Path $HomeDir ".openclaw" }
 $OpenVikingDir = Join-Path $HomeDir ".openviking"
 $PluginDest = Join-Path $OpenClawDir "extensions\memory-openviking"
+$SelectedMode = "local"
 
 $DefaultServerPort = 1933
 $DefaultAgfsPort = 1833
@@ -186,6 +188,64 @@ function Prompt-Optional {
   return $v.Trim()
 }
 
+function Select-Workdir {
+  # Already set via -Workdir
+  $defaultDir = Join-Path $HomeDir ".openclaw"
+  if ($OpenClawDir -ne $defaultDir) { return }
+
+  $instances = @()
+  Get-ChildItem -Path $HomeDir -Directory -Filter ".openclaw*" -ErrorAction SilentlyContinue | ForEach-Object {
+    $name = $_.Name
+    if ($name -eq ".openclaw" -or $name -like ".openclaw-*") {
+      $instances += $_.FullName
+    }
+  }
+
+  if ($instances.Count -le 1) { return }
+
+  if (-not $Yes) {
+    Write-Host ""
+    Title (T "Found multiple OpenClaw instances:" "发现多个 OpenClaw 实例：")
+    for ($i = 0; $i -lt $instances.Count; $i++) {
+      Write-Host "  $($i + 1)) $($instances[$i])"
+    }
+    Write-Host ""
+    $choice = Prompt-OrDefault (T "Select instance number" "选择实例编号") "1"
+    $idx = [int]$choice - 1
+    if ($idx -ge 0 -and $idx -lt $instances.Count) {
+      $script:OpenClawDir = $instances[$idx]
+    } else {
+      Warn (T "Invalid selection, using default" "无效选择，使用默认")
+      $script:OpenClawDir = $instances[0]
+    }
+    $script:PluginDest = Join-Path $script:OpenClawDir "extensions\memory-openviking"
+  }
+}
+
+function Select-Mode {
+  if ($Yes) {
+    $script:SelectedMode = "local"
+    return
+  }
+  $mode = Prompt-OrDefault (T "Plugin mode (local/remote)" "插件模式 (local/remote)") "local"
+  if ($mode -eq "remote") {
+    $script:SelectedMode = "remote"
+  } else {
+    $script:SelectedMode = "local"
+  }
+}
+
+function Collect-RemoteConfig {
+  $script:RemoteBaseUrl = "http://127.0.0.1:1933"
+  $script:RemoteApiKey = ""
+  $script:RemoteAgentId = ""
+  if (-not $Yes) {
+    $script:RemoteBaseUrl = Prompt-OrDefault (T "OpenViking server URL" "OpenViking 服务器地址") $script:RemoteBaseUrl
+    $script:RemoteApiKey = Prompt-Optional (T "API Key (optional)" "API Key（可选）")
+    $script:RemoteAgentId = Prompt-Optional (T "Agent ID (optional)" "Agent ID（可选）")
+  }
+}
+
 function Configure-OvConf {
   New-Item -ItemType Directory -Force -Path $OpenVikingDir | Out-Null
 
@@ -259,6 +319,10 @@ function Download-Plugin {
   $files = @(
     "examples/openclaw-memory-plugin/index.ts",
     "examples/openclaw-memory-plugin/config.ts",
+    "examples/openclaw-memory-plugin/client.ts",
+    "examples/openclaw-memory-plugin/process-manager.ts",
+    "examples/openclaw-memory-plugin/memory-ranking.ts",
+    "examples/openclaw-memory-plugin/text-utils.ts",
     "examples/openclaw-memory-plugin/openclaw.plugin.json",
     "examples/openclaw-memory-plugin/package.json",
     "examples/openclaw-memory-plugin/package-lock.json",
@@ -325,17 +389,25 @@ function Configure-OpenClawPlugin {
   $cfg["plugins"]["allow"] = @("memory-openviking")
   $cfg["plugins"]["slots"]["memory"] = "memory-openviking"
   $cfg["plugins"]["load"]["paths"] = $mergedPaths
-  $ovConfPath = Join-Path $OpenVikingDir "ov.conf"
-  $cfg["plugins"]["entries"]["memory-openviking"] = @{
-    config = @{
-      mode = "local"
-      configPath = $ovConfPath
-      port = $ServerPort
-      targetUri = "viking://user/memories"
-      autoRecall = $true
-      autoCapture = $true
-    }
+
+  $pluginConfig = @{
+    mode = $SelectedMode
+    targetUri = "viking://user/memories"
+    autoRecall = $true
+    autoCapture = $true
   }
+
+  if ($SelectedMode -eq "local") {
+    $ovConfPath = Join-Path $OpenVikingDir "ov.conf"
+    $pluginConfig["configPath"] = $ovConfPath
+    $pluginConfig["port"] = $ServerPort
+  } else {
+    $pluginConfig["baseUrl"] = $RemoteBaseUrl
+    if ($RemoteApiKey) { $pluginConfig["apiKey"] = $RemoteApiKey }
+    if ($RemoteAgentId) { $pluginConfig["agentId"] = $RemoteAgentId }
+  }
+
+  $cfg["plugins"]["entries"]["memory-openviking"] = @{ config = $pluginConfig }
   $cfg["gateway"]["mode"] = "local"
 
   $cfgJson = $cfg | ConvertTo-Json -Depth 20
@@ -363,24 +435,51 @@ function Write-OpenVikingEnv {
 Title (T "🦣 OpenClaw + OpenViking Installer" "🦣 OpenClaw + OpenViking 一键安装")
 Write-Host ""
 
-Validate-Environment
-Check-OpenClaw
-Install-OpenViking
-$serverPort = Configure-OvConf
+Select-Workdir
+Info ("{0} $OpenClawDir" -f (T "Target:" "目标实例:"))
+
+Select-Mode
+Info ("{0} $SelectedMode" -f (T "Mode:" "模式:"))
+
+$serverPort = $DefaultServerPort
+if ($SelectedMode -eq "local") {
+  Validate-Environment
+  Check-OpenClaw
+  Install-OpenViking
+  $serverPort = Configure-OvConf
+} else {
+  Check-OpenClaw
+  Collect-RemoteConfig
+}
+
 Download-Plugin
 Configure-OpenClawPlugin -ServerPort $serverPort
-Write-OpenVikingEnv
+
+if ($SelectedMode -eq "local") {
+  Write-OpenVikingEnv
+}
 
 Write-Host ""
 Title "═══════════════════════════════════════════════════════════"
 Title ("  {0}" -f (T "Installation complete!" "安装完成！"))
 Title "═══════════════════════════════════════════════════════════"
 Write-Host ""
-Info (T "Run these commands to start OpenClaw + OpenViking:" "请按以下命令启动 OpenClaw + OpenViking：")
-Write-Host "  1) openclaw --version"
-Write-Host "  2) openclaw onboard"
-Write-Host "  3) . `"$OpenClawDir\openviking.env.ps1`"; openclaw gateway"
-Write-Host "  4) openclaw status"
-Write-Host ""
-Info ("{0} $OpenVikingDir\ov.conf" -f (T "You can edit the config freely:" "你可以按需自由修改配置文件:"))
+
+if ($SelectedMode -eq "local") {
+  Info (T "Run these commands to start OpenClaw + OpenViking:" "请按以下命令启动 OpenClaw + OpenViking：")
+  Write-Host "  1) openclaw --version"
+  Write-Host "  2) openclaw onboard"
+  Write-Host "  3) . `"$OpenClawDir\openviking.env.ps1`"; openclaw gateway"
+  Write-Host "  4) openclaw status"
+  Write-Host ""
+  Info ("{0} $OpenVikingDir\ov.conf" -f (T "You can edit the config freely:" "你可以按需自由修改配置文件:"))
+} else {
+  Info (T "Run these commands to start OpenClaw:" "请按以下命令启动 OpenClaw：")
+  Write-Host "  1) openclaw --version"
+  Write-Host "  2) openclaw onboard"
+  Write-Host "  3) openclaw gateway"
+  Write-Host "  4) openclaw status"
+  Write-Host ""
+  Info ("{0} $RemoteBaseUrl" -f (T "Remote server:" "远程服务器:"))
+}
 Write-Host ""

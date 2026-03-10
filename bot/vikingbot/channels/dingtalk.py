@@ -112,7 +112,7 @@ class DingTalkChannel(BaseChannel):
         try:
             if not DINGTALK_AVAILABLE:
                 logger.exception(
-                    "DingTalk Stream SDK not installed. Install with: uv pip install 'vikingbot[dingtalk]' (or uv pip install -e \".[dingtalk]\" for local dev)"
+                    "DingTalk Stream SDK not installed. Install with: uv pip install 'openviking[bot-dingtalk]' (or uv pip install -e \".[bot-dingtalk]\" for local dev)"
                 )
                 return
 

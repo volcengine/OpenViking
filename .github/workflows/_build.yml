@@ -4,10 +4,10 @@ on:
   workflow_call:
     inputs:
       os_json:
-        description: 'JSON string of runner labels to build on (ubuntu-latest=x86_64, macos-latest=arm64, macos-15-intel=x86_64, windows-latest=x86_64)'
+        description: 'JSON string of runner labels to build on (ubuntu-latest=x86_64, ubuntu-24.04-arm=aarch64, macos-latest=arm64, macos-15-intel=x86_64, windows-latest=x86_64)'
         required: false
         type: string
-        default: '["ubuntu-latest", "macos-latest", "macos-15-intel", "windows-latest"]'
+        default: '["ubuntu-latest", "ubuntu-24.04-arm", "macos-latest", "macos-15-intel", "windows-latest"]'
       python_json:
         description: 'JSON string of Python versions'
         required: false
@@ -36,9 +36,9 @@ on:
         type: boolean
         default: true
       os_json:
-        description: 'JSON string of runner labels to build on (ubuntu-latest=x86_64, macos-latest=arm64, macos-15-intel=x86_64, windows-latest=x86_64)'
+        description: 'JSON string of runner labels to build on (ubuntu-latest=x86_64, ubuntu-24.04-arm=aarch64, macos-latest=arm64, macos-15-intel=x86_64, windows-latest=x86_64)'
         required: false
-        default: '["ubuntu-latest", "macos-latest", "macos-15-intel", "windows-latest"]'
+        default: '["ubuntu-latest", "ubuntu-24.04-arm", "macos-latest", "macos-15-intel", "windows-latest"]'
       python_json:
         description: 'JSON string of Python versions'
         required: false
@@ -115,10 +115,16 @@ jobs:
         echo "::notice::Build sdist Version: $VERSION"
 
   build-linux:
-    name: Build distribution on Linux (glibc 2.31) py${{ matrix.python-version }}
-    # Only run if inputs.os_json contains 'ubuntu' or 'linux'
-    if: inputs.build_wheels && (contains(inputs.os_json, 'ubuntu') || contains(inputs.os_json, 'linux'))
-    runs-on: ubuntu-latest
+    name: Build distribution on Linux ${{ matrix.arch }} (glibc 2.31) py${{ matrix.python-version }}
+    # Run if Linux runners are requested (explicit labels or generic 'linux')
+    if: >-
+      inputs.build_wheels &&
+      (
+        contains(inputs.os_json, 'linux') ||
+        contains(inputs.os_json, 'ubuntu-latest') ||
+        contains(inputs.os_json, 'ubuntu-24.04-arm')
+      )
+    runs-on: ${{ matrix.arch == 'aarch64' && 'ubuntu-24.04-arm' || 'ubuntu-latest' }}
     container: ubuntu:20.04
     env:
       DEBIAN_FRONTEND: noninteractive
@@ -127,6 +133,7 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ${{ fromJson(inputs.python_json) }}
+        arch: ${{ contains(inputs.os_json, 'linux') && fromJson('["x86_64","aarch64"]') || (contains(inputs.os_json, 'ubuntu-latest') && contains(inputs.os_json, 'ubuntu-24.04-arm')) && fromJson('["x86_64","aarch64"]') || contains(inputs.os_json, 'ubuntu-24.04-arm') && fromJson('["aarch64"]') || fromJson('["x86_64"]') }}
     
     steps:
     - name: Install system dependencies (Linux)
@@ -194,6 +201,7 @@ jobs:
       uses: dtolnay/rust-toolchain@v1
       with:
         toolchain: stable
+        targets: ${{ matrix.arch == 'aarch64' && 'aarch64-unknown-linux-gnu' || 'x86_64-unknown-linux-gnu' }}
     - name: Install uv
       uses: astral-sh/setup-uv@v7
       with:
@@ -212,12 +220,12 @@ jobs:
       run: uv pip install setuptools setuptools_scm pybind11 cmake wheel build
 
     - name: Build Rust CLI (Linux)
-      run: cargo build --release --target x86_64-unknown-linux-gnu -p ov_cli
+      run: cargo build --release --target ${{ matrix.arch == 'aarch64' && 'aarch64-unknown-linux-gnu' || 'x86_64-unknown-linux-gnu' }} -p ov_cli
 
     - name: Copy Rust CLI binary (Linux)
       run: |
         mkdir -p openviking/bin
-        cp target/x86_64-unknown-linux-gnu/release/ov openviking/bin/
+        cp target/${{ matrix.arch == 'aarch64' && 'aarch64-unknown-linux-gnu' || 'x86_64-unknown-linux-gnu' }}/release/ov openviking/bin/
         chmod +x openviking/bin/ov
     - name: Clean workspace (force ignore dirty)
       shell: bash
@@ -269,7 +277,7 @@ jobs:
     - name: Store the distribution packages
       uses: actions/upload-artifact@v7
       with:
-        name: python-package-distributions-linux-${{ matrix.python-version }}
+        name: python-package-distributions-linux-${{ matrix.arch }}-${{ matrix.python-version }}
         path: dist/
 
     - name: Display built wheel version
@@ -277,12 +285,12 @@ jobs:
       run: |
         VERSION=$(ls dist/*.whl | head -n 1 | xargs basename | cut -d- -f2)
         echo "Build Version: $VERSION"
-        echo "::notice::Build Wheel Version (Linux py${{ matrix.python-version }}): $VERSION"
+        echo "::notice::Build Wheel Version (Linux ${{ matrix.arch }} glibc 2.31 py${{ matrix.python-version }}): $VERSION"
 
   build-other:
-    name: Build distribution on ${{ matrix.os == 'macos-latest' && 'macOS arm64 (macos-latest)' || matrix.os == 'macos-15-intel' && 'macOS x86_64 (macos-15-intel)' || matrix.os == 'windows-latest' && 'Windows x86_64 (windows-latest)' || matrix.os }} py${{ matrix.python-version }}
-    # Filter out ubuntu-latest from this job since it's handled by build-linux
-    if: inputs.build_wheels
+    name: Build non-Linux distributions
+    # Run only when non-Linux runners are explicitly requested
+    if: inputs.build_wheels && (contains(inputs.os_json, 'macos') || contains(inputs.os_json, 'windows'))
     runs-on: ${{ matrix.os || 'ubuntu-latest' }}
     strategy:
       fail-fast: false
@@ -291,7 +299,9 @@ jobs:
         python-version: ${{ fromJson(inputs.python_json) }}
         # Exclude ubuntu-latest from this matrix if it was passed in inputs
         exclude:
+          - os: linux
           - os: ubuntu-latest
+          - os: ubuntu-24.04-arm
 
     steps:
     - uses: actions/checkout@v6

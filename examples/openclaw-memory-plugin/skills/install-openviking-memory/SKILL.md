@@ -1,282 +1,118 @@
 ---
-name: install-openviking-memory
-description: Install and configure OpenViking as the long-term memory backend for OpenClaw. Run this skill once to set up persistent memory that automatically remembers and recalls context across conversations. Trigger when the user asks to "install openviking", "set up memory", or "enable long-term memory".
-compatibility: OpenClaw installed (npm install -g openclaw), Python >= 3.10, Node.js >= 22
+name: openviking-memory
+description: OpenViking long-term memory plugin guide. Once installed, the plugin automatically remembers important facts from conversations and recalls relevant context before responding.
 ---
 
-# Install OpenViking Memory for OpenClaw
+# OpenViking Memory Guide
 
-This skill installs [OpenViking](https://github.com/volcengine/OpenViking) as the memory backend for OpenClaw. After installation, OpenClaw will automatically **remember** facts from conversations and **recall** relevant context.
+## How It Works
 
-> **For AI Agents:** Follow the steps below **in order**. Run each command, check the output, and only proceed when the step passes. Ask the user for input only where indicated with **[ASK USER]**.
+- **Auto-Capture**: At the end of a conversation, automatically extracts memories from user messages
+  - `semantic` mode: captures all qualifying user text, relying on OpenViking's extraction pipeline to filter
+  - `keyword` mode: only captures text matching trigger words (e.g. "remember", "preference", etc.)
+- **Auto-Recall**: Before a conversation starts, automatically searches for relevant memories and injects them into context
 
----
+## Available Tools
 
-## Step 1: Check Prerequisites
+### memory_recall — Search Memories
 
-Run **all** checks below. Every check must pass before continuing.
+Searches long-term memories in OpenViking, returns relevant results.
 
-### 1.1 Check Node.js (>= 22)
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `query` | Yes | Search query text |
+| `limit` | No | Maximum number of results (defaults to plugin config) |
+| `scoreThreshold` | No | Minimum relevance score 0-1 (defaults to plugin config) |
+| `targetUri` | No | Search scope URI (defaults to plugin config) |
 
-```bash
-node -v
-```
+Example: User asks "What programming language did I say I like?"
 
-- **Pass:** Output shows `v22.x.x` or higher.
-- **Fail:** Tell the user: "Node.js >= 22 is required. Install it from https://nodejs.org/ or use nvm: `nvm install 22`"
+### memory_store — Manual Store
 
-### 1.2 Check Python (>= 3.10)
+Writes text to an OpenViking session and runs memory extraction.
 
-**Linux / macOS:**
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `text` | Yes | Information text to store |
+| `role` | No | Session role (default `user`) |
+| `sessionId` | No | Existing OpenViking session ID |
 
-```bash
-python3 --version
-```
+Example: User says "Remember my email is xxx@example.com"
 
-**Windows:**
+### memory_forget — Delete Memories
 
-```powershell
-python --version
-```
+Delete by exact URI, or search and delete.
 
-- **Pass:** Output shows `Python 3.10.x` or higher.
-- **Fail:** Tell the user: "Python >= 3.10 is required. See INSTALL.md for installation instructions, or build from source: https://www.python.org/downloads/"
+| Parameter | Required | Description |
+|-----------|----------|-------------|
+| `uri` | No | Exact memory URI (direct delete) |
+| `query` | No | Search query (find then delete) |
+| `targetUri` | No | Search scope URI |
+| `limit` | No | Search limit (default 5) |
+| `scoreThreshold` | No | Minimum relevance score |
 
-### 1.3 Check Build Tools (cmake, g++)
+Example: User says "Forget my phone number"
 
-```bash
-cmake --version
-g++ --version
-```
+## Configuration
 
-- **Pass:** Both commands return version info.
-- **Fail:** Tell the user which tool is missing and how to install:
-  - RHEL/CentOS/openEuler: `sudo dnf install -y gcc gcc-c++ cmake make`
-  - Ubuntu/Debian: `sudo apt install -y build-essential cmake`
-  - **These tools are required** — OpenClaw's `node-llama-cpp` dependency compiles C++ during installation, and OpenViking also has C++ extensions.
+| Field | Default | Description |
+|-------|---------|-------------|
+| `mode` | `remote` | `local` (start local server) or `remote` (connect to remote) |
+| `baseUrl` | `http://127.0.0.1:1933` | OpenViking server URL (remote mode) |
+| `apiKey` | — | OpenViking API Key (optional) |
+| `agentId` | `openclaw-<hostname>` | Identifies this agent (auto-generated, persisted to `~/.openviking/.agent-id`) |
+| `configPath` | `~/.openviking/ov.conf` | Config file path (local mode) |
+| `port` | `1933` | Local server port (local mode) |
+| `targetUri` | `viking://user/memories` | Default search scope |
+| `autoCapture` | `true` | Automatically capture memories |
+| `captureMode` | `semantic` | Capture mode: `semantic` / `keyword` |
+| `captureMaxLength` | `24000` | Maximum text length per capture |
+| `autoRecall` | `true` | Automatically recall and inject context |
+| `recallLimit` | `6` | Maximum memories injected during auto-recall |
+| `recallScoreThreshold` | `0.01` | Minimum relevance score for recall |
+| `ingestReplyAssist` | `true` | Add reply guidance when detecting multi-party conversation text |
 
-### 1.4 Check OpenClaw
-
-```bash
-openclaw --version
-```
-
-- **Pass:** Shows version output.
-- **Fail:** Tell the user: "OpenClaw is required. Install with: `npm install -g openclaw` (if downloads are slow: `npm install -g openclaw --registry=https://registry.npmmirror.com`). After installing, run `openclaw onboard` to configure your LLM."
-
-### 1.5 Check Go (>= 1.19) — only for source install on Linux
-
-> Skip this check if the user will install via `pip install openviking --upgrade --force-reinstall` (PyPI pre-built package).
-
-```bash
-go version
-```
-
-- **Pass:** Output shows `go1.19.x` or higher.
-- **Fail:** Tell the user: "Go >= 1.19 is required for source installation on Linux (to compile AGFS). Download from https://go.dev/dl/ — see INSTALL.md for detailed steps."
-
----
-
-## Step 2: Clone and Install OpenViking
-
-### 2.1 Clone Repository
-
-If the OpenViking repo is not already present:
+## Daily Operations
 
 ```bash
-git clone https://github.com/volcengine/OpenViking.git
-cd OpenViking
-```
-
-### 2.2 Install Python Package
-
-Two options — choose based on the user's needs:
-
-#### Option A: Install from PyPI (recommended, no Go needed)
-
-```bash
-python3 -m pip install openviking --upgrade --force-reinstall
-```
-
-#### Option B: Install from Source (developer mode)
-
-Requires Go >= 1.19 on Linux (check passed in Step 1.5).
-
-**Linux / macOS:**
-
-```bash
-python3 -m pip install -e . --force-reinstall
-```
-
-**Windows:**
-
-```powershell
-python -m pip install -e . --force-reinstall
-```
-
-> If pip downloads are slow, suggest using a mirror:
-> `python3 -m pip install openviking --upgrade --force-reinstall -i https://pypi.tuna.tsinghua.edu.cn/simple`
-
-### 2.3 Verify Installation
-
-**Linux / macOS:**
-
-```bash
-python3 -c "import openviking; print('openviking module: ok')"
-```
-
-**Windows:**
-
-```powershell
-python -c "import openviking; print('openviking module: ok')"
-```
-
-- **Pass:** Prints `openviking module: ok`.
-- **Fail — multiple Python versions:** Ask the user which Python to use, then install with that path: `/path/to/python3.11 -m pip install openviking --upgrade --force-reinstall`
-- **Fail — `TypeError: unsupported operand type(s) for |`:** Python version is below 3.10. The user needs to upgrade.
-- **Fail — `Go compiler not found`:** Go is not installed (source install only). See Step 1.5.
-
----
-
-## Step 3: Run the Setup Helper
-
-From the OpenViking repo root:
-
-```bash
-npx ./examples/openclaw-memory-plugin/setup-helper
-```
-
-The helper will interactively prompt for:
-
-1. **Workspace path** — data storage location (default: absolute path of `~/.openviking/data`, auto-detected)
-2. **Volcengine Ark API Key** — **[ASK USER]** Direct them to https://console.volcengine.com/ark if they don't have one
-3. **VLM model** — default `doubao-seed-2-0-pro-260215`, press Enter to accept
-4. **Embedding model** — default `doubao-embedding-vision-250615`, press Enter to accept
-5. **Server ports** — default 1933 (HTTP) and 1833 (AGFS), press Enter to accept
-
-The helper will automatically:
-- Create `~/.openviking/ov.conf`
-- Deploy the `memory-openviking` plugin into OpenClaw
-- Configure OpenClaw to use local mode
-- Write `~/.openclaw/openviking.env` (Linux/macOS) or `openviking.env.bat` (Windows)
-
-Wait for `Setup complete!` before proceeding.
-
----
-
-## Step 4: Start OpenClaw with Memory
-
-**Always load the env file first**, then start the gateway:
-
-**Linux / macOS:**
-
-```bash
+# Start (local mode: source env first)
 source ~/.openclaw/openviking.env && openclaw gateway
-```
 
-**Windows (cmd):**
+# Start (remote mode: no env needed)
+openclaw gateway
 
-```cmd
-call "%USERPROFILE%\.openclaw\openviking.env.bat" && openclaw gateway
-```
-
-Wait a few seconds. Verify this line appears in the output:
-
-```
-[gateway] memory-openviking: local server started (http://127.0.0.1:1933, ...)
-```
-
-- **Pass:** Tell the user: "OpenViking memory is now active. I will automatically remember important facts from our conversations and recall them when relevant."
-- **Fail — `health check timeout`:** A stale process is blocking the port. Fix with:
-  ```bash
-  lsof -ti tcp:1933 tcp:1833 | xargs kill -9
-  source ~/.openclaw/openviking.env && openclaw gateway
-  ```
-
----
-
-## Step 5: Verify (Optional)
-
-```bash
+# Check status
 openclaw status
-```
 
-The **Memory** line should show: `enabled (plugin memory-openviking)`
-
----
-
-## Troubleshooting Quick Reference
-
-| Symptom | Cause | Fix |
-|---------|-------|-----|
-| `cmake not found` during npm install | Missing build tools | `sudo dnf install -y gcc gcc-c++ cmake make` |
-| `Python.h: No such file or directory` | Missing Python dev headers | `sudo dnf install -y python3-devel` (or `python3.11-devel`) |
-| `Go compiler not found` | Go not installed | Install Go >= 1.19 from https://go.dev/dl/ |
-| `dial tcp: i/o timeout` (Go modules) | Network issue | `go env -w GOPROXY=https://goproxy.cn,direct` |
-| `ERR_INVALID_URL` (npm) | Proxy missing `http://` prefix | `export https_proxy=http://host:port` |
-| `extracted 0 memories` | Wrong API key or model name | Check `api_key` and `model` in `~/.openviking/ov.conf` |
-| `health check timeout` | Stale process on port | Kill with `lsof -ti tcp:1933 tcp:1833 \| xargs kill -9` |
-| Plugin not loaded | Env file not sourced | Run `source ~/.openclaw/openviking.env` before gateway |
-
----
-
-## Daily Usage
-
-Each time the user wants to start OpenClaw with memory:
-
-**Linux / macOS:**
-
-```bash
-source ~/.openclaw/openviking.env && openclaw gateway
-```
-
-**Windows (cmd):**
-
-```cmd
-call "%USERPROFILE%\.openclaw\openviking.env.bat" && openclaw gateway
-```
-
-> Suggest adding an alias for convenience:
-> ```bash
-> echo 'alias openclaw-start="source ~/.openclaw/openviking.env && openclaw gateway"' >> ~/.bashrc
-> ```
-
-### Enable/Disable the Memory Plugin Slot
-
-Disable the memory plugin:
-
-```bash
+# Disable memory
 openclaw config set plugins.slots.memory none
-```
 
-Enable the OpenViking memory plugin:
-
-```bash
+# Enable memory
 openclaw config set plugins.slots.memory memory-openviking
 ```
 
-If the gateway is already running, restart it after changing the slot.
+Restart the gateway after changing the slot.
 
----
+## Multi-Instance Support
 
-## Uninstall
-
-**Linux / macOS:**
+If you have multiple OpenClaw instances, use `--workdir` to target a specific one:
 
 ```bash
-lsof -ti tcp:1933 tcp:1833 tcp:18789 | xargs kill -9
-npm uninstall -g openclaw
-rm -rf ~/.openclaw
-python3 -m pip uninstall openviking -y
-rm -rf ~/.openviking
+# Install script
+curl -fsSL ... | bash -s -- --workdir ~/.openclaw-openclaw-second
+
+# Setup helper
+npx ./examples/openclaw-memory-plugin/setup-helper --workdir ~/.openclaw-openclaw-second
+
+# Manual config (prefix openclaw commands)
+OPENCLAW_STATE_DIR=~/.openclaw-openclaw-second openclaw config set ...
 ```
 
-**Windows (cmd):**
+## Troubleshooting
 
-```cmd
-for /f "tokens=5" %a in ('netstat -ano ^| findstr "LISTENING" ^| findstr ":1933 :1833 :18789"') do taskkill /PID %a /F
-npm uninstall -g openclaw
-rmdir /s /q "%USERPROFILE%\.openclaw"
-python -m pip uninstall openviking -y
-rmdir /s /q "%USERPROFILE%\.openviking"
-```
+| Symptom | Cause | Fix |
+|---------|-------|-----|
+| `extracted 0 memories` | Wrong API Key or model name | Check `api_key` and `model` in `ov.conf` |
+| `port occupied` | Port used by another process | Change port: `openclaw config set plugins.entries.memory-openviking.config.port 1934` |
+| Plugin not loaded | Env file not sourced or slot not configured | Check `openclaw status` output |
+| Inaccurate recall | recallScoreThreshold too low | Increase threshold or adjust recallLimit |

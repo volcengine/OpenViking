@@ -114,7 +114,8 @@ class SyncHTTPClient:
     def add_resource(
         self,
         path: str,
-        target: Optional[str] = None,
+        to: Optional[str] = None,
+        parent: Optional[str] = None,
         reason: str = "",
         instruction: str = "",
         wait: bool = False,
@@ -129,7 +130,8 @@ class SyncHTTPClient:
         return run_async(
             self._async_client.add_resource(
                 path,
-                target,
+                to,
+                parent,
                 reason,
                 instruction,
                 wait,

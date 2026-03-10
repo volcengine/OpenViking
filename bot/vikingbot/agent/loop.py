@@ -12,11 +12,10 @@ from vikingbot.agent.memory import MemoryStore
 from vikingbot.agent.subagent import SubagentManager
 from vikingbot.agent.tools import register_default_tools
 from vikingbot.agent.tools.registry import ToolRegistry
-from vikingbot.bus.events import InboundMessage, OutboundMessage, OutboundEventType
+from vikingbot.bus.events import InboundMessage, OutboundEventType, OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.config import load_config
-from vikingbot.config.schema import Config
-from vikingbot.config.schema import SessionKey
+from vikingbot.config.schema import Config, SessionKey
 from vikingbot.hooks import HookContext
 from vikingbot.hooks.manager import hook_manager
 from vikingbot.providers.base import LLMProvider
@@ -284,18 +283,9 @@ class AgentLoop:
                     reasoning_content=response.reasoning_content,
                 )
 
-                for tool_call in response.tool_calls:
-                    args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
-
-                    if publish_events:
-                        await self.bus.publish_outbound(
-                            OutboundMessage(
-                                session_key=session_key,
-                                content=f"{tool_call.name}({args_str})",
-                                event_type=OutboundEventType.TOOL_CALL,
-                            )
-                        )
-                    logger.info(f"[TOOL_CALL]: {tool_call.name}({args_str[:200]})")
+                # Stage 2: Execute all tools in parallel
+                async def execute_single_tool(idx: int, tool_call):
+                    """Execute a single tool and track execution time."""
                     tool_execute_start_time = time.time()
                     result = await self.tools.execute(
                         tool_call.name,
@@ -305,9 +295,29 @@ class AgentLoop:
                         sender_id=sender_id,
                     )
                     tool_execute_duration = (time.time() - tool_execute_start_time) * 1000
+                    return idx, tool_call, result, tool_execute_duration
+
+                # Run all tool executions in parallel
+                tool_tasks = [
+                    execute_single_tool(idx, tool_call)
+                    for idx, tool_call in enumerate(response.tool_calls)
+                ]
+                results = await asyncio.gather(*tool_tasks)
+
+                # Stage 3: Process results sequentially in original order
+                for idx, tool_call, result, tool_execute_duration in results:
+                    args_str = json.dumps(tool_call.arguments, ensure_ascii=False)
+                    logger.info(f"[TOOL_CALL]: {tool_call.name}({args_str[:200]})")
                     logger.info(f"[RESULT]: {str(result)[:600]}")
 
                     if publish_events:
+                        await self.bus.publish_outbound(
+                            OutboundMessage(
+                                session_key=session_key,
+                                content=f"{tool_call.name}({args_str})",
+                                event_type=OutboundEventType.TOOL_CALL,
+                            )
+                        )
                         await self.bus.publish_outbound(
                             OutboundMessage(
                                 session_key=session_key,
@@ -385,9 +395,12 @@ class AgentLoop:
         else:
             cmd = msg.content.strip().lower()
         if cmd == "/new":
-            await self._consolidate_memory(session, archive_all=True)
+            # Clone session for async consolidation, then immediately clear original
+            session_clone = session.clone()
             session.clear()
             await self.sessions.save(session)
+            # Run consolidation in background
+            await self._safe_consolidate_memory(session_clone, archive_all=True)
             return OutboundMessage(
                 session_key=msg.session_key, content="🐈 New session started. Memory consolidated."
             )
@@ -399,7 +412,13 @@ class AgentLoop:
 
         # Consolidate memory before processing if session is too large
         if len(session.messages) > self.memory_window:
-            await self._consolidate_memory(session)
+            # Clone session for async consolidation, then immediately trim original
+            session_clone = session.clone()
+            keep_count = min(10, max(2, self.memory_window // 2))
+            session.messages = session.messages[-keep_count:] if keep_count else []
+            await self.sessions.save(session)
+            # Run consolidation in background
+            await self._safe_consolidate_memory(session_clone, archive_all=False)
 
         if self.sandbox_manager:
             message_workspace = self.sandbox_manager.get_workspace_path(session_key)
@@ -423,6 +442,7 @@ class AgentLoop:
             media=msg.media if msg.media else None,
             session_key=msg.session_key,
         )
+        # logger.info(f"New messages: {messages}")
 
         # Run agent loop
         final_content, tools_used = await self._run_agent_loop(
@@ -489,59 +509,60 @@ class AgentLoop:
         return OutboundMessage(session_key=msg.session_key, content=final_content)
 
     async def _consolidate_memory(self, session, archive_all: bool = False) -> None:
-        """Consolidate old messages into MEMORY.md + HISTORY.md, then trim session."""
-        if not session.messages:
-            return
+        """Consolidate old messages into MEMORY.md + HISTORY.md. Works on a cloned session."""
+        try:
+            if not session.messages:
+                return
 
-        # use openviking tools to extract memory
-        await hook_manager.execute_hooks(
-            context=HookContext(
-                event_type="message.compact",
-                session_id=session.key.safe_name(),
-                workspace_id=self.sandbox_manager.to_workspace_id(session.key),
-                session_key=session.key,
-            ),
-            session=session,
-        )
-
-        if self.sandbox_manager:
-            memory_workspace = self.sandbox_manager.get_workspace_path(session.key)
-        else:
-            memory_workspace = self.workspace
-
-        memory = MemoryStore(memory_workspace)
-        if archive_all:
-            old_messages = session.messages
-            keep_count = 0
-        else:
-            keep_count = min(10, max(2, self.memory_window // 2))
-            old_messages = session.messages[:-keep_count]
-        if not old_messages:
-            return
-        logger.info(
-            f"Memory consolidation started: {len(session.messages)} messages, archiving {len(old_messages)}, keeping {keep_count}"
-        )
-
-        # Format messages for LLM (include tool names when available)
-        lines = []
-        for m in old_messages:
-            if not m.get("content"):
-                continue
-            tools_used = m.get("tools_used", [])
-            if tools_used and isinstance(tools_used, list):
-                tool_names = [
-                    tc.get("tool_name", "unknown") for tc in tools_used if isinstance(tc, dict)
-                ]
-                tools_str = f" [tools: {', '.join(tool_names)}]" if tool_names else ""
-            else:
-                tools_str = ""
-            lines.append(
-                f"[{m.get('timestamp', '?')[:16]}] {m['role'].upper()}{tools_str}: {m['content']}"
+            # use openviking tools to extract memory
+            await hook_manager.execute_hooks(
+                context=HookContext(
+                    event_type="message.compact",
+                    session_id=session.key.safe_name(),
+                    workspace_id=self.sandbox_manager.to_workspace_id(session.key),
+                    session_key=session.key,
+                ),
+                session=session,
             )
-        conversation = "\n".join(lines)
-        current_memory = memory.read_long_term()
 
-        prompt = f"""You are a memory consolidation agent. Process this conversation and return a JSON object with exactly two keys:
+            if self.sandbox_manager:
+                memory_workspace = self.sandbox_manager.get_workspace_path(session.key)
+            else:
+                memory_workspace = self.workspace
+
+            memory = MemoryStore(memory_workspace)
+            if archive_all:
+                old_messages = session.messages
+                keep_count = 0
+            else:
+                keep_count = min(10, max(2, self.memory_window // 2))
+                old_messages = session.messages[:-keep_count]
+            if not old_messages:
+                return
+            logger.info(
+                f"Memory consolidation started: {len(session.messages)} messages, archiving {len(old_messages)}, keeping {keep_count}"
+            )
+
+            # Format messages for LLM (include tool names when available)
+            lines = []
+            for m in old_messages:
+                if not m.get("content"):
+                    continue
+                tools_used = m.get("tools_used", [])
+                if tools_used and isinstance(tools_used, list):
+                    tool_names = [
+                        tc.get("tool_name", "unknown") for tc in tools_used if isinstance(tc, dict)
+                    ]
+                    tools_str = f" [tools: {', '.join(tool_names)}]" if tool_names else ""
+                else:
+                    tools_str = ""
+                lines.append(
+                    f"[{m.get('timestamp', '?')[:16]}] {m['role'].upper()}{tools_str}: {m['content']}"
+                )
+            conversation = "\n".join(lines)
+            current_memory = memory.read_long_term()
+
+            prompt = f"""You are a memory consolidation agent. Process this conversation and return a JSON object with exactly two keys:
 
 1. "history_entry": A paragraph (2-5 sentences) summarizing the key events/decisions/topics. Start with a timestamp like [YYYY-MM-DD HH:MM]. Include enough detail to be useful when found by grep search later.
 
@@ -555,7 +576,6 @@ class AgentLoop:
 
 Respond with ONLY valid JSON, no markdown fences."""
 
-        try:
             response = await self.provider.chat(
                 messages=[
                     {
@@ -578,13 +598,18 @@ Respond with ONLY valid JSON, no markdown fences."""
                 if load_config().use_local_memory and update != current_memory:
                     memory.write_long_term(update)
 
-            session.messages = session.messages[-keep_count:] if keep_count else []
-            await self.sessions.save(session)
-            logger.info(
-                f"Memory consolidation done, session trimmed to {len(session.messages)} messages"
-            )
+            # Session trimming and saving is handled by the caller before calling _consolidate_memory
+            # This method works on a cloned session, so no need to save it
+            logger.info("Memory consolidation done")
         except Exception as e:
             logger.exception(f"Memory consolidation failed: {e}")
+
+    async def _safe_consolidate_memory(self, session, archive_all: bool = False) -> None:
+        """Safe wrapper for _consolidate_memory that ensures all exceptions are caught."""
+        try:
+            await self._consolidate_memory(session, archive_all)
+        except Exception as e:
+            logger.exception(f"Background memory consolidation task failed: {e}")
 
     async def process_direct(
         self,

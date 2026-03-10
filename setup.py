@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import subprocess
@@ -15,38 +16,78 @@ CXX_COMPILER_PATH = shutil.which("g++") or "g++"
 ENGINE_SOURCE_DIR = "src/"
 
 
-class CMakeBuildExtension(build_ext):
-    """Custom CMake build extension that builds AGFS, ov CLI and C++ extensions."""
+class OpenVikingBuildExt(build_ext):
+    """Build OpenViking runtime artifacts and Python native extensions."""
 
     def run(self):
-        self.build_agfs()
-        self.build_ov()
+        self.build_agfs_artifacts()
+        self.build_ov_cli_artifact()
         self.cmake_executable = CMAKE_PATH
 
         for ext in self.extensions:
             self.build_extension(ext)
 
-    def _copy_binary(self, src, dst):
-        """Helper to copy binary and set permissions."""
-        print(f"Copying binary from {src} to {dst}")
+    def _copy_artifact(self, src, dst):
+        """Copy a build artifact into the package tree and preserve executability."""
+        print(f"Copying artifact from {src} to {dst}")
         dst.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(str(src), str(dst))
         if sys.platform != "win32":
             os.chmod(str(dst), 0o755)
 
-    def _ensure_build_lib_copied(self, target_binary=None, target_lib=None):
-        """Ensure binaries are copied to the build directory (where wheel is packaged from)."""
+    def _copy_artifacts_to_build_lib(self, target_binary=None, target_lib=None):
+        """Copy built artifacts into build_lib so wheel packaging can include them."""
         if self.build_lib:
             build_pkg_dir = Path(self.build_lib) / "openviking"
             if target_binary and target_binary.exists():
-                self._copy_binary(target_binary, build_pkg_dir / "bin" / target_binary.name)
+                self._copy_artifact(target_binary, build_pkg_dir / "bin" / target_binary.name)
             if target_lib and target_lib.exists():
-                # Libs go to lib/ as expected by agfs_utils.py
-                self._copy_binary(target_lib, build_pkg_dir / "lib" / target_lib.name)
+                self._copy_artifact(target_lib, build_pkg_dir / "lib" / target_lib.name)
 
-    def build_agfs(self):
-        """Build AGFS server and binding library."""
-        # Paths
+    def _require_artifact(self, artifact_path, artifact_name, stage_name):
+        """Abort the build immediately when a required artifact is missing."""
+        if artifact_path.exists():
+            return
+        raise RuntimeError(
+            f"{stage_name} did not produce required {artifact_name} at {artifact_path}"
+        )
+
+    def _run_stage_with_artifact_checks(
+        self, stage_name, build_fn, required_artifacts, on_success=None
+    ):
+        """Run a build stage and always validate its required outputs on normal return."""
+        build_fn()
+        for artifact_path, artifact_name in required_artifacts:
+            self._require_artifact(artifact_path, artifact_name, stage_name)
+        if on_success:
+            on_success()
+
+    def _resolve_cargo_target_dir(self, cargo_project_dir, env):
+        """Resolve the Cargo target directory for workspace and overridden builds."""
+        configured_target_dir = env.get("CARGO_TARGET_DIR")
+        if configured_target_dir:
+            return Path(configured_target_dir).resolve()
+
+        try:
+            result = subprocess.run(
+                ["cargo", "metadata", "--format-version", "1", "--no-deps"],
+                cwd=str(cargo_project_dir),
+                env=env,
+                check=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            metadata = json.loads(result.stdout.decode("utf-8"))
+            target_directory = metadata.get("target_directory")
+            if target_directory:
+                return Path(target_directory).resolve()
+        except Exception as exc:
+            print(f"[Warning] Failed to resolve Cargo target directory via metadata: {exc}")
+
+        return cargo_project_dir.parents[1] / "target"
+
+    def build_agfs_artifacts(self):
+        """Build or reuse the AGFS server binary and binding library."""
         binary_name = "agfs-server.exe" if sys.platform == "win32" else "agfs-server"
         if sys.platform == "win32":
             lib_name = "libagfsbinding.dll"
@@ -56,45 +97,59 @@ class CMakeBuildExtension(build_ext):
             lib_name = "libagfsbinding.so"
 
         agfs_server_dir = Path("third_party/agfs/agfs-server").resolve()
-
-        # Target in source tree (for development/install)
         agfs_bin_dir = Path("openviking/bin").resolve()
         agfs_lib_dir = Path("openviking/lib").resolve()
         agfs_target_binary = agfs_bin_dir / binary_name
         agfs_target_lib = agfs_lib_dir / lib_name
 
-        # 1. Check for pre-built binaries in a specified directory
+        self._run_stage_with_artifact_checks(
+            "AGFS build",
+            lambda: self._build_agfs_artifacts_impl(
+                agfs_server_dir,
+                binary_name,
+                lib_name,
+                agfs_target_binary,
+                agfs_target_lib,
+            ),
+            [
+                (agfs_target_binary, binary_name),
+                (agfs_target_lib, lib_name),
+            ],
+            on_success=lambda: self._copy_artifacts_to_build_lib(
+                agfs_target_binary, agfs_target_lib
+            ),
+        )
+
+    def _build_agfs_artifacts_impl(
+        self, agfs_server_dir, binary_name, lib_name, agfs_target_binary, agfs_target_lib
+    ):
+        """Implement AGFS artifact building without final artifact checks."""
+
         prebuilt_dir = os.environ.get("OV_PREBUILT_BIN_DIR")
         if prebuilt_dir:
             prebuilt_path = Path(prebuilt_dir).resolve()
-            print(f"Checking for pre-built AGFS binaries in {prebuilt_path}...")
+            print(f"Checking for pre-built AGFS artifacts in {prebuilt_path}...")
             src_bin = prebuilt_path / binary_name
             src_lib = prebuilt_path / lib_name
 
             if src_bin.exists():
-                self._copy_binary(src_bin, agfs_target_binary)
+                self._copy_artifact(src_bin, agfs_target_binary)
             if src_lib.exists():
-                self._copy_binary(src_lib, agfs_target_lib)
+                self._copy_artifact(src_lib, agfs_target_lib)
 
             if agfs_target_binary.exists() and agfs_target_lib.exists():
-                print(f"[OK] Used pre-built AGFS binaries from {prebuilt_dir}")
-                self._ensure_build_lib_copied(agfs_target_binary, agfs_target_lib)
+                print(f"[OK] Used pre-built AGFS artifacts from {prebuilt_dir}")
                 return
 
-        # 2. Skip build if requested and binaries exist
         if os.environ.get("OV_SKIP_AGFS_BUILD") == "1":
             if agfs_target_binary.exists() and agfs_target_lib.exists():
-                print("[OK] Skipping AGFS build, using existing binaries")
-                self._ensure_build_lib_copied(agfs_target_binary, agfs_target_lib)
+                print("[OK] Skipping AGFS build, using existing artifacts")
                 return
-            else:
-                print("[Warning] OV_SKIP_AGFS_BUILD=1 but binaries not found. Will try to build.")
+            print("[Warning] OV_SKIP_AGFS_BUILD=1 but artifacts are missing. Will try to build.")
 
-        # 3. Try to build from source
         if agfs_server_dir.exists() and shutil.which("go"):
-            print("Building AGFS from source...")
+            print("Building AGFS artifacts from source...")
 
-            # Build server
             try:
                 print(f"Building AGFS server: {binary_name}")
                 env = os.environ.copy()
@@ -121,38 +176,30 @@ class CMakeBuildExtension(build_ext):
                     print(f"Build stderr: {result.stderr.decode('utf-8', errors='replace')}")
 
                 agfs_built_binary = agfs_server_dir / "build" / binary_name
-                if agfs_built_binary.exists():
-                    self._copy_binary(agfs_built_binary, agfs_target_binary)
-                    print("[OK] AGFS server built successfully from source")
-                else:
-                    raise FileNotFoundError(
-                        f"Build succeeded but binary not found at {agfs_built_binary}"
-                    )
-            except (subprocess.CalledProcessError, Exception) as e:
-                error_msg = f"Failed to build AGFS server from source: {e}"
-                if isinstance(e, subprocess.CalledProcessError):
-                    if e.stdout:
+                self._require_artifact(agfs_built_binary, binary_name, "AGFS server build")
+                self._copy_artifact(agfs_built_binary, agfs_target_binary)
+                print("[OK] AGFS server built successfully from source")
+            except Exception as exc:
+                error_msg = f"Failed to build AGFS server from source: {exc}"
+                if isinstance(exc, subprocess.CalledProcessError):
+                    if exc.stdout:
                         error_msg += (
-                            f"\nBuild stdout:\n{e.stdout.decode('utf-8', errors='replace')}"
+                            f"\nBuild stdout:\n{exc.stdout.decode('utf-8', errors='replace')}"
                         )
-                    if e.stderr:
+                    if exc.stderr:
                         error_msg += (
-                            f"\nBuild stderr:\n{e.stderr.decode('utf-8', errors='replace')}"
+                            f"\nBuild stderr:\n{exc.stderr.decode('utf-8', errors='replace')}"
                         )
                 print(f"[Error] {error_msg}")
                 raise RuntimeError(error_msg)
 
-            # Build binding library
             try:
                 print(f"Building AGFS binding library: {lib_name}")
-                # Use CGO_ENABLED=1 for shared library
                 env = os.environ.copy()
                 env["CGO_ENABLED"] = "1"
 
-                lib_build_args = ["make", "build-lib"]
-
                 result = subprocess.run(
-                    lib_build_args,
+                    ["make", "build-lib"],
                     cwd=str(agfs_server_dir),
                     env=env,
                     check=True,
@@ -165,68 +212,64 @@ class CMakeBuildExtension(build_ext):
                     print(f"Build stderr: {result.stderr.decode('utf-8', errors='replace')}")
 
                 agfs_built_lib = agfs_server_dir / "build" / lib_name
-                if agfs_built_lib.exists():
-                    self._copy_binary(agfs_built_lib, agfs_target_lib)
-                    print("[OK] AGFS binding library built successfully")
-                else:
-                    print(f"[Warning] Binding library not found at {agfs_built_lib}")
-            except Exception as e:
-                error_msg = f"Failed to build AGFS binding library: {e}"
-                if isinstance(e, subprocess.CalledProcessError):
-                    if e.stdout:
-                        error_msg += f"\nBuild stdout: {e.stdout.decode('utf-8', errors='replace')}"
-                    if e.stderr:
-                        error_msg += f"\nBuild stderr: {e.stderr.decode('utf-8', errors='replace')}"
+                self._require_artifact(agfs_built_lib, lib_name, "AGFS binding build")
+                self._copy_artifact(agfs_built_lib, agfs_target_lib)
+                print("[OK] AGFS binding library built successfully")
+            except Exception as exc:
+                error_msg = f"Failed to build AGFS binding library: {exc}"
+                if isinstance(exc, subprocess.CalledProcessError):
+                    if exc.stdout:
+                        error_msg += (
+                            f"\nBuild stdout: {exc.stdout.decode('utf-8', errors='replace')}"
+                        )
+                    if exc.stderr:
+                        error_msg += (
+                            f"\nBuild stderr: {exc.stderr.decode('utf-8', errors='replace')}"
+                        )
                 print(f"[Error] {error_msg}")
                 raise RuntimeError(error_msg)
-
         else:
-            if agfs_target_binary.exists():
-                print(
-                    f"[Info] Go compiler not found, but AGFS binary exists at {agfs_target_binary}. Skipping build."
-                )
+            if agfs_target_binary.exists() and agfs_target_lib.exists():
+                print("[Info] AGFS artifacts already exist locally. Skipping source build.")
             elif not agfs_server_dir.exists():
                 print(f"[Warning] AGFS source directory not found at {agfs_server_dir}")
             else:
                 print("[Warning] Go compiler not found. Cannot build AGFS from source.")
 
-        # Final check and copy to build dir
-        self._ensure_build_lib_copied(agfs_target_binary, agfs_target_lib)
-
-    def build_ov(self):
-        """Build or copy ov Rust CLI."""
+    def build_ov_cli_artifact(self):
+        """Build or reuse the ov Rust CLI binary."""
         binary_name = "ov.exe" if sys.platform == "win32" else "ov"
         ov_cli_dir = Path("crates/ov_cli").resolve()
+        ov_target_binary = Path("openviking/bin").resolve() / binary_name
 
-        agfs_bin_dir = Path("openviking/bin").resolve()
-        ov_target_binary = agfs_bin_dir / binary_name
+        self._run_stage_with_artifact_checks(
+            "ov CLI build",
+            lambda: self._build_ov_cli_artifact_impl(ov_cli_dir, binary_name, ov_target_binary),
+            [(ov_target_binary, binary_name)],
+            on_success=lambda: self._copy_artifacts_to_build_lib(ov_target_binary, None),
+        )
 
-        # 1. Check for pre-built
+    def _build_ov_cli_artifact_impl(self, ov_cli_dir, binary_name, ov_target_binary):
+        """Implement ov CLI building without final artifact checks."""
+
         prebuilt_dir = os.environ.get("OV_PREBUILT_BIN_DIR")
         if prebuilt_dir:
             src_bin = Path(prebuilt_dir).resolve() / binary_name
             if src_bin.exists():
-                self._copy_binary(src_bin, ov_target_binary)
-                self._ensure_build_lib_copied(ov_target_binary, None)
+                self._copy_artifact(src_bin, ov_target_binary)
                 return
 
-        # 2. Skip build if requested
         if os.environ.get("OV_SKIP_OV_BUILD") == "1":
             if ov_target_binary.exists():
                 print("[OK] Skipping ov CLI build, using existing binary")
-                self._ensure_build_lib_copied(ov_target_binary, None)
                 return
-            else:
-                print("[Warning] OV_SKIP_OV_BUILD=1 but binary not found. Will try to build.")
+            print("[Warning] OV_SKIP_OV_BUILD=1 but binary is missing. Will try to build.")
 
-        # 3. Build from source
         if ov_cli_dir.exists() and shutil.which("cargo"):
             print("Building ov CLI from source...")
             try:
                 env = os.environ.copy()
                 build_args = ["cargo", "build", "--release"]
-
-                # Support cross-compilation via CARGO_BUILD_TARGET
                 target = env.get("CARGO_BUILD_TARGET")
                 if target:
                     print(f"Cross-compiling with CARGO_BUILD_TARGET={target}")
@@ -245,47 +288,61 @@ class CMakeBuildExtension(build_ext):
                 if result.stderr:
                     print(f"Build stderr: {result.stderr.decode('utf-8', errors='replace')}")
 
-                # Find built binary
+                cargo_target_dir = self._resolve_cargo_target_dir(ov_cli_dir, env)
                 if target:
-                    built_bin = ov_cli_dir / "target" / target / "release" / binary_name
+                    built_bin = cargo_target_dir / target / "release" / binary_name
                 else:
-                    built_bin = ov_cli_dir / "target" / "release" / binary_name
+                    built_bin = cargo_target_dir / "release" / binary_name
 
-                if built_bin.exists():
-                    self._copy_binary(built_bin, ov_target_binary)
-                    print("[OK] ov CLI built successfully from source")
-                else:
-                    print(f"[Warning] Built ov binary not found at {built_bin}")
-            except Exception as e:
-                error_msg = f"Failed to build ov CLI from source: {e}"
-                if isinstance(e, subprocess.CalledProcessError):
-                    if e.stdout:
-                        error_msg += f"\nBuild stdout: {e.stdout.decode('utf-8', errors='replace')}"
-                    if e.stderr:
-                        error_msg += f"\nBuild stderr: {e.stderr.decode('utf-8', errors='replace')}"
+                self._require_artifact(built_bin, binary_name, "ov CLI build")
+                self._copy_artifact(built_bin, ov_target_binary)
+                print("[OK] ov CLI built successfully from source")
+            except Exception as exc:
+                error_msg = f"Failed to build ov CLI from source: {exc}"
+                if isinstance(exc, subprocess.CalledProcessError):
+                    if exc.stdout:
+                        error_msg += (
+                            f"\nBuild stdout: {exc.stdout.decode('utf-8', errors='replace')}"
+                        )
+                    if exc.stderr:
+                        error_msg += (
+                            f"\nBuild stderr: {exc.stderr.decode('utf-8', errors='replace')}"
+                        )
                 print(f"[Error] {error_msg}")
                 raise RuntimeError(error_msg)
         else:
-            if not ov_cli_dir.exists():
+            if ov_target_binary.exists():
+                print("[Info] ov CLI binary already exists locally. Skipping source build.")
+            elif not ov_cli_dir.exists():
                 print(f"[Warning] ov CLI source directory not found at {ov_cli_dir}")
             else:
                 print("[Warning] Cargo not found. Cannot build ov CLI from source.")
 
-        # Final check and copy to build dir
-        self._ensure_build_lib_copied(ov_target_binary, None)
-
     def build_extension(self, ext):
-        """Build a single C++ extension module using CMake."""
+        """Build a single Python native extension artifact using CMake."""
         ext_fullpath = Path(self.get_ext_fullpath(ext.name))
         ext_dir = ext_fullpath.parent.resolve()
         build_dir = Path(self.build_temp) / "cmake_build"
         build_dir.mkdir(parents=True, exist_ok=True)
+
+        self._run_stage_with_artifact_checks(
+            "CMake build",
+            lambda: self._build_extension_impl(ext_fullpath, ext_dir, build_dir),
+            [(ext_fullpath, f"native extension '{ext.name}'")],
+        )
+
+    def _build_extension_impl(self, ext_fullpath, ext_dir, build_dir):
+        """Invoke CMake to build the Python native extension."""
+        py_output_name = ext_fullpath.stem
+        py_output_suffix = ext_fullpath.suffix
 
         cmake_args = [
             f"-S{Path(ENGINE_SOURCE_DIR).resolve()}",
             f"-B{build_dir}",
             "-DCMAKE_BUILD_TYPE=Release",
             f"-DPY_OUTPUT_DIR={ext_dir}",
+            f"-DPY_OUTPUT_NAME={py_output_name}",
+            f"-DPY_OUTPUT_SUFFIX={py_output_suffix}",
             "-DCMAKE_VERBOSE_MAKEFILE=ON",
             "-DCMAKE_INSTALL_RPATH=$ORIGIN",
             f"-DPython3_EXECUTABLE={sys.executable}",
@@ -322,7 +379,7 @@ setup(
         )
     ],
     cmdclass={
-        "build_ext": CMakeBuildExtension,
+        "build_ext": OpenVikingBuildExt,
     },
     package_data={
         "openviking": [

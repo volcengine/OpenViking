@@ -42,19 +42,29 @@ DEFAULT_AGFS_PORT=1833
 DEFAULT_VLM_MODEL="doubao-seed-2-0-pro-260215"
 DEFAULT_EMBED_MODEL="doubao-embedding-vision-251215"
 SELECTED_SERVER_PORT="${DEFAULT_SERVER_PORT}"
+SELECTED_MODE="local"
 LANG_UI="en"
 
 # Parse args (supports curl | bash -s -- ...)
+_expect_workdir=""
 for arg in "$@"; do
+  if [[ -n "$_expect_workdir" ]]; then
+    OPENCLAW_DIR="$arg"
+    PLUGIN_DEST="${OPENCLAW_DIR}/extensions/memory-openviking"
+    _expect_workdir=""
+    continue
+  fi
   [[ "$arg" == "-y" || "$arg" == "--yes" ]] && INSTALL_YES="1"
   [[ "$arg" == "--zh" ]] && LANG_UI="zh"
+  [[ "$arg" == "--workdir" ]] && { _expect_workdir="1"; continue; }
   [[ "$arg" == "-h" || "$arg" == "--help" ]] && {
-    echo "Usage: curl -fsSL <INSTALL_URL> | bash [-s -- -y --zh]"
+    echo "Usage: curl -fsSL <INSTALL_URL> | bash [-s -- -y --zh --workdir <path>]"
     echo ""
     echo "Options:"
-    echo "  -y, --yes   Non-interactive mode"
-    echo "  --zh        Chinese prompts"
-    echo "  -h, --help  Show this help"
+    echo "  -y, --yes            Non-interactive mode"
+    echo "  --zh                 Chinese prompts"
+    echo "  --workdir <path>     OpenClaw config directory (default: ~/.openclaw)"
+    echo "  -h, --help           Show this help"
     echo ""
     echo "Env vars: REPO, BRANCH, OPENVIKING_INSTALL_YES, SKIP_OPENCLAW, SKIP_OPENVIKING, NPM_REGISTRY, PIP_INDEX_URL"
     exit 0
@@ -122,6 +132,85 @@ detect_distro() {
     DISTRO="debian"
   elif command -v dnf &>/dev/null || command -v yum &>/dev/null; then
     DISTRO="rhel"
+  fi
+}
+
+# ─── Workdir detection & mode selection ───
+
+detect_openclaw_instances() {
+  local instances=()
+  for dir in "${HOME_DIR}"/.openclaw*; do
+    [[ -d "$dir" ]] || continue
+    # skip workspace/data subdirectories
+    [[ "$(basename "$dir")" == .openclaw-* ]] || [[ "$(basename "$dir")" == ".openclaw" ]] || continue
+    instances+=("$dir")
+  done
+  echo "${instances[@]}"
+}
+
+select_workdir() {
+  # Already set via --workdir
+  [[ -n "$OPENCLAW_DIR" && "$OPENCLAW_DIR" != "${HOME_DIR}/.openclaw" ]] && return 0
+
+  local instances=($(detect_openclaw_instances))
+
+  # Only default instance or none — keep default
+  if [[ ${#instances[@]} -le 1 ]]; then
+    return 0
+  fi
+
+  # Multiple instances found — let user pick
+  if [[ "$INSTALL_YES" != "1" ]]; then
+    echo ""
+    bold "$(tr "Found multiple OpenClaw instances:" "发现多个 OpenClaw 实例：")"
+    local i=1
+    for inst in "${instances[@]}"; do
+      echo "  ${i}) ${inst}"
+      i=$((i + 1))
+    done
+    echo ""
+    read -r -p "$(tr "Select instance number [1]: " "选择实例编号 [1]: ")" _choice < /dev/tty || true
+    if [[ -n "$_choice" && "$_choice" =~ ^[0-9]+$ ]]; then
+      local idx=$((_choice - 1))
+      if [[ $idx -ge 0 && $idx -lt ${#instances[@]} ]]; then
+        OPENCLAW_DIR="${instances[$idx]}"
+      else
+        warn "$(tr "Invalid selection, using default" "无效选择，使用默认")"
+        OPENCLAW_DIR="${instances[0]}"
+      fi
+    else
+      OPENCLAW_DIR="${instances[0]}"
+    fi
+    PLUGIN_DEST="${OPENCLAW_DIR}/extensions/memory-openviking"
+  fi
+}
+
+select_mode() {
+  if [[ "$INSTALL_YES" == "1" ]]; then
+    SELECTED_MODE="local"
+    return 0
+  fi
+  echo ""
+  read -r -p "$(tr "Plugin mode - local or remote [local]: " "插件模式 - local 或 remote [local]: ")" _mode < /dev/tty || true
+  _mode="${_mode:-local}"
+  if [[ "$_mode" == "remote" ]]; then
+    SELECTED_MODE="remote"
+  else
+    SELECTED_MODE="local"
+  fi
+}
+
+collect_remote_config() {
+  remote_base_url="http://127.0.0.1:1933"
+  remote_api_key=""
+  remote_agent_id=""
+  if [[ "$INSTALL_YES" != "1" ]]; then
+    read -r -p "$(tr "OpenViking server URL [${remote_base_url}]: " "OpenViking 服务器地址 [${remote_base_url}]: ")" _base_url < /dev/tty || true
+    read -r -p "$(tr "API Key (optional): " "API Key（可选）: ")" _api_key < /dev/tty || true
+    read -r -p "$(tr "Agent ID (optional): " "Agent ID（可选）: ")" _agent_id < /dev/tty || true
+    remote_base_url="${_base_url:-$remote_base_url}"
+    remote_api_key="${_api_key:-}"
+    remote_agent_id="${_agent_id:-}"
   fi
 }
 
@@ -465,6 +554,10 @@ download_plugin() {
   local files=(
     "examples/openclaw-memory-plugin/index.ts"
     "examples/openclaw-memory-plugin/config.ts"
+    "examples/openclaw-memory-plugin/client.ts"
+    "examples/openclaw-memory-plugin/process-manager.ts"
+    "examples/openclaw-memory-plugin/memory-ranking.ts"
+    "examples/openclaw-memory-plugin/text-utils.ts"
     "examples/openclaw-memory-plugin/openclaw.plugin.json"
     "examples/openclaw-memory-plugin/package.json"
     "examples/openclaw-memory-plugin/package-lock.json"
@@ -511,22 +604,37 @@ download_plugin() {
 }
 
 configure_openclaw_plugin() {
-  local server_port="${SELECTED_SERVER_PORT}"
-  # Use absolute path so openclaw works when started from any cwd (e.g. root from /root)
-  local config_path="${OPENVIKING_DIR}/ov.conf"
   info "$(tr "Configuring OpenClaw plugin..." "正在配置 OpenClaw 插件...")"
 
-  openclaw config set plugins.enabled true
-  openclaw config set plugins.allow '["memory-openviking"]' --json
-  openclaw config set gateway.mode local
-  openclaw config set plugins.slots.memory memory-openviking
-  openclaw config set plugins.load.paths "[\"${PLUGIN_DEST}\"]" --json
-  openclaw config set plugins.entries.memory-openviking.config.mode local
-  openclaw config set plugins.entries.memory-openviking.config.configPath "${config_path}"
-  openclaw config set plugins.entries.memory-openviking.config.port "${server_port}"
-  openclaw config set plugins.entries.memory-openviking.config.targetUri viking://user/memories
-  openclaw config set plugins.entries.memory-openviking.config.autoRecall true --json
-  openclaw config set plugins.entries.memory-openviking.config.autoCapture true --json
+  local oc_env=()
+  if [[ "$OPENCLAW_DIR" != "${HOME_DIR}/.openclaw" ]]; then
+    oc_env=(env OPENCLAW_STATE_DIR="$OPENCLAW_DIR")
+  fi
+
+  "${oc_env[@]}" openclaw config set plugins.enabled true
+  "${oc_env[@]}" openclaw config set plugins.allow '["memory-openviking"]' --json
+  "${oc_env[@]}" openclaw config set gateway.mode local
+  "${oc_env[@]}" openclaw config set plugins.slots.memory memory-openviking
+  "${oc_env[@]}" openclaw config set plugins.load.paths "[\"${PLUGIN_DEST}\"]" --json
+  "${oc_env[@]}" openclaw config set plugins.entries.memory-openviking.config.mode "${SELECTED_MODE}"
+  "${oc_env[@]}" openclaw config set plugins.entries.memory-openviking.config.targetUri viking://user/memories
+  "${oc_env[@]}" openclaw config set plugins.entries.memory-openviking.config.autoRecall true --json
+  "${oc_env[@]}" openclaw config set plugins.entries.memory-openviking.config.autoCapture true --json
+
+  if [[ "$SELECTED_MODE" == "local" ]]; then
+    local config_path="${OPENVIKING_DIR}/ov.conf"
+    "${oc_env[@]}" openclaw config set plugins.entries.memory-openviking.config.configPath "${config_path}"
+    "${oc_env[@]}" openclaw config set plugins.entries.memory-openviking.config.port "${SELECTED_SERVER_PORT}"
+  else
+    "${oc_env[@]}" openclaw config set plugins.entries.memory-openviking.config.baseUrl "${remote_base_url}"
+    if [[ -n "${remote_api_key}" ]]; then
+      "${oc_env[@]}" openclaw config set plugins.entries.memory-openviking.config.apiKey "${remote_api_key}"
+    fi
+    if [[ -n "${remote_agent_id}" ]]; then
+      "${oc_env[@]}" openclaw config set plugins.entries.memory-openviking.config.agentId "${remote_agent_id}"
+    fi
+  fi
+
   info "$(tr "OpenClaw plugin configured" "OpenClaw 插件配置完成")"
 }
 
@@ -552,27 +660,51 @@ main() {
   echo ""
 
   detect_os
-  validate_environment
+  select_workdir
+  info "$(tr "Target: ${OPENCLAW_DIR}" "目标实例: ${OPENCLAW_DIR}")"
 
-  install_openclaw
-  install_openviking
-  configure_openviking_conf
+  select_mode
+  info "$(tr "Mode: ${SELECTED_MODE}" "模式: ${SELECTED_MODE}")"
+
+  if [[ "$SELECTED_MODE" == "local" ]]; then
+    validate_environment
+    install_openclaw
+    install_openviking
+    configure_openviking_conf
+  else
+    install_openclaw
+    collect_remote_config
+  fi
+
   download_plugin
   configure_openclaw_plugin
-  write_openviking_env
+
+  if [[ "$SELECTED_MODE" == "local" ]]; then
+    write_openviking_env
+  fi
 
   echo ""
   bold "═══════════════════════════════════════════════════════════"
   bold "  $(tr "Installation complete!" "安装完成！")"
   bold "═══════════════════════════════════════════════════════════"
   echo ""
-  info "$(tr "Run these commands to start OpenClaw + OpenViking:" "请按以下命令启动 OpenClaw + OpenViking：")"
-  echo "  1) openclaw --version"
-  echo "  2) openclaw onboard"
-  echo "  3) source ${OPENCLAW_DIR}/openviking.env && openclaw gateway"
-  echo "  4) openclaw status"
-  echo ""
-  info "$(tr "You can edit the config freely: ${OPENVIKING_DIR}/ov.conf" "你可以按需自由修改配置文件: ${OPENVIKING_DIR}/ov.conf")"
+  if [[ "$SELECTED_MODE" == "local" ]]; then
+    info "$(tr "Run these commands to start OpenClaw + OpenViking:" "请按以下命令启动 OpenClaw + OpenViking：")"
+    echo "  1) openclaw --version"
+    echo "  2) openclaw onboard"
+    echo "  3) source ${OPENCLAW_DIR}/openviking.env && openclaw gateway"
+    echo "  4) openclaw status"
+    echo ""
+    info "$(tr "You can edit the config freely: ${OPENVIKING_DIR}/ov.conf" "你可以按需自由修改配置文件: ${OPENVIKING_DIR}/ov.conf")"
+  else
+    info "$(tr "Run these commands to start OpenClaw:" "请按以下命令启动 OpenClaw：")"
+    echo "  1) openclaw --version"
+    echo "  2) openclaw onboard"
+    echo "  3) openclaw gateway"
+    echo "  4) openclaw status"
+    echo ""
+    info "$(tr "Remote server: ${remote_base_url}" "远程服务器: ${remote_base_url}")"
+  fi
   echo ""
 }
 

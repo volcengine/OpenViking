@@ -64,6 +64,18 @@ class Session:
         self.messages = []
         self.updated_at = datetime.now()
 
+    def clone(self) -> "Session":
+        """Create a deep copy of this session."""
+        import copy
+
+        return Session(
+            key=self.key,
+            messages=copy.deepcopy(self.messages),
+            created_at=self.created_at,
+            updated_at=self.updated_at,
+            metadata=copy.deepcopy(self.metadata),
+        )
+
 
 class SessionManager:
     """

@@ -33,14 +33,14 @@ class BaseClient(ABC):
     async def add_resource(
         self,
         path: str,
-        target: Optional[str] = None,
+        to: Optional[str] = None,
+        parent: Optional[str] = None,
         reason: str = "",
         instruction: str = "",
         wait: bool = False,
         timeout: Optional[float] = None,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
-        ...
 
     @abstractmethod
     async def add_skill(
