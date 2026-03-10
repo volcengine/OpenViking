@@ -11,6 +11,11 @@ include README.md
 include pyproject.toml
 include setup.py
 recursive-include openviking *.yaml
+
+# sdist should be source-only: never ship runtime binaries from working tree
+prune openviking/bin
+prune openviking/lib
+recursive-exclude openviking *.so *.dylib *.dll *.exe
 global-exclude *.py[cod]
 global-exclude __pycache__
 global-exclude .git*

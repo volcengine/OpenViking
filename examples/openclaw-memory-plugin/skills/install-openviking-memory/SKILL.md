@@ -241,6 +241,22 @@ call "%USERPROFILE%\.openclaw\openviking.env.bat" && openclaw gateway
 > echo 'alias openclaw-start="source ~/.openclaw/openviking.env && openclaw gateway"' >> ~/.bashrc
 > ```
 
+### Enable/Disable the Memory Plugin Slot
+
+Disable the memory plugin:
+
+```bash
+openclaw config set plugins.slots.memory none
+```
+
+Enable the OpenViking memory plugin:
+
+```bash
+openclaw config set plugins.slots.memory memory-openviking
+```
+
+If the gateway is already running, restart it after changing the slot.
+
 ---
 
 ## Uninstall

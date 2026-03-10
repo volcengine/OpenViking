@@ -9,7 +9,7 @@ from openviking.parse.parsers.code.ast.skeleton import ClassSkeleton, CodeSkelet
 
 
 def _node_text(node, content_bytes: bytes) -> str:
-    return content_bytes[node.start_byte:node.end_byte].decode("utf-8", errors="replace")
+    return content_bytes[node.start_byte : node.end_byte].decode("utf-8", errors="replace")
 
 
 def _preceding_doc(siblings: list, idx: int, content_bytes: bytes) -> str:
@@ -103,7 +103,9 @@ class RustExtractor(LanguageExtractor):
         siblings = list(root.children)
         for idx, child in enumerate(siblings):
             if child.type == "use_declaration":
-                imports.append(_node_text(child, content_bytes).strip().rstrip(";").replace("use ", ""))
+                imports.append(
+                    _node_text(child, content_bytes).strip().rstrip(";").replace("use ", "")
+                )
             elif child.type in ("struct_item", "trait_item", "enum_item"):
                 doc = _preceding_doc(siblings, idx, content_bytes)
                 classes.append(_extract_struct_or_trait(child, content_bytes, docstring=doc))

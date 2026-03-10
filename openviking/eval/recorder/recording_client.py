@@ -25,7 +25,7 @@ class RecordingAGFSClient:
     to a file for later playback and performance analysis.
 
     Usage:
-        from pyagfs import AGFSClient
+        from openviking.pyagfs import AGFSClient
         from openviking.eval.recorder.recording_client import RecordingAGFSClient
 
         base_client = AGFSClient(api_base_url="http://localhost:1833")

@@ -116,7 +116,6 @@ class TestImportOvpack:
         # Verify content consistency
         assert original_content == imported_content
 
-
     @staticmethod
     def _build_ovpack(zip_path: Path, entries: dict[str, str]) -> None:
         buffer = io.BytesIO()
@@ -172,4 +171,6 @@ class TestImportOvpack:
         self._build_ovpack(ovpack_path, entries)
 
         with pytest.raises(ValueError, match=error_pattern):
-            await client.import_ovpack(str(ovpack_path), "viking://resources/security/", vectorize=False)
+            await client.import_ovpack(
+                str(ovpack_path), "viking://resources/security/", vectorize=False
+            )

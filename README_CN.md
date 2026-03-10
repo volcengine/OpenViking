@@ -59,7 +59,7 @@
 在开始使用 OpenViking 之前，请确保您的环境满足以下要求：
 
 - **Python 版本**：3.10 或更高版本
-- **Go 版本**：1.19 或更高（从源码构建 AGFS 组件需要）
+- **Go 版本**：1.22 或更高（从源码构建 AGFS 组件需要）
 - **C++ 编译器**：GCC 9+ 或 Clang 11+（构建核心扩展需要，必须支持 C++17）
 - **操作系统**：Linux、macOS、Windows
 - **网络连接**：需要稳定的网络连接（用于下载依赖和访问模型服务）
@@ -435,6 +435,24 @@ ov grep "openviking" --uri viking://resources/volcengine/OpenViking/docs/zh
 ```
 
 恭喜！您已成功运行 OpenViking 🎉
+
+### VikingBot 快速开始
+
+VikingBot 是构建在 OpenViking 之上的 AI 智能体框架。以下是快速开始指南：
+
+```bash
+# 选项 1：从 PyPI 安装 VikingBot（推荐大多数用户使用）
+pip install openviking[bot]
+
+# 选项 2：从源码安装 VikingBot（用于开发）
+uv pip install -e bot/
+
+# 启动 OpenViking 服务器（同时启动 Bot）
+openviking-server --with-bot
+
+# 在另一个终端启动交互式聊天
+ov chat
+```
 
 ---
 

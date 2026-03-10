@@ -22,10 +22,10 @@ from datetime import datetime
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-from pyagfs.exceptions import AGFSHTTPError
-
+from openviking.pyagfs.exceptions import AGFSHTTPError
 from openviking.server.identity import RequestContext, Role
 from openviking.utils.time_utils import format_simplified, get_current_timestamp, parse_iso_datetime
+from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
@@ -306,8 +306,8 @@ class VikingFS:
         """Content search by pattern or keywords."""
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
-        result = self.agfs.grep(
-            path, pattern, True, case_insensitive, stream=False, node_limit=node_limit
+        result = await asyncio.to_thread(
+            self.agfs.grep, path, pattern, True, case_insensitive, False, node_limit=node_limit
         )
         if result.get("matches", None) is None:
             result["matches"] = []
@@ -792,7 +792,7 @@ class VikingFS:
         entries.append(RelationEntry(id=link_id, uris=uris, reason=reason))
 
         await self._write_relation_table(from_path, entries)
-        logger.info(f"[VikingFS] Created link: {from_uri} -> {uris}")
+        logger.debug(f"[VikingFS] Created link: {from_uri} -> {uris}")
 
     async def unlink(
         self,
@@ -815,17 +815,17 @@ class VikingFS:
                     break
 
             if not entry_to_modify:
-                logger.warning(f"[VikingFS] URI not found in relations: {uri}")
+                logger.debug(f"[VikingFS] URI not found in relations: {uri}")
                 return
 
             entry_to_modify.uris.remove(uri)
 
             if not entry_to_modify.uris:
                 entries.remove(entry_to_modify)
-                logger.info(f"[VikingFS] Removed empty entry: {entry_to_modify.id}")
+                logger.debug(f"[VikingFS] Removed empty entry: {entry_to_modify.id}")
 
             await self._write_relation_table(from_path, entries)
-            logger.info(f"[VikingFS] Removed link: {from_uri} -> {uri}")
+            logger.debug(f"[VikingFS] Removed link: {from_uri} -> {uri}")
 
         except Exception as e:
             logger.error(f"[VikingFS] Failed to unlink {from_uri} -> {uri}: {e}")
@@ -1079,7 +1079,7 @@ class VikingFS:
         try:
             await vector_store.delete_uris(real_ctx, uris)
             for uri in uris:
-                logger.info(f"[VikingFS] Deleted from vector store: {uri}")
+                logger.debug(f"[VikingFS] Deleted from vector store: {uri}")
         except Exception as e:
             logger.warning(f"[VikingFS] Failed to delete from vector store: {e}")
 
@@ -1127,7 +1127,7 @@ class VikingFS:
                     new_uri=new_uri,
                     new_parent_uri=new_parent_uri,
                 )
-                logger.info(f"[VikingFS] Updated URI: {uri} -> {new_uri}")
+                logger.debug(f"[VikingFS] Updated URI: {uri} -> {new_uri}")
             except Exception as e:
                 logger.warning(f"[VikingFS] Failed to update {uri} in vector store: {e}")
 
@@ -1253,8 +1253,8 @@ class VikingFS:
         path = self._uri_to_path(uri, ctx=ctx)
         try:
             content = self.agfs.read(path)
-        except Exception as e:
-            raise FileNotFoundError(f"Failed to read {uri}: {e}")
+        except Exception:
+            raise NotFoundError(uri, "file")
         text = self._handle_agfs_content(content)
         if offset == 0 and limit == -1:
             return text
@@ -1272,8 +1272,8 @@ class VikingFS:
         path = self._uri_to_path(uri, ctx=ctx)
         try:
             return self._handle_agfs_read(self.agfs.read(path))
-        except Exception as e:
-            raise FileNotFoundError(f"Failed to read {uri}: {e}")
+        except Exception:
+            raise NotFoundError(uri, "file")
 
     async def write_file_bytes(
         self,
@@ -1358,8 +1358,8 @@ class VikingFS:
         real_ctx = self._ctx_or_default(ctx)
         try:
             entries = self._ls_entries(path)
-        except Exception as e:
-            raise FileNotFoundError(f"Failed to list {uri}: {e}")
+        except Exception:
+            raise NotFoundError(uri, "directory")
         # basic info
         now = datetime.now()
         all_entries = []
@@ -1422,8 +1422,8 @@ class VikingFS:
                 elif show_all_hidden:
                     all_entries.append(new_entry)
             return all_entries
-        except Exception as e:
-            raise FileNotFoundError(f"Failed to list {uri}: {e}")
+        except Exception:
+            raise NotFoundError(uri, "directory")
 
     async def move_file(
         self,

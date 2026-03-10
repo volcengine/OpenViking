@@ -107,7 +107,7 @@ class CMakeBuildExtension(build_ext):
                     else ["make", "build"]
                 )
 
-                subprocess.run(
+                result = subprocess.run(
                     build_args,
                     cwd=str(agfs_server_dir),
                     env=env,
@@ -115,6 +115,10 @@ class CMakeBuildExtension(build_ext):
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                 )
+                if result.stdout:
+                    print(f"Build stdout: {result.stdout.decode('utf-8', errors='replace')}")
+                if result.stderr:
+                    print(f"Build stderr: {result.stderr.decode('utf-8', errors='replace')}")
 
                 agfs_built_binary = agfs_server_dir / "build" / binary_name
                 if agfs_built_binary.exists():
@@ -135,7 +139,8 @@ class CMakeBuildExtension(build_ext):
                         error_msg += (
                             f"\nBuild stderr:\n{e.stderr.decode('utf-8', errors='replace')}"
                         )
-                print(f"[Warning] {error_msg}")
+                print(f"[Error] {error_msg}")
+                raise RuntimeError(error_msg)
 
             # Build binding library
             try:
@@ -146,7 +151,7 @@ class CMakeBuildExtension(build_ext):
 
                 lib_build_args = ["make", "build-lib"]
 
-                subprocess.run(
+                result = subprocess.run(
                     lib_build_args,
                     cwd=str(agfs_server_dir),
                     env=env,
@@ -154,6 +159,10 @@ class CMakeBuildExtension(build_ext):
                     stdout=subprocess.PIPE,
                     stderr=subprocess.PIPE,
                 )
+                if result.stdout:
+                    print(f"Build stdout: {result.stdout.decode('utf-8', errors='replace')}")
+                if result.stderr:
+                    print(f"Build stderr: {result.stderr.decode('utf-8', errors='replace')}")
 
                 agfs_built_lib = agfs_server_dir / "build" / lib_name
                 if agfs_built_lib.exists():
@@ -162,16 +171,20 @@ class CMakeBuildExtension(build_ext):
                 else:
                     print(f"[Warning] Binding library not found at {agfs_built_lib}")
             except Exception as e:
-                print(f"[Warning] Failed to build AGFS binding library: {e}")
+                error_msg = f"Failed to build AGFS binding library: {e}"
                 if isinstance(e, subprocess.CalledProcessError):
                     if e.stdout:
-                        print(f"Build stdout: {e.stdout.decode('utf-8', errors='replace')}")
+                        error_msg += f"\nBuild stdout: {e.stdout.decode('utf-8', errors='replace')}"
                     if e.stderr:
-                        print(f"Build stderr: {e.stderr.decode('utf-8', errors='replace')}")
+                        error_msg += f"\nBuild stderr: {e.stderr.decode('utf-8', errors='replace')}"
+                print(f"[Error] {error_msg}")
+                raise RuntimeError(error_msg)
 
         else:
             if agfs_target_binary.exists():
-                print(f"[Info] Go compiler not found, but AGFS binary exists at {agfs_target_binary}. Skipping build.")
+                print(
+                    f"[Info] Go compiler not found, but AGFS binary exists at {agfs_target_binary}. Skipping build."
+                )
             elif not agfs_server_dir.exists():
                 print(f"[Warning] AGFS source directory not found at {agfs_server_dir}")
             else:
@@ -219,12 +232,18 @@ class CMakeBuildExtension(build_ext):
                     print(f"Cross-compiling with CARGO_BUILD_TARGET={target}")
                     build_args.extend(["--target", target])
 
-                subprocess.run(
+                result = subprocess.run(
                     build_args,
                     cwd=str(ov_cli_dir),
                     env=env,
                     check=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
                 )
+                if result.stdout:
+                    print(f"Build stdout: {result.stdout.decode('utf-8', errors='replace')}")
+                if result.stderr:
+                    print(f"Build stderr: {result.stderr.decode('utf-8', errors='replace')}")
 
                 # Find built binary
                 if target:
@@ -238,7 +257,14 @@ class CMakeBuildExtension(build_ext):
                 else:
                     print(f"[Warning] Built ov binary not found at {built_bin}")
             except Exception as e:
-                print(f"[Warning] Failed to build ov CLI from source: {e}")
+                error_msg = f"Failed to build ov CLI from source: {e}"
+                if isinstance(e, subprocess.CalledProcessError):
+                    if e.stdout:
+                        error_msg += f"\nBuild stdout: {e.stdout.decode('utf-8', errors='replace')}"
+                    if e.stderr:
+                        error_msg += f"\nBuild stderr: {e.stderr.decode('utf-8', errors='replace')}"
+                print(f"[Error] {error_msg}")
+                raise RuntimeError(error_msg)
         else:
             if not ov_cli_dir.exists():
                 print(f"[Warning] ov CLI source directory not found at {ov_cli_dir}")
@@ -286,9 +312,9 @@ class CMakeBuildExtension(build_ext):
 
 
 setup(
-    install_requires=[
-        f"pyagfs @ file://localhost/{os.path.abspath('third_party/agfs/agfs-sdk/python')}"
-    ],
+    # install_requires=[
+    #     f"pyagfs @ file://localhost/{os.path.abspath('third_party/agfs/agfs-sdk/python')}"
+    # ],
     ext_modules=[
         Extension(
             name="openviking.storage.vectordb.engine",

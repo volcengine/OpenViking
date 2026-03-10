@@ -3,7 +3,6 @@
 __version__ = "0.1.7"
 
 from .client import AGFSClient, FileHandle
-from .binding_client import AGFSBindingClient, FileHandle as BindingFileHandle
 from .exceptions import (
     AGFSClientError,
     AGFSConnectionError,
@@ -12,6 +11,15 @@ from .exceptions import (
     AGFSNotSupportedError,
 )
 from .helpers import cp, upload, download
+
+# Binding client depends on a native shared library (libagfsbinding.so/dylib/dll).
+# Make it optional so the pure-HTTP AGFSClient remains usable when the native
+# library is not installed (e.g. Docker images without CGO build).
+try:
+    from .binding_client import AGFSBindingClient, FileHandle as BindingFileHandle
+except (ImportError, OSError):
+    AGFSBindingClient = None
+    BindingFileHandle = None
 
 __all__ = [
     "AGFSClient",

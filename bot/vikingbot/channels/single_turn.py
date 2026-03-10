@@ -20,9 +20,10 @@ class SingleTurnChannelConfig(BaseChannelConfig):
 
     enabled: bool = True
     type: Any = "cli"
+    _channel_id: str = "default"
 
     def channel_id(self) -> str:
-        return "chat"
+        return self._channel_id
 
 
 class SingleTurnChannel(BaseChannel):
@@ -41,7 +42,7 @@ class SingleTurnChannel(BaseChannel):
         bus: MessageBus,
         workspace_path: Path | None = None,
         message: str = "",
-        session_id: str = "cli__chat__default",
+        session_id: str = "default",
         markdown: bool = True,
         eval: bool = False,
     ):
@@ -59,7 +60,11 @@ class SingleTurnChannel(BaseChannel):
 
         # Send the message
         msg = InboundMessage(
-            session_key=SessionKey.from_safe_name(self.session_id),
+            session_key=SessionKey(
+                type="cli",
+                channel_id=self.config.channel_id(),
+                chat_id=self.session_id,
+            ),
             sender_id="default",
             content=self.message,
         )
@@ -72,6 +77,7 @@ class SingleTurnChannel(BaseChannel):
                 from vikingbot.cli.commands import console
                 from rich.markdown import Markdown
                 from rich.text import Text
+
                 content = self._last_response or ""
                 body = Markdown(content) if self.markdown else Text(content)
                 console.print(body)

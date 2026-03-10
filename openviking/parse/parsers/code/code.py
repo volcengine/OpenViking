@@ -311,11 +311,15 @@ class CodeRepositoryParser(BaseParser):
             error_msg = stderr.decode().strip()
             user_msg = "Git command failed."
             if "Could not resolve hostname" in error_msg:
-                user_msg = "Git command failed: could not resolve hostname. Check the URL or your network."
+                user_msg = (
+                    "Git command failed: could not resolve hostname. Check the URL or your network."
+                )
             elif "Permission denied" in error_msg or "publickey" in error_msg:
-                user_msg = "Git command failed: authentication error. Check your SSH keys or credentials."
+                user_msg = (
+                    "Git command failed: authentication error. Check your SSH keys or credentials."
+                )
             raise RuntimeError(
-                f'{user_msg} Command: git {" ".join(args[1:])}. Details: {error_msg}'
+                f"{user_msg} Command: git {' '.join(args[1:])}. Details: {error_msg}"
             )
         return stdout.decode().strip()
 
@@ -368,7 +372,7 @@ class CodeRepositoryParser(BaseParser):
         # Download (blocking HTTP; run in thread pool to avoid stalling event loop).
         def _download() -> None:
             req = urllib.request.Request(zip_url, headers={"User-Agent": "OpenViking"})
-            with urllib.request.urlopen(req) as resp, open(zip_path, "wb") as f:
+            with urllib.request.urlopen(req, timeout=1800) as resp, open(zip_path, "wb") as f:
                 shutil.copyfileobj(resp, f)
 
         try:

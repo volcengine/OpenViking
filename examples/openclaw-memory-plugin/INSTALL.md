@@ -401,6 +401,22 @@ call "%USERPROFILE%\.openclaw\openviking.env.bat" && openclaw gateway
 > alias openclaw-start='source ~/.openclaw/openviking.env && openclaw gateway'
 > ```
 
+### 5.1 Enable or Disable the Memory Plugin
+
+Disable the OpenViking memory plugin:
+
+```bash
+openclaw config set plugins.slots.memory none
+```
+
+Enable the OpenViking memory plugin:
+
+```bash
+openclaw config set plugins.slots.memory memory-openviking
+```
+
+If the gateway is already running, restart it after changing the slot.
+
 The plugin automatically starts and stops the OpenViking server.
 
 ---

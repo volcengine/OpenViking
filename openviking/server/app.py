@@ -68,7 +68,7 @@ def create_app(
         if config.root_api_key:
             api_key_manager = APIKeyManager(
                 root_key=config.root_api_key,
-                agfs_url=service._agfs_url,
+                agfs_client=service._agfs,
             )
             await api_key_manager.load()
             app.state.api_key_manager = api_key_manager
@@ -136,7 +136,7 @@ def create_app(
     # Catch-all for unhandled exceptions so clients always get JSON
     @app.exception_handler(Exception)
     async def general_error_handler(request: Request, exc: Exception):
-        logger.exception("Unhandled exception in request handler")
+        logger.warning("Unhandled exception: %s", exc)
         return JSONResponse(
             status_code=500,
             content=Response(
@@ -151,6 +151,7 @@ def create_app(
     # Configure Bot API if --with-bot is enabled
     if config.with_bot:
         import openviking.server.routers.bot as bot_module
+
         bot_module.set_bot_api_url(config.bot_api_url)
         logger.info(f"Bot API proxy enabled, forwarding to {config.bot_api_url}")
     else:

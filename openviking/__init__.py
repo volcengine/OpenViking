@@ -26,7 +26,7 @@ except ImportError:
         __version__ = "0.0.0+unknown"
 
 try:
-    from pyagfs import AGFSClient
+    from openviking.pyagfs import AGFSClient
 except ImportError:
     raise ImportError(
         "pyagfs not found. Please install: pip install -e third_party/agfs/agfs-sdk/python"

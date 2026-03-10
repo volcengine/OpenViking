@@ -69,9 +69,7 @@ class DatasetGenerator:
         # 2. Split content into chunks if needed
         # 3. Use LLM to generate (Question, Answer, Context) triples
         return EvalDataset(
-            name=f"gen_{uuid.uuid4().hex[:8]}",
-            description=f"Generated from {uri_base}",
-            samples=[]
+            name=f"gen_{uuid.uuid4().hex[:8]}", description=f"Generated from {uri_base}", samples=[]
         )
 
     async def generate_from_content(
@@ -127,13 +125,10 @@ class DatasetGenerator:
                         query=item["question"],
                         ground_truth=item["answer"],
                         context=[item["context"]],
-                        meta={"source": source_name}
+                        meta={"source": source_name},
                     )
                 )
         except Exception as e:
             logger.error(f"Failed to generate samples: {e}")
 
-        return EvalDataset(
-            name=f"gen_{source_name}",
-            samples=samples
-        )
+        return EvalDataset(name=f"gen_{source_name}", samples=samples)

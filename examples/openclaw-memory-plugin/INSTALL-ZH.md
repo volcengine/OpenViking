@@ -401,6 +401,22 @@ call "%USERPROFILE%\.openclaw\openviking.env.bat" && openclaw gateway
 > alias openclaw-start='source ~/.openclaw/openviking.env && openclaw gateway'
 > ```
 
+### 5.1 启用或关闭记忆插件
+
+关闭 OpenViking 记忆插件：
+
+```bash
+openclaw config set plugins.slots.memory none
+```
+
+启用 OpenViking 记忆插件：
+
+```bash
+openclaw config set plugins.slots.memory memory-openviking
+```
+
+如果 gateway 已在运行，修改 slot 后请重启 gateway 使配置生效。
+
 插件会自动启动和停止 OpenViking 服务。
 
 ---

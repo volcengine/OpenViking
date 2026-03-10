@@ -9,8 +9,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Dict, Optional
 
-from pyagfs import AGFSClient
-
+from openviking.pyagfs import AGFSClient
 from openviking.server.identity import ResolvedIdentity, Role
 from openviking_cli.exceptions import (
     AlreadyExistsError,
@@ -52,9 +51,15 @@ class APIKeyManager:
     In-memory index for O(1) key lookup at runtime.
     """
 
-    def __init__(self, root_key: str, agfs_url: str):
+    def __init__(self, root_key: str, agfs_client: AGFSClient):
+        """Initialize APIKeyManager.
+
+        Args:
+            root_key: Global root API key for administrative access.
+            agfs_client: AGFS client for persistent storage of user keys.
+        """
         self._root_key = root_key
-        self._agfs = AGFSClient(agfs_url)
+        self._agfs = agfs_client
         self._accounts: Dict[str, AccountInfo] = {}
         self._user_keys: Dict[str, UserKeyEntry] = {}
 

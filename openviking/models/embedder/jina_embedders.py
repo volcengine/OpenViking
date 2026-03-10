@@ -166,4 +166,3 @@ class JinaDenseEmbedder(DenseEmbedderBase):
             int: Vector dimension
         """
         return self._dimension
-

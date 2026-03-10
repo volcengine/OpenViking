@@ -120,6 +120,36 @@
 
 ---
 
+## Step 6：配置 ov.conf
+
+对于没有提交到仓库，或者在第三方仓库的 Adapter，可以通过配置 `backend` 为完整的类路径来动态加载。
+同时，可以使用 `custom_params` 字段传递自定义参数。
+
+在 `ov.conf`  中添加如下配置：
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "backend": "tests.storage.mock_backend.MockCollectionAdapter",
+      "name": "mock_test_collection",
+      "custom_params": {
+        "custom_param1": "val1",
+        "custom_param2": 123
+      }
+    }
+  }
+}
+```
+
+注意：
+1. `backend`: 填写 Adapter 类的完整 Python 路径（例如 `my_project.adapters.MyAdapter`）。
+2. `custom_params`: 这是一个字典，你可以放入任何自定义参数，Adapter 的 `from_config` 方法可以通过 `config.custom_params` 获取这些值。
+
+
+
+---
+
 ## 5. Filter 与查询兼容规则
 
 - Adapter 需要兼容统一过滤表达。

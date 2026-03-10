@@ -37,13 +37,14 @@ class OpenAPIChannelConfig(BaseChannelConfig):
     """Configuration for OpenAPI channel."""
 
     enabled: bool = True
-    type: str = "openapi"
+    type: str = "cli"
     api_key: str = ""  # If empty, no auth required
     allow_from: list[str] = []
     max_concurrent_requests: int = 100
+    _channel_id: str = "default"
 
     def channel_id(self) -> str:
-        return "openapi"
+        return self._channel_id
 
 
 class PendingResponse:
@@ -293,7 +294,7 @@ class OpenAPIChannel(BaseChannel):
         try:
             # Build session key
             session_key = SessionKey(
-                type="openapi",
+                type="cli",
                 channel_id=self.config.channel_id(),
                 chat_id=session_id,
             )
@@ -362,7 +363,7 @@ class OpenAPIChannel(BaseChannel):
             try:
                 # Build session key and send message
                 session_key = SessionKey(
-                    type="openapi",
+                    type="cli",
                     channel_id=self.config.channel_id(),
                     chat_id=session_id,
                 )
@@ -388,10 +389,7 @@ class OpenAPIChannel(BaseChannel):
 
             except Exception as e:
                 logger.exception(f"Error in stream generator: {e}")
-                error_event = ChatStreamEvent(
-                    event=EventType.RESPONSE,
-                    data={"error": str(e)}
-                )
+                error_event = ChatStreamEvent(event=EventType.RESPONSE, data={"error": str(e)})
                 yield f"data: {error_event.model_dump_json()}\n\n"
             finally:
                 self._pending.pop(session_id, None)
@@ -436,7 +434,7 @@ def get_openapi_router(bus: MessageBus, config: Config) -> APIRouter:
 
     # Register channel's send method as subscriber for outbound messages
     bus.subscribe_outbound(
-        f"openapi__{openapi_config.channel_id()}",
+        f"cli__{openapi_config.channel_id()}",
         channel.send,
     )
 

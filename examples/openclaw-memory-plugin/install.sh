@@ -40,7 +40,7 @@ PLUGIN_DEST="${OPENCLAW_DIR}/extensions/memory-openviking"
 DEFAULT_SERVER_PORT=1933
 DEFAULT_AGFS_PORT=1833
 DEFAULT_VLM_MODEL="doubao-seed-2-0-pro-260215"
-DEFAULT_EMBED_MODEL="doubao-embedding-vision-250615"
+DEFAULT_EMBED_MODEL="doubao-embedding-vision-251215"
 SELECTED_SERVER_PORT="${DEFAULT_SERVER_PORT}"
 LANG_UI="en"
 
@@ -438,7 +438,7 @@ configure_openviking_conf() {
   },
   "embedding": {
     "dense": {
-      "backend": "volcengine",
+      "provider": "volcengine",
       "api_key": ${embedding_api_json},
       "model": "${embedding_model}",
       "api_base": "https://ark.cn-beijing.volces.com/api/v3",
@@ -447,7 +447,7 @@ configure_openviking_conf() {
     }
   },
   "vlm": {
-    "backend": "volcengine",
+    "provider": "volcengine",
     "api_key": ${vlm_api_json},
     "model": "${vlm_model}",
     "api_base": "https://ark.cn-beijing.volces.com/api/v3",
@@ -524,7 +524,7 @@ configure_openclaw_plugin() {
   openclaw config set plugins.entries.memory-openviking.config.mode local
   openclaw config set plugins.entries.memory-openviking.config.configPath "${config_path}"
   openclaw config set plugins.entries.memory-openviking.config.port "${server_port}"
-  openclaw config set plugins.entries.memory-openviking.config.targetUri viking://
+  openclaw config set plugins.entries.memory-openviking.config.targetUri viking://user/memories
   openclaw config set plugins.entries.memory-openviking.config.autoRecall true --json
   openclaw config set plugins.entries.memory-openviking.config.autoCapture true --json
   info "$(tr "OpenClaw plugin configured" "OpenClaw 插件配置完成")"

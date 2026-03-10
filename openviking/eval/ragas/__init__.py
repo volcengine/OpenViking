@@ -47,6 +47,7 @@ class RagasConfig:
         show_progress: Whether to show progress bar during evaluation.
         raise_exceptions: Whether to raise exceptions during evaluation.
     """
+
     max_workers: int = 16
     batch_size: int = 10
     timeout: int = 180
@@ -316,12 +317,7 @@ class RagasEvaluator(BaseEvaluator):
                 if metric_name in df.columns:
                     scores[metric_name] = float(df.iloc[i][metric_name])
 
-            eval_results.append(
-                EvalResult(
-                    sample=sample,
-                    scores=scores
-                )
-            )
+            eval_results.append(EvalResult(sample=sample, scores=scores))
 
         mean_scores = {}
         for metric in self.metrics:

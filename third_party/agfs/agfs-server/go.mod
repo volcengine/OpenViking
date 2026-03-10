@@ -1,6 +1,6 @@
 module github.com/c4pt0r/agfs/agfs-server
 
-go 1.19
+go 1.22.0
 
 require (
 	github.com/aws/aws-sdk-go-v2 v1.39.2

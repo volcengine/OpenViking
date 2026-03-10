@@ -60,7 +60,9 @@ class QQChannel(BaseChannel):
     async def start(self) -> None:
         """Start the QQ bot."""
         if not QQ_AVAILABLE:
-            logger.exception("QQ SDK not installed. Install with: uv pip install 'vikingbot[qq]' (or uv pip install -e \".[qq]\" for local dev)")
+            logger.exception(
+                "QQ SDK not installed. Install with: uv pip install 'vikingbot[qq]' (or uv pip install -e \".[qq]\" for local dev)"
+            )
             return
 
         if not self.config.app_id or not self.config.secret:

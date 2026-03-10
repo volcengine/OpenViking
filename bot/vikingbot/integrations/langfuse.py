@@ -12,6 +12,7 @@ propagate_attributes = None
 try:
     from langfuse import Langfuse
     from langfuse import propagate_attributes as _propagate_attributes
+
     propagate_attributes = _propagate_attributes
 except ImportError:
     pass
@@ -36,12 +37,16 @@ class LangfuseClient:
             return
 
         if Langfuse is None:
-            logger.warning("Langfuse not installed. Install with: uv pip install vikingbot[langfuse] (or uv pip install -e \".[langfuse]\" for local dev). Configure in ~/.openviking/ov.conf under bot.langfuse")
+            logger.warning(
+                'Langfuse not installed. Install with: uv pip install vikingbot[langfuse] (or uv pip install -e ".[langfuse]" for local dev). Configure in ~/.openviking/ov.conf under bot.langfuse'
+            )
             self.enabled = False
             return
 
         if not secret_key:
-            logger.warning("Langfuse enabled but no secret_key provided. Configure in ~/.openviking/ov.conf under bot.langfuse")
+            logger.warning(
+                "Langfuse enabled but no secret_key provided. Configure in ~/.openviking/ov.conf under bot.langfuse"
+            )
             self.enabled = False
             return
 
@@ -61,7 +66,7 @@ class LangfuseClient:
     def get_instance(cls) -> "LangfuseClient":
         """Get the singleton instance."""
         if cls._instance is None:
-            logger.warning("[LANGFUSE] No instance set, creating default (disabled) instance")
+            logger.warning("[LANGFUSE] disabled")
             cls._instance = LangfuseClient(enabled=False)
         return cls._instance
 
@@ -93,7 +98,9 @@ class LangfuseClient:
             yield
             return
         if not self._client:
-            logger.warning(f"[LANGFUSE] propagate_attributes skipped: Langfuse client not initialized")
+            logger.warning(
+                f"[LANGFUSE] propagate_attributes skipped: Langfuse client not initialized"
+            )
             yield
             return
 
@@ -115,7 +122,9 @@ class LangfuseClient:
                 with propagate_attributes(**propagate_kwargs):
                     yield
             else:
-                logger.warning(f"[LANGFUSE] propagate_attributes not available (SDK version may not support it)")
+                logger.warning(
+                    f"[LANGFUSE] propagate_attributes not available (SDK version may not support it)"
+                )
                 yield
         except Exception as e:
             logger.debug(f"[LANGFUSE] propagate_attributes error: {e}")

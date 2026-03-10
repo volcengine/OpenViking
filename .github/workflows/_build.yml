@@ -79,6 +79,9 @@ jobs:
       run: |
         git reset --hard HEAD
         git clean -fd
+        # For sdist, ensure local runtime binaries are not packaged even if present
+        rm -rf openviking/bin openviking/lib third_party/agfs/bin || true
+        rm -f openviking/storage/vectordb/*.so openviking/storage/vectordb/*.dylib openviking/storage/vectordb/*.dll openviking/storage/vectordb/*.exe || true
         rm -rf openviking/_version.py openviking.egg-info
         # Ignore uv.lock changes to avoid dirty state in setuptools_scm
         git update-index --assume-unchanged uv.lock || true
@@ -99,7 +102,7 @@ jobs:
       run: uv run --frozen python -m build --sdist
 
     - name: Store the distribution packages
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v7
       with:
         name: python-package-distributions-sdist
         path: dist/*.tar.gz
@@ -264,7 +267,7 @@ jobs:
         rmdir dist_fixed
 
     - name: Store the distribution packages
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v7
       with:
         name: python-package-distributions-linux-${{ matrix.python-version }}
         path: dist/
@@ -402,7 +405,7 @@ jobs:
       run: uv run --frozen python -m build --wheel
 
     - name: Store the distribution packages
-      uses: actions/upload-artifact@v6
+      uses: actions/upload-artifact@v7
       with:
         name: python-package-distributions-${{ matrix.os == 'macos-latest' && 'macos-arm64' || matrix.os == 'macos-15-intel' && 'macos-x86_64' || matrix.os == 'windows-latest' && 'windows-x86_64' || matrix.os }}-${{ matrix.python-version }}
         path: dist/

@@ -46,7 +46,6 @@ dependencies = [
     "apscheduler>=3.11.0",
     "volcengine>=1.0.216",
     "volcengine-python-sdk[ark]>=5.0.3",
-    "pyagfs",
     "fastapi>=0.128.0",
     "uvicorn>=0.39.0",
     "xxhash>=3.0.0",
@@ -97,6 +96,9 @@ eval = [
     "datasets>=2.0.0",
     "pandas>=2.0.0",
 ]
+bot = [
+    "vikingbot>=0.1.3",
+]
 
 [project.urls]
 Homepage = "https://github.com/volcengine/openviking"
@@ -107,7 +109,7 @@ Issues = "https://github.com/volcengine/openviking/issues"
 [project.scripts]
 ov = "openviking_cli.rust_cli:main"  # Rust CLI 入口（极简包装器）
 openviking = "openviking_cli.rust_cli:main"  # Rust CLI 入口（放弃 python CLI）
-openviking-server = "openviking.server.bootstrap:main"
+openviking-server = "openviking_cli.server_bootstrap:main"
 
 [tool.setuptools_scm]
 write_to = "openviking/_version.py"

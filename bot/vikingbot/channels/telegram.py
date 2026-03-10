@@ -99,11 +99,13 @@ class TelegramChannel(BaseChannel):
 
     def __init__(
         self,
-        config: TelegramConfig,
+        config: TelegramChannelConfig,
         bus: MessageBus,
         groq_api_key: str = "",
+        workspace_path: Path | None = None,
+        **kwargs,
     ):
-        super().__init__(config, bus, **kwargs)
+        super().__init__(config, bus, workspace_path=workspace_path, **kwargs)
         self.config: TelegramChannelConfig = config
         self.groq_api_key = groq_api_key
         self._app: Application | None = None
@@ -317,12 +319,12 @@ class TelegramChannel(BaseChannel):
 
                 # Save to workspace/media/
                 from pathlib import Path
+                from vikingbot.utils.helpers import get_media_path
 
                 if self.workspace_path:
                     media_dir = self.workspace_path / "media"
                 else:
-                    # Fallback to ~/.vikingbot/media if workspace not available
-                    media_dir = Path.home() / ".vikingbot" / "media"
+                    media_dir = get_media_path()
                 media_dir.mkdir(parents=True, exist_ok=True)
 
                 file_path = media_dir / f"{media_file.file_id[:16]}{ext}"

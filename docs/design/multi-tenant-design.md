@@ -126,7 +126,7 @@ Request
 class APIKeyManager:
     """API Key 生命周期管理与解析"""
 
-    def __init__(self, root_key: Optional[str], agfs_url: str)
+    def __init__(self, root_key: str, agfs_client: AGFSClient)
     async def load()                                     # 加载所有 account 的 users.json 到内存
     async def save_account(account_id: str)              # 持久化指定 account 的 users.json
     def resolve(api_key: str) -> ResolvedIdentity        # Key → 身份 + 角色

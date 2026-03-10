@@ -7,6 +7,8 @@ from loguru import logger
 
 def ensure_dir(path: Path) -> Path:
     """Ensure a directory exists, creating it if necessary."""
+    if not path.exists():
+        logger.info(f"Creating directory: {path}")
     path.mkdir(parents=True, exist_ok=True)
     return path
 
@@ -18,7 +20,10 @@ _bot_data_path: Path | None = None
 def set_bot_data_path(path: Path) -> None:
     """Set the global bot data path."""
     global _bot_data_path
-    _bot_data_path = path
+    expanded_path = path.expanduser()
+    if not expanded_path.exists():
+        logger.info(f"Storage workspace directory does not exist, will be created: {expanded_path}")
+    _bot_data_path = expanded_path
 
 
 def get_bot_data_path() -> Path:

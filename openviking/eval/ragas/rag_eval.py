@@ -86,6 +86,7 @@ class RAGEvaluator:
 
         if enable_recorder:
             from openviking.eval.recorder import init_recorder
+
             init_recorder(enabled=True)
             logger.info("IO Recorder enabled")
 
@@ -174,11 +175,13 @@ class RAGEvaluator:
 
             if result:
                 for ctx in result:
-                    contexts.append({
-                        "uri": getattr(ctx, "uri", ""),
-                        "content": getattr(ctx, "abstract", "") or getattr(ctx, "overview", ""),
-                        "score": getattr(ctx, "score", 0.0),
-                    })
+                    contexts.append(
+                        {
+                            "uri": getattr(ctx, "uri", ""),
+                            "content": getattr(ctx, "abstract", "") or getattr(ctx, "overview", ""),
+                            "score": getattr(ctx, "score", 0.0),
+                        }
+                    )
 
             retrieval_time = time.time() - start_time
             return {
@@ -284,9 +287,9 @@ def print_report(eval_results: Dict[str, Any]):
     for i, result in enumerate(eval_results.get("results", []), 1):
         print(f"\n[Q{i}] {result['question'][:80]}...")
         print(f"  Contexts Retrieved: {result['context_count']}")
-        print(f"  Retrieval Time: {result['retrieval_time']*1000:.1f}ms")
-        if result['contexts']:
-            for j, ctx in enumerate(result['contexts'][:2], 1):
+        print(f"  Retrieval Time: {result['retrieval_time'] * 1000:.1f}ms")
+        if result["contexts"]:
+            for j, ctx in enumerate(result["contexts"][:2], 1):
                 print(f"  [{j}] URI: {ctx['uri'][:60]}...")
                 print(f"      Score: {ctx['score']:.3f}")
 
@@ -383,7 +386,7 @@ async def main_async(args):
         recorder = get_recorder()
 
         viking_fs = get_viking_fs()
-        if hasattr(viking_fs.agfs, 'stop_recording'):
+        if hasattr(viking_fs.agfs, "stop_recording"):
             viking_fs.agfs.stop_recording()
 
         stats = recorder.get_stats()
@@ -395,10 +398,10 @@ async def main_async(args):
         print(f"VikingDB Operations: {stats['vikingdb_count']}")
         print(f"Total Latency: {stats['total_latency_ms']:.2f} ms")
         print(f"Errors: {stats['errors']}")
-        if stats['operations']:
+        if stats["operations"]:
             print("\nOperations Breakdown:")
-            for op, data in stats['operations'].items():
-                avg_latency = data['total_latency_ms'] / data['count'] if data['count'] > 0 else 0
+            for op, data in stats["operations"].items():
+                avg_latency = data["total_latency_ms"] / data["count"] if data["count"] > 0 else 0
                 print(f"  {op}: {data['count']} calls, avg {avg_latency:.2f} ms")
         print(f"\nRecord file: {recorder.record_file}")
 

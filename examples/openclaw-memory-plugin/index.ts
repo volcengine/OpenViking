@@ -1,6 +1,7 @@
 import { spawn, execSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { readFileSync, existsSync } from "node:fs";
+import { Socket } from "node:net";
 import { join } from "node:path";
 import { homedir, tmpdir, platform } from "node:os";
 
@@ -64,6 +65,8 @@ const CJK_CHAR_REGEX = /[\u3040-\u30ff\u3400-\u9fff\uf900-\ufaff\uac00-\ud7af]/;
 const RELEVANT_MEMORIES_BLOCK_RE = /<relevant-memories>[\s\S]*?<\/relevant-memories>/gi;
 const CONVERSATION_METADATA_BLOCK_RE =
   /(?:^|\n)\s*(?:Conversation info|Conversation metadata|会话信息|对话信息)\s*(?:\([^)]+\))?\s*:\s*```[\s\S]*?```/gi;
+/** Strips "Sender (untrusted metadata): ```json ... ```" so capture sends clean text to OpenViking extract. */
+const SENDER_METADATA_BLOCK_RE = /Sender\s*\([^)]*\)\s*:\s*```[\s\S]*?```/gi;
 const FENCED_JSON_BLOCK_RE = /```json\s*([\s\S]*?)```/gi;
 const METADATA_JSON_KEY_RE =
   /"(session|sessionid|sessionkey|conversationid|channel|sender|userid|agentid|timestamp|timezone)"\s*:/gi;
@@ -76,6 +79,20 @@ const QUESTION_CUE_RE =
   /[?？]|\b(?:what|when|where|who|why|how|which|can|could|would|did|does|is|are)\b|^(?:请问|能否|可否|怎么|如何|什么时候|谁|什么|哪|是否)/i;
 const CAPTURE_LIMIT = 3;
 const SPEAKER_TAG_RE = /(?:^|\s)([A-Za-z\u4e00-\u9fa5][A-Za-z0-9_\u4e00-\u9fa5-]{1,30}):\s/g;
+const DEFAULT_AGFS_PORT = 1833;
+
+/** Read AGFS port from OpenViking config (ov.conf). Used so we can clean both OpenViking and AGFS ports. */
+function getAgfsPortFromConfig(configPath: string): number {
+  try {
+    if (!existsSync(configPath)) return DEFAULT_AGFS_PORT;
+    const raw = readFileSync(configPath, "utf-8");
+    const obj = JSON.parse(raw) as { storage?: { agfs?: { port?: number } } };
+    const p = obj?.storage?.agfs?.port;
+    return typeof p === "number" && p >= 1 && p <= 65535 ? p : DEFAULT_AGFS_PORT;
+  } catch {
+    return DEFAULT_AGFS_PORT;
+  }
+}
 
 function resolveCaptureMinLength(text: string): number {
   return CJK_CHAR_REGEX.test(text) ? 4 : 10;
@@ -97,10 +114,12 @@ function sanitizeUserTextForCapture(text: string): string {
   return text
     .replace(RELEVANT_MEMORIES_BLOCK_RE, " ")
     .replace(CONVERSATION_METADATA_BLOCK_RE, " ")
+    .replace(SENDER_METADATA_BLOCK_RE, " ")
     .replace(FENCED_JSON_BLOCK_RE, (full, inner) =>
       looksLikeMetadataJsonBlock(String(inner ?? "")) ? " " : full,
     )
     .replace(LEADING_TIMESTAMP_PREFIX_RE, "")
+    .replace(/^\s*\[[^\]\n]{1,120}\]\s*/, "")
     .replace(/\u0000/g, "")
     .replace(/\s+/g, " ")
     .trim();
@@ -774,6 +793,14 @@ class OpenVikingClient {
     );
   }
 
+  /** GET session so server loads messages from storage before extract (workaround for AGFS visibility). */
+  async getSession(sessionId: string): Promise<{ message_count?: number }> {
+    return this.request<{ message_count?: number }>(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
+      { method: "GET" },
+    );
+  }
+
   async extractSessionMemories(sessionId: string): Promise<Array<Record<string, unknown>>> {
     return this.request<Array<Record<string, unknown>>>(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/extract`,
@@ -859,6 +886,106 @@ function waitForHealth(baseUrl: string, timeoutMs: number, intervalMs: number): 
   });
 }
 
+function withTimeout<T>(promise: Promise<T>, timeoutMs: number, timeoutMessage: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(timeoutMessage)), timeoutMs);
+    promise.then(
+      (value) => {
+        clearTimeout(timer);
+        resolve(value);
+      },
+      (err) => {
+        clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
+function quickTcpProbe(host: string, port: number, timeoutMs: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = new Socket();
+    let done = false;
+    const finish = (ok: boolean) => {
+      if (done) {
+        return;
+      }
+      done = true;
+      socket.destroy();
+      resolve(ok);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once("connect", () => finish(true));
+    socket.once("timeout", () => finish(false));
+    socket.once("error", () => finish(false));
+    try {
+      socket.connect(port, host);
+    } catch {
+      finish(false);
+    }
+  });
+}
+
+async function quickHealthCheck(baseUrl: string, timeoutMs: number): Promise<boolean> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    const response = await fetch(`${baseUrl}/health`, {
+      method: "GET",
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      return false;
+    }
+    const body = (await response.json().catch(() => ({}))) as { status?: string };
+    return body.status === "ok";
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function quickRecallPrecheck(
+  mode: "local" | "remote",
+  baseUrl: string,
+  defaultPort: number,
+  localProcess: ReturnType<typeof spawn> | null,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const healthOk = await quickHealthCheck(baseUrl, 500);
+  if (healthOk) {
+    return { ok: true };
+  }
+
+  let host = "127.0.0.1";
+  let port = defaultPort;
+  try {
+    const parsed = new URL(baseUrl);
+    if (parsed.hostname) {
+      host = parsed.hostname;
+    }
+    if (parsed.port) {
+      const parsedPort = Number(parsed.port);
+      if (Number.isFinite(parsedPort) && parsedPort > 0) {
+        port = parsedPort;
+      }
+    }
+  } catch {
+    // Keep defaults when baseUrl is malformed.
+  }
+
+  if (mode === "local") {
+    const portOk = await quickTcpProbe(host, port, 200);
+    if (!portOk) {
+      return { ok: false, reason: `local port unavailable (${host}:${port})` };
+    }
+    if (localProcess && (localProcess.killed || localProcess.exitCode !== null || localProcess.signalCode !== null)) {
+      return { ok: false, reason: "local process is not running" };
+    }
+  }
+  return { ok: false, reason: "health check failed" };
+}
+
 const memoryPlugin = {
   id: "memory-openviking",
   name: "Memory (OpenViking)",
@@ -873,6 +1000,25 @@ const memoryPlugin = {
     let clientPromise: Promise<OpenVikingClient>;
     let localProcess: ReturnType<typeof spawn> | null = null;
     let resolveLocalClient: ((c: OpenVikingClient) => void) | null = null;
+    let rejectLocalClient: ((err: unknown) => void) | null = null;
+    let localUnavailableReason: string | null = null;
+    const autoRecallTimeoutMs = 5_000;
+
+    const markLocalUnavailable = (reason: string, err?: unknown) => {
+      if (!localUnavailableReason) {
+        localUnavailableReason = reason;
+        api.logger.warn(
+          `memory-openviking: local mode marked unavailable (${reason})${err ? `: ${String(err)}` : ""}`,
+        );
+      }
+      if (rejectLocalClient) {
+        rejectLocalClient(
+          err instanceof Error ? err : new Error(`memory-openviking unavailable: ${reason}`),
+        );
+        rejectLocalClient = null;
+      }
+      resolveLocalClient = null;
+    };
 
     if (cfg.mode === "local") {
       const cached = localClientCache.get(localCacheKey);
@@ -880,8 +1026,9 @@ const memoryPlugin = {
         localProcess = cached.process;
         clientPromise = Promise.resolve(cached.client);
       } else {
-        clientPromise = new Promise<OpenVikingClient>((resolve) => {
+        clientPromise = new Promise<OpenVikingClient>((resolve, reject) => {
           resolveLocalClient = resolve;
+          rejectLocalClient = reject;
         });
       }
     } else {
@@ -1134,36 +1281,49 @@ const memoryPlugin = {
         const prependContextParts: string[] = [];
 
         if (cfg.autoRecall && queryText.length >= 5) {
-          try {
-            const candidateLimit = Math.max(cfg.recallLimit * 4, cfg.recallLimit);
-            const result = await (await getClient()).find(queryText, {
-              targetUri: cfg.targetUri,
-              limit: candidateLimit,
-              scoreThreshold: 0,
-            });
-            const processed = postProcessMemories(result.memories ?? [], {
-              limit: candidateLimit,
-              scoreThreshold: cfg.recallScoreThreshold,
-            });
-            const memories = pickMemoriesForInjection(processed, cfg.recallLimit, queryText);
-            if (memories.length > 0) {
-              const memoryContext = memories
-                .map((item) => `- [${item.category ?? "memory"}] ${item.abstract ?? item.uri}`)
-                .join("\n");
-              api.logger.info?.(
-                `memory-openviking: injecting ${memories.length} memories into context`,
+          const precheck = await quickRecallPrecheck(cfg.mode, cfg.baseUrl, cfg.port, localProcess);
+          if (!precheck.ok) {
+            api.logger.info?.(
+              `memory-openviking: skipping auto-recall because precheck failed (${precheck.reason})`,
+            );
+          } else {
+            try {
+              const candidateLimit = Math.max(cfg.recallLimit * 4, cfg.recallLimit);
+              const result = await withTimeout(
+                getClient().then((client) =>
+                  client.find(queryText, {
+                    targetUri: cfg.targetUri,
+                    limit: candidateLimit,
+                    scoreThreshold: 0,
+                  }),
+                ),
+                autoRecallTimeoutMs,
+                `OpenViking auto-recall timeout after ${autoRecallTimeoutMs}ms`,
               );
-              api.logger.info?.(
-                `memory-openviking: inject-detail ${toJsonLog({ count: memories.length, memories: summarizeInjectionMemories(memories) })}`,
-              );
-              prependContextParts.push(
-                "<relevant-memories>\nThe following OpenViking memories may be relevant:\n" +
-                  `${memoryContext}\n` +
+              const processed = postProcessMemories(result.memories ?? [], {
+                limit: candidateLimit,
+                scoreThreshold: cfg.recallScoreThreshold,
+              });
+              const memories = pickMemoriesForInjection(processed, cfg.recallLimit, queryText);
+              if (memories.length > 0) {
+                const memoryContext = memories
+                  .map((item) => `- [${item.category ?? "memory"}] ${item.abstract ?? item.uri}`)
+                  .join("\n");
+                api.logger.info?.(
+                  `memory-openviking: injecting ${memories.length} memories into context`,
+                );
+                api.logger.info?.(
+                  `memory-openviking: inject-detail ${toJsonLog({ count: memories.length, memories: summarizeInjectionMemories(memories) })}`,
+                );
+                prependContextParts.push(
+                  "<relevant-memories>\nThe following OpenViking memories may be relevant:\n" +
+                    `${memoryContext}\n` +
                   "</relevant-memories>",
-              );
+                );
+              }
+            } catch (err) {
+              api.logger.warn(`memory-openviking: auto-recall failed: ${String(err)}`);
             }
-          } catch (err) {
-            api.logger.warn(`memory-openviking: auto-recall failed: ${String(err)}`);
           }
         }
 
@@ -1240,6 +1400,8 @@ const memoryPlugin = {
             for (const text of selected) {
               await c.addSessionMessage(sessionId, "user", text);
             }
+            // Force server to read session so storage (e.g. AGFS) sees the written messages before extract
+            await c.getSession(sessionId).catch(() => ({}));
             const extracted = await c.extractSessionMemories(sessionId);
             api.logger.info(
               `memory-openviking: auto-captured ${selected.length} messages, extracted ${extracted.length} memories`,
@@ -1271,8 +1433,7 @@ const memoryPlugin = {
       start: async () => {
         if (cfg.mode === "local" && resolveLocalClient) {
           const baseUrl = cfg.baseUrl;
-          // Local mode: startup (embedder load, AGFS) can take 1–2 min; use longer health timeout
-          const timeoutMs = Math.max(cfg.timeoutMs, 120_000);
+          const timeoutMs = 60_000;
           const intervalMs = 500;
           const defaultPy = IS_WIN ? "python" : "python3";
           let pythonCmd = process.env.OPENVIKING_PYTHON;
@@ -1324,83 +1485,119 @@ const memoryPlugin = {
               (IS_WIN ? ' 或 call "%USERPROFILE%\\.openclaw\\openviking.env.bat"' : " 或 source ~/.openclaw/openviking.env"),
             );
           }
-          // Kill stale OpenViking processes occupying the target port
+          // Kill stale OpenViking and AGFS processes occupying configured ports (so port changes are respected)
+          const agfsPort = getAgfsPortFromConfig(cfg.configPath);
+          const portsToClean = [cfg.port];
+          if (agfsPort !== cfg.port) portsToClean.push(agfsPort);
+
           if (IS_WIN) {
-            try {
-              const netstatOut = execSync(`netstat -ano | findstr "LISTENING" | findstr ":${cfg.port}"`, {
-                encoding: "utf-8", shell: true,
-              }).trim();
-              if (netstatOut) {
-                const pids = new Set<number>();
-                for (const line of netstatOut.split(/\r?\n/)) {
-                  const m = line.trim().match(/\s(\d+)\s*$/);
-                  if (m) pids.add(Number(m[1]));
+            for (const port of portsToClean) {
+              try {
+                const netstatOut = execSync(`netstat -ano | findstr "LISTENING" | findstr ":${port}"`, {
+                  encoding: "utf-8", shell: true,
+                }).trim();
+                if (netstatOut) {
+                  const pids = new Set<number>();
+                  for (const line of netstatOut.split(/\r?\n/)) {
+                    const m = line.trim().match(/\s(\d+)\s*$/);
+                    if (m) pids.add(Number(m[1]));
+                  }
+                  for (const pid of pids) {
+                    if (pid > 0) {
+                      api.logger.info?.(`memory-openviking: killing stale process on port ${port} (pid ${pid})`);
+                      try { execSync(`taskkill /PID ${pid} /F`, { shell: true }); } catch { /* already gone */ }
+                    }
+                  }
+                  await new Promise((r) => setTimeout(r, 500));
+                }
+              } catch { /* netstat not available or no stale process */ }
+            }
+          } else {
+            for (const port of portsToClean) {
+              try {
+                let pids: number[] = [];
+                try {
+                  const lsofOut = execSync(`lsof -ti tcp:${port} -s tcp:listen 2>/dev/null || true`, {
+                    encoding: "utf-8",
+                    shell: "/bin/sh",
+                  }).trim();
+                  if (lsofOut) pids = lsofOut.split(/\s+/).map((s) => Number(s)).filter((n) => n > 0);
+                } catch { /* lsof not available */ }
+                if (pids.length === 0) {
+                  const ssOut = execSync(`ss -tlnp 2>/dev/null | awk -v p=":${port}" '$4 ~ p {gsub(/.*pid=/,""); gsub(/,.*/,""); print; exit}'`, {
+                    encoding: "utf-8",
+                    shell: "/bin/sh",
+                  }).trim();
+                  if (ssOut) {
+                    const n = Number(ssOut);
+                    if (n > 0) pids = [n];
+                  }
                 }
                 for (const pid of pids) {
-                  if (pid > 0) {
-                    api.logger.info?.(`memory-openviking: killing stale process on port ${cfg.port} (pid ${pid})`);
-                    try { execSync(`taskkill /PID ${pid} /F`, { shell: true }); } catch { /* already gone */ }
-                  }
+                  api.logger.info?.(`memory-openviking: killing stale process on port ${port} (pid ${pid})`);
+                  try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
                 }
-                await new Promise((r) => setTimeout(r, 500));
-              }
-            } catch { /* netstat not available or no stale process */ }
-          } else {
-            try {
-              const lsofOut = execSync(`lsof -ti tcp:${cfg.port} -s tcp:listen 2>/dev/null || true`, {
-                encoding: "utf-8",
-                shell: "/bin/sh",
-              }).trim();
-              if (lsofOut) {
-                for (const pidStr of lsofOut.split(/\s+/)) {
-                  const pid = Number(pidStr);
-                  if (pid > 0) {
-                    api.logger.info?.(`memory-openviking: killing stale process on port ${cfg.port} (pid ${pid})`);
-                    try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
-                  }
-                }
-                await new Promise((r) => setTimeout(r, 500));
-              }
-            } catch { /* lsof not available or no stale process */ }
+                if (pids.length) await new Promise((r) => setTimeout(r, 500));
+              } catch { /* port check failed */ }
+            }
           }
 
           // Inherit system environment; optionally override Go/Python paths via env vars
           const pathSep = IS_WIN ? ";" : ":";
           const env = {
             ...process.env,
+            PYTHONUNBUFFERED: "1",
+            PYTHONWARNINGS: "ignore::RuntimeWarning",
             OPENVIKING_CONFIG_FILE: cfg.configPath,
+            OPENVIKING_START_CONFIG: cfg.configPath,
+            OPENVIKING_START_HOST: "127.0.0.1",
+            OPENVIKING_START_PORT: String(cfg.port),
             ...(process.env.OPENVIKING_GO_PATH && { PATH: `${process.env.OPENVIKING_GO_PATH}${pathSep}${process.env.PATH || ""}` }),
             ...(process.env.OPENVIKING_GOPATH && { GOPATH: process.env.OPENVIKING_GOPATH }),
             ...(process.env.OPENVIKING_GOPROXY && { GOPROXY: process.env.OPENVIKING_GOPROXY }),
           };
+          // Run OpenViking server: use run_path on the module file to avoid RuntimeWarning from
+          // "parent package import loads submodule before execution" (exit 3). Fallback to run_module with warning suppressed.
+          const runpyCode = IS_WIN
+            ? `import sys,os,warnings; warnings.filterwarnings('ignore', category=RuntimeWarning, message='.*sys.modules.*'); sys.argv=['openviking.server.bootstrap','--config',os.environ['OPENVIKING_START_CONFIG'],'--host',os.environ.get('OPENVIKING_START_HOST','127.0.0.1'),'--port',os.environ['OPENVIKING_START_PORT']]; import runpy, importlib.util; spec=importlib.util.find_spec('openviking.server.bootstrap'); (runpy.run_path(spec.origin, run_name='__main__') if spec and getattr(spec,'origin',None) else runpy.run_module('openviking.server.bootstrap', run_name='__main__', alter_sys=True))`
+            : `import sys,os,warnings; warnings.filterwarnings('ignore', category=RuntimeWarning, message='.*sys.modules.*'); sys.argv=['openviking.server.bootstrap','--config',os.environ['OPENVIKING_START_CONFIG'],'--host',os.environ.get('OPENVIKING_START_HOST','127.0.0.1'),'--port',os.environ['OPENVIKING_START_PORT']]; import runpy, importlib.util; spec=importlib.util.find_spec('openviking.server.bootstrap'); (runpy.run_path(spec.origin, run_name='__main__') if spec and getattr(spec,'origin',None) else runpy.run_module('openviking.server.bootstrap', run_name='__main__', alter_sys=True))`;
           const child = spawn(
             pythonCmd,
-            [
-              "-m",
-              "openviking.server.bootstrap",
-              "--config",
-              cfg.configPath,
-              "--host",
-              "127.0.0.1",
-              "--port",
-              String(cfg.port),
-            ],
+            ["-c", runpyCode],
             { env, cwd: IS_WIN ? tmpdir() : "/tmp", stdio: ["ignore", "pipe", "pipe"] },
           );
           localProcess = child;
+          const stderrChunks: string[] = [];
           child.on("error", (err) => api.logger.warn(`memory-openviking: local server error: ${String(err)}`));
-          child.stderr?.on("data", (chunk) => api.logger.debug?.(`[openviking] ${String(chunk).trim()}`));
+          child.stderr?.on("data", (chunk) => {
+            const s = String(chunk).trim();
+            if (s) stderrChunks.push(s);
+            api.logger.debug?.(`[openviking] ${s}`);
+          });
+          child.on("exit", (code, signal) => {
+            if (localProcess === child && (code != null && code !== 0 || signal)) {
+              const out = stderrChunks.length ? `\n[openviking stderr]\n${stderrChunks.join("\n")}` : "";
+              api.logger.warn(`memory-openviking: subprocess exited (code=${code}, signal=${signal})${out}`);
+            }
+          });
           try {
             await waitForHealth(baseUrl, timeoutMs, intervalMs);
             const client = new OpenVikingClient(baseUrl, cfg.apiKey, cfg.timeoutMs);
             localClientCache.set(localCacheKey, { client, process: child });
             resolveLocalClient(client);
+            rejectLocalClient = null;
             api.logger.info(
               `memory-openviking: local server started (${baseUrl}, config: ${cfg.configPath})`,
             );
           } catch (err) {
             localProcess = null;
             child.kill("SIGTERM");
+            markLocalUnavailable("startup failed", err);
+            if (stderrChunks.length) {
+              api.logger.warn(
+                `memory-openviking: startup failed (health check timeout or error). OpenViking stderr:\n${stderrChunks.join("\n")}`,
+              );
+            }
             throw err;
           }
         } else {

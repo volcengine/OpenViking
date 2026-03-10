@@ -67,7 +67,6 @@ class OpenVikingService:
 
         # Infrastructure
         self._agfs_manager: Optional[AGFSManager] = None
-        self._agfs_url: Optional[str] = None
         self._agfs_client: Optional[Any] = None
         self._queue_manager: Optional[QueueManager] = None
         self._vikingdb_manager: Optional[VikingDBManager] = None
@@ -115,10 +114,8 @@ class OpenVikingService:
         if mode == "http-client":
             self._agfs_manager = AGFSManager(config=config.agfs)
             self._agfs_manager.start()
-            self._agfs_url = self._agfs_manager.url
-            config.agfs.url = self._agfs_url
-        else:
-            self._agfs_url = config.agfs.url
+            agfs_url = self._agfs_manager.url
+            config.agfs.url = agfs_url
 
         # Create AGFS client using utility
         self._agfs_client = create_agfs_client(config.agfs)
@@ -144,7 +141,12 @@ class OpenVikingService:
             self._queue_manager.setup_standard_queues(self._vikingdb_manager)
 
         # Initialize TransactionManager
-        self._transaction_manager = init_transaction_manager(agfs_config=config.agfs)
+        self._transaction_manager = init_transaction_manager(agfs=self._agfs_client)
+
+    @property
+    def _agfs(self) -> Any:
+        """Internal access to AGFS client for APIKeyManager."""
+        return self._agfs_client
 
     @property
     def viking_fs(self) -> Optional[VikingFS]:

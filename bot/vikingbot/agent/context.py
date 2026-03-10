@@ -6,8 +6,6 @@ import platform
 from pathlib import Path
 from typing import Any
 
-from loguru import logger
-
 from vikingbot.agent.memory import MemoryStore
 from vikingbot.agent.skills import SkillsLoader
 from vikingbot.config.schema import SessionKey
@@ -89,18 +87,19 @@ class ContextBuilder:
         if self.sandbox_manager:
             sandbox_cwd = await self.sandbox_manager.get_sandbox_cwd(session_key)
             parts.append(
-                f"## Sandbox Environment\nYou are running in a sandboxed environment. All file operations and command execution are restricted to the sandbox directory.\nThe sandbox root directory is `{sandbox_cwd}` (use relative paths for all operations)."
+                f"## Sandbox Environment\n\nYou are running in a sandboxed environment. All file operations and command execution are restricted to the sandbox directory.\nThe sandbox root directory is `{sandbox_cwd}` (use relative paths for all operations)."
             )
 
         # Add session context
-        session_context ="## Current Session"
+        session_context = "## Current Session"
         if session_key and session_key.type:
             session_context += f"\nChannel: {session_key.type}"
             if self._is_group_chat:
                 session_context += (
                     f"\n**Group chat session.** Current user ID: {self._sender_id}\n"
                     f"Multiple users can participate in this conversation. Each user message is prefixed with the user ID in brackets like @<user_id>. "
-                    f"You should pay attention to who is speaking to understand the context. ")
+                    f"You should pay attention to who is speaking to understand the context. "
+                )
         parts.append(session_context)
 
         # Viking user profile
@@ -149,8 +148,8 @@ Skills with available="false" need dependencies installed first - you can try in
 
     async def _get_identity(self, session_key: SessionKey) -> str:
         """Get the core identity section."""
-        from datetime import datetime
         import time as _time
+        from datetime import datetime
 
         now = datetime.now().strftime("%Y-%m-%d %H:%M (%A)")
         tz = _time.strftime("%Z") or "UTC"
@@ -165,6 +164,7 @@ Skills with available="false" need dependencies installed first - you can try in
             workspace_display = workspace_path
 
         return f"""# vikingbot 🐈
+
 You are VikingBot, an AI assistant built based on the OpenViking context database.
 When acquiring information, data, and knowledge, you **prioritize using openviking tools to read and search OpenViking (a context database) above all other sources**.
 You have access to tools that allow you to:
@@ -306,7 +306,10 @@ Always be helpful, accurate, and concise. When using tools, think step by step: 
         Returns:
             Updated message list.
         """
-        msg: dict[str, Any] = {"role": "assistant", "content": content or ""}
+        msg: dict[str, Any] = {"role": "assistant"}
+
+        if content:
+            msg["content"] = content
 
         if tool_calls:
             msg["tool_calls"] = tool_calls
