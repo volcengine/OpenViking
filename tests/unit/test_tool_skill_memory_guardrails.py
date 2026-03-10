@@ -222,7 +222,7 @@ async def test_merge_tool_memory_old_format_upgrades_to_reme(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_merge_tool_memory_reme_format_parses_and_merges(monkeypatch):
+async def test_merge_tool_memory_content_format_parses_and_merges(monkeypatch):
     extractor = MemoryExtractor()
     monkeypatch.setattr(extractor, "_get_tool_static_description", lambda name: "static desc")
     monkeypatch.setattr(extractor, "_merge_memory_bundle", AsyncMock(return_value=None))

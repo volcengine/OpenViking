@@ -910,7 +910,7 @@ class MemoryExtractor:
         self._ensure_tool_desc_cache()
         return (self._tool_desc_cache.get(tool_name) or "").strip()
 
-    def _extract_reme_field(self, content: str, keys: list[str]) -> str:
+    def _extract_content_field(self, content: str, keys: list[str]) -> str:
         if not content:
             return ""
         for key in keys:
@@ -919,7 +919,7 @@ class MemoryExtractor:
                 return (m.group(1) or "").strip()
         return ""
 
-    def _extract_reme_section(self, content: str, headings: list[str]) -> str:
+    def _extract_content_section(self, content: str, headings: list[str]) -> str:
         if not content:
             return ""
         for h in headings:
@@ -966,27 +966,27 @@ class MemoryExtractor:
 
     def _extract_tool_memory_context_fields_from_text(self, text: str) -> dict:
         return {
-            "best_for": self._extract_reme_field(text, ["Best for", "Best scenarios", "最佳场景", "适用场景"]),
-            "optimal_params": self._extract_reme_field(
+            "best_for": self._extract_content_field(text, ["Best for", "Best scenarios", "最佳场景", "适用场景"]),
+            "optimal_params": self._extract_content_field(
                 text, ["Optimal params", "Optimal parameters", "最优参数", "推荐参数"]
             ),
-            "common_failures": self._extract_reme_field(text, ["Common failures", "常见失败", "失败模式"]),
-            "recommendation": self._extract_reme_field(
+            "common_failures": self._extract_content_field(text, ["Common failures", "常见失败", "失败模式"]),
+            "recommendation": self._extract_content_field(
                 text, ["Recommendation", "Recommendations", "推荐", "建议"]
             ),
         }
 
     def _extract_skill_memory_context_fields_from_text(self, text: str) -> dict:
         return {
-            "best_for": self._extract_reme_field(text, ["Best for", "最佳场景", "适用场景"]),
-            "recommended_flow": self._extract_reme_field(
+            "best_for": self._extract_content_field(text, ["Best for", "最佳场景", "适用场景"]),
+            "recommended_flow": self._extract_content_field(
                 text, ["Recommended flow", "Recommended Flow", "推荐流程", "推荐步骤"]
             ),
-            "key_dependencies": self._extract_reme_field(
+            "key_dependencies": self._extract_content_field(
                 text, ["Key dependencies", "Key Dependencies", "关键依赖", "前置条件"]
             ),
-            "common_failures": self._extract_reme_field(text, ["Common failures", "常见失败", "失败模式"]),
-            "recommendation": self._extract_reme_field(
+            "common_failures": self._extract_content_field(text, ["Common failures", "常见失败", "失败模式"]),
+            "recommendation": self._extract_content_field(
                 text, ["Recommendation", "Recommendations", "推荐", "建议"]
             ),
         }
@@ -1003,28 +1003,28 @@ class MemoryExtractor:
 
         if not best_for:
             best_for = (
-                self._extract_reme_field(guidelines, ["Best for", "Best scenarios", "最佳场景", "适用场景"])
+                self._extract_content_field(guidelines, ["Best for", "Best scenarios", "最佳场景", "适用场景"])
                 or self._compact_block(
-                    self._extract_reme_section(guidelines, ["Best Scenarios", "Best for", "最佳场景"])
+                    self._extract_content_section(guidelines, ["Best Scenarios", "Best for", "最佳场景"])
                 )
             )
         if not optimal_params:
             optimal_params = (
-                self._extract_reme_field(guidelines, ["Optimal params", "Optimal parameters", "最优参数", "推荐参数"])
+                self._extract_content_field(guidelines, ["Optimal params", "Optimal parameters", "最优参数", "推荐参数"])
                 or self._compact_block(
-                    self._extract_reme_section(guidelines, ["Optimal Parameters", "Optimal params", "最优参数"])
+                    self._extract_content_section(guidelines, ["Optimal Parameters", "Optimal params", "最优参数"])
                 )
             )
         if not common_failures:
             common_failures = (
-                self._extract_reme_field(guidelines, ["Common failures", "常见失败", "失败模式"])
-                or self._compact_block(self._extract_reme_section(guidelines, ["Common Failures", "常见失败"]))
+                self._extract_content_field(guidelines, ["Common failures", "常见失败", "失败模式"])
+                or self._compact_block(self._extract_content_section(guidelines, ["Common Failures", "常见失败"]))
             )
         if not recommendation:
             recommendation = (
-                self._extract_reme_field(guidelines, ["Recommendation", "Recommendations", "推荐", "建议"])
+                self._extract_content_field(guidelines, ["Recommendation", "Recommendations", "推荐", "建议"])
                 or self._compact_block(
-                    self._extract_reme_section(guidelines, ["Recommendations", "Recommendation", "推荐"])
+                    self._extract_content_section(guidelines, ["Recommendations", "Recommendation", "推荐"])
                 )
             )
 
@@ -1311,35 +1311,35 @@ class MemoryExtractor:
 
         if not best_for:
             best_for = (
-                self._extract_reme_field(guidelines, ["Best for", "最佳场景", "适用场景"])
+                self._extract_content_field(guidelines, ["Best for", "最佳场景", "适用场景"])
                 or self._compact_block(
-                    self._extract_reme_section(guidelines, ["Best for", "Best Scenarios", "最佳场景"])
+                    self._extract_content_section(guidelines, ["Best for", "Best Scenarios", "最佳场景"])
                 )
             )
         if not recommended_flow:
             recommended_flow = (
-                self._extract_reme_field(guidelines, ["Recommended flow", "推荐流程", "推荐步骤"])
+                self._extract_content_field(guidelines, ["Recommended flow", "推荐流程", "推荐步骤"])
                 or self._compact_block(
-                    self._extract_reme_section(guidelines, ["Recommended Flow", "推荐流程", "推荐步骤"])
+                    self._extract_content_section(guidelines, ["Recommended Flow", "推荐流程", "推荐步骤"])
                 )
             )
         if not key_dependencies:
             key_dependencies = (
-                self._extract_reme_field(guidelines, ["Key dependencies", "关键依赖", "前置条件"])
+                self._extract_content_field(guidelines, ["Key dependencies", "关键依赖", "前置条件"])
                 or self._compact_block(
-                    self._extract_reme_section(guidelines, ["Key Dependencies", "关键依赖", "前置条件"])
+                    self._extract_content_section(guidelines, ["Key Dependencies", "关键依赖", "前置条件"])
                 )
             )
         if not common_failures:
             common_failures = (
-                self._extract_reme_field(guidelines, ["Common failures", "常见失败", "失败模式"])
-                or self._compact_block(self._extract_reme_section(guidelines, ["Common Failures", "常见失败"]))
+                self._extract_content_field(guidelines, ["Common failures", "常见失败", "失败模式"])
+                or self._compact_block(self._extract_content_section(guidelines, ["Common Failures", "常见失败"]))
             )
         if not recommendation:
             recommendation = (
-                self._extract_reme_field(guidelines, ["Recommendation", "Recommendations", "推荐", "建议"])
+                self._extract_content_field(guidelines, ["Recommendation", "Recommendations", "推荐", "建议"])
                 or self._compact_block(
-                    self._extract_reme_section(guidelines, ["Recommendations", "Recommendation", "推荐"])
+                    self._extract_content_section(guidelines, ["Recommendations", "Recommendation", "推荐"])
                 )
             )
 
