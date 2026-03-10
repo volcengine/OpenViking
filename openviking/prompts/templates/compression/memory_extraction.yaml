@@ -338,8 +338,12 @@ template: |
     "category": "tools",
     "tool_name": "web_search",
     "abstract": "web_search: Technical docs search optimal, needs specific query terms",
-    "overview": "## Tool Info\\n- **Name**: web_search\\n- **Type**: external_api\\n\\n## Statistics\\n- **Success Rate**: 92%\\n- **Avg Time**: 2.3s\\n\\n## Best Scenarios\\n- Technical documentation (95%)\\n- Tutorials (90%)\\n\\n## Optimal Parameters\\n- max_results: 5-20\\n- language: 'en'",
-    "content": "## Recommendations\\n\\n### Query Optimization\\n- Use specific multi-word queries\\n- Add qualifiers like 'tutorial', 'guide'\\n\\n## Good Cases\\n- 'Python asyncio tutorial' → 3 high-quality results\\n\\n## Bad Cases\\n- 'programming' → timeout (too broad)"
+    "best_for": "Technical documentation, tutorials",
+    "optimal_params": "max_results=5-20, language='en'",
+    "common_failures": "Generic queries timeout; max_results>50 unreliable",
+    "recommendation": "Use specific multi-word queries; add qualifiers like 'tutorial' or 'guide'",
+    "overview": "## Tool Info\\n- **Name**: web_search\\n- **Type**: external_api\\n\\n## Statistics\\n- **Success Rate**: 92%\\n- **Avg Time**: 2.3s\\n\\n## Tool Memory Context\\n- Best for: Technical documentation, tutorials\\n- Optimal params: max_results=5-20, language='en'\\n- Common failures: Generic queries timeout; max_results>50 unreliable\\n- Recommendation: Use specific multi-word queries; add qualifiers like 'tutorial' or 'guide'",
+    "content": "## Guidelines\\n\\n### Query Optimization\\n- Use specific multi-word queries\\n- Add qualifiers like 'tutorial', 'guide'\\n\\n## Good Cases\\n- 'Python asyncio tutorial' → 3 high-quality results\\n\\n## Bad Cases\\n- 'programming' → timeout (too broad)"
   }
   ```
 
@@ -350,8 +354,13 @@ template: |
     "category": "skills",
     "skill_name": "create_presentation",
     "abstract": "create_presentation: Collect materials first for better efficiency",
-    "overview": "## Skill Info\\n- **Name**: create_presentation\\n- **Type**: workflow\\n\\n## Statistics\\n- **Success Rate**: 85%\\n- **Avg Time**: 120s\\n\\n## Recommended Flow\\n1. Collect materials\\n2. Generate outline\\n3. Create slides\\n4. Refine content\\n\\n## Key Dependencies\\n- Clear topic\\n- Target audience",
-    "content": "## Execution Strategy\\n\\n### Preparation\\n1. Confirm topic and audience\\n2. Collect reference materials\\n\\n## Good Cases\\n- Tech sharing: collected asyncio docs first → 90s, high quality\\n\\n## Bad Cases\\n- 'Make a PPT' without topic → multiple reworks needed"
+    "best_for": "Slide creation tasks with clear topic and audience",
+    "recommended_flow": "Collect materials → Outline → Create slides → Refine",
+    "key_dependencies": "Clear topic; target audience",
+    "common_failures": "Missing topic/audience causes rework",
+    "recommendation": "Collect reference materials before generating slides",
+    "overview": "## Skill Info\\n- **Name**: create_presentation\\n- **Type**: workflow\\n\\n## Statistics\\n- **Success Rate**: 85%\\n\\n## Skill Memory Context\\n- Best for: Slide creation tasks with clear topic and audience\\n- Recommended flow: Collect materials → Outline → Create slides → Refine\\n- Key dependencies: Clear topic; target audience\\n- Common failures: Missing topic/audience causes rework\\n- Recommendation: Collect reference materials before generating slides",
+    "content": "## Guidelines\\n\\n### Preparation\\n1. Confirm topic and audience\\n2. Collect reference materials\\n\\n## Good Cases\\n- Tech sharing: collected asyncio docs first → high quality\\n\\n## Bad Cases\\n- 'Make a PPT' without topic → multiple reworks needed"
   }
   ```
 
@@ -366,7 +375,13 @@ template: |
         "overview": "Structured Markdown, use different heading templates by category",
         "content": "Free Markdown, complete narrative",
         "tool_name": "Only for tools category: the tool name from input [ToolCall] record (must copy exactly)",
-        "skill_name": "Only for skills category: inferred from full conversation context (descriptive name for the skill/workflow)"
+        "skill_name": "Only for skills category: if any [ToolCall] record contains skill_name, copy it exactly; otherwise infer a descriptive skill/workflow name from context",
+        "best_for": "Optional: tools/skills only, what this tool/skill is best used for",
+        "optimal_params": "Optional: tools only, best parameter settings and ranges",
+        "recommended_flow": "Optional: skills only, recommended execution flow",
+        "key_dependencies": "Optional: skills only, prerequisites/inputs needed",
+        "common_failures": "Optional: tools/skills only, common failure patterns",
+        "recommendation": "Optional: tools/skills only, short actionable recommendations"
       }
     ]
   }
@@ -377,7 +392,10 @@ template: |
   - If nothing worth recording, return {"memories": []}
   - For preferences, keep each memory as one independently updatable facet; do not combine unrelated facets in one memory
   - For tools category: tool_name MUST be copied from [ToolCall] tool_name field exactly, do NOT modify it
-  - For skills category: skill_name should be inferred from the full conversation context (skill may involve internal tools not shown in [ToolCall]). Use a descriptive name that represents the skill/workflow.
+  - For skills category: if any [ToolCall] record contains skill_name, skill_name MUST be copied from that field exactly, do NOT translate or add suffix/prefix; only if there is no skill_name in any [ToolCall] record, infer a descriptive skill/workflow name from the full conversation context
+  - For tools/skills category: fill "best_for/common_failures/recommendation" when evidence exists in recent_messages and tool calls; if uncertain, omit the field (do NOT fabricate).
+  - For tools category: fill "optimal_params" when there is evidence (e.g. repeated parameter choices correlated with better outcomes); otherwise omit.
+  - For skills category: fill "recommended_flow/key_dependencies" when there is evidence; otherwise omit.
 
 llm_config:
   temperature: 0.0

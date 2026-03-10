@@ -156,6 +156,10 @@ class SessionCompressor:
         viking_fs = get_viking_fs()
 
         tool_parts = self._extract_tool_parts(messages)
+        from .tool_skill_utils import collect_skill_stats, collect_tool_stats
+
+        tool_stats_map = collect_tool_stats(tool_parts)
+        skill_stats_map = collect_skill_stats(tool_parts)
 
         for candidate in candidates:
             # Profile: skip dedup, always merge
@@ -176,6 +180,29 @@ class SessionCompressor:
                         candidate, tool_parts
                     )
                     candidate.tool_status = tool_status
+                    if tool_name:
+                        candidate.tool_name = tool_name
+                    if skill_name:
+                        candidate.skill_name = skill_name
+
+                    if tool_name and candidate.call_time == 0:
+                        tool_stats = tool_stats_map.get(tool_name, {})
+                        candidate.call_time = tool_stats.get("call_count", candidate.call_time)
+                        candidate.success_time = tool_stats.get("success_time", candidate.success_time)
+                        candidate.duration_ms = tool_stats.get("duration_ms", candidate.duration_ms)
+                        candidate.prompt_tokens = tool_stats.get(
+                            "prompt_tokens", candidate.prompt_tokens
+                        )
+                        candidate.completion_tokens = tool_stats.get(
+                            "completion_tokens", candidate.completion_tokens
+                        )
+
+                    if skill_name and candidate.call_time == 0:
+                        skill_stats = skill_stats_map.get(skill_name, {})
+                        candidate.call_time = skill_stats.get("call_count", candidate.call_time)
+                        candidate.success_time = skill_stats.get(
+                            "success_time", candidate.success_time
+                        )
                     if skill_name:
                         memory = await self.extractor._merge_skill_memory(
                             skill_name, candidate, ctx=ctx
@@ -292,44 +319,83 @@ class SessionCompressor:
         Returns:
             (tool_name, skill_name, tool_status) tuple
         """
-        candidate_tool = candidate.tool_name
-        candidate_skill = candidate.skill_name
+        from difflib import SequenceMatcher
 
-        calibrated_tool = ""
-        calibrated_skill = ""
+        def _normalize(name: str) -> str:
+            return (
+                (name or "")
+                .lower()
+                .strip()
+                .replace("_", "")
+                .replace("-", "")
+                .replace(" ", "")
+            )
+
         tool_status = "completed"
 
-        for part in tool_parts:
-            if part.skill_uri:
-                part_skill_name = self._extract_skill_name_from_uri(part.skill_uri)
-                if candidate_skill:
-                    if self._is_similar_name(candidate_skill, part_skill_name):
-                        calibrated_skill = part_skill_name
-                        tool_status = part.tool_status or "completed"
-                    else:
-                        calibrated_skill = candidate_skill
-                else:
-                    calibrated_skill = part_skill_name
+        if candidate.category == MemoryCategory.TOOLS:
+            candidate_tool = (candidate.tool_name or "").strip()
+            if not candidate_tool:
+                return ("", "", tool_status)
 
-            elif part.tool_name:
-                if candidate_tool:
-                    if self._is_similar_name(candidate_tool, part.tool_name):
-                        calibrated_tool = part.tool_name
-                        tool_status = part.tool_status or "completed"
-                    else:
-                        calibrated_tool = candidate_tool
-                else:
-                    calibrated_tool = part.tool_name
+            candidate_norm = _normalize(candidate_tool)
+            best_ratio = -1.0
+            best_tool_name = ""
+            best_status = "completed"
 
-        if calibrated_skill:
-            return ("", calibrated_skill, tool_status)
-        if calibrated_tool:
-            return (calibrated_tool, "", tool_status)
-        if candidate_skill:
-            return ("", candidate_skill, "completed")
-        if candidate_tool:
-            return (candidate_tool, "", "completed")
-        return ("", "", "completed")
+            for part in tool_parts:
+                part_tool = (getattr(part, "tool_name", "") or "").strip()
+                if not part_tool:
+                    continue
+
+                part_norm = _normalize(part_tool)
+                if part_tool == candidate_tool or (candidate_norm and part_norm == candidate_norm):
+                    return (part_tool, "", part.tool_status or "completed")
+
+                ratio = SequenceMatcher(None, candidate_norm, part_norm).ratio()
+                if ratio > best_ratio or (ratio == best_ratio and ratio >= 0):
+                    best_ratio = ratio
+                    best_tool_name = part_tool
+                    best_status = part.tool_status or "completed"
+
+            if best_ratio >= 0.8 and best_tool_name:
+                return (best_tool_name, "", best_status)
+            return ("", "", tool_status)
+
+        if candidate.category == MemoryCategory.SKILLS:
+            candidate_skill = (candidate.skill_name or "").strip()
+            if not candidate_skill:
+                return ("", "", tool_status)
+
+            candidate_norm = _normalize(candidate_skill)
+            best_ratio = -1.0
+            best_skill_name = ""
+            best_status = "completed"
+
+            for part in tool_parts:
+                part_uri = getattr(part, "skill_uri", "")
+                if not part_uri:
+                    continue
+
+                part_skill = self._extract_skill_name_from_uri(part_uri)
+                if not part_skill:
+                    continue
+
+                part_norm = _normalize(part_skill)
+                if part_skill == candidate_skill or (candidate_norm and part_norm == candidate_norm):
+                    return ("", part_skill, part.tool_status or "completed")
+
+                ratio = SequenceMatcher(None, candidate_norm, part_norm).ratio()
+                if ratio > best_ratio or (ratio == best_ratio and ratio >= 0):
+                    best_ratio = ratio
+                    best_skill_name = part_skill
+                    best_status = part.tool_status or "completed"
+
+            if best_ratio >= 0.9 and best_skill_name:
+                return ("", best_skill_name, best_status)
+            return ("", "", tool_status)
+
+        return ("", "", tool_status)
 
     def _is_similar_name(self, name1: str, name2: str) -> bool:
         """Check if two names are similar enough to be considered the same.

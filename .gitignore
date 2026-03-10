@@ -162,3 +162,4 @@ test_scripts/
 examples/data/
 openviking/_version.py
 specs/
+.trae/

@@ -18,6 +18,7 @@ from openviking.core.context import Context, ContextType, Vectorize
 from openviking.prompts import render_prompt
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import get_viking_fs
+from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
@@ -68,6 +69,12 @@ class ToolSkillCandidateMemory(CandidateMemory):
     completion_tokens: int = 0  # 输出 Token
     call_time: int = 0  # 调用次数
     success_time: int = 0  # 成功调用次数
+    best_for: str = ""
+    optimal_params: str = ""
+    recommended_flow: str = ""
+    key_dependencies: str = ""
+    common_failures: str = ""
+    recommendation: str = ""
 
 
 @dataclass
@@ -112,6 +119,8 @@ class MemoryExtractor:
 
     def __init__(self):
         """Initialize memory extractor."""
+        self._tool_desc_cache: dict[str, str] = {}
+        self._tool_desc_cache_ready: bool = False
 
     @staticmethod
     def _get_owner_space(category: MemoryCategory, ctx: RequestContext) -> str:
@@ -240,10 +249,23 @@ class MemoryExtractor:
             return []
 
         messages = context["messages"]
+        from openviking.message.part import ToolPart
 
-        tool_stats_map = self._collect_tool_stats_from_messages(messages)
+        from .tool_skill_utils import (
+            calibrate_skill_name,
+            calibrate_tool_name,
+            collect_skill_stats,
+            collect_tool_stats,
+        )
 
-        # logger.warning(f"tool_stats_map={tool_stats_map}")
+        tool_parts = []
+        for msg in messages:
+            for part in getattr(msg, "parts", []):
+                if isinstance(part, ToolPart):
+                    tool_parts.append(part)
+
+        tool_stats_map = collect_tool_stats(tool_parts)
+        skill_stats_map = collect_skill_stats(tool_parts)
 
         formatted_lines = []
         for m in messages:
@@ -300,9 +322,35 @@ class MemoryExtractor:
 
                 # 只在 tools/skills 时使用 ToolSkillCandidateMemory
                 if category in (MemoryCategory.TOOLS, MemoryCategory.SKILLS):
-                    tool_name = mem.get("tool_name", "")
-                    skill_name = mem.get("skill_name", "")
-                    stats = tool_stats_map.get(tool_name or skill_name, {})
+                    llm_tool_name = mem.get("tool_name", "") or ""
+                    llm_skill_name = mem.get("skill_name", "") or ""
+
+                    tool_name = ""
+                    skill_name = ""
+                    stats = {}
+
+                    if category == MemoryCategory.TOOLS:
+                        canonical_tool_name, _ = calibrate_tool_name(
+                            llm_tool_name, tool_parts
+                        )
+                        if not canonical_tool_name:
+                            continue
+                        tool_name = canonical_tool_name
+                        stats = tool_stats_map.get(tool_name, {})
+
+                    if category == MemoryCategory.SKILLS:
+                        canonical_skill_name, _ = calibrate_skill_name(
+                            llm_skill_name, tool_parts
+                        )
+                        if not canonical_skill_name:
+                            continue
+                        skill_name = canonical_skill_name
+                        stats = skill_stats_map.get(skill_name, {})
+
+                    call_time = stats.get("call_count", 0)
+                    if call_time == 0:
+                        continue
+
                     candidates.append(
                         ToolSkillCandidateMemory(
                             category=category,
@@ -314,11 +362,29 @@ class MemoryExtractor:
                             language=output_language,
                             tool_name=tool_name,
                             skill_name=skill_name,
-                            call_time=stats.get("call_count", 0),
+                            call_time=call_time,
                             success_time=stats.get("success_time", 0),
-                            duration_ms=stats.get("duration_ms", 0),
-                            prompt_tokens=stats.get("prompt_tokens", 0),
-                            completion_tokens=stats.get("completion_tokens", 0),
+                            duration_ms=(
+                                stats.get("duration_ms", 0)
+                                if category == MemoryCategory.TOOLS
+                                else 0
+                            ),
+                            prompt_tokens=(
+                                stats.get("prompt_tokens", 0)
+                                if category == MemoryCategory.TOOLS
+                                else 0
+                            ),
+                            completion_tokens=(
+                                stats.get("completion_tokens", 0)
+                                if category == MemoryCategory.TOOLS
+                                else 0
+                            ),
+                            best_for=str(mem.get("best_for", "") or "").strip(),
+                            optimal_params=str(mem.get("optimal_params", "") or "").strip(),
+                            recommended_flow=str(mem.get("recommended_flow", "") or "").strip(),
+                            key_dependencies=str(mem.get("key_dependencies", "") or "").strip(),
+                            common_failures=str(mem.get("common_failures", "") or "").strip(),
+                            recommendation=str(mem.get("recommendation", "") or "").strip(),
                         )
                     )
                 else:
@@ -547,40 +613,104 @@ class MemoryExtractor:
         existing = ""
         try:
             existing = await viking_fs.read_file(uri, ctx=ctx) or ""
-        except Exception:
-            pass
+        except NotFoundError:
+            existing = ""
+        except Exception as e:
+            logger.warning(
+                "Failed to read existing tool memory %s: %s; skipping write to avoid data loss",
+                uri,
+                e,
+            )
+            return None
 
-        if isinstance(candidate, ToolSkillCandidateMemory):
-            new_stats = {
-                "total_calls": candidate.call_time,
-                "success_count": candidate.success_time,
-                "fail_count": candidate.call_time - candidate.success_time,
-                "total_time_ms": candidate.duration_ms or 0,
-                "total_tokens": (candidate.prompt_tokens or 0) + (candidate.completion_tokens or 0),
-            }
-        else:
-            new_stats = self._parse_tool_statistics(candidate.content)
-            if new_stats["total_calls"] == 0:
-                new_stats["total_calls"] = 1
-                tool_status = getattr(candidate, "tool_status", "completed")
-                if tool_status == "error":
-                    new_stats["fail_count"] = 1
-                    new_stats["success_count"] = 0
-                else:
-                    new_stats["success_count"] = 1
-                    new_stats["fail_count"] = 0
+        if not isinstance(candidate, ToolSkillCandidateMemory):
+            logger.warning("Tool memory merge requires ToolSkillCandidateMemory, skipping")
+            return None
+
+        if candidate.call_time <= 0:
+            logger.warning("Tool memory merge skipped due to call_time=0: %s", tool_name)
+            return None
+
+        new_stats = {
+            "total_calls": candidate.call_time,
+            "success_count": candidate.success_time,
+            "fail_count": candidate.call_time - candidate.success_time,
+            "total_time_ms": candidate.duration_ms or 0,
+            "total_tokens": (candidate.prompt_tokens or 0) + (candidate.completion_tokens or 0),
+        }
+        new_guidelines = (candidate.content or "").strip()
+        abstract_override: Optional[str] = None
+        new_fields = {
+            "best_for": (candidate.best_for or "").strip(),
+            "optimal_params": (candidate.optimal_params or "").strip(),
+            "common_failures": (candidate.common_failures or "").strip(),
+            "recommendation": (candidate.recommendation or "").strip(),
+        }
+        fallback_fields = self._extract_tool_memory_context_fields_from_text(
+            "\n".join([str(candidate.overview or "").strip(), str(candidate.content or "").strip()])
+        )
+        for k, v in fallback_fields.items():
+            if not new_fields.get(k) and v:
+                new_fields[k] = v.strip()
 
         if not existing.strip():
             merged_stats = self._compute_statistics_derived(new_stats)
-            merged_content = self._generate_tool_memory_content(tool_name, merged_stats, candidate)
+            merged_content = self._generate_tool_memory_content(
+                tool_name, merged_stats, new_guidelines, fields=new_fields
+            )
             await viking_fs.write_file(uri=uri, content=merged_content, ctx=ctx)
             return self._create_tool_context(uri, candidate, ctx)
 
         existing_stats = self._parse_tool_statistics(existing)
         merged_stats = self._merge_tool_statistics(existing_stats, new_stats)
-        merged_content = self._generate_tool_memory_content(tool_name, merged_stats, candidate)
+        if merged_stats.get("total_calls", 0) < existing_stats.get("total_calls", 0):
+            logger.warning(
+                "Tool memory merge violates monotonic total_calls: tool=%s existing=%s merged=%s; skipping write",
+                tool_name,
+                existing_stats.get("total_calls", 0),
+                merged_stats.get("total_calls", 0),
+            )
+            return None
+        existing_guidelines = self._extract_tool_guidelines(existing)
+        if existing_guidelines is None:
+            existing_guidelines = ""
+        existing_fields = self._extract_tool_memory_context_fields_from_text(existing)
+        merged_fields = {
+            "best_for": self._merge_kv_field(existing_fields.get("best_for", ""), new_fields.get("best_for", "")),
+            "optimal_params": self._merge_kv_field(
+                existing_fields.get("optimal_params", ""), new_fields.get("optimal_params", "")
+            ),
+            "common_failures": self._merge_kv_field(
+                existing_fields.get("common_failures", ""), new_fields.get("common_failures", "")
+            ),
+            "recommendation": self._merge_kv_field(
+                existing_fields.get("recommendation", ""), new_fields.get("recommendation", "")
+            ),
+        }
+        merged_guidelines = existing_guidelines
+        if new_guidelines:
+            payload = await self._merge_memory_bundle(
+                existing_abstract="",
+                existing_overview="",
+                existing_content=existing_guidelines,
+                new_abstract=candidate.abstract,
+                new_overview=candidate.overview,
+                new_content=new_guidelines,
+                category="tools",
+                output_language=candidate.language,
+            )
+            if payload and payload.content:
+                merged_guidelines = payload.content.strip()
+                if payload.abstract:
+                    abstract_override = payload.abstract.strip() or None
+            else:
+                merged_guidelines = (existing_guidelines + "\n\n" + new_guidelines).strip()
+
+        merged_content = self._generate_tool_memory_content(
+            tool_name, merged_stats, merged_guidelines, fields=merged_fields
+        )
         await viking_fs.write_file(uri=uri, content=merged_content, ctx=ctx)
-        return self._create_tool_context(uri, candidate, ctx)
+        return self._create_tool_context(uri, candidate, ctx, abstract_override=abstract_override)
 
     async def _enqueue_semantic_for_parent(self, file_uri: str, ctx: "RequestContext") -> None:
         """Enqueue semantic generation for parent directory."""
@@ -626,27 +756,73 @@ class MemoryExtractor:
             "total_tokens": 0,
         }
 
-        match = re.search(r"总调用次数:\s*(\d+)", content)
+        match = re.search(r"总调用次数(?:\*+)?\s*[:：]\s*(\d+)", content)
         if match:
             stats["total_calls"] = int(match.group(1))
+        else:
+            match = re.search(r"(?im)^Based on\s+(\d+)\s+historical\s+calls\s*:", content)
+            if match:
+                stats["total_calls"] = int(match.group(1))
 
-        match = re.search(r"成功率:\s*([\d.]+)%", content)
+        match = re.search(
+            r"成功率(?:\*+)?\s*[:：]\s*([\d.]+)%\s*[（(]\s*(\d+)\s*成功\s*[，,]\s*(\d+)\s*失败",
+            content,
+        )
         if match:
-            success_rate = float(match.group(1)) / 100
-            stats["success_count"] = int(stats["total_calls"] * success_rate)
-            stats["fail_count"] = stats["total_calls"] - stats["success_count"]
+            stats["success_count"] = int(match.group(2))
+            stats["fail_count"] = int(match.group(3))
+            if stats["total_calls"] <= 0:
+                stats["total_calls"] = stats["success_count"] + stats["fail_count"]
+        else:
+            match = re.search(r"成功率(?:\*+)?\s*[:：]\s*([\d.]+)%", content)
+            if match and stats["total_calls"] > 0:
+                success_rate = float(match.group(1)) / 100
+                stats["success_count"] = int(stats["total_calls"] * success_rate)
+                stats["fail_count"] = stats["total_calls"] - stats["success_count"]
+            else:
+                match = re.search(
+                    r"(?im)^-\s*Success rate:\s*([\d.]+)%\s*\((\d+)\s+successful,\s*(\d+)\s+failed\)",
+                    content,
+                )
+                if match:
+                    stats["success_count"] = int(match.group(2))
+                    stats["fail_count"] = int(match.group(3))
+                    if stats["total_calls"] <= 0:
+                        stats["total_calls"] = stats["success_count"] + stats["fail_count"]
+                else:
+                    match = re.search(r"(?im)^-\s*Success rate:\s*([\d.]+)%", content)
+                    if match and stats["total_calls"] > 0:
+                        success_rate = float(match.group(1)) / 100
+                        stats["success_count"] = int(stats["total_calls"] * success_rate)
+                        stats["fail_count"] = stats["total_calls"] - stats["success_count"]
 
-        match = re.search(r"平均耗时:\s*([\d.]+)ms", content)
+        match = re.search(r"平均耗时(?:\*+)?\s*[:：]\s*([\d.]+)ms", content)
         if match and stats["total_calls"] > 0:
             stats["total_time_ms"] = float(match.group(1)) * stats["total_calls"]
         else:
-            match = re.search(r"平均耗时:\s*([\d.]+)s", content)
+            match = re.search(r"平均耗时(?:\*+)?\s*[:：]\s*([\d.]+)s", content)
             if match and stats["total_calls"] > 0:
                 stats["total_time_ms"] = float(match.group(1)) * 1000 * stats["total_calls"]
+        if stats["total_time_ms"] == 0:
+            match = re.search(r"(?im)^-\s*Avg time:\s*([\d.]+)s", content)
+            if match and stats["total_calls"] > 0:
+                stats["total_time_ms"] = float(match.group(1)) * 1000 * stats["total_calls"]
+            else:
+                match = re.search(r"(?im)^-\s*Avg time:\s*([\d.]+)ms", content)
+                if match and stats["total_calls"] > 0:
+                    stats["total_time_ms"] = float(match.group(1)) * stats["total_calls"]
 
-        match = re.search(r"平均Token:\s*(\d+)", content)
+        match = re.search(r"平均Token(?:\*+)?\s*[:：]\s*(\d+)", content)
         if match and stats["total_calls"] > 0:
             stats["total_tokens"] = int(match.group(1)) * stats["total_calls"]
+        else:
+            match = re.search(r"(?im)^-\s*Avg time:.*?Avg tokens:\s*(\d+)", content)
+            if match and stats["total_calls"] > 0:
+                stats["total_tokens"] = int(match.group(1)) * stats["total_calls"]
+            else:
+                match = re.search(r"(?im)^-\s*Avg tokens:\s*(\d+)", content)
+                if match and stats["total_calls"] > 0:
+                    stats["total_tokens"] = int(match.group(1)) * stats["total_calls"]
 
         return stats
 
@@ -685,24 +861,203 @@ class MemoryExtractor:
                 formatted = f"{value_ms:.{decimals_needed}f}"
         return f"{formatted}ms"
 
+    def _format_duration(self, value_ms: float) -> str:
+        if value_ms is None:
+            return "N/A"
+        try:
+            value_ms = float(value_ms)
+        except Exception:
+            return "N/A"
+        if value_ms <= 0:
+            return "0s"
+        if value_ms >= 1000:
+            return f"{value_ms / 1000:.1f}s"
+        return f"{int(round(value_ms))}ms"
+
+    def _ensure_tool_desc_cache(self) -> None:
+        if self._tool_desc_cache_ready:
+            return
+        self._tool_desc_cache_ready = True
+        try:
+            from vikingbot.agent.tools.factory import register_default_tools
+            from vikingbot.agent.tools.registry import ToolRegistry
+            from vikingbot.config.loader import load_config
+
+            registry = ToolRegistry()
+            config = load_config()
+            register_default_tools(
+                registry=registry,
+                config=config,
+                include_message_tool=False,
+                include_spawn_tool=False,
+                include_cron_tool=False,
+                include_image_tool=False,
+                include_viking_tools=True,
+            )
+            cache: dict[str, str] = {}
+            for name in registry.tool_names:
+                tool = registry.get(name)
+                desc = getattr(tool, "description", "") if tool else ""
+                if desc:
+                    cache[name] = str(desc)
+            self._tool_desc_cache = cache
+        except Exception:
+            self._tool_desc_cache = {}
+
+    def _get_tool_static_description(self, tool_name: str) -> str:
+        if not tool_name:
+            return ""
+        self._ensure_tool_desc_cache()
+        return (self._tool_desc_cache.get(tool_name) or "").strip()
+
+    def _extract_reme_field(self, content: str, keys: list[str]) -> str:
+        if not content:
+            return ""
+        for key in keys:
+            m = re.search(rf"(?im)^[ \t>*-]*{re.escape(key)}\s*[:：]\s*(.+?)\s*$", content)
+            if m:
+                return (m.group(1) or "").strip()
+        return ""
+
+    def _extract_reme_section(self, content: str, headings: list[str]) -> str:
+        if not content:
+            return ""
+        for h in headings:
+            m = re.search(
+                rf"(?im)^[ \t]*##[ \t]*{re.escape(h)}[ \t]*\n([\s\S]*?)(?=^[ \t]*##[ \t]|\Z)",
+                content,
+            )
+            if m:
+                return (m.group(1) or "").strip()
+        return ""
+
+    def _compact_block(self, text: str) -> str:
+        if not text:
+            return ""
+        lines = []
+        for line in str(text).splitlines():
+            s = line.strip()
+            if not s:
+                continue
+            s = re.sub(r"^[>*\-\s]+", "", s).strip()
+            if s:
+                lines.append(s)
+        return "; ".join(lines).strip()
+
+    def _merge_kv_field(self, existing_value: str, new_value: str) -> str:
+        a = (existing_value or "").strip()
+        b = (new_value or "").strip()
+        if not a:
+            return b
+        if not b:
+            return a
+        if a == b:
+            return a
+        parts = []
+        for s in (a, b):
+            for p in [x.strip() for x in re.split(r"[;\n；]+", s)]:
+                if p and p not in parts:
+                    parts.append(p)
+        merged = "; ".join(parts).strip()
+        if len(merged) <= 1000:
+            return merged
+        limited = "; ".join(parts).strip()[:1000]
+        return limited
+
+    def _extract_tool_memory_context_fields_from_text(self, text: str) -> dict:
+        return {
+            "best_for": self._extract_reme_field(text, ["Best for", "Best scenarios", "最佳场景", "适用场景"]),
+            "optimal_params": self._extract_reme_field(
+                text, ["Optimal params", "Optimal parameters", "最优参数", "推荐参数"]
+            ),
+            "common_failures": self._extract_reme_field(text, ["Common failures", "常见失败", "失败模式"]),
+            "recommendation": self._extract_reme_field(
+                text, ["Recommendation", "Recommendations", "推荐", "建议"]
+            ),
+        }
+
+    def _extract_skill_memory_context_fields_from_text(self, text: str) -> dict:
+        return {
+            "best_for": self._extract_reme_field(text, ["Best for", "最佳场景", "适用场景"]),
+            "recommended_flow": self._extract_reme_field(
+                text, ["Recommended flow", "Recommended Flow", "推荐流程", "推荐步骤"]
+            ),
+            "key_dependencies": self._extract_reme_field(
+                text, ["Key dependencies", "Key Dependencies", "关键依赖", "前置条件"]
+            ),
+            "common_failures": self._extract_reme_field(text, ["Common failures", "常见失败", "失败模式"]),
+            "recommendation": self._extract_reme_field(
+                text, ["Recommendation", "Recommendations", "推荐", "建议"]
+            ),
+        }
+
     def _generate_tool_memory_content(
-        self, tool_name: str, stats: dict, candidate: CandidateMemory
+        self, tool_name: str, stats: dict, guidelines: str, fields: Optional[dict] = None
     ) -> str:
-        """生成合并后的 Tool Memory 内容"""
-        return f"""## 工具信息
-- **名称**: {tool_name}
+        static_desc = self._get_tool_static_description(tool_name) or "N/A"
+        fields = fields or {}
+        best_for = (fields.get("best_for") or "").strip()
+        optimal_params = (fields.get("optimal_params") or "").strip()
+        common_failures = (fields.get("common_failures") or "").strip()
+        recommendation = (fields.get("recommendation") or "").strip()
 
-## 调用统计
-- **总调用次数**: {stats["total_calls"]}
-- **成功率**: {stats["success_rate"] * 100:.1f}%（{stats["success_count"]} 成功，{stats["fail_count"]} 失败）
-- **平均耗时**: {self._format_ms(stats["avg_time_ms"])}
-- **平均Token**: {int(stats["avg_tokens"])}
+        if not best_for:
+            best_for = (
+                self._extract_reme_field(guidelines, ["Best for", "Best scenarios", "最佳场景", "适用场景"])
+                or self._compact_block(
+                    self._extract_reme_section(guidelines, ["Best Scenarios", "Best for", "最佳场景"])
+                )
+            )
+        if not optimal_params:
+            optimal_params = (
+                self._extract_reme_field(guidelines, ["Optimal params", "Optimal parameters", "最优参数", "推荐参数"])
+                or self._compact_block(
+                    self._extract_reme_section(guidelines, ["Optimal Parameters", "Optimal params", "最优参数"])
+                )
+            )
+        if not common_failures:
+            common_failures = (
+                self._extract_reme_field(guidelines, ["Common failures", "常见失败", "失败模式"])
+                or self._compact_block(self._extract_reme_section(guidelines, ["Common Failures", "常见失败"]))
+            )
+        if not recommendation:
+            recommendation = (
+                self._extract_reme_field(guidelines, ["Recommendation", "Recommendations", "推荐", "建议"])
+                or self._compact_block(
+                    self._extract_reme_section(guidelines, ["Recommendations", "Recommendation", "推荐"])
+                )
+            )
 
-{candidate.content}
-"""
+        best_for = best_for or "N/A"
+        optimal_params = optimal_params or "N/A"
+        common_failures = common_failures or "N/A"
+        recommendation = recommendation or "N/A"
+
+        return (
+            "Tool: "
+            + str(tool_name)
+            + "\n\n"
+            + "Static Description:\n"
+            + f"\"{static_desc}\"\n\n"
+            + "Tool Memory Context:\n"
+            + f"Based on {stats['total_calls']} historical calls:\n"
+            + f"- Success rate: {stats['success_rate'] * 100:.1f}% ({stats['success_count']} successful, {stats['fail_count']} failed)\n"
+            + f"- Avg time: {self._format_duration(stats.get('avg_time_ms', 0))}, Avg tokens: {int(stats.get('avg_tokens', 0))}\n"
+            + f"- Best for: {best_for}\n"
+            + f"- Optimal params: {optimal_params}\n"
+            + f"- Common failures: {common_failures}\n"
+            + f"- Recommendation: {recommendation}\n\n"
+            + "Guidelines:\n"
+            + (guidelines or "").strip()
+            + "\n"
+        )
 
     def _create_tool_context(
-        self, uri: str, candidate: CandidateMemory, ctx: "RequestContext"
+        self,
+        uri: str,
+        candidate: CandidateMemory,
+        ctx: "RequestContext",
+        abstract_override: Optional[str] = None,
     ) -> Context:
         """创建 Tool Memory 的 Context 对象"""
         agent_space = ctx.user.agent_space_name()
@@ -710,7 +1065,7 @@ class MemoryExtractor:
             uri=uri,
             parent_uri=f"viking://agent/{agent_space}/memories/tools",
             is_leaf=True,
-            abstract=candidate.abstract,
+            abstract=abstract_override or candidate.abstract,
             context_type=ContextType.MEMORY.value,
             category=candidate.category.value,
             session_id=candidate.source_session,
@@ -718,6 +1073,26 @@ class MemoryExtractor:
             account_id=ctx.account_id,
             owner_space=agent_space,
         )
+
+    def _extract_tool_guidelines(self, content: str) -> str:
+        headings = r"(使用指南|Guidelines|Guildlines)"
+        m = re.search(rf"^##\s*{headings}\s*\n", content, flags=re.MULTILINE)
+        if m:
+            return content[m.end() :].strip()
+
+        m = re.search(r"(?im)^Guidelines:\s*\n", content)
+        if m:
+            return content[m.end() :].strip()
+
+        m = re.search(
+            r"^##\s*工具信息[\s\S]*?^##\s*调用统计[\s\S]*?^\-\s*\*\*平均Token\*\*:.*$\n\n",
+            content,
+            flags=re.MULTILINE,
+        )
+        if m:
+            return content[m.end() :].strip()
+
+        return content.strip()
 
     async def _merge_skill_memory(
         self, skill_name: str, candidate: CandidateMemory, ctx: "RequestContext"
@@ -738,10 +1113,27 @@ class MemoryExtractor:
         existing = ""
         try:
             existing = await viking_fs.read_file(uri, ctx=ctx) or ""
-        except Exception:
-            pass
+        except NotFoundError:
+            existing = ""
+        except Exception as e:
+            logger.warning(
+                "Failed to read existing skill memory %s: %s; skipping write to avoid data loss",
+                uri,
+                e,
+            )
+            return None
 
-        new_stats = self._parse_skill_statistics(candidate.content)
+        new_stats = {
+            "total_executions": 0,
+            "success_count": 0,
+            "fail_count": 0,
+        }
+        if isinstance(candidate, ToolSkillCandidateMemory) and candidate.call_time > 0:
+            new_stats["total_executions"] = candidate.call_time
+            new_stats["success_count"] = candidate.success_time
+            new_stats["fail_count"] = max(0, candidate.call_time - candidate.success_time)
+        else:
+            new_stats = self._parse_skill_statistics(candidate.content)
         if new_stats["total_executions"] == 0:
             new_stats["total_executions"] = 1
             if "error" in candidate.content.lower() or "fail" in candidate.content.lower():
@@ -750,20 +1142,89 @@ class MemoryExtractor:
             else:
                 new_stats["success_count"] = 1
                 new_stats["fail_count"] = 0
+        new_guidelines = (candidate.content or "").strip()
+        abstract_override: Optional[str] = None
+        new_fields = {
+            "best_for": "",
+            "recommended_flow": "",
+            "key_dependencies": "",
+            "common_failures": "",
+            "recommendation": "",
+        }
+        if isinstance(candidate, ToolSkillCandidateMemory):
+            new_fields = {
+                "best_for": (candidate.best_for or "").strip(),
+                "recommended_flow": (candidate.recommended_flow or "").strip(),
+                "key_dependencies": (candidate.key_dependencies or "").strip(),
+                "common_failures": (candidate.common_failures or "").strip(),
+                "recommendation": (candidate.recommendation or "").strip(),
+            }
+        fallback_fields = self._extract_skill_memory_context_fields_from_text(
+            "\n".join([str(candidate.overview or "").strip(), str(candidate.content or "").strip()])
+        )
+        for k, v in fallback_fields.items():
+            if not new_fields.get(k) and v:
+                new_fields[k] = v.strip()
 
         if not existing.strip():
             merged_stats = self._compute_skill_statistics_derived(new_stats)
             merged_content = self._generate_skill_memory_content(
-                skill_name, merged_stats, candidate
+                skill_name, merged_stats, new_guidelines, fields=new_fields
             )
             await viking_fs.write_file(uri=uri, content=merged_content, ctx=ctx)
             return self._create_skill_context(uri, candidate, ctx)
 
         existing_stats = self._parse_skill_statistics(existing)
         merged_stats = self._merge_skill_statistics(existing_stats, new_stats)
-        merged_content = self._generate_skill_memory_content(skill_name, merged_stats, candidate)
+        if merged_stats.get("total_executions", 0) < existing_stats.get("total_executions", 0):
+            logger.warning(
+                "Skill memory merge violates monotonic total_executions: skill=%s existing=%s merged=%s; skipping write",
+                skill_name,
+                existing_stats.get("total_executions", 0),
+                merged_stats.get("total_executions", 0),
+            )
+            return None
+        existing_guidelines = self._extract_skill_guidelines(existing) or existing.strip()
+        existing_fields = self._extract_skill_memory_context_fields_from_text(existing)
+        merged_fields = {
+            "best_for": self._merge_kv_field(existing_fields.get("best_for", ""), new_fields.get("best_for", "")),
+            "recommended_flow": self._merge_kv_field(
+                existing_fields.get("recommended_flow", ""), new_fields.get("recommended_flow", "")
+            ),
+            "key_dependencies": self._merge_kv_field(
+                existing_fields.get("key_dependencies", ""), new_fields.get("key_dependencies", "")
+            ),
+            "common_failures": self._merge_kv_field(
+                existing_fields.get("common_failures", ""), new_fields.get("common_failures", "")
+            ),
+            "recommendation": self._merge_kv_field(
+                existing_fields.get("recommendation", ""), new_fields.get("recommendation", "")
+            ),
+        }
+        merged_guidelines = existing_guidelines
+        if new_guidelines:
+            payload = await self._merge_memory_bundle(
+                existing_abstract="",
+                existing_overview="",
+                existing_content=existing_guidelines,
+                new_abstract=candidate.abstract,
+                new_overview=candidate.overview,
+                new_content=new_guidelines,
+                category="skills",
+                output_language=candidate.language,
+            )
+            if payload and payload.content:
+                merged_guidelines = payload.content.strip()
+                if payload.abstract:
+                    abstract_override = payload.abstract.strip() or None
+            else:
+                merged_guidelines = (existing_guidelines + "\n\n" + new_guidelines).strip()
+
+        merged_content = self._generate_skill_memory_content(
+            skill_name, merged_stats, merged_guidelines, fields=merged_fields
+        )
         await viking_fs.write_file(uri=uri, content=merged_content, ctx=ctx)
-        return self._create_skill_context(uri, candidate, ctx)
+        return self._create_skill_context(uri, candidate, ctx, abstract_override=abstract_override)
 
     def _compute_skill_statistics_derived(self, stats: dict) -> dict:
         """计算 Skill 派生统计数据（成功率）"""
@@ -781,15 +1242,48 @@ class MemoryExtractor:
             "fail_count": 0,
         }
 
-        match = re.search(r"总执行次数:\s*(\d+)", content)
+        match = re.search(r"总执行次数(?:\*+)?\s*[:：]\s*(\d+)", content)
         if match:
             stats["total_executions"] = int(match.group(1))
+        else:
+            match = re.search(
+                r"(?im)^Based on\s+(\d+)\s+historical\s+executions\s*:",
+                content,
+            )
+            if match:
+                stats["total_executions"] = int(match.group(1))
 
-        match = re.search(r"成功率:\s*([\d.]+)%", content)
+        match = re.search(
+            r"成功率(?:\*+)?\s*[:：]\s*([\d.]+)%\s*[（(]\s*(\d+)\s*成功\s*[，,]\s*(\d+)\s*失败",
+            content,
+        )
         if match:
-            success_rate = float(match.group(1)) / 100
-            stats["success_count"] = int(stats["total_executions"] * success_rate)
-            stats["fail_count"] = stats["total_executions"] - stats["success_count"]
+            stats["success_count"] = int(match.group(2))
+            stats["fail_count"] = int(match.group(3))
+            if stats["total_executions"] <= 0:
+                stats["total_executions"] = stats["success_count"] + stats["fail_count"]
+        else:
+            match = re.search(r"成功率(?:\*+)?\s*[:：]\s*([\d.]+)%", content)
+            if match and stats["total_executions"] > 0:
+                success_rate = float(match.group(1)) / 100
+                stats["success_count"] = int(stats["total_executions"] * success_rate)
+                stats["fail_count"] = stats["total_executions"] - stats["success_count"]
+            else:
+                match = re.search(
+                    r"(?im)^-\s*Success rate:\s*([\d.]+)%\s*\((\d+)\s+successful,\s*(\d+)\s+failed\)",
+                    content,
+                )
+                if match:
+                    stats["success_count"] = int(match.group(2))
+                    stats["fail_count"] = int(match.group(3))
+                    if stats["total_executions"] <= 0:
+                        stats["total_executions"] = stats["success_count"] + stats["fail_count"]
+                else:
+                    match = re.search(r"(?im)^-\s*Success rate:\s*([\d.]+)%", content)
+                    if match and stats["total_executions"] > 0:
+                        success_rate = float(match.group(1)) / 100
+                        stats["success_count"] = int(stats["total_executions"] * success_rate)
+                        stats["fail_count"] = stats["total_executions"] - stats["success_count"]
 
         return stats
 
@@ -806,22 +1300,78 @@ class MemoryExtractor:
         return merged
 
     def _generate_skill_memory_content(
-        self, skill_name: str, stats: dict, candidate: CandidateMemory
+        self, skill_name: str, stats: dict, guidelines: str, fields: Optional[dict] = None
     ) -> str:
-        """生成合并后的 Skill Memory 内容"""
-        return f"""## 技能信息
-- **名称**: {skill_name}
+        fields = fields or {}
+        best_for = (fields.get("best_for") or "").strip()
+        recommended_flow = (fields.get("recommended_flow") or "").strip()
+        key_dependencies = (fields.get("key_dependencies") or "").strip()
+        common_failures = (fields.get("common_failures") or "").strip()
+        recommendation = (fields.get("recommendation") or "").strip()
 
-## 执行统计
-- **总执行次数**: {stats["total_executions"]}
-- **成功率**: {stats["success_rate"] * 100:.1f}%（{stats["success_count"]} 成功，{stats["fail_count"]} 失败）
+        if not best_for:
+            best_for = (
+                self._extract_reme_field(guidelines, ["Best for", "最佳场景", "适用场景"])
+                or self._compact_block(
+                    self._extract_reme_section(guidelines, ["Best for", "Best Scenarios", "最佳场景"])
+                )
+            )
+        if not recommended_flow:
+            recommended_flow = (
+                self._extract_reme_field(guidelines, ["Recommended flow", "推荐流程", "推荐步骤"])
+                or self._compact_block(
+                    self._extract_reme_section(guidelines, ["Recommended Flow", "推荐流程", "推荐步骤"])
+                )
+            )
+        if not key_dependencies:
+            key_dependencies = (
+                self._extract_reme_field(guidelines, ["Key dependencies", "关键依赖", "前置条件"])
+                or self._compact_block(
+                    self._extract_reme_section(guidelines, ["Key Dependencies", "关键依赖", "前置条件"])
+                )
+            )
+        if not common_failures:
+            common_failures = (
+                self._extract_reme_field(guidelines, ["Common failures", "常见失败", "失败模式"])
+                or self._compact_block(self._extract_reme_section(guidelines, ["Common Failures", "常见失败"]))
+            )
+        if not recommendation:
+            recommendation = (
+                self._extract_reme_field(guidelines, ["Recommendation", "Recommendations", "推荐", "建议"])
+                or self._compact_block(
+                    self._extract_reme_section(guidelines, ["Recommendations", "Recommendation", "推荐"])
+                )
+            )
 
-## Guildlines
-{candidate.content}
-"""
+        best_for = best_for or "N/A"
+        recommended_flow = recommended_flow or "N/A"
+        key_dependencies = key_dependencies or "N/A"
+        common_failures = common_failures or "N/A"
+        recommendation = recommendation or "N/A"
+
+        return (
+            "Skill: "
+            + str(skill_name)
+            + "\n\n"
+            + "Skill Memory Context:\n"
+            + f"Based on {stats['total_executions']} historical executions:\n"
+            + f"- Success rate: {stats['success_rate'] * 100:.1f}% ({stats['success_count']} successful, {stats['fail_count']} failed)\n"
+            + f"- Best for: {best_for}\n"
+            + f"- Recommended flow: {recommended_flow}\n"
+            + f"- Key dependencies: {key_dependencies}\n"
+            + f"- Common failures: {common_failures}\n"
+            + f"- Recommendation: {recommendation}\n\n"
+            + "Guidelines:\n"
+            + (guidelines or "").strip()
+            + "\n"
+        )
 
     def _create_skill_context(
-        self, uri: str, candidate: CandidateMemory, ctx: "RequestContext"
+        self,
+        uri: str,
+        candidate: CandidateMemory,
+        ctx: "RequestContext",
+        abstract_override: Optional[str] = None,
     ) -> Context:
         """创建 Skill Memory 的 Context 对象"""
         agent_space = ctx.user.agent_space_name()
@@ -829,7 +1379,7 @@ class MemoryExtractor:
             uri=uri,
             parent_uri=f"viking://agent/{agent_space}/memories/skills",
             is_leaf=True,
-            abstract=candidate.abstract,
+            abstract=abstract_override or candidate.abstract,
             context_type=ContextType.MEMORY.value,
             category=candidate.category.value,
             session_id=candidate.source_session,
@@ -837,3 +1387,23 @@ class MemoryExtractor:
             account_id=ctx.account_id,
             owner_space=agent_space,
         )
+
+    def _extract_skill_guidelines(self, content: str) -> str:
+        headings = r"(使用指南|Guidelines|Guildlines)"
+        m = re.search(rf"^##\s*{headings}\s*\n", content, flags=re.MULTILINE)
+        if m:
+            return content[m.end() :].strip()
+
+        m = re.search(r"(?im)^Guidelines:\s*\n", content)
+        if m:
+            return content[m.end() :].strip()
+
+        m = re.search(
+            r"^##\s*技能信息[\s\S]*?^##\s*执行统计[\s\S]*?^\-\s*\*\*成功率\*\*:.*$\n\n",
+            content,
+            flags=re.MULTILINE,
+        )
+        if m:
+            return content[m.end() :].strip()
+
+        return content.strip()
