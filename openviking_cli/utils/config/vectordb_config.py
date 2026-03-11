@@ -41,6 +41,23 @@ class VikingDBConfig(BaseModel):
     model_config = {"extra": "forbid"}
 
 
+class OceanBaseConfig(BaseModel):
+    """Configuration for OceanBase vector database (via pyobvector)."""
+
+    uri: str = Field(
+        default="127.0.0.1:2881",
+        description="OceanBase connection URI (host:port)",
+    )
+    user: str = Field(
+        default="root@test",
+        description="Database user (tenant@user for OceanBase)",
+    )
+    password: str = Field(default="", description="Database password")
+    db_name: str = Field(default="test", description="Database name")
+
+    model_config = {"extra": "forbid"}
+
+
 class VectorDBBackendConfig(BaseModel):
     """
     Configuration for VectorDB backend.
@@ -99,6 +116,12 @@ class VectorDBBackendConfig(BaseModel):
         description="VikingDB private deployment configuration for 'vikingdb' type",
     )
 
+    # OceanBase vector database (pyobvector)
+    oceanbase: Optional[OceanBaseConfig] = Field(
+        default_factory=lambda: OceanBaseConfig(),
+        description="OceanBase configuration for 'oceanbase' type",
+    )
+
     custom_params: Dict[str, Any] = Field(
         default_factory=dict,
         description="Custom parameters for custom backend adapters",
@@ -109,7 +132,7 @@ class VectorDBBackendConfig(BaseModel):
     @model_validator(mode="after")
     def validate_config(self):
         """Validate configuration completeness and consistency"""
-        standard_backends = ["local", "http", "volcengine", "vikingdb"]
+        standard_backends = ["local", "http", "volcengine", "vikingdb", "oceanbase"]
 
         # Allow custom backend classes (containing dot) without standard validation
         if "." in self.backend:
@@ -144,5 +167,11 @@ class VectorDBBackendConfig(BaseModel):
         elif self.backend == "vikingdb":
             if not self.vikingdb or not self.vikingdb.host:
                 raise ValueError("VectorDB vikingdb backend requires 'host' to be set")
+
+        elif self.backend == "oceanbase":
+            if not self.oceanbase:
+                raise ValueError("VectorDB oceanbase backend requires 'oceanbase' config")
+            if not self.oceanbase.uri:
+                raise ValueError("VectorDB oceanbase backend requires 'oceanbase.uri' to be set")
 
         return self

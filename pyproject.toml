@@ -96,6 +96,9 @@ eval = [
     "datasets>=2.0.0",
     "pandas>=2.0.0",
 ]
+oceanbase = [
+    "pyobvector>=0.2.20",
+]
 # vikingbot core dependencies
 bot = [
     "pydantic-settings>=2.0.0",
