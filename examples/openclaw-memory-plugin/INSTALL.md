@@ -4,9 +4,30 @@ Give [OpenClaw](https://github.com/openclaw/openclaw) long-term memory powered b
 
 ---
 
-## One-Click Install (Linux / macOS)
+## One-Click Install
 
-**Prerequisites:** Python >= 3.10, Node.js >= 22. The script checks these and prompts you to install any missing components.
+**Prerequisites:** Python >= 3.10, Node.js >= 22. The installer checks these and prompts you to install any missing components.
+
+### Option A: npm (recommended, all platforms)
+
+```bash
+npm install -g openclaw-openviking-setup-helper
+ov-install
+```
+
+Non-interactive mode:
+
+```bash
+ov-install -y
+```
+
+Install to a specific OpenClaw instance:
+
+```bash
+ov-install --workdir ~/.openclaw-second
+```
+
+### Option B: curl (Linux / macOS)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-memory-plugin/install.sh | bash
@@ -31,7 +52,7 @@ Remote mode (connect to an existing OpenViking server, no Python/OpenViking requ
 curl -fsSL ... | bash
 ```
 
-The script will: 1) select target OpenClaw instance (auto-detects multiple instances), 2) select mode (local/remote), 3) validate environment and install (local mode), 4) configure and deploy the memory plugin.
+The installer will: 1) select target OpenClaw instance (auto-detects multiple instances), 2) select mode (local/remote), 3) validate environment and install (local mode), 4) configure and deploy the memory plugin.
 
 ---
 
@@ -329,6 +350,21 @@ python3 -c "import openviking; print('ok')"
 
 ### 4.3 Run the Setup Helper
 
+#### Option A: npm global install (recommended)
+
+```bash
+npm install -g openclaw-openviking-setup-helper
+ov-install
+```
+
+Non-interactive mode:
+
+```bash
+ov-install -y
+```
+
+#### Option B: Run from repo
+
 From the OpenViking repo root:
 
 ```bash
@@ -593,7 +629,15 @@ npm install -g openclaw
   - Linux/macOS: `source ~/.openclaw/openviking.env`
   - Windows: `call "%USERPROFILE%\.openclaw\openviking.env.bat"`
 - Run `openclaw status` to check plugin state
-- Re-run setup: `npx ./examples/openclaw-memory-plugin/setup-helper`
+- Re-run setup:
+
+```bash
+# npm install (recommended)
+ov-install
+
+# or from repo
+npx ./examples/openclaw-memory-plugin/setup-helper
+```
 
 #### `health check timeout at http://127.0.0.1:1933`
 
