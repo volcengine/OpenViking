@@ -115,10 +115,10 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `max_concurrent` | int | Maximum concurrent embedding requests (`embedding.max_concurrent`, default: `10`) |
-| `provider` | str | `"volcengine"`, `"openai"`, `"vikingdb"`, or `"jina"` |
+| `provider` | str | `"volcengine"`, `"openai"`, `"vikingdb"`, `"jina"`, or `"voyage"` |
 | `api_key` | str | API key |
 | `model` | str | Model name |
-| `dimension` | int | Vector dimension |
+| `dimension` | int | Vector dimension. For Voyage, this maps to `output_dimension` |
 | `input` | str | Input type: `"text"` or `"multimodal"` |
 | `batch_size` | int | Batch size for embedding requests |
 
@@ -136,6 +136,7 @@ With `input: "multimodal"`, OpenViking can embed text, images (PNG, JPG, etc.), 
 - `volcengine`: Volcengine Embedding API
 - `vikingdb`: VikingDB Embedding API
 - `jina`: Jina AI Embedding API
+- `voyage`: Voyage AI Embedding API
 
 **vikingdb provider example:**
 
@@ -175,6 +176,39 @@ Available Jina models:
 
 Get your API key at https://jina.ai
 
+**voyage provider example:**
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "voyage",
+      "api_key": "pa-xxx",
+      "api_base": "https://api.voyageai.com/v1",
+      "model": "voyage-4-lite",
+      "dimension": 1024
+    }
+  }
+}
+```
+
+Supported Voyage text embedding models include:
+- `voyage-4-lite`
+- `voyage-4`
+- `voyage-4-large`
+- `voyage-code-3`
+- `voyage-context-3`
+- `voyage-3`
+- `voyage-3.5`
+- `voyage-3.5-lite`
+- `voyage-finance-2`
+- `voyage-law-2`
+
+If `dimension` is omitted, OpenViking uses the model's default output dimension when creating the vector schema.
+
+OpenViking currently configures a single dense embedder for both indexing and query-time retrieval, so provider-specific query/document modes are not exposed in config yet.
+OpenViking also expects dense float vectors throughout storage and retrieval, so Voyage quantized output dtypes are not exposed in config.
+
 **Local deployment (GGUF/MLX):** Jina embedding models are open-weight and available in GGUF and MLX formats on [Hugging Face](https://huggingface.co/jinaai). You can run them locally with any OpenAI-compatible server (e.g. llama.cpp, MLX, vLLM) and point the `api_base` to your local endpoint:
 
 ```json
@@ -193,13 +227,15 @@ Get your API key at https://jina.ai
 
 #### Sparse Embedding
 
+> **Note:** Volcengine sparse embedding is supported starting from model `doubao-embedding-vision-250615`.
+
 ```json
 {
   "embedding": {
     "sparse": {
       "provider": "volcengine",
       "api_key": "your-api-key",
-      "model": "bm25-sparse-v1"
+      "model": "doubao-embedding-vision-250615"
     }
   }
 }
@@ -238,7 +274,7 @@ Two approaches are supported:
     "sparse": {
       "provider": "volcengine",
       "api_key": "your-api-key",
-      "model": "bm25-sparse-v1"
+      "model": "doubao-embedding-vision-250615"
     }
   }
 }
@@ -267,6 +303,7 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 | `api_base` | str | API endpoint (optional) |
 | `thinking` | bool | Enable thinking mode for VolcEngine models (default: `false`) |
 | `max_concurrent` | int | Maximum concurrent semantic LLM calls (default: `100`) |
+| `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible providers, optional) |
 
 **Available Models**
 
@@ -281,6 +318,30 @@ When resources are added, VLM generates:
 2. **L1 (Overview)**: ~2k token overview with navigation
 
 If VLM is not configured, L0/L1 will be generated from content directly (less semantic), and multimodal resources may have limited descriptions.
+
+**Custom HTTP Headers**
+
+For OpenAI-compatible providers (e.g., OpenRouter), you can add custom HTTP headers via `extra_headers`:
+
+```json
+{
+  "vlm": {
+    "provider": "openai",
+    "api_key": "your-api-key",
+    "model": "gpt-4o",
+    "api_base": "https://openrouter.ai/api/v1",
+    "extra_headers": {
+      "HTTP-Referer": "https://your-site.com",
+      "X-Title": "Your App Name"
+    }
+  }
+}
+```
+
+Common use cases:
+- **OpenRouter**: Requires `HTTP-Referer` and `X-Title` to identify your application
+- **Custom proxies**: Add authentication or tracing headers
+- **API gateways**: Add version or routing identifiers
 
 ### code
 
@@ -479,14 +540,13 @@ Supports S3 storage in VirtualHostStyle mode, such as TOS.
 
 </details>
 
-
 #### vectordb
 
 Vector database storage configuration
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `backend` | str | VectorDB backend type: 'local' (file-based), 'http' (remote service), 'volcengine' (cloud VikingDB), or 'vikingdb' (private deployment) | "local" |
+| `backend` | str | VectorDB backend: 'local', 'http', 'volcengine', 'vikingdb', or 'oceanbase' (OceanBase) | "local" |
 | `name` | str | VectorDB collection name | "context" |
 | `url` | str | Remote service URL for 'http' type (e.g., 'http://localhost:5000') | null |
 | `project_name` | str | Project name (alias project) | "default" |
@@ -495,6 +555,7 @@ Vector database storage configuration
 | `sparse_weight` | float | Sparse weight for hybrid vector search, only effective when using hybrid index | 0.0 |
 | `volcengine` | object | 'volcengine' type VikingDB configuration | - |
 | `vikingdb` | object | 'vikingdb' type private deployment configuration | - |
+| `oceanbase` | object | OceanBase config when backend is 'oceanbase' | - |
 
 Default local mode
 ```
@@ -523,6 +584,29 @@ Supports cloud-deployed VikingDB on Volcengine
         "ak": "your-access-key",
         "sk": "your-secret-key"
       }
+  }
+}
+```
+</details>
+
+<details>
+<summary><b>OceanBase (oceanbase)</b></summary>
+Use [OceanBase](https://www.oceanbase.com/) as the vector backend. See [OceanBase integration guide](./06-oceanbase-integration.md) for installation and configuration.
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "name": "context",
+      "backend": "oceanbase",
+      "distance_metric": "cosine",
+      "oceanbase": {
+        "uri": "127.0.0.1:2881",
+        "user": "root@test",
+        "password": "your-password",
+        "db_name": "test"
+      }
+    }
   }
 }
 ```
@@ -603,6 +687,28 @@ When `root_api_key` is configured, the server enables multi-tenant authenticatio
 
 For startup and deployment details see [Deployment](./03-deployment.md), for authentication see [Authentication](./04-authentication.md).
 
+## storage.transaction Section
+
+Path locks are enabled by default and usually require no configuration. **The default behavior is no-wait**: if the target path is already locked by another operation, the operation fails immediately with `LockAcquisitionError`. Set `lock_timeout` to a positive value to allow polling/retry.
+
+```json
+{
+  "storage": {
+    "transaction": {
+      "lock_timeout": 5.0,
+      "lock_expire": 300.0
+    }
+  }
+}
+```
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `lock_timeout` | float | Path lock acquisition timeout (seconds). `0` = fail immediately if locked (default). `> 0` = wait/retry up to this many seconds, then raise `LockAcquisitionError`. | `0.0` |
+| `lock_expire` | float | Stale lock expiry threshold (seconds). Locks held longer than this by a crashed process are force-released. | `300.0` |
+
+For details on the lock mechanism, see [Path Locks and Crash Recovery](../concepts/09-transaction.md).
+
 ## Full Schema
 
 ```json
@@ -623,7 +729,8 @@ For startup and deployment details see [Deployment](./03-deployment.md), for aut
     "model": "string",
     "api_base": "string",
     "thinking": false,
-    "max_concurrent": 100
+    "max_concurrent": 100,
+    "extra_headers": {}
   },
   "rerank": {
     "provider": "volcengine",
@@ -636,6 +743,10 @@ For startup and deployment details see [Deployment](./03-deployment.md), for aut
       "backend": "local|s3|memory",
       "url": "string",
       "timeout": 10
+    },
+    "transaction": {
+      "lock_timeout": 0.0,
+      "lock_expire": 300.0
     },
     "vectordb": {
       "backend": "local|remote",

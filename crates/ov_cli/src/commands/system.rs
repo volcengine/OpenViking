@@ -34,19 +34,29 @@ pub async fn health(
     client: &HttpClient,
     output_format: OutputFormat,
     compact: bool,
-) -> Result<()> {
+) -> Result<bool> {
     let response: serde_json::Value = client.get("/health", &[]).await?;
     
-    // For health check, if it's a simple status, just print it
-    if let Some(status) = response.get("status").and_then(|v| v.as_str()) {
-        if matches!(output_format, OutputFormat::Json) {
-            output_success(&response, output_format, compact);
-        } else {
-            println!("{}", status);
-        }
-    } else {
+    // Extract the key fields
+    let healthy = response.get("healthy").and_then(|v| v.as_bool()).unwrap_or(false);
+    let _status = response.get("status").and_then(|v| v.as_str());
+    let version = response.get("version").and_then(|v| v.as_str());
+    let user_id = response.get("user_id").and_then(|v| v.as_str());
+    
+    // For table output, print in a readable format
+    if matches!(output_format, OutputFormat::Table) || matches!(output_format, OutputFormat::Json) {
         output_success(&response, output_format, compact);
+    } else {
+        // Simple text output
+        print!("healthy  {}", if healthy { "true" } else { "false" });
+        if let Some(v) = version {
+            print!("  version  {}", v);
+        }
+        if let Some(u) = user_id {
+            print!("  user_id  {}", u);
+        }
+        println!();
     }
     
-    Ok(())
+    Ok(healthy)
 }

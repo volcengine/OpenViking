@@ -45,11 +45,13 @@ class SingleTurnChannel(BaseChannel):
         session_id: str = "default",
         markdown: bool = True,
         eval: bool = False,
+        sender: str | None = None,
     ):
         super().__init__(config, bus, workspace_path)
         self.message = message
         self.session_id = session_id
         self.markdown = markdown
+        self.sender = sender
         self._response_received = asyncio.Event()
         self._last_response: str | None = None
         self._eval = eval
@@ -59,13 +61,14 @@ class SingleTurnChannel(BaseChannel):
         self._running = True
 
         # Send the message
+        sender_id = self.sender or "user"
         msg = InboundMessage(
             session_key=SessionKey(
                 type="cli",
                 channel_id=self.config.channel_id(),
                 chat_id=self.session_id,
             ),
-            sender_id="default",
+            sender_id=sender_id,
             content=self.message,
         )
         await self.bus.publish_inbound(msg)

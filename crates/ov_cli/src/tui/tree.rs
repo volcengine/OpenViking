@@ -62,11 +62,25 @@ impl TreeState {
     const ROOT_SCOPES: &'static [&'static str] = &["agent", "resources", "session", "user"];
 
     pub async fn load_root(&mut self, client: &HttpClient, uri: &str) {
-        let is_root = uri == "viking://" || uri == "viking:///";
+        let is_root = uri == "viking://" || uri == "viking:///" || uri == "/";
 
         if is_root {
-            // Synthesize root scope folders and eagerly load their children
-            let mut root_nodes = Vec::new();
+            // Create a single "/" root directory node, which when expanded will show the scopes
+            let mut root_node = TreeNode {
+                entry: FsEntry {
+                    uri: "/".to_string(),
+                    size: None,
+                    is_dir: true,
+                    mod_time: None,
+                },
+                depth: 0,
+                expanded: true,
+                children_loaded: false,
+                children: Vec::new(),
+            };
+
+            // Preload the children (root scopes) so they're ready when expanding
+            let mut scope_nodes = Vec::new();
             for scope in Self::ROOT_SCOPES {
                 let scope_uri = format!("viking://{}", scope);
                 let mut node = TreeNode {
@@ -76,28 +90,27 @@ impl TreeState {
                         is_dir: true,
                         mod_time: None,
                     },
-                    depth: 0,
+                    depth: 1,
                     expanded: false,
                     children_loaded: false,
                     children: Vec::new(),
                 };
 
-                // Try to load children eagerly to show first level
+                // Try to load children eagerly for scopes
                 if let Ok(mut children) = Self::fetch_children(client, &scope_uri).await {
                     for child in &mut children {
-                        child.depth = 1;
+                        child.depth = 2;
                     }
                     node.children = children;
                     node.children_loaded = true;
-                    if !node.children.is_empty() {
-                        node.expanded = true;
-                    }
                 }
-                // Always show all scopes
-                root_nodes.push(node);
+                scope_nodes.push(node);
             }
 
-            self.nodes = root_nodes;
+            root_node.children = scope_nodes;
+            root_node.children_loaded = true;
+
+            self.nodes = vec![root_node];
             self.rebuild_visible();
         } else {
             match Self::fetch_children(client, uri).await {

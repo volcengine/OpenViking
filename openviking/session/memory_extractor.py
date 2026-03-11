@@ -161,7 +161,13 @@ class MemoryExtractor:
         if not user_text:
             return fallback
 
-        # Detect scripts that are largely language-unique first.
+        # Detect scripts that are largely language-unique.
+        # Require threshold to avoid misclassifying mixed-language texts
+        # (e.g., Chinese with a single Cyrillic letter).
+        total_chars = len(re.findall(r"\S", user_text))
+        if total_chars == 0:
+            return fallback
+
         counts = {
             "ko": len(re.findall(r"[\uac00-\ud7af]", user_text)),
             "ru": len(re.findall(r"[\u0400-\u04ff]", user_text)),
@@ -169,7 +175,8 @@ class MemoryExtractor:
         }
 
         detected, score = max(counts.items(), key=lambda item: item[1])
-        if score > 0:
+        # Threshold: at least 2 chars AND at least 10% of non-whitespace chars
+        if score >= 2 and score / total_chars >= 0.10:
             return detected
 
         # CJK disambiguation:
@@ -219,8 +226,14 @@ class MemoryExtractor:
         context: dict,
         user: UserIdentifier,
         session_id: str,
+        *,
+        strict: bool = False,
     ) -> List[CandidateMemory]:
-        """Extract memory candidates from messages."""
+        """Extract memory candidates from messages.
+
+        When ``strict`` is True, extraction failures are re-raised as
+        ``RuntimeError`` so async task tracking can mark tasks as failed.
+        """
         user = user
         vlm = get_openviking_config().vlm
         if not vlm or not vlm.is_available():
@@ -288,10 +301,19 @@ class MemoryExtractor:
             response = await vlm.get_completion_async(prompt)
             logger.debug("Memory extraction LLM raw response: %s", response)
             data = parse_json_from_response(response) or {}
+            if isinstance(data, list):
+                logger.warning(
+                    "Memory extraction received list instead of dict; wrapping as memories"
+                )
+                data = {"memories": data}
+            elif not isinstance(data, dict):
+                logger.warning(
+                    "Memory extraction received unexpected type %s; skipping", type(data).__name__
+                )
+                data = {}
             logger.debug("Memory extraction LLM parsed payload: %s", data)
 
             candidates = []
-            # print(f"memories = {data.get('memories', [])}")
             for mem in data.get("memories", []):
                 category_str = mem.get("category", "patterns")
                 try:
@@ -383,7 +405,18 @@ class MemoryExtractor:
 
         except Exception as e:
             logger.error(f"Memory extraction failed: {e}")
+            if strict:
+                raise RuntimeError(f"memory_extraction_failed: {e}") from e
             return []
+
+    async def extract_strict(
+        self,
+        context: dict,
+        user: UserIdentifier,
+        session_id: str,
+    ) -> List[CandidateMemory]:
+        """Compatibility wrapper: strict mode delegates to ``extract``."""
+        return await self.extract(context, user, session_id, strict=True)
 
     async def create_memory(
         self,
@@ -693,28 +726,6 @@ class MemoryExtractor:
         )
         await viking_fs.write_file(uri=uri, content=merged_content, ctx=ctx)
         return self._create_tool_context(uri, candidate, ctx, abstract_override=abstract_override)
-
-    async def _enqueue_semantic_for_parent(self, file_uri: str, ctx: "RequestContext") -> None:
-        """Enqueue semantic generation for parent directory."""
-        try:
-            from openviking.storage.queuefs import get_queue_manager
-            from openviking.storage.queuefs.semantic_msg import SemanticMsg
-
-            parent_uri = "/".join(file_uri.rsplit("/", 1)[:-1])
-            queue_manager = get_queue_manager()
-            semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
-            msg = SemanticMsg(
-                uri=parent_uri,
-                context_type="memory",
-                account_id=ctx.account_id,
-                user_id=ctx.user.user_id,
-                agent_id=ctx.user.agent_id,
-                role=ctx.role.value,
-            )
-            await semantic_queue.enqueue(msg)
-            logger.debug(f"Enqueued semantic generation for: {parent_uri}")
-        except Exception as e:
-            logger.warning(f"Failed to enqueue semantic generation for {file_uri}: {e}")
 
     def _compute_statistics_derived(self, stats: dict) -> dict:
         """计算派生统计数据（平均值、成功率）"""

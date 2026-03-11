@@ -26,10 +26,18 @@ class VLMConfig(BaseModel):
 
     default_provider: Optional[str] = Field(default=None, description="Default provider name")
 
+    max_tokens: Optional[int] = Field(
+        default=None, description="Maximum tokens for VLM completion output (None = provider default)"
+    )
+
     thinking: bool = Field(default=False, description="Enable thinking mode for VolcEngine models")
 
     max_concurrent: int = Field(
         default=100, description="Maximum number of concurrent LLM calls for semantic processing"
+    )
+
+    extra_headers: Optional[Dict[str, str]] = Field(
+        default=None, description="Extra HTTP headers for OpenAI-compatible providers"
     )
 
     _vlm_instance: Optional[Any] = None
@@ -68,6 +76,8 @@ class VLMConfig(BaseModel):
                 self.providers[self.provider]["api_key"] = self.api_key
             if self.api_base and "api_base" not in self.providers[self.provider]:
                 self.providers[self.provider]["api_base"] = self.api_base
+            if self.extra_headers and "extra_headers" not in self.providers[self.provider]:
+                self.providers[self.provider]["extra_headers"] = self.extra_headers
 
     def _has_any_config(self) -> bool:
         """Check if any config is provided."""
@@ -134,6 +144,7 @@ class VLMConfig(BaseModel):
             "max_retries": self.max_retries,
             "provider": name,
             "thinking": self.thinking,
+            "max_tokens": self.max_tokens,
         }
 
         if config:
@@ -148,9 +159,11 @@ class VLMConfig(BaseModel):
         return self.get_vlm_instance().get_completion(prompt, thinking)
 
     async def get_completion_async(
-        self, prompt: str, thinking: bool = False, max_retries: int = 0
+        self, prompt: str, thinking: bool = False, max_retries: int | None = None
     ) -> str:
-        """Get LLM completion asynchronously, max_retries=0 means no retry."""
+        """Get LLM completion asynchronously. Uses self.max_retries if not specified."""
+        if max_retries is None:
+            max_retries = self.max_retries
         return await self.get_vlm_instance().get_completion_async(prompt, thinking, max_retries)
 
     def is_available(self) -> bool:

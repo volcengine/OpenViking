@@ -11,6 +11,7 @@ from openviking.core.context import Context
 from openviking.server.identity import RequestContext
 from openviking.storage.queuefs import EmbeddingQueue, get_queue_manager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
+from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.uri import VikingURI
 
@@ -162,6 +163,8 @@ async def import_ovpack(
 
         # Extract root directory name (assuming first path component is root name)
         first_path = infolist[0].filename
+        # Normalize path separators to handle Windows-created ZIPs
+        first_path = first_path.replace("\\", "/")
         base_name = first_path.split("/")[0]
         if not base_name:
             raise ValueError("Could not determine root directory name from ovpack")
@@ -176,7 +179,7 @@ async def import_ovpack(
                     f"Resource already exists at {root_uri}. Use force=True to overwrite."
                 )
             logger.info(f"[local_fs] Overwriting existing resource at {root_uri}")
-        except FileNotFoundError:
+        except NotFoundError:
             # Path does not exist, safe to import
             pass
 
@@ -202,7 +205,10 @@ async def import_ovpack(
             if not zip_path:
                 continue
 
+            # Validate before normalization so backslash paths are rejected
             safe_zip_path = _validate_ovpack_member_path(zip_path, base_name)
+            # Normalize path separators to handle Windows-created ZIPs
+            safe_zip_path = safe_zip_path.replace("\\", "/")
 
             # Handle directory entries
             if safe_zip_path.endswith("/"):

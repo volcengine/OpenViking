@@ -45,6 +45,7 @@ Add a resource to the knowledge base.
 | instruction | str | No | "" | Special processing instructions |
 | wait | bool | No | False | Wait for semantic processing to complete |
 | timeout | float | No | None | Timeout in seconds (only used when wait=True) |
+| watch_interval | float | No | 0 | Watch interval (minutes). >0 enables/updates watch; <=0 disables watch. Only takes effect when target is provided |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -166,6 +167,48 @@ curl -X POST http://localhost:1933/api/v1/system/wait \
 
 ```bash
 openviking add-resource ./documents/guide.md --wait
+```
+
+**Example: Watch for Updates (watch_interval)**
+
+`watch_interval` is in minutes and periodically triggers re-processing for the specified target URI:
+
+- `watch_interval > 0`: create (or reactivate and update) a watch task for the `target`
+- `watch_interval <= 0`: disable (deactivate) the watch task for the `target`
+- watch tasks are only managed when `target` / CLI `--to` is provided
+
+If there is already an active watch task for the same `target`, submitting another request with `watch_interval > 0` returns a conflict error. Disable it first (`watch_interval = 0`) and then set a new interval.
+
+**Python SDK (Embedded / HTTP)**
+
+```python
+client.add_resource(
+    "./documents/guide.md",
+    target="viking://resources/documents/guide.md",
+    watch_interval=60,
+)
+```
+
+**HTTP API**
+
+```bash
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "path": "./documents/guide.md",
+    "target": "viking://resources/documents/guide.md",
+    "watch_interval": 60
+  }'
+```
+
+**CLI**
+
+```bash
+openviking add-resource ./documents/guide.md --to viking://resources/documents/guide.md --watch-interval 60
+
+# Disable watch
+openviking add-resource ./documents/guide.md --to viking://resources/documents/guide.md --watch-interval 0
 ```
 
 ---

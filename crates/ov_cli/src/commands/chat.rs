@@ -37,9 +37,9 @@ pub struct ChatCommand {
     #[arg(short, long)]
     pub session: Option<String>,
 
-    /// User ID
-    #[arg(short, long, default_value = "cli_user")]
-    pub user: String,
+    /// Sender ID
+    #[arg(short, long, default_value = "user")]
+    pub sender: String,
 
     /// Non-interactive mode (single message)
     #[arg(short = 'M', long)]
@@ -128,7 +128,7 @@ impl ChatCommand {
         let request = ChatRequest {
             message: message.to_string(),
             session_id: self.session.clone(),
-            user_id: Some(self.user.clone()),
+            user_id: Some(self.sender.clone()),
             stream: false,
             context: None,
         };
@@ -171,7 +171,7 @@ impl ChatCommand {
         let request = ChatRequest {
             message: message.to_string(),
             session_id: self.session.clone(),
-            user_id: Some(self.user.clone()),
+            user_id: Some(self.sender.clone()),
             stream: true,
             context: None,
         };
@@ -244,10 +244,10 @@ impl ChatCommand {
     async fn run_interactive(&self, client: &Client) -> Result<()> {
         println!("Vikingbot Chat - Interactive Mode");
         println!("Endpoint: {}", self.endpoint);
-        println!("Streaming: {}", if self.stream { "enabled" } else { "disabled" });
         if let Some(session) = &self.session {
             println!("Session: {}", session);
         }
+        println!("Sender: {}", self.sender);
         println!("Type 'exit', 'quit', or press Ctrl+C to exit");
         println!("----------------------------------------\n");
 
@@ -348,7 +348,7 @@ impl ChatCommand {
         let request = ChatRequest {
             message: input.to_string(),
             session_id: session_id.clone(),
-            user_id: Some(self.user.clone()),
+            user_id: Some(self.sender.clone()),
             stream: false,
             context: None,
         };
@@ -403,7 +403,7 @@ impl ChatCommand {
         let request = ChatRequest {
             message: input.to_string(),
             session_id: session_id.clone(),
-            user_id: Some(self.user.clone()),
+            user_id: Some(self.sender.clone()),
             stream: true,
             context: None,
         };
@@ -617,7 +617,7 @@ impl ChatCommand {
         endpoint: String,
         api_key: Option<String>,
         session: Option<String>,
-        user: String,
+        sender: String,
         message: Option<String>,
         stream: bool,
         no_format: bool,
@@ -627,7 +627,7 @@ impl ChatCommand {
             endpoint,
             api_key,
             session,
-            user,
+            sender,
             message,
             stream,
             no_format,

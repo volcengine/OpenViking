@@ -6,7 +6,7 @@ import asyncio
 import logging
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, Path, Query
+from fastapi import APIRouter, Body, Depends, Path, Query
 from pydantic import BaseModel, model_validator
 
 from openviking.message.part import TextPart, part_from_dict
@@ -14,7 +14,10 @@ from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import ErrorInfo, Response
+from openviking.server.telemetry import resolve_selection, run_operation
 from openviking.service.task_tracker import get_task_tracker
+from openviking.telemetry import TelemetryRequest
+from openviking_cli.exceptions import InvalidArgumentError
 
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
 logger = logging.getLogger(__name__)
@@ -71,6 +74,19 @@ class AddMessageRequest(BaseModel):
         if self.content is None and self.parts is None:
             raise ValueError("Either 'content' or 'parts' must be provided")
         return self
+
+
+class UsedRequest(BaseModel):
+    """Request model for recording usage."""
+
+    contexts: Optional[List[str]] = None
+    skill: Optional[Dict[str, Any]] = None
+
+
+class CommitSessionRequest(BaseModel):
+    """Request model for session commit."""
+
+    telemetry: TelemetryRequest = False
 
 
 def _to_jsonable(value: Any) -> Any:
@@ -144,6 +160,7 @@ async def delete_session(
 
 @router.post("/{session_id}/commit")
 async def commit_session(
+    request: CommitSessionRequest = Body(default_factory=CommitSessionRequest),
     session_id: str = Path(..., description="Session ID"),
     wait: bool = Query(
         True,
@@ -173,8 +190,20 @@ async def commit_session(
                     message=f"Session {session_id} already has a commit in progress",
                 ),
             )
-        result = await service.sessions.commit_async(session_id, _ctx)
-        return Response(status="ok", result=result)
+        execution = await run_operation(
+            operation="session.commit",
+            telemetry=request.telemetry,
+            fn=lambda: service.sessions.commit_async(session_id, _ctx),
+        )
+        return Response(
+            status="ok",
+            result=execution.result,
+            telemetry=execution.telemetry,
+        ).model_dump(exclude_none=True)
+
+    selection = resolve_selection(request.telemetry)
+    if selection.include_payload:
+        raise InvalidArgumentError("telemetry is not supported when wait=false for session.commit")
 
     # Atomically check + create to prevent race conditions
     task = tracker.create_if_no_running("session_commit", session_id)
@@ -272,5 +301,26 @@ async def add_message(
         result={
             "session_id": session_id,
             "message_count": len(session.messages),
+        },
+    )
+
+
+@router.post("/{session_id}/used")
+async def record_used(
+    request: UsedRequest,
+    session_id: str = Path(..., description="Session ID"),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Record actually used contexts and skills in a session."""
+    service = get_service()
+    session = service.sessions.session(_ctx, session_id)
+    await session.load()
+    session.used(contexts=request.contexts, skill=request.skill)
+    return Response(
+        status="ok",
+        result={
+            "session_id": session_id,
+            "contexts_used": session.stats.contexts_used,
+            "skills_used": session.stats.skills_used,
         },
     )

@@ -137,6 +137,7 @@ Rerank refines candidate results in THINKING mode.
 
 - Rerank AK/SK configured
 - Using THINKING mode (default for search())
+- If rerank returns an invalid result or the API call fails, retrieval falls back to vector scores
 
 ### Scoring Method
 

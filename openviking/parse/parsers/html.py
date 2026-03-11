@@ -18,7 +18,7 @@ import time
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
-from urllib.parse import urlparse
+from urllib.parse import unquote, urlparse
 
 from openviking.parse.base import (
     NodeType,
@@ -28,6 +28,7 @@ from openviking.parse.base import (
     lazy_import,
 )
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking.parse.parsers.constants import CODE_EXTENSIONS
 from openviking_cli.utils.config import get_openviking_config
 
 
@@ -53,7 +54,10 @@ class URLTypeDetector:
     """
 
     # Extension to URL type mapping
+    # CODE_EXTENSIONS spread comes first so explicit entries below override
+    # (e.g., .html/.htm -> DOWNLOAD_HTML instead of DOWNLOAD_TXT)
     EXTENSION_MAP = {
+        **dict.fromkeys(CODE_EXTENSIONS, URLType.DOWNLOAD_TXT),
         ".pdf": URLType.DOWNLOAD_PDF,
         ".md": URLType.DOWNLOAD_MD,
         ".markdown": URLType.DOWNLOAD_MD,
@@ -345,6 +349,24 @@ class HTMLParser(BaseParser):
                 warnings=[f"Failed to fetch webpage: {e}"],
             )
 
+    @staticmethod
+    def _extract_filename_from_url(url: str) -> str:
+        """
+        Extract and URL-decode the original filename from a URL.
+
+        Args:
+            url: URL to extract filename from
+
+        Returns:
+            Decoded filename (e.g., "schemas.py" from ".../schemas.py")
+            Falls back to "download" if no filename can be extracted.
+        """
+        parsed = urlparse(url)
+        # URL-decode path to handle encoded characters (e.g., %E7%99%BE -> Chinese chars)
+        decoded_path = unquote(parsed.path)
+        basename = Path(decoded_path).name
+        return basename if basename else "download"
+
     async def _handle_download_link(
         self, url: str, file_type: str, start_time: float, meta: Dict[str, Any], **kwargs
     ) -> ParseResult:
@@ -365,22 +387,30 @@ class HTMLParser(BaseParser):
             # Download to temporary file
             temp_path = await self._download_file(url)
 
+            # Extract original filename from URL for use as source_path,
+            # so parsers use it instead of the temp file name.
+            original_filename = self._extract_filename_from_url(url)
+
             # Get appropriate parser
             if file_type == "pdf":
                 from openviking.parse.parsers.pdf import PDFParser
 
                 parser = PDFParser()
-                result = await parser.parse(temp_path)
+                result = await parser.parse(temp_path, resource_name=Path(original_filename).stem)
             elif file_type == "markdown":
                 from openviking.parse.parsers.markdown import MarkdownParser
 
                 parser = MarkdownParser()
-                result = await parser.parse(temp_path)
+                content = Path(temp_path).read_text(encoding="utf-8")
+                result = await parser.parse_content(
+                    content, source_path=original_filename, **kwargs
+                )
             elif file_type == "text":
-                from openviking.parse.parsers.text import TextParser
-
-                parser = TextParser()
-                result = await parser.parse(temp_path)
+                # For text/code files, preserve the original filename and extension.
+                # Read the downloaded content and save it with the original name
+                # instead of routing through TextParser->MarkdownParser which
+                # would rename it to .md and split it into sections.
+                result = await self._save_downloaded_text(temp_path, original_filename, start_time)
             elif file_type == "html":
                 # Parse downloaded HTML locally
                 return await self._parse_local_file(Path(temp_path), start_time, **kwargs)
@@ -510,6 +540,57 @@ class HTMLParser(BaseParser):
 
         return url
 
+    async def _save_downloaded_text(
+        self, temp_path: str, original_filename: str, start_time: float
+    ) -> ParseResult:
+        """
+        Save a downloaded text/code file preserving its original filename and extension.
+
+        Instead of routing through TextParser -> MarkdownParser (which renames to .md
+        and splits into sections), this saves the file directly into a VikingFS temp
+        directory with its original name.
+
+        Args:
+            temp_path: Path to the downloaded temporary file
+            original_filename: Original filename from URL (e.g., "schemas.py")
+            start_time: Parse start timestamp
+
+        Returns:
+            ParseResult with temp_dir_path set
+        """
+        from openviking.storage.viking_fs import get_viking_fs
+
+        content = Path(temp_path).read_text(encoding="utf-8")
+        doc_name = Path(original_filename).stem
+
+        viking_fs = get_viking_fs()
+        temp_uri = viking_fs.create_temp_uri()
+        await viking_fs.mkdir(temp_uri)
+
+        # Create document root directory (TreeBuilder expects exactly one dir)
+        root_dir = f"{temp_uri}/{doc_name}"
+        await viking_fs.mkdir(root_dir)
+
+        # Save with original filename (preserving extension)
+        file_uri = f"{root_dir}/{original_filename}"
+        await viking_fs.write_file(file_uri, content)
+
+        root = ResourceNode(
+            type=NodeType.ROOT,
+            title=doc_name,
+            level=0,
+        )
+
+        result = create_parse_result(
+            root=root,
+            source_path=original_filename,
+            source_format="text",
+            parser_name="HTMLParser",
+            parse_time=time.time() - start_time,
+        )
+        result.temp_dir_path = temp_uri
+        return result
+
     async def _download_file(self, url: str) -> str:
         """
         Download file from URL to temporary location.
@@ -527,9 +608,10 @@ class HTMLParser(BaseParser):
 
         url = self._convert_to_raw_url(url)
 
-        # Determine file extension from URL
+        # Determine file extension from URL (decode first to handle encoded paths)
         parsed = urlparse(url)
-        ext = Path(parsed.path).suffix or ".tmp"
+        decoded_path = unquote(parsed.path)
+        ext = Path(decoded_path).suffix or ".tmp"
 
         # Create temp file
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=ext)

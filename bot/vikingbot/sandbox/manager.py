@@ -107,7 +107,9 @@ class SandboxManager:
     def to_workspace_id(self, session_key: SessionKey):
         if self.config.sandbox.mode == "shared":
             return "shared"
-        else:
+        elif self.config.sandbox.mode == "per-channel":
+            return session_key.channel_key()
+        else:  # per-session
             return session_key.safe_name()
 
     async def get_sandbox_cwd(self, session_key: SessionKey) -> str:

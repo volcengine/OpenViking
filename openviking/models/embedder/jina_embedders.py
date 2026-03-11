@@ -22,18 +22,32 @@ class JinaDenseEmbedder(DenseEmbedderBase):
     """Jina AI Dense Embedder Implementation
 
     Uses Jina AI embedding API via OpenAI-compatible client.
-    Supports task-specific embeddings and Matryoshka dimension reduction.
+    Supports task-specific embeddings (non-symmetric) and Matryoshka dimension reduction.
+
+    Jina models are non-symmetric by default and require the 'task' parameter to distinguish
+    between query and document embeddings. This is different from official OpenAI models,
+    which are symmetric and do not support the input_type parameter.
 
     Example:
-        >>> embedder = JinaDenseEmbedder(
+        >>> # Query embedding
+        >>> query_embedder = JinaDenseEmbedder(
         ...     model_name="jina-embeddings-v5-text-small",
         ...     api_key="jina_xxx",
         ...     dimension=512,
-        ...     task="retrieval.query"
+        ...     context="query"
         ... )
-        >>> result = embedder.embed("Hello world")
-        >>> print(len(result.dense_vector))
+        >>> query_vector = query_embedder.embed("search query")
+        >>> print(len(query_vector.dense_vector))
         512
+
+        >>> # Document embedding
+        >>> doc_embedder = JinaDenseEmbedder(
+        ...     model_name="jina-embeddings-v5-text-small",
+        ...     api_key="jina_xxx",
+        ...     dimension=512,
+        ...     context="document"
+        ... )
+        >>> doc_vector = doc_embedder.embed("document content")
     """
 
     def __init__(
@@ -42,9 +56,11 @@ class JinaDenseEmbedder(DenseEmbedderBase):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         dimension: Optional[int] = None,
-        task: Optional[str] = None,
+        query_param: Optional[str] = "retrieval.query",
+        document_param: Optional[str] = "retrieval.passage",
         late_chunking: Optional[bool] = None,
         config: Optional[Dict[str, Any]] = None,
+        task: Optional[str] = None,
     ):
         """Initialize Jina AI Dense Embedder
 
@@ -53,9 +69,11 @@ class JinaDenseEmbedder(DenseEmbedderBase):
             api_key: API key, required
             api_base: API base URL, defaults to https://api.jina.ai/v1
             dimension: Dimension for Matryoshka reduction, optional
-            task: Task type for task-specific embeddings, optional.
-                  Valid values: retrieval.query, retrieval.passage,
-                  text-matching, classification, separation
+            query_param: Task value for query-side embeddings. Defaults to 'retrieval.query'.
+                        Override for models with different task naming conventions.
+            document_param: Task value for document-side embeddings. Defaults to
+                           'retrieval.passage'. Override for models with different task
+                           naming conventions.
             late_chunking: Enable late chunking via extra_body, optional
             config: Additional configuration dict
 
@@ -67,7 +85,8 @@ class JinaDenseEmbedder(DenseEmbedderBase):
         self.api_key = api_key
         self.api_base = api_base or "https://api.jina.ai/v1"
         self.dimension = dimension
-        self.task = task
+        self.query_param = query_param
+        self.document_param = document_param
         self.late_chunking = late_chunking
 
         if not self.api_key:
@@ -88,20 +107,27 @@ class JinaDenseEmbedder(DenseEmbedderBase):
             )
         self._dimension = dimension if dimension is not None else max_dim
 
-    def _build_extra_body(self) -> Optional[Dict[str, Any]]:
+    def _build_extra_body(self, is_query: bool = False) -> Optional[Dict[str, Any]]:
         """Build extra_body dict for Jina-specific parameters"""
         extra_body = {}
-        if self.task is not None:
-            extra_body["task"] = self.task
+        task = None
+        if is_query and self.query_param is not None:
+            task = self.query_param
+        elif not is_query and self.document_param is not None:
+            task = self.document_param
+
+        if task is not None:
+            extra_body["task"] = task
         if self.late_chunking is not None:
             extra_body["late_chunking"] = self.late_chunking
         return extra_body if extra_body else None
 
-    def embed(self, text: str) -> EmbedResult:
+    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform dense embedding on text
 
         Args:
             text: Input text
+            is_query: Flag to indicate if this is a query embedding
 
         Returns:
             EmbedResult: Result containing only dense_vector
@@ -114,7 +140,7 @@ class JinaDenseEmbedder(DenseEmbedderBase):
             if self.dimension:
                 kwargs["dimensions"] = self.dimension
 
-            extra_body = self._build_extra_body()
+            extra_body = self._build_extra_body(is_query=is_query)
             if extra_body:
                 kwargs["extra_body"] = extra_body
 
@@ -127,11 +153,12 @@ class JinaDenseEmbedder(DenseEmbedderBase):
         except Exception as e:
             raise RuntimeError(f"Embedding failed: {str(e)}") from e
 
-    def embed_batch(self, texts: List[str]) -> List[EmbedResult]:
+    def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
         """Batch embedding (Jina native support)
 
         Args:
             texts: List of texts
+            is_query: Flag to indicate if these are query embeddings
 
         Returns:
             List[EmbedResult]: List of embedding results
@@ -147,7 +174,7 @@ class JinaDenseEmbedder(DenseEmbedderBase):
             if self.dimension:
                 kwargs["dimensions"] = self.dimension
 
-            extra_body = self._build_extra_body()
+            extra_body = self._build_extra_body(is_query=is_query)
             if extra_body:
                 kwargs["extra_body"] = extra_body
 

@@ -234,6 +234,7 @@ def gateway(
         True, "--agent/--no-agent", help="Enable agent loop for OpenAPI/chat"
     ),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Verbose output"),
+    config_path: str = typer.Option(None, "--config", "-c", help="ov.conf path"),
 ):
     """Start the vikingbot gateway with OpenAPI chat enabled by default."""
 
@@ -243,7 +244,8 @@ def gateway(
         logging.basicConfig(level=logging.DEBUG)
 
     bus = MessageBus()
-    config = ensure_config()
+    path = Path(config_path).expanduser() if config_path is not None else None
+    config = ensure_config(path)
     _init_bot_data(config)
     session_manager = SessionManager(config.bot_data_path)
 
@@ -507,6 +509,7 @@ def prepare_agent_channel(
     markdown: bool,
     logs: bool,
     eval: bool = False,
+    sender: str | None = None,
 ):
     """Prepare channel for agent command."""
     from vikingbot.channels.chat import ChatChannel, ChatChannelConfig
@@ -524,6 +527,7 @@ def prepare_agent_channel(
             session_id=session_id,
             markdown=markdown,
             eval=eval,
+            sender=sender,
         )
         channels.add_channel(channel)
     else:
@@ -536,6 +540,7 @@ def prepare_agent_channel(
             session_id=session_id,
             markdown=markdown,
             logs=logs,
+            sender=sender,
         )
         channels.add_channel(channel)
 
@@ -557,18 +562,12 @@ def chat(
     ),
     config_path: str = typer.Option(
         None, "--config", "-c", help="Path to ov.conf, default .openviking/ov.conf"
-    )
+    ),
+    sender: str = typer.Option(
+        None, "--sender", help="Sender ID, same usage as feishu channel sender"
+    ),
 ):
     """Interact with the agent directly."""
-    if message is not None:
-        # Single-turn mode: only show error logs
-        logger.remove()
-        logger.add(sys.stderr, level="ERROR")
-    elif logs:
-        logger.enable("vikingbot")
-    else:
-        logger.disable("vikingbot")
-
     path = Path(config_path).expanduser() if config_path is not None else None
 
     bus = MessageBus()
@@ -581,10 +580,28 @@ def chat(
     if session_id is None:
         session_id = get_or_create_machine_id()
     cron = prepare_cron(bus, quiet=is_single_turn)
-    channels = prepare_agent_channel(config, bus, message, session_id, markdown, logs, eval)
+    channels = prepare_agent_channel(config, bus, message, session_id, markdown, logs, eval, sender)
     agent_loop = prepare_agent_loop(
         config, bus, session_manager, cron, quiet=is_single_turn, eval=eval
     )
+
+    logger.remove()
+
+    log_file = get_data_dir() / f"vikingbot.debug.{os.getpid()}.log"
+    logger.add(
+        log_file,
+        level="DEBUG",
+        rotation="10 MB",
+        retention="7 days",
+        encoding="utf-8",
+        backtrace=True,
+        diagnose=True,
+    )
+
+    if logs:
+        logger.add(sys.stderr, level="DEBUG")
+    else:
+        logger.add(sys.stderr, level="ERROR")
 
     async def run():
         if is_single_turn:

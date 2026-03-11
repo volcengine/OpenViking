@@ -180,3 +180,8 @@ class FSService:
         """File pattern matching."""
         viking_fs = self._ensure_initialized()
         return await viking_fs.glob(pattern, uri=uri, node_limit=node_limit, ctx=ctx)
+
+    async def read_file_bytes(self, uri: str, ctx: RequestContext) -> bytes:
+        """Read file as raw bytes."""
+        viking_fs = self._ensure_initialized()
+        return await viking_fs.read_file_bytes(uri, ctx=ctx)

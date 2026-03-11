@@ -104,31 +104,47 @@ class LangfuseClient:
             yield
             return
 
-        try:
-            propagate_kwargs = {}
-            if session_id:
-                propagate_kwargs["session_id"] = session_id
-            if user_id:
-                propagate_kwargs["user_id"] = user_id
+        propagate_kwargs = {}
+        if session_id:
+            propagate_kwargs["session_id"] = session_id
+        if user_id:
+            propagate_kwargs["user_id"] = user_id
 
-            if not propagate_kwargs:
-                yield
-                return
-
-            # Use module-level propagate_attributes from langfuse SDK v3
-            global propagate_attributes
-            if propagate_attributes is not None:
-                logger.info(f"[LANGFUSE] Propagating attributes: {list(propagate_kwargs.keys())}")
-                with propagate_attributes(**propagate_kwargs):
-                    yield
-            else:
-                logger.warning(
-                    "[LANGFUSE] propagate_attributes not available (SDK version may not support it)"
-                )
-                yield
-        except Exception as e:
-            logger.debug(f"[LANGFUSE] propagate_attributes error: {e}")
+        if not propagate_kwargs:
             yield
+            return
+
+        # Use module-level propagate_attributes from langfuse SDK v3
+        # Store in a local variable to avoid shadowing issues with the method name
+        global propagate_attributes
+        _propagate = propagate_attributes
+
+        if _propagate is None:
+            logger.warning(
+                "[LANGFUSE] propagate_attributes not available (SDK version may not support it)"
+            )
+            yield
+            return
+
+        # Only catch exceptions when ENTERING the context manager
+        # Don't wrap the yield - let exceptions from the inner block propagate normally
+        logger.info(f"[LANGFUSE] Propagating attributes: {list(propagate_kwargs.keys())}")
+        try:
+            cm = _propagate(**propagate_kwargs)
+            cm.__enter__()
+        except Exception as e:
+            logger.debug(f"[LANGFUSE] Failed to enter propagate_attributes: {e}")
+            yield
+            return
+
+        try:
+            yield
+        finally:
+            # Always exit the context manager
+            try:
+                cm.__exit__(None, None, None)
+            except Exception as e:
+                logger.debug(f"[LANGFUSE] Failed to exit propagate_attributes: {e}")
 
     @contextmanager
     def trace(
@@ -207,23 +223,47 @@ class LangfuseClient:
             yield None
             return
 
+        observation = None
         try:
-            with self._client.start_as_current_generation(
-                name=name,
-                model=model,
-                input=prompt,
-                metadata=metadata or {},
-            ) as generation:
-                yield generation
+            # Use start_observation for the current SDK version
+            if hasattr(self._client, "start_as_current_observation"):
+                with self._client.start_as_current_observation(
+                    name=name,
+                    as_type="generation",
+                    model=model,
+                    input=prompt,
+                    metadata=metadata or {},
+                ) as obs:
+                    yield obs
+            elif hasattr(self._client, "start_observation"):
+                observation = self._client.start_observation(
+                    name=name,
+                    as_type="generation",
+                    model=model,
+                    input=prompt,
+                    metadata=metadata or {},
+                )
+                yield observation
+            else:
+                logger.debug("[LANGFUSE] No supported observation method found on client")
+                yield None
         except Exception as e:
             logger.debug(f"Langfuse generation error: {e}")
             yield None
+        finally:
+            # If we used start_observation, we need to end it manually
+            if observation and hasattr(observation, "end"):
+                try:
+                    observation.end()
+                except Exception as e:
+                    logger.debug(f"Langfuse observation.end() error: {e}")
 
     def update_generation(
         self,
         generation: Any,
         output: str | None = None,
         usage: dict[str, int] | None = None,
+        usage_details: dict[str, int] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> None:
         """Update a generation with output and usage."""
@@ -234,12 +274,18 @@ class LangfuseClient:
             update_kwargs: dict[str, Any] = {}
             if output is not None:
                 update_kwargs["output"] = output
-            if usage:
-                update_kwargs["usage"] = {
-                    "prompt_tokens": usage.get("prompt_tokens", 0),
-                    "completion_tokens": usage.get("completion_tokens", 0),
-                    "total_tokens": usage.get("total_tokens", 0),
+            if usage_details:
+                update_kwargs["usage_details"] = usage_details
+            elif usage:
+                # Support both usage and usage_details formats
+                usage_details = {
+                    "input": usage.get("prompt_tokens", 0),
+                    "output": usage.get("completion_tokens", 0),
                 }
+                # Pass through total_tokens if available
+                if "total_tokens" in usage:
+                    usage_details["total"] = usage["total_tokens"]
+                update_kwargs["usage_details"] = usage_details
             if metadata:
                 if hasattr(generation, "metadata") and generation.metadata:
                     update_kwargs["metadata"] = {**generation.metadata, **metadata}

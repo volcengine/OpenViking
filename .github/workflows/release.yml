@@ -34,7 +34,7 @@ on:
         description: 'JSON string of Python versions (Manual only)'
         required: false
         type: string
-        default: '["3.10", "3.11", "3.12", "3.13"]'
+        default: '["3.10", "3.11", "3.12", "3.13", "3.14"]'
 
 permissions:
   contents: write
@@ -48,7 +48,7 @@ jobs:
     uses: ./.github/workflows/_build.yml
     with:
       os_json: ${{ inputs.os_json || '["ubuntu-24.04", "ubuntu-24.04-arm", "macos-14", "macos-15-intel", "windows-latest"]' }}
-      python_json: ${{ inputs.python_json || '["3.10", "3.11", "3.12", "3.13"]' }}
+      python_json: ${{ inputs.python_json || '["3.10", "3.11", "3.12", "3.13", "3.14"]' }}
       build_sdist: ${{ github.event_name == 'release' || inputs.build_sdist != false }}
       build_wheels: ${{ github.event_name == 'release' || inputs.build_wheels != false }}
 
@@ -182,7 +182,7 @@ jobs:
 
       - name: Extract metadata (tags, labels) for Docker
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository }}
 
@@ -193,7 +193,7 @@ jobs:
         uses: docker/setup-buildx-action@v4
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           platforms: linux/amd64,linux/arm64

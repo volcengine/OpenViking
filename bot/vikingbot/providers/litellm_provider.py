@@ -4,9 +4,9 @@ import json
 import os
 from typing import Any
 
-from loguru import logger
 import litellm
 from litellm import acompletion
+from loguru import logger
 
 from vikingbot.integrations.langfuse import LangfuseClient
 from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
@@ -104,6 +104,64 @@ class LiteLLMProvider(LLMProvider):
                     kwargs.update(overrides)
                     return
 
+    def _handle_system_message(
+        self, model: str, messages: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """
+        Handle system message for providers that don't support it (e.g. MiniMax).
+        Merges system message into the first user message or converts to user role.
+        """
+        # Check for MiniMax
+        if model.startswith("minimax/") or "/minimax/" in model:
+            # Create a copy to avoid modifying the original list
+            new_messages = []
+
+            # Helper to merge content
+            def merge_content(base_content, new_content):
+                if isinstance(base_content, str) and isinstance(new_content, str):
+                    return f"{new_content}\n\n{base_content}"
+                if isinstance(base_content, list):
+                    base_content = list(base_content)
+                    base_content.insert(0, {"type": "text", "text": f"{new_content}\n\n"})
+                    return base_content
+                return f"{new_content}\n\n{str(base_content)}"
+
+            # First pass: identify system messages
+            system_contents = []
+            cleaned_messages = []
+
+            for msg in messages:
+                if msg.get("role") == "system":
+                    system_contents.append(msg.get("content", ""))
+                else:
+                    cleaned_messages.append(msg)
+
+            # If no system messages, return as is
+            if not system_contents:
+                return messages
+
+            # Combine all system prompts
+            full_system_prompt = "\n\n".join([str(c) for c in system_contents])
+
+            # Merge into the first user message if available
+            merged = False
+            for msg in cleaned_messages:
+                if not merged and msg.get("role") == "user":
+                    msg = msg.copy()
+                    msg["content"] = merge_content(msg.get("content", ""), full_system_prompt)
+                    new_messages.append(msg)
+                    merged = True
+                else:
+                    new_messages.append(msg)
+
+            # If no user message found, create one at the beginning
+            if not merged:
+                new_messages.insert(0, {"role": "user", "content": full_system_prompt})
+
+            return new_messages
+
+        return messages
+
     async def chat(
         self,
         messages: list[dict[str, Any]],
@@ -128,6 +186,9 @@ class LiteLLMProvider(LLMProvider):
             LLMResponse with content and/or tool calls.
         """
         model = self._resolve_model(model or self.default_model)
+
+        # Handle system message for MiniMax and others that don't support it
+        messages = self._handle_system_message(model, messages)
 
         kwargs: dict[str, Any] = {
             "model": model,
@@ -155,24 +216,28 @@ class LiteLLMProvider(LLMProvider):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
 
-        # Direct Langfuse v3 SDK usage
+        # Langfuse integration
         # Note: session_id is set via propagate_attributes in loop.py, not here
-        langfuse_generation = None
+        langfuse_observation = None
         try:
             if self.langfuse.enabled and self.langfuse._client:
                 metadata = {"has_tools": tools is not None}
-                langfuse_generation = self.langfuse._client.start_generation(
-                    name="llm-chat",
-                    model=model,
-                    input=messages,
-                    metadata=metadata,
-                )
+                client = self.langfuse._client
+                # Use start_observation with generation type
+                if hasattr(client, "start_observation"):
+                    langfuse_observation = client.start_observation(
+                        name="llm-chat",
+                        as_type="generation",
+                        model=model,
+                        input=messages,
+                        metadata=metadata,
+                    )
 
             response = await acompletion(**kwargs)
             llm_response = self._parse_response(response)
 
-            # Update and end Langfuse generation
-            if langfuse_generation:
+            # Update and end Langfuse observation
+            if langfuse_observation:
                 output_text = llm_response.content or ""
                 if llm_response.tool_calls:
                     output_text = (
@@ -180,21 +245,20 @@ class LiteLLMProvider(LLMProvider):
                         or f"[Tool calls: {[tc.name for tc in llm_response.tool_calls]}]"
                     )
 
-                # Update generation with output and usage
+                # Update observation with output and usage
                 update_kwargs: dict[str, Any] = {
                     "output": output_text,
                     "metadata": {"finish_reason": llm_response.finish_reason},
                 }
 
                 if llm_response.usage:
-                    # Langfuse v3 SDK expects "usage_details" with "input" and "output" keys
+                    # Add usage data using usage_details format
                     usage_details: dict[str, Any] = {
                         "input": llm_response.usage.get("prompt_tokens", 0),
                         "output": llm_response.usage.get("completion_tokens", 0),
                     }
 
-                    # Add cache read tokens if available (OpenAI/Anthropic prompt caching)
-                    # Try multiple possible field names for cached tokens
+                    # Add cache read tokens if available
                     cache_read_tokens = llm_response.usage.get(
                         "cache_read_input_tokens"
                     ) or llm_response.usage.get("prompt_tokens_details", {}).get("cached_tokens")
@@ -202,23 +266,44 @@ class LiteLLMProvider(LLMProvider):
                         usage_details["cache_read_input_tokens"] = cache_read_tokens
 
                     update_kwargs["usage_details"] = usage_details
-                    # Log the usage details being sent to Langfuse
-                    # logger.info(f"[LANGFUSE] Updating generation with usage_details: {usage_details}")
 
-                langfuse_generation.update(**update_kwargs)
-                langfuse_generation.end()
-                self.langfuse.flush()
+                # Update the observation
+                if hasattr(langfuse_observation, "update"):
+                    try:
+                        langfuse_observation.update(**update_kwargs)
+                    except Exception as e:
+                        logger.debug(f"[LANGFUSE] Failed to update observation: {e}")
+
+                # End the observation
+                if hasattr(langfuse_observation, "end"):
+                    try:
+                        langfuse_observation.end()
+                    except Exception as e:
+                        logger.debug(f"[LANGFUSE] Failed to end observation: {e}")
+
+                try:
+                    self.langfuse.flush()
+                except Exception as e:
+                    logger.debug(f"[LANGFUSE] Failed to flush: {e}")
 
             return llm_response
         except Exception as e:
-            # End Langfuse generation with error
-            if langfuse_generation:
-                langfuse_generation.update(
-                    output=f"Error: {str(e)}",
-                    metadata={"error": str(e)},
-                )
-                langfuse_generation.end()
-                self.langfuse.flush()
+            # End Langfuse observation with error
+            if langfuse_observation:
+                try:
+                    if hasattr(langfuse_observation, "update"):
+                        langfuse_observation.update(
+                            output=f"Error: {str(e)}",
+                            metadata={"error": str(e)},
+                        )
+                    if hasattr(langfuse_observation, "end"):
+                        langfuse_observation.end()
+                    try:
+                        self.langfuse.flush()
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
             # Return error as content for graceful handling
             return LLMResponse(
                 content=f"Error calling LLM: {str(e)}",

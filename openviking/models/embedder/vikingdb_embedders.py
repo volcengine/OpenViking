@@ -123,7 +123,7 @@ class VikingDBDenseEmbedder(DenseEmbedderBase, VikingDBClientMixin):
         self.embedding_type = embedding_type
         self.dense_model = {"name": model_name, "version": model_version, "dim": dimension}
 
-    def embed(self, text: str) -> EmbedResult:
+    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         results = self._call_api([text], dense_model=self.dense_model)
         if not results:
             return EmbedResult(dense_vector=[])
@@ -135,7 +135,7 @@ class VikingDBDenseEmbedder(DenseEmbedderBase, VikingDBClientMixin):
 
         return EmbedResult(dense_vector=dense_vector)
 
-    def embed_batch(self, texts: List[str]) -> List[EmbedResult]:
+    def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
         if not texts:
             return []
         raw_results = self._call_api(texts, dense_model=self.dense_model)
@@ -173,7 +173,7 @@ class VikingDBSparseEmbedder(SparseEmbedderBase, VikingDBClientMixin):
             "version": model_version,
         }
 
-    def embed(self, text: str) -> EmbedResult:
+    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         results = self._call_api([text], sparse_model=self.sparse_model)
         if not results:
             return EmbedResult(sparse_vector={})
@@ -185,7 +185,7 @@ class VikingDBSparseEmbedder(SparseEmbedderBase, VikingDBClientMixin):
 
         return EmbedResult(sparse_vector=sparse_vector)
 
-    def embed_batch(self, texts: List[str]) -> List[EmbedResult]:
+    def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
         if not texts:
             return []
         raw_results = self._call_api(texts, sparse_model=self.sparse_model)
@@ -223,7 +223,7 @@ class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
             "version": model_version,
         }
 
-    def embed(self, text: str) -> EmbedResult:
+    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         results = self._call_api(
             [text], dense_model=self.dense_model, sparse_model=self.sparse_model
         )
@@ -241,7 +241,7 @@ class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
 
         return EmbedResult(dense_vector=dense_vector, sparse_vector=sparse_vector)
 
-    def embed_batch(self, texts: List[str]) -> List[EmbedResult]:
+    def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
         if not texts:
             return []
         raw_results = self._call_api(

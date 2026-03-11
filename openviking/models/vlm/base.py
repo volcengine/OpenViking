@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """VLM base interface and abstract classes"""
 
+import re
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, List, Union
@@ -9,6 +10,8 @@ from typing import Any, Dict, List, Union
 from openviking.utils.time_utils import format_iso8601
 
 from .token_usage import TokenUsageTracker
+
+_THINK_TAG_RE = re.compile(r"<think>[\s\S]*?</think>")
 
 
 class VLMBase(ABC):
@@ -22,6 +25,8 @@ class VLMBase(ABC):
         self.api_base = config.get("api_base")
         self.temperature = config.get("temperature", 0.0)
         self.max_retries = config.get("max_retries", 2)
+        self.max_tokens = config.get("max_tokens")
+        self.extra_headers = config.get("extra_headers")
 
         # Token usage tracking
         self._token_tracker = TokenUsageTracker()
@@ -58,6 +63,10 @@ class VLMBase(ABC):
         """Get vision completion asynchronously"""
         pass
 
+    def _clean_response(self, content: str) -> str:
+        """Strip reasoning tags (e.g. ``<think>...</think>``) from model output."""
+        return _THINK_TAG_RE.sub("", content).strip()
+
     def is_available(self) -> bool:
         """Check if available"""
         return self.api_key is not None or self.api_base is not None
@@ -80,6 +89,14 @@ class VLMBase(ABC):
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         )
+        # Operation-level telemetry aggregation (no-op when telemetry is disabled).
+        try:
+            from openviking.telemetry import get_current_telemetry
+
+            get_current_telemetry().add_token_usage(prompt_tokens, completion_tokens)
+        except Exception:
+            # Telemetry must never break model inference.
+            pass
 
     def get_token_usage(self) -> Dict[str, Any]:
         """Get token usage

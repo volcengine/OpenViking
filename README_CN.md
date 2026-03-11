@@ -97,7 +97,7 @@ OpenViking 支持三种 VLM 提供商：
 
 | 提供商 | 描述 | 获取 API Key |
 |----------|-------------|-------------|
-| `volcengine` | 火山引擎豆包模型 | [Volcengine 控制台](https://console.volcengine.com/ark) |
+| `volcengine` | 火山引擎豆包模型 | [Volcengine 控制台](https://console.volcengine.com/ark/region:ark+cn-beijing/overview?briefPage=0&briefType=introduce&type=new&utm_content=OpenViking&utm_medium=devrel&utm_source=OWO&utm_term=OpenViking) |
 | `openai` | OpenAI 官方 API | [OpenAI 平台](https://platform.openai.com) |
 | `litellm` | 统一调用多种第三方模型 (Anthropic, DeepSeek, Gemini, vLLM, Ollama 等) | 参见 [LiteLLM 提供商](https://docs.litellm.ai/docs/providers) |
 
@@ -486,6 +486,8 @@ ov chat
 结合 OpenViking 后，若仍开启原生记忆，效果在原 OpenClaw 上提升 43%，输入 token 成本降低 91%；在 LanceDB 上效果提升 15%，输入 token 降低 96%。若关闭原生记忆，效果在原 OpenClaw 上提升 49%，输入 token 成本降低 83%；在 LanceDB 上效果提升 17%，输入 token 降低 92%。
 
 👉 **[查看：OpenClaw 记忆插件](examples/openclaw-memory-plugin/README.md)**
+
+👉 **[查看：OpenCode 记忆插件示例](examples/opencode-memory-plugin/README.md)**
 
 ## VikingBot 部署详情
 

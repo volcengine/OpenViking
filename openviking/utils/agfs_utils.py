@@ -99,6 +99,10 @@ def mount_agfs_backend(agfs: Any, agfs_config: Any) -> None:
             local_dir = plugin_config["config"]["local_dir"]
             os.makedirs(local_dir, exist_ok=True)
             logger.debug(f"[AGFSUtils] Ensured local directory exists: {local_dir}")
+        # Ensure queuefs db_path parent directory exists before mounting
+        if plugin_name == "queuefs" and "db_path" in plugin_config.get("config", {}):
+            db_path = plugin_config["config"]["db_path"]
+            os.makedirs(os.path.dirname(db_path), exist_ok=True)
 
         try:
             agfs.unmount(mount_path)

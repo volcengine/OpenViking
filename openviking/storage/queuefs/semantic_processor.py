@@ -3,7 +3,10 @@
 """SemanticProcessor: Processes messages from SemanticQueue, generates .abstract.md and .overview.md."""
 
 import asyncio
-from typing import Any, Dict, List, Optional, Tuple
+import threading
+from contextlib import nullcontext
+from dataclasses import dataclass, field
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from openviking.parse.parsers.constants import (
     CODE_EXTENSIONS,
@@ -24,12 +27,29 @@ from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecutor
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.viking_fs import get_viking_fs
+from openviking.telemetry import bind_telemetry, resolve_telemetry
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import VikingURI
 from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+@dataclass
+class DiffResult:
+    """Directory diff result for sync operations."""
+
+    added_files: List[str] = field(default_factory=list)
+    deleted_files: List[str] = field(default_factory=list)
+    updated_files: List[str] = field(default_factory=list)
+    added_dirs: List[str] = field(default_factory=list)
+    deleted_dirs: List[str] = field(default_factory=list)
+
+
+class RequestQueueStats:
+    processed: int = 0
+    error_count: int = 0
 
 
 class SemanticProcessor(DequeueHandlerBase):
@@ -43,6 +63,14 @@ class SemanticProcessor(DequeueHandlerBase):
     4. Enqueue to EmbeddingQueue for vectorization
     """
 
+    _stats_lock = threading.Lock()
+    _dag_stats_by_telemetry_id: Dict[str, DagStats] = {}
+    _dag_stats_by_uri: Dict[str, DagStats] = {}
+    _dag_stats_order: List[Tuple[str, str]] = []
+    _request_stats_by_telemetry_id: Dict[str, RequestQueueStats] = {}
+    _request_stats_order: List[str] = []
+    _max_cached_stats = 256
+
     def __init__(self, max_concurrent_llm: int = 100):
         """
         Initialize SemanticProcessor.
@@ -54,6 +82,61 @@ class SemanticProcessor(DequeueHandlerBase):
         self._dag_executor: Optional[SemanticDagExecutor] = None
         self._current_ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
         self._current_msg: Optional[SemanticMsg] = None
+
+    @classmethod
+    def _cache_dag_stats(cls, telemetry_id: str, uri: str, stats: DagStats) -> None:
+        with cls._stats_lock:
+            if telemetry_id:
+                cls._dag_stats_by_telemetry_id[telemetry_id] = stats
+            cls._dag_stats_by_uri[uri] = stats
+            cls._dag_stats_order.append((telemetry_id, uri))
+            if len(cls._dag_stats_order) > cls._max_cached_stats:
+                old_telemetry_id, old_uri = cls._dag_stats_order.pop(0)
+                if old_telemetry_id:
+                    cls._dag_stats_by_telemetry_id.pop(old_telemetry_id, None)
+                cls._dag_stats_by_uri.pop(old_uri, None)
+
+    @classmethod
+    def consume_dag_stats(
+        cls,
+        telemetry_id: str = "",
+        uri: Optional[str] = None,
+    ) -> Optional[DagStats]:
+        with cls._stats_lock:
+            if telemetry_id and telemetry_id in cls._dag_stats_by_telemetry_id:
+                stats = cls._dag_stats_by_telemetry_id.pop(telemetry_id, None)
+                if uri:
+                    cls._dag_stats_by_uri.pop(uri, None)
+                return stats
+            if uri and uri in cls._dag_stats_by_uri:
+                return cls._dag_stats_by_uri.pop(uri, None)
+        return None
+
+    @classmethod
+    def _merge_request_stats(
+        cls,
+        telemetry_id: str,
+        processed: int = 0,
+        error_count: int = 0,
+    ) -> None:
+        if not telemetry_id:
+            return
+        with cls._stats_lock:
+            stats = cls._request_stats_by_telemetry_id.setdefault(telemetry_id, RequestQueueStats())
+            stats.processed += processed
+            stats.error_count += error_count
+            cls._request_stats_order.append(telemetry_id)
+            if len(cls._request_stats_order) > cls._max_cached_stats:
+                old_telemetry_id = cls._request_stats_order.pop(0)
+                if old_telemetry_id != telemetry_id:
+                    cls._request_stats_by_telemetry_id.pop(old_telemetry_id, None)
+
+    @classmethod
+    def consume_request_stats(cls, telemetry_id: str) -> Optional[RequestQueueStats]:
+        if not telemetry_id:
+            return None
+        with cls._stats_lock:
+            return cls._request_stats_by_telemetry_id.pop(telemetry_id, None)
 
     @staticmethod
     def _owner_space_for_uri(uri: str, ctx: RequestContext) -> str:
@@ -103,55 +186,28 @@ class SemanticProcessor(DequeueHandlerBase):
         # Default to other
         return FILE_TYPE_OTHER
 
-    async def _enqueue_semantic_msg(self, msg: SemanticMsg) -> None:
-        """Enqueue a SemanticMsg to the semantic queue for processing."""
-        from openviking.storage.queuefs import get_queue_manager
-
-        queue_manager = get_queue_manager()
-        semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC)
-        # The queue manager returns SemanticQueue but method signature says NamedQueue
-        # We need to ignore the type error for the enqueue call
-        await semantic_queue.enqueue(msg)  # type: ignore
-        logger.debug(f"Enqueued semantic message for processing: {msg.uri}")
-
-    async def _collect_directory_info(
-        self,
-        uri: str,
-        result: List[Tuple[str, List[str], List[str]]],
-    ) -> None:
-        """Recursively collect directory info, post-order traversal ensures bottom-up order."""
+    async def _check_file_content_changed(
+        self, file_path: str, target_file: str, ctx: Optional[RequestContext] = None
+    ) -> bool:
+        """Check if file content has changed compared to target file."""
         viking_fs = get_viking_fs()
-
         try:
-            entries = await viking_fs.ls(uri, ctx=self._current_ctx)
-        except Exception as e:
-            logger.warning(f"Failed to list directory {uri}: {e}")
-            return
-
-        children_uris = []
-        file_paths = []
-
-        for entry in entries:
-            name = entry.get("name", "")
-            if not name or name.startswith(".") or name in [".", ".."]:
-                continue
-
-            item_uri = VikingURI(uri).join(name).uri
-
-            if entry.get("isDir", False):
-                # Child directory
-                children_uris.append(item_uri)
-                # Recursively collect children
-                await self._collect_directory_info(item_uri, result)
-            else:
-                # File (not starting with .)
-                file_paths.append(item_uri)
-
-        # Add current directory info
-        result.append((uri, children_uris, file_paths))
+            current_stat = await viking_fs.stat(file_path, ctx=ctx)
+            target_stat = await viking_fs.stat(target_file, ctx=ctx)
+            current_size = current_stat.get("size") if isinstance(current_stat, dict) else None
+            target_size = target_stat.get("size") if isinstance(target_stat, dict) else None
+            if current_size is not None and target_size is not None and current_size != target_size:
+                return True
+            current_content = await viking_fs.read_file(file_path, ctx=ctx)
+            target_content = await viking_fs.read_file(target_file, ctx=ctx)
+            return current_content != target_content
+        except Exception:
+            return True
 
     async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """Process dequeued SemanticMsg, recursively process all subdirectories."""
+        msg: Optional[SemanticMsg] = None
+        collector = None
         try:
             import json
 
@@ -161,151 +217,396 @@ class SemanticProcessor(DequeueHandlerBase):
             if "data" in data and isinstance(data["data"], str):
                 data = json.loads(data["data"])
 
-            # data is guaranteed to be not None at this point
             assert data is not None
             msg = SemanticMsg.from_dict(data)
-            self._current_msg = msg
-            self._current_ctx = self._ctx_from_semantic_msg(msg)
-            logger.info(
-                f"Processing semantic generation for: {msg.uri} (recursive={msg.recursive})"
-            )
-
-            if msg.recursive:
-                executor = SemanticDagExecutor(
-                    processor=self,
-                    context_type=msg.context_type,
-                    max_concurrent_llm=self.max_concurrent_llm,
-                    ctx=self._current_ctx,
-                )
-                self._dag_executor = executor
-                await executor.run(msg.uri)
-                logger.info(f"Completed semantic generation for: {msg.uri}")
-                self.report_success()
-                return None
-            else:
-                # Non-recursive processing: directly process this directory
-                children_uris = []
-                file_paths = []
-
-                # Collect immediate children info only (no recursion)
-                viking_fs = get_viking_fs()
-                try:
-                    entries = await viking_fs.ls(msg.uri, ctx=self._current_ctx)
-                    for entry in entries:
-                        name = entry.get("name", "")
-                        if not name or name.startswith(".") or name in [".", ".."]:
-                            continue
-
-                        item_uri = VikingURI(msg.uri).join(name).uri
-
-                        if entry.get("isDir", False):
-                            children_uris.append(item_uri)
-                        else:
-                            file_paths.append(item_uri)
-                except Exception as e:
-                    logger.warning(f"Failed to list directory {msg.uri}: {e}")
-
-                # Process this directory
-                await self._process_single_directory(
-                    uri=msg.uri,
-                    context_type=msg.context_type,
-                    children_uris=children_uris,
-                    file_paths=file_paths,
+            collector = resolve_telemetry(msg.telemetry_id)
+            telemetry_ctx = bind_telemetry(collector) if collector is not None else nullcontext()
+            with telemetry_ctx:
+                self._current_msg = msg
+                self._current_ctx = self._ctx_from_semantic_msg(msg)
+                logger.info(
+                    f"Processing semantic generation for: {msg.uri} (recursive={msg.recursive})"
                 )
 
+                logger.info(f"Processing semantic generation for: {msg})")
+
+                if msg.context_type == "memory":
+                    await self._process_memory_directory(msg)
+                else:
+                    is_incremental = False
+                    viking_fs = get_viking_fs()
+                    if msg.target_uri:
+                        target_exists = await viking_fs.exists(
+                            msg.target_uri, ctx=self._current_ctx
+                        )
+                        # Check if target URI exists and is not the same as the source URI（避免重复处理）
+                        if target_exists and msg.uri != msg.target_uri:
+                            is_incremental = True
+                            logger.info(
+                                f"Target URI exists, using incremental update: {msg.target_uri}"
+                            )
+
+                    # Re-acquire lifecycle lock if handle was lost (e.g. server restart)
+                    if msg.lifecycle_lock_handle_id:
+                        lock_uri = msg.target_uri or msg.uri
+                        msg.lifecycle_lock_handle_id = await self._ensure_lifecycle_lock(
+                            msg.lifecycle_lock_handle_id,
+                            viking_fs._uri_to_path(lock_uri, ctx=self._current_ctx),
+                        )
+
+                    executor = SemanticDagExecutor(
+                        processor=self,
+                        context_type=msg.context_type,
+                        max_concurrent_llm=self.max_concurrent_llm,
+                        ctx=self._current_ctx,
+                        incremental_update=is_incremental,
+                        target_uri=msg.target_uri,
+                        semantic_msg_id=msg.id,
+                        recursive=msg.recursive,
+                        lifecycle_lock_handle_id=msg.lifecycle_lock_handle_id,
+                    )
+                    self._dag_executor = executor
+                    await executor.run(msg.uri)
+                    self._cache_dag_stats(
+                        msg.telemetry_id,
+                        msg.uri,
+                        executor.get_stats(),
+                    )
+                self._merge_request_stats(msg.telemetry_id, processed=1)
                 logger.info(f"Completed semantic generation for: {msg.uri}")
                 self.report_success()
                 return None
 
         except Exception as e:
             logger.error(f"Failed to process semantic message: {e}", exc_info=True)
+            if msg is not None:
+                self._merge_request_stats(msg.telemetry_id, error_count=1)
             self.report_error(str(e), data)
             return None
         finally:
+            # Safety net: release lifecycle lock if still held (e.g. on exception
+            # before the DAG executor took ownership)
+            if msg and msg.lifecycle_lock_handle_id:
+                try:
+                    from openviking.storage.transaction import get_lock_manager
+
+                    lm = get_lock_manager()
+                    handle = lm.get_handle(msg.lifecycle_lock_handle_id)
+                    if handle:
+                        await lm.release(handle)
+                        logger.info(
+                            f"[SemanticProcessor] Safety-net released lifecycle lock "
+                            f"{msg.lifecycle_lock_handle_id}"
+                        )
+                except Exception:
+                    pass
             self._current_msg = None
+            self._current_ctx = None
 
     def get_dag_stats(self) -> Optional["DagStats"]:
         if not self._dag_executor:
             return None
         return self._dag_executor.get_stats()
 
-    async def _process_single_directory(
-        self,
-        uri: str,
-        context_type: str,
-        children_uris: List[str],
-        file_paths: List[str],
-    ) -> None:
-        """Process single directory, generate .abstract.md and .overview.md."""
+    @staticmethod
+    async def _ensure_lifecycle_lock(handle_id: str, lock_path: str) -> str:
+        """If the handle is missing (server restart), re-acquire a SUBTREE lock.
+
+        Returns the (possibly new) handle ID, or "" on failure.
+        """
+        from openviking.storage.transaction import get_lock_manager
+
+        lm = get_lock_manager()
+        if lm.get_handle(handle_id):
+            return handle_id
+        new_handle = lm.create_handle()
+        if await lm.acquire_subtree(new_handle, lock_path):
+            logger.info(f"Re-acquired lifecycle lock on {lock_path} (handle {new_handle.id})")
+            return new_handle.id
+        logger.warning(f"Failed to re-acquire lifecycle lock on {lock_path}")
+        await lm.release(new_handle)
+        return ""
+
+    async def _process_memory_directory(self, msg: SemanticMsg) -> None:
+        """Process a memory directory with special handling.
+
+        For memory directories:
+        - Memory files are already vectorized via embedding queue
+        - Only generate abstract.md and overview.md
+        - Vectorize the generated abstract.md and overview.md
+
+        Args:
+            msg: The semantic message containing directory info and changes
+        """
         viking_fs = get_viking_fs()
+        dir_uri = msg.uri
+        ctx = self._current_ctx
+        llm_sem = asyncio.Semaphore(self.max_concurrent_llm)
 
-        # 1. Collect .abstract.md from subdirectories (already processed earlier)
-        children_abstracts = await self._collect_children_abstracts(children_uris)
-
-        # 2. Concurrently generate summaries for files in directory
-        file_summaries = await self._generate_file_summaries(
-            file_paths, context_type=context_type, parent_uri=uri, enqueue_files=True
-        )
-
-        # 3. Generate .overview.md (contains brief description)
-        overview = await self._generate_overview(uri, file_summaries, children_abstracts)
-
-        # 4. Extract abstract from overview
-        abstract = self._extract_abstract_from_overview(overview)
-
-        # 5. Write files
-        await viking_fs.write_file(f"{uri}/.overview.md", overview, ctx=self._current_ctx)
-        await viking_fs.write_file(f"{uri}/.abstract.md", abstract, ctx=self._current_ctx)
-
-        logger.debug(f"Generated overview and abstract for {uri}")
-
-        # 6. Vectorize directory
         try:
-            await self._vectorize_directory_simple(uri, context_type, abstract, overview)
+            entries = await viking_fs.ls(dir_uri, ctx=ctx)
         except Exception as e:
-            logger.error(f"Failed to vectorize directory {uri}: {e}", exc_info=True)
+            logger.warning(f"Failed to list memory directory {dir_uri}: {e}")
+            return
 
-    async def _collect_children_abstracts(self, children_uris: List[str]) -> List[Dict[str, str]]:
+        file_paths: List[str] = []
+        for entry in entries:
+            name = entry.get("name", "")
+            if not name or name.startswith(".") or name in [".", ".."]:
+                continue
+            if not entry.get("isDir", False):
+                item_uri = VikingURI(dir_uri).join(name).uri
+                file_paths.append(item_uri)
+
+        if not file_paths:
+            logger.info(f"No memory files found in {dir_uri}")
+            return
+
+        file_summaries: List[Dict[str, str]] = []
+        existing_summaries: Dict[str, str] = {}
+
+        if msg.changes:
+            try:
+                old_overview = await viking_fs.read_file(f"{dir_uri}/.overview.md", ctx=ctx)
+                if old_overview:
+                    existing_summaries = self._parse_overview_md(old_overview)
+                    logger.info(
+                        f"Parsed {len(existing_summaries)} existing summaries from overview.md"
+                    )
+            except Exception as e:
+                logger.debug(f"No existing overview.md found for {dir_uri}: {e}")
+
+        changed_files: Set[str] = set()
+        if msg.changes:
+            changed_files = set(msg.changes.get("added", []) + msg.changes.get("modified", []))
+            deleted_files = set(msg.changes.get("deleted", []))
+            logger.info(
+                f"Processing memory directory {dir_uri} with changes: "
+                f"added={len(msg.changes.get('added', []))}, "
+                f"modified={len(msg.changes.get('modified', []))}, "
+                f"deleted={len(deleted_files)}"
+            )
+
+        for file_path in file_paths:
+            file_name = file_path.split("/")[-1]
+
+            if file_path not in changed_files and file_name in existing_summaries:
+                file_summaries.append({"name": file_name, "summary": existing_summaries[file_name]})
+                logger.debug(f"Reused existing summary for {file_name}")
+            else:
+                try:
+                    summary_dict = await self._generate_single_file_summary(
+                        file_path, llm_sem=llm_sem, ctx=ctx
+                    )
+                    file_summaries.append(summary_dict)
+                    logger.debug(f"Generated summary for {file_name}")
+                except Exception as e:
+                    logger.warning(f"Failed to generate summary for {file_path}: {e}")
+                    file_summaries.append({"name": file_name, "summary": ""})
+
+        overview = await self._generate_overview(dir_uri, file_summaries, [])
+        abstract = self._extract_abstract_from_overview(overview)
+        overview, abstract = self._enforce_size_limits(overview, abstract)
+
+        try:
+            await viking_fs.write_file(f"{dir_uri}/.overview.md", overview, ctx=ctx)
+            await viking_fs.write_file(f"{dir_uri}/.abstract.md", abstract, ctx=ctx)
+            logger.info(f"Generated abstract.md and overview.md for {dir_uri}")
+        except Exception as e:
+            logger.error(f"Failed to write abstract/overview for {dir_uri}: {e}")
+            return
+
+        await self._vectorize_directory(
+            uri=dir_uri,
+            context_type="memory",
+            abstract=abstract,
+            overview=overview,
+            ctx=ctx,
+            semantic_msg_id=msg.id,
+        )
+        logger.info(f"Vectorized abstract.md and overview.md for {dir_uri}")
+
+    async def _sync_topdown_recursive(
+        self,
+        root_uri: str,
+        target_uri: str,
+        ctx: Optional[RequestContext] = None,
+        file_change_status: Optional[Dict[str, bool]] = None,
+    ) -> DiffResult:
+        viking_fs = get_viking_fs()
+        diff = DiffResult()
+
+        async def list_children(dir_uri: str) -> Tuple[Dict[str, str], Dict[str, str]]:
+            files: Dict[str, str] = {}
+            dirs: Dict[str, str] = {}
+            try:
+                entries = await viking_fs.ls(dir_uri, show_all_hidden=True, ctx=ctx)
+            except Exception as e:
+                logger.error(f"[SyncDiff] Failed to list {dir_uri}: {e}")
+                return files, dirs
+
+            for entry in entries:
+                name = entry.get("name", "")
+                if not name or name in [".", ".."]:
+                    continue
+                if name.startswith(".") and name not in [".abstract.md", ".overview.md"]:
+                    continue
+                item_uri = VikingURI(dir_uri).join(name).uri
+                if entry.get("isDir", False):
+                    dirs[name] = item_uri
+                else:
+                    files[name] = item_uri
+            return files, dirs
+
+        async def sync_dir(root_dir: str, target_dir: str) -> None:
+            root_files, root_dirs = await list_children(root_dir)
+            target_files, target_dirs = await list_children(target_dir)
+
+            file_names = set(root_files.keys()) | set(target_files.keys())
+            for name in sorted(file_names):
+                root_file = root_files.get(name)
+                target_file = target_files.get(name)
+
+                if root_file and name in target_dirs:
+                    target_conflict_dir = target_dirs[name]
+                    try:
+                        await viking_fs.rm(target_conflict_dir, recursive=True, ctx=ctx)
+                        diff.deleted_dirs.append(target_conflict_dir)
+                        target_dirs.pop(name, None)
+                    except Exception as e:
+                        logger.error(
+                            f"[SyncDiff] Failed to delete directory for file conflict: {target_conflict_dir}, error={e}"
+                        )
+                    target_file = None
+
+                if target_file and name in root_dirs and not root_file:
+                    try:
+                        await viking_fs.rm(target_file, ctx=ctx)
+                        diff.deleted_files.append(target_file)
+                        target_files.pop(name, None)
+                    except Exception as e:
+                        logger.error(
+                            f"[SyncDiff] Failed to delete file for dir conflict: {target_file}, error={e}"
+                        )
+                    continue
+
+                if target_file and not root_file:
+                    try:
+                        await viking_fs.rm(target_file, ctx=ctx)
+                        diff.deleted_files.append(target_file)
+                    except Exception as e:
+                        logger.error(f"[SyncDiff] Failed to delete file: {target_file}, error={e}")
+                    continue
+
+                if root_file and target_file:
+                    changed = False
+                    if file_change_status and root_file in file_change_status:
+                        changed = file_change_status[root_file]
+                    else:
+                        try:
+                            changed = await self._check_file_content_changed(
+                                root_file, target_file, ctx=ctx
+                            )
+                        except Exception as e:
+                            logger.error(
+                                f"[SyncDiff] Failed to compare file content for {root_file}: {e}, treating as unchanged"
+                            )
+                            changed = False
+                    if changed:
+                        diff.updated_files.append(root_file)
+                        try:
+                            await viking_fs.rm(target_file, ctx=ctx)
+                        except Exception as e:
+                            logger.error(
+                                f"[SyncDiff] Failed to remove old file before update: {target_file}, error={e}"
+                            )
+                        try:
+                            await viking_fs.mv(root_file, target_file, ctx=ctx)
+                        except Exception as e:
+                            logger.error(
+                                f"[SyncDiff] Failed to move updated file: {root_file} -> {target_file}, error={e}"
+                            )
+                    continue
+
+                if root_file and not target_file:
+                    diff.added_files.append(root_file)
+                    target_file_uri = VikingURI(target_dir).join(name).uri
+                    try:
+                        await viking_fs.mv(root_file, target_file_uri, ctx=ctx)
+                    except Exception as e:
+                        logger.error(
+                            f"[SyncDiff] Failed to move added file: {root_file} -> {target_file_uri}, error={e}"
+                        )
+
+            dir_names = set(root_dirs.keys()) | set(target_dirs.keys())
+            for name in sorted(dir_names):
+                root_subdir = root_dirs.get(name)
+                target_subdir = target_dirs.get(name)
+
+                if root_subdir and name in target_files:
+                    target_conflict_file = target_files[name]
+                    try:
+                        await viking_fs.rm(target_conflict_file, ctx=ctx)
+                        diff.deleted_files.append(target_conflict_file)
+                        target_files.pop(name, None)
+                    except Exception as e:
+                        logger.error(
+                            f"[SyncDiff] Failed to delete file for dir conflict: {target_conflict_file}, error={e}"
+                        )
+                    target_subdir = None
+
+                if target_subdir and not root_subdir:
+                    try:
+                        await viking_fs.rm(target_subdir, recursive=True, ctx=ctx)
+                        diff.deleted_dirs.append(target_subdir)
+                    except Exception as e:
+                        logger.error(
+                            f"[SyncDiff] Failed to delete directory: {target_subdir}, error={e}"
+                        )
+                    continue
+
+                if root_subdir and not target_subdir:
+                    diff.added_dirs.append(root_subdir)
+                    target_subdir_uri = VikingURI(target_dir).join(name).uri
+                    try:
+                        await viking_fs.mv(root_subdir, target_subdir_uri, ctx=ctx)
+                    except Exception as e:
+                        logger.error(
+                            f"[SyncDiff] Failed to move added directory: {root_subdir} -> {target_subdir_uri}, error={e}"
+                        )
+                    continue
+
+                if root_subdir and target_subdir:
+                    await sync_dir(root_subdir, target_subdir)
+
+        target_exists = await viking_fs.exists(target_uri, ctx=ctx)
+        if not target_exists:
+            parent_uri = VikingURI(target_uri).parent
+            if parent_uri:
+                await viking_fs.mkdir(parent_uri.uri, exist_ok=True, ctx=ctx)
+            diff.added_dirs.append(root_uri)
+            await viking_fs.mv(root_uri, target_uri, ctx=ctx)
+            return diff
+
+        await sync_dir(root_uri, target_uri)
+        try:
+            await viking_fs.delete_temp(root_uri, ctx=ctx)
+        except Exception as e:
+            logger.error(f"[SyncDiff] Failed to delete root directory {root_uri}: {e}")
+        return diff
+
+    async def _collect_children_abstracts(
+        self, children_uris: List[str], ctx: Optional[RequestContext] = None
+    ) -> List[Dict[str, str]]:
         """Collect .abstract.md from subdirectories."""
         viking_fs = get_viking_fs()
         results = []
 
         for child_uri in children_uris:
-            abstract = await viking_fs.abstract(child_uri, ctx=self._current_ctx)
+            abstract = await viking_fs.abstract(child_uri, ctx=ctx)
             dir_name = child_uri.split("/")[-1]
             results.append({"name": dir_name, "abstract": abstract})
         return results
-
-    async def _generate_file_summaries(
-        self,
-        file_paths: List[str],
-        context_type: Optional[str] = None,
-        parent_uri: Optional[str] = None,
-        enqueue_files: bool = False,
-    ) -> List[Dict[str, str]]:
-        """Concurrently generate file summaries."""
-        if not file_paths:
-            return []
-
-        async def generate_one_summary(file_path: str) -> Dict[str, str]:
-            summary = await self._generate_single_file_summary(file_path, ctx=self._current_ctx)
-            if enqueue_files and context_type and parent_uri:
-                try:
-                    await self._vectorize_single_file(
-                        parent_uri=parent_uri,
-                        context_type=context_type,
-                        file_path=file_path,
-                        summary_dict=summary,
-                    )
-                except Exception as e:
-                    logger.error(
-                        f"Failed to vectorize file {file_path}: {e}",
-                        exc_info=True,
-                    )
-            return summary
-
-        tasks = [generate_one_summary(fp) for fp in file_paths]
-        return await asyncio.gather(*tasks)
 
     async def _generate_text_summary(
         self,
@@ -319,11 +620,6 @@ class SemanticProcessor(DequeueHandlerBase):
         vlm = get_openviking_config().vlm
         active_ctx = ctx or self._current_ctx
 
-        # Read file content (limit length)
-        content = await viking_fs.read_file(file_path, ctx=active_ctx)
-
-        # Limit content length (about 10000 tokens)
-        max_chars = 30000
         content = await viking_fs.read_file(file_path, ctx=active_ctx)
         if isinstance(content, bytes):
             # Try to decode with error handling for text files
@@ -333,8 +629,8 @@ class SemanticProcessor(DequeueHandlerBase):
                 logger.warning(f"Failed to decode file as UTF-8, skipping: {file_path}")
                 return {"name": file_name, "summary": ""}
 
-        # Limit content length (about 10000 tokens)
-        max_chars = 30000
+        # Limit content length
+        max_chars = get_openviking_config().semantic.max_file_content_chars
         if len(content) > max_chars:
             content = content[:max_chars] + "\n...(truncated)"
 
@@ -442,6 +738,68 @@ class SemanticProcessor(DequeueHandlerBase):
 
         return "\n".join(content_lines).strip()
 
+    def _enforce_size_limits(self, overview: str, abstract: str) -> Tuple[str, str]:
+        """Enforce max size limits on overview and abstract."""
+        semantic = get_openviking_config().semantic
+        if len(overview) > semantic.overview_max_chars:
+            overview = overview[: semantic.overview_max_chars]
+        if len(abstract) > semantic.abstract_max_chars:
+            abstract = abstract[: semantic.abstract_max_chars - 3] + "..."
+        return overview, abstract
+
+    def _parse_overview_md(self, overview_content: str) -> Dict[str, str]:
+        """Parse overview.md and extract file summaries.
+
+        Args:
+            overview_content: Content of the overview.md file
+
+        Returns:
+            Dictionary mapping file names to their summaries
+        """
+        import re
+
+        summaries: Dict[str, str] = {}
+
+        if not overview_content or not overview_content.strip():
+            return summaries
+
+        lines = overview_content.split("\n")
+        current_file = None
+        current_summary_lines: List[str] = []
+
+        for line in lines:
+            header_match = re.match(r"^###\s+(.+?)\s*$", line)
+            if header_match:
+                if current_file and current_summary_lines:
+                    summaries[current_file] = " ".join(current_summary_lines).strip()
+
+                file_name = header_match.group(1).strip()
+                parts = file_name.split()
+                if len(parts) >= 2 and parts[0] == parts[1]:
+                    file_name = parts[0]
+
+                current_file = file_name
+                current_summary_lines = []
+                continue
+
+            numbered_match = re.match(r"^\[(\d+)\]\s+(.+?):\s*(.+)$", line)
+            if numbered_match:
+                if current_file and current_summary_lines:
+                    summaries[current_file] = " ".join(current_summary_lines).strip()
+                current_file = numbered_match.group(2).strip()
+                current_summary_lines = [numbered_match.group(3).strip()]
+                continue
+
+            if current_file:
+                stripped = line.strip()
+                if stripped and not stripped.startswith("#"):
+                    current_summary_lines.append(stripped)
+
+        if current_file and current_summary_lines:
+            summaries[current_file] = " ".join(current_summary_lines).strip()
+
+        return summaries
+
     async def _generate_overview(
         self,
         dir_uri: str,
@@ -449,6 +807,11 @@ class SemanticProcessor(DequeueHandlerBase):
         children_abstracts: List[Dict[str, str]],
     ) -> str:
         """Generate directory's .overview.md (L1).
+
+        For small directories, generates a single overview from all file summaries.
+        For large directories that would exceed the prompt budget, splits file
+        summaries into batches, generates a partial overview per batch, then
+        merges the partials into a final overview.
 
         Args:
             dir_uri: Directory URI
@@ -458,9 +821,10 @@ class SemanticProcessor(DequeueHandlerBase):
         Returns:
             Overview content
         """
-        import re
 
-        vlm = get_openviking_config().vlm
+        config = get_openviking_config()
+        vlm = config.vlm
+        semantic = config.semantic
 
         if not vlm.is_available():
             logger.warning("VLM not available, using default overview")
@@ -481,7 +845,64 @@ class SemanticProcessor(DequeueHandlerBase):
             else "None"
         )
 
-        # Generate overview
+        # Budget guard: check if prompt would be oversized
+        estimated_size = len(file_summaries_str) + len(children_abstracts_str)
+        over_budget = estimated_size > semantic.max_overview_prompt_chars
+        many_files = len(file_summaries) > semantic.overview_batch_size
+
+        if over_budget and many_files:
+            # Many files, oversized prompt → batch and merge
+            logger.info(
+                f"Overview prompt for {dir_uri} exceeds budget "
+                f"({estimated_size} chars, {len(file_summaries)} files). "
+                f"Splitting into batches of {semantic.overview_batch_size}."
+            )
+            overview = await self._batched_generate_overview(
+                dir_uri, file_summaries, children_abstracts, file_index_map
+            )
+        elif over_budget:
+            # Few files but long summaries → truncate summaries to fit budget
+            logger.info(
+                f"Overview prompt for {dir_uri} exceeds budget "
+                f"({estimated_size} chars) with {len(file_summaries)} files. "
+                f"Truncating summaries to fit."
+            )
+            budget = semantic.max_overview_prompt_chars
+            budget -= len(children_abstracts_str)
+            per_file = max(100, budget // max(len(file_summaries), 1))
+            truncated_lines = []
+            for idx, item in enumerate(file_summaries, 1):
+                summary = item["summary"][:per_file]
+                truncated_lines.append(f"[{idx}] {item['name']}: {summary}")
+            file_summaries_str = "\n".join(truncated_lines)
+            overview = await self._single_generate_overview(
+                dir_uri,
+                file_summaries_str,
+                children_abstracts_str,
+                file_index_map,
+            )
+        else:
+            overview = await self._single_generate_overview(
+                dir_uri,
+                file_summaries_str,
+                children_abstracts_str,
+                file_index_map,
+            )
+
+        return overview
+
+    async def _single_generate_overview(
+        self,
+        dir_uri: str,
+        file_summaries_str: str,
+        children_abstracts_str: str,
+        file_index_map: Dict[int, str],
+    ) -> str:
+        """Generate overview from a single prompt (small directories)."""
+        import re
+
+        vlm = get_openviking_config().vlm
+
         try:
             prompt = render_prompt(
                 "semantic.overview_generation",
@@ -504,16 +925,123 @@ class SemanticProcessor(DequeueHandlerBase):
             return overview.strip()
 
         except Exception as e:
-            logger.error(f"Failed to generate overview for {dir_uri}: {e}", exc_info=True)
+            logger.error(
+                f"Failed to generate overview for {dir_uri}: {e}",
+                exc_info=True,
+            )
             return f"# {dir_uri.split('/')[-1]}\n\nDirectory overview"
 
-    async def _vectorize_directory_simple(
+    async def _batched_generate_overview(
+        self,
+        dir_uri: str,
+        file_summaries: List[Dict[str, str]],
+        children_abstracts: List[Dict[str, str]],
+        file_index_map: Dict[int, str],
+    ) -> str:
+        """Generate overview by batching file summaries and merging.
+
+        Splits file summaries into batches, generates a partial overview per
+        batch, then merges all partials into a final overview.
+        """
+        import re
+
+        vlm = get_openviking_config().vlm
+        semantic = get_openviking_config().semantic
+        batch_size = semantic.overview_batch_size
+        dir_name = dir_uri.split("/")[-1]
+
+        # Split file summaries into batches
+        batches = [
+            file_summaries[i : i + batch_size] for i in range(0, len(file_summaries), batch_size)
+        ]
+        logger.info(f"Generating overview for {dir_uri} in {len(batches)} batches")
+
+        # Build children abstracts string (used in first batch + merge)
+        children_abstracts_str = (
+            "\n".join(f"- {item['name']}/: {item['abstract']}" for item in children_abstracts)
+            if children_abstracts
+            else "None"
+        )
+
+        # Generate partial overview per batch using global file indices
+        partial_overviews = []
+        global_offset = 0
+        for batch_idx, batch in enumerate(batches):
+            # Build per-batch index map using global offsets
+            batch_lines = []
+            batch_index_map = {}
+            for local_idx, item in enumerate(batch):
+                global_idx = global_offset + local_idx + 1
+                batch_index_map[global_idx] = item["name"]
+                batch_lines.append(f"[{global_idx}] {item['name']}: {item['summary']}")
+            batch_str = "\n".join(batch_lines)
+            global_offset += len(batch)
+
+            # Include children abstracts in the first batch
+            children_str = children_abstracts_str if batch_idx == 0 else "None"
+
+            try:
+                prompt = render_prompt(
+                    "semantic.overview_generation",
+                    {
+                        "dir_name": dir_name,
+                        "file_summaries": batch_str,
+                        "children_abstracts": children_str,
+                    },
+                )
+                partial = await vlm.get_completion_async(prompt)
+
+                # Replace [number] references per batch using batch-local map
+                def make_replacer(idx_map):
+                    def replacer(match):
+                        idx = int(match.group(1))
+                        return idx_map.get(idx, match.group(0))
+
+                    return replacer
+
+                partial = re.sub(r"\[(\d+)\]", make_replacer(batch_index_map), partial)
+                partial_overviews.append(partial.strip())
+            except Exception as e:
+                logger.warning(
+                    f"Failed to generate partial overview batch "
+                    f"{batch_idx + 1}/{len(batches)} for {dir_uri}: {e}"
+                )
+
+        if not partial_overviews:
+            return f"# {dir_name}\n\nDirectory overview"
+
+        # If only one batch succeeded, use it directly
+        if len(partial_overviews) == 1:
+            return partial_overviews[0]
+
+        # Merge partials into a final overview (include children for context)
+        combined = "\n\n---\n\n".join(partial_overviews)
+        try:
+            prompt = render_prompt(
+                "semantic.overview_generation",
+                {
+                    "dir_name": dir_name,
+                    "file_summaries": combined,
+                    "children_abstracts": children_abstracts_str,
+                },
+            )
+            overview = await vlm.get_completion_async(prompt)
+            return overview.strip()
+        except Exception as e:
+            logger.error(
+                f"Failed to merge partial overviews for {dir_uri}: {e}",
+                exc_info=True,
+            )
+            return partial_overviews[0]
+
+    async def _vectorize_directory(
         self,
         uri: str,
         context_type: str,
         abstract: str,
         overview: str,
         ctx: Optional[RequestContext] = None,
+        semantic_msg_id: Optional[str] = None,
     ) -> None:
         """Create directory Context and enqueue to EmbeddingQueue."""
 
@@ -530,31 +1058,8 @@ class SemanticProcessor(DequeueHandlerBase):
             overview=overview,
             context_type=context_type,
             ctx=active_ctx,
+            semantic_msg_id=semantic_msg_id,
         )
-
-    async def _vectorize_files(
-        self,
-        uri: str,
-        context_type: str,
-        file_paths: List[str],
-        file_summaries: List[Dict[str, str]],
-        ctx: Optional[RequestContext] = None,
-    ) -> None:
-        """Vectorize files in directory."""
-        from openviking.storage.queuefs import get_queue_manager
-
-        queue_manager = get_queue_manager()
-        embedding_queue = queue_manager.get_queue(queue_manager.EMBEDDING)
-
-        for file_path, file_summary_dict in zip(file_paths, file_summaries):
-            await self._vectorize_single_file(
-                parent_uri=uri,
-                context_type=context_type,
-                file_path=file_path,
-                summary_dict=file_summary_dict,
-                embedding_queue=embedding_queue,
-                ctx=ctx,
-            )
 
     async def _vectorize_single_file(
         self,
@@ -562,8 +1067,8 @@ class SemanticProcessor(DequeueHandlerBase):
         context_type: str,
         file_path: str,
         summary_dict: Dict[str, str],
-        embedding_queue: Optional[Any] = None,
         ctx: Optional[RequestContext] = None,
+        semantic_msg_id: Optional[str] = None,
     ) -> None:
         """Vectorize a single file using its content or summary."""
         from openviking.utils.embedding_utils import vectorize_file
@@ -575,4 +1080,5 @@ class SemanticProcessor(DequeueHandlerBase):
             parent_uri=parent_uri,
             context_type=context_type,
             ctx=active_ctx,
+            semantic_msg_id=semantic_msg_id,
         )

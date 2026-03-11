@@ -95,12 +95,14 @@ class TestCommit:
         """
         client, uri = client_with_resource_sync
         vikingdb = client._client.service.vikingdb_manager
+        # Use the client's own context to match the account_id used when adding the resource
+        client_ctx = client._client._ctx
 
         # Look up the record by URI
         records_before = await vikingdb.get_context_by_uri(
-            account_id="default",
             uri=uri,
             limit=1,
+            ctx=client_ctx,
         )
         assert records_before, f"Resource not found for URI: {uri}"
         count_before = records_before[0].get("active_count") or 0
@@ -116,9 +118,9 @@ class TestCommit:
 
         # Verify the count actually changed in storage
         records_after = await vikingdb.get_context_by_uri(
-            account_id="default",
             uri=uri,
             limit=1,
+            ctx=client_ctx,
         )
         assert records_after, f"Record disappeared after commit for URI: {uri}"
         count_after = records_after[0].get("active_count") or 0

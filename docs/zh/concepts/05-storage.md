@@ -135,6 +135,7 @@ index_meta = {
 | `local` | 本地持久化 |
 | `http` | HTTP 远程服务 |
 | `volcengine` | 火山引擎 VikingDB |
+| `oceanbase` | OceanBase 向量库 |
 
 ## 向量同步
 

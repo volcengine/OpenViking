@@ -307,6 +307,51 @@ impl HttpClient {
         self.get("/api/v1/content/overview", &params).await
     }
 
+    /// Download file as raw bytes
+    pub async fn get_bytes(&self, uri: &str) -> Result<Vec<u8>> {
+        let url = format!("{}/api/v1/content/download", self.base_url);
+        let params = vec![("uri".to_string(), uri.to_string())];
+        
+        let response = self
+            .http
+            .get(&url)
+            .headers(self.build_headers())
+            .query(&params)
+            .send()
+            .await
+            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            // Try to parse error message as JSON
+            let json_result: Result<serde_json::Value> = response
+                .json()
+                .await
+                .map_err(|e| Error::Network(format!("Failed to parse error response: {}", e)));
+            
+            let error_msg = match json_result {
+                Ok(json) => {
+                    json
+                        .get("error")
+                        .and_then(|e| e.get("message"))
+                        .and_then(|m| m.as_str())
+                        .map(|s| s.to_string())
+                        .or_else(|| json.get("detail").and_then(|d| d.as_str()).map(|s| s.to_string()))
+                        .unwrap_or_else(|| format!("HTTP error {}", status))
+                }
+                Err(_) => format!("HTTP error {}", status),
+            };
+            
+            return Err(Error::Api(error_msg));
+        }
+
+        response
+            .bytes()
+            .await
+            .map(|b| b.to_vec())
+            .map_err(|e| Error::Network(format!("Failed to read response bytes: {}", e)))
+    }
+
     // ============ Filesystem Methods ============
 
     pub async fn ls(&self, uri: &str, simple: bool, recursive: bool, output: &str, abs_limit: i32, show_all_hidden: bool, node_limit: i32) -> Result<serde_json::Value> {
@@ -435,6 +480,7 @@ impl HttpClient {
         include: Option<String>,
         exclude: Option<String>,
         directly_upload_media: bool,
+        watch_interval: f64,
     ) -> Result<serde_json::Value> {
         let path_obj = Path::new(path);
 
@@ -456,6 +502,7 @@ impl HttpClient {
                     "include": include,
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
+                    "watch_interval": watch_interval,
                 });
 
                 self.post("/api/v1/resources", &body).await
@@ -475,6 +522,7 @@ impl HttpClient {
                     "include": include,
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
+                    "watch_interval": watch_interval,
                 });
 
                 self.post("/api/v1/resources", &body).await
@@ -492,6 +540,7 @@ impl HttpClient {
                     "include": include,
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
+                    "watch_interval": watch_interval,
                 });
 
                 self.post("/api/v1/resources", &body).await
@@ -510,6 +559,7 @@ impl HttpClient {
                 "include": include,
                 "exclude": exclude,
                 "directly_upload_media": directly_upload_media,
+                "watch_interval": watch_interval,
             });
 
             self.post("/api/v1/resources", &body).await
@@ -688,5 +738,57 @@ impl HttpClient {
             account_id, user_id
         );
         self.post(&path, &serde_json::json!({})).await
+    }
+
+    // ============ Debug Vector Methods ============
+
+    /// Get paginated vector records
+    pub async fn debug_vector_scroll(
+        &self,
+        limit: Option<u32>,
+        cursor: Option<String>,
+        uri_prefix: Option<String>,
+    ) -> Result<(Vec<serde_json::Value>, Option<String>)> {
+        let mut params = Vec::new();
+        if let Some(l) = limit {
+            params.push(("limit".to_string(), l.to_string()));
+        }
+        if let Some(c) = cursor {
+            params.push(("cursor".to_string(), c));
+        }
+        if let Some(u) = uri_prefix {
+            params.push(("uri".to_string(), u));
+        }
+
+        let result: serde_json::Value = self.get("/api/v1/debug/vector/scroll", &params).await?;
+        let records = result["records"]
+            .as_array()
+            .ok_or_else(|| Error::Parse("Missing records in response".to_string()))?
+            .clone();
+        let next_cursor = result["next_cursor"].as_str().map(|s| s.to_string());
+
+        Ok((records, next_cursor))
+    }
+
+    /// Get count of vector records
+    pub async fn debug_vector_count(
+        &self,
+        filter: Option<&serde_json::Value>,
+        uri_prefix: Option<String>,
+    ) -> Result<u64> {
+        let mut params = Vec::new();
+        if let Some(f) = filter {
+            params.push(("filter".to_string(), serde_json::to_string(f)?));
+        }
+        if let Some(u) = uri_prefix {
+            params.push(("uri".to_string(), u));
+        }
+
+        let result: serde_json::Value = self.get("/api/v1/debug/vector/count", &params).await?;
+        let count = result["count"]
+            .as_u64()
+            .ok_or_else(|| Error::Parse("Missing count in response".to_string()))?;
+
+        Ok(count)
     }
 }

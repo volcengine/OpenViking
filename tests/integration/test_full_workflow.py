@@ -10,6 +10,7 @@ import pytest_asyncio
 
 from openviking import AsyncOpenViking
 from openviking.message import TextPart
+from openviking.storage.transaction import release_all_locks
 
 
 @pytest_asyncio.fixture(scope="function")
@@ -67,11 +68,17 @@ class TestResourceToSearchWorkflow:
 
         # 3. Read searched resource
         if search_result.resources:
-            res = await client.tree(search_result.resources[0].uri)
-            for data in res:
-                if not data["isDir"]:
-                    content = await client.read(data["uri"])
-                    assert len(content) > 0
+            uri = search_result.resources[0].uri
+            info = await client.stat(uri)
+            if info.get("isDir"):
+                res = await client.tree(uri)
+                for data in res:
+                    if not data["isDir"]:
+                        content = await client.read(data["uri"])
+                        assert len(content) > 0
+            else:
+                content = await client.read(uri)
+                assert len(content) > 0
 
 
 class TestSessionWorkflow:
@@ -165,6 +172,7 @@ class TestImportExportWorkflow:
         assert export_path.exists()
 
         # 4. Delete original resource
+        await release_all_locks()
         await client.rm(original_uri, recursive=True)
 
         # 5. Import

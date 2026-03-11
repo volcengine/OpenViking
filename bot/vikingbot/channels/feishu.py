@@ -45,7 +45,7 @@ try:
         GetMessageResourceRequest,
         P2ImMessageReceiveV1,
         ReplyMessageRequest,
-        ReplyMessageRequestBody,
+        ReplyMessageRequestBody
     )
 
     FEISHU_AVAILABLE = True
@@ -172,8 +172,9 @@ class FeishuChannel(BaseChannel):
 
         # Handle failed response
         if not response.success():
+            raw_detail = getattr(getattr(response, 'raw', None), 'content', response.msg)
             raise Exception(
-                f"Failed to download image: code={response.code}, msg={response.msg}, log_id={response.get_log_id()}"
+                f"Failed to download image: code={response.code}, msg={raw_detail}, log_id={response.get_log_id()}"
             )
 
         # Read the image bytes from the response file
@@ -658,10 +659,7 @@ class FeishuChannel(BaseChannel):
             chat_type = message.chat_type  # "p2p" or "group"
             msg_type = message.message_type
 
-            # Add reaction to indicate "seen"
-            await self._add_reaction(message_id, "MeMeMe")
-
-            # Parse message content and media
+            # Parse message content and media first to check mentions
             content = ""
             media = []
 
@@ -746,7 +744,54 @@ class FeishuChannel(BaseChannel):
 
             import re
 
+            # 检查是否@了机器人
+            is_mentioned = False
             mention_pattern = re.compile(r"@_user_\d+")
+            bot_open_id = self.config.open_id
+            bot_app_id = self.config.app_id
+
+            # 优先从message的mentions字段提取@信息（text和post类型都适用）
+            if hasattr(message, 'mentions') and message.mentions and bot_open_id:
+                for mention in message.mentions:
+                    if hasattr(mention, 'id') and hasattr(mention.id, 'open_id'):
+                        at_id = mention.id.open_id
+                        if at_id == bot_open_id:
+                            is_mentioned = True
+                            break
+                        continue
+                    # 兼容其他可能的ID格式
+                    at_id = getattr(mention, 'id', '') or getattr(mention, 'user_id', '')
+                    if at_id == f"app_{bot_app_id}" or at_id == bot_app_id:
+                        is_mentioned = True
+                        break
+
+            # 话题群@检查逻辑
+            should_process = True
+            if chat_type == "group":
+                chat_mode = await self._get_chat_mode(chat_id)
+                if chat_mode == "thread":
+                    # 判断是否是话题的首条消息（root_id等于message_id说明是话题发起消息）
+                    is_topic_starter = message.root_id == message.message_id or not message.root_id
+
+                    if self.config.thread_require_mention:
+                        # 模式1：默认True，所有消息都需要@才处理
+                        if not is_mentioned:
+                            logger.info(f"Skipping thread message: thread_require_mention is True and not mentioned")
+                            should_process = False
+                    else:
+                        # 模式2：False，仅话题首条消息不需要@，后续回复需要@
+                        if not is_topic_starter and not is_mentioned:
+                            logger.info(f"Skipping thread message: not topic starter and not mentioned")
+                            should_process = False
+
+            # 不需要处理的消息直接跳过
+            if not should_process:
+                return
+
+            # 确认需要处理后再添加"已读"表情
+            await self._add_reaction(message_id, "MeMeMe")
+
+            # 替换所有@占位符
             content = mention_pattern.sub(f"@{sender_id}", content)
 
             # Forward to message bus

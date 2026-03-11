@@ -1,6 +1,9 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
 from openviking.server.identity import RequestContext, Role
@@ -19,6 +22,9 @@ class _FakeVikingFS:
     async def write_file(self, path, content, ctx=None):
         self.writes.append((path, content))
 
+    def _uri_to_path(self, uri, ctx=None):
+        return uri.replace("viking://", "/local/acc1/")
+
 
 class _FakeProcessor:
     def __init__(self):
@@ -34,13 +40,26 @@ class _FakeProcessor:
     def _extract_abstract_from_overview(self, overview):
         return "abstract"
 
-    async def _vectorize_directory_simple(self, uri, context_type, abstract, overview, ctx=None):
+    def _enforce_size_limits(self, overview, abstract):
+        return overview, abstract
+
+    async def _vectorize_directory(
+        self, uri, context_type, abstract, overview, ctx=None, semantic_msg_id=None
+    ):
         self.vectorized_dirs.append(uri)
 
     async def _vectorize_single_file(
-        self, parent_uri, context_type, file_path, summary_dict, ctx=None
+        self, parent_uri, context_type, file_path, summary_dict, ctx=None, semantic_msg_id=None
     ):
         self.vectorized_files.append(file_path)
+
+    async def _vectorize_directory_simple(self, uri, context_type, abstract, overview, ctx=None):
+        await self._vectorize_directory(uri, context_type, abstract, overview, ctx=ctx)
+
+
+class _DummyTracker:
+    async def register(self, **_kwargs):
+        return None
 
 
 @pytest.mark.asyncio
@@ -58,6 +77,25 @@ async def test_semantic_dag_stats_collects_nodes(monkeypatch):
     }
     fake_fs = _FakeVikingFS(tree)
     monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
+        lambda: _DummyTracker(),
+    )
+
+    # Mock lock layer: LockContext as no-op passthrough
+    mock_handle = MagicMock()
+    monkeypatch.setattr(
+        "openviking.storage.transaction.lock_context.LockContext.__aenter__",
+        AsyncMock(return_value=mock_handle),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.transaction.lock_context.LockContext.__aexit__",
+        AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.transaction.get_lock_manager",
+        lambda: MagicMock(),
+    )
 
     processor = _FakeProcessor()
     ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
@@ -68,6 +106,7 @@ async def test_semantic_dag_stats_collects_nodes(monkeypatch):
         ctx=ctx,
     )
     await executor.run(root_uri)
+    await asyncio.sleep(0)
 
     stats = executor.get_stats()
     assert isinstance(stats, DagStats)

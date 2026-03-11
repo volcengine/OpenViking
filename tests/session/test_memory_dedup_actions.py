@@ -23,6 +23,9 @@ from openviking.session.memory_extractor import (
     MergedMemoryPayload,
 )
 from openviking_cli.session.user_id import UserIdentifier
+from tests.utils.mock_context import make_test_ctx
+
+ctx = make_test_ctx()
 
 
 class _DummyVikingDB:
@@ -39,7 +42,7 @@ class _DummyEmbedResult:
 
 
 class _DummyEmbedder:
-    def embed(self, _text):
+    def embed(self, _text, is_query: bool = False):
         return _DummyEmbedResult([0.1, 0.2, 0.3])
 
 
@@ -61,6 +64,23 @@ def _make_candidate() -> CandidateMemory:
         user=_make_user(),
         language="en",
     )
+
+
+def _make_dedup(vikingdb=None, embedder=None) -> MemoryDeduplicator:
+    """Create MemoryDeduplicator without config dependency."""
+    dedup = MemoryDeduplicator.__new__(MemoryDeduplicator)
+    dedup.vikingdb = vikingdb or MagicMock()
+    dedup.embedder = embedder
+    return dedup
+
+
+def _make_compressor(vikingdb=None, embedder=None) -> SessionCompressor:
+    """Create SessionCompressor without config dependency."""
+    vikingdb = vikingdb or MagicMock()
+    with patch("openviking.session.memory_deduplicator.get_openviking_config") as mock_config:
+        mock_config.return_value.embedding.get_embedder.return_value = embedder
+        compressor = SessionCompressor(vikingdb=vikingdb)
+    return compressor
 
 
 def _make_existing(uri_suffix: str = "existing.md") -> Context:
@@ -171,12 +191,13 @@ class TestMemoryDeduplicatorPayload:
         dedup = MemoryDeduplicator(vikingdb=vikingdb)
         candidate = _make_candidate()
 
-        similar = await dedup._find_similar_memories(candidate)
+        similar, _query_vector = await dedup._find_similar_memories(candidate, ctx)
 
         assert len(similar) == 1
         assert similar[0].uri == existing.uri
         call = vikingdb.search_similar_memories.await_args.kwargs
-        assert call["account_id"] == "acc1"
+        # Note: removed stale assert call["account_id"] -- _find_similar_memories
+        # does not pass account_id to search_similar_memories.
         assert call["owner_space"] == _make_user().user_space_name()
         assert call["category_uri_prefix"] == (
             f"viking://user/{_make_user().user_space_name()}/memories/preferences/"
@@ -203,7 +224,7 @@ class TestMemoryDeduplicatorPayload:
         )
         dedup = MemoryDeduplicator(vikingdb=vikingdb)
 
-        similar = await dedup._find_similar_memories(_make_candidate())
+        similar, _ = await dedup._find_similar_memories(_make_candidate(), ctx)
 
         assert len(similar) == 1
 
@@ -246,6 +267,101 @@ class TestMemoryDeduplicatorPayload:
         assert "facet=" in existing_text
         assert similar[4].uri in existing_text
         assert similar[5].uri not in existing_text
+
+    @pytest.mark.asyncio
+    async def test_find_similar_includes_batch_memories(self):
+        """Batch memory with high cosine similarity appears in results."""
+        vikingdb = MagicMock()
+        vikingdb.search_similar_memories = AsyncMock(return_value=[])
+
+        dedup = _make_dedup(vikingdb=vikingdb, embedder=_DummyEmbedder())
+        candidate = _make_candidate()
+
+        # Batch memory with identical embedding vector -> cosine similarity = 1.0
+        batch_ctx = _make_existing("batch_item.md")
+        batch_vector = [0.1, 0.2, 0.3]  # Same as _DummyEmbedder returns
+        batch_memories = [(batch_vector, batch_ctx)]
+
+        similar, query_vector = await dedup._find_similar_memories(
+            candidate, ctx, batch_memories=batch_memories
+        )
+
+        assert len(similar) == 1
+        assert similar[0].uri == batch_ctx.uri
+        assert similar[0].meta["_dedup_score"] == pytest.approx(1.0, abs=1e-6)
+        assert query_vector == [0.1, 0.2, 0.3]
+
+    @pytest.mark.asyncio
+    async def test_find_similar_excludes_dissimilar_batch_memories(self):
+        """Batch memory with opposite embedding (cosine = -1.0) is excluded."""
+        vikingdb = MagicMock()
+        vikingdb.search_similar_memories = AsyncMock(return_value=[])
+
+        dedup = _make_dedup(vikingdb=vikingdb, embedder=_DummyEmbedder())
+        candidate = _make_candidate()
+
+        # Opposite direction vector -> cosine = -1.0, below threshold 0.0
+        batch_ctx = _make_existing("unrelated.md")
+        batch_vector = [-0.1, -0.2, -0.3]
+        batch_memories = [(batch_vector, batch_ctx)]
+
+        similar, _ = await dedup._find_similar_memories(
+            candidate, ctx, batch_memories=batch_memories
+        )
+
+        assert len(similar) == 0
+
+    @pytest.mark.asyncio
+    async def test_find_similar_deduplicates_batch_and_db_by_uri(self):
+        """If same URI appears in both DB results and batch, only keep DB version."""
+        existing = _make_existing("overlap.md")
+        vikingdb = MagicMock()
+        vikingdb.search_similar_memories = AsyncMock(
+            return_value=[
+                {
+                    "id": "uri_overlap",
+                    "uri": existing.uri,
+                    "context_type": "memory",
+                    "level": 2,
+                    "account_id": "acc1",
+                    "owner_space": _make_user().user_space_name(),
+                    "abstract": existing.abstract,
+                    "category": "preferences",
+                    "_score": 0.9,
+                }
+            ]
+        )
+
+        dedup = _make_dedup(vikingdb=vikingdb, embedder=_DummyEmbedder())
+        candidate = _make_candidate()
+
+        # Batch contains same URI as DB result
+        batch_ctx = _make_existing("overlap.md")
+        batch_vector = [0.1, 0.2, 0.3]
+        batch_memories = [(batch_vector, batch_ctx)]
+
+        similar, _ = await dedup._find_similar_memories(
+            candidate, ctx, batch_memories=batch_memories
+        )
+
+        # Should have exactly 1 (DB version), not 2
+        assert len(similar) == 1
+        assert similar[0].uri == existing.uri
+        assert similar[0].meta["_dedup_score"] == pytest.approx(0.9, abs=1e-6)
+
+    @pytest.mark.asyncio
+    async def test_deduplicate_returns_query_vector_in_result(self):
+        """DedupResult includes query_vector for batch tracking."""
+        vikingdb = MagicMock()
+        vikingdb.search_similar_memories = AsyncMock(return_value=[])
+
+        dedup = _make_dedup(vikingdb=vikingdb, embedder=_DummyEmbedder())
+        candidate = _make_candidate()
+
+        result = await dedup.deduplicate(candidate, ctx)
+
+        assert result.decision == DedupDecision.CREATE
+        assert result.query_vector == [0.1, 0.2, 0.3]
 
 
 @pytest.mark.asyncio
@@ -556,3 +672,138 @@ class TestSessionCompressorDedupActions:
         assert [m.uri for m in memories] == [new_memory.uri]
         assert call_order == ["delete", "create"]
         vikingdb.delete_uris.assert_awaited_once_with(_make_ctx(), [target.uri])
+
+    async def test_batch_dedup_passes_batch_memories_to_deduplicate(self):
+        """Compressor passes batch_memories with previously created memory to deduplicate."""
+        candidate_a = _make_candidate()
+        candidate_a.abstract = "User prefers dark mode"
+        candidate_a.content = "The user prefers dark mode in all editors."
+
+        candidate_b = _make_candidate()
+        candidate_b.abstract = "User likes dark mode"
+        candidate_b.content = "The user likes dark mode for coding."
+
+        memory_a = _make_existing("created_a.md")
+
+        vikingdb = MagicMock()
+        vikingdb.delete_uris = AsyncMock(return_value=None)
+        vikingdb.enqueue_embedding_msg = AsyncMock()
+
+        compressor = _make_compressor(vikingdb=vikingdb)
+        compressor.extractor.extract = AsyncMock(return_value=[candidate_a, candidate_b])
+        compressor.extractor.create_memory = AsyncMock(return_value=memory_a)
+
+        call_count = 0
+
+        async def _deduplicate(candidate, ctx, *, batch_memories=None):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                assert batch_memories is None or len(batch_memories) == 0
+                return DedupResult(
+                    decision=DedupDecision.CREATE,
+                    candidate=candidate,
+                    similar_memories=[],
+                    actions=[],
+                    query_vector=[0.1, 0.2, 0.3],
+                )
+            else:
+                assert batch_memories is not None
+                assert len(batch_memories) == 1
+                assert batch_memories[0][0] == [0.1, 0.2, 0.3]
+                assert batch_memories[0][1].uri == memory_a.uri
+                return DedupResult(
+                    decision=DedupDecision.SKIP,
+                    candidate=candidate,
+                    similar_memories=[batch_memories[0][1]],
+                    actions=[],
+                    query_vector=[0.1, 0.2, 0.3],
+                )
+
+        compressor.deduplicator.deduplicate = AsyncMock(side_effect=_deduplicate)
+        compressor._index_memory = AsyncMock(return_value=True)
+
+        fs = MagicMock()
+        fs.rm = AsyncMock()
+
+        with patch("openviking.session.compressor.get_viking_fs", return_value=fs):
+            memories = await compressor.extract_long_term_memories(
+                [Message.create_user("test message")],
+                user=_make_user(),
+                session_id="session_test",
+                ctx=_make_ctx(),
+            )
+
+        assert len(memories) == 1
+        assert memories[0].uri == memory_a.uri
+        assert call_count == 2
+        compressor.extractor.create_memory.assert_awaited_once()
+
+    async def test_batch_dedup_real_cosine_path(self):
+        """End-to-end: real deduplicator cosine comparison catches batch duplicate."""
+        candidate_a = _make_candidate()
+        candidate_a.abstract = "User prefers dark mode"
+        candidate_a.content = "The user prefers dark mode in all editors."
+
+        candidate_b = _make_candidate()
+        candidate_b.abstract = "User likes dark mode"
+        candidate_b.content = "The user likes dark mode for coding."
+
+        memory_a = _make_existing("real_a.md")
+
+        vikingdb = MagicMock()
+        vikingdb.search_similar_memories = AsyncMock(return_value=[])
+        vikingdb.delete_uris = AsyncMock(return_value=None)
+        vikingdb.enqueue_embedding_msg = AsyncMock()
+
+        compressor = _make_compressor(vikingdb=vikingdb, embedder=_DummyEmbedder())
+        compressor.extractor.extract = AsyncMock(return_value=[candidate_a, candidate_b])
+        compressor.extractor.create_memory = AsyncMock(return_value=memory_a)
+        compressor._index_memory = AsyncMock(return_value=True)
+
+        # Spy on _llm_decision to verify batch match triggers LLM path
+        original_llm_decision = compressor.deduplicator._llm_decision
+        llm_decision_calls = []
+
+        async def _spy_llm_decision(candidate, similar_memories):
+            llm_decision_calls.append(similar_memories)
+            return await original_llm_decision(candidate, similar_memories)
+
+        compressor.deduplicator._llm_decision = _spy_llm_decision
+
+        # Mock config for _llm_decision (called when similar memories found)
+        class _NoVLMConfig:
+            vlm = None
+
+            class embedding:
+                @staticmethod
+                def get_embedder():
+                    return _DummyEmbedder()
+
+        fs = MagicMock()
+        fs.rm = AsyncMock()
+
+        with (
+            patch("openviking.session.compressor.get_viking_fs", return_value=fs),
+            patch(
+                "openviking.session.memory_deduplicator.get_openviking_config",
+                return_value=_NoVLMConfig(),
+            ),
+        ):
+            await compressor.extract_long_term_memories(
+                [Message.create_user("test message")],
+                user=_make_user(),
+                session_id="session_test",
+                ctx=_make_ctx(),
+            )
+
+        # _DummyEmbedder returns [0.1, 0.2, 0.3] for all texts -> cosine = 1.0
+        # First: DB empty, no batch -> CREATE (no _llm_decision called).
+        # Second: DB empty, but batch match found (cosine=1.0) ->
+        # _llm_decision IS called with the batch-sourced similar memory.
+        assert vikingdb.search_similar_memories.await_count == 2
+        # Key assertion: _llm_decision was called exactly once (for second candidate)
+        assert len(llm_decision_calls) == 1
+        # The similar_memories passed to LLM came from batch (not DB, which was empty)
+        assert len(llm_decision_calls[0]) == 1
+        assert llm_decision_calls[0][0].uri == memory_a.uri

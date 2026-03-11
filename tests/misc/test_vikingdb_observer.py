@@ -8,13 +8,16 @@ Test VikingDBObserver functionality
 import asyncio
 
 import openviking as ov
+from openviking.async_client import AsyncOpenViking
 
 
 async def test_vikingdb_observer():
     """Test VikingDBObserver functionality"""
     print("=== Test VikingDBObserver ===")
 
-    # Create client
+    # Reset singleton to ensure clean state from previous tests
+    await AsyncOpenViking.reset()
+
     client = ov.AsyncOpenViking(path="./test_data/test_vikingdb_observer")
 
     try:
@@ -72,14 +75,16 @@ async def test_vikingdb_observer():
         traceback.print_exc()
 
     finally:
-        # Close client
-        await client.close()
+        await AsyncOpenViking.reset()
         print("Client closed")
 
 
-def test_sync_client():
+async def test_sync_client():
     """Test sync client"""
     print("\n=== Test sync client ===")
+
+    # Reset singleton to ensure clean state from previous tests
+    await AsyncOpenViking.reset()
 
     client = ov.OpenViking(path="./test_data/test_vikingdb_observer")
 
@@ -109,6 +114,7 @@ def test_sync_client():
 
     finally:
         client.close()
+        await AsyncOpenViking.reset()
         print("Sync client closed")
 
 
@@ -117,4 +123,4 @@ if __name__ == "__main__":
     asyncio.run(test_vikingdb_observer())
 
     # Run sync test
-    test_sync_client()
+    asyncio.run(test_sync_client())

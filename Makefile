@@ -2,7 +2,6 @@
 
 # Variables
 PYTHON ?= python3
-PIP ?= $(PYTHON) -m pip
 SETUP_PY := setup.py
 AGFS_SERVER_DIR := third_party/agfs/agfs-server
 OV_CLI_DIR := crates/ov_cli
@@ -42,12 +41,18 @@ help:
 	@echo "  help        - Show this help message"
 
 check-pip:
-	@$(PYTHON) -m pip --version > /dev/null 2>&1 || ( \
-		echo "Error: pip not found for $(PYTHON)."; \
-		echo "Try fixing your virtual environment by running:"; \
+	@if command -v uv > /dev/null 2>&1 && uv pip --help > /dev/null 2>&1; then \
+		echo "  [OK] uv pip found"; \
+	elif $(PYTHON) -m pip --version > /dev/null 2>&1; then \
+		echo "  [OK] pip found"; \
+	else \
+		echo "Error: Neither uv pip nor pip found for $(PYTHON)."; \
+		echo "Try fixing your environment by running:"; \
+		echo "  uv sync          # if using uv"; \
+		echo "  or"; \
 		echo "  $(PYTHON) -m ensurepip --upgrade"; \
-		exit 1 \
-	)
+		exit 1; \
+	fi
 
 check-deps:
 	@echo "Checking dependencies..."
@@ -87,7 +92,13 @@ check-deps:
 build: check-deps check-pip
 	@echo "Starting build process via setup.py..."
 	$(PYTHON) $(SETUP_PY) build_ext --inplace
-	$(PIP) install -e .
+	@if command -v uv > /dev/null 2>&1 && uv pip --help > /dev/null 2>&1; then \
+		echo "  [OK] uv pip found, use uv pip to install..."; \
+		uv pip install -e .; \
+	else \
+		echo "  [OK] pip found, use pip to install..."; \
+		$(PYTHON) -m pip install -e .; \
+	fi
 	@echo "Build completed successfully."
 
 clean:

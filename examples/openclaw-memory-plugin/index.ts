@@ -5,7 +5,8 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { Type } from "@sinclair/typebox";
 import { memoryOpenVikingConfigSchema } from "./config.js";
 
-import { OpenVikingClient, localClientCache, isMemoryUri } from "./client.js";
+import { OpenVikingClient, localClientCache, localClientPendingPromises, isMemoryUri } from "./client.js";
+import type { PendingClientEntry } from "./client.js";
 import type { FindResultItem } from "./client.js";
 import {
   getCaptureDecision,
@@ -32,6 +33,10 @@ import {
   prepareLocalPort,
 } from "./process-manager.js";
 
+const MAX_OPENVIKING_STDERR_LINES = 200;
+const MAX_OPENVIKING_STDERR_CHARS = 256_000;
+const AUTO_RECALL_TIMEOUT_MS = 5_000;
+
 const memoryPlugin = {
   id: "memory-openviking",
   name: "Memory (OpenViking)",
@@ -48,7 +53,6 @@ const memoryPlugin = {
     let resolveLocalClient: ((c: OpenVikingClient) => void) | null = null;
     let rejectLocalClient: ((err: unknown) => void) | null = null;
     let localUnavailableReason: string | null = null;
-    const autoRecallTimeoutMs = 5_000;
 
     const markLocalUnavailable = (reason: string, err?: unknown) => {
       if (!localUnavailableReason) {
@@ -72,10 +76,18 @@ const memoryPlugin = {
         localProcess = cached.process;
         clientPromise = Promise.resolve(cached.client);
       } else {
-        clientPromise = new Promise<OpenVikingClient>((resolve, reject) => {
-          resolveLocalClient = resolve;
-          rejectLocalClient = reject;
-        });
+        const existingPending = localClientPendingPromises.get(localCacheKey);
+        if (existingPending) {
+          clientPromise = existingPending.promise;
+        } else {
+          const entry = {} as PendingClientEntry;
+          entry.promise = new Promise<OpenVikingClient>((resolve, reject) => {
+            entry.resolve = resolve;
+            entry.reject = reject;
+          });
+          clientPromise = entry.promise;
+          localClientPendingPromises.set(localCacheKey, entry);
+        }
       }
     } else {
       clientPromise = Promise.resolve(new OpenVikingClient(cfg.baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs));
@@ -351,7 +363,16 @@ const memoryPlugin = {
     );
 
     if (cfg.autoRecall || cfg.ingestReplyAssist) {
-      api.on("before_agent_start", async (event: { messages?: unknown[]; prompt: string }) => {
+      api.on("before_agent_start", async (event: { messages?: unknown[]; prompt: string }, ctx?: { agentId?: string }) => {
+        // Dynamically switch agent identity for multi-agent memory isolation.
+        // In multi-agent gateway deployments, the hook context carries the current
+        // agent's ID so we route memory operations to the correct agent_space.
+        const hookAgentId = ctx?.agentId;
+        if (hookAgentId) {
+          const client = await getClient();
+          client.setAgentId(hookAgentId);
+          api.logger.info?.(`memory-openviking: switched to agentId=${hookAgentId} for recall`);
+        }
         const queryText = extractLatestUserText(event.messages) || event.prompt.trim();
         if (!queryText) {
           return;
@@ -366,76 +387,85 @@ const memoryPlugin = {
             );
           } else {
             try {
-              const candidateLimit = Math.max(cfg.recallLimit * 4, 20);
-              // 同时检索 user 和 agent 两个位置的记忆
-              const [userSettled, agentSettled] = await Promise.allSettled([
-                getClient().then((client) =>
-                  client.find(queryText, {
-                    targetUri: "viking://user/memories",
+              await withTimeout(
+                (async () => {
+                  const candidateLimit = Math.max(cfg.recallLimit * 4, 20);
+                  api.logger.info?.(`memory-openviking: autoRecall searching (query="${queryText.slice(0, 80)}", limit=${candidateLimit})`);
+                  // 同时检索 user 和 agent 两个位置的记忆
+                  const [userSettled, agentSettled] = await Promise.allSettled([
+                    getClient().then((client) =>
+                      client.find(queryText, {
+                        targetUri: "viking://user/memories",
+                        limit: candidateLimit,
+                        scoreThreshold: 0,
+                      }),
+                    ),
+                    getClient().then((client) =>
+                      client.find(queryText, {
+                        targetUri: "viking://agent/memories",
+                        limit: candidateLimit,
+                        scoreThreshold: 0,
+                      }),
+                    ),
+                  ]);
+                  const userResult = userSettled.status === "fulfilled" ? userSettled.value : { memories: [] };
+                  const agentResult = agentSettled.status === "fulfilled" ? agentSettled.value : { memories: [] };
+                  api.logger.info?.(`memory-openviking: autoRecall done (user=${userResult.memories?.length ?? 0}, agent=${agentResult.memories?.length ?? 0})`);
+
+                  if (userSettled.status === "rejected") {
+                    api.logger.warn(`memory-openviking: user memories search failed: ${String(userSettled.reason)}`);
+                  }
+                  if (agentSettled.status === "rejected") {
+                    api.logger.warn(`memory-openviking: agent memories search failed: ${String(agentSettled.reason)}`);
+                  }
+                  // 合并两个位置的结果，去重
+                  const allMemories = [...(userResult.memories ?? []), ...(agentResult.memories ?? [])];
+                  const uniqueMemories = allMemories.filter((memory, index, self) =>
+                    index === self.findIndex((m) => m.uri === memory.uri)
+                  );
+                  const leafOnly = uniqueMemories.filter((m) => m.level === 2);
+                  const processed = postProcessMemories(leafOnly, {
                     limit: candidateLimit,
-                    scoreThreshold: 0,
-                  }),
-                ),
-                getClient().then((client) =>
-                  client.find(queryText, {
-                    targetUri: "viking://agent/memories",
-                    limit: candidateLimit,
-                    scoreThreshold: 0,
-                  }),
-                ),
-              ]);
-              const userResult = userSettled.status === "fulfilled" ? userSettled.value : { memories: [] };
-              const agentResult = agentSettled.status === "fulfilled" ? agentSettled.value : { memories: [] };
-              if (userSettled.status === "rejected") {
-                api.logger.warn(`memory-openviking: user memories search failed: ${String(userSettled.reason)}`);
-              }
-              if (agentSettled.status === "rejected") {
-                api.logger.warn(`memory-openviking: agent memories search failed: ${String(agentSettled.reason)}`);
-              }
-              // 合并两个位置的结果，去重
-              const allMemories = [...(userResult.memories ?? []), ...(agentResult.memories ?? [])];
-              const uniqueMemories = allMemories.filter((memory, index, self) =>
-                index === self.findIndex((m) => m.uri === memory.uri)
-              );
-              const leafOnly = uniqueMemories.filter((m) => m.level === 2);
-              const processed = postProcessMemories(leafOnly, {
-                limit: candidateLimit,
-                scoreThreshold: cfg.recallScoreThreshold,
-              });
-              const memories = pickMemoriesForInjection(processed, cfg.recallLimit, queryText);
-              if (memories.length > 0) {
-                // 对 level 2 节点读取正文，其余用 abstract
-                const client = await getClient();
-                const memoryLines = await Promise.all(
-                  memories.map(async (item: FindResultItem) => {
-                    if (item.level === 2) {
-                      try {
-                        const content = await client.read(item.uri);
-                        if (content && typeof content === "string" && content.trim()) {
-                          return `- [${item.category ?? "memory"}] ${content.trim()}`;
+                    scoreThreshold: cfg.recallScoreThreshold,
+                  });
+                  const memories = pickMemoriesForInjection(processed, cfg.recallLimit, queryText);
+                  if (memories.length > 0) {
+                    // 对 level 2 节点读取正文，其余用 abstract
+                    const client = await getClient();
+                    const memoryLines = await Promise.all(
+                      memories.map(async (item: FindResultItem) => {
+                        if (item.level === 2) {
+                          try {
+                            const content = await client.read(item.uri);
+                            if (content && typeof content === "string" && content.trim()) {
+                              return `- [${item.category ?? "memory"}] ${content.trim()}`;
+                            }
+                          } catch {
+                            // fallback to abstract
+                          }
                         }
-                      } catch {
-                        // fallback to abstract
-                      }
-                    }
-                    return `- [${item.category ?? "memory"}] ${item.abstract ?? item.uri}`;
-                  }),
-                );
-                const memoryContext = memoryLines.join("\n");
-                api.logger.info?.(
-                  `memory-openviking: injecting ${memories.length} memories into context`,
-                );
-                api.logger.info?.(
-                  `memory-openviking: inject-detail ${toJsonLog({ count: memories.length, memories: summarizeInjectionMemories(memories) })}`,
-                );
-                prependContextParts.push(
-                  "<relevant-memories>\nThe following OpenViking memories may be relevant:\n" +
-                    `${memoryContext}\n` +
-                  "</relevant-memories>",
-                );
-              }
+                        return `- [${item.category ?? "memory"}] ${item.abstract ?? item.uri}`;
+                      }),
+                    );
+                    const memoryContext = memoryLines.join("\n");
+                    api.logger.info?.(
+                      `memory-openviking: injecting ${memories.length} memories into context`,
+                    );
+                    api.logger.info?.(
+                      `memory-openviking: inject-detail ${toJsonLog({ count: memories.length, memories: summarizeInjectionMemories(memories) })}`,
+                    );
+                    prependContextParts.push(
+                      "<relevant-memories>\nThe following OpenViking memories may be relevant:\n" +
+                        `${memoryContext}\n` +
+                      "</relevant-memories>",
+                    );
+                  }
+                })(),
+                AUTO_RECALL_TIMEOUT_MS,
+                `memory-openviking: auto-recall timed out after ${AUTO_RECALL_TIMEOUT_MS}ms`,
+              );
             } catch (err) {
-              api.logger.warn(`memory-openviking: auto-recall failed: ${String(err)}`);
+              api.logger.warn(`memory-openviking: auto-recall failed or timed out: ${String(err)}`);
             }
           }
         }
@@ -471,7 +501,14 @@ const memoryPlugin = {
     if (cfg.autoCapture) {
       let lastProcessedMsgCount = 0;
 
-      api.on("agent_end", async (event: { success?: boolean; messages?: unknown[] }) => {
+      api.on("agent_end", async (event: { success?: boolean; messages?: unknown[] }, ctx?: { agentId?: string }) => {
+        // Dynamically switch agent identity for multi-agent memory isolation
+        const hookAgentId = ctx?.agentId;
+        if (hookAgentId) {
+          const client = await getClient();
+          client.setAgentId(hookAgentId);
+          api.logger.info?.(`memory-openviking: switched to agentId=${hookAgentId} for capture`);
+        }
         if (!event.success || !event.messages || event.messages.length === 0) {
           api.logger.info(
             `memory-openviking: auto-capture skipped (success=${String(event.success)}, messages=${event.messages?.length ?? 0})`,
@@ -537,7 +574,16 @@ const memoryPlugin = {
     api.registerService({
       id: "memory-openviking",
       start: async () => {
-        if (cfg.mode === "local" && resolveLocalClient) {
+        // Claim the pending entry — only the first start() call to claim it spawns the process.
+        // Subsequent start() calls (from other registrations sharing the same promise) fall through.
+        const pendingEntry = localClientPendingPromises.get(localCacheKey);
+        const isSpawner = cfg.mode === "local" && !!pendingEntry;
+        if (isSpawner) {
+          localClientPendingPromises.delete(localCacheKey);
+          resolveLocalClient = pendingEntry!.resolve;
+          rejectLocalClient = pendingEntry!.reject;
+        }
+        if (isSpawner) {
           const timeoutMs = 60_000;
           const intervalMs = 500;
 
@@ -571,15 +617,43 @@ const memoryPlugin = {
           );
           localProcess = child;
           const stderrChunks: string[] = [];
+          let stderrCharCount = 0;
+          let stderrDroppedChunks = 0;
+          const pushStderrChunk = (chunk: string) => {
+            if (!chunk) return;
+            stderrChunks.push(chunk);
+            stderrCharCount += chunk.length;
+            while (
+              stderrChunks.length > MAX_OPENVIKING_STDERR_LINES ||
+              stderrCharCount > MAX_OPENVIKING_STDERR_CHARS
+            ) {
+              const dropped = stderrChunks.shift();
+              if (!dropped) break;
+              stderrCharCount -= dropped.length;
+              stderrDroppedChunks += 1;
+            }
+          };
+          const formatStderrOutput = () => {
+            if (!stderrChunks.length && !stderrDroppedChunks) return "";
+            const truncated =
+              stderrDroppedChunks > 0
+                ? `[truncated ${stderrDroppedChunks} earlier stderr chunk(s)]\n`
+                : "";
+            return `\n[openviking stderr]\n${truncated}${stderrChunks.join("\n")}`;
+          };
           child.on("error", (err: Error) => api.logger.warn(`memory-openviking: local server error: ${String(err)}`));
           child.stderr?.on("data", (chunk: Buffer) => {
             const s = String(chunk).trim();
-            if (s) stderrChunks.push(s);
+            pushStderrChunk(s);
             api.logger.debug?.(`[openviking] ${s}`);
           });
           child.on("exit", (code: number | null, signal: string | null) => {
-            if (localProcess === child && (code != null && code !== 0 || signal)) {
-              const out = stderrChunks.length ? `\n[openviking stderr]\n${stderrChunks.join("\n")}` : "";
+            if (localProcess === child) {
+              localProcess = null;
+              localClientCache.delete(localCacheKey);
+            }
+            if (code != null && code !== 0 || signal) {
+              const out = formatStderrOutput();
               api.logger.warn(`memory-openviking: subprocess exited (code=${code}, signal=${signal})${out}`);
             }
           });
@@ -589,16 +663,18 @@ const memoryPlugin = {
             localClientCache.set(localCacheKey, { client, process: child });
             resolveLocalClient(client);
             rejectLocalClient = null;
+            localClientPendingPromises.delete(localCacheKey);
             api.logger.info(
               `memory-openviking: local server started (${baseUrl}, config: ${cfg.configPath})`,
             );
           } catch (err) {
             localProcess = null;
             child.kill("SIGTERM");
+            localClientPendingPromises.delete(localCacheKey);
             markLocalUnavailable("startup failed", err);
             if (stderrChunks.length) {
               api.logger.warn(
-                `memory-openviking: startup failed (health check timeout or error). OpenViking stderr:\n${stderrChunks.join("\n")}`,
+                `memory-openviking: startup failed (health check timeout or error).${formatStderrOutput()}`,
               );
             }
             throw err;
@@ -611,6 +687,7 @@ const memoryPlugin = {
         }
       },
       stop: () => {
+        localClientPendingPromises.delete(localCacheKey);
         if (localProcess) {
           localProcess.kill("SIGTERM");
           localClientCache.delete(localCacheKey);

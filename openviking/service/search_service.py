@@ -64,7 +64,7 @@ class SearchService:
         if session:
             session_info = await session.get_context_for_search(query)
 
-        return await viking_fs.search(
+        result = await viking_fs.search(
             query=query,
             ctx=ctx,
             target_uri=target_uri,
@@ -73,6 +73,7 @@ class SearchService:
             score_threshold=score_threshold,
             filter=filter,
         )
+        return result
 
     async def find(
         self,
@@ -96,7 +97,7 @@ class SearchService:
             FindResult
         """
         viking_fs = self._ensure_initialized()
-        return await viking_fs.find(
+        result = await viking_fs.find(
             query=query,
             ctx=ctx,
             target_uri=target_uri,
@@ -104,3 +105,4 @@ class SearchService:
             score_threshold=score_threshold,
             filter=filter,
         )
+        return result

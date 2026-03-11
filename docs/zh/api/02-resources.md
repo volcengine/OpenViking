@@ -45,6 +45,7 @@ Input -> Parser -> TreeBuilder -> AGFS -> SemanticQueue -> Vector Index
 | instruction | str | 否 | "" | 特殊处理指令 |
 | wait | bool | 否 | False | 等待语义处理完成 |
 | timeout | float | 否 | None | 超时时间（秒），仅在 wait=True 时生效 |
+| watch_interval | float | 否 | 0 | 定时更新间隔（分钟）。>0 开启/更新定时任务；<=0 关闭（停用）定时任务。仅在指定 target 时生效 |
 
 **Python SDK (Embedded / HTTP)**
 
@@ -166,6 +167,48 @@ curl -X POST http://localhost:1933/api/v1/system/wait \
 
 ```bash
 openviking add-resource ./documents/guide.md --wait
+```
+
+**示例：开启定时更新（watch_interval）**
+
+`watch_interval` 的单位为分钟，用于对指定的目标 URI 定期触发更新处理：
+
+- `watch_interval > 0`：创建（或重新激活并更新）该 `target` 的定时任务
+- `watch_interval <= 0`：关闭（停用）该 `target` 的定时任务
+- 只有在指定 `target` / CLI `--to` 时才会创建定时任务
+
+如果同一个 `target` 已存在激活中的定时任务，再次以 `watch_interval > 0` 提交会返回冲突错误；需要先将 `watch_interval` 设为 `0`（取消/停用）后再重新设置新的间隔。
+
+**Python SDK (Embedded / HTTP)**
+
+```python
+client.add_resource(
+    "./documents/guide.md",
+    target="viking://resources/documents/guide.md",
+    watch_interval=60,
+)
+```
+
+**HTTP API**
+
+```bash
+curl -X POST http://localhost:1933/api/v1/resources \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "path": "./documents/guide.md",
+    "target": "viking://resources/documents/guide.md",
+    "watch_interval": 60
+  }'
+```
+
+**CLI**
+
+```bash
+openviking add-resource ./documents/guide.md --to viking://resources/documents/guide.md --watch-interval 60
+
+# 取消监控
+openviking add-resource ./documents/guide.md --to viking://resources/documents/guide.md --watch-interval 0
 ```
 
 ---

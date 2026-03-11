@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -46,6 +47,36 @@ _ALLOWED_FORWARD_RESPONSE_HEADERS = {
 }
 
 
+def _is_json_content_type(content_type: str) -> bool:
+    value = (content_type or "").lower()
+    return "application/json" in value or "+json" in value
+
+
+def _should_default_telemetry(upstream_path: str) -> bool:
+    if upstream_path in {"/api/v1/search/find", "/api/v1/resources"}:
+        return True
+    return upstream_path.startswith("/api/v1/sessions/") and upstream_path.endswith("/commit")
+
+
+def _with_default_telemetry(request: Request, upstream_path: str, body: bytes) -> bytes:
+    if request.method.upper() != "POST":
+        return body
+    if not _should_default_telemetry(upstream_path):
+        return body
+    if not _is_json_content_type(request.headers.get("content-type", "")):
+        return body
+
+    try:
+        payload = json.loads(body.decode("utf-8")) if body else {}
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return body
+    if not isinstance(payload, dict):
+        return body
+
+    payload.setdefault("telemetry", True)
+    return json.dumps(payload).encode("utf-8")
+
+
 def _error_response(status_code: int, code: str, message: str, details: Optional[dict] = None):
     return JSONResponse(
         status_code=status_code,
@@ -80,6 +111,7 @@ async def _forward_request(request: Request, upstream_path: str) -> Response:
     """Forward the incoming request to OpenViking upstream."""
     client: httpx.AsyncClient = request.app.state.upstream_client
     body = await request.body()
+    body = _with_default_telemetry(request, upstream_path, body)
     try:
         upstream_response = await client.request(
             method=request.method,
@@ -128,6 +160,39 @@ def _validate_path_param(value: str, name: str) -> Optional[JSONResponse]:
     return None
 
 
+def _validate_fs_path(path_str: str) -> Optional[JSONResponse]:
+    """Validate file system path to prevent directory traversal attacks."""
+    if not path_str:
+        # Empty path is allowed (means current directory)
+        return None
+
+    # Reject absolute paths
+    if path_str.startswith("/") or path_str.startswith("\\"):
+        return _error_response(
+            status_code=400,
+            code="INVALID_PATH",
+            message="Absolute paths are not allowed",
+        )
+
+    # Check for Windows drive letters (C:, D:, etc.)
+    if len(path_str) >= 2 and path_str[1] == ":":
+        return _error_response(
+            status_code=400,
+            code="INVALID_PATH",
+            message="Absolute paths are not allowed",
+        )
+
+    # Check for parent directory traversal
+    if ".." in path_str:
+        return _error_response(
+            status_code=400,
+            code="INVALID_PATH",
+            message="Path traversal sequences (..) are not allowed",
+        )
+
+    return None
+
+
 def _create_proxy_router() -> APIRouter:
     router = APIRouter(prefix=PROXY_PREFIX, tags=["console"])
 
@@ -140,10 +205,18 @@ def _create_proxy_router() -> APIRouter:
 
     @router.get("/ov/fs/ls")
     async def fs_ls(request: Request):
+        path = request.query_params.get("path", "")
+        invalid = _validate_fs_path(path)
+        if invalid:
+            return invalid
         return await _forward_request(request, "/api/v1/fs/ls")
 
     @router.get("/ov/fs/tree")
     async def fs_tree(request: Request):
+        path = request.query_params.get("path", "")
+        invalid = _validate_fs_path(path)
+        if invalid:
+            return invalid
         return await _forward_request(request, "/api/v1/fs/tree")
 
     @router.get("/ov/fs/stat")

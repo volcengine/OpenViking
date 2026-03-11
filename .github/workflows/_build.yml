@@ -12,7 +12,7 @@ on:
         description: 'JSON string of Python versions'
         required: false
         type: string
-        default: '["3.10", "3.11", "3.12", "3.13"]'
+        default: '["3.10", "3.11", "3.12", "3.13", "3.14"]'
       build_sdist:
         description: 'Whether to build source distribution'
         required: false
@@ -42,7 +42,7 @@ on:
       python_json:
         description: 'JSON string of Python versions'
         required: false
-        default: '["3.10", "3.11", "3.12", "3.13"]'
+        default: '["3.10", "3.11", "3.12", "3.13", "3.14"]'
 
 jobs:
   build-sdist:
@@ -170,6 +170,7 @@ jobs:
           "3.11") PYTHON_FULL="3.11.8" ;;
           "3.12") PYTHON_FULL="3.12.2" ;;
           "3.13") PYTHON_FULL="3.13.2" ;;
+          "3.14") PYTHON_FULL="3.14.3" ;;
           *)
             echo "Error: Unknown python version $PYTHON_VERSION"
             exit 1
@@ -454,21 +455,22 @@ jobs:
       shell: bash
       run: |
         python - <<'PY'
+        import importlib
         import importlib.util
-        import pathlib
-        import site
 
-        candidates = []
-        for base in site.getsitepackages():
-            candidates.extend(pathlib.Path(base).glob("openviking/storage/vectordb/engine*.so"))
+        import openviking.storage.vectordb.engine as engine
 
-        if not candidates:
-            raise SystemExit("openviking storage engine extension was not installed")
+        native_spec = importlib.util.find_spec("openviking.storage.vectordb.engine._native")
+        if native_spec is None or native_spec.origin is None:
+            raise SystemExit("openviking storage native backend extension was not installed")
 
-        engine_path = candidates[0]
-        spec = importlib.util.spec_from_file_location("engine", engine_path)
-        module = importlib.util.module_from_spec(spec)
-        assert spec.loader is not None
-        spec.loader.exec_module(module)
-        print(f"Loaded native extension from {engine_path}")
+        native_module = importlib.import_module("openviking.storage.vectordb.engine._native")
+        if engine.ENGINE_VARIANT != "native":
+            raise SystemExit(
+                f"expected native engine variant on macOS arm64 wheel, got {engine.ENGINE_VARIANT}"
+            )
+
+        print(f"Loaded runtime engine variant {engine.ENGINE_VARIANT}")
+        print(f"Loaded native extension from {native_spec.origin}")
+        print(f"Imported backend module {native_module.__name__}")
         PY

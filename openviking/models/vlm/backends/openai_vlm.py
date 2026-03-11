@@ -29,7 +29,10 @@ class OpenAIVLM(VLMBase):
                 import openai
             except ImportError:
                 raise ImportError("Please install openai: pip install openai")
-            self._sync_client = openai.OpenAI(api_key=self.api_key, base_url=self.api_base)
+            client_kwargs = {"api_key": self.api_key, "base_url": self.api_base}
+            if self.extra_headers:
+                client_kwargs["default_headers"] = self.extra_headers
+            self._sync_client = openai.OpenAI(**client_kwargs)
         return self._sync_client
 
     def get_async_client(self):
@@ -39,7 +42,10 @@ class OpenAIVLM(VLMBase):
                 import openai
             except ImportError:
                 raise ImportError("Please install openai: pip install openai")
-            self._async_client = openai.AsyncOpenAI(api_key=self.api_key, base_url=self.api_base)
+            client_kwargs = {"api_key": self.api_key, "base_url": self.api_base}
+            if self.extra_headers:
+                client_kwargs["default_headers"] = self.extra_headers
+            self._async_client = openai.AsyncOpenAI(**client_kwargs)
         return self._async_client
 
     def _update_token_usage_from_response(self, response):
@@ -62,10 +68,12 @@ class OpenAIVLM(VLMBase):
             "messages": [{"role": "user", "content": prompt}],
             "temperature": self.temperature,
         }
+        if self.max_tokens is not None:
+            kwargs["max_tokens"] = self.max_tokens
 
         response = client.chat.completions.create(**kwargs)
         self._update_token_usage_from_response(response)
-        return response.choices[0].message.content or ""
+        return self._clean_response(response.choices[0].message.content or "")
 
     async def get_completion_async(
         self, prompt: str, thinking: bool = False, max_retries: int = 0
@@ -77,13 +85,15 @@ class OpenAIVLM(VLMBase):
             "messages": [{"role": "user", "content": prompt}],
             "temperature": self.temperature,
         }
+        if self.max_tokens is not None:
+            kwargs["max_tokens"] = self.max_tokens
 
         last_error = None
         for attempt in range(max_retries + 1):
             try:
                 response = await client.chat.completions.create(**kwargs)
                 self._update_token_usage_from_response(response)
-                return response.choices[0].message.content or ""
+                return self._clean_response(response.choices[0].message.content or "")
             except Exception as e:
                 last_error = e
                 if attempt < max_retries:
@@ -165,10 +175,12 @@ class OpenAIVLM(VLMBase):
             "messages": [{"role": "user", "content": content}],
             "temperature": self.temperature,
         }
+        if self.max_tokens is not None:
+            kwargs["max_tokens"] = self.max_tokens
 
         response = client.chat.completions.create(**kwargs)
         self._update_token_usage_from_response(response)
-        return response.choices[0].message.content or ""
+        return self._clean_response(response.choices[0].message.content or "")
 
     async def get_vision_completion_async(
         self,
@@ -189,7 +201,9 @@ class OpenAIVLM(VLMBase):
             "messages": [{"role": "user", "content": content}],
             "temperature": self.temperature,
         }
+        if self.max_tokens is not None:
+            kwargs["max_tokens"] = self.max_tokens
 
         response = await client.chat.completions.create(**kwargs)
         self._update_token_usage_from_response(response)
-        return response.choices[0].message.content or ""
+        return self._clean_response(response.choices[0].message.content or "")
