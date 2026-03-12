@@ -30,9 +30,9 @@ async def health_check(request: Request):
     # Try to get user identity if auth headers are present
     try:
         # Extract headers manually
-        x_api_key = request.headers.get("x-api-key")
-        authorization = request.headers.get("authorization")
-        x_openviking_user = request.headers.get("x-openviking-user")
+        x_api_key = request.headers.get("X-API-Key")
+        authorization = request.headers.get("Authorization")
+        x_openviking_user = request.headers.get("X-OpenViking-User")
 
         # Check if we have auth or in dev mode
         api_key_manager = getattr(request.app.state, "api_key_manager", None)
@@ -42,7 +42,14 @@ async def health_check(request: Request):
         elif x_api_key or authorization:
             # Try to resolve identity
             try:
-                identity = await resolve_identity(request, x_api_key, authorization)
+                identity = await resolve_identity(
+                    request,
+                    x_api_key=x_api_key,
+                    authorization=authorization,
+                    x_openviking_account=request.headers.get("X-OpenViking-Account"),
+                    x_openviking_user=x_openviking_user,
+                    x_openviking_agent=request.headers.get("X-OpenViking-Agent"),
+                )
                 if identity and identity.user_id:
                     result["user_id"] = identity.user_id
             except Exception:
