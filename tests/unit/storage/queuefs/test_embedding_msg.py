@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 import json
+
 import pytest
 
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg

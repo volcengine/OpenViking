@@ -1,16 +1,13 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
 from openviking.session.memory_extractor import (
-    FIELD_MAX_LENGTH,
     FIELD_MAX_LENGTHS,
     MemoryExtractor,
-    MemoryCategory,
-    ToolSkillCandidateMemory,
 )
 
 

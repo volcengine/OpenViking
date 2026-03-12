@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from openviking.core.context import Context
 from openviking.session.memory_deduplicator import MemoryDeduplicator
 from openviking.session.memory_extractor import CandidateMemory, MemoryCategory
 from openviking_cli.session.user_id import UserIdentifier

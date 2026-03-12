@@ -23,7 +23,6 @@ from openviking.parse.parsers.constants import (
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.queuefs.semantic_processor import DiffResult, SemanticProcessor
 from openviking_cli.session.user_id import UserIdentifier
-from openviking_cli.utils import VikingURI
 
 
 class FakeVikingFS:
