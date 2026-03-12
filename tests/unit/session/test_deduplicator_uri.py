@@ -72,7 +72,9 @@ class TestFindSimilarMemoriesURIConversion:
     async def test_user_uri_converted_to_temp_uri(self):
         vikingdb = MagicMock()
         vikingdb.get_embedder.return_value = _DummyEmbedder()
-        vikingdb.search_similar_memories = AsyncMock(return_value=[_make_existing_user_memory("pref1.md")])
+        vikingdb.search_similar_memories = AsyncMock(
+            return_value=[_make_existing_user_memory("pref1.md")]
+        )
 
         dedup = MemoryDeduplicator(vikingdb=vikingdb)
         candidate = _make_candidate()
@@ -94,7 +96,9 @@ class TestFindSimilarMemoriesURIConversion:
     async def test_agent_uri_converted_to_temp_uri(self):
         vikingdb = MagicMock()
         vikingdb.get_embedder.return_value = _DummyEmbedder()
-        vikingdb.search_similar_memories = AsyncMock(return_value=[_make_existing_agent_memory("case1.md")])
+        vikingdb.search_similar_memories = AsyncMock(
+            return_value=[_make_existing_agent_memory("case1.md")]
+        )
 
         dedup = MemoryDeduplicator(vikingdb=vikingdb)
         candidate = _make_candidate(category=MemoryCategory.CASES)
@@ -117,7 +121,9 @@ class TestFindSimilarMemoriesURIConversion:
     async def test_no_conversion_when_no_temp_uri(self):
         vikingdb = MagicMock()
         vikingdb.get_embedder.return_value = _DummyEmbedder()
-        vikingdb.search_similar_memories = AsyncMock(return_value=[_make_existing_user_memory("pref1.md")])
+        vikingdb.search_similar_memories = AsyncMock(
+            return_value=[_make_existing_user_memory("pref1.md")]
+        )
 
         dedup = MemoryDeduplicator(vikingdb=vikingdb)
         candidate = _make_candidate()
@@ -164,7 +170,9 @@ class TestFindSimilarMemoriesURIConversion:
     async def test_uri_conversion_preserves_meta_and_score(self):
         vikingdb = MagicMock()
         vikingdb.get_embedder.return_value = _DummyEmbedder()
-        vikingdb.search_similar_memories = AsyncMock(return_value=[_make_existing_user_memory("pref1.md")])
+        vikingdb.search_similar_memories = AsyncMock(
+            return_value=[_make_existing_user_memory("pref1.md")]
+        )
 
         dedup = MemoryDeduplicator(vikingdb=vikingdb)
         candidate = _make_candidate()
@@ -199,7 +207,9 @@ class TestExtractFacetKey:
         assert result == "work schedule"
 
     def test_extract_with_no_separator_returns_prefix(self):
-        result = MemoryDeduplicator._extract_facet_key("This is a long abstract without any separator")
+        result = MemoryDeduplicator._extract_facet_key(
+            "This is a long abstract without any separator"
+        )
         assert len(result) <= 24
         assert result == "this is a long abstract"
 
@@ -278,7 +288,7 @@ class TestCosineSimilarity:
         vec_a = [1.0, 0.0, 0.0]
         vec_b = [1.0, 1.0, 0.0]
         result = MemoryDeduplicator._cosine_similarity(vec_a, vec_b)
-        expected = 1.0 / (2.0 ** 0.5)
+        expected = 1.0 / (2.0**0.5)
         assert abs(result - expected) < 1e-9
 
     def test_negative_values(self):

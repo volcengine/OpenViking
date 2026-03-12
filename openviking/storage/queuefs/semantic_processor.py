@@ -236,7 +236,9 @@ class SemanticProcessor(DequeueHandlerBase):
                 root_tree = await self._collect_tree_info(root_uri, ctx=ctx)
 
                 target_tree = await self._collect_tree_info(target_uri, ctx=ctx)
-                diff = await self._compute_diff(root_tree, target_tree, root_uri, target_uri, ctx=ctx)
+                diff = await self._compute_diff(
+                    root_tree, target_tree, root_uri, target_uri, ctx=ctx
+                )
                 logger.info(
                     f"[SyncDiff] Diff computed: "
                     f"added_files={len(diff.added_files)}, "
@@ -460,9 +462,7 @@ class SemanticProcessor(DequeueHandlerBase):
                 target_parent = VikingURI(target_file).parent
                 if target_parent:
                     try:
-                        await viking_fs.mkdir(
-                            target_parent.uri, exist_ok=True, ctx=ctx
-                        )
+                        await viking_fs.mkdir(target_parent.uri, exist_ok=True, ctx=ctx)
                     except Exception as mkdir_error:
                         logger.debug(
                             f"[SyncDiff] Parent dir creation skipped (may already exist): {mkdir_error}"

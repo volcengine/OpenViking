@@ -175,12 +175,14 @@ class TestCollectTreeInfo:
 
     @pytest.mark.asyncio
     async def test_collect_directory_with_files(self, processor, fake_fs, ctx):
-        fake_fs.set_tree({
-            "viking://temp/dir": [
-                {"name": "file1.txt", "isDir": False},
-                {"name": "file2.py", "isDir": False},
-            ]
-        })
+        fake_fs.set_tree(
+            {
+                "viking://temp/dir": [
+                    {"name": "file1.txt", "isDir": False},
+                    {"name": "file2.py", "isDir": False},
+                ]
+            }
+        )
         processor._current_ctx = ctx
 
         with patch(
@@ -197,18 +199,20 @@ class TestCollectTreeInfo:
 
     @pytest.mark.asyncio
     async def test_collect_directory_with_subdirs(self, processor, fake_fs, ctx):
-        fake_fs.set_tree({
-            "viking://temp/root": [
-                {"name": "subdir1", "isDir": True},
-                {"name": "subdir2", "isDir": True},
-            ],
-            "viking://temp/root/subdir1": [
-                {"name": "file1.txt", "isDir": False},
-            ],
-            "viking://temp/root/subdir2": [
-                {"name": "file2.txt", "isDir": False},
-            ],
-        })
+        fake_fs.set_tree(
+            {
+                "viking://temp/root": [
+                    {"name": "subdir1", "isDir": True},
+                    {"name": "subdir2", "isDir": True},
+                ],
+                "viking://temp/root/subdir1": [
+                    {"name": "file1.txt", "isDir": False},
+                ],
+                "viking://temp/root/subdir2": [
+                    {"name": "file2.txt", "isDir": False},
+                ],
+            }
+        )
         processor._current_ctx = ctx
 
         with patch(
@@ -222,17 +226,19 @@ class TestCollectTreeInfo:
 
     @pytest.mark.asyncio
     async def test_collect_nested_directories(self, processor, fake_fs, ctx):
-        fake_fs.set_tree({
-            "viking://temp/root": [
-                {"name": "level1", "isDir": True},
-            ],
-            "viking://temp/root/level1": [
-                {"name": "level2", "isDir": True},
-            ],
-            "viking://temp/root/level1/level2": [
-                {"name": "deep_file.txt", "isDir": False},
-            ],
-        })
+        fake_fs.set_tree(
+            {
+                "viking://temp/root": [
+                    {"name": "level1", "isDir": True},
+                ],
+                "viking://temp/root/level1": [
+                    {"name": "level2", "isDir": True},
+                ],
+                "viking://temp/root/level1/level2": [
+                    {"name": "deep_file.txt", "isDir": False},
+                ],
+            }
+        )
         processor._current_ctx = ctx
 
         with patch(
@@ -246,12 +252,14 @@ class TestCollectTreeInfo:
 
     @pytest.mark.asyncio
     async def test_collect_skips_hidden_files(self, processor, fake_fs, ctx):
-        fake_fs.set_tree({
-            "viking://temp/dir": [
-                {"name": ".hidden", "isDir": False},
-                {"name": "visible.txt", "isDir": False},
-            ]
-        })
+        fake_fs.set_tree(
+            {
+                "viking://temp/dir": [
+                    {"name": ".hidden", "isDir": False},
+                    {"name": "visible.txt", "isDir": False},
+                ]
+            }
+        )
         processor._current_ctx = ctx
 
         with patch(
@@ -265,13 +273,15 @@ class TestCollectTreeInfo:
 
     @pytest.mark.asyncio
     async def test_collect_skips_dot_and_dotdot(self, processor, fake_fs, ctx):
-        fake_fs.set_tree({
-            "viking://temp/dir": [
-                {"name": ".", "isDir": True},
-                {"name": "..", "isDir": True},
-                {"name": "file.txt", "isDir": False},
-            ]
-        })
+        fake_fs.set_tree(
+            {
+                "viking://temp/dir": [
+                    {"name": ".", "isDir": True},
+                    {"name": "..", "isDir": True},
+                    {"name": "file.txt", "isDir": False},
+                ]
+            }
+        )
         processor._current_ctx = ctx
 
         with patch(
@@ -372,10 +382,12 @@ class TestComputeDiff:
         target_tree = {
             "viking://target/root": ([], ["viking://target/root/file.txt"]),
         }
-        fake_fs.set_file_contents({
-            "viking://temp/root/file.txt": "new content",
-            "viking://target/root/file.txt": "old content",
-        })
+        fake_fs.set_file_contents(
+            {
+                "viking://temp/root/file.txt": "new content",
+                "viking://target/root/file.txt": "old content",
+            }
+        )
         processor._current_ctx = ctx
 
         with patch(
@@ -396,10 +408,12 @@ class TestComputeDiff:
         target_tree = {
             "viking://target/root": ([], ["viking://target/root/file.txt"]),
         }
-        fake_fs.set_file_contents({
-            "viking://temp/root/file.txt": "same content",
-            "viking://target/root/file.txt": "same content",
-        })
+        fake_fs.set_file_contents(
+            {
+                "viking://temp/root/file.txt": "same content",
+                "viking://target/root/file.txt": "same content",
+            }
+        )
         processor._current_ctx = ctx
 
         with patch(
@@ -469,10 +483,12 @@ class TestComputeDiff:
             ),
             "viking://target/root/old_dir": ([], []),
         }
-        fake_fs.set_file_contents({
-            "viking://temp/root/updated.txt": "new content",
-            "viking://target/root/updated.txt": "old content",
-        })
+        fake_fs.set_file_contents(
+            {
+                "viking://temp/root/updated.txt": "new content",
+                "viking://target/root/updated.txt": "old content",
+            }
+        )
         processor._current_ctx = ctx
 
         with patch(
@@ -494,10 +510,12 @@ class TestCheckFileContentChanged:
 
     @pytest.mark.asyncio
     async def test_content_changed(self, processor, fake_fs, ctx):
-        fake_fs.set_file_contents({
-            "viking://temp/file.txt": "new content",
-            "viking://target/file.txt": "old content",
-        })
+        fake_fs.set_file_contents(
+            {
+                "viking://temp/file.txt": "new content",
+                "viking://target/file.txt": "old content",
+            }
+        )
         processor._current_ctx = ctx
 
         with patch(
@@ -511,10 +529,12 @@ class TestCheckFileContentChanged:
 
     @pytest.mark.asyncio
     async def test_content_unchanged(self, processor, fake_fs, ctx):
-        fake_fs.set_file_contents({
-            "viking://temp/file.txt": "same content",
-            "viking://target/file.txt": "same content",
-        })
+        fake_fs.set_file_contents(
+            {
+                "viking://temp/file.txt": "same content",
+                "viking://target/file.txt": "same content",
+            }
+        )
         processor._current_ctx = ctx
 
         with patch(
@@ -528,10 +548,12 @@ class TestCheckFileContentChanged:
 
     @pytest.mark.asyncio
     async def test_content_changed_empty_files(self, processor, fake_fs, ctx):
-        fake_fs.set_file_contents({
-            "viking://temp/file.txt": "",
-            "viking://target/file.txt": "",
-        })
+        fake_fs.set_file_contents(
+            {
+                "viking://temp/file.txt": "",
+                "viking://target/file.txt": "",
+            }
+        )
         processor._current_ctx = ctx
 
         with patch(
@@ -545,10 +567,12 @@ class TestCheckFileContentChanged:
 
     @pytest.mark.asyncio
     async def test_content_changed_one_empty(self, processor, fake_fs, ctx):
-        fake_fs.set_file_contents({
-            "viking://temp/file.txt": "content",
-            "viking://target/file.txt": "",
-        })
+        fake_fs.set_file_contents(
+            {
+                "viking://temp/file.txt": "content",
+                "viking://target/file.txt": "",
+            }
+        )
         processor._current_ctx = ctx
 
         with patch(
@@ -616,7 +640,8 @@ class TestExecuteSyncOperations:
             "openviking.storage.queuefs.semantic_processor.get_viking_fs", return_value=fake_fs
         ):
             with patch(
-                "openviking.storage.queuefs.semantic_processor.VikingURI", return_value=mock_viking_uri
+                "openviking.storage.queuefs.semantic_processor.VikingURI",
+                return_value=mock_viking_uri,
             ):
                 await processor._execute_sync_operations(
                     diff, "viking://temp/root", "viking://target/root"
@@ -642,14 +667,18 @@ class TestExecuteSyncOperations:
             "openviking.storage.queuefs.semantic_processor.get_viking_fs", return_value=fake_fs
         ):
             with patch(
-                "openviking.storage.queuefs.semantic_processor.VikingURI", return_value=mock_viking_uri
+                "openviking.storage.queuefs.semantic_processor.VikingURI",
+                return_value=mock_viking_uri,
             ):
                 await processor._execute_sync_operations(
                     diff, "viking://temp/root", "viking://target/root"
                 )
 
         assert "viking://target/root/updated.txt" in fake_fs.deleted_files
-        assert ("viking://temp/root/updated.txt", "viking://target/root/updated.txt") in fake_fs.moved_files
+        assert (
+            "viking://temp/root/updated.txt",
+            "viking://target/root/updated.txt",
+        ) in fake_fs.moved_files
 
     @pytest.mark.asyncio
     async def test_execute_delete_dirs(self, processor, fake_fs, ctx):
@@ -717,7 +746,8 @@ class TestExecuteSyncOperations:
             "openviking.storage.queuefs.semantic_processor.get_viking_fs", return_value=fake_fs
         ):
             with patch(
-                "openviking.storage.queuefs.semantic_processor.VikingURI", return_value=mock_viking_uri
+                "openviking.storage.queuefs.semantic_processor.VikingURI",
+                return_value=mock_viking_uri,
             ):
                 await processor._execute_sync_operations(
                     diff, "viking://temp/root", "viking://target/root"
@@ -742,22 +772,27 @@ class TestCreateSyncDiffCallback:
             "viking://temp/root", "viking://target/root"
         )
         import asyncio
+
         assert asyncio.iscoroutinefunction(callback)
 
     @pytest.mark.asyncio
     async def test_callback_collects_tree_info(self, processor, fake_fs, ctx):
-        fake_fs.set_tree({
-            "viking://temp/root": [
-                {"name": "file.txt", "isDir": False},
-            ],
-            "viking://target/root": [
-                {"name": "file.txt", "isDir": False},
-            ],
-        })
-        fake_fs.set_file_contents({
-            "viking://temp/root/file.txt": "content",
-            "viking://target/root/file.txt": "content",
-        })
+        fake_fs.set_tree(
+            {
+                "viking://temp/root": [
+                    {"name": "file.txt", "isDir": False},
+                ],
+                "viking://target/root": [
+                    {"name": "file.txt", "isDir": False},
+                ],
+            }
+        )
+        fake_fs.set_file_contents(
+            {
+                "viking://temp/root/file.txt": "content",
+                "viking://target/root/file.txt": "content",
+            }
+        )
         processor._current_ctx = ctx
 
         with patch(
@@ -783,10 +818,12 @@ class TestCreateSyncDiffCallback:
 
     @pytest.mark.asyncio
     async def test_callback_deletes_root_after_sync(self, processor, fake_fs, ctx):
-        fake_fs.set_tree({
-            "viking://temp/root": [],
-            "viking://target/root": [],
-        })
+        fake_fs.set_tree(
+            {
+                "viking://temp/root": [],
+                "viking://target/root": [],
+            }
+        )
         processor._current_ctx = ctx
 
         with patch(

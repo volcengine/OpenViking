@@ -15,7 +15,9 @@ from openviking_cli.session.user_id import UserIdentifier
 def mock_processor():
     """Create a mock SemanticProcessor."""
     processor = MagicMock()
-    processor._generate_single_file_summary = AsyncMock(return_value={"name": "test.py", "summary": "test summary"})
+    processor._generate_single_file_summary = AsyncMock(
+        return_value={"name": "test.py", "summary": "test summary"}
+    )
     processor._generate_overview = AsyncMock(return_value="test overview")
     processor._extract_abstract_from_overview = MagicMock(return_value="test abstract")
     processor._vectorize_single_file = AsyncMock()
@@ -54,7 +56,9 @@ def mock_context():
 @pytest.fixture
 def executor(mock_processor, mock_context, mock_viking_fs):
     """Create a SemanticDagExecutor instance for testing."""
-    with patch("openviking.storage.queuefs.semantic_dag.get_viking_fs", return_value=mock_viking_fs):
+    with patch(
+        "openviking.storage.queuefs.semantic_dag.get_viking_fs", return_value=mock_viking_fs
+    ):
         executor = SemanticDagExecutor(
             processor=mock_processor,
             context_type="resource",
@@ -70,8 +74,12 @@ def executor(mock_processor, mock_context, mock_viking_fs):
 class TestGetTargetFilePath:
     """Tests for _get_target_file_path() method."""
 
-    def test_returns_none_when_incremental_update_disabled(self, mock_processor, mock_context, mock_viking_fs):
-        with patch("openviking.storage.queuefs.semantic_dag.get_viking_fs", return_value=mock_viking_fs):
+    def test_returns_none_when_incremental_update_disabled(
+        self, mock_processor, mock_context, mock_viking_fs
+    ):
+        with patch(
+            "openviking.storage.queuefs.semantic_dag.get_viking_fs", return_value=mock_viking_fs
+        ):
             executor = SemanticDagExecutor(
                 processor=mock_processor,
                 context_type="resource",
@@ -84,8 +92,12 @@ class TestGetTargetFilePath:
         result = executor._get_target_file_path("viking://resource/root/file.py")
         assert result is None
 
-    def test_returns_none_when_target_uri_is_none(self, mock_processor, mock_context, mock_viking_fs):
-        with patch("openviking.storage.queuefs.semantic_dag.get_viking_fs", return_value=mock_viking_fs):
+    def test_returns_none_when_target_uri_is_none(
+        self, mock_processor, mock_context, mock_viking_fs
+    ):
+        with patch(
+            "openviking.storage.queuefs.semantic_dag.get_viking_fs", return_value=mock_viking_fs
+        ):
             executor = SemanticDagExecutor(
                 processor=mock_processor,
                 context_type="resource",
@@ -207,7 +219,9 @@ class TestReadExistingSummary:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_returns_summary_dict_when_record_exists(self, executor, mock_viking_fs, mock_vector_store):
+    async def test_returns_summary_dict_when_record_exists(
+        self, executor, mock_viking_fs, mock_vector_store
+    ):
         executor._viking_fs = mock_viking_fs
         executor._root_uri = "viking://resource/root"
         mock_viking_fs._get_vector_store = MagicMock(return_value=mock_vector_store)
@@ -234,7 +248,9 @@ class TestReadExistingSummary:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_returns_none_when_abstract_is_empty(self, executor, mock_viking_fs, mock_vector_store):
+    async def test_returns_none_when_abstract_is_empty(
+        self, executor, mock_viking_fs, mock_vector_store
+    ):
         executor._viking_fs = mock_viking_fs
         executor._root_uri = "viking://resource/root"
         mock_viking_fs._get_vector_store = MagicMock(return_value=mock_vector_store)
@@ -256,7 +272,9 @@ class TestReadExistingSummary:
         assert result is None
 
     @pytest.mark.asyncio
-    async def test_calls_vector_store_with_correct_uri(self, executor, mock_viking_fs, mock_vector_store, mock_context):
+    async def test_calls_vector_store_with_correct_uri(
+        self, executor, mock_viking_fs, mock_vector_store, mock_context
+    ):
         executor._viking_fs = mock_viking_fs
         executor._root_uri = "viking://resource/root"
         mock_viking_fs._get_vector_store = MagicMock(return_value=mock_vector_store)
@@ -293,7 +311,10 @@ class TestCheckDirChildrenChanged:
 
         executor._list_dir = AsyncMock(
             side_effect=[
-                (["viking://resource/target/dir1", "viking://resource/target/dir2"], ["viking://resource/target/file1.py", "viking://resource/target/file2.py"]),
+                (
+                    ["viking://resource/target/dir1", "viking://resource/target/dir2"],
+                    ["viking://resource/target/file1.py", "viking://resource/target/file2.py"],
+                ),
                 ([], []),
             ]
         )
@@ -382,9 +403,7 @@ class TestCheckDirChildrenChanged:
 
         mock_viking_fs.ls = AsyncMock(return_value=[])
 
-        result = await executor._check_dir_children_changed(
-            "viking://resource/root", [], []
-        )
+        result = await executor._check_dir_children_changed("viking://resource/root", [], [])
         assert result is False
 
     @pytest.mark.asyncio
@@ -496,7 +515,9 @@ class TestIncrementalUpdateIntegration:
     """Integration tests for incremental update scenarios."""
 
     @pytest.mark.asyncio
-    async def test_full_incremental_flow_no_changes(self, executor, mock_viking_fs, mock_vector_store):
+    async def test_full_incremental_flow_no_changes(
+        self, executor, mock_viking_fs, mock_vector_store
+    ):
         executor._viking_fs = mock_viking_fs
         executor._root_uri = "viking://resource/root"
         mock_viking_fs._get_vector_store = MagicMock(return_value=mock_vector_store)
@@ -507,7 +528,9 @@ class TestIncrementalUpdateIntegration:
             return_value=[{"abstract": "existing summary"}]
         )
 
-        content_changed = await executor._check_file_content_changed("viking://resource/root/file.py")
+        content_changed = await executor._check_file_content_changed(
+            "viking://resource/root/file.py"
+        )
         assert content_changed is False
 
         summary = await executor._read_existing_summary("viking://resource/root/file.py")
@@ -515,14 +538,18 @@ class TestIncrementalUpdateIntegration:
         assert summary["summary"] == "existing summary"
 
     @pytest.mark.asyncio
-    async def test_full_incremental_flow_with_changes(self, executor, mock_viking_fs, mock_vector_store):
+    async def test_full_incremental_flow_with_changes(
+        self, executor, mock_viking_fs, mock_vector_store
+    ):
         executor._viking_fs = mock_viking_fs
         executor._root_uri = "viking://resource/root"
         mock_viking_fs._get_vector_store = MagicMock(return_value=mock_vector_store)
 
         mock_viking_fs.read_file = AsyncMock(side_effect=["new content", "old content"])
 
-        content_changed = await executor._check_file_content_changed("viking://resource/root/file.py")
+        content_changed = await executor._check_file_content_changed(
+            "viking://resource/root/file.py"
+        )
         assert content_changed is True
 
     @pytest.mark.asyncio
@@ -549,9 +576,7 @@ class TestIncrementalUpdateIntegration:
         executor._viking_fs = mock_viking_fs
         executor._root_uri = "viking://resource/root"
 
-        mock_viking_fs.read_file = AsyncMock(
-            side_effect=["existing overview", "existing abstract"]
-        )
+        mock_viking_fs.read_file = AsyncMock(side_effect=["existing overview", "existing abstract"])
 
         overview, abstract = await executor._read_existing_overview_abstract(
             "viking://resource/root/subdir"

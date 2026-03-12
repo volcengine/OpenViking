@@ -233,21 +233,25 @@ class TestToJsonFromJson:
         assert restored.role == original.role
 
     def test_from_json_with_new_fields(self):
-        json_str = json.dumps({
-            "uri": "viking://resource/test",
-            "context_type": "resource",
-            "target_uri": "viking://resource/target",
-            "skip_vectorization": True,
-        })
+        json_str = json.dumps(
+            {
+                "uri": "viking://resource/test",
+                "context_type": "resource",
+                "target_uri": "viking://resource/target",
+                "skip_vectorization": True,
+            }
+        )
         msg = SemanticMsg.from_json(json_str)
         assert msg.target_uri == "viking://resource/target"
         assert msg.skip_vectorization is True
 
     def test_from_json_without_new_fields(self):
-        json_str = json.dumps({
-            "uri": "viking://resource/test",
-            "context_type": "resource",
-        })
+        json_str = json.dumps(
+            {
+                "uri": "viking://resource/test",
+                "context_type": "resource",
+            }
+        )
         msg = SemanticMsg.from_json(json_str)
         assert msg.target_uri == ""
         assert msg.skip_vectorization is False

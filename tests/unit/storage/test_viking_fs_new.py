@@ -69,7 +69,9 @@ class TestVikingFSCopyDirectory:
         """copy_directory() should recursively copy directory contents."""
         fs = _create_viking_fs_mock()
         fs._ensure_access = MagicMock()
-        fs._uri_to_path = MagicMock(side_effect=lambda uri, ctx=None: uri.replace("viking://", "/local/"))
+        fs._uri_to_path = MagicMock(
+            side_effect=lambda uri, ctx=None: uri.replace("viking://", "/local/")
+        )
         fs._ensure_parent_dirs = AsyncMock()
 
         mock_agfs_cp = MagicMock()
@@ -97,7 +99,9 @@ class TestVikingFSCopyDirectory:
 
         fs = _create_viking_fs_mock()
         fs._ensure_access = MagicMock()
-        fs._uri_to_path = MagicMock(side_effect=lambda uri, ctx=None: uri.replace("viking://", "/local/"))
+        fs._uri_to_path = MagicMock(
+            side_effect=lambda uri, ctx=None: uri.replace("viking://", "/local/")
+        )
         fs._ensure_parent_dirs = AsyncMock()
 
         ctx = RequestContext(
@@ -127,10 +131,12 @@ class TestVikingFSDeleteTemp:
         fs = _create_viking_fs_mock()
         fs._uri_to_path = MagicMock(return_value="/local/temp/test_temp")
 
-        fs._ls_entries = MagicMock(return_value=[
-            {"name": "file1.txt", "isDir": False},
-            {"name": "subdir", "isDir": True},
-        ])
+        fs._ls_entries = MagicMock(
+            return_value=[
+                {"name": "file1.txt", "isDir": False},
+                {"name": "subdir", "isDir": True},
+            ]
+        )
 
         fs.agfs.rm = MagicMock()
 
@@ -168,11 +174,13 @@ class TestVikingFSDeleteTemp:
         """delete_temp() should skip . and .. entries."""
         fs = _create_viking_fs_mock()
         fs._uri_to_path = MagicMock(return_value="/local/temp/test_temp")
-        fs._ls_entries = MagicMock(return_value=[
-            {"name": ".", "isDir": True},
-            {"name": "..", "isDir": True},
-            {"name": "actual_file.txt", "isDir": False},
-        ])
+        fs._ls_entries = MagicMock(
+            return_value=[
+                {"name": ".", "isDir": True},
+                {"name": "..", "isDir": True},
+                {"name": "actual_file.txt", "isDir": False},
+            ]
+        )
         fs.agfs.rm = MagicMock()
 
         await fs.delete_temp("viking://temp/test_temp/")

@@ -126,7 +126,9 @@ class EmbeddingTaskTracker:
                 on_complete = task_info.get("on_complete")
 
                 del self._tasks[semantic_msg_id]
-                logger.info(f"All embedding tasks({task_info['total']}) completed for SemanticMsg {semantic_msg_id}")
+                logger.info(
+                    f"All embedding tasks({task_info['total']}) completed for SemanticMsg {semantic_msg_id}"
+                )
 
         if on_complete:
             try:

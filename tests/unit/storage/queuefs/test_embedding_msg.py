@@ -86,12 +86,14 @@ class TestEmbeddingMsg:
 
     def test_from_json_with_semantic_msg_id(self):
         """Test from_json() method with semantic_msg_id."""
-        json_str = json.dumps({
-            "id": "json-id-123",
-            "message": "from json",
-            "context_data": {"from": "json"},
-            "semantic_msg_id": "semantic-from-json",
-        })
+        json_str = json.dumps(
+            {
+                "id": "json-id-123",
+                "message": "from json",
+                "context_data": {"from": "json"},
+                "semantic_msg_id": "semantic-from-json",
+            }
+        )
         msg = EmbeddingMsg.from_json(json_str)
         assert msg.semantic_msg_id == "semantic-from-json"
         assert msg.id == "json-id-123"
@@ -99,11 +101,13 @@ class TestEmbeddingMsg:
 
     def test_from_json_missing_semantic_msg_id(self):
         """Test from_json() with missing semantic_msg_id (backward compatibility)."""
-        json_str = json.dumps({
-            "id": "json-id-456",
-            "message": "legacy json",
-            "context_data": {"legacy": True},
-        })
+        json_str = json.dumps(
+            {
+                "id": "json-id-456",
+                "message": "legacy json",
+                "context_data": {"legacy": True},
+            }
+        )
         msg = EmbeddingMsg.from_json(json_str)
         assert msg.semantic_msg_id is None
         assert msg.message == "legacy json"
