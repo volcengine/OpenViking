@@ -46,9 +46,6 @@ class EmbeddingTaskTracker:
             on_complete: Optional callback when all tasks complete
             metadata: Optional metadata to store with the task
         """
-        if total_count <= 0:
-            return
-
         async with self._lock:
             self._tasks[semantic_msg_id] = {
                 "remaining": total_count,
@@ -60,6 +57,24 @@ class EmbeddingTaskTracker:
                 f"Registered embedding tracker for SemanticMsg {semantic_msg_id}: "
                 f"{total_count} tasks"
             )
+
+            if total_count <= 0 and on_complete:
+                del self._tasks[semantic_msg_id]
+                logger.info(
+                    f"No embedding tasks for SemanticMsg {semantic_msg_id}, "
+                    f"triggering on_complete immediately"
+                )
+
+        if total_count <= 0 and on_complete:
+            try:
+                result = on_complete()
+                if asyncio.iscoroutine(result):
+                    await result
+            except Exception as e:
+                logger.error(
+                    f"Error in completion callback for {semantic_msg_id}: {e}",
+                    exc_info=True,
+                )
 
     async def increment(self, semantic_msg_id: str) -> Optional[int]:
         """Increment the remaining task count for a SemanticMsg.
@@ -111,7 +126,7 @@ class EmbeddingTaskTracker:
                 on_complete = task_info.get("on_complete")
 
                 del self._tasks[semantic_msg_id]
-                logger.info(f"All embedding tasks completed for SemanticMsg {semantic_msg_id}")
+                logger.info(f"All embedding tasks({task_info['total']}) completed for SemanticMsg {semantic_msg_id}")
 
         if on_complete:
             try:

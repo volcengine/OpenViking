@@ -377,16 +377,18 @@ class SemanticDagExecutor:
 
             try:
                 if need_vectorize:
-                    await self._processor._vectorize_directory(
-                        dir_uri,
-                        self._context_type,
-                        abstract,
-                        overview,
-                        ctx=self._ctx,
-                        semantic_msg_id=self._semantic_msg_id,
+                    asyncio.create_task(
+                        self._processor._vectorize_directory(
+                            dir_uri,
+                            self._context_type,
+                            abstract,
+                            overview,
+                            ctx=self._ctx,
+                            semantic_msg_id=self._semantic_msg_id,
+                        )
                     )
             except Exception as e:
-                logger.error(f"Failed to vectorize directory {dir_uri}: {e}", exc_info=True)
+                logger.error(f"Failed to schedule vectorization for {dir_uri}: {e}", exc_info=True)
 
         except Exception as e:
             logger.error(f"Failed to generate overview for {dir_uri}: {e}", exc_info=True)
