@@ -71,5 +71,5 @@ async def download(
     return FastAPIResponse(
         content=content,
         media_type="application/octet-stream",
-        headers={"Content-Disposition": "attachment; filename*=UTF-8{filename}"},
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"},
     )
