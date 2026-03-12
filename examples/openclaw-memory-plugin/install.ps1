@@ -297,6 +297,14 @@ function Configure-OvConf {
         input = "multimodal"
       }
     }
+    log = @{
+      level = "WARNING"
+      format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+      output = "file"
+      rotation = $true
+      rotation_days = 3
+      rotation_interval = "midnight"
+    }
     vlm = @{
       provider = "volcengine"
       api_key = $(if ($vlmApiKey) { $vlmApiKey } else { $null })

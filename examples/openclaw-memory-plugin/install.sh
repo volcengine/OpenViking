@@ -535,6 +535,14 @@ configure_openviking_conf() {
       "input": "multimodal"
     }
   },
+  "log": {
+    "level": "WARNING",
+    "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    "output": "file",
+    "rotation": true,
+    "rotation_days": 3,
+    "rotation_interval": "midnight"
+  },
   "vlm": {
     "provider": "volcengine",
     "api_key": ${vlm_api_json},

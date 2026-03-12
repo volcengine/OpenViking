@@ -265,6 +265,14 @@ function buildOvvConfJson(opts = {}) {
       vectordb: { name: "context", backend: "local", project: "default" },
       agfs: { port: agfsPort, log_level: "warn", backend: "local", timeout: 10, retry_times: 3 },
     },
+    log: {
+      level: "WARNING",
+      format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+      output: "file",
+      rotation: true,
+      rotation_days: 3,
+      rotation_interval: "midnight",
+    },
     embedding: {
       dense: {
         provider: "volcengine",
