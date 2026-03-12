@@ -16,7 +16,7 @@ class SemanticMsg:
     Attributes:
         id: Unique identifier (UUID)
         uri: Directory URI to process
-        context_type: Type of context (resource, memory, skill)
+        context_type: Type of context (resource, memory, skill, session)
         status: Processing status (pending/processing/completed)
         timestamp: Creation timestamp
         recursive: Whether to recursively process subdirectories.
@@ -27,7 +27,7 @@ class SemanticMsg:
 
     id: str  # UUID
     uri: str  # Directory URI
-    context_type: str  # resource, memory, skill
+    context_type: str  # resource, memory, skill, session
     status: str = "pending"  # pending/processing/completed
     timestamp: int = int(datetime.now().timestamp())
     recursive: bool = True  # Whether to recursively process subdirectories

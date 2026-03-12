@@ -20,9 +20,10 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import PurePath
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 from openviking.pyagfs.exceptions import AGFSHTTPError
+from openviking.pyagfs.helpers import cp as agfs_cp
 from openviking.server.identity import RequestContext, Role
 from openviking.utils.time_utils import format_simplified, get_current_timestamp, parse_iso_datetime
 from openviking_cli.exceptions import NotFoundError
@@ -1459,6 +1460,65 @@ class VikingFS:
         await self._ensure_parent_dirs(to_path)
         self.agfs.write(to_path, content)
         self.agfs.rm(from_path)
+
+    async def copy_directory(
+        self,
+        from_uri: str,
+        to_uri: str,
+        ctx: Optional[RequestContext] = None,
+    ) -> None:
+        """Copy directory recursively.
+        
+        Args:
+            from_uri: Source directory URI
+            to_uri: Destination directory URI
+            ctx: Request context
+        """
+        self._ensure_access(from_uri, ctx)
+        self._ensure_access(to_uri, ctx)
+        
+        from_path = self._uri_to_path(from_uri, ctx=ctx)
+        to_path = self._uri_to_path(to_uri, ctx=ctx)
+        
+        await self._ensure_parent_dirs(to_path)
+        
+        await asyncio.to_thread(agfs_cp, self.agfs, from_path, to_path, recursive=True)
+
+    async def atomic_switch_multiple(
+        self,
+        switches: List[Tuple[str, str]],
+        ctx: Optional[RequestContext] = None,
+    ) -> None:
+        """Atomically switch multiple temp directories to targets.
+        
+        Args:
+            switches: List of (temp_uri, target_uri) tuples
+            ctx: Request context
+            
+        Process:
+        1. Delete all old targets (if exist)
+        2. Move all temps to targets
+        
+        Guarantees:
+        - Either all succeed or all fail
+        - No partial state visible to readers
+        """
+        for temp_uri, target_uri in switches:
+            self._ensure_access(temp_uri, ctx)
+            self._ensure_access(target_uri, ctx)
+        
+        for temp_uri, target_uri in switches:
+            target_path = self._uri_to_path(target_uri, ctx=ctx)
+            try:
+                await asyncio.to_thread(self.agfs.rm, target_path, recursive=True)
+            except Exception as e:
+                if "not found" not in str(e).lower():
+                    raise
+        
+        for temp_uri, target_uri in switches:
+            temp_path = self._uri_to_path(temp_uri, ctx=ctx)
+            target_path = self._uri_to_path(target_uri, ctx=ctx)
+            await asyncio.to_thread(self.agfs.mv, temp_path, target_path)
 
     # ========== Temp File Operations (backward compatible) ==========
 
