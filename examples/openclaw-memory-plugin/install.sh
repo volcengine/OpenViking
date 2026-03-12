@@ -624,6 +624,7 @@ configure_openclaw_plugin() {
   # Merge into existing allow list instead of overwriting
   local existing_allow
   existing_allow=$("${oc_env[@]}" openclaw config get plugins.allow --json 2>/dev/null || echo '[]')
+  existing_allow=$(echo "$existing_allow" | tr -d '\n' | tr -s ' ')
   if ! echo "$existing_allow" | grep -q '"memory-openviking"'; then
     existing_allow=$(echo "$existing_allow" | sed 's/]$//' | sed 's/$/,"memory-openviking"]/' | sed 's/\[,/[/')
   fi
@@ -635,6 +636,7 @@ configure_openclaw_plugin() {
   # Merge into existing load paths instead of overwriting
   local existing_paths
   existing_paths=$("${oc_env[@]}" openclaw config get plugins.load.paths --json 2>/dev/null || echo '[]')
+  existing_paths=$(echo "$existing_paths" | tr -d '\n' | tr -s ' ')
   if ! echo "$existing_paths" | grep -q "\"${PLUGIN_DEST}\""; then
     existing_paths=$(echo "$existing_paths" | sed 's|]$||' | sed "s|$|,\"${PLUGIN_DEST}\"]|" | sed 's|\[,|[|')
   fi
