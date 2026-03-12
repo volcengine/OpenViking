@@ -307,6 +307,51 @@ impl HttpClient {
         self.get("/api/v1/content/overview", &params).await
     }
 
+    /// Download file as raw bytes
+    pub async fn get_bytes(&self, uri: &str) -> Result<Vec<u8>> {
+        let url = format!("{}/api/v1/content/download", self.base_url);
+        let params = vec![("uri".to_string(), uri.to_string())];
+        
+        let response = self
+            .http
+            .get(&url)
+            .headers(self.build_headers())
+            .query(&params)
+            .send()
+            .await
+            .map_err(|e| Error::Network(format!("HTTP request failed: {}", e)))?;
+
+        let status = response.status();
+        if !status.is_success() {
+            // Try to parse error message as JSON
+            let json_result: Result<serde_json::Value> = response
+                .json()
+                .await
+                .map_err(|e| Error::Network(format!("Failed to parse error response: {}", e)));
+            
+            let error_msg = match json_result {
+                Ok(json) => {
+                    json
+                        .get("error")
+                        .and_then(|e| e.get("message"))
+                        .and_then(|m| m.as_str())
+                        .map(|s| s.to_string())
+                        .or_else(|| json.get("detail").and_then(|d| d.as_str()).map(|s| s.to_string()))
+                        .unwrap_or_else(|| format!("HTTP error {}", status))
+                }
+                Err(_) => format!("HTTP error {}", status),
+            };
+            
+            return Err(Error::Api(error_msg));
+        }
+
+        response
+            .bytes()
+            .await
+            .map(|b| b.to_vec())
+            .map_err(|e| Error::Network(format!("Failed to read response bytes: {}", e)))
+    }
+
     // ============ Filesystem Methods ============
 
     pub async fn ls(&self, uri: &str, simple: bool, recursive: bool, output: &str, abs_limit: i32, show_all_hidden: bool, node_limit: i32) -> Result<serde_json::Value> {

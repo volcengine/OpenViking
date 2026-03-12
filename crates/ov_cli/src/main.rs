@@ -261,6 +261,13 @@ enum Commands {
         /// Viking URI
         uri: String,
     },
+    /// Download file to local path (supports binaries/images)
+    Get {
+        /// Viking URI
+        uri: String,
+        /// Local path (must not exist yet)
+        local_path: String,
+    },
     /// Run semantic retrieval
     Find {
         /// Search query
@@ -606,6 +613,7 @@ async fn main() {
         Commands::Read { uri } => handle_read(uri, ctx).await,
         Commands::Abstract { uri } => handle_abstract(uri, ctx).await,
         Commands::Overview { uri } => handle_overview(uri, ctx).await,
+        Commands::Get { uri, local_path } => handle_get(uri, local_path, ctx).await,
         Commands::Find { query, uri, node_limit, threshold } => {
             handle_find(query, uri, node_limit, threshold, ctx).await
         }
@@ -913,6 +921,11 @@ async fn handle_overview(uri: String, ctx: CliContext) -> Result<()> {
     commands::content::overview(&client, &uri, ctx.output_format, ctx.compact).await
 }
 
+async fn handle_get(uri: String, local_path: String, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    commands::content::get(&client, &uri, &local_path).await
+}
+
 async fn handle_find(
     query: String,
     uri: String,
@@ -1028,10 +1041,25 @@ async fn handle_glob(pattern: String, uri: String, node_limit: i32, ctx: CliCont
 
 async fn handle_health(ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
-    let system_status: serde_json::Value = client.get("/api/v1/observer/system", &[]).await?;
-    let is_healthy = system_status.get("is_healthy").and_then(|v| v.as_bool()).unwrap_or(false);
-    output::output_success(&serde_json::json!({ "healthy": is_healthy }), ctx.output_format, ctx.compact);
-    if !is_healthy {
+    
+    // First try the new /health endpoint with more info
+    let health_result: serde_json::Value = client.get("/health", &[]).await?;
+    
+    let healthy = health_result.get("healthy").and_then(|v| v.as_bool()).unwrap_or(false);
+    let version = health_result.get("version").and_then(|v| v.as_str());
+    let user_id = health_result.get("user_id").and_then(|v| v.as_str());
+    
+    let mut output = serde_json::json!({ "healthy": healthy });
+    if let Some(v) = version {
+        output["version"] = serde_json::json!(v);
+    }
+    if let Some(u) = user_id {
+        output["user_id"] = serde_json::json!(u);
+    }
+    
+    output::output_success(&output, ctx.output_format, ctx.compact);
+    
+    if !healthy {
         std::process::exit(1);
     }
     Ok(())

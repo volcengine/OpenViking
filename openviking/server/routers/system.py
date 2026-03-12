@@ -8,12 +8,12 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from openviking.server.auth import get_request_context
+from openviking.server.auth import get_request_context, resolve_identity
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.storage.viking_fs import get_viking_fs
-from openviking_cli.utils.logger import get_logger
+from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
 
@@ -21,9 +21,36 @@ router = APIRouter()
 
 
 @router.get("/health", tags=["system"])
-async def health_check():
+async def health_check(request: Request):
     """Health check endpoint (no authentication required)."""
-    return {"status": "ok"}
+    from openviking import __version__
+
+    result = {"status": "ok", "healthy": True, "version": __version__}
+
+    # Try to get user identity if auth headers are present
+    try:
+        # Extract headers manually
+        x_api_key = request.headers.get("x-api-key")
+        authorization = request.headers.get("authorization")
+        x_openviking_user = request.headers.get("x-openviking-user")
+
+        # Check if we have auth or in dev mode
+        api_key_manager = getattr(request.app.state, "api_key_manager", None)
+        if api_key_manager is None:
+            # Dev mode - use default user
+            result["user_id"] = x_openviking_user or "default"
+        elif x_api_key or authorization:
+            # Try to resolve identity
+            try:
+                identity = await resolve_identity(request, x_api_key, authorization)
+                if identity and identity.user_id:
+                    result["user_id"] = identity.user_id
+            except Exception:
+                pass
+    except Exception:
+        pass
+
+    return result
 
 
 @router.get("/ready", tags=["system"])

@@ -2,7 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Content endpoints for OpenViking HTTP Server."""
 
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends, Query
+from fastapi.responses import Response as FastAPIResponse
 
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
@@ -45,3 +48,28 @@ async def overview(
     service = get_service()
     result = await service.fs.overview(uri, ctx=_ctx)
     return Response(status="ok", result=result)
+
+
+@router.get("/download")
+async def download(
+    uri: str = Query(..., description="Viking URI"),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Download file as raw bytes (for images, binaries, etc.)."""
+    service = get_service()
+    content = await service.fs.read_file_bytes(uri, ctx=_ctx)
+
+    # Try to get filename from stat
+    filename = "download"
+    try:
+        stat = await service.fs.stat(uri, ctx=_ctx)
+        if stat and "name" in stat:
+            filename = stat["name"]
+    except Exception:
+        pass
+    filename = quote(filename)
+    return FastAPIResponse(
+        content=content,
+        media_type="application/octet-stream",
+        headers={"Content-Disposition": "attachment; filename*=UTF-8{filename}"},
+    )
