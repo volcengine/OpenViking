@@ -1044,12 +1044,9 @@ async fn handle_glob(pattern: String, uri: String, node_limit: i32, ctx: CliCont
 async fn handle_health(ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     
-    // Reuse the system health command and get the health status
-    let healthy = commands::system::health(&client, ctx.output_format, ctx.compact).await?;
+    // Reuse the system health command
+    let _ = commands::system::health(&client, ctx.output_format, ctx.compact).await?;
     
-    if !healthy {
-        std::process::exit(1);
-    }
     Ok(())
 }
 
