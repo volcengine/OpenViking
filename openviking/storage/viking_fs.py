@@ -193,9 +193,37 @@ class VikingFS:
         finally:
             self._bound_ctx.reset(token)
 
+    @staticmethod
+    def _normalize_uri(uri: str) -> str:
+        """Normalize short-format URIs to the canonical viking:// form."""
+        if uri.startswith("viking://"):
+            return uri
+        return VikingURI.normalize(uri)
+
+    @classmethod
+    def _normalized_uri_parts(cls, uri: str) -> tuple[str, List[str]]:
+        """Normalize a URI and reject ambiguous or platform-specific path traversal forms."""
+        normalized = cls._normalize_uri(uri)
+        parts = [p for p in normalized[len("viking://") :].strip("/").split("/") if p]
+
+        for part in parts:
+            if part in {".", ".."}:
+                raise PermissionError(f"Unsafe URI traversal segment '{part}' in {normalized}")
+            if "\\" in part:
+                raise PermissionError(
+                    f"Unsafe URI path separator '\\\\' in component '{part}' of {normalized}"
+                )
+            if len(part) >= 2 and part[1] == ":" and part[0].isalpha():
+                raise PermissionError(
+                    f"Unsafe URI drive-prefixed component '{part}' in {normalized}"
+                )
+
+        return normalized, parts
+
     def _ensure_access(self, uri: str, ctx: Optional[RequestContext]) -> None:
         real_ctx = self._ctx_or_default(ctx)
-        if not self._is_accessible(uri, real_ctx):
+        normalized_uri, _ = self._normalized_uri_parts(uri)
+        if not self._is_accessible(normalized_uri, real_ctx):
             raise PermissionError(f"Access denied for {uri}")
 
     # ========== AGFS Basic Commands ==========
@@ -872,11 +900,10 @@ class VikingFS:
         """
         real_ctx = self._ctx_or_default(ctx)
         account_id = real_ctx.account_id
-        remainder = uri[len("viking://") :].strip("/") if uri.startswith("viking://") else uri
-        if not remainder:
+        _, parts = self._normalized_uri_parts(uri)
+        if not parts:
             return f"/local/{account_id}"
 
-        parts = [p for p in remainder.split("/") if p]
         safe_parts = [self._shorten_component(p, self._MAX_FILENAME_BYTES) for p in parts]
         return f"/local/{account_id}/{'/'.join(safe_parts)}"
 
@@ -926,9 +953,7 @@ class VikingFS:
         For user/agent, the second segment is space unless it's a known structure dir.
         For session, the second segment is always space (when 3+ parts).
         """
-        if not uri.startswith("viking://"):
-            return None
-        parts = [p for p in uri[len("viking://") :].strip("/").split("/") if p]
+        _, parts = self._normalized_uri_parts(uri)
         if len(parts) < 2:
             return None
         scope = parts[0]
@@ -946,12 +971,9 @@ class VikingFS:
 
     def _is_accessible(self, uri: str, ctx: RequestContext) -> bool:
         """Check whether a URI is visible/accessible under current request context."""
+        normalized_uri, parts = self._normalized_uri_parts(uri)
         if ctx.role == Role.ROOT:
             return True
-        if not uri.startswith("viking://"):
-            uri = VikingURI.normalize(uri)
-
-        parts = [p for p in uri[len("viking://") :].strip("/").split("/") if p]
         if not parts:
             return True
 
@@ -961,7 +983,7 @@ class VikingFS:
         if scope == "_system":
             return False
 
-        space = self._extract_space_from_uri(uri)
+        space = self._extract_space_from_uri(normalized_uri)
         if space is None:
             return True
 
