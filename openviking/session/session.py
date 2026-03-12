@@ -449,6 +449,10 @@ class Session:
                 temp_uri=session_temp_uri,
                 index=self._compression.compression_index,
                 messages=messages_to_archive,
+                user=self.user,
+                session_id=self.session_id,
+                ctx=self.ctx,
+                strict_extract_errors=True,
             )
 
             self._compression.original_count += len(messages_to_archive)

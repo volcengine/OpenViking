@@ -549,6 +549,14 @@ async function configureOvConf() {
       vectordb: { name: "context", backend: "local", project: "default" },
       agfs: { port: agfsPortNum, log_level: "warn", backend: "local", timeout: 10, retry_times: 3 },
     },
+    log: {
+      level: "WARNING",
+      format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+      output: "file",
+      rotation: true,
+      rotation_days: 3,
+      rotation_interval: "midnight",
+    },
     embedding: {
       dense: {
         backend: "volcengine",
@@ -633,51 +641,37 @@ async function downloadPlugin() {
 async function configureOpenClawPlugin(pluginPath = PLUGIN_DEST) {
   info(tr("Configuring OpenClaw plugin...", "正在配置 OpenClaw 插件..."));
 
-  const configPath = join(OPENCLAW_DIR, "openclaw.json");
-  let config = {};
+  const ocEnv = { ...process.env };
+  if (OPENCLAW_DIR !== DEFAULT_OPENCLAW_DIR) {
+    ocEnv.OPENCLAW_STATE_DIR = OPENCLAW_DIR;
+  }
 
-  if (existsSync(configPath)) {
-    try {
-      const raw = await readFile(configPath, "utf8");
-      if (raw.trim()) config = JSON.parse(raw);
-    } catch {
-      warn(tr("Existing openclaw.json invalid. Rebuilding required sections.", "已有 openclaw.json 非法，将重建相关配置节点。"));
+  const oc = (args) => runCapture("openclaw", args, { env: ocEnv, shell: IS_WIN });
+
+  // Enable plugin (files already deployed to extensions dir by deployPlugin)
+  const enableResult = await oc(["plugins", "enable", "memory-openviking"]);
+  if (enableResult.code !== 0) throw new Error(`openclaw plugins enable failed (exit code ${enableResult.code})`);
+
+  // Set gateway mode
+  await oc(["config", "set", "gateway.mode", "local"]);
+
+  // Set plugin config for the selected mode
+  if (selectedMode === "local") {
+    const ovConfPath = join(OPENVIKING_DIR, "ov.conf");
+    await oc(["config", "set", "plugins.entries.memory-openviking.config.mode", "local"]);
+    await oc(["config", "set", "plugins.entries.memory-openviking.config.configPath", ovConfPath]);
+    await oc(["config", "set", "plugins.entries.memory-openviking.config.port", String(selectedServerPort)]);
+  } else {
+    await oc(["config", "set", "plugins.entries.memory-openviking.config.mode", "remote"]);
+    await oc(["config", "set", "plugins.entries.memory-openviking.config.baseUrl", remoteBaseUrl]);
+    if (remoteApiKey) {
+      await oc(["config", "set", "plugins.entries.memory-openviking.config.apiKey", remoteApiKey]);
+    }
+    if (remoteAgentId) {
+      await oc(["config", "set", "plugins.entries.memory-openviking.config.agentId", remoteAgentId]);
     }
   }
 
-  if (!config.plugins) config.plugins = {};
-  if (!config.gateway) config.gateway = {};
-  if (!config.plugins.slots) config.plugins.slots = {};
-  if (!config.plugins.load) config.plugins.load = {};
-  if (!config.plugins.entries) config.plugins.entries = {};
-
-  const existingPaths = Array.isArray(config.plugins.load.paths) ? config.plugins.load.paths : [];
-  config.plugins.enabled = true;
-  config.plugins.allow = ["memory-openviking"];
-  config.plugins.slots.memory = "memory-openviking";
-  config.plugins.load.paths = [...new Set([...existingPaths, pluginPath])];
-
-  const pluginConfig = {
-    mode: selectedMode,
-    targetUri: "viking://user/memories",
-    autoRecall: true,
-    autoCapture: true,
-  };
-
-  if (selectedMode === "local") {
-    pluginConfig.configPath = join(OPENVIKING_DIR, "ov.conf");
-    pluginConfig.port = selectedServerPort;
-  } else {
-    pluginConfig.baseUrl = remoteBaseUrl;
-    if (remoteApiKey) pluginConfig.apiKey = remoteApiKey;
-    if (remoteAgentId) pluginConfig.agentId = remoteAgentId;
-  }
-
-  config.plugins.entries["memory-openviking"] = { config: pluginConfig };
-  config.gateway.mode = "local";
-
-  await mkdir(OPENCLAW_DIR, { recursive: true });
-  await writeFile(configPath, JSON.stringify(config, null, 2) + "\n", "utf8");
   info(tr("OpenClaw plugin configured", "OpenClaw 插件配置完成"));
 }
 

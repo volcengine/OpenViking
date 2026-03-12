@@ -187,6 +187,7 @@ class SessionCompressor:
         ctx: Optional[RequestContext] = None,
         user_temp_uri: Optional[str] = None,
         agent_temp_uri: Optional[str] = None,
+        strict_extract_errors: bool = False,
     ) -> List[Context]:
         """Extract long-term memories from messages.
 
@@ -210,7 +211,12 @@ class SessionCompressor:
         if not ctx:
             return []
 
-        candidates = await self.extractor.extract(context, user, session_id)
+        if strict_extract_errors:
+            # Intentionally let extraction errors bubble up so caller (task tracker)
+            # can mark background commit tasks as failed with an explicit error.
+            candidates = await self.extractor.extract_strict(context, user, session_id)
+        else:
+            candidates = await self.extractor.extract(context, user, session_id)
 
         if not candidates:
             return []

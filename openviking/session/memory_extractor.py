@@ -219,8 +219,13 @@ class MemoryExtractor:
         context: dict,
         user: UserIdentifier,
         session_id: str,
+        strict: bool = False,
     ) -> List[CandidateMemory]:
-        """Extract memory candidates from messages."""
+        """Extract memory candidates from messages.
+
+        When ``strict`` is True, extraction failures are re-raised as
+        ``RuntimeError`` so async task tracking can mark tasks as failed.
+        """
         user = user
         vlm = get_openviking_config().vlm
         if not vlm or not vlm.is_available():
@@ -383,7 +388,18 @@ class MemoryExtractor:
 
         except Exception as e:
             logger.error(f"Memory extraction failed: {e}")
+            if strict:
+                raise RuntimeError(f"memory_extraction_failed: {e}") from e
             return []
+
+    async def extract_strict(
+        self,
+        context: dict,
+        user: UserIdentifier,
+        session_id: str,
+    ) -> List[CandidateMemory]:
+        """Compatibility wrapper: strict mode delegates to ``extract``."""
+        return await self.extract(context, user, session_id, strict=True)
 
     async def create_memory(
         self,
