@@ -5,12 +5,11 @@ Vikingbot OpenAPIChannel when the --with-bot option is enabled.
 """
 
 import json
-import os
 from typing import AsyncGenerator, Optional
 
 import httpx
-from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import APIRouter, HTTPException, Request, status
+from fastapi.responses import StreamingResponse
 
 from openviking_cli.utils.logger import get_logger
 

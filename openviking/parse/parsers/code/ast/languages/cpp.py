@@ -134,7 +134,9 @@ def _extract_class(node, content_bytes: bytes, docstring: str = "") -> ClassSkel
     return ClassSkeleton(name=name, bases=bases, docstring=docstring, methods=methods)
 
 
-def _extract_typedef_struct(node, content_bytes: bytes, docstring: str = "") -> Optional[ClassSkeleton]:
+def _extract_typedef_struct(
+    node, content_bytes: bytes, docstring: str = ""
+) -> Optional[ClassSkeleton]:
     """Handle typedef struct { ... } Name; and typedef struct Tag { ... } Name;
 
     tree-sitter-cpp emits this as a 'type_definition' node with children:
@@ -159,7 +161,9 @@ def _extract_typedef_struct(node, content_bytes: bytes, docstring: str = "") -> 
     return skeleton if skeleton.name else None
 
 
-def _extract_function_proto(node, content_bytes: bytes, docstring: str = "") -> Optional[FunctionSig]:
+def _extract_function_proto(
+    node, content_bytes: bytes, docstring: str = ""
+) -> Optional[FunctionSig]:
     """Extract a function prototype from a top-level declaration node."""
     fn = _extract_function(node, content_bytes, docstring=docstring)
     return fn if fn.name else None
@@ -207,7 +211,7 @@ class CppExtractor(LanguageExtractor):
 
         siblings = list(root.children)
         top_level = []
-        for idx, child in enumerate(siblings):
+        for _idx, child in enumerate(siblings):
             if child.type == "preproc_include":
                 for sub in child.children:
                     if sub.type in ("string_literal", "system_lib_string"):

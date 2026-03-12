@@ -297,6 +297,14 @@ function Configure-OvConf {
         input = "multimodal"
       }
     }
+    log = @{
+      level = "WARNING"
+      format = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+      output = "file"
+      rotation = $true
+      rotation_days = 3
+      rotation_interval = "midnight"
+    }
     vlm = @{
       provider = "volcengine"
       api_key = $(if ($vlmApiKey) { $vlmApiKey } else { $null })
@@ -326,6 +334,7 @@ function Download-Plugin {
     "examples/openclaw-memory-plugin/openclaw.plugin.json",
     "examples/openclaw-memory-plugin/package.json",
     "examples/openclaw-memory-plugin/package-lock.json",
+    "examples/openclaw-memory-plugin/tsconfig.json",
     "examples/openclaw-memory-plugin/.gitignore"
   )
 
@@ -358,62 +367,40 @@ function Configure-OpenClawPlugin {
   param([int]$ServerPort)
   Info (T "Configuring OpenClaw plugin..." "正在配置 OpenClaw 插件...")
 
-  $cfgPath = Join-Path $OpenClawDir "openclaw.json"
-  $cfg = @{}
-  if (Test-Path $cfgPath) {
-    try {
-      $raw = Get-Content -Raw -Path $cfgPath
-      if (-not [string]::IsNullOrWhiteSpace($raw)) {
-        $obj = $raw | ConvertFrom-Json -AsHashtable
-        if ($obj) { $cfg = $obj }
+  $oldStateDir = $env:OPENCLAW_STATE_DIR
+  if ($OpenClawDir -ne (Join-Path $HomeDir ".openclaw")) {
+    $env:OPENCLAW_STATE_DIR = $OpenClawDir
+  }
+
+  try {
+    # Enable plugin (files already deployed to extensions dir by Deploy-Plugin)
+    openclaw plugins enable memory-openviking
+    if ($LASTEXITCODE -ne 0) { throw "openclaw plugins enable failed (exit code $LASTEXITCODE)" }
+
+    # Set gateway mode
+    openclaw config set gateway.mode local
+
+    # Set plugin config for the selected mode
+    if ($SelectedMode -eq "local") {
+      $ovConfPath = Join-Path $OpenVikingDir "ov.conf"
+      openclaw config set plugins.entries.memory-openviking.config.mode local
+      openclaw config set plugins.entries.memory-openviking.config.configPath $ovConfPath
+      openclaw config set plugins.entries.memory-openviking.config.port $ServerPort
+    } else {
+      openclaw config set plugins.entries.memory-openviking.config.mode remote
+      openclaw config set plugins.entries.memory-openviking.config.baseUrl $RemoteBaseUrl
+      if ($RemoteApiKey) {
+        openclaw config set plugins.entries.memory-openviking.config.apiKey $RemoteApiKey
       }
-    } catch {
-      Warn (T "Existing openclaw.json is invalid. Rebuilding required sections." "检测到已有 openclaw.json 非法，将重建相关配置节点。")
+      if ($RemoteAgentId) {
+        openclaw config set plugins.entries.memory-openviking.config.agentId $RemoteAgentId
+      }
     }
+
+    Info (T "OpenClaw plugin configured" "OpenClaw 插件配置完成")
+  } finally {
+    $env:OPENCLAW_STATE_DIR = $oldStateDir
   }
-
-  if (-not $cfg.ContainsKey("plugins")) { $cfg["plugins"] = @{} }
-  if (-not $cfg.ContainsKey("gateway")) { $cfg["gateway"] = @{} }
-  if (-not $cfg["plugins"].ContainsKey("slots")) { $cfg["plugins"]["slots"] = @{} }
-  if (-not $cfg["plugins"].ContainsKey("load")) { $cfg["plugins"]["load"] = @{} }
-  if (-not $cfg["plugins"].ContainsKey("entries")) { $cfg["plugins"]["entries"] = @{} }
-
-  # Keep plugin load paths unique.
-  $existingPaths = @()
-  if ($cfg["plugins"]["load"].ContainsKey("paths") -and $cfg["plugins"]["load"]["paths"]) {
-    $existingPaths = @($cfg["plugins"]["load"]["paths"])
-  }
-  $mergedPaths = @($existingPaths + @($PluginDest) | Select-Object -Unique)
-
-  $cfg["plugins"]["enabled"] = $true
-  $cfg["plugins"]["allow"] = @("memory-openviking")
-  $cfg["plugins"]["slots"]["memory"] = "memory-openviking"
-  $cfg["plugins"]["load"]["paths"] = $mergedPaths
-
-  $pluginConfig = @{
-    mode = $SelectedMode
-    targetUri = "viking://user/memories"
-    autoRecall = $true
-    autoCapture = $true
-  }
-
-  if ($SelectedMode -eq "local") {
-    $ovConfPath = Join-Path $OpenVikingDir "ov.conf"
-    $pluginConfig["configPath"] = $ovConfPath
-    $pluginConfig["port"] = $ServerPort
-  } else {
-    $pluginConfig["baseUrl"] = $RemoteBaseUrl
-    if ($RemoteApiKey) { $pluginConfig["apiKey"] = $RemoteApiKey }
-    if ($RemoteAgentId) { $pluginConfig["agentId"] = $RemoteAgentId }
-  }
-
-  $cfg["plugins"]["entries"]["memory-openviking"] = @{ config = $pluginConfig }
-  $cfg["gateway"]["mode"] = "local"
-
-  $cfgJson = $cfg | ConvertTo-Json -Depth 20
-  Write-Utf8NoBom -Path $cfgPath -Content $cfgJson
-
-  Info (T "OpenClaw plugin configured" "OpenClaw 插件配置完成")
 }
 
 function Write-OpenVikingEnv {

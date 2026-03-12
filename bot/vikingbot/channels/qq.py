@@ -2,7 +2,6 @@
 
 import asyncio
 from collections import deque
-from typing import TYPE_CHECKING
 
 from loguru import logger
 

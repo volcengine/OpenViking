@@ -25,6 +25,8 @@ class VikingClient:
             self.admin_user_id = "default"
             self._apikey_manager = None
         else:
+            if agent_id and "#" in agent_id:
+                agent_id = agent_id.split("#", 1)[0]
             self.client = ov.AsyncHTTPClient(
                 url=openviking_config.server_url,
                 api_key=openviking_config.root_api_key,
@@ -98,10 +100,10 @@ class VikingClient:
         return await self.client.find(query)
 
     async def add_resource(
-        self, local_path: str, desc: str, target_path: Optional[str] = None, wait: bool = False
+        self, local_path: str, desc: str
     ) -> Optional[Dict[str, Any]]:
         """添加资源到 Viking"""
-        result = await self.client.add_resource(path=local_path, reason=desc, wait=wait)
+        result = await self.client.add_resource(path=local_path, reason=desc)
         return result
 
     async def list_resources(
@@ -325,7 +327,7 @@ class VikingClient:
 
     async def grep(self, uri: str, pattern: str, case_insensitive: bool = False) -> Dict[str, Any]:
         """通过模式（正则表达式）搜索内容"""
-        return await self.client.grep(uri, pattern, case_insensitive=case_insensitive)
+        return await self.client.grep(uri, pattern, case_insensitive=case_insensitive, node_limit=10)
 
     async def glob(self, pattern: str, uri: Optional[str] = None) -> Dict[str, Any]:
         """通过 glob 模式匹配文件"""
@@ -441,12 +443,13 @@ async def main_test():
     # res = await client.search_memory("你好", "user_1")
     # res = await client.list_resources("viking://resources/")
     # res = await client.read_content("viking://user/memories/profile.md", level="read")
-    # res = await client.add_resource("/Users/bytedance/Documents/论文/吉比特年报.pdf", "吉比特年报")
-    res = await client.commit(
-        session_id="99999",
-        messages=[{"role": "user", "content": "你好"}],
-        user_id="1010101010",
-    )
+    # res = await client.add_resource("https://github.com/volcengine/OpenViking", "ov代码")
+    res = await client.grep("viking://resources/", "viking", True)
+    # res = await client.commit(
+    #     session_id="99999",
+    #     messages=[{"role": "user", "content": "你好"}],
+    #     user_id="1010101010",
+    # )
     # res = await client.commit("1234", [{"role": "user", "content": "帮我搜索 Python asyncio 教程"}
     #                                    ,{"role": "assistant", "content": "我来帮你r搜索 Python asyncio 相关的教程。"}])
     print(res)
@@ -468,5 +471,5 @@ async def account_test():
 
 
 if __name__ == "__main__":
-    # asyncio.run(main_test())
-    asyncio.run(account_test())
+    asyncio.run(main_test())
+    # asyncio.run(account_test())

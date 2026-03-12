@@ -1,0 +1,347 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>OpenViking Console</title>
+    <link rel="stylesheet" href="/console/styles.css" />
+  </head>
+  <body>
+    <div class="workspace shell">
+      <header class="topbar">
+        <div class="topbar-left">
+          <button id="navToggleBtn" class="icon-btn" type="button" aria-label="Toggle navigation">☰</button>
+          <div class="brand">
+            <span class="brand-title">OpenViking Console</span>
+            <span class="brand-subtitle">Control Plane Dashboard</span>
+          </div>
+        </div>
+        <div class="topbar-right">
+          <span class="pill">
+            <span class="statusDot ok" aria-hidden="true"></span>
+            UI Ready
+          </span>
+          <span id="writeBadge" class="badge">Readonly</span>
+          <button id="resultToggleBtn" class="topbar-result-toggle" type="button">Hide Result</button>
+          <div class="theme-toggle" role="group" aria-label="Theme mode">
+            <button type="button" class="theme-btn" data-theme-mode="system" aria-pressed="false">System</button>
+            <button type="button" class="theme-btn" data-theme-mode="dark" aria-pressed="false">Dark</button>
+            <button type="button" class="theme-btn" data-theme-mode="light" aria-pressed="false">Light</button>
+          </div>
+        </div>
+      </header>
+
+      <div class="shell-body">
+        <aside class="sidebar" aria-label="Capabilities">
+          <nav class="nav-groups">
+            <section class="nav-group">
+              <h2 class="nav-group-title">Data</h2>
+              <button id="tab-filesystem" class="tab nav-item active" data-panel="filesystem">FileSystem</button>
+              <button id="tab-find" class="tab nav-item" data-panel="find">Find</button>
+              <button id="tab-add-resource" class="tab nav-item" data-panel="add-resource">Add Resource</button>
+              <button id="tab-add-memory" class="tab nav-item" data-panel="add-memory">Add Memory</button>
+            </section>
+
+            <section class="nav-group">
+              <h2 class="nav-group-title">Ops</h2>
+              <button id="tab-tenants" class="tab nav-item" data-panel="tenants">Tenants</button>
+              <button id="tab-monitor" class="tab nav-item" data-panel="monitor">Monitor</button>
+            </section>
+
+            <section class="nav-group">
+              <h2 class="nav-group-title">Access</h2>
+              <button id="tab-settings" class="tab nav-item" data-panel="settings">Settings</button>
+            </section>
+          </nav>
+        </aside>
+
+        <div id="sidebarResizer" class="resizer resizer-vertical" role="separator" aria-orientation="vertical"></div>
+
+        <main class="content-area">
+          <section class="content">
+            <div class="panel-stack">
+              <section id="panel-filesystem" class="panel active">
+                <h2>FileSystem</h2>
+                <div class="fs-toolbar">
+                  <div class="fs-toolbar-nav">
+                    <button id="fsBackBtn" class="ghost fs-nav-btn" title="Back">←</button>
+                    <button id="fsUpBtn" class="ghost fs-nav-btn" title="Up">↑</button>
+                    <button id="fsRefreshBtn" class="ghost fs-nav-btn" title="Refresh">↻</button>
+                  </div>
+                  <input id="fsCurrentUri" type="text" value="viking://" aria-label="Current URI" />
+                  <div class="fs-toolbar-controls">
+                    <div class="fs-view-toggle">
+                      <button id="fsModeListBtn" class="ghost active" aria-pressed="true">List</button>
+                      <button id="fsModeTreeBtn" class="ghost" aria-pressed="false">Tree</button>
+                    </div>
+                    <button id="fsGoBtn">Enter</button>
+                  </div>
+                </div>
+                <div id="fsTree" class="fs-tree" hidden></div>
+                <div class="fs-table-wrap">
+                  <table class="fs-table">
+                    <thead>
+                      <tr>
+                        <th
+                          id="fsColAction"
+                          scope="col"
+                          data-min-width="34"
+                          data-resizable="false"
+                          aria-label="open file content"
+                        ></th>
+                        <th id="fsColUri" scope="col" data-min-width="220">
+                          <button class="fs-sort-btn" data-fs-sort="uri" aria-sort="none">uri</button>
+                        </th>
+                        <th id="fsColSize" scope="col" data-min-width="90">
+                          <button class="fs-sort-btn" data-fs-sort="size" aria-sort="none">size</button>
+                        </th>
+                        <th id="fsColIsDir" scope="col" data-min-width="90">
+                          <button class="fs-sort-btn" data-fs-sort="isDir" aria-sort="none">isDir</button>
+                        </th>
+                        <th id="fsColModTime" scope="col" data-min-width="160">
+                          <button class="fs-sort-btn" data-fs-sort="modTime" aria-sort="none">modTime</button>
+                        </th>
+                        <th id="fsColAbstract" scope="col" data-min-width="220">
+                          <button class="fs-sort-btn" data-fs-sort="abstract" aria-sort="none">abstract</button>
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody id="fsEntries"></tbody>
+                  </table>
+                </div>
+              </section>
+
+              <section id="panel-find" class="panel">
+                <h2>Find</h2>
+                <div class="find-controls">
+                  <div class="find-field find-field-query">
+                    <label for="findQuery">Query</label>
+                    <input id="findQuery" type="text" placeholder="Search query" />
+                  </div>
+                  <div class="find-field">
+                    <label for="findTarget">Target URI (optional)</label>
+                    <input id="findTarget" type="text" placeholder="viking://resources/" />
+                  </div>
+                  <div class="find-field find-field-limit">
+                    <label for="findLimit">Limit</label>
+                    <input id="findLimit" type="number" min="1" step="1" placeholder="10" />
+                  </div>
+                </div>
+                <button id="findBtn">Run Find</button>
+                <div class="find-table-wrap">
+                  <table class="find-table">
+                    <thead id="findResultsHead"></thead>
+                    <tbody id="findResultsBody"></tbody>
+                  </table>
+                </div>
+              </section>
+
+              <section id="panel-add-resource" class="panel">
+                <h2>Add Resource</h2>
+                <div class="add-resource-mode-toggle" role="tablist" aria-label="Add Resource input mode">
+                  <button
+                    id="addResourceModePathBtn"
+                    class="active"
+                    type="button"
+                    role="tab"
+                    aria-selected="true"
+                    aria-controls="addResourcePathPane"
+                  >
+                    Path
+                  </button>
+                  <button
+                    id="addResourceModeUploadBtn"
+                    type="button"
+                    role="tab"
+                    aria-selected="false"
+                    aria-controls="addResourceUploadPane"
+                  >
+                    Upload
+                  </button>
+                </div>
+                <div id="addResourcePathPane" class="add-resource-input-pane" role="tabpanel">
+                  <label for="addResourcePath">Path on OpenViking server</label>
+                  <input id="addResourcePath" type="text" placeholder="/abs/path/on/server/or/dir" />
+                </div>
+                <div id="addResourceUploadPane" class="add-resource-input-pane" role="tabpanel" hidden>
+                  <label for="addResourceFile">Upload file for temp path</label>
+                  <input id="addResourceFile" type="file" />
+                </div>
+                <label for="addResourceTarget">Target URI (optional)</label>
+                <input id="addResourceTarget" type="text" placeholder="viking://resources/" />
+                <div class="row wrap checks">
+                  <label class="check-item" for="addResourceWait">
+                    <input id="addResourceWait" type="checkbox" />
+                    <span>wait</span>
+                  </label>
+                  <label class="check-item" for="addResourceStrict">
+                    <input id="addResourceStrict" type="checkbox" checked />
+                    <span>strict</span>
+                  </label>
+                  <label class="check-item" for="addResourceUploadMedia">
+                    <input id="addResourceUploadMedia" type="checkbox" checked />
+                    <span>directly_upload_media</span>
+                  </label>
+                </div>
+                <label for="addResourceTimeout">Timeout seconds (optional)</label>
+                <input id="addResourceTimeout" type="number" min="0" step="0.1" placeholder="30" />
+                <label for="addResourceIgnoreDirs">ignore_dirs (optional, comma-separated)</label>
+                <input id="addResourceIgnoreDirs" type="text" placeholder=".git,node_modules,.venv" />
+                <label for="addResourceInclude">include pattern (optional)</label>
+                <input id="addResourceInclude" type="text" placeholder="*.md,*.txt" />
+                <label for="addResourceExclude">exclude pattern (optional)</label>
+                <input id="addResourceExclude" type="text" placeholder="*.log,*.tmp" />
+                <label for="addResourceReason">Reason (optional)</label>
+                <textarea id="addResourceReason" rows="2" placeholder="Why add this resource?"></textarea>
+                <label for="addResourceInstruction">Instruction (optional)</label>
+                <textarea
+                  id="addResourceInstruction"
+                  rows="2"
+                  placeholder="How should OpenViking process this resource?"
+                ></textarea>
+                <div class="row wrap">
+                  <button id="addResourceSubmitBtn">Add Resource</button>
+                </div>
+                <p class="muted">Use the tabs to choose either a server path or a local upload. Result panel will show backend response.</p>
+              </section>
+
+              <section id="panel-add-memory" class="panel">
+                <h2>Add Memory</h2>
+                <label for="addMemoryInput">Content</label>
+                <textarea
+                  id="addMemoryInput"
+                  rows="8"
+                  placeholder="Plain text (treated as a user message), or JSON array of {role, content} objects for multi-turn."
+                ></textarea>
+                <button id="addMemoryBtn">Add Memory</button>
+              </section>
+
+              <section id="panel-tenants" class="panel">
+                <h2>Tenants</h2>
+                <div class="tenant-layout">
+                  <section class="tenant-pane">
+                    <div class="tenant-pane-head">
+                      <h3>Accounts</h3>
+                      <div class="row">
+                        <input id="tenantAccountSearch" type="text" placeholder="Filter account_id" />
+                        <button id="tenantRefreshAccountsBtn" class="ghost">Refresh</button>
+                      </div>
+                    </div>
+                    <div class="row tenant-inline-form">
+                      <input id="tenantCreateAccountId" type="text" placeholder="new account_id" />
+                      <input id="tenantCreateAdminUserId" type="text" value="admin" placeholder="first admin user_id" />
+                      <button id="tenantCreateAccountBtn" class="tenant-create-btn" data-tenant-write>Create</button>
+                    </div>
+                    <div class="tenant-table-wrap">
+                      <table class="tenant-table">
+                        <thead>
+                          <tr>
+                            <th scope="col">
+                              <button class="tenant-sort-btn" data-tenant-account-sort="account_id" aria-sort="none">
+                                account_id
+                              </button>
+                            </th>
+                            <th scope="col">
+                              <button class="tenant-sort-btn" data-tenant-account-sort="user_count" aria-sort="none">
+                                user_count
+                              </button>
+                            </th>
+                            <th scope="col">actions</th>
+                          </tr>
+                        </thead>
+                        <tbody id="tenantAccountsBody"></tbody>
+                      </table>
+                    </div>
+                  </section>
+
+                  <section class="tenant-pane">
+                    <div class="tenant-pane-head">
+                      <h3>Users</h3>
+                      <span id="tenantCurrentAccount" class="badge badge-soft">No account selected</span>
+                    </div>
+                    <div class="row tenant-inline-form">
+                      <input id="tenantAddUserId" type="text" placeholder="new user_id" />
+                      <select id="tenantAddUserRole">
+                        <option value="user">user</option>
+                        <option value="admin">admin</option>
+                      </select>
+                      <button id="tenantAddUserBtn" data-tenant-write>Add User</button>
+                    </div>
+                    <div class="tenant-table-wrap">
+                      <table class="tenant-table">
+                        <thead>
+                          <tr>
+                            <th scope="col">
+                              <button class="tenant-sort-btn" data-tenant-user-sort="user_id" aria-sort="none">
+                                user_id
+                              </button>
+                            </th>
+                            <th scope="col">
+                              <button class="tenant-sort-btn" data-tenant-user-sort="role" aria-sort="none">role</button>
+                            </th>
+                            <th scope="col">actions</th>
+                          </tr>
+                        </thead>
+                        <tbody id="tenantUsersBody"></tbody>
+                      </table>
+                    </div>
+                  </section>
+                </div>
+
+                <p id="tenantHint" class="muted">
+                  Tip: Select an account to load users. Write operations require explicit confirmation.
+                </p>
+
+                <div id="tenantConfirmModal" class="tenant-modal" hidden>
+                  <div class="tenant-modal-card" role="dialog" aria-modal="true" aria-labelledby="tenantConfirmTitle">
+                    <h3 id="tenantConfirmTitle">Confirm action</h3>
+                    <p id="tenantConfirmMessage" class="muted"></p>
+                    <label id="tenantConfirmLabel" for="tenantConfirmInput">Type to confirm</label>
+                    <input id="tenantConfirmInput" type="text" autocomplete="off" />
+                    <p id="tenantConfirmError" class="tenant-error" hidden></p>
+                    <div class="row">
+                      <button id="tenantConfirmCancelBtn" class="ghost">Cancel</button>
+                      <button id="tenantConfirmActionBtn" class="danger">Confirm</button>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              <section id="panel-monitor" class="panel">
+                <h2>Monitor</h2>
+                <div class="row">
+                  <button id="systemBtn">System Status</button>
+                  <button id="observerBtn">Observer(System)</button>
+                </div>
+                <ul id="monitorResults" class="list"></ul>
+              </section>
+
+              <section id="panel-settings" class="panel">
+                <h2>Settings</h2>
+                <label for="apiKeyInput">X-API-Key</label>
+                <input id="apiKeyInput" type="password" placeholder="Paste key for this browser session" />
+                <div class="row">
+                  <button id="saveKeyBtn">Save</button>
+                  <button id="clearKeyBtn" class="ghost">Clear</button>
+                </div>
+                <p id="connectionHint" class="muted">No API key in session.</p>
+              </section>
+            </div>
+
+            <div id="outputResizer" class="resizer resizer-horizontal" role="separator" aria-orientation="horizontal"></div>
+
+            <section class="result-card">
+              <div class="result-head">
+                <h2>Result</h2>
+                <button id="clearOutputBtn" class="ghost" type="button">Clear</button>
+              </div>
+              <pre id="output"></pre>
+            </section>
+          </section>
+        </main>
+      </div>
+    </div>
+
+    <script type="module" src="/console/app.js"></script>
+  </body>
+</html>

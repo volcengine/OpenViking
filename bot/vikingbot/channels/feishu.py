@@ -35,17 +35,17 @@ from vikingbot.config.schema import FeishuChannelConfig
 try:
     import lark_oapi as lark
     from lark_oapi.api.im.v1 import (
-        CreateMessageRequest,
-        CreateMessageRequestBody,
         CreateMessageReactionRequest,
         CreateMessageReactionRequestBody,
+        CreateMessageRequest,
+        CreateMessageRequestBody,
         Emoji,
-        P2ImMessageReceiveV1,
+        GetChatRequest,
         GetImageRequest,
         GetMessageResourceRequest,
+        P2ImMessageReceiveV1,
         ReplyMessageRequest,
         ReplyMessageRequestBody,
-        GetChatRequest,
     )
 
     FEISHU_AVAILABLE = True
@@ -77,6 +77,16 @@ class FeishuChannel(BaseChannel):
     """
 
     name = "feishu"
+    # 飞书官方支持的处理中表情列表，按顺序发送
+    PROCESSING_EMOJIS = [
+        "StatusInFlight",
+        "OneSecond",
+        "Typing",
+        "OnIt",
+        "Coffee",
+        "OnIt",
+        "EatingFood",
+    ]
 
     def __init__(self, config: FeishuChannelConfig, bus: MessageBus, **kwargs):
         super().__init__(config, bus, **kwargs)
@@ -310,6 +320,20 @@ class FeishuChannel(BaseChannel):
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, self._add_reaction_sync, message_id, emoji_type)
 
+    async def send_processing_reaction(self, message_id: str, emoji: str) -> None:
+        """
+        Send processing reaction emoji implementation for Feishu.
+        """
+        await self._add_reaction(message_id, emoji)
+
+    async def handle_processing_tick(self, message_id: str, tick_count: int) -> None:
+        """
+        Handle processing tick event, send corresponding emoji reaction.
+        """
+        if 0 <= tick_count < len(self.PROCESSING_EMOJIS):
+            emoji = self.PROCESSING_EMOJIS[tick_count]
+            await self.send_processing_reaction(message_id, emoji)
+
     # Regex to match markdown tables (header + separator + data rows)
     _TABLE_RE = re.compile(
         r"((?:^[ \t]*\|.+\|[ \t]*\n)(?:^[ \t]*\|[-:\s|]+\|[ \t]*\n)(?:^[ \t]*\|.+\|[ \t]*\n?)+)",
@@ -326,7 +350,10 @@ class FeishuChannel(BaseChannel):
         lines = [l.strip() for l in table_text.strip().split("\n") if l.strip()]
         if len(lines) < 3:
             return None
-        split = lambda l: [c.strip() for c in l.strip("|").split("|")]
+
+        def split(l: str) -> list[str]:
+            return [c.strip() for c in l.strip("|").split("|")]
+
         headers = split(lines[0])
         rows = [split(l) for l in lines[2:]]
         columns = [
@@ -384,7 +411,6 @@ class FeishuChannel(BaseChannel):
             before = protected[last_end : m.start()].strip()
             if before:
                 elements.append({"tag": "markdown", "content": before})
-            level = len(m.group(1))
             text = m.group(2).strip()
             elements.append(
                 {
@@ -466,6 +492,9 @@ class FeishuChannel(BaseChannel):
 
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message through Feishu."""
+        # 先调用基类处理通用动作
+        if await super().send(msg):
+            return
 
         if not self._client:
             logger.warning("Feishu client not initialized")
@@ -476,6 +505,7 @@ class FeishuChannel(BaseChannel):
             return
 
         try:
+            # logger.info(f"Sending message {msg}")
             # Determine receive_id_type based on chat_id format
             # open_id starts with "ou_", chat_id starts with "oc_"
             reply_to = msg.metadata.get("reply_to")
@@ -487,23 +517,7 @@ class FeishuChannel(BaseChannel):
             # Process images and get cleaned content
             cleaned_content, images = await self._extract_and_upload_images(msg.content)
 
-            # Process @mentions: convert @ou_xxxx to Feishu mention format
-            # Pattern: @ou_xxxxxxx (user open_id)
-            import re
-
-            mention_pattern = r"@(ou_[a-zA-Z0-9_-]+)"
-
-            def replace_mention(match):
-                open_id = match.group(1)
-                return f'<at user_id="{open_id}">@{open_id}</at>'
-
-            # Replace all mentions
-            content_with_mentions = re.sub(mention_pattern, replace_mention, cleaned_content)
-
-            # Also support @all mention
-            content_with_mentions = content_with_mentions.replace(
-                "@all", '<at user_id="all">所有人</at>'
-            )
+            content_with_mentions = cleaned_content
 
             # Check if we need to reply to a specific message
             # Get reply message ID from metadata (original incoming message ID)
@@ -703,7 +717,6 @@ class FeishuChannel(BaseChannel):
                             image_bytes = await self._download_feishu_image(image_key, message_id)
                             if image_bytes:
                                 # Save to workspace/media directory
-                                from pathlib import Path
 
                                 media_dir = get_data_path() / "received"
 
@@ -745,7 +758,7 @@ class FeishuChannel(BaseChannel):
                 chat_mode = await self._get_chat_mode(chat_id)
                 if chat_mode == "thread" and not message.root_id:
                     message.root_id = message.message_id
-                if message.root_id:
+                if chat_mode == "thread" and message.root_id:
                     chat_id = f"{reply_to}#{message.root_id}"
             await self._handle_message(
                 sender_id=sender_id,
@@ -762,8 +775,8 @@ class FeishuChannel(BaseChannel):
                 },
             )
 
-        except Exception as e:
-            logger.exception(f"Error processing Feishu message")
+        except Exception:
+            logger.exception("Error processing Feishu message")
 
     async def _extract_and_upload_images(self, content: str) -> tuple[str, list[dict]]:
         """Extract images from markdown content, upload to Feishu, and return cleaned content."""

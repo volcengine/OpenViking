@@ -75,12 +75,43 @@ class BaseChannel(ABC):
         pass
 
     @abstractmethod
-    async def send(self, msg: OutboundMessage) -> None:
+    async def send(self, msg: OutboundMessage) -> bool:
         """
         Send a message through this channel.
 
         Args:
             msg: The message to send.
+
+        Returns:
+            True if the message was handled by base logic, False if needs subclass handling
+        """
+        # 处理添加表情的通用动作
+        if msg.metadata and msg.metadata.get("action") == "add_reaction":
+            message_id = msg.metadata.get("message_id")
+            emoji = msg.metadata.get("emoji")
+            if message_id and emoji:
+                await self.send_processing_reaction(message_id, emoji)
+                return True
+        # 处理处理中tick事件
+        if msg.metadata and msg.metadata.get("action") == "processing_tick":
+            message_id = msg.metadata.get("message_id")
+            tick_count = msg.metadata.get("tick_count", 0)
+            if message_id:
+                await self.handle_processing_tick(message_id, tick_count)
+                return True
+        return False
+
+    async def handle_processing_tick(self, message_id: str, tick_count: int) -> None:
+        """
+        Handle processing tick event. Default empty implementation,
+        channels can override to show custom processing indicators.
+        """
+        pass
+
+    async def send_processing_reaction(self, message_id: str, emoji: str) -> None:
+        """
+        Send a processing reaction emoji to a message.
+        Default empty implementation, channels can override if supported.
         """
         pass
 

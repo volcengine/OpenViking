@@ -72,7 +72,7 @@ class SingleTurnChannel(BaseChannel):
 
         # Wait for response with timeout
         try:
-            await asyncio.wait_for(self._response_received.wait(), timeout=300.0)
+            await asyncio.wait_for(self._response_received.wait(), timeout=3000.0)
             if self._last_response:
                 from vikingbot.cli.commands import console
                 from rich.markdown import Markdown

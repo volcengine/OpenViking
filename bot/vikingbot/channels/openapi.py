@@ -5,25 +5,21 @@ import secrets
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, AsyncGenerator, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException
 from fastapi.responses import StreamingResponse
 from loguru import logger
-from pydantic import BaseModel
 
 from vikingbot.bus.events import InboundMessage, OutboundEventType, OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.base import BaseChannel
 from vikingbot.channels.openapi_models import (
-    ChatMessage,
     ChatRequest,
     ChatResponse,
     ChatStreamEvent,
-    ErrorResponse,
     EventType,
     HealthResponse,
-    MessageRole,
     SessionCreateRequest,
     SessionCreateResponse,
     SessionDetailResponse,

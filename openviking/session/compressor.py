@@ -137,6 +137,7 @@ class SessionCompressor:
         user: Optional["UserIdentifier"] = None,
         session_id: Optional[str] = None,
         ctx: Optional[RequestContext] = None,
+        strict_extract_errors: bool = False,
     ) -> List[Context]:
         """Extract long-term memories from messages."""
         if not messages:
@@ -146,7 +147,12 @@ class SessionCompressor:
         if not ctx:
             return []
 
-        candidates = await self.extractor.extract(context, user, session_id)
+        if strict_extract_errors:
+            # Intentionally let extraction errors bubble up so caller (task tracker)
+            # can mark background commit tasks as failed with an explicit error.
+            candidates = await self.extractor.extract_strict(context, user, session_id)
+        else:
+            candidates = await self.extractor.extract(context, user, session_id)
 
         if not candidates:
             return []
@@ -156,6 +162,10 @@ class SessionCompressor:
         viking_fs = get_viking_fs()
 
         tool_parts = self._extract_tool_parts(messages)
+        from .tool_skill_utils import collect_skill_stats, collect_tool_stats
+
+        tool_stats_map = collect_tool_stats(tool_parts)
+        skill_stats_map = collect_skill_stats(tool_parts)
 
         for candidate in candidates:
             # Profile: skip dedup, always merge
@@ -176,6 +186,31 @@ class SessionCompressor:
                         candidate, tool_parts
                     )
                     candidate.tool_status = tool_status
+                    if tool_name:
+                        candidate.tool_name = tool_name
+                    if skill_name:
+                        candidate.skill_name = skill_name
+
+                    if tool_name and candidate.call_time == 0:
+                        tool_stats = tool_stats_map.get(tool_name, {})
+                        candidate.call_time = tool_stats.get("call_count", candidate.call_time)
+                        candidate.success_time = tool_stats.get(
+                            "success_time", candidate.success_time
+                        )
+                        candidate.duration_ms = tool_stats.get("duration_ms", candidate.duration_ms)
+                        candidate.prompt_tokens = tool_stats.get(
+                            "prompt_tokens", candidate.prompt_tokens
+                        )
+                        candidate.completion_tokens = tool_stats.get(
+                            "completion_tokens", candidate.completion_tokens
+                        )
+
+                    if skill_name and candidate.call_time == 0:
+                        skill_stats = skill_stats_map.get(skill_name, {})
+                        candidate.call_time = skill_stats.get("call_count", candidate.call_time)
+                        candidate.success_time = skill_stats.get(
+                            "success_time", candidate.success_time
+                        )
                     if skill_name:
                         memory = await self.extractor._merge_skill_memory(
                             skill_name, candidate, ctx=ctx
@@ -292,43 +327,22 @@ class SessionCompressor:
         Returns:
             (tool_name, skill_name, tool_status) tuple
         """
-        candidate_tool = candidate.tool_name
-        candidate_skill = candidate.skill_name
+        from .tool_skill_utils import calibrate_skill_name, calibrate_tool_name
 
-        calibrated_tool = ""
-        calibrated_skill = ""
-        tool_status = "completed"
+        if candidate.category == MemoryCategory.TOOLS:
+            candidate_tool = (candidate.tool_name or "").strip()
+            if not candidate_tool:
+                return ("", "", "completed")
+            calibrated_name, status = calibrate_tool_name(candidate_tool, tool_parts)
+            return (calibrated_name, "", status)
 
-        for part in tool_parts:
-            if part.skill_uri:
-                part_skill_name = self._extract_skill_name_from_uri(part.skill_uri)
-                if candidate_skill:
-                    if self._is_similar_name(candidate_skill, part_skill_name):
-                        calibrated_skill = part_skill_name
-                        tool_status = part.tool_status or "completed"
-                    else:
-                        calibrated_skill = candidate_skill
-                else:
-                    calibrated_skill = part_skill_name
+        if candidate.category == MemoryCategory.SKILLS:
+            candidate_skill = (candidate.skill_name or "").strip()
+            if not candidate_skill:
+                return ("", "", "completed")
+            calibrated_name, status = calibrate_skill_name(candidate_skill, tool_parts)
+            return ("", calibrated_name, status)
 
-            elif part.tool_name:
-                if candidate_tool:
-                    if self._is_similar_name(candidate_tool, part.tool_name):
-                        calibrated_tool = part.tool_name
-                        tool_status = part.tool_status or "completed"
-                    else:
-                        calibrated_tool = candidate_tool
-                else:
-                    calibrated_tool = part.tool_name
-
-        if calibrated_skill:
-            return ("", calibrated_skill, tool_status)
-        if calibrated_tool:
-            return (calibrated_tool, "", tool_status)
-        if candidate_skill:
-            return ("", candidate_skill, "completed")
-        if candidate_tool:
-            return (candidate_tool, "", "completed")
         return ("", "", "completed")
 
     def _is_similar_name(self, name1: str, name2: str) -> bool:
@@ -352,13 +366,6 @@ class SessionCompressor:
 
         ratio = SequenceMatcher(None, n1, n2).ratio()
         return ratio >= 0.7
-
-    def _extract_skill_name_from_uri(self, skill_uri: str) -> str:
-        """从 skill_uri 提取 skill_name
-
-        例如: viking://agent/skills/create_presentation -> create_presentation
-        """
-        return skill_uri.rstrip("/").split("/")[-1]
 
     def _extract_used_uris(self, messages: List[Message]) -> Dict[str, List[str]]:
         """Extract URIs used in messages."""

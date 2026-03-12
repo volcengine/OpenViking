@@ -340,6 +340,7 @@ class Session:
                 user=self.user,
                 session_id=self.session_id,
                 ctx=self.ctx,
+                strict_extract_errors=True,
             )
             logger.info(f"Extracted {len(memories)} memories")
             result["memories_extracted"] = len(memories)

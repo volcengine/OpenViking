@@ -8,11 +8,10 @@ import shutil
 import subprocess
 import sys
 import time
-
-import uvicorn
-
 from dataclasses import dataclass
 from typing import Optional
+
+import uvicorn
 
 from openviking.server.app import create_app
 from openviking.server.config import load_server_config

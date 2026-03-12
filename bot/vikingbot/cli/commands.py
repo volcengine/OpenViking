@@ -4,9 +4,7 @@ import asyncio
 import json
 import os
 import select
-import signal
 import sys
-import hashlib
 import time
 from pathlib import Path
 
@@ -31,16 +29,15 @@ from vikingbot.cron.service import CronService
 from vikingbot.cron.types import CronJob
 from vikingbot.heartbeat.service import HeartbeatService
 from vikingbot.integrations.langfuse import LangfuseClient
-from vikingbot.config.loader import load_config
 
 # Create sandbox manager
 from vikingbot.sandbox.manager import SandboxManager
 from vikingbot.session.manager import SessionManager
 from vikingbot.utils.helpers import (
+    get_bridge_path,
+    get_history_path,
     get_source_workspace_path,
     set_bot_data_path,
-    get_history_path,
-    get_bridge_path,
 )
 
 app = typer.Typer(
@@ -471,6 +468,7 @@ async def start_console(console_port):
     """Start the console web UI in a separate thread within the same process."""
     try:
         import threading
+
         from vikingbot.console.console_gradio_simple import run_console_server
 
         def run_in_thread():
@@ -557,6 +555,9 @@ def chat(
     eval: bool = typer.Option(
         False, "--eval", "-e", help="Run evaluation mode, output JSON results"
     ),
+    config_path: str = typer.Option(
+        None, "--config", "-c", help="Path to ov.conf, default .openviking/ov.conf"
+    )
 ):
     """Interact with the agent directly."""
     if message is not None:
@@ -568,8 +569,10 @@ def chat(
     else:
         logger.disable("vikingbot")
 
+    path = Path(config_path).expanduser() if config_path is not None else None
+
     bus = MessageBus()
-    config = ensure_config()
+    config = ensure_config(path)
     _init_bot_data(config)
     session_manager = SessionManager(config.bot_data_path)
 
@@ -788,8 +791,6 @@ def cron_list(
     table.add_column("Schedule")
     table.add_column("Status")
     table.add_column("Next Run")
-
-    import time
 
     for job in jobs:
         # Format schedule

@@ -32,7 +32,7 @@ on:
 jobs:
   permission-check:
     name: Check write permission
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     permissions:
       contents: read
     outputs:
@@ -69,7 +69,7 @@ jobs:
     if: >-
       needs.permission-check.outputs.allowed == 'true' &&
       (inputs.target == 'testpypi' || inputs.target == 'both')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment:
       name: testpypi
       url: https://test.pypi.org/p/openviking
@@ -116,7 +116,7 @@ jobs:
     if: >-
       needs.permission-check.outputs.allowed == 'true' &&
       (inputs.target == 'pypi' || inputs.target == 'both')
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment:
       name: pypi
       url: https://pypi.org/p/openviking

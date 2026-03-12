@@ -21,6 +21,7 @@ from .log_config import LogConfig
 from .parser_config import (
     AudioConfig,
     CodeConfig,
+    DirectoryConfig,
     HTMLConfig,
     ImageConfig,
     MarkdownConfig,
@@ -89,6 +90,10 @@ class OpenVikingConfig(BaseModel):
         default_factory=lambda: TextConfig(), description="Text parsing configuration"
     )
 
+    directory: DirectoryConfig = Field(
+        default_factory=lambda: DirectoryConfig(), description="Directory parsing configuration"
+    )
+
     auto_generate_l0: bool = Field(
         default=True, description="Automatically generate L0 (abstract) if not provided"
     )
@@ -136,7 +141,17 @@ class OpenVikingConfig(BaseModel):
         parser_configs = {}
         if "parsers" in config_copy:
             parser_configs = config_copy.pop("parsers")
-        parser_types = ["pdf", "code", "image", "audio", "video", "markdown", "html", "text"]
+        parser_types = [
+            "pdf",
+            "code",
+            "image",
+            "audio",
+            "video",
+            "markdown",
+            "html",
+            "text",
+            "directory",
+        ]
         for parser_type in parser_types:
             if parser_type in config_copy:
                 parser_configs[parser_type] = config_copy.pop(parser_type)

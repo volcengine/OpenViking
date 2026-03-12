@@ -1,10 +1,11 @@
 """Memory system for persistent agent memory."""
 
-from openviking.async_client import logger
-from vikingbot.config.loader import load_config
 from pathlib import Path
 from typing import Any
+from loguru import logger
+import time
 
+from vikingbot.config.loader import load_config
 from vikingbot.openviking_mount.ov_server import VikingClient
 from vikingbot.utils.helpers import ensure_dir
 
@@ -49,12 +50,19 @@ class MemoryStore:
     async def get_viking_memory_context(self, current_message: str, workspace_id: str) -> str:
         client = await VikingClient.create(agent_id=workspace_id)
         admin_user_id = load_config().ov_server.admin_user_id
+        start = time.time()
         result = await client.search_memory(current_message, user_id=admin_user_id, limit=3)
+        cost = round(time.time() - start, 2)
         if not result:
+            logger.info(f"[USER_MEMORY]: search failed. cost {cost}")
             return ""
         user_memory = self._parse_viking_memory(result["user_memory"])
         agent_memory = self._parse_viking_memory(result["agent_memory"])
-        return f"### user memories:\n{user_memory}\n### agent memories:\n{agent_memory}"
+        logger.info(f"[USER_MEMORY]: search success. res: {user_memory[:100]}. cost {cost}")
+        return (
+            f"### user memories:\n{user_memory}\n"
+            f"### agent memories:\n{agent_memory}"
+        )
 
     async def get_viking_user_profile(self, workspace_id: str, user_id: str) -> str:
         client = await VikingClient.create(agent_id=workspace_id)

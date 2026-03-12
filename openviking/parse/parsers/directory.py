@@ -106,6 +106,17 @@ class DirectoryParser(BaseParser):
                 exclude=kwargs.get("exclude"),
             )
             directly_upload_media = kwargs.get("directly_upload_media", True)
+            preserve_structure = kwargs.get("preserve_structure")
+            if preserve_structure is None:
+                # Fall back to config default
+                try:
+                    from openviking_cli.utils.config.open_viking_config import (
+                        get_openviking_config,
+                    )
+
+                    preserve_structure = get_openviking_config().directory.preserve_structure
+                except Exception:
+                    preserve_structure = True
             processable_files = scan_result.all_processable_files()
             warnings.extend(scan_result.warnings)
 
@@ -157,6 +168,7 @@ class DirectoryParser(BaseParser):
                         target_uri,
                         viking_fs,
                         warnings,
+                        preserve_structure=preserve_structure,
                     )
                     parser_name = "direct_upload"
                 else:
@@ -167,6 +179,7 @@ class DirectoryParser(BaseParser):
                         target_uri,
                         viking_fs,
                         warnings,
+                        preserve_structure=preserve_structure,
                     )
 
                 if ok:
@@ -319,12 +332,18 @@ class DirectoryParser(BaseParser):
         target_uri: str,
         viking_fs: Any,
         warnings: List[str],
+        preserve_structure: bool = True,
     ) -> bool:
         """Process one file into the VikingFS directory temp.
 
         - Files WITH a parser → ``parser.parse()`` → merge output into
           *target_uri* at the correct relative location.
         - Files WITHOUT a parser → read and write directly to VikingFS.
+
+        Args:
+            preserve_structure: When True, files keep their relative directory
+                hierarchy.  When False, all files are placed directly under
+                *target_uri* (flat).
 
         Returns:
             *True* on success, *False* on failure.
@@ -336,8 +355,11 @@ class DirectoryParser(BaseParser):
             try:
                 sub_result = await parser.parse(str(src_file))
                 if sub_result.temp_dir_path:
-                    parent = str(PurePosixPath(rel_path).parent)
-                    dest = f"{target_uri}/{parent}" if parent != "." else target_uri
+                    if preserve_structure:
+                        parent = str(PurePosixPath(rel_path).parent)
+                        dest = f"{target_uri}/{parent}" if parent != "." else target_uri
+                    else:
+                        dest = target_uri
                     await DirectoryParser._merge_temp(
                         viking_fs,
                         sub_result.temp_dir_path,
@@ -350,7 +372,10 @@ class DirectoryParser(BaseParser):
         else:
             try:
                 content = src_file.read_bytes()
-                dst_uri = f"{target_uri}/{rel_path}"
+                if preserve_structure:
+                    dst_uri = f"{target_uri}/{rel_path}"
+                else:
+                    dst_uri = f"{target_uri}/{PurePosixPath(rel_path).name}"
                 await viking_fs.write_file(dst_uri, content)
                 return True
             except Exception as exc:
@@ -363,10 +388,16 @@ class DirectoryParser(BaseParser):
         target_uri: str,
         viking_fs: Any,
         warnings: List[str],
+        preserve_structure: bool = True,
     ) -> bool:
         """Directly upload a file without using its parser.
 
         Used for media files when directly_upload_media=True.
+
+        Args:
+            preserve_structure: When True, files keep their relative directory
+                hierarchy.  When False, all files are placed directly under
+                *target_uri* (flat).
 
         Returns:
             *True* on success, *False* on failure.
@@ -376,7 +407,10 @@ class DirectoryParser(BaseParser):
 
         try:
             content = src_file.read_bytes()
-            dst_uri = f"{target_uri}/{rel_path}"
+            if preserve_structure:
+                dst_uri = f"{target_uri}/{rel_path}"
+            else:
+                dst_uri = f"{target_uri}/{PurePosixPath(rel_path).name}"
             await viking_fs.write_file(dst_uri, content)
             return True
         except Exception as exc:

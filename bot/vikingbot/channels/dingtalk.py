@@ -5,8 +5,8 @@ import json
 import time
 from typing import Any
 
-from loguru import logger
 import httpx
+from loguru import logger
 
 from vikingbot.bus.events import OutboundMessage
 from vikingbot.bus.queue import MessageBus
@@ -15,11 +15,11 @@ from vikingbot.config.schema import DingTalkChannelConfig
 
 try:
     from dingtalk_stream import (
-        DingTalkStreamClient,
-        Credential,
+        AckMessage,
         CallbackHandler,
         CallbackMessage,
-        AckMessage,
+        Credential,
+        DingTalkStreamClient,
     )
     from dingtalk_stream.chatbot import ChatbotMessage
 

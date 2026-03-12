@@ -465,6 +465,21 @@ class TextConfig(ParserConfig):
             raise ValueError("max_paragraph_length must be positive")
 
 
+@dataclass
+class DirectoryConfig(ParserConfig):
+    """
+    Configuration for directory parsing.
+
+    Attributes:
+        preserve_structure: Whether to preserve nested directory structure when
+            adding directory resources. When True (default), files maintain their
+            relative path hierarchy. When False, all files are flattened to a
+            single level under the resource root.
+    """
+
+    preserve_structure: bool = True
+
+
 # Configuration registry for dynamic loading
 PARSER_CONFIG_REGISTRY = {
     "pdf": PDFConfig,
@@ -475,6 +490,7 @@ PARSER_CONFIG_REGISTRY = {
     "markdown": MarkdownConfig,
     "html": HTMLConfig,
     "text": TextConfig,
+    "directory": DirectoryConfig,
 }
 
 
@@ -505,10 +521,8 @@ def get_parser_config(
         ... })
     """
     if parser_type not in PARSER_CONFIG_REGISTRY:
-        raise ValueError(
-            f"Unsupported parser type: '{parser_type}'. "
-            f"Supported types: {list(PARSER_CONFIG_REGISTRY.keys())}"
-        )
+        supported = list(PARSER_CONFIG_REGISTRY.keys())
+        raise ValueError(f"Unsupported parser type: '{parser_type}'. Supported: {supported}")
 
     config_class = PARSER_CONFIG_REGISTRY[parser_type]
 
