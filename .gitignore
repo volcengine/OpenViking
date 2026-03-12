@@ -27,7 +27,6 @@ openviking.egg-info/
 data/
 
 # Rust
-Cargo.lock
 target/
 **/*.rs.bk
 *.pdb
