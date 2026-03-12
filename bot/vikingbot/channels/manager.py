@@ -7,7 +7,6 @@ from typing import Any
 
 from loguru import logger
 
-from vikingbot.bus.events import OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.base import BaseChannel
 from vikingbot.config.schema import BaseChannelConfig, ChannelType, Config

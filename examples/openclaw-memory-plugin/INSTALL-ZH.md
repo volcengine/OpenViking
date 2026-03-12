@@ -4,13 +4,36 @@
 
 ---
 
-## 一键安装（Linux / macOS）
+## 一键安装
+
+**前置条件：** Python >= 3.10，Node.js >= 22。安装助手会自动检查并提示安装缺少的组件。
+
+### 方式 A：npm 安装（推荐，全平台）
+
+```bash
+npm install -g openclaw-openviking-setup-helper
+ov-install
+```
+
+非交互模式（使用默认配置）：
+
+```bash
+ov-install -y
+```
+
+安装到指定 OpenClaw 实例：
+
+```bash
+ov-install --workdir ~/.openclaw-second
+```
+
+### 方式 B：curl 一键安装（Linux / macOS）
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-memory-plugin/install.sh | bash
 ```
 
-非交互模式（使用默认配置）：
+非交互模式：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-memory-plugin/install.sh | bash -s -y
@@ -64,6 +87,15 @@ python3 -m pip install openviking --upgrade
 > `python3 -m venv ~/.openviking/venv && ~/.openviking/venv/bin/pip install openviking`
 
 ### Step 2: 运行安装助手
+
+#### 方式 A：npm 全局安装（推荐）
+
+```bash
+npm install -g openclaw-openviking-setup-helper
+ov-install
+```
+
+#### 方式 B：从仓库运行
 
 ```bash
 git clone https://github.com/volcengine/OpenViking.git

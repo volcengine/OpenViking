@@ -39,6 +39,11 @@ class SandboxMode(str, Enum):
     PER_SESSION = "per-session"
     SHARED = "shared"
 
+class AgentMemoryMode(str, Enum):
+    """Agent memory mode enumeration."""
+    PER_SESSION = "per-session"
+    SHARED = "shared"
+
 
 class BaseChannelConfig(BaseModel):
     """Base channel configuration."""
@@ -606,6 +611,7 @@ class Config(BaseSettings):
     )
     storage_workspace: str | None = None  # From ov.conf root level storage.workspace
     use_local_memory: bool = False
+    read_only: bool = False
 
     @property
     def channels_config(self) -> ChannelsConfig:

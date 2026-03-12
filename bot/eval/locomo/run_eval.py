@@ -53,29 +53,12 @@ def run_vikingbot_chat(question: str) -> tuple[str, dict, float]:
         output = result.stdout.strip()
         # 解析返回的json结果，处理换行、多余前缀等特殊情况
         try:
-            # 先去掉[Pasted前缀
-            output = output.replace("[Pasted", "").strip()
-            # 提取第一个{到最后一个}之间的有效JSON内容，清除换行和多余空白
-            start_idx = output.find("{")
-            end_idx = output.rfind("}")
-            if start_idx != -1 and end_idx != -1:
-                json_str = (
-                    output[start_idx : end_idx + 1].replace("\n", " ").replace("\r", "").strip()
-                )
-                # 处理text内容中未转义的双引号
-                json_str = re.sub(
-                    r'"text": "(.*?)"(?=, "token_usage")',
-                    lambda m: '"text": "%s"' % m.group(1).replace('"', '\\"'),
-                    json_str,
-                )
-                resp_json = json.loads(json_str)
-                response = resp_json.get("text", "")
-                token_usage = resp_json.get(
-                    "token_usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-                )
-                time_cost = resp_json.get("time_cost", time_cost)
-            else:
-                raise ValueError("No valid JSON structure found in output")
+            resp_json = json.loads(output, strict=False)
+            response = resp_json.get("text", "")
+            token_usage = resp_json.get(
+                "token_usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+            )
+            time_cost = resp_json.get("time_cost", time_cost)
         except (json.JSONDecodeError, ValueError) as e:
             response = f"[PARSE ERROR] {output}"
             token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
@@ -111,8 +94,8 @@ def main():
     parser.add_argument(
         "input",
         nargs="?",
-        default="./locomo10.json",
-        help="Path to locomo10.json file, default: ./locomo10.json",
+        default="./test_data/locomo10.json",
+        help="Path to locomo10.json file, default: ./test_data/locomo10.json",
     )
     parser.add_argument(
         "--output",

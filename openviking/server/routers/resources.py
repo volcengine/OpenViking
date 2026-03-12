@@ -36,6 +36,7 @@ class AddResourceRequest(BaseModel):
     include: Optional[str] = None
     exclude: Optional[str] = None
     directly_upload_media: bool = True
+    preserve_structure: Optional[bool] = None
 
     @model_validator(mode="after")
     def check_path_or_temp_path(self):
@@ -109,6 +110,16 @@ async def add_resource(
     if path is None:
         raise InvalidArgumentError("Either 'path' or 'temp_path' must be provided.")
 
+    kwargs = {
+        "strict": request.strict,
+        "ignore_dirs": request.ignore_dirs,
+        "include": request.include,
+        "exclude": request.exclude,
+        "directly_upload_media": request.directly_upload_media,
+    }
+    if request.preserve_structure is not None:
+        kwargs["preserve_structure"] = request.preserve_structure
+
     result = await service.resources.add_resource(
         path=path,
         ctx=_ctx,
@@ -118,11 +129,7 @@ async def add_resource(
         instruction=request.instruction,
         wait=request.wait,
         timeout=request.timeout,
-        strict=request.strict,
-        ignore_dirs=request.ignore_dirs,
-        include=request.include,
-        exclude=request.exclude,
-        directly_upload_media=request.directly_upload_media,
+        **kwargs,
     )
     return Response(status="ok", result=result)
 

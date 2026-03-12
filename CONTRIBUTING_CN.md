@@ -441,14 +441,14 @@ git commit -m "refactor(storage): simplify interface methods"
 运行快速集成测试，支持自定义矩阵配置。
 
 *   **Inputs**:
-    *   `os_json`: 操作系统列表的 JSON 字符串数组 (例如 `["ubuntu-latest"]`)。
+    *   `os_json`: 操作系统列表的 JSON 字符串数组 (例如 `["ubuntu-24.04"]`)。
     *   `python_json`: Python 版本列表的 JSON 字符串数组 (例如 `["3.10"]`)。
 
 #### C. 完整测试 (`13. _Test Suite (Full)`)
 在所有支持的平台 (Linux/Mac/Win) 和 Python 版本 (3.10-3.13) 上运行完整的测试套件。手动触发时支持自定义矩阵配置。
 
 *   **Inputs**:
-    *   `os_json`: 操作系统列表 (默认: `["ubuntu-latest", "macos-latest", "windows-latest"]`)。
+    *   `os_json`: 操作系统列表 (默认: `["ubuntu-24.04", "macos-14", "windows-latest"]`)。
     *   `python_json`: Python 版本列表 (默认: `["3.10", "3.11", "3.12", "3.13"]`)。
 
 #### D. 安全扫描 (`14. _CodeQL Scan`)
@@ -458,7 +458,7 @@ git commit -m "refactor(storage): simplify interface methods"
 仅构建 Python wheel 包，不发布。
 
 *   **Inputs**:
-    *   `os_json`: 操作系统列表 (默认: `["ubuntu-latest", "macos-latest", "macos-15-intel", "windows-latest"]`)。
+    *   `os_json`: 操作系统列表 (默认: `["ubuntu-24.04", "ubuntu-24.04-arm", "macos-14", "macos-15-intel", "windows-latest"]`)。
     *   `python_json`: Python 版本列表 (默认: `["3.10", "3.11", "3.12", "3.13"]`)。
     *   `build_sdist`: 是否构建源码包 (默认: `true`)。
     *   `build_wheels`: 是否构建 Wheel 包 (默认: `true`)。

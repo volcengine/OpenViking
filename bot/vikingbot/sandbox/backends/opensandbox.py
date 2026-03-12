@@ -1,22 +1,20 @@
 """OpenSandbox backend implementation using official SDK."""
 
+import asyncio
+import atexit
 import os
 import subprocess
-import asyncio
 import time
-import atexit
 from datetime import timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import httpx
 from loguru import logger
 
-from vikingbot.sandbox.base import SandboxBackend, SandboxNotStartedError
-from vikingbot.sandbox.backends import register_backend
-
-
 from vikingbot.config.schema import SandboxConfig, SessionKey
+from vikingbot.sandbox.backends import register_backend
+from vikingbot.sandbox.base import SandboxBackend, SandboxNotStartedError
 
 # Global to track the opensandbox-server process
 _OSB_SERVER_PROCESS: "subprocess.Popen | None" = None
@@ -152,8 +150,8 @@ class OpenSandboxBackend(SandboxBackend):
                     )
 
         try:
-            from opensandbox.sandbox import Sandbox
             from opensandbox.config import ConnectionConfig
+            from opensandbox.sandbox import Sandbox
 
             self._connection_config = ConnectionConfig(
                 domain=self._server_url,
@@ -167,7 +165,7 @@ class OpenSandboxBackend(SandboxBackend):
             volumes = None
             if not self._is_vke:
                 # Local environment: mount host volume
-                from opensandbox.models.sandboxes import Volume, Host
+                from opensandbox.models.sandboxes import Host, Volume
 
                 volumes = [
                     Volume(

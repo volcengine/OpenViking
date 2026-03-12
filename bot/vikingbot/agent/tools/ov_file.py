@@ -3,6 +3,8 @@
 from abc import ABC
 from pathlib import Path
 from typing import Any, Optional
+
+import httpx
 from loguru import logger
 
 from vikingbot.agent.tools.base import Tool, ToolContext
@@ -144,7 +146,7 @@ class VikingSearchTool(OVFileTool):
         self,
         tool_context: "ToolContext",
         query: str,
-        target_uri: Optional[str] = None,
+        target_uri: Optional[str] = "",
         **kwargs: Any,
     ) -> str:
         try:
@@ -173,57 +175,51 @@ class VikingAddResourceTool(OVFileTool):
 
     @property
     def description(self) -> str:
-        return "Add a local file as a resource to OpenViking."
+        return "Add a resource (url like pic, git code or local file path) to OpenViking.This is a asynchronous operation."
 
     @property
     def parameters(self) -> dict[str, Any]:
         return {
             "type": "object",
             "properties": {
-                "local_path": {"type": "string", "description": "Path to the local file to add"},
+                "path": {"type": "string", "description": "Url or local file path"},
                 "description": {"type": "string", "description": "Description of the resource"},
-                "target_path": {
-                    "type": "string",
-                    "description": "Target path in Viking (e.g., /bot_test/dutao/docs/)",
-                    "default": "",
-                },
-                "wait": {
-                    "type": "boolean",
-                    "description": "Whether to wait for processing to complete",
-                    "default": False,
-                },
             },
-            "required": ["local_path", "description"],
+            "required": ["path", "description"],
         }
 
     async def execute(
         self,
         tool_context: "ToolContext",
-        local_path: str,
+        path: str,
         description: str,
-        target_path: str = "",
-        wait: bool = False,
         **kwargs: Any,
     ) -> str:
+        client = None
         try:
-            path = Path(local_path).expanduser().resolve()
-            if not path.exists():
-                return f"Error: File not found: {local_path}"
-            if not path.is_file():
-                return f"Error: Not a file: {local_path}"
+            if path and not path.startswith("http"):
+                local_path = Path(path).expanduser().resolve()
+                if not local_path.exists():
+                    return f"Error: File not found: {path}"
+                if not local_path.is_file():
+                    return f"Error: Not a file: {path}"
 
-            client = await self._get_client(tool_context)
-            result = await client.add_resource(
-                str(path), description, target_path=target_path or None, wait=wait
-            )
+            client = await VikingClient.create(tool_context.workspace_id)
+            result = await client.add_resource(path, description)
 
             if result:
-                root_uri = result.get("root_uri", "unknown")
+                root_uri = result.get("root_uri", "")
                 return f"Successfully added resource: {root_uri}"
             else:
                 return "Failed to add resource"
+        except httpx.ReadTimeout:
+            return f"Request timed out. The resource addition task may still be processing on the server side."
         except Exception as e:
+            logger.warning(f"Error adding resource: {e}")
             return f"Error adding resource to Viking: {str(e)}"
+        finally:
+            if client:
+                await client.close()
 
 
 class VikingGrepTool(OVFileTool):
@@ -244,7 +240,7 @@ class VikingGrepTool(OVFileTool):
             "properties": {
                 "uri": {
                     "type": "string",
-                    "description": "The whole Viking URI to search within (e.g., viking://resources/path/)",
+                    "description": "The whole Viking URI to search within (e.g., viking://resources/)",
                 },
                 "pattern": {
                     "type": "string",

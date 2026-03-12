@@ -768,3 +768,76 @@ class TestDirectlyUploadMedia:
         assert mock_image.parse.call_count == 2
         mock_audio.parse.assert_called_once()
         mock_video.parse.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Tests: preserve_structure parameter
+# ---------------------------------------------------------------------------
+
+
+class TestPreserveStructure:
+    """Tests for the preserve_structure parameter."""
+
+    @pytest.mark.asyncio
+    async def test_preserve_structure_true_keeps_hierarchy(
+        self, tmp_nested_code: Path, parser, fake_fs
+    ) -> None:
+        """preserve_structure=True (default) keeps relative directory paths."""
+        await parser.parse(str(tmp_nested_code), preserve_structure=True)
+
+        dir_name = tmp_nested_code.name
+        rel_paths = set()
+        for uri in fake_fs.files:
+            idx = uri.find(f"/{dir_name}/")
+            if idx >= 0:
+                rel = uri[idx + len(f"/{dir_name}/") :]
+                rel_paths.add(rel)
+
+        assert "top.py" in rel_paths
+        assert "a/x.py" in rel_paths
+        assert "a/b/c.py" in rel_paths
+        assert "a/b/d.py" in rel_paths
+
+    @pytest.mark.asyncio
+    async def test_preserve_structure_false_flattens(
+        self, tmp_nested_code: Path, parser, fake_fs
+    ) -> None:
+        """preserve_structure=False flattens all files to a single level."""
+        await parser.parse(str(tmp_nested_code), preserve_structure=False)
+
+        dir_name = tmp_nested_code.name
+        rel_paths = set()
+        for uri in fake_fs.files:
+            idx = uri.find(f"/{dir_name}/")
+            if idx >= 0:
+                rel = uri[idx + len(f"/{dir_name}/") :]
+                rel_paths.add(rel)
+
+        # All files should be at the top level (no '/' in paths)
+        for rel in rel_paths:
+            assert "/" not in rel, f"Expected flat path, got: {rel}"
+
+        # All filenames should be present
+        assert "top.py" in rel_paths
+        assert "x.py" in rel_paths
+        assert "c.py" in rel_paths
+        assert "d.py" in rel_paths
+
+    @pytest.mark.asyncio
+    async def test_preserve_structure_default_is_true(
+        self, tmp_nested_code: Path, parser, fake_fs
+    ) -> None:
+        """Default behavior (no explicit param) preserves structure."""
+        await parser.parse(str(tmp_nested_code))
+
+        dir_name = tmp_nested_code.name
+        rel_paths = set()
+        for uri in fake_fs.files:
+            idx = uri.find(f"/{dir_name}/")
+            if idx >= 0:
+                rel = uri[idx + len(f"/{dir_name}/") :]
+                rel_paths.add(rel)
+
+        # Structure should be preserved by default
+        assert "a/b/c.py" in rel_paths
+        assert "a/x.py" in rel_paths

@@ -24,11 +24,11 @@ jobs:
   test-lite:
     uses: ./.github/workflows/_test_lite.yml
     with:
-      os_json: '["ubuntu-latest"]'
+      os_json: '["ubuntu-24.04"]'
       python_json: '["3.10"]'
 
   check-deps:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     outputs:
       deps_changed: ${{ steps.check.outputs.deps_changed }}
     steps:

@@ -14,6 +14,7 @@ from vikingbot.agent.tools.ov_file import (
     VikingGlobTool,
     VikingSearchUserMemoryTool,
     VikingMemoryCommitTool,
+    VikingAddResourceTool,
 )
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.agent.tools.shell import ExecTool
@@ -92,6 +93,10 @@ def register_default_tools(
         registry.register(VikingGlobTool())
         registry.register(VikingSearchUserMemoryTool())
         registry.register(VikingMemoryCommitTool())
+        if not config.read_only:
+            registry.register(VikingAddResourceTool())
+
+
 
     # Image generation tool
     if include_image_tool:
