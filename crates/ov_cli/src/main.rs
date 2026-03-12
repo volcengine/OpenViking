@@ -780,7 +780,9 @@ async fn handle_system(cmd: SystemCommands, ctx: CliContext) -> Result<()> {
             commands::system::status(&client, ctx.output_format, ctx.compact).await
         }
         SystemCommands::Health => {
-            commands::system::health(&client, ctx.output_format, ctx.compact).await
+            let _ =
+            commands::system::health(&client, ctx.output_format, ctx.compact).await?;
+            Ok(())
         }
     }
 }
@@ -1042,22 +1044,8 @@ async fn handle_glob(pattern: String, uri: String, node_limit: i32, ctx: CliCont
 async fn handle_health(ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     
-    // First try the new /health endpoint with more info
-    let health_result: serde_json::Value = client.get("/health", &[]).await?;
-    
-    let healthy = health_result.get("healthy").and_then(|v| v.as_bool()).unwrap_or(false);
-    let version = health_result.get("version").and_then(|v| v.as_str());
-    let user_id = health_result.get("user_id").and_then(|v| v.as_str());
-    
-    let mut output = serde_json::json!({ "healthy": healthy });
-    if let Some(v) = version {
-        output["version"] = serde_json::json!(v);
-    }
-    if let Some(u) = user_id {
-        output["user_id"] = serde_json::json!(u);
-    }
-    
-    output::output_success(&output, ctx.output_format, ctx.compact);
+    // Reuse the system health command and get the health status
+    let healthy = commands::system::health(&client, ctx.output_format, ctx.compact).await?;
     
     if !healthy {
         std::process::exit(1);

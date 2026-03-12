@@ -34,7 +34,7 @@ pub async fn health(
     client: &HttpClient,
     output_format: OutputFormat,
     compact: bool,
-) -> Result<()> {
+) -> Result<bool> {
     let response: serde_json::Value = client.get("/health", &[]).await?;
     
     // Extract the key fields
@@ -58,5 +58,5 @@ pub async fn health(
         println!();
     }
     
-    Ok(())
+    Ok(healthy)
 }
