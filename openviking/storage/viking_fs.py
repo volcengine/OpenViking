@@ -332,6 +332,21 @@ class VikingFS:
         path = self._uri_to_path(uri, ctx=ctx)
         return self.agfs.stat(path)
 
+    async def exists(self, uri: str, ctx: Optional[RequestContext] = None) -> bool:
+        """Check if a URI exists.
+
+        Args:
+            uri: Viking URI
+            ctx: Request context
+
+        Returns:
+            bool: True if the URI exists, False otherwise
+        """
+        try:
+            await self.stat(uri, ctx=ctx)
+            return True
+        except Exception:
+            return False
     async def glob(
         self,
         pattern: str,

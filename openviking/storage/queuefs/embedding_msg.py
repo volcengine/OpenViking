@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 import json
 from dataclasses import asdict, dataclass
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional, Union
 from uuid import uuid4
 
 
@@ -10,11 +10,18 @@ from uuid import uuid4
 class EmbeddingMsg:
     message: Union[str, List[Dict[str, Any]]]
     context_data: Dict[str, Any]
+    semantic_msg_id: Optional[str] = None
 
-    def __init__(self, message: Union[str, List[Dict[str, Any]]], context_data: Dict[str, Any]):
+    def __init__(
+        self,
+        message: Union[str, List[Dict[str, Any]]],
+        context_data: Dict[str, Any],
+        semantic_msg_id: Optional[str] = None,
+    ):
         self.id = str(uuid4())
         self.message = message
         self.context_data = context_data
+        self.semantic_msg_id = semantic_msg_id
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert embedding message to dictionary format."""
@@ -30,6 +37,7 @@ class EmbeddingMsg:
         obj = EmbeddingMsg(
             message=data["message"],
             context_data=data["context_data"],
+            semantic_msg_id=data.get("semantic_msg_id"),
         )
         obj.id = data.get("id", obj.id)
         return obj

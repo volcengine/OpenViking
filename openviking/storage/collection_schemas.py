@@ -263,3 +263,11 @@ class TextEmbeddingHandler(DequeueHandlerBase):
             traceback.print_exc()
             self.report_error(str(e), data)
             return None
+        finally:
+            if embedding_msg and embedding_msg.semantic_msg_id:
+                from openviking.storage.queuefs.embedding_tracker import EmbeddingTaskTracker
+                tracker = EmbeddingTaskTracker.get_instance()
+                try:
+                    await tracker.decrement(embedding_msg.semantic_msg_id)
+                except Exception as tracker_err:
+                    logger.warning(f"Failed to decrement embedding tracker: {tracker_err}")

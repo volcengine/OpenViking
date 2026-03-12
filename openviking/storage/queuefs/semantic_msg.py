@@ -16,7 +16,7 @@ class SemanticMsg:
     Attributes:
         id: Unique identifier (UUID)
         uri: Directory URI to process
-        context_type: Type of context (resource, memory, skill)
+        context_type: Type of context (resource, memory, skill, session)
         status: Processing status (pending/processing/completed)
         timestamp: Creation timestamp
         recursive: Whether to recursively process subdirectories.
@@ -27,7 +27,7 @@ class SemanticMsg:
 
     id: str  # UUID
     uri: str  # Directory URI
-    context_type: str  # resource, memory, skill
+    context_type: str  # resource, memory, skill, session
     status: str = "pending"  # pending/processing/completed
     timestamp: int = int(datetime.now().timestamp())
     recursive: bool = True  # Whether to recursively process subdirectories
@@ -37,6 +37,7 @@ class SemanticMsg:
     role: str = "root"
     # Additional flags
     skip_vectorization: bool = False
+    target_uri: str = ""
 
     def __init__(
         self,
@@ -48,6 +49,7 @@ class SemanticMsg:
         agent_id: str = "default",
         role: str = "root",
         skip_vectorization: bool = False,
+        target_uri: str = "",
     ):
         self.id = str(uuid4())
         self.uri = uri
@@ -58,6 +60,7 @@ class SemanticMsg:
         self.agent_id = agent_id
         self.role = role
         self.skip_vectorization = skip_vectorization
+        self.target_uri = target_uri
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert object to dictionary."""
@@ -93,6 +96,7 @@ class SemanticMsg:
             agent_id=data.get("agent_id", "default"),
             role=data.get("role", "root"),
             skip_vectorization=data.get("skip_vectorization", False),
+            target_uri=data.get("target_uri", ""),
         )
         if "id" in data and data["id"]:
             obj.id = data["id"]

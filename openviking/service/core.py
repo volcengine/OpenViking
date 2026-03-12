@@ -11,6 +11,7 @@ from typing import Any, Optional
 
 from openviking.agfs_manager import AGFSManager
 from openviking.core.directories import DirectoryInitializer
+from openviking.resource.resource_lock import ResourceLockManager
 from openviking.server.identity import RequestContext, Role
 from openviking.service.debug_service import DebugService
 from openviking.service.fs_service import FSService
@@ -77,6 +78,7 @@ class OpenVikingService:
         self._session_compressor: Optional[SessionCompressor] = None
         self._transaction_manager: Optional[TransactionManager] = None
         self._directory_initializer: Optional[DirectoryInitializer] = None
+        self._lock_manager: Optional[ResourceLockManager] = None
 
         # Sub-services
         self._fs_service = FSService()
@@ -142,6 +144,11 @@ class OpenVikingService:
 
         # Initialize TransactionManager
         self._transaction_manager = init_transaction_manager(agfs=self._agfs_client)
+        
+        # Initialize ResourceLockManager
+        if self._agfs_client:
+            self._lock_manager = ResourceLockManager(agfs=self._agfs_client)
+            logger.info("ResourceLockManager initialized")
 
     @property
     def _agfs(self) -> Any:
@@ -254,8 +261,15 @@ class OpenVikingService:
             user_count,
         )
 
+        # Clean up all locks on service startup
+        if self._lock_manager:
+            cleaned_count = self._lock_manager.cleanup_all_locks()
+            logger.info(f"Cleaned up {cleaned_count} locks on service startup")
+
         # Initialize processors
-        self._resource_processor = ResourceProcessor(vikingdb=self._vikingdb_manager)
+        self._resource_processor = ResourceProcessor(
+            vikingdb=self._vikingdb_manager,
+        )
         self._skill_processor = SkillProcessor(vikingdb=self._vikingdb_manager)
         self._session_compressor = SessionCompressor(vikingdb=self._vikingdb_manager)
 

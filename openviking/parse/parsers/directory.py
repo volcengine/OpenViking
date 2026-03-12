@@ -123,6 +123,11 @@ class DirectoryParser(BaseParser):
             viking_fs = self._get_viking_fs()
             temp_uri = self._create_temp_uri()
             target_uri = f"{temp_uri}/{dir_name}"
+            logger.info(
+                f"Scanning directory: {source_path}, "
+                f"processable files: {len(processable_files)}, "
+                f"warnings: {warnings}"
+            )
             await viking_fs.mkdir(temp_uri, exist_ok=True)
             await viking_fs.mkdir(target_uri, exist_ok=True)
 

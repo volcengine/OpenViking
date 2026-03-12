@@ -391,8 +391,21 @@ class MemoryExtractor:
         user: str,
         session_id: str,
         ctx: RequestContext,
+        user_temp_uri: Optional[str] = None,
+        agent_temp_uri: Optional[str] = None,
     ) -> Optional[Context]:
-        """Create Context object from candidate and persist to AGFS as .md file."""
+        """Create Context object from candidate and persist to AGFS as .md file.
+        
+        Args:
+            candidate: Candidate memory to create
+            user: User identifier
+            session_id: Session ID
+            ctx: Request context
+            user_temp_uri: Temp user URI (for COW pattern). If provided, user memories
+                          will be written to this temp location.
+            agent_temp_uri: Temp agent URI (for COW pattern). If provided, agent memories
+                           will be written to this temp location.
+        """
         viking_fs = get_viking_fs()
         if not viking_fs:
             logger.warning("VikingFS not available, skipping memory creation")
@@ -402,14 +415,22 @@ class MemoryExtractor:
 
         # Special handling for profile: append to profile.md
         if candidate.category == MemoryCategory.PROFILE:
-            payload = await self._append_to_profile(candidate, viking_fs, ctx=ctx)
+            payload = await self._append_to_profile(
+                candidate, viking_fs, ctx=ctx, user_temp_uri=user_temp_uri
+            )
             if not payload:
                 return None
             user_space = ctx.user.user_space_name()
-            memory_uri = f"viking://user/{user_space}/memories/profile.md"
+            # Use temp user URI if provided (for COW pattern)
+            if user_temp_uri:
+                memory_uri = f"{user_temp_uri}/memories/profile.md"
+                parent_uri = f"{user_temp_uri}/memories"
+            else:
+                memory_uri = f"viking://user/{user_space}/memories/profile.md"
+                parent_uri = f"viking://user/{user_space}/memories"
             memory = Context(
                 uri=memory_uri,
-                parent_uri=f"viking://user/{user_space}/memories",
+                parent_uri=parent_uri,
                 is_leaf=True,
                 abstract=payload.abstract,
                 context_type=ContextType.MEMORY.value,
@@ -430,9 +451,17 @@ class MemoryExtractor:
             MemoryCategory.ENTITIES,
             MemoryCategory.EVENTS,
         ]:
-            parent_uri = f"viking://user/{ctx.user.user_space_name()}/{cat_dir}"
+            # Use temp user URI if provided (for COW pattern)
+            if user_temp_uri:
+                parent_uri = f"{user_temp_uri}/{cat_dir}"
+            else:
+                parent_uri = f"viking://user/{ctx.user.user_space_name()}/{cat_dir}"
         else:  # CASES, PATTERNS
-            parent_uri = f"viking://agent/{ctx.user.agent_space_name()}/{cat_dir}"
+            # Use temp agent URI if provided (for COW pattern)
+            if agent_temp_uri:
+                parent_uri = f"{agent_temp_uri}/{cat_dir}"
+            else:
+                parent_uri = f"viking://agent/{ctx.user.agent_space_name()}/{cat_dir}"
 
         # Generate file URI (store directly as .md file, no directory creation)
         memory_id = f"mem_{str(uuid4())}"
@@ -468,9 +497,14 @@ class MemoryExtractor:
         candidate: CandidateMemory,
         viking_fs,
         ctx: RequestContext,
+        user_temp_uri: Optional[str] = None,
     ) -> Optional[MergedMemoryPayload]:
         """Update user profile - always merge with existing content."""
-        uri = f"viking://user/{ctx.user.user_space_name()}/memories/profile.md"
+        # Use temp user URI if provided (for COW pattern)
+        if user_temp_uri:
+            uri = f"{user_temp_uri}/memories/profile.md"
+        else:
+            uri = f"viking://user/{ctx.user.user_space_name()}/memories/profile.md"
         existing = ""
         try:
             existing = await viking_fs.read_file(uri, ctx=ctx) or ""
@@ -570,7 +604,7 @@ class MemoryExtractor:
             return None
 
     async def _merge_tool_memory(
-        self, tool_name: str, candidate: CandidateMemory, ctx: "RequestContext"
+        self, tool_name: str, candidate: CandidateMemory, ctx: "RequestContext", agent_temp_uri: Optional[str] = None
     ) -> Optional[Context]:
         """合并 Tool Memory，统计数据用 Python 累加"""
         if not tool_name or not tool_name.strip():
@@ -578,7 +612,11 @@ class MemoryExtractor:
             return None
 
         agent_space = ctx.user.agent_space_name()
-        uri = f"viking://agent/{agent_space}/memories/tools/{tool_name}.md"
+        # Use temp agent URI if provided (for COW pattern)
+        if agent_temp_uri:
+            uri = f"{agent_temp_uri}/memories/tools/{tool_name}.md"
+        else:
+            uri = f"viking://agent/{agent_space}/memories/tools/{tool_name}.md"
         viking_fs = get_viking_fs()
 
         if not viking_fs:
@@ -634,7 +672,7 @@ class MemoryExtractor:
                 tool_name, merged_stats, new_guidelines, fields=new_fields
             )
             await viking_fs.write_file(uri=uri, content=merged_content, ctx=ctx)
-            return self._create_tool_context(uri, candidate, ctx)
+            return self._create_tool_context(uri, candidate, ctx, agent_temp_uri=agent_temp_uri)
 
         existing_stats = self._parse_tool_statistics(existing)
         merged_stats = self._merge_tool_statistics(existing_stats, new_stats)
@@ -692,7 +730,7 @@ class MemoryExtractor:
             tool_name, merged_stats, merged_guidelines, fields=merged_fields
         )
         await viking_fs.write_file(uri=uri, content=merged_content, ctx=ctx)
-        return self._create_tool_context(uri, candidate, ctx, abstract_override=abstract_override)
+        return self._create_tool_context(uri, candidate, ctx, abstract_override=abstract_override, agent_temp_uri=agent_temp_uri)
 
     async def _enqueue_semantic_for_parent(self, file_uri: str, ctx: "RequestContext") -> None:
         """Enqueue semantic generation for parent directory."""
@@ -1108,12 +1146,18 @@ class MemoryExtractor:
         candidate: CandidateMemory,
         ctx: "RequestContext",
         abstract_override: Optional[str] = None,
+        agent_temp_uri: Optional[str] = None,
     ) -> Context:
         """创建 Tool Memory 的 Context 对象"""
         agent_space = ctx.user.agent_space_name()
+        # Use temp agent URI if provided (for COW pattern)
+        if agent_temp_uri:
+            parent_uri = f"{agent_temp_uri}/memories/tools"
+        else:
+            parent_uri = f"viking://agent/{agent_space}/memories/tools"
         return Context(
             uri=uri,
-            parent_uri=f"viking://agent/{agent_space}/memories/tools",
+            parent_uri=parent_uri,
             is_leaf=True,
             abstract=abstract_override or candidate.abstract,
             context_type=ContextType.MEMORY.value,
@@ -1145,7 +1189,7 @@ class MemoryExtractor:
         return content.strip()
 
     async def _merge_skill_memory(
-        self, skill_name: str, candidate: CandidateMemory, ctx: "RequestContext"
+        self, skill_name: str, candidate: CandidateMemory, ctx: "RequestContext", agent_temp_uri: Optional[str] = None
     ) -> Optional[Context]:
         """合并 Skill Memory，统计数据用 Python 累加"""
         if not skill_name or not skill_name.strip():
@@ -1153,7 +1197,11 @@ class MemoryExtractor:
             return None
 
         agent_space = ctx.user.agent_space_name()
-        uri = f"viking://agent/{agent_space}/memories/skills/{skill_name}.md"
+        # Use temp agent URI if provided (for COW pattern)
+        if agent_temp_uri:
+            uri = f"{agent_temp_uri}/memories/skills/{skill_name}.md"
+        else:
+            uri = f"viking://agent/{agent_space}/memories/skills/{skill_name}.md"
         viking_fs = get_viking_fs()
 
         if not viking_fs:
@@ -1222,7 +1270,7 @@ class MemoryExtractor:
                 skill_name, merged_stats, new_guidelines, fields=new_fields
             )
             await viking_fs.write_file(uri=uri, content=merged_content, ctx=ctx)
-            return self._create_skill_context(uri, candidate, ctx)
+            return self._create_skill_context(uri, candidate, ctx, agent_temp_uri=agent_temp_uri)
 
         existing_stats = self._parse_skill_statistics(existing)
         merged_stats = self._merge_skill_statistics(existing_stats, new_stats)
@@ -1284,7 +1332,7 @@ class MemoryExtractor:
             skill_name, merged_stats, merged_guidelines, fields=merged_fields
         )
         await viking_fs.write_file(uri=uri, content=merged_content, ctx=ctx)
-        return self._create_skill_context(uri, candidate, ctx, abstract_override=abstract_override)
+        return self._create_skill_context(uri, candidate, ctx, abstract_override=abstract_override, agent_temp_uri=agent_temp_uri)
 
     def _compute_skill_statistics_derived(self, stats: dict) -> dict:
         """计算 Skill 派生统计数据（成功率）"""
@@ -1436,12 +1484,18 @@ class MemoryExtractor:
         candidate: CandidateMemory,
         ctx: "RequestContext",
         abstract_override: Optional[str] = None,
+        agent_temp_uri: Optional[str] = None,
     ) -> Context:
         """创建 Skill Memory 的 Context 对象"""
         agent_space = ctx.user.agent_space_name()
+        # Use temp agent URI if provided (for COW pattern)
+        if agent_temp_uri:
+            parent_uri = f"{agent_temp_uri}/memories/skills"
+        else:
+            parent_uri = f"viking://agent/{agent_space}/memories/skills"
         return Context(
             uri=uri,
-            parent_uri=f"viking://agent/{agent_space}/memories/skills",
+            parent_uri=parent_uri,
             is_leaf=True,
             abstract=abstract_override or candidate.abstract,
             context_type=ContextType.MEMORY.value,

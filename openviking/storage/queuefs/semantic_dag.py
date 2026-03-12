@@ -48,11 +48,19 @@ class SemanticDagExecutor:
         context_type: str,
         max_concurrent_llm: int,
         ctx: RequestContext,
+        incremental_update: bool = False,
+        target_uri: Optional[str] = None,
+        semantic_msg_id: Optional[str] = None,
+        recursive: bool = True,
     ):
         self._processor = processor
         self._context_type = context_type
         self._max_concurrent_llm = max_concurrent_llm
         self._ctx = ctx
+        self._incremental_update = incremental_update
+        self._target_uri = target_uri
+        self._semantic_msg_id = semantic_msg_id
+        self._recursive = recursive
         self._llm_sem = asyncio.Semaphore(max_concurrent_llm)
         self._viking_fs = get_viking_fs()
         self._nodes: Dict[str, DirNode] = {}
@@ -62,7 +70,7 @@ class SemanticDagExecutor:
         self._stats = DagStats()
 
     async def run(self, root_uri: str) -> None:
-        """Run DAG execution starting from root_uri."""
+        """Run DAG execution starting from root_uri."""      
         self._root_uri = root_uri
         self._root_done = asyncio.Event()
         await self._dispatch_dir(root_uri, parent_uri=None)
@@ -79,8 +87,10 @@ class SemanticDagExecutor:
             children_dirs, file_paths = await self._list_dir(dir_uri)
             file_index = {path: idx for idx, path in enumerate(file_paths)}
             child_index = {path: idx for idx, path in enumerate(children_dirs)}
-            pending = len(children_dirs) + len(file_paths)
-
+            if self._recursive:
+                pending = len(children_dirs) + len(file_paths)
+            else:
+                pending = len(file_paths)
             node = DirNode(
                 uri=dir_uri,
                 children_dirs=children_dirs,
@@ -108,8 +118,10 @@ class SemanticDagExecutor:
                 self._stats.in_progress_nodes += 1
                 asyncio.create_task(self._file_summary_task(dir_uri, file_path))
 
-            for child_uri in children_dirs:
-                asyncio.create_task(self._dispatch_dir(child_uri, dir_uri))
+            if children_dirs:
+                if self._recursive:
+                    for child_uri in children_dirs:
+                        asyncio.create_task(self._dispatch_dir(child_uri, dir_uri))
         except Exception as e:
             logger.error(f"Failed to dispatch directory {dir_uri}: {e}", exc_info=True)
             if parent_uri:
@@ -141,13 +153,101 @@ class SemanticDagExecutor:
 
         return children_dirs, file_paths
 
+    def _get_target_file_path(self, current_uri: str) -> Optional[str]:
+        if not self._incremental_update or not self._target_uri or not self._root_uri:
+            logger.warning(f"Invalid target_uri or root_uri for incremental update: target_uri={self._target_uri}, root_uri={self._root_uri}")
+            return None
+        try:
+            relative_path = current_uri[len(self._root_uri):]
+            if relative_path.startswith("/"):
+                relative_path = relative_path[1:]
+            return f"{self._target_uri}/{relative_path}" if relative_path else self._target_uri
+        except Exception:
+            return None
+
+    async def _check_file_content_changed(self, file_path: str) -> bool:
+        target_path = self._get_target_file_path(file_path)
+        if not target_path:
+            return True
+        try:
+            current_content = await self._viking_fs.read_file(file_path, ctx=self._ctx)
+            target_content = await self._viking_fs.read_file(target_path, ctx=self._ctx)
+            return current_content != target_content
+        except Exception:
+            return True
+
+    async def _read_existing_summary(self, file_path: str) -> Optional[Dict[str, str]]:
+        target_path = self._get_target_file_path(file_path)
+        if not target_path:
+            return None
+        try:
+            vector_store = self._viking_fs._get_vector_store()
+            if not vector_store:
+                return None
+            records = await vector_store.get_context_by_uri(
+                account_id=self._ctx.account_id,
+                uri=target_path,
+                limit=1,
+            )
+            if records and len(records) > 0:
+                record = records[0]
+                summary = record.get("abstract", "")
+                if summary:
+                    file_name = file_path.split("/")[-1]
+                    return {"name": file_name, "summary": summary}
+        except Exception:
+            pass
+        return None
+
+    async def _check_dir_children_changed(self, dir_uri: str, current_files: List[str], current_dirs: List[str]) -> bool:
+        target_path = self._get_target_file_path(dir_uri)
+        if not target_path:
+            return True
+        try:
+            target_dirs, target_files = await self._list_dir(target_path)
+            current_file_names = {f.split("/")[-1] for f in current_files}
+            target_file_names = {f.split("/")[-1] for f in target_files}
+            if current_file_names != target_file_names:
+                return True
+            current_dir_names = {d.split("/")[-1] for d in current_dirs}
+            target_dir_names = {d.split("/")[-1] for d in target_dirs}
+            if current_dir_names != target_dir_names:
+                return True
+            for current_file in current_files:
+                if await self._check_file_content_changed(current_file):
+                    return True
+            return False
+        except Exception:
+            return True
+
+    async def _read_existing_overview_abstract(self, dir_uri: str) -> tuple[Optional[str], Optional[str]]:
+        target_path = self._get_target_file_path(dir_uri)
+        if not target_path:
+            return None, None
+        try:
+            overview = await self._viking_fs.read_file(f"{target_path}/.overview.md", ctx=self._ctx)
+            abstract = await self._viking_fs.read_file(f"{target_path}/.abstract.md", ctx=self._ctx)
+            return overview, abstract
+        except Exception:
+            return None, None
+
     async def _file_summary_task(self, parent_uri: str, file_path: str) -> None:
         """Generate file summary and notify parent completion."""
+
         file_name = file_path.split("/")[-1]
+        need_vectorize = True
         try:
-            summary_dict = await self._processor._generate_single_file_summary(
-                file_path, llm_sem=self._llm_sem, ctx=self._ctx
-            )
+            summary_dict = None
+            if self._incremental_update:
+                content_changed = await self._check_file_content_changed(file_path)
+
+                if not content_changed:
+                    summary_dict = await self._read_existing_summary(file_path)
+                    need_vectorize = False
+            if summary_dict is None:
+                summary_dict = await self._processor._generate_single_file_summary(
+                    file_path, llm_sem=self._llm_sem, ctx=self._ctx
+                )
         except Exception as e:
             logger.warning(f"Failed to generate summary for {file_path}: {e}")
             summary_dict = {"name": file_name, "summary": ""}
@@ -155,21 +255,21 @@ class SemanticDagExecutor:
             self._stats.done_nodes += 1
             self._stats.in_progress_nodes = max(0, self._stats.in_progress_nodes - 1)
 
-        await self._on_file_done(parent_uri, file_path, summary_dict)
-
-        # Vectorize file as soon as summary is ready to avoid waiting for overview.
         try:
-            asyncio.create_task(
-                self._processor._vectorize_single_file(
-                    parent_uri=parent_uri,
-                    context_type=self._context_type,
-                    file_path=file_path,
-                    summary_dict=summary_dict,
-                    ctx=self._ctx,
+            if need_vectorize:
+                asyncio.create_task(
+                    self._processor._vectorize_single_file(
+                        parent_uri=parent_uri,
+                        context_type=self._context_type,
+                        file_path=file_path,
+                        summary_dict=summary_dict,
+                        ctx=self._ctx,
+                        semantic_msg_id=self._semantic_msg_id,
+                    )
                 )
-            )
         except Exception as e:
             logger.error(f"Failed to schedule vectorization for {file_path}: {e}", exc_info=True)
+        await self._on_file_done(parent_uri, file_path, summary_dict)
 
     async def _on_file_done(
         self, parent_uri: str, file_path: str, summary_dict: Dict[str, str]
@@ -241,17 +341,27 @@ class SemanticDagExecutor:
         node = self._nodes.get(dir_uri)
         if not node:
             return
-
-        async with node.lock:
-            file_summaries = self._finalize_file_summaries(node)
-            children_abstracts = self._finalize_children_abstracts(node)
-
+        need_vectorize = True
         try:
-            async with self._llm_sem:
-                overview = await self._processor._generate_overview(
-                    dir_uri, file_summaries, children_abstracts
+            overview = None
+            abstract = None
+            if self._incremental_update:
+                children_changed = await self._check_dir_children_changed(
+                    dir_uri, node.file_paths, node.children_dirs
                 )
-            abstract = self._processor._extract_abstract_from_overview(overview)
+
+                if not children_changed:
+                    need_vectorize = False
+                    overview, abstract = await self._read_existing_overview_abstract(dir_uri)
+            if overview is None or abstract is None:
+                async with node.lock:
+                    file_summaries = self._finalize_file_summaries(node)
+                    children_abstracts = self._finalize_children_abstracts(node)
+                async with self._llm_sem:
+                    overview = await self._processor._generate_overview(
+                        dir_uri, file_summaries, children_abstracts
+                    )
+                abstract = self._processor._extract_abstract_from_overview(overview)
 
             try:
                 await self._viking_fs.write_file(f"{dir_uri}/.overview.md", overview, ctx=self._ctx)
@@ -260,9 +370,11 @@ class SemanticDagExecutor:
                 logger.warning(f"Failed to write overview/abstract for {dir_uri}: {e}")
 
             try:
-                await self._processor._vectorize_directory_simple(
-                    dir_uri, self._context_type, abstract, overview, ctx=self._ctx
-                )
+                if need_vectorize:
+                    await self._processor._vectorize_directory(
+                        dir_uri, self._context_type, abstract, overview, ctx=self._ctx,
+                        semantic_msg_id=self._semantic_msg_id,
+                    )
             except Exception as e:
                 logger.error(f"Failed to vectorize directory {dir_uri}: {e}", exc_info=True)
 

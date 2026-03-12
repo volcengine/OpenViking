@@ -116,6 +116,7 @@ async def vectorize_directory_meta(
     overview: str,
     context_type: str = "resource",
     ctx: Optional[RequestContext] = None,
+    semantic_msg_id: Optional[str] = None,
 ) -> None:
     """
     Vectorize directory metadata (.abstract.md and .overview.md).
@@ -147,6 +148,7 @@ async def vectorize_directory_meta(
     context_abstract.set_vectorize(Vectorize(text=abstract))
     msg_abstract = EmbeddingMsgConverter.from_context(context_abstract)
     if msg_abstract:
+        msg_abstract.semantic_msg_id = semantic_msg_id
         await embedding_queue.enqueue(msg_abstract)
         logger.debug(f"Enqueued directory L0 (abstract) for vectorization: {uri}")
 
@@ -165,6 +167,7 @@ async def vectorize_directory_meta(
     context_overview.set_vectorize(Vectorize(text=overview))
     msg_overview = EmbeddingMsgConverter.from_context(context_overview)
     if msg_overview:
+        msg_overview.semantic_msg_id = semantic_msg_id
         await embedding_queue.enqueue(msg_overview)
         logger.debug(f"Enqueued directory L1 (overview) for vectorization: {uri}")
 
@@ -175,6 +178,7 @@ async def vectorize_file(
     parent_uri: str,
     context_type: str = "resource",
     ctx: Optional[RequestContext] = None,
+    semantic_msg_id: Optional[str] = None,
 ) -> None:
     """
     Vectorize a single file.
@@ -246,6 +250,7 @@ async def vectorize_file(
         if not embedding_msg:
             return
 
+        embedding_msg.semantic_msg_id = semantic_msg_id
         await embedding_queue.enqueue(embedding_msg)
         logger.debug(f"Enqueued file for vectorization: {file_path}")
 
