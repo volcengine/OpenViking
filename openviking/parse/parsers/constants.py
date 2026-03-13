@@ -174,7 +174,6 @@ CODE_EXTENSIONS = {
     ".graphql",
     ".gql",
     ".prisma",
-    ".conf",
 }
 
 # Documentation file extensions for file type detection
@@ -225,7 +224,6 @@ ADDITIONAL_TEXT_EXTENSIONS = {
     ".yarnrc",
     ".env",
     ".env.example",
-    ".jsonl",
 }
 
 # Common text encodings to try for encoding detection (in order of likelihood)

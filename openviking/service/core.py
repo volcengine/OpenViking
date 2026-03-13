@@ -255,9 +255,7 @@ class OpenVikingService:
         )
 
         # Initialize processors
-        self._resource_processor = ResourceProcessor(
-            vikingdb=self._vikingdb_manager,
-        )
+        self._resource_processor = ResourceProcessor(vikingdb=self._vikingdb_manager)
         self._skill_processor = SkillProcessor(vikingdb=self._vikingdb_manager)
         self._session_compressor = SessionCompressor(vikingdb=self._vikingdb_manager)
 

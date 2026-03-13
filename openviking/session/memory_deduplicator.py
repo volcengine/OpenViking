@@ -117,19 +117,8 @@ class MemoryDeduplicator:
     async def _find_similar_memories(
         self,
         candidate: CandidateMemory,
-        user_temp_uri: Optional[str] = None,
-        agent_temp_uri: Optional[str] = None,
     ) -> List[Context]:
-        """Find similar existing memories using vector search.
-
-        Args:
-            candidate: Candidate memory
-            user_temp_uri: Temp user URI (for COW pattern)
-            agent_temp_uri: Temp agent URI (for COW pattern)
-
-        Returns:
-            List of similar memories with temp URIs (if temp URIs provided)
-        """
+        """Find similar existing memories using vector search."""
         if not self.embedder:
             return []
 
@@ -138,7 +127,6 @@ class MemoryDeduplicator:
         embed_result: EmbedResult = self.embedder.embed(query_text)
         query_vector = embed_result.dense_vector
 
-        # Search target URI (not temp URI) because vectors are stored for target URIs
         category_uri_prefix = self._category_uri_prefix(candidate.category.value, candidate.user)
 
         owner = candidate.user
@@ -189,25 +177,6 @@ class MemoryDeduplicator:
                     if context:
                         # Keep retrieval score for later destructive-action guardrails.
                         context.meta = {**(context.meta or {}), "_dedup_score": score}
-
-                        # Convert target URI to temp URI (for COW pattern)
-                        if user_temp_uri or agent_temp_uri:
-                            original_uri = context.uri
-                            # Convert user URI
-                            if user_temp_uri and original_uri.startswith("viking://user/"):
-                                parts = original_uri.split("/")
-                                if len(parts) >= 5:
-                                    rest = "/".join(parts[4:])
-                                    context.uri = f"{user_temp_uri}/{rest}"
-                                    logger.debug(f"Converted URI: {original_uri} -> {context.uri}")
-                            # Convert agent URI
-                            elif agent_temp_uri and original_uri.startswith("viking://agent/"):
-                                parts = original_uri.split("/")
-                                if len(parts) >= 5:
-                                    rest = "/".join(parts[4:])
-                                    context.uri = f"{agent_temp_uri}/{rest}"
-                                    logger.debug(f"Converted URI: {original_uri} -> {context.uri}")
-
                         similar.append(context)
             logger.debug("Dedup similar memories after threshold=%d", len(similar))
             return similar

@@ -78,57 +78,16 @@ class SessionCompressor:
         await self.extractor._enqueue_semantic_for_parent(memory.uri, ctx)
         return True
 
-    def _convert_to_temp_uri(
-        self, target_uri: str, user_temp_uri: Optional[str], agent_temp_uri: Optional[str]
-    ) -> str:
-        """Convert target URI to temp URI for COW pattern.
-
-        Args:
-            target_uri: Target URI (e.g., viking://user/... or viking://agent/...)
-            user_temp_uri: Temp user URI (if available)
-            agent_temp_uri: Temp agent URI (if available)
-
-        Returns:
-            Converted temp URI, or original URI if no temp available
-        """
-        if not user_temp_uri and not agent_temp_uri:
-            return target_uri
-
-        # Convert user URI
-        if target_uri.startswith("viking://user/") and user_temp_uri:
-            # viking://user/{user_space}/memories/... -> {user_temp_uri}/memories/...
-            parts = target_uri.split("/")
-            if len(parts) >= 5:
-                # parts[0]="viking:", parts[1]="", parts[2]="user", parts[3]="{user_space}", parts[4:]="memories/..."
-                rest = "/".join(parts[4:])
-                return f"{user_temp_uri}/{rest}"
-
-        # Convert agent URI
-        if target_uri.startswith("viking://agent/") and agent_temp_uri:
-            # viking://agent/{agent_space}/memories/... -> {agent_temp_uri}/memories/...
-            parts = target_uri.split("/")
-            if len(parts) >= 5:
-                # parts[0]="viking:", parts[1]="", parts[2]="agent", parts[3]="{agent_space}", parts[4:]="memories/..."
-                rest = "/".join(parts[4:])
-                return f"{agent_temp_uri}/{rest}"
-
-        return target_uri
-
     async def _merge_into_existing(
         self,
         candidate: CandidateMemory,
         target_memory: Context,
         viking_fs,
         ctx: RequestContext,
-        user_temp_uri: Optional[str] = None,
-        agent_temp_uri: Optional[str] = None,
     ) -> bool:
         """Merge candidate content into an existing memory file."""
         try:
-            # Convert target URI to temp URI for COW pattern
-            temp_uri = self._convert_to_temp_uri(target_memory.uri, user_temp_uri, agent_temp_uri)
-
-            existing_content = await viking_fs.read_file(temp_uri, ctx=ctx)
+            existing_content = await viking_fs.read_file(target_memory.uri, ctx=ctx)
             payload = await self.extractor._merge_memory_bundle(
                 existing_abstract=target_memory.abstract,
                 existing_overview=(target_memory.meta or {}).get("overview") or "",
@@ -142,41 +101,34 @@ class SessionCompressor:
             if not payload:
                 return False
 
-            await viking_fs.write_file(temp_uri, payload.content, ctx=ctx)
+            await viking_fs.write_file(target_memory.uri, payload.content, ctx=ctx)
             target_memory.abstract = payload.abstract
             target_memory.meta = {**(target_memory.meta or {}), "overview": payload.overview}
-            logger.info("Merged memory %s with abstract %s", temp_uri, target_memory.abstract)
+            logger.info(
+                "Merged memory %s with abstract %s", target_memory.uri, target_memory.abstract
+            )
             target_memory.set_vectorize(Vectorize(text=payload.content))
-            # Note: vectorization will be handled by SemanticQueue after directory switch
-            # await self._index_memory(target_memory, ctx)
+            await self._index_memory(target_memory, ctx)
             return True
         except Exception as e:
             logger.error(f"Failed to merge memory {target_memory.uri}: {e}")
             return False
 
     async def _delete_existing_memory(
-        self,
-        memory: Context,
-        viking_fs,
-        ctx: RequestContext,
-        user_temp_uri: Optional[str] = None,
-        agent_temp_uri: Optional[str] = None,
+        self, memory: Context, viking_fs, ctx: RequestContext
     ) -> bool:
         """Hard delete an existing memory file and clean up its vector record."""
         try:
-            # Convert target URI to temp URI for COW pattern
-            temp_uri = self._convert_to_temp_uri(memory.uri, user_temp_uri, agent_temp_uri)
-
-            await viking_fs.rm(temp_uri, recursive=False, ctx=ctx)
+            await viking_fs.rm(memory.uri, recursive=False, ctx=ctx)
         except Exception as e:
-            logger.error(f"Failed to delete memory file {temp_uri}: {e}")
+            logger.error(f"Failed to delete memory file {memory.uri}: {e}")
             return False
 
         try:
             # rm() already syncs vector deletion in most cases; keep this as a safe fallback.
-            await self.vikingdb.delete_uris(ctx, [temp_uri])
+            await self.vikingdb.delete_uris(ctx, [memory.uri])
         except Exception as e:
-            logger.warning(f"Failed to remove vector record for {temp_uri}: {e}")
+            logger.warning(f"Failed to remove vector record for {memory.uri}: {e}")
         return True
 
     async def extract_long_term_memories(
@@ -185,25 +137,9 @@ class SessionCompressor:
         user: Optional["UserIdentifier"] = None,
         session_id: Optional[str] = None,
         ctx: Optional[RequestContext] = None,
-        user_temp_uri: Optional[str] = None,
-        agent_temp_uri: Optional[str] = None,
         strict_extract_errors: bool = False,
     ) -> List[Context]:
-        """Extract long-term memories from messages.
-
-        Args:
-            messages: Messages to extract from
-            user: User identifier
-            session_id: Session ID
-            ctx: Request context
-            user_temp_uri: Temp user URI (for COW pattern). If provided, user memories
-                          will be written to this temp location.
-            agent_temp_uri: Temp agent URI (for COW pattern). If provided, agent memories
-                           will be written to this temp location.
-
-        Returns:
-            List of extracted memories
-        """
+        """Extract long-term memories from messages."""
         if not messages:
             return []
 
@@ -234,19 +170,11 @@ class SessionCompressor:
         for candidate in candidates:
             # Profile: skip dedup, always merge
             if candidate.category in ALWAYS_MERGE_CATEGORIES:
-                memory = await self.extractor.create_memory(
-                    candidate,
-                    user,
-                    session_id,
-                    ctx=ctx,
-                    user_temp_uri=user_temp_uri,
-                    agent_temp_uri=agent_temp_uri,
-                )
+                memory = await self.extractor.create_memory(candidate, user, session_id, ctx=ctx)
                 if memory:
                     memories.append(memory)
                     stats.created += 1
-                    # Note: vectorization will be handled by SemanticQueue after directory switch
-                    # await self._index_memory(memory, ctx)
+                    await self._index_memory(memory, ctx)
                 else:
                     stats.skipped += 1
                 continue
@@ -285,11 +213,11 @@ class SessionCompressor:
                         )
                     if skill_name:
                         memory = await self.extractor._merge_skill_memory(
-                            skill_name, candidate, ctx=ctx, agent_temp_uri=agent_temp_uri
+                            skill_name, candidate, ctx=ctx
                         )
                     elif tool_name:
                         memory = await self.extractor._merge_tool_memory(
-                            tool_name, candidate, ctx=ctx, agent_temp_uri=agent_temp_uri
+                            tool_name, candidate, ctx=ctx
                         )
                     else:
                         logger.warning("No tool_name or skill_name found, skipping")
@@ -298,8 +226,7 @@ class SessionCompressor:
                     if memory:
                         memories.append(memory)
                         stats.merged += 1
-                        # Note: vectorization will be handled by SemanticQueue after directory switch
-                        # await self._index_memory(memory, ctx)
+                        await self._index_memory(memory, ctx)
                 continue
 
             # Dedup check for other categories
@@ -329,11 +256,7 @@ class SessionCompressor:
                 for action in actions:
                     if action.decision == MemoryActionDecision.DELETE:
                         if viking_fs and await self._delete_existing_memory(
-                            action.memory,
-                            viking_fs,
-                            ctx=ctx,
-                            user_temp_uri=user_temp_uri,
-                            agent_temp_uri=agent_temp_uri,
+                            action.memory, viking_fs, ctx=ctx
                         ):
                             stats.deleted += 1
                         else:
@@ -341,17 +264,13 @@ class SessionCompressor:
                     elif action.decision == MemoryActionDecision.MERGE:
                         if candidate.category in MERGE_SUPPORTED_CATEGORIES and viking_fs:
                             if await self._merge_into_existing(
-                                candidate,
-                                action.memory,
-                                viking_fs,
-                                ctx=ctx,
-                                user_temp_uri=user_temp_uri,
-                                agent_temp_uri=agent_temp_uri,
+                                candidate, action.memory, viking_fs, ctx=ctx
                             ):
                                 stats.merged += 1
                             else:
                                 stats.skipped += 1
                         else:
+                            # events/cases don't support MERGE, treat as SKIP
                             stats.skipped += 1
                 continue
 
@@ -360,60 +279,24 @@ class SessionCompressor:
                 for action in actions:
                     if action.decision == MemoryActionDecision.DELETE:
                         if viking_fs and await self._delete_existing_memory(
-                            action.memory,
-                            viking_fs,
-                            ctx=ctx,
-                            user_temp_uri=user_temp_uri,
-                            agent_temp_uri=agent_temp_uri,
+                            action.memory, viking_fs, ctx=ctx
                         ):
                             stats.deleted += 1
                         else:
                             stats.skipped += 1
 
-                memory = await self.extractor.create_memory(
-                    candidate,
-                    user,
-                    session_id,
-                    ctx=ctx,
-                    user_temp_uri=user_temp_uri,
-                    agent_temp_uri=agent_temp_uri,
-                )
+                memory = await self.extractor.create_memory(candidate, user, session_id, ctx=ctx)
                 if memory:
                     memories.append(memory)
                     stats.created += 1
-                    # Note: vectorization will be handled by SemanticQueue after directory switch
-                    # await self._index_memory(memory, ctx)
+                    await self._index_memory(memory, ctx)
                 else:
                     stats.skipped += 1
 
         # Extract URIs used in messages, create relations
         used_uris = self._extract_used_uris(messages)
         if used_uris and memories:
-            # Convert memory URIs from temp to target for relation creation
-            target_memories = []
-            for memory in memories:
-                # Create a copy with target URI
-                target_uri = memory.uri
-                # If memory.uri is a temp URI, convert it to target URI
-                if user_temp_uri and memory.uri.startswith(user_temp_uri):
-                    target_uri = memory.uri.replace(
-                        user_temp_uri, f"viking://user/{ctx.user.user_space_name()}"
-                    )
-                elif agent_temp_uri and memory.uri.startswith(agent_temp_uri):
-                    target_uri = memory.uri.replace(
-                        agent_temp_uri, f"viking://agent/{ctx.user.agent_space_name()}"
-                    )
-
-                # Create a new Context with target URI for relation creation
-                target_memory = Context(
-                    uri=target_uri,
-                    context_type=memory.context_type,
-                    abstract=memory.abstract,
-                    meta=memory.meta,
-                )
-                target_memories.append(target_memory)
-
-            await self._create_relations(target_memories, used_uris, ctx=ctx)
+            await self._create_relations(memories, used_uris, ctx=ctx)
 
         logger.info(
             f"Memory extraction: created={stats.created}, "
