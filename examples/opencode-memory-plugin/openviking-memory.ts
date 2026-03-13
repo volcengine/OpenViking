@@ -3,6 +3,12 @@
  *
  * Exposes OpenViking's semantic memory capabilities as tools for AI agents.
  * Supports user profiles, preferences, entities, events, cases, and patterns.
+ * 
+ * Contributed by: littlelory@convolens.net
+ * GitHub: https://github.com/convolens
+ * We are building Enterprise AI assistant for consumer brands，with process awareness and memory,
+ * Serving product development to pre-launch lifecycle
+ * Copyright 2026 Convolens.
  */
 
 import type { Hooks, PluginInput } from "@opencode-ai/plugin"
