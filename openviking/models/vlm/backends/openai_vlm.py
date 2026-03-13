@@ -5,6 +5,7 @@
 import asyncio
 import base64
 import logging
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Union
 
@@ -54,8 +55,12 @@ class OpenAIVLM(VLMBase):
             )
         return
 
+    # Retry delays (seconds) on 429 RateLimitError before each successive attempt
+    _RATE_LIMIT_RETRY_DELAYS = [10, 30, 60]
+
     def get_completion(self, prompt: str, thinking: bool = False) -> str:
         """Get text completion"""
+        import openai
         client = self.get_client()
         kwargs = {
             "model": self.model or "gpt-4o-mini",
@@ -63,6 +68,15 @@ class OpenAIVLM(VLMBase):
             "temperature": self.temperature,
         }
 
+        for delay in self._RATE_LIMIT_RETRY_DELAYS:
+            try:
+                response = client.chat.completions.create(**kwargs)
+                self._update_token_usage_from_response(response)
+                return response.choices[0].message.content or ""
+            except openai.RateLimitError:
+                time.sleep(delay)
+
+        # Final attempt — let it raise naturally
         response = client.chat.completions.create(**kwargs)
         self._update_token_usage_from_response(response)
         return response.choices[0].message.content or ""
@@ -71,6 +85,7 @@ class OpenAIVLM(VLMBase):
         self, prompt: str, thinking: bool = False, max_retries: int = 0
     ) -> str:
         """Get text completion asynchronously"""
+        import openai
         client = self.get_async_client()
         kwargs = {
             "model": self.model or "gpt-4o-mini",
@@ -78,21 +93,18 @@ class OpenAIVLM(VLMBase):
             "temperature": self.temperature,
         }
 
-        last_error = None
-        for attempt in range(max_retries + 1):
+        for delay in self._RATE_LIMIT_RETRY_DELAYS:
             try:
                 response = await client.chat.completions.create(**kwargs)
                 self._update_token_usage_from_response(response)
                 return response.choices[0].message.content or ""
-            except Exception as e:
-                last_error = e
-                if attempt < max_retries:
-                    await asyncio.sleep(2**attempt)
+            except openai.RateLimitError:
+                await asyncio.sleep(delay)
 
-        if last_error:
-            raise last_error
-        else:
-            raise RuntimeError("Unknown error in async completion")
+        # Final attempt — let it raise naturally
+        response = await client.chat.completions.create(**kwargs)
+        self._update_token_usage_from_response(response)
+        return response.choices[0].message.content or ""
 
     def _detect_image_format(self, data: bytes) -> str:
         """Detect image format from magic bytes.
