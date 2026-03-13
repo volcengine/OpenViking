@@ -93,11 +93,58 @@ class LangfuseClient:
             session_id: Optional session ID to associate with all nested observations
             user_id: Optional user ID to associate with all nested observations
         """
-        # Skip langfuse propagate_attributes for now due to exception handling issues
-        # Just yield without wrapping
-        if self.enabled:
-            logger.debug(f"[LANGFUSE] propagate_attributes called with session_id={session_id}, user_id={user_id} (skipped)")
-        yield
+        if not self.enabled:
+            logger.warning("[LANGFUSE] propagate_attributes skipped: Langfuse client not enabled")
+            yield
+            return
+        if not self._client:
+            logger.warning(
+                "[LANGFUSE] propagate_attributes skipped: Langfuse client not initialized"
+            )
+            yield
+            return
+
+        propagate_kwargs = {}
+        if session_id:
+            propagate_kwargs["session_id"] = session_id
+        if user_id:
+            propagate_kwargs["user_id"] = user_id
+
+        if not propagate_kwargs:
+            yield
+            return
+
+        # Use module-level propagate_attributes from langfuse SDK v3
+        # Store in a local variable to avoid shadowing issues with the method name
+        global propagate_attributes
+        _propagate = propagate_attributes
+
+        if _propagate is None:
+            logger.warning(
+                "[LANGFUSE] propagate_attributes not available (SDK version may not support it)"
+            )
+            yield
+            return
+
+        # Only catch exceptions when ENTERING the context manager
+        # Don't wrap the yield - let exceptions from the inner block propagate normally
+        logger.info(f"[LANGFUSE] Propagating attributes: {list(propagate_kwargs.keys())}")
+        try:
+            cm = _propagate(**propagate_kwargs)
+            cm.__enter__()
+        except Exception as e:
+            logger.debug(f"[LANGFUSE] Failed to enter propagate_attributes: {e}")
+            yield
+            return
+
+        try:
+            yield
+        finally:
+            # Always exit the context manager
+            try:
+                cm.__exit__(None, None, None)
+            except Exception as e:
+                logger.debug(f"[LANGFUSE] Failed to exit propagate_attributes: {e}")
 
     @contextmanager
     def trace(
