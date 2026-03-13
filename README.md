@@ -99,7 +99,7 @@ OpenViking supports three VLM providers:
 
 | Provider | Description | Get API Key |
 |----------|-------------|-------------|
-| `volcengine` | Volcengine Doubao Models | [Volcengine Console](https://console.volcengine.com/ark) |
+| `volcengine` | Volcengine Doubao Models | [Volcengine Console](https://console.volcengine.com/ark/region:ark+cn-beijing/overview?briefPage=0&briefType=introduce&type=new&utm_content=OpenViking&utm_medium=devrel&utm_source=OWO&utm_term=OpenViking) |
 | `openai` | OpenAI Official API | [OpenAI Platform](https://platform.openai.com) |
 | `litellm` | Unified access to various third-party models (Anthropic, DeepSeek, Gemini, vLLM, Ollama, etc.) | See [LiteLLM Providers](https://docs.litellm.ai/docs/providers) |
 
@@ -125,7 +125,7 @@ Volcengine supports both model names and endpoint IDs. Using model names is reco
 }
 ```
 
-You can also use endpoint IDs (found in [Volcengine ARK Console](https://console.volcengine.com/ark)):
+You can also use endpoint IDs (found in [Volcengine ARK Console](https://console.volcengine.com/ark/region:ark+cn-beijing/overview?briefPage=0&briefType=introduce&type=new&utm_content=OpenViking&utm_medium=devrel&utm_source=OWO&utm_term=OpenViking):
 
 ```json
 {
