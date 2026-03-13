@@ -93,42 +93,11 @@ class LangfuseClient:
             session_id: Optional session ID to associate with all nested observations
             user_id: Optional user ID to associate with all nested observations
         """
-        if not self.enabled:
-            logger.warning("[LANGFUSE] propagate_attributes skipped: Langfuse client not enabled")
-            yield
-            return
-        if not self._client:
-            logger.warning(
-                "[LANGFUSE] propagate_attributes skipped: Langfuse client not initialized"
-            )
-            yield
-            return
-
-        try:
-            propagate_kwargs = {}
-            if session_id:
-                propagate_kwargs["session_id"] = session_id
-            if user_id:
-                propagate_kwargs["user_id"] = user_id
-
-            if not propagate_kwargs:
-                yield
-                return
-
-            # Use module-level propagate_attributes from langfuse SDK v3
-            global propagate_attributes
-            if propagate_attributes is not None:
-                logger.info(f"[LANGFUSE] Propagating attributes: {list(propagate_kwargs.keys())}")
-                with propagate_attributes(**propagate_kwargs):
-                    yield
-            else:
-                logger.warning(
-                    "[LANGFUSE] propagate_attributes not available (SDK version may not support it)"
-                )
-                yield
-        except Exception as e:
-            logger.debug(f"[LANGFUSE] propagate_attributes error: {e}")
-            yield
+        # Skip langfuse propagate_attributes for now due to exception handling issues
+        # Just yield without wrapping
+        if self.enabled:
+            logger.debug(f"[LANGFUSE] propagate_attributes called with session_id={session_id}, user_id={user_id} (skipped)")
+        yield
 
     @contextmanager
     def trace(
