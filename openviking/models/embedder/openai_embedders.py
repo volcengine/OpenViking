@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """OpenAI Embedder Implementation"""
 
+import time
 from typing import Any, Dict, List, Optional
 
 import openai
@@ -79,6 +80,21 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             # Use default value, text-embedding-3-small defaults to 1536
             return 1536
 
+    # ~4 chars/token; keep well under the 8192-token context window
+    _MAX_CHARS = 30000
+    # Retry delays (seconds) on 429 RateLimitError before each successive attempt
+    _RATE_LIMIT_RETRY_DELAYS = [10, 30, 60]
+
+    def _call_with_retry(self, fn):
+        """Call fn(), retrying with increasing delays on RateLimitError."""
+        for delay in self._RATE_LIMIT_RETRY_DELAYS:
+            try:
+                return fn()
+            except openai.RateLimitError:
+                time.sleep(delay)
+        # Final attempt — let it raise naturally
+        return fn()
+
     def embed(self, text: str) -> EmbedResult:
         """Perform dense embedding on text
 
@@ -92,14 +108,16 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             RuntimeError: When API call fails
         """
         try:
+            text = text[: self._MAX_CHARS]
             kwargs = {"input": text, "model": self.model_name}
             if self.dimension:
                 kwargs["dimensions"] = self.dimension
 
-            response = self.client.embeddings.create(**kwargs)
-            vector = response.data[0].embedding
+            def _call():
+                response = self.client.embeddings.create(**kwargs)
+                return EmbedResult(dense_vector=response.data[0].embedding)
 
-            return EmbedResult(dense_vector=vector)
+            return self._call_with_retry(_call)
         except openai.APIError as e:
             raise RuntimeError(f"OpenAI API error: {e.message}") from e
         except Exception as e:
@@ -121,13 +139,16 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             return []
 
         try:
+            texts = [t[: self._MAX_CHARS] for t in texts]
             kwargs = {"input": texts, "model": self.model_name}
             if self.dimension:
                 kwargs["dimensions"] = self.dimension
 
-            response = self.client.embeddings.create(**kwargs)
+            def _call():
+                response = self.client.embeddings.create(**kwargs)
+                return [EmbedResult(dense_vector=item.embedding) for item in response.data]
 
-            return [EmbedResult(dense_vector=item.embedding) for item in response.data]
+            return self._call_with_retry(_call)
         except openai.APIError as e:
             raise RuntimeError(f"OpenAI API error: {e.message}") from e
         except Exception as e:
