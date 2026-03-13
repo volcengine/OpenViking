@@ -137,6 +137,7 @@ index_meta = {
 | `local` | Local persistence |
 | `http` | HTTP remote service |
 | `volcengine` | Volcengine VikingDB |
+| `oceanbase` | OceanBase vector database |
 
 ## Vector Synchronization
 

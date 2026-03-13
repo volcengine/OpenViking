@@ -7,6 +7,7 @@ from __future__ import annotations
 from .base import CollectionAdapter
 from .http_adapter import HttpCollectionAdapter
 from .local_adapter import LocalCollectionAdapter
+from .oceanbase_adapter import OceanBaseCollectionAdapter
 from .vikingdb_private_adapter import VikingDBPrivateCollectionAdapter
 from .volcengine_adapter import VolcengineCollectionAdapter
 
@@ -15,6 +16,7 @@ _ADAPTER_REGISTRY: dict[str, type[CollectionAdapter]] = {
     "http": HttpCollectionAdapter,
     "volcengine": VolcengineCollectionAdapter,
     "vikingdb": VikingDBPrivateCollectionAdapter,
+    "oceanbase": OceanBaseCollectionAdapter,
 }
 
 

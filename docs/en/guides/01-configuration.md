@@ -488,7 +488,7 @@ Vector database storage configuration
 
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
-| `backend` | str | VectorDB backend type: 'local' (file-based), 'http' (remote service), 'volcengine' (cloud VikingDB), or 'vikingdb' (private deployment) | "local" |
+| `backend` | str | VectorDB backend: 'local', 'http', 'volcengine', 'vikingdb', or 'oceanbase' (OceanBase) | "local" |
 | `name` | str | VectorDB collection name | "context" |
 | `url` | str | Remote service URL for 'http' type (e.g., 'http://localhost:5000') | null |
 | `project_name` | str | Project name (alias project) | "default" |
@@ -497,6 +497,7 @@ Vector database storage configuration
 | `sparse_weight` | float | Sparse weight for hybrid vector search, only effective when using hybrid index | 0.0 |
 | `volcengine` | object | 'volcengine' type VikingDB configuration | - |
 | `vikingdb` | object | 'vikingdb' type private deployment configuration | - |
+| `oceanbase` | object | OceanBase config when backend is 'oceanbase' | - |
 
 Default local mode
 ```
@@ -525,6 +526,29 @@ Supports cloud-deployed VikingDB on Volcengine
         "ak": "your-access-key",
         "sk": "your-secret-key"
       }
+  }
+}
+```
+</details>
+
+<details>
+<summary><b>OceanBase (oceanbase)</b></summary>
+Use [OceanBase](https://www.oceanbase.com/) as the vector backend. See [OceanBase integration guide](./06-oceanbase-integration.md) for installation and configuration.
+
+```json
+{
+  "storage": {
+    "vectordb": {
+      "name": "context",
+      "backend": "oceanbase",
+      "distance_metric": "cosine",
+      "oceanbase": {
+        "uri": "127.0.0.1:2881",
+        "user": "root@test",
+        "password": "your-password",
+        "db_name": "test"
+      }
+    }
   }
 }
 ```
