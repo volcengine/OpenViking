@@ -67,6 +67,8 @@ interface BufferedMessage {
 const sessionMessageBuffer = new Map<string, BufferedMessage[]>()  // sessionId → messages
 const MAX_BUFFERED_MESSAGES_PER_SESSION = 100
 const BUFFERED_MESSAGE_TTL_MS = 15 * 60 * 1000
+const BUFFER_CLEANUP_INTERVAL_MS = 30 * 1000
+let lastBufferCleanupAt = 0
 
 // ============================================================================
 // Logging
@@ -350,13 +352,20 @@ function loadConfig(): OpenVikingConfig {
     if (fs.existsSync(configPath)) {
       const fileContent = fs.readFileSync(configPath, "utf-8")
       const fileConfig = JSON.parse(fileContent)
-      const config = { ...DEFAULT_CONFIG, ...fileConfig }
+      const config = {
+        ...DEFAULT_CONFIG,
+        ...fileConfig,
+        autoCommit: fileConfig.autoCommit
+          ? {
+              ...DEFAULT_CONFIG.autoCommit,
+              ...fileConfig.autoCommit,
+            }
+          : DEFAULT_CONFIG.autoCommit
+            ? { ...DEFAULT_CONFIG.autoCommit }
+            : undefined,
+      }
       if (config.autoCommit) {
-        config.autoCommit = {
-          ...DEFAULT_CONFIG.autoCommit,
-          ...config.autoCommit,
-          intervalMinutes: getAutoCommitIntervalMinutes(config),
-        }
+        config.autoCommit.intervalMinutes = getAutoCommitIntervalMinutes(config)
       }
 
       // Environment variable takes precedence over config file
@@ -371,7 +380,12 @@ function loadConfig(): OpenVikingConfig {
   }
 
   // Check environment variable even if config file doesn't exist
-  const config = { ...DEFAULT_CONFIG }
+  const config = {
+    ...DEFAULT_CONFIG,
+    autoCommit: DEFAULT_CONFIG.autoCommit
+      ? { ...DEFAULT_CONFIG.autoCommit }
+      : undefined,
+  }
   if (process.env.OPENVIKING_API_KEY) {
     config.apiKey = process.env.OPENVIKING_API_KEY
   }
@@ -525,15 +539,19 @@ function upsertBufferedMessage(
   updates: Partial<Pick<BufferedMessage, "role" | "content">>,
 ): void {
   const now = Date.now()
-  for (const [bufferedSessionId, bufferedMessages] of sessionMessageBuffer.entries()) {
-    const freshMessages = bufferedMessages.filter((message) => now - message.timestamp <= BUFFERED_MESSAGE_TTL_MS)
-    if (freshMessages.length === 0) {
-      sessionMessageBuffer.delete(bufferedSessionId)
-      continue
+
+  if (now - lastBufferCleanupAt >= BUFFER_CLEANUP_INTERVAL_MS) {
+    for (const [bufferedSessionId, bufferedMessages] of sessionMessageBuffer.entries()) {
+      const freshMessages = bufferedMessages.filter((message) => now - message.timestamp <= BUFFERED_MESSAGE_TTL_MS)
+      if (freshMessages.length === 0) {
+        sessionMessageBuffer.delete(bufferedSessionId)
+        continue
+      }
+      if (freshMessages.length !== bufferedMessages.length) {
+        sessionMessageBuffer.set(bufferedSessionId, freshMessages)
+      }
     }
-    if (freshMessages.length !== bufferedMessages.length) {
-      sessionMessageBuffer.set(bufferedSessionId, freshMessages)
-    }
+    lastBufferCleanupAt = now
   }
 
   const existingBuffer = sessionMessageBuffer.get(sessionId) ?? []
