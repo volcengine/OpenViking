@@ -65,6 +65,8 @@ interface BufferedMessage {
   timestamp: number
 }
 const sessionMessageBuffer = new Map<string, BufferedMessage[]>()  // sessionId → messages
+const MAX_BUFFERED_MESSAGES_PER_SESSION = 100
+const BUFFERED_MESSAGE_TTL_MS = 15 * 60 * 1000
 
 // ============================================================================
 // Logging
@@ -349,6 +351,13 @@ function loadConfig(): OpenVikingConfig {
       const fileContent = fs.readFileSync(configPath, "utf-8")
       const fileConfig = JSON.parse(fileContent)
       const config = { ...DEFAULT_CONFIG, ...fileConfig }
+      if (config.autoCommit) {
+        config.autoCommit = {
+          ...DEFAULT_CONFIG.autoCommit,
+          ...config.autoCommit,
+          intervalMinutes: getAutoCommitIntervalMinutes(config),
+        }
+      }
 
       // Environment variable takes precedence over config file
       if (process.env.OPENVIKING_API_KEY) {
@@ -365,6 +374,9 @@ function loadConfig(): OpenVikingConfig {
   const config = { ...DEFAULT_CONFIG }
   if (process.env.OPENVIKING_API_KEY) {
     config.apiKey = process.env.OPENVIKING_API_KEY
+  }
+  if (config.autoCommit) {
+    config.autoCommit.intervalMinutes = getAutoCommitIntervalMinutes(config)
   }
 
   return config
@@ -397,7 +409,7 @@ async function makeRequest<T = any>(config: OpenVikingConfig, options: HttpReque
 
   // Chain with tool's abort signal if provided
   const signal = options.abortSignal
-    ? (options.abortSignal.addEventListener("abort", () => controller.abort()), controller.signal)
+    ? AbortSignal.any([options.abortSignal, controller.signal])
     : controller.signal
 
   try {
@@ -451,7 +463,7 @@ async function makeRequest<T = any>(config: OpenVikingConfig, options: HttpReque
 
     if (error.message?.includes("fetch failed") || error.code === "ECONNREFUSED") {
       throw new Error(
-        `OpenViking service unavailable at ${config.endpoint}. Please check if the service is running (try: ov serve).`,
+        `OpenViking service unavailable at ${config.endpoint}. Please check if the service is running (try: openviking-server).`,
       )
     }
 
@@ -505,6 +517,55 @@ function mergeMessageContent(existing: string | undefined, incoming: string): st
   if (next.includes(existing)) return next
   if (existing.includes(next)) return existing
   return `${existing}\n${next}`.trim()
+}
+
+function upsertBufferedMessage(
+  sessionId: string,
+  messageId: string,
+  updates: Partial<Pick<BufferedMessage, "role" | "content">>,
+): void {
+  const now = Date.now()
+  for (const [bufferedSessionId, bufferedMessages] of sessionMessageBuffer.entries()) {
+    const freshMessages = bufferedMessages.filter((message) => now - message.timestamp <= BUFFERED_MESSAGE_TTL_MS)
+    if (freshMessages.length === 0) {
+      sessionMessageBuffer.delete(bufferedSessionId)
+      continue
+    }
+    if (freshMessages.length !== bufferedMessages.length) {
+      sessionMessageBuffer.set(bufferedSessionId, freshMessages)
+    }
+  }
+
+  const existingBuffer = sessionMessageBuffer.get(sessionId) ?? []
+  const freshBuffer = existingBuffer.filter((message) => now - message.timestamp <= BUFFERED_MESSAGE_TTL_MS)
+
+  let buffered = freshBuffer.find((message) => message.messageId === messageId)
+  if (!buffered) {
+    while (freshBuffer.length >= MAX_BUFFERED_MESSAGES_PER_SESSION) {
+      freshBuffer.shift()
+    }
+    buffered = { messageId, timestamp: now }
+    freshBuffer.push(buffered)
+  } else {
+    buffered.timestamp = now
+  }
+
+  if (updates.role) {
+    buffered.role = updates.role
+  }
+  if (updates.content) {
+    buffered.content = mergeMessageContent(buffered.content, updates.content)
+  }
+
+  sessionMessageBuffer.set(sessionId, freshBuffer)
+}
+
+function getAutoCommitIntervalMinutes(config: OpenVikingConfig): number {
+  const configured = Number(config.autoCommit?.intervalMinutes ?? DEFAULT_CONFIG.autoCommit?.intervalMinutes ?? 10)
+  if (!Number.isFinite(configured)) {
+    return DEFAULT_CONFIG.autoCommit?.intervalMinutes ?? 10
+  }
+  return Math.max(1, configured)
 }
 
 function resolveEventSessionId(event: any): string | undefined {
@@ -916,7 +977,7 @@ function startAutoCommit(config: OpenVikingConfig) {
 
   log("INFO", "auto-commit", "Auto-commit scheduler started", {
     check_interval_seconds: 60,
-    commit_interval_minutes: config.autoCommit.intervalMinutes
+    commit_interval_minutes: getAutoCommitIntervalMinutes(config)
   })
 }
 
@@ -929,7 +990,7 @@ function stopAutoCommit() {
 }
 
 async function checkAndCommitSessions(config: OpenVikingConfig): Promise<void> {
-  const intervalMs = (config.autoCommit?.intervalMinutes ?? 10) * 60 * 1000
+  const intervalMs = getAutoCommitIntervalMinutes(config) * 60 * 1000
   const now = Date.now()
 
   for (const [opencodeSessionId, mapping] of sessionMap.entries()) {
@@ -990,23 +1051,6 @@ async function addMessageToSession(
     })
     return false
   }
-}
-
-/**
- * Extract text content from message parts
- */
-function extractMessageContent(parts: any[]): string {
-  if (!Array.isArray(parts)) return ""
-
-  const textParts: string[] = []
-
-  for (const part of parts) {
-    if (part.type === "text" && part.text) {
-      textParts.push(part.text)
-    }
-  }
-
-  return textParts.join("\n").trim()
 }
 
 // ============================================================================
@@ -1262,18 +1306,7 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
         const mapping = sessionMap.get(sessionId)
         if (!mapping) {
           // Buffer this message for later processing
-          if (!sessionMessageBuffer.has(sessionId)) {
-            sessionMessageBuffer.set(sessionId, [])
-          }
-          const buffer = sessionMessageBuffer.get(sessionId)!
-          let buffered = buffer.find(m => m.messageId === messageId)
-          if (!buffered) {
-            buffered = { messageId, timestamp: Date.now() }
-            buffer.push(buffered)
-          }
-          if (role) {
-            buffered.role = role
-          }
+          upsertBufferedMessage(sessionId, messageId, role ? { role } : {})
           log("DEBUG", "message", "Message buffered (no session mapping yet)", {
             session_id: sessionId,
             message_id: messageId,
@@ -1329,16 +1362,7 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
         if (!mapping) {
           // Buffer this message content for later processing
           if (partType === "text" && part.text && part.text.trim().length > 0) {
-            if (!sessionMessageBuffer.has(sessionId)) {
-              sessionMessageBuffer.set(sessionId, [])
-            }
-            const buffer = sessionMessageBuffer.get(sessionId)!
-            let buffered = buffer.find(m => m.messageId === messageId)
-            if (!buffered) {
-              buffered = { messageId, timestamp: Date.now() }
-              buffer.push(buffered)
-            }
-            buffered.content = mergeMessageContent(buffered.content, part.text)
+            upsertBufferedMessage(sessionId, messageId, { content: part.text })
             log("DEBUG", "message", "Message content buffered (no session mapping yet)", {
               session_id: sessionId,
               message_id: messageId,
@@ -1369,8 +1393,6 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
               commit_in_flight: mapping.commitInFlight === true,
             })
           }
-
-          await flushPendingMessages(sessionId, mapping, config)
         }
       }
     },
