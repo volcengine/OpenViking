@@ -80,8 +80,10 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             # Use default value, text-embedding-3-small defaults to 1536
             return 1536
 
-    # ~4 chars/token; keep well under the 8192-token context window
-    _MAX_CHARS = 30000
+    # Dense/structured text (e.g. YAML, JSON) can encode at ~1 char/token.
+    # Use 7000 chars to safely stay under the 8192-token context window limit
+    # regardless of content type.
+    _MAX_CHARS = 7000
     # Retry delays (seconds) on 429 RateLimitError before each successive attempt
     _RATE_LIMIT_RETRY_DELAYS = [10, 30, 60]
 
