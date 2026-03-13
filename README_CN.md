@@ -487,6 +487,8 @@ ov chat
 
 👉 **[查看：OpenClaw 记忆插件](examples/openclaw-memory-plugin/README.md)**
 
+👉 **[查看：OpenCode 记忆插件示例](examples/opencode-memory-plugin/README.md)**
+
 ## VikingBot 部署详情
 
 OpenViking 有一个类似 nanobot 的机器人用于交互工作，现已可用。

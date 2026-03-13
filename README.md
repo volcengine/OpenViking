@@ -491,6 +491,8 @@ After integrating OpenViking:
 
 👉 **[View: OpenClaw Memory Plugin](examples/openclaw-memory-plugin/README.md)**
 
+👉 **[View: OpenCode Memory Plugin Example](examples/opencode-memory-plugin/README.md)**
+
 --
 
 ## Core Concepts
