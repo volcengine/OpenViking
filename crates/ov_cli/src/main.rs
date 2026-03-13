@@ -339,7 +339,7 @@ enum Commands {
         #[arg(short, long)]
         session: Option<String>,
         /// Sender ID
-        #[arg(short, long, default_value = "cli_user")]
+        #[arg(short, long, default_value = "user")]
         sender: String,
         /// Stream the response (default: true)
         #[arg(long, default_value_t = true)]
