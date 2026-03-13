@@ -269,7 +269,7 @@ def scan_directory(
 
             classification = _classify_file(file_path, effective_registry)
             classified = ClassifiedFile(
-                path=file_path, rel_path=rel_path, classification=classification
+                path=file_path, rel_path=rel_path_norm, classification=classification
             )
             if classification == CLASS_PROCESSABLE:
                 result.processable.append(classified)
