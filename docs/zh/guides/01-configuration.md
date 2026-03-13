@@ -121,7 +121,7 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | `max_concurrent` | int | 最大并发 Embedding 请求数（`embedding.max_concurrent`，默认：`10`） |
-| `provider` | str | `"volcengine"`、`"openai"`、`"vikingdb"` 或 `"jina"` |
+| `provider` | str | `"volcengine"`、`"openai"`、`"vikingdb"`、`"jina"` 或 `"google"` |
 | `api_key` | str | API Key |
 | `model` | str | 模型名称 |
 | `dimension` | int | 向量维度 |
@@ -134,6 +134,8 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 |------|------|----------|------|
 | `doubao-embedding-vision-250615` | 1024 | multimodal | 推荐 |
 | `doubao-embedding-250615` | 1024 | text | 仅文本 |
+| `gemini-embedding-2-preview` | 3072 | text | Google Gemini Embedding 2 支持 MRL |
+| `gemini-embedding-001` | 768 | text | Google 传统文本模型 |
 
 使用 `input: "multimodal"` 时，OpenViking 可以嵌入文本、图片（PNG、JPG 等）和混合内容。
 
@@ -142,6 +144,7 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 - `volcengine`: 火山引擎 Embedding API
 - `vikingdb`: VikingDB Embedding API
 - `jina`: Jina AI Embedding API
+- `google`: Google/Gemini AI Embedding API
 
 **vikingdb provider 配置示例:**
 
@@ -196,6 +199,27 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 ```
 
 获取 API Key: https://jina.ai
+
+**google provider 配置示例:**
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "google",
+      "api_key": "your-gemini-api-key",
+      "model": "gemini-embedding-2-preview",
+      "dimension": 3072
+    }
+  }
+}
+```
+
+可用 Google/Gemini 模型:
+- `gemini-embedding-2-preview`: 3072 维, 支持 Matryoshka 降维 (默认)
+- `gemini-embedding-001`: 768 维, 传统文本模型
+
+获取 API Key: https://aistudio.google.com/app/apikey
 
 #### Sparse Embedding
 

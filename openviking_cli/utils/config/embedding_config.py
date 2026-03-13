@@ -16,7 +16,7 @@ class EmbeddingModelConfig(BaseModel):
     input: str = Field(default="multimodal", description="Input type: 'text' or 'multimodal'")
     provider: Optional[str] = Field(
         default="volcengine",
-        description="Provider type: 'openai', 'volcengine', 'vikingdb', 'jina'",
+        description="Provider type: 'openai', 'volcengine', 'vikingdb', 'jina', 'google'",
     )
     backend: Optional[str] = Field(
         default="volcengine",
@@ -53,9 +53,9 @@ class EmbeddingModelConfig(BaseModel):
         if not self.provider:
             raise ValueError("Embedding provider is required")
 
-        if self.provider not in ["openai", "volcengine", "vikingdb", "jina"]:
+        if self.provider not in ["openai", "volcengine", "vikingdb", "jina", "google"]:
             raise ValueError(
-                f"Invalid embedding provider: '{self.provider}'. Must be one of: 'openai', 'volcengine', 'vikingdb', 'jina'"
+                f"Invalid embedding provider: '{self.provider}'. Must be one of: 'openai', 'volcengine', 'vikingdb', 'jina', 'google'"
             )
 
         # Provider-specific validation
@@ -84,6 +84,10 @@ class EmbeddingModelConfig(BaseModel):
         elif self.provider == "jina":
             if not self.api_key:
                 raise ValueError("Jina provider requires 'api_key' to be set")
+
+        elif self.provider == "google":
+            if not self.api_key:
+                raise ValueError("Google provider requires 'api_key' to be set")
 
         return self
 
@@ -134,6 +138,7 @@ class EmbeddingConfig(BaseModel):
             ValueError: If provider/type combination is not supported
         """
         from openviking.models.embedder import (
+            GoogleDenseEmbedder,
             JinaDenseEmbedder,
             OpenAIDenseEmbedder,
             VikingDBDenseEmbedder,
@@ -222,6 +227,15 @@ class EmbeddingConfig(BaseModel):
             ),
             ("jina", "dense"): (
                 JinaDenseEmbedder,
+                lambda cfg: {
+                    "model_name": cfg.model,
+                    "api_key": cfg.api_key,
+                    "api_base": cfg.api_base,
+                    "dimension": cfg.dimension,
+                },
+            ),
+            ("google", "dense"): (
+                GoogleDenseEmbedder,
                 lambda cfg: {
                     "model_name": cfg.model,
                     "api_key": cfg.api_key,

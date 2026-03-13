@@ -9,6 +9,7 @@ Provides three embedder abstractions:
 - HybridEmbedderBase: Returns both dense and sparse vectors
 
 Supported providers:
+- Google/Gemini: Dense only
 - OpenAI: Dense only
 - Volcengine: Dense, Sparse, Hybrid
 - Jina AI: Dense only
@@ -22,6 +23,7 @@ from openviking.models.embedder.base import (
     HybridEmbedderBase,
     SparseEmbedderBase,
 )
+from openviking.models.embedder.google_embedders import GoogleDenseEmbedder
 from openviking.models.embedder.jina_embedders import JinaDenseEmbedder
 from openviking.models.embedder.openai_embedders import OpenAIDenseEmbedder
 from openviking.models.embedder.vikingdb_embedders import (
@@ -43,6 +45,8 @@ __all__ = [
     "SparseEmbedderBase",
     "HybridEmbedderBase",
     "CompositeHybridEmbedder",
+    # Google/Gemini implementations
+    "GoogleDenseEmbedder",
     # Jina AI implementations
     "JinaDenseEmbedder",
     # OpenAI implementations
