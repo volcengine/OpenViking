@@ -484,6 +484,25 @@ class Session:
             # 2.5 Update active_count
             active_count_updated = await self._update_active_counts_async()
             result["active_count_updated"] = active_count_updated
+
+            # 2.6 Clear live session's messages.jsonl immediately.
+            #
+            # The atomic temp→live switch (Phase 3) is handled asynchronously
+            # by SemanticProcessor and may complete much later.  If the session
+            # object is evicted from memory and reloaded from disk before that
+            # switch happens, the old messages.jsonl in the live directory would
+            # be read back — causing duplicate commits on a subsequent call.
+            #
+            # Writing an empty messages.jsonl to the *live* directory here
+            # closes this race window: even if the session is reloaded before
+            # the semantic switch, it will find no messages to re-commit.
+            await self._viking_fs.write_file(
+                f"{self._session_uri}/messages.jsonl", "", ctx=self.ctx
+            )
+            logger.info(
+                f"Cleared live messages.jsonl for session {self.session_id} "
+                "to prevent duplicate commits before semantic switch"
+            )
         except Exception as e:
             logger.error(f"Failed to write changes to temp: {e}")
             await self._cleanup_temp_uris()
