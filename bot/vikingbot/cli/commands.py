@@ -563,7 +563,7 @@ def chat(
     ),
     sender: str = typer.Option(
         None, "--sender", help="Sender ID, same usage as feishu channel sender"
-    )
+    ),
 ):
     """Interact with the agent directly."""
     if message is not None:
