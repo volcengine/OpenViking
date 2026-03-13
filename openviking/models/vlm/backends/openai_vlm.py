@@ -68,15 +68,20 @@ class OpenAIVLM(VLMBase):
             "temperature": self.temperature,
         }
 
-        for delay in self._RATE_LIMIT_RETRY_DELAYS:
+        for attempt, delay in enumerate(self._RATE_LIMIT_RETRY_DELAYS, start=1):
             try:
                 response = client.chat.completions.create(**kwargs)
                 self._update_token_usage_from_response(response)
                 return response.choices[0].message.content or ""
             except openai.RateLimitError:
+                logger.warning(
+                    f"VLM rate limited (429), attempt {attempt}/{len(self._RATE_LIMIT_RETRY_DELAYS)}. "
+                    f"Retrying in {delay}s..."
+                )
                 time.sleep(delay)
 
         # Final attempt — let it raise naturally
+        logger.warning("VLM rate limited (429), making final attempt...")
         response = client.chat.completions.create(**kwargs)
         self._update_token_usage_from_response(response)
         return response.choices[0].message.content or ""
@@ -93,15 +98,20 @@ class OpenAIVLM(VLMBase):
             "temperature": self.temperature,
         }
 
-        for delay in self._RATE_LIMIT_RETRY_DELAYS:
+        for attempt, delay in enumerate(self._RATE_LIMIT_RETRY_DELAYS, start=1):
             try:
                 response = await client.chat.completions.create(**kwargs)
                 self._update_token_usage_from_response(response)
                 return response.choices[0].message.content or ""
             except openai.RateLimitError:
+                logger.warning(
+                    f"VLM rate limited (429), attempt {attempt}/{len(self._RATE_LIMIT_RETRY_DELAYS)}. "
+                    f"Retrying in {delay}s..."
+                )
                 await asyncio.sleep(delay)
 
         # Final attempt — let it raise naturally
+        logger.warning("VLM rate limited (429), making final attempt...")
         response = await client.chat.completions.create(**kwargs)
         self._update_token_usage_from_response(response)
         return response.choices[0].message.content or ""
