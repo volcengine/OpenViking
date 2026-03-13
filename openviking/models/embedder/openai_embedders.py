@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """OpenAI Embedder Implementation"""
 
+import logging
 import time
 from typing import Any, Dict, List, Optional
 
@@ -80,21 +81,27 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             # Use default value, text-embedding-3-small defaults to 1536
             return 1536
 
-    # Dense/structured text (e.g. YAML, JSON) can encode at ~1 char/token.
-    # Use 7000 chars to safely stay under the 8192-token context window limit
-    # regardless of content type.
+    # YAML/dense text can be ~1 char/token; use 7000 chars to safely stay
+    # under the 8192-token context window limit regardless of content type
     _MAX_CHARS = 7000
     # Retry delays (seconds) on 429 RateLimitError before each successive attempt
     _RATE_LIMIT_RETRY_DELAYS = [10, 30, 60]
 
+    _logger = logging.getLogger(__name__)
+
     def _call_with_retry(self, fn):
         """Call fn(), retrying with increasing delays on RateLimitError."""
-        for delay in self._RATE_LIMIT_RETRY_DELAYS:
+        for attempt, delay in enumerate(self._RATE_LIMIT_RETRY_DELAYS, start=1):
             try:
                 return fn()
             except openai.RateLimitError:
+                self._logger.warning(
+                    f"Embedding rate limited (429), attempt {attempt}/{len(self._RATE_LIMIT_RETRY_DELAYS)}. "
+                    f"Retrying in {delay}s..."
+                )
                 time.sleep(delay)
         # Final attempt — let it raise naturally
+        self._logger.warning("Embedding rate limited (429), making final attempt...")
         return fn()
 
     def embed(self, text: str) -> EmbedResult:
