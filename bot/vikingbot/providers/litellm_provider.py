@@ -220,7 +220,10 @@ class LiteLLMProvider(LLMProvider):
                     except Exception as e:
                         logger.debug(f"[LANGFUSE] Failed to end observation: {e}")
 
-                self.langfuse.flush()
+                try:
+                    self.langfuse.flush()
+                except Exception as e:
+                    logger.debug(f"[LANGFUSE] Failed to flush: {e}")
 
             return llm_response
         except Exception as e:
@@ -234,7 +237,10 @@ class LiteLLMProvider(LLMProvider):
                         )
                     if hasattr(langfuse_observation, "end"):
                         langfuse_observation.end()
-                    self.langfuse.flush()
+                    try:
+                        self.langfuse.flush()
+                    except Exception:
+                        pass
                 except Exception:
                     pass
             # Return error as content for graceful handling
