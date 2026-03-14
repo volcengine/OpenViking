@@ -14,13 +14,21 @@ class EmbeddingModelConfig(BaseModel):
     dimension: Optional[int] = Field(default=None, description="Embedding dimension")
     batch_size: int = Field(default=32, description="Batch size for embedding generation")
     input: str = Field(default="multimodal", description="Input type: 'text' or 'multimodal'")
+    input_type: Optional[str] = Field(
+        default=None,
+        description="Provider-specific text embedding input type (for example 'query' or 'document')",
+    )
+    output_dtype: Optional[str] = Field(
+        default=None,
+        description="Provider-specific output dtype for embedding vectors",
+    )
     provider: Optional[str] = Field(
         default="volcengine",
-        description="Provider type: 'openai', 'volcengine', 'vikingdb', 'jina'",
+        description="Provider type: 'openai', 'volcengine', 'vikingdb', 'jina', 'voyage'",
     )
     backend: Optional[str] = Field(
         default="volcengine",
-        description="Backend type (Deprecated, use 'provider' instead): 'openai', 'volcengine', 'vikingdb'",
+        description="Backend type (Deprecated, use 'provider' instead): 'openai', 'volcengine', 'vikingdb', 'voyage'",
     )
     version: Optional[str] = Field(default=None, description="Model version")
     ak: Optional[str] = Field(default=None, description="Access Key ID for VikingDB API")
@@ -53,9 +61,9 @@ class EmbeddingModelConfig(BaseModel):
         if not self.provider:
             raise ValueError("Embedding provider is required")
 
-        if self.provider not in ["openai", "volcengine", "vikingdb", "jina"]:
+        if self.provider not in ["openai", "volcengine", "vikingdb", "jina", "voyage"]:
             raise ValueError(
-                f"Invalid embedding provider: '{self.provider}'. Must be one of: 'openai', 'volcengine', 'vikingdb', 'jina'"
+                f"Invalid embedding provider: '{self.provider}'. Must be one of: 'openai', 'volcengine', 'vikingdb', 'jina', 'voyage'"
             )
 
         # Provider-specific validation
@@ -85,7 +93,27 @@ class EmbeddingModelConfig(BaseModel):
             if not self.api_key:
                 raise ValueError("Jina provider requires 'api_key' to be set")
 
+        elif self.provider == "voyage":
+            if not self.api_key:
+                raise ValueError("Voyage provider requires 'api_key' to be set")
+
         return self
+
+    def get_effective_dimension(self) -> int:
+        """Resolve the dimension used for schema creation and validation."""
+        if self.dimension is not None:
+            return self.dimension
+
+        provider = (self.provider or "").lower()
+
+        if provider == "voyage":
+            from openviking.models.embedder.voyage_embedders import (
+                get_voyage_model_default_dimension,
+            )
+
+            return get_voyage_model_default_dimension(self.model)
+
+        return 2048
 
 
 class EmbeddingConfig(BaseModel):
@@ -136,6 +164,7 @@ class EmbeddingConfig(BaseModel):
         from openviking.models.embedder import (
             JinaDenseEmbedder,
             OpenAIDenseEmbedder,
+            VoyageDenseEmbedder,
             VikingDBDenseEmbedder,
             VikingDBHybridEmbedder,
             VikingDBSparseEmbedder,
@@ -229,6 +258,17 @@ class EmbeddingConfig(BaseModel):
                     "dimension": cfg.dimension,
                 },
             ),
+            ("voyage", "dense"): (
+                VoyageDenseEmbedder,
+                lambda cfg: {
+                    "model_name": cfg.model,
+                    "api_key": cfg.api_key,
+                    "api_base": cfg.api_base,
+                    "dimension": cfg.dimension,
+                    "input_type": cfg.input_type,
+                    "output_dtype": cfg.output_dtype,
+                },
+            ),
         }
 
         key = (provider, embedder_type)
@@ -276,7 +316,7 @@ class EmbeddingConfig(BaseModel):
     def get_dimension(self) -> int:
         """Helper to get dimension from active config"""
         if self.hybrid:
-            return self.hybrid.dimension or 2048
+            return self.hybrid.get_effective_dimension()
         if self.dense:
-            return self.dense.dimension or 2048
+            return self.dense.get_effective_dimension()
         return 2048
