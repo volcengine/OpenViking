@@ -83,7 +83,9 @@ test = [
     "ragas>=0.1.0",
     "datasets>=2.0.0",
     "pandas>=2.0.0",
+    "anyio>=4.0",
 ]
+gemini-async = ["anyio>=4.0"]
 dev = [
     "mypy>=1.0.0",
     "ruff>=0.1.0",

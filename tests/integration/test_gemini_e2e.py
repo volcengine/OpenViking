@@ -110,6 +110,27 @@ class TestGeminiE2EMultimodalEmbedding:
         assert sim > 0.99, f"Fallback similarity {sim:.3f} too low"
 
 
+class TestGeminiE2EAsyncBatch:
+    @pytest.mark.anyio
+    async def test_async_embed_batch_concurrent(self):
+        try:
+            import anyio  # noqa: F401
+        except ImportError:
+            pytest.skip("anyio not installed")
+        import time
+        embedder = GeminiDenseEmbedder(
+            "gemini-embedding-2-preview", api_key=_API_KEY, dimension=128
+        )
+        texts = [f"sentence {i}" for i in range(300)]  # 3 batches of 100
+        t0 = time.monotonic()
+        results = await embedder.async_embed_batch(texts)
+        elapsed = time.monotonic() - t0
+        assert len(results) == 300
+        assert all(len(r.dense_vector) == 128 for r in results)
+        assert elapsed < 15  # concurrent should be << 3× serial RTT
+        embedder.close()
+
+
 class TestGeminiE2ETaskType:
     def test_query_vs_document_task_types(self):
         doc_embedder = GeminiDenseEmbedder(
