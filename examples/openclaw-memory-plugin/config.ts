@@ -38,13 +38,10 @@ const DEFAULT_INGEST_REPLY_ASSIST_MIN_SPEAKER_TURNS = 2;
 const DEFAULT_INGEST_REPLY_ASSIST_MIN_CHARS = 120;
 const DEFAULT_LOCAL_CONFIG_PATH = join(homedir(), ".openviking", "ov.conf");
 
-const DEFAULT_AGENT_ID = "default";
-
-function resolveAgentId(configured: unknown): string {
+function resolveAgentId(configured: unknown): string | undefined {
   if (typeof configured === "string" && configured.trim()) {
     return configured.trim();
   }
-  return DEFAULT_AGENT_ID;
 }
 
 function resolveEnvVars(value: string): string {
@@ -87,7 +84,7 @@ function resolveDefaultBaseUrl(): string {
 }
 
 export const memoryOpenVikingConfigSchema = {
-  parse(value: unknown): Required<MemoryOpenVikingConfig> {
+  parse(value: unknown): Required<Omit<MemoryOpenVikingConfig, "agentId">> & Pick<MemoryOpenVikingConfig, "agentId"> {
     if (!value || typeof value !== "object" || Array.isArray(value)) {
       value = {};
     }
@@ -208,8 +205,8 @@ export const memoryOpenVikingConfigSchema = {
     },
     agentId: {
       label: "Agent ID",
-      placeholder: "auto-generated",
-      help: "Identifies this agent to OpenViking (sent as X-OpenViking-Agent header). Defaults to \"default\" if not set.",
+      placeholder: "default",
+      help: "Leave empty for per-agent memory isolation (recommended). The host-provided agent ID is used to namespace memories; \"main\" maps to \"default\" for backward compatibility. Set a fixed value (e.g. \"default\") to share one namespace across all agents.",
     },
     apiKey: {
       label: "OpenViking API Key",

@@ -78,13 +78,17 @@ const memoryPlugin = {
         });
       }
     } else {
-      clientPromise = Promise.resolve(new OpenVikingClient(cfg.baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs));
+      clientPromise = Promise.resolve(new OpenVikingClient(cfg.baseUrl, cfg.apiKey, cfg.timeoutMs));
     }
 
     const getClient = (): Promise<OpenVikingClient> => clientPromise;
 
+    const getAgentId = (agentId?: string): string => {
+      return cfg.agentId ?? (agentId === "main" ? "default" : agentId) ?? "default";
+    };
+
     api.registerTool(
-      {
+      (ctx) => ({
         name: "memory_recall",
         label: "Memory Recall (OpenViking)",
         description:
@@ -102,6 +106,7 @@ const memoryPlugin = {
           ),
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
+          const agentId = getAgentId(ctx.agentId);
           const { query } = params as { query: string };
           const limit =
             typeof (params as { limit?: number }).limit === "number"
@@ -124,6 +129,7 @@ const memoryPlugin = {
               targetUri,
               limit: requestLimit,
               scoreThreshold: 0,
+              agentId,
             });
           } else {
             // 默认同时检索 user 和 agent 两个位置的记忆
@@ -132,11 +138,13 @@ const memoryPlugin = {
                 targetUri: "viking://user/memories",
                 limit: requestLimit,
                 scoreThreshold: 0,
+                agentId,
               }),
               (await getClient()).find(query, {
                 targetUri: "viking://agent/memories",
                 limit: requestLimit,
                 scoreThreshold: 0,
+                agentId,
               }),
             ]);
             const userResult = userSettled.status === "fulfilled" ? userSettled.value : { memories: [] };
@@ -179,12 +187,12 @@ const memoryPlugin = {
             },
           };
         },
-      },
+      }),
       { name: "memory_recall" },
     );
 
     api.registerTool(
-      {
+      (ctx) => ({
         name: "memory_store",
         label: "Memory Store (OpenViking)",
         description:
@@ -195,6 +203,7 @@ const memoryPlugin = {
           sessionId: Type.Optional(Type.String({ description: "Existing OpenViking session ID" })),
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
+          const agentId = getAgentId(ctx.agentId);
           const { text } = params as { text: string };
           const role =
             typeof (params as { role?: string }).role === "string"
@@ -211,11 +220,11 @@ const memoryPlugin = {
           try {
             const c = await getClient();
             if (!sessionId) {
-              sessionId = await c.createSession();
+              sessionId = await c.createSession(agentId);
               createdTempSession = true;
             }
-            await c.addSessionMessage(sessionId, role, text);
-            const extracted = await c.extractSessionMemories(sessionId);
+            await c.addSessionMessage(sessionId, role, text, agentId);
+            const extracted = await c.extractSessionMemories(sessionId, agentId);
             if (extracted.length === 0) {
               api.logger.warn(
                 `memory-openviking: memory_store completed but extract returned 0 memories (sessionId=${sessionId}). ` +
@@ -239,16 +248,16 @@ const memoryPlugin = {
           } finally {
             if (createdTempSession && sessionId) {
               const c = await getClient().catch(() => null);
-              if (c) await c.deleteSession(sessionId!).catch(() => {});
+              if (c) await c.deleteSession(sessionId!, agentId).catch(() => {});
             }
           }
         },
-      },
+      }),
       { name: "memory_store" },
     );
 
     api.registerTool(
-      {
+      (ctx) => ({
         name: "memory_forget",
         label: "Memory Forget (OpenViking)",
         description:
@@ -265,6 +274,7 @@ const memoryPlugin = {
           ),
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
+          const agentId = getAgentId(ctx.agentId);
           const uri = (params as { uri?: string }).uri;
           if (uri) {
             if (!isMemoryUri(uri)) {
@@ -273,7 +283,7 @@ const memoryPlugin = {
                 details: { action: "rejected", uri },
               };
             }
-            await (await getClient()).deleteUri(uri);
+            await (await getClient()).deleteUri(uri, agentId);
             return {
               content: [{ type: "text", text: `Forgotten: ${uri}` }],
               details: { action: "deleted", uri },
@@ -306,6 +316,7 @@ const memoryPlugin = {
             targetUri,
             limit: requestLimit,
             scoreThreshold: 0,
+            agentId,
           });
           const candidates = postProcessMemories(result.memories ?? [], {
             limit: requestLimit,
@@ -325,7 +336,7 @@ const memoryPlugin = {
           }
           const top = candidates[0];
           if (candidates.length === 1 && clampScore(top.score) >= 0.85) {
-            await (await getClient()).deleteUri(top.uri);
+            await (await getClient()).deleteUri(top.uri, agentId);
             return {
               content: [{ type: "text", text: `Forgotten: ${top.uri}` }],
               details: { action: "deleted", uri: top.uri, score: top.score ?? 0 },
@@ -346,12 +357,13 @@ const memoryPlugin = {
             details: { action: "candidates", candidates, scoreThreshold, requestLimit },
           };
         },
-      },
+      }),
       { name: "memory_forget" },
     );
 
     if (cfg.autoRecall || cfg.ingestReplyAssist) {
-      api.on("before_agent_start", async (event: { messages?: unknown[]; prompt: string }) => {
+      api.on("before_agent_start", async (event: { messages?: unknown[]; prompt: string }, ctx) => {
+        const agentId = getAgentId(ctx.agentId);
         const queryText = extractLatestUserText(event.messages) || event.prompt.trim();
         if (!queryText) {
           return;
@@ -374,6 +386,7 @@ const memoryPlugin = {
                     targetUri: "viking://user/memories",
                     limit: candidateLimit,
                     scoreThreshold: 0,
+                    agentId,
                   }),
                 ),
                 getClient().then((client) =>
@@ -381,6 +394,7 @@ const memoryPlugin = {
                     targetUri: "viking://agent/memories",
                     limit: candidateLimit,
                     scoreThreshold: 0,
+                    agentId,
                   }),
                 ),
               ]);
@@ -410,7 +424,7 @@ const memoryPlugin = {
                   memories.map(async (item: FindResultItem) => {
                     if (item.level === 2) {
                       try {
-                        const content = await client.read(item.uri);
+                        const content = await client.read(item.uri, agentId);
                         if (content && typeof content === "string" && content.trim()) {
                           return `- [${item.category ?? "memory"}] ${content.trim()}`;
                         }
@@ -471,7 +485,7 @@ const memoryPlugin = {
     if (cfg.autoCapture) {
       let lastProcessedMsgCount = 0;
 
-      api.on("agent_end", async (event: { success?: boolean; messages?: unknown[] }) => {
+      api.on("agent_end", async (event: { success?: boolean; messages?: unknown[] }, ctx) => {
         if (!event.success || !event.messages || event.messages.length === 0) {
           api.logger.info(
             `memory-openviking: auto-capture skipped (success=${String(event.success)}, messages=${event.messages?.length ?? 0})`,
@@ -502,13 +516,14 @@ const memoryPlugin = {
             return;
           }
 
+          const agentId = getAgentId(ctx.agentId);
           const c = await getClient();
-          const sessionId = await c.createSession();
+          const sessionId = await c.createSession(agentId);
           try {
-            await c.addSessionMessage(sessionId, "user", decision.normalizedText);
+            await c.addSessionMessage(sessionId, "user", decision.normalizedText, agentId);
             // Force server to read session so storage (e.g. AGFS) sees the written messages before extract
-            await c.getSession(sessionId).catch(() => ({}));
-            const extracted = await c.extractSessionMemories(sessionId);
+            await c.getSession(sessionId, agentId).catch(() => ({}));
+            const extracted = await c.extractSessionMemories(sessionId, agentId);
             api.logger.info(
               `memory-openviking: auto-captured ${newCount} new messages, extracted ${extracted.length} memories`,
             );
@@ -526,7 +541,7 @@ const memoryPlugin = {
               );
             }
           } finally {
-            await c.deleteSession(sessionId).catch(() => {});
+            await c.deleteSession(sessionId, agentId).catch(() => {});
           }
         } catch (err) {
           api.logger.warn(`memory-openviking: auto-capture failed: ${String(err)}`);
@@ -585,7 +600,7 @@ const memoryPlugin = {
           });
           try {
             await waitForHealth(baseUrl, timeoutMs, intervalMs);
-            const client = new OpenVikingClient(baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs);
+            const client = new OpenVikingClient(baseUrl, cfg.apiKey, cfg.timeoutMs);
             localClientCache.set(localCacheKey, { client, process: child });
             resolveLocalClient(client);
             rejectLocalClient = null;

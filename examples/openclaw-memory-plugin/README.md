@@ -95,6 +95,27 @@ Env vars:
 }
 ```
 
+## Multi-Agent Memory Isolation
+
+Previously, all agents on the same OpenClaw instance shared a single memory namespace — memories stored by one agent were visible to every other agent. The plugin now supports **per-agent memory isolation**: each agent's memories are automatically namespaced by its agent ID, so agents no longer see each other's memories.
+
+**This is enabled by default.** No extra configuration is needed — simply leave the `agentId` config empty and the plugin will use the agent ID provided by the OpenClaw host.
+
+| `agentId` config | Behavior |
+|---|---|
+| **Not set** (default, recommended) | Each agent gets its own isolated memory namespace. The plugin reads the agent ID from the OpenClaw host automatically. |
+| **Set to a fixed value** (e.g. `"default"`) | All agents using this value share the same memory namespace (the old behavior). |
+
+> **Backward compatibility:** OpenClaw's default primary agent ID is `main`. For compatibility with previous versions (where all memories were stored under `default`), the plugin maps `main` to the `default` namespace — so existing memories remain accessible after upgrading. Other agents get their own isolated namespace based on their agent ID.
+
+### Reverting to Shared Memory
+
+If you need all agents to share the same memories (the previous behavior), set a fixed `agentId`:
+
+```bash
+openclaw config set plugins.entries.memory-openviking.config.agentId "default"
+```
+
 ## Troubleshooting
 
 | Symptom | Fix |
