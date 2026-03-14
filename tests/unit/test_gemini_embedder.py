@@ -4,7 +4,7 @@
 Tests for GeminiDenseEmbedder.
 Pattern: patch at module import path, use MagicMock, never make real API calls.
 """
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -244,3 +244,72 @@ class TestGeminiDenseEmbedderBatch:
         results = embedder.embed_batch(["a", "b"])
         assert len(results) == 2
         assert mock_client.models.embed_content.call_count == 3
+
+
+class TestGeminiDenseEmbedderAsyncBatch:
+    """Unit tests for async_embed_batch (uses AsyncMock, no real API)."""
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    @pytest.mark.anyio
+    async def test_async_embed_batch_dispatches_all_chunks(self, mock_client_class):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+        mock_client = mock_client_class.return_value
+        mock_client.aio.models.embed_content = AsyncMock(side_effect=[
+            _make_mock_result([[0.1]] * 100),
+            _make_mock_result([[0.2]] * 10),
+        ])
+        embedder = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="key", dimension=1)
+        results = await embedder.async_embed_batch([f"t{i}" for i in range(110)])
+        assert len(results) == 110
+        assert mock_client.aio.models.embed_content.call_count == 2
+
+    @patch("openviking.models.embedder.gemini_embedders._TEXT_BATCH_SIZE", 1)
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    @pytest.mark.anyio
+    async def test_async_embed_batch_preserves_order(self, mock_client_class):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+        mock_client = mock_client_class.return_value
+        mock_client.aio.models.embed_content = AsyncMock(side_effect=[
+            _make_mock_result([[1.0]]),
+            _make_mock_result([[2.0]]),
+            _make_mock_result([[3.0]]),
+        ])
+        embedder = GeminiDenseEmbedder(
+            "gemini-embedding-2-preview", api_key="key", dimension=1, max_concurrent_batches=3
+        )
+        results = await embedder.async_embed_batch(["a", "b", "c"])
+        # Order must match input regardless of task completion order
+        assert [r.dense_vector[0] for r in results] == [1.0, 2.0, 3.0]
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    @pytest.mark.anyio
+    async def test_async_embed_batch_error_fallback_to_individual(self, mock_client_class):
+        from google.genai.errors import APIError
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+        mock_client = mock_client_class.return_value
+        mock_response = MagicMock()
+        mock_response.status_code = 500
+        mock_client.aio.models.embed_content = AsyncMock(
+            side_effect=APIError(500, {}, response=mock_response)
+        )
+        mock_client.models.embed_content.return_value = _make_mock_result([[0.1]])
+        embedder = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="key", dimension=1)
+        results = await embedder.async_embed_batch(["a", "b"])
+        assert len(results) == 2
+        assert mock_client.models.embed_content.call_count == 2
+
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    @pytest.mark.anyio
+    async def test_async_embed_batch_empty(self, mock_client_class):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+        embedder = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="key")
+        assert await embedder.async_embed_batch([]) == []
+
+    @patch("openviking.models.embedder.gemini_embedders._ANYIO_AVAILABLE", False)
+    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
+    @pytest.mark.anyio
+    async def test_async_embed_batch_raises_without_anyio(self, mock_client_class):
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+        embedder = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="key")
+        with pytest.raises(ImportError, match="anyio is required"):
+            await embedder.async_embed_batch(["text"])

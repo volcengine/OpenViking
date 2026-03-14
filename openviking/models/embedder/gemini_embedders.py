@@ -10,6 +10,12 @@ from google.genai.errors import APIError
 
 import logging
 
+try:
+    import anyio
+    _ANYIO_AVAILABLE = True
+except ImportError:
+    _ANYIO_AVAILABLE = False
+
 from openviking.models.embedder.base import (
     DenseEmbedderBase,
     EmbedResult,
@@ -67,6 +73,7 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
         api_key: Optional[str] = None,
         dimension: Optional[int] = None,
         task_type: Optional[str] = None,
+        max_concurrent_batches: int = 10,
         config: Optional[Dict[str, Any]] = None,
     ):
         super().__init__(model_name, config)
@@ -75,6 +82,7 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
         self.client = genai.Client(api_key=api_key)
         self.task_type = task_type
         self._dimension = dimension or self.KNOWN_DIMENSIONS.get(model_name, 3072)
+        self._max_concurrent_batches = max_concurrent_batches
         config_kwargs: Dict[str, Any] = {"output_dimensionality": self._dimension}
         if self.task_type:
             config_kwargs["task_type"] = self.task_type
@@ -150,6 +158,50 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
                 for text in batch:
                     results.append(self.embed(text))
         return results
+
+    async def async_embed_batch(self, texts: List[str]) -> List[EmbedResult]:
+        """Concurrent batch embedding via client.aio — requires anyio to be installed.
+
+        Dispatches all 100-text chunks in parallel, bounded by max_concurrent_batches.
+        Per-batch APIError falls back to individual embed() calls via thread pool.
+        Raises ImportError if anyio is not installed.
+        """
+        if not _ANYIO_AVAILABLE:
+            raise ImportError(
+                "anyio is required for async_embed_batch: pip install 'openviking[gemini-async]'"
+            )
+        if not texts:
+            return []
+        batches = [texts[i : i + _TEXT_BATCH_SIZE] for i in range(0, len(texts), _TEXT_BATCH_SIZE)]
+        results: List[Optional[List[EmbedResult]]] = [None] * len(batches)
+        sem = anyio.Semaphore(self._max_concurrent_batches)
+
+        async def _embed_one(idx: int, batch: List[str]) -> None:
+            async with sem:
+                try:
+                    response = await self.client.aio.models.embed_content(
+                        model=self.model_name, contents=batch, config=self._embed_config
+                    )
+                    results[idx] = [
+                        EmbedResult(
+                            dense_vector=truncate_and_normalize(list(emb.values), self._dimension)
+                        )
+                        for emb in response.embeddings
+                    ]
+                except APIError as e:
+                    logger.warning(
+                        f"Gemini batch embed failed (code={e.code}) for batch of {len(batch)}, "
+                        "falling back to individual calls"
+                    )
+                    results[idx] = [
+                        await anyio.to_thread.run_sync(self.embed, text) for text in batch
+                    ]
+
+        async with anyio.create_task_group() as tg:
+            for idx, batch in enumerate(batches):
+                tg.start_soon(_embed_one, idx, batch)
+
+        return [r for batch_results in results for r in (batch_results or [])]
 
     def get_dimension(self) -> int:
         return self._dimension
