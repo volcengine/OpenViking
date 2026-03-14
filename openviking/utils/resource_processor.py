@@ -175,6 +175,7 @@ class ResourceProcessor:
                     parent_uri=parent,
                     source_path=parse_result.source_path,
                     source_format=parse_result.source_format,
+                    trigger_semantic=True,
                 )
                 if context_tree and context_tree.root:
                     result["root_uri"] = context_tree.root.uri

@@ -141,7 +141,7 @@ class HierarchicalRetriever:
             context_type=query.context_type.value if query.context_type else None,
             target_dirs=target_dirs,
             scope_dsl=scope_dsl,
-            limit=self.GLOBAL_SEARCH_TOPK,
+            limit=min(limit, self.GLOBAL_SEARCH_TOPK),
         )
 
         # Debug: Print all URIs in global_results
@@ -168,6 +168,9 @@ class HierarchicalRetriever:
             mode=mode,
         )
 
+        # 从 global_results 中提取 level 2 的文件作为初始候选者
+        initial_candidates = [r for r in global_results if r.get("level", 2) == 2]
+
         # Step 4: Recursive search
         candidates = await self._recursive_search(
             vector_proxy=vector_proxy,
@@ -182,6 +185,7 @@ class HierarchicalRetriever:
             context_type=query.context_type.value if query.context_type else None,
             target_dirs=target_dirs,
             scope_dsl=scope_dsl,
+            initial_candidates=initial_candidates,
         )
 
         # Step 6: Convert results
@@ -266,12 +270,16 @@ class HierarchicalRetriever:
             docs = [str(r.get("abstract", "")) for r in global_results]
             query_scores = self._rerank_scores(query, docs, default_scores)
             for i, r in enumerate(global_results):
-                points.append((r["uri"], query_scores[i]))
-                seen.add(r["uri"])
+                # 只添加非 level 2 的项目到起始点
+                if r.get("level", 2) != 2:
+                    points.append((r["uri"], query_scores[i]))
+                    seen.add(r["uri"])
         else:
             for r in global_results:
-                points.append((r["uri"], r["_score"]))
-                seen.add(r["uri"])
+                # 只添加非 level 2 的项目到起始点
+                if r.get("level", 2) != 2:
+                    points.append((r["uri"], r["_score"]))
+                    seen.add(r["uri"])
 
         # Root directories as starting points
         for uri in root_uris:
@@ -295,6 +303,7 @@ class HierarchicalRetriever:
         context_type: Optional[str] = None,
         target_dirs: Optional[List[str]] = None,
         scope_dsl: Optional[Dict[str, Any]] = None,
+        initial_candidates: Optional[List[Dict[str, Any]]] = None,
     ) -> List[Dict[str, Any]]:
         """
         Recursive search with directory priority return and score propagation.
@@ -321,6 +330,20 @@ class HierarchicalRetriever:
         visited: set = set()
         prev_topk_uris: set = set()
         convergence_rounds = 0
+
+        # 添加初始候选者（level 2 文件）
+        if initial_candidates:
+            for r in initial_candidates:
+                uri = r.get("uri", "")
+                if uri:
+                    # 只添加 level 2 的文件
+                    if r.get("level", 2) == 2:
+                        score = r.get("_score", 0.0)
+                        r["_final_score"] = score
+                        collected_by_uri[uri] = r
+                        logger.debug(
+                            f"[RecursiveSearch] Added initial candidate: {uri} (score: {score:.4f})"
+                        )
 
         alpha = self.SCORE_PROPAGATION_ALPHA
 
