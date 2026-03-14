@@ -89,7 +89,6 @@ class MemoryDeduplicator:
     async def deduplicate(
         self,
         candidate: CandidateMemory,
-        *,
         ctx: RequestContext,
     ) -> DedupResult:
         """Decide how to handle a candidate memory."""
