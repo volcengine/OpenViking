@@ -15,6 +15,7 @@ from typing import Dict, List, Optional
 from openviking.core.context import Context
 from openviking.models.embedder.base import EmbedResult
 from openviking.prompts import render_prompt
+from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
@@ -88,10 +89,12 @@ class MemoryDeduplicator:
     async def deduplicate(
         self,
         candidate: CandidateMemory,
+        *,
+        ctx: RequestContext,
     ) -> DedupResult:
         """Decide how to handle a candidate memory."""
         # Step 1: Vector pre-filtering - find similar memories in same category
-        similar_memories = await self._find_similar_memories(candidate)
+        similar_memories = await self._find_similar_memories(candidate, ctx=ctx)
 
         if not similar_memories:
             # No similar memories, create directly
@@ -117,6 +120,7 @@ class MemoryDeduplicator:
     async def _find_similar_memories(
         self,
         candidate: CandidateMemory,
+        ctx: RequestContext,
     ) -> List[Context]:
         """Find similar existing memories using vector search."""
         if not self.embedder:
@@ -130,7 +134,6 @@ class MemoryDeduplicator:
         category_uri_prefix = self._category_uri_prefix(candidate.category.value, candidate.user)
 
         owner = candidate.user
-        account_id = owner.account_id if hasattr(owner, "account_id") else "default"
         owner_space = None
         if owner and hasattr(owner, "user_space_name"):
             owner_space = (
@@ -139,9 +142,8 @@ class MemoryDeduplicator:
                 else owner.user_space_name()
             )
         logger.debug(
-            "Dedup prefilter candidate category=%s account=%s owner_space=%s uri_prefix=%s",
+            "Dedup prefilter candidate category=%s owner_space=%s uri_prefix=%s",
             candidate.category.value,
-            account_id,
             owner_space,
             category_uri_prefix,
         )
@@ -149,11 +151,11 @@ class MemoryDeduplicator:
         try:
             # Search with memory-scope filter.
             results = await self.vikingdb.search_similar_memories(
-                account_id=account_id,
                 owner_space=owner_space,
                 category_uri_prefix=category_uri_prefix,
                 query_vector=query_vector,
                 limit=5,
+                ctx=ctx,
             )
 
             # Filter by similarity threshold

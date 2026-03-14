@@ -13,10 +13,12 @@ import json
 from typing import Any, Dict, Optional
 
 from openviking.models.embedder.base import EmbedResult
+from openviking.server.identity import RequestContext, Role
 from openviking.storage.errors import CollectionNotFoundError
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
+from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 
@@ -190,27 +192,44 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                 self._initialize_embedder(config)
 
             # Generate embedding vector(s)
+            is_rate_limit_error = False
             if self._embedder:
-                # embed() is a blocking HTTP call; offload to thread pool to avoid
-                # blocking the event loop and allow real concurrency.
-                result: EmbedResult = await asyncio.to_thread(
-                    self._embedder.embed, embedding_msg.message
-                )
+                try:
+                    # embed() is a blocking HTTP call; offload to thread pool to avoid
+                    # blocking the event loop and allow real concurrency.
+                    result: EmbedResult = await asyncio.to_thread(
+                        self._embedder.embed, embedding_msg.message
+                    )
 
-                # Add dense vector
-                if result.dense_vector:
-                    inserted_data["vector"] = result.dense_vector
-                    # Validate vector dimension
-                    if len(result.dense_vector) != self._vector_dim:
-                        error_msg = f"Dense vector dimension mismatch: expected {self._vector_dim}, got {len(result.dense_vector)}"
-                        logger.error(error_msg)
-                        self.report_error(error_msg, data)
-                        return None
+                    # Add dense vector
+                    if result.dense_vector:
+                        inserted_data["vector"] = result.dense_vector
+                        # Validate vector dimension
+                        if len(result.dense_vector) != self._vector_dim:
+                            error_msg = f"Dense vector dimension mismatch: expected {self._vector_dim}, got {len(result.dense_vector)}"
+                            logger.error(error_msg)
+                            self.report_error(error_msg, data)
+                            return None
 
-                # Add sparse vector if present
-                if result.sparse_vector:
-                    inserted_data["sparse_vector"] = result.sparse_vector
-                    logger.debug(f"Generated sparse vector with {len(result.sparse_vector)} terms")
+                    # Add sparse vector if present
+                    if result.sparse_vector:
+                        inserted_data["sparse_vector"] = result.sparse_vector
+                        logger.debug(
+                            f"Generated sparse vector with {len(result.sparse_vector)} terms"
+                        )
+                except Exception as e:
+                    error_msg = f"Failed to generate embedding: {e}"
+                    logger.error(error_msg)
+
+                    # 检查是否是限流错误
+                    from openviking.models.embedder.volcengine_embedders import is_429_error
+
+                    if is_429_error(e):
+                        is_rate_limit_error = True
+                        logger.info("Rate limit error detected, will attempt to re-enqueue")
+
+                    self.report_error(error_msg, data)
+                    return None
             else:
                 error_msg = "Embedder not initialized, skipping vector generation"
                 logger.warning(error_msg)
@@ -221,13 +240,24 @@ class TextEmbeddingHandler(DequeueHandlerBase):
             try:
                 # Ensure vector DB has deterministic IDs per semantic layer.
                 uri = inserted_data.get("uri")
+                account_id = inserted_data.get("account_id", "default")
+                logger.debug(
+                    f"[TextEmbeddingHandler] Preparing to upsert, uri={uri}, account_id={account_id}, inserted_data={inserted_data}"
+                )
+
                 if uri:
-                    account_id = inserted_data.get("account_id", "default")
                     seed_uri = self._seed_uri_for_id(uri, inserted_data.get("level", 2))
                     id_seed = f"{account_id}:{seed_uri}"
                     inserted_data["id"] = hashlib.md5(id_seed.encode("utf-8")).hexdigest()
 
-                record_id = await self._vikingdb.upsert(inserted_data)
+                # Create RequestContext from account_id
+                user = UserIdentifier(account_id=account_id, user_id="default", agent_id="default")
+                ctx = RequestContext(user=user, role=Role.ROOT)
+                logger.debug(
+                    f"[TextEmbeddingHandler] Created ctx for upsert, ctx.account_id={ctx.account_id}, ctx.user={ctx.user}"
+                )
+
+                record_id = await self._vikingdb.upsert(inserted_data, ctx=ctx)
                 if record_id:
                     logger.debug(
                         f"Successfully wrote embedding to database: {record_id} abstract {inserted_data['abstract']} vector {inserted_data['vector'][:5]}"
@@ -252,6 +282,24 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                 traceback.print_exc()
                 self.report_error(str(db_err), data)
                 return None
+
+            # 如果是限流错误，尝试重新入队
+            if is_rate_limit_error:
+                try:
+                    # 安全地检查和使用 queue_manager
+                    has_queue_manager = getattr(self._vikingdb, "has_queue_manager", False)
+                    if has_queue_manager:
+                        enqueue_func = getattr(self._vikingdb, "enqueue_embedding_msg", None)
+                        if enqueue_func:
+                            await enqueue_func(embedding_msg)
+                            logger.info(
+                                f"Successfully re-enqueued embedding message: {embedding_msg.id}"
+                            )
+                            # 报告成功，因为我们已经重新入队了
+                            self.report_success()
+                            return None
+                except Exception as requeue_err:
+                    logger.error(f"Failed to re-enqueue message: {requeue_err}")
 
             self.report_success()
             return inserted_data

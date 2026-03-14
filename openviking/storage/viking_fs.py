@@ -642,9 +642,14 @@ class VikingFS:
             target_directories=[target_uri] if target_uri else None,
         )
 
+        real_ctx = self._ctx_or_default(ctx)
+        logger.debug(
+            f"[VikingFS.find] Calling retriever.retrieve with ctx.account_id={real_ctx.account_id}, ctx.user={real_ctx.user}"
+        )
+
         result = await retriever.retrieve(
             typed_query,
-            ctx=self._ctx_or_default(ctx),
+            ctx=real_ctx,
             limit=limit,
             score_threshold=score_threshold,
             scope_dsl=filter,
@@ -769,9 +774,13 @@ class VikingFS:
         )
 
         async def _execute(tq: TypedQuery):
+            real_ctx = self._ctx_or_default(ctx)
+            logger.debug(
+                f"[VikingFS.search._execute] Calling retriever.retrieve with ctx.account_id={real_ctx.account_id}, ctx.user={real_ctx.user}"
+            )
             return await retriever.retrieve(
                 tq,
-                ctx=self._ctx_or_default(ctx),
+                ctx=real_ctx,
                 limit=limit,
                 score_threshold=score_threshold,
                 scope_dsl=filter,
@@ -1130,9 +1139,9 @@ class VikingFS:
         for uri in uris:
             try:
                 records = await vector_store.get_context_by_uri(
-                    account_id=self._ctx_or_default(ctx).account_id,
                     uri=uri,
                     limit=1,
+                    ctx=self._ctx_or_default(ctx),
                 )
 
                 if not records or "id" not in records[0]:

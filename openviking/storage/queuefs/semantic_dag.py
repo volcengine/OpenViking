@@ -141,6 +141,90 @@ class SemanticDagExecutor:
 
         return children_dirs, file_paths
 
+    def _get_target_file_path(self, current_uri: str) -> Optional[str]:
+        if not self._incremental_update or not self._target_uri or not self._root_uri:
+            logger.warning(
+                f"Invalid target_uri or root_uri for incremental update: target_uri={self._target_uri}, root_uri={self._root_uri}"
+            )
+            return None
+        try:
+            relative_path = current_uri[len(self._root_uri) :]
+            if relative_path.startswith("/"):
+                relative_path = relative_path[1:]
+            return f"{self._target_uri}/{relative_path}" if relative_path else self._target_uri
+        except Exception:
+            return None
+
+    async def _check_file_content_changed(self, file_path: str) -> bool:
+        target_path = self._get_target_file_path(file_path)
+        if not target_path:
+            return True
+        try:
+            current_content = await self._viking_fs.read_file(file_path, ctx=self._ctx)
+            target_content = await self._viking_fs.read_file(target_path, ctx=self._ctx)
+            return current_content != target_content
+        except Exception:
+            return True
+
+    async def _read_existing_summary(self, file_path: str) -> Optional[Dict[str, str]]:
+        target_path = self._get_target_file_path(file_path)
+        if not target_path:
+            return None
+        try:
+            vector_store = self._viking_fs._get_vector_store()
+            if not vector_store:
+                return None
+            records = await vector_store.get_context_by_uri(
+                uri=target_path,
+                limit=1,
+                ctx=self._ctx,
+            )
+            if records and len(records) > 0:
+                record = records[0]
+                summary = record.get("abstract", "")
+                if summary:
+                    file_name = file_path.split("/")[-1]
+                    return {"name": file_name, "summary": summary}
+        except Exception:
+            pass
+        return None
+
+    async def _check_dir_children_changed(
+        self, dir_uri: str, current_files: List[str], current_dirs: List[str]
+    ) -> bool:
+        target_path = self._get_target_file_path(dir_uri)
+        if not target_path:
+            return True
+        try:
+            target_dirs, target_files = await self._list_dir(target_path)
+            current_file_names = {f.split("/")[-1] for f in current_files}
+            target_file_names = {f.split("/")[-1] for f in target_files}
+            if current_file_names != target_file_names:
+                return True
+            current_dir_names = {d.split("/")[-1] for d in current_dirs}
+            target_dir_names = {d.split("/")[-1] for d in target_dirs}
+            if current_dir_names != target_dir_names:
+                return True
+            for current_file in current_files:
+                if await self._check_file_content_changed(current_file):
+                    return True
+            return False
+        except Exception:
+            return True
+
+    async def _read_existing_overview_abstract(
+        self, dir_uri: str
+    ) -> tuple[Optional[str], Optional[str]]:
+        target_path = self._get_target_file_path(dir_uri)
+        if not target_path:
+            return None, None
+        try:
+            overview = await self._viking_fs.read_file(f"{target_path}/.overview.md", ctx=self._ctx)
+            abstract = await self._viking_fs.read_file(f"{target_path}/.abstract.md", ctx=self._ctx)
+            return overview, abstract
+        except Exception:
+            return None, None
+
     async def _file_summary_task(self, parent_uri: str, file_path: str) -> None:
         """Generate file summary and notify parent completion."""
         file_name = file_path.split("/")[-1]

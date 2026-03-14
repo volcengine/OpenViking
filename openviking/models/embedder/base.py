@@ -1,8 +1,12 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
+import random
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, TypeVar
+
+T = TypeVar("T")
 
 
 def truncate_and_normalize(embedding: List[float], dimension: Optional[int]) -> List[float]:
@@ -255,3 +259,68 @@ class CompositeHybridEmbedder(HybridEmbedderBase):
     def close(self):
         self.dense_embedder.close()
         self.sparse_embedder.close()
+
+
+def exponential_backoff_retry(
+    func: Callable[[], T],
+    max_wait: float = 10.0,
+    base_delay: float = 0.5,
+    max_delay: float = 2.0,
+    jitter: bool = True,
+    is_retryable: Optional[Callable[[Exception], bool]] = None,
+    logger=None,
+) -> T:
+    """
+    指数退避重试函数
+
+    Args:
+        func: 要执行的函数
+        max_wait: 最大总等待时间（秒）
+        base_delay: 基础延迟时间（秒）
+        max_delay: 单次最大延迟时间（秒）
+        jitter: 是否添加随机抖动
+        is_retryable: 判断异常是否可重试的函数
+        logger: 日志记录器
+
+    Returns:
+        函数执行结果
+
+    Raises:
+        最后一次尝试的异常
+    """
+    start_time = time.time()
+    attempt = 0
+
+    while True:
+        try:
+            return func()
+        except Exception as e:
+            attempt += 1
+            elapsed = time.time() - start_time
+
+            if elapsed >= max_wait:
+                if logger:
+                    logger.error(
+                        f"Exceeded max wait time ({max_wait}s) after {attempt} attempts, giving up"
+                    )
+                raise
+
+            if is_retryable and not is_retryable(e):
+                if logger:
+                    logger.error(f"Non-retryable error after {attempt} attempts: {e}")
+                raise
+
+            delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
+
+            if jitter:
+                delay = delay * (0.5 + random.random())
+
+            remaining_time = max_wait - elapsed
+            delay = min(delay, remaining_time)
+
+            if logger:
+                logger.info(
+                    f"Retry attempt {attempt}, waiting {delay:.2f}s before next try (elapsed: {elapsed:.2f}s)"
+                )
+
+            time.sleep(delay)

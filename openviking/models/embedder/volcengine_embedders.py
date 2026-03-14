@@ -11,9 +11,26 @@ from openviking.models.embedder.base import (
     EmbedResult,
     HybridEmbedderBase,
     SparseEmbedderBase,
+    exponential_backoff_retry,
     truncate_and_normalize,
 )
 from openviking_cli.utils.logger import default_logger as logger
+
+
+def is_429_error(exception: Exception) -> bool:
+    """
+    判断异常是否为 429 限流错误
+
+    Args:
+        exception: 要检查的异常
+
+    Returns:
+        如果是 429 错误则返回 True，否则返回 False
+    """
+    exception_str = str(exception)
+    return (
+        "429" in exception_str or "TooManyRequests" in exception_str or "RateLimit" in exception_str
+    )
 
 
 def process_sparse_embedding(sparse_data: Any) -> Dict[str, float]:
@@ -120,7 +137,8 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
         Raises:
             RuntimeError: When API call fails
         """
-        try:
+
+        def _embed_call():
             if self.input_type == "multimodal":
                 # Use multimodal embeddings API
                 response = self.client.multimodal_embeddings.create(
@@ -134,6 +152,17 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
 
             vector = truncate_and_normalize(vector, self.dimension)
             return EmbedResult(dense_vector=vector)
+
+        try:
+            return exponential_backoff_retry(
+                _embed_call,
+                max_wait=10.0,
+                base_delay=0.5,
+                max_delay=2.0,
+                jitter=True,
+                is_retryable=is_429_error,
+                logger=logger,
+            )
         except Exception as e:
             raise RuntimeError(f"Volcengine embedding failed: {str(e)}") from e
 
@@ -226,7 +255,8 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
         Raises:
             RuntimeError: When API call fails
         """
-        try:
+
+        def _embed_call():
             # Must use multimodal endpoint for sparse
             response = self.client.multimodal_embeddings.create(
                 input=[{"type": "text", "text": text}],
@@ -236,6 +266,17 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
             item = response.data
             sparse_vector = getattr(item, "sparse_embedding", None)
             return EmbedResult(sparse_vector=process_sparse_embedding(sparse_vector))
+
+        try:
+            return exponential_backoff_retry(
+                _embed_call,
+                max_wait=10.0,
+                base_delay=0.5,
+                max_delay=2.0,
+                jitter=True,
+                is_retryable=is_429_error,
+                logger=logger,
+            )
         except Exception as e:
             raise RuntimeError(f"Volcengine sparse embedding failed: {str(e)}") from e
 
@@ -312,7 +353,8 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
         Raises:
             RuntimeError: When API call fails
         """
-        try:
+
+        def _embed_call():
             # Always use multimodal for hybrid to get both
 
             response = self.client.multimodal_embeddings.create(
@@ -326,6 +368,17 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
 
             return EmbedResult(
                 dense_vector=dense_vector, sparse_vector=process_sparse_embedding(sparse_vector)
+            )
+
+        try:
+            return exponential_backoff_retry(
+                _embed_call,
+                max_wait=10.0,
+                base_delay=0.5,
+                max_delay=2.0,
+                jitter=True,
+                is_retryable=is_429_error,
+                logger=logger,
             )
         except Exception as e:
             raise RuntimeError(f"Volcengine hybrid embedding failed: {str(e)}") from e

@@ -14,7 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from openviking.models.embedder.base import EmbedResult
 from openviking.retrieve.memory_lifecycle import hotness_score
 from openviking.server.identity import RequestContext, Role
-from openviking.storage import VikingVectorIndexBackend
+from openviking.storage import VikingDBManager, VikingDBManagerProxy
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.retrieve.types import (
@@ -49,7 +49,7 @@ class HierarchicalRetriever:
 
     def __init__(
         self,
-        storage: VikingVectorIndexBackend,
+        storage: VikingDBManager,
         embedder: Optional[Any],
         rerank_config: Optional[RerankConfig] = None,
     ):
@@ -103,12 +103,15 @@ class HierarchicalRetriever:
         # Use custom threshold or default threshold
         effective_threshold = score_threshold if score_threshold is not None else self.threshold
 
+        # 创建 proxy 包装器，绑定当前 ctx
+        vector_proxy = VikingDBManagerProxy(self.vector_store, ctx)
+
         target_dirs = [d for d in (query.target_directories or []) if d]
 
-        if not await self.vector_store.collection_exists_bound():
+        if not await vector_proxy.collection_exists_bound():
             logger.warning(
                 "[RecursiveSearch] Collection %s does not exist",
-                self.vector_store.collection_name,
+                vector_proxy.collection_name,
             )
             return QueryResult(
                 query=query,
@@ -132,7 +135,7 @@ class HierarchicalRetriever:
 
         # Step 2: Global vector search to supplement starting points
         global_results = await self._global_vector_search(
-            ctx=ctx,
+            vector_proxy=vector_proxy,
             query_vector=query_vector,
             sparse_query_vector=sparse_query_vector,
             context_type=query.context_type.value if query.context_type else None,
@@ -151,8 +154,8 @@ class HierarchicalRetriever:
 
         # Step 4: Recursive search
         candidates = await self._recursive_search(
+            vector_proxy=vector_proxy,
             query=query.query,
-            ctx=ctx,
             query_vector=query_vector,
             sparse_query_vector=sparse_query_vector,
             starting_points=starting_points,
@@ -176,7 +179,7 @@ class HierarchicalRetriever:
 
     async def _global_vector_search(
         self,
-        ctx: RequestContext,
+        vector_proxy: VikingDBManagerProxy,
         query_vector: Optional[List[float]],
         sparse_query_vector: Optional[Dict[str, float]],
         context_type: Optional[str],
@@ -185,8 +188,7 @@ class HierarchicalRetriever:
         limit: int,
     ) -> List[Dict[str, Any]]:
         """Global vector search to locate initial directories."""
-        results = await self.vector_store.search_global_roots_in_tenant(
-            ctx=ctx,
+        results = await vector_proxy.search_global_roots_in_tenant(
             query_vector=query_vector,
             sparse_query_vector=sparse_query_vector,
             context_type=context_type,
@@ -265,8 +267,8 @@ class HierarchicalRetriever:
 
     async def _recursive_search(
         self,
+        vector_proxy: VikingDBManagerProxy,
         query: str,
-        ctx: RequestContext,
         query_vector: Optional[List[float]],
         sparse_query_vector: Optional[Dict[str, float]],
         starting_points: List[Tuple[str, float]],
@@ -320,8 +322,7 @@ class HierarchicalRetriever:
 
             pre_filter_limit = max(limit * 2, 20)
 
-            results = await self.vector_store.search_children_in_tenant(
-                ctx=ctx,
+            results = await vector_proxy.search_children_in_tenant(
                 parent_uri=current_uri,
                 query_vector=query_vector,
                 sparse_query_vector=sparse_query_vector,  # Pass sparse vector
