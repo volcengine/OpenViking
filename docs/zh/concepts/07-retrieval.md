@@ -137,6 +137,7 @@ Rerank 在 THINKING 模式下对候选结果精排。
 
 - 配置了 Rerank AK/SK
 - 使用 THINKING 模式（search() 默认）
+- 如果 rerank 返回无效结果或 API 调用失败，会回退到向量分数
 
 ### 评分方式
 
