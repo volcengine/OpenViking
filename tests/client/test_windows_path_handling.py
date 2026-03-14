@@ -33,13 +33,14 @@ class TestZipCreationPathNormalization:
             try:
                 # Verify all paths in ZIP use forward slashes
                 with zipfile.ZipFile(zip_path, "r") as zf:
-                    for name in zf.namelist():
+                    names = zf.namelist()
+                    for name in names:
                         # No backslashes should be present
                         assert "\\" not in name, f"Path contains backslash: {name}"
-                        # Paths should be properly structured
-                        assert name.startswith("test_project/"), (
-                            f"Path should start with root: {name}"
-                        )
+                    # Verify the expected files exist with correct paths
+                    assert "file1.txt" in names
+                    assert "subdir/file2.txt" in names
+                    assert "subdir/nested/file3.txt" in names
             finally:
                 Path(zip_path).unlink(missing_ok=True)
 
@@ -67,9 +68,9 @@ class TestZipCreationPathNormalization:
                     names = set(zf.namelist())
 
                     # Check all expected files exist
-                    assert "complex_project/root.txt" in names
-                    assert "complex_project/level1/file1.txt" in names
-                    assert "complex_project/level1/level2/file2.txt" in names
+                    assert "root.txt" in names
+                    assert "level1/file1.txt" in names
+                    assert "level1/level2/file2.txt" in names
 
                     # Verify no duplicate filenames (same name in different dirs)
                     # This is the bug: on Windows, paths with backslashes might be treated differently

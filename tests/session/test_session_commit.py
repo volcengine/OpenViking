@@ -5,7 +5,17 @@
 
 from openviking import AsyncOpenViking
 from openviking.message import TextPart
+from openviking.server.identity import RequestContext, Role
 from openviking.session import Session
+from openviking_cli.session.user_id import UserIdentifier
+
+
+def _make_user() -> UserIdentifier:
+    return UserIdentifier("acc1", "test_user", "test_agent")
+
+
+user = _make_user()
+ctx = RequestContext(user=user, role=Role.ROOT)
 
 
 class TestCommit:
@@ -101,6 +111,7 @@ class TestCommit:
             account_id="default",
             uri=uri,
             limit=1,
+            ctx=ctx,
         )
         assert records_before, f"Resource not found for URI: {uri}"
         count_before = records_before[0].get("active_count") or 0
@@ -119,6 +130,7 @@ class TestCommit:
             account_id="default",
             uri=uri,
             limit=1,
+            ctx=ctx,
         )
         assert records_after, f"Record disappeared after commit for URI: {uri}"
         count_after = records_after[0].get("active_count") or 0
