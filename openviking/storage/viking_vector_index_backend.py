@@ -711,7 +711,7 @@ class VikingVectorIndexBackend:
                 target_directories=target_directories,
                 extra_filter=extra_filter,
             ),
-            In("level", [0, 1]),
+            In("level", [0, 1, 2]),  # TODO: smj fix this
         )
         return await self.search(
             query_vector=query_vector,
