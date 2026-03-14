@@ -91,7 +91,7 @@ class VikingClient:
         }
 
     def get_agent_space_name(self, user_id: str) -> str:
-        return hashlib.md5((user_id + self.agent_id).encode()).hexdigest()[:12]
+        return hashlib.md5(f"{user_id}:{self.agent_id}".encode()).hexdigest()[:12]
 
     async def find(self, query: str, target_uri: Optional[str] = None):
         """搜索资源"""

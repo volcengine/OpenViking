@@ -131,10 +131,10 @@ export class OpenVikingClient {
 
     const identity = await this.getRuntimeIdentity();
     const fallbackSpace =
-      scope === "user" ? identity.userId : md5Short(`${identity.userId}${identity.agentId}`);
+      scope === "user" ? identity.userId : md5Short(`${identity.userId}:${identity.agentId}`);
     const reservedDirs = scope === "user" ? USER_STRUCTURE_DIRS : AGENT_STRUCTURE_DIRS;
     const preferredSpace =
-      scope === "user" ? identity.userId : md5Short(`${identity.userId}${identity.agentId}`);
+      scope === "user" ? identity.userId : md5Short(`${identity.userId}:${identity.agentId}`);
 
     try {
       const entries = await this.ls(`viking://${scope}`);
