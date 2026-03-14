@@ -79,7 +79,7 @@ class RerankClient:
         SignerV4.sign(r, credentials)
         return r
 
-    def rerank_batch(self, query: str, documents: List[str]) -> List[float]:
+    def rerank_batch(self, query: str, documents: List[str]) -> Optional[List[float]]:
         """
         Batch rerank documents against a query.
 
@@ -88,7 +88,8 @@ class RerankClient:
             documents: List of document texts to rank
 
         Returns:
-            List of rerank scores for each document (same order as input)
+            List of rerank scores for each document (same order as input),
+            or None when rerank fails and the caller should fall back
         """
         if not documents:
             return []
@@ -111,7 +112,7 @@ class RerankClient:
 
             response = requests.request(
                 method=req.method,
-                url=f"http://{self.host}{req.path}",
+                url=f"https://{self.host}{req.path}",
                 headers=req.headers,
                 data=req.body,
                 timeout=30,
@@ -121,10 +122,17 @@ class RerankClient:
             # print(f"[RerankClient] Raw response: {result}")
             if "result" not in result or "data" not in result["result"]:
                 logger.warning(f"[RerankClient] Unexpected response format: {result}")
-                return [0.0] * len(documents)
+                return None
 
             # Each document is a separate group, data array returns scores for each group sequentially
             data = result["result"]["data"]
+            if len(data) != len(documents):
+                logger.warning(
+                    "[RerankClient] Unexpected rerank result length: expected=%s actual=%s",
+                    len(documents),
+                    len(data),
+                )
+                return None
             scores = [item.get("score", 0.0) for item in data]
 
             logger.debug(f"[RerankClient] Reranked {len(documents)} documents")
@@ -132,7 +140,7 @@ class RerankClient:
 
         except Exception as e:
             logger.error(f"[RerankClient] Rerank failed: {e}")
-            return [0.0] * len(documents)
+            return None
 
     @classmethod
     def from_config(cls, config) -> Optional["RerankClient"]:

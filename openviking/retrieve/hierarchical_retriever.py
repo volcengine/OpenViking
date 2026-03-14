@@ -26,6 +26,7 @@ from openviking_cli.retrieve.types import (
 )
 from openviking_cli.utils.config import RerankConfig
 from openviking_cli.utils.logger import get_logger
+from openviking_cli.utils.rerank import RerankClient
 
 logger = get_logger(__name__)
 
@@ -68,8 +69,7 @@ class HierarchicalRetriever:
 
         # Initialize rerank client only if config is available
         if rerank_config and rerank_config.is_available():
-            # TODO: Support later - initialize RerankClient here
-            self._rerank_client = None
+            self._rerank_client = RerankClient.from_config(rerank_config)
             logger.info(
                 f"[HierarchicalRetriever] Rerank config available, threshold={self.threshold}"
             )
@@ -142,7 +142,12 @@ class HierarchicalRetriever:
         )
 
         # Step 3: Merge starting points
-        starting_points = self._merge_starting_points(query.query, root_uris, global_results)
+        starting_points = self._merge_starting_points(
+            query.query,
+            root_uris,
+            global_results,
+            mode=mode,
+        )
 
         # Step 4: Recursive search
         candidates = await self._recursive_search(
@@ -191,6 +196,36 @@ class HierarchicalRetriever:
         )
         return results
 
+    def _rerank_scores(
+        self,
+        query: str,
+        documents: List[str],
+        fallback_scores: List[float],
+    ) -> List[float]:
+        """Return rerank scores or fall back to vector scores."""
+        if not self._rerank_client or not documents:
+            return fallback_scores
+
+        try:
+            scores = self._rerank_client.rerank_batch(query, documents)
+        except Exception as e:
+            logger.warning("[HierarchicalRetriever] Rerank failed, fallback to vector scores: %s", e)
+            return fallback_scores
+
+        if not scores or len(scores) != len(documents):
+            logger.warning(
+                "[HierarchicalRetriever] Invalid rerank result, fallback to vector scores"
+            )
+            return fallback_scores
+
+        normalized_scores: List[float] = []
+        for score, fallback in zip(scores, fallback_scores):
+            if isinstance(score, (int, float)):
+                normalized_scores.append(float(score))
+            else:
+                normalized_scores.append(fallback)
+        return normalized_scores
+
     def _merge_starting_points(
         self,
         query: str,
@@ -206,15 +241,12 @@ class HierarchicalRetriever:
         seen = set()
 
         # Results from global search
-        docs = []
+        default_scores = [r.get("_score", 0.0) for r in global_results]
         if self._rerank_client and mode == RetrieverMode.THINKING:
-            for r in global_results:
-                # todo: multi-modal
-                doc = r["abstract"]
-                docs.append(doc)
-            rerank_scores = self._rerank_client.rerank_batch(query, docs)
+            docs = [str(r.get("abstract", "")) for r in global_results]
+            query_scores = self._rerank_scores(query, docs, default_scores)
             for i, r in enumerate(global_results):
-                points.append((r["uri"], rerank_scores[i]))
+                points.append((r["uri"], query_scores[i]))
                 seen.add(r["uri"])
         else:
             for r in global_results:
@@ -300,19 +332,10 @@ class HierarchicalRetriever:
             if not results:
                 continue
 
-            query_scores = []
+            query_scores = [r.get("_score", 0.0) for r in results]
             if self._rerank_client and mode == RetrieverMode.THINKING:
-                documents = []
-                for r in results:
-                    # todo: multi-modal
-                    doc = r["abstract"]
-                    documents.append(doc)
-
-                rerank_scores = self._rerank_client.rerank_batch(query, documents)
-                query_scores = rerank_scores
-            else:
-                for r in results:
-                    query_scores.append(r.get("_score", 0))
+                documents = [str(r.get("abstract", "")) for r in results]
+                query_scores = self._rerank_scores(query, documents, query_scores)
 
             for r, score in zip(results, query_scores):
                 uri = r.get("uri", "")
