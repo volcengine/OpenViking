@@ -337,6 +337,9 @@ class Session:
             )
             memories = await self._session_compressor.extract_long_term_memories(
                 messages=messages_to_archive,
+                user=self.user,
+                session_id=self.session_id,
+                ctx=self.ctx,
             )
             logger.info(f"Extracted {len(memories)} memories")
             result["memories_extracted"] = len(memories)
