@@ -80,8 +80,8 @@ class _SingleAccountBackend:
             created = self._adapter.create_collection(
                 name=name,
                 schema=collection_meta,
-                distance=getattr(self, "_distance_metric", "cosine"),
-                sparse_weight=getattr(self, "_sparse_weight", 0.0),
+                distance=self._distance_metric,
+                sparse_weight=self._sparse_weight,
                 index_name=VikingVectorIndexBackend.DEFAULT_INDEX_NAME,
             )
             if not created:
@@ -89,7 +89,7 @@ class _SingleAccountBackend:
 
             self._collection_config = {
                 "vector_dim": vector_dim,
-                "distance": getattr(self, "_distance_metric", "cosine"),
+                "distance": self._distance_metric,
                 "schema": schema,
             }
             self._refresh_meta_data(self._get_collection())
@@ -118,7 +118,7 @@ class _SingleAccountBackend:
             return None
         config = self._collection_config
         return {
-            "name": getattr(self, "_collection_name", "context"),
+            "name": self._collection_name,
             "vector_dim": config.get("vector_dim"),
             "count": await self.count(),
             "status": "active",
