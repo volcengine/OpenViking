@@ -32,6 +32,9 @@ import {
   prepareLocalPort,
 } from "./process-manager.js";
 
+const MAX_OPENVIKING_STDERR_LINES = 200;
+const MAX_OPENVIKING_STDERR_CHARS = 256_000;
+
 const memoryPlugin = {
   id: "memory-openviking",
   name: "Memory (OpenViking)",
@@ -571,15 +574,43 @@ const memoryPlugin = {
           );
           localProcess = child;
           const stderrChunks: string[] = [];
+          let stderrCharCount = 0;
+          let stderrDroppedChunks = 0;
+          const pushStderrChunk = (chunk: string) => {
+            if (!chunk) return;
+            stderrChunks.push(chunk);
+            stderrCharCount += chunk.length;
+            while (
+              stderrChunks.length > MAX_OPENVIKING_STDERR_LINES ||
+              stderrCharCount > MAX_OPENVIKING_STDERR_CHARS
+            ) {
+              const dropped = stderrChunks.shift();
+              if (!dropped) break;
+              stderrCharCount -= dropped.length;
+              stderrDroppedChunks += 1;
+            }
+          };
+          const formatStderrOutput = () => {
+            if (!stderrChunks.length && !stderrDroppedChunks) return "";
+            const truncated =
+              stderrDroppedChunks > 0
+                ? `[truncated ${stderrDroppedChunks} earlier stderr chunk(s)]\n`
+                : "";
+            return `\n[openviking stderr]\n${truncated}${stderrChunks.join("\n")}`;
+          };
           child.on("error", (err: Error) => api.logger.warn(`memory-openviking: local server error: ${String(err)}`));
           child.stderr?.on("data", (chunk: Buffer) => {
             const s = String(chunk).trim();
-            if (s) stderrChunks.push(s);
+            pushStderrChunk(s);
             api.logger.debug?.(`[openviking] ${s}`);
           });
           child.on("exit", (code: number | null, signal: string | null) => {
-            if (localProcess === child && (code != null && code !== 0 || signal)) {
-              const out = stderrChunks.length ? `\n[openviking stderr]\n${stderrChunks.join("\n")}` : "";
+            if (localProcess === child) {
+              localProcess = null;
+              localClientCache.delete(localCacheKey);
+            }
+            if (code != null && code !== 0 || signal) {
+              const out = formatStderrOutput();
               api.logger.warn(`memory-openviking: subprocess exited (code=${code}, signal=${signal})${out}`);
             }
           });
@@ -598,7 +629,7 @@ const memoryPlugin = {
             markLocalUnavailable("startup failed", err);
             if (stderrChunks.length) {
               api.logger.warn(
-                `memory-openviking: startup failed (health check timeout or error). OpenViking stderr:\n${stderrChunks.join("\n")}`,
+                `memory-openviking: startup failed (health check timeout or error).${formatStderrOutput()}`,
               );
             }
             throw err;
