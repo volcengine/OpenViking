@@ -4,10 +4,10 @@ on:
   workflow_call:
     inputs:
       os_json:
-        description: 'JSON string of runner labels to build on (ubuntu-24.04=x86_64, ubuntu-24.04-arm=aarch64, macos-14=arm64, macos-15-intel=x86_64, windows-latest=x86_64)'
+        description: 'JSON string of runner labels to build on (ubuntu-24.04=x86_64, ubuntu-24.04-arm=aarch64, macos-14=arm64, macos-15=arm64, macos-15-intel=x86_64, windows-latest=x86_64)'
         required: false
         type: string
-        default: '["ubuntu-24.04", "ubuntu-24.04-arm", "macos-14", "macos-15-intel", "windows-latest"]'
+        default: '["ubuntu-24.04", "ubuntu-24.04-arm", "macos-14", "macos-15", "macos-15-intel", "windows-latest"]'
       python_json:
         description: 'JSON string of Python versions'
         required: false
@@ -36,9 +36,9 @@ on:
         type: boolean
         default: true
       os_json:
-        description: 'JSON string of runner labels to build on (ubuntu-24.04=x86_64, ubuntu-24.04-arm=aarch64, macos-14=arm64, macos-15-intel=x86_64, windows-latest=x86_64)'
+        description: 'JSON string of runner labels to build on (ubuntu-24.04=x86_64, ubuntu-24.04-arm=aarch64, macos-14=arm64, macos-15=arm64, macos-15-intel=x86_64, windows-latest=x86_64)'
         required: false
-        default: '["ubuntu-24.04", "ubuntu-24.04-arm", "macos-14", "macos-15-intel", "windows-latest"]'
+        default: '["ubuntu-24.04", "ubuntu-24.04-arm", "macos-14", "macos-15", "macos-15-intel", "windows-latest"]'
       python_json:
         description: 'JSON string of Python versions'
         required: false
