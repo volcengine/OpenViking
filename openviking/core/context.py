@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Unified context class for OpenViking."""
 
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional
@@ -37,14 +38,27 @@ class ContextLevel(int, Enum):
     DETAIL = 2  # L2: detail/content
 
 
+@dataclass
+class ModalContent:
+    """Media reference for native multimodal embedding.
+    uri travels through the queue; data is injected by the handler
+    at dequeue time by reading from viking_fs. Never serialized to JSON.
+    """
+
+    mime_type: str
+    uri: str
+    data: Optional[bytes] = field(default=None, repr=False)
+
+
 class Vectorize:
     text: str = ""
     # image: str = ""
     # video: str = ""
     # audio: str = ""
 
-    def __init__(self, text: str = ""):
+    def __init__(self, text: str = "", media: Optional[ModalContent] = None):
         self.text = text
+        self.media = media
 
 
 class Context:

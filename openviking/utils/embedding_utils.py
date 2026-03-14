@@ -19,6 +19,59 @@ from openviking_cli.utils import VikingURI, get_logger
 
 logger = get_logger(__name__)
 
+_IMAGE_MIME_MAP = {
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".gif": "image/gif",
+    ".webp": "image/webp",
+    ".bmp": "image/bmp",
+    ".svg": "image/svg+xml",
+}
+
+# Use the embedder's allowlist as the single source of truth for image MIME types.
+from openviking.models.embedder.gemini_embedders import _SUPPORTED_MULTIMODAL_MIMES as _GEMINI_MULTIMODAL_MIMES
+_GEMINI_SUPPORTED_IMAGE_MIMES = frozenset(m for m in _GEMINI_MULTIMODAL_MIMES if m.startswith("image/"))
+
+_MIME_MAP_VIDEO = {
+    ".mp4": "video/mp4",
+    ".mpeg": "video/mpeg",
+    ".mov": "video/mov",
+    ".avi": "video/avi",
+    ".webm": "video/webm",
+    ".wmv": "video/wmv",
+    ".3gpp": "video/3gpp",
+}
+_MIME_MAP_AUDIO = {
+    ".mp3": "audio/mp3",
+    ".mpeg": "audio/mpeg",
+    ".wav": "audio/wav",
+    ".ogg": "audio/ogg",
+    ".flac": "audio/flac",
+}
+_MIME_MAP_PDF = {
+    ".pdf": "application/pdf",
+}
+
+_GEMINI_SUPPORTED_MEDIA_MIMES = frozenset(_GEMINI_MULTIMODAL_MIMES)
+
+
+def _infer_image_mime(file_name: str) -> Optional[str]:
+    """Return MIME type for image file by extension, or None if unknown."""
+    ext = os.path.splitext(file_name.lower())[1]
+    return _IMAGE_MIME_MAP.get(ext)
+
+
+def _infer_media_mime(file_name: str) -> Optional[str]:
+    """Return MIME type for any Gemini-supported media (image/video/audio/PDF), or None."""
+    ext = os.path.splitext(file_name.lower())[1]
+    return (
+        _IMAGE_MIME_MAP.get(ext)
+        or _MIME_MAP_VIDEO.get(ext)
+        or _MIME_MAP_AUDIO.get(ext)
+        or _MIME_MAP_PDF.get(ext)
+    )
+
 
 def _owner_space_for_uri(uri: str, ctx: RequestContext) -> str:
     """Derive owner_space from a URI."""
@@ -175,6 +228,7 @@ async def vectorize_file(
     parent_uri: str,
     context_type: str = "resource",
     ctx: Optional[RequestContext] = None,
+    embedding_provider: Optional[str] = None,
 ) -> None:
     """
     Vectorize a single file.
@@ -207,7 +261,8 @@ async def vectorize_file(
         )
 
         content_type = get_resource_content_type(file_name)
-        if content_type is None:
+        is_pdf = os.path.splitext(file_name.lower())[1] == ".pdf"
+        if content_type is None and not is_pdf:
             # Unsupported file type: fall back to summary if available
             if summary:
                 logger.warning(
@@ -228,15 +283,44 @@ async def vectorize_file(
                 context.set_vectorize(Vectorize(text=content))
             except Exception as e:
                 logger.warning(
-                    f"Failed to read file content for {file_path}, falling back to summary: {e}"
+                    f"Failed to read file content for {file_path}, falling back to summary: {e}",
+                    exc_info=True,
                 )
                 if summary:
                     context.set_vectorize(Vectorize(text=summary))
                 else:
                     logger.warning(f"No summary available for {file_path}, skipping vectorization")
                     return
+        elif content_type in (
+            ResourceContentType.IMAGE,
+            ResourceContentType.VIDEO,
+            ResourceContentType.AUDIO,
+        ) or is_pdf:
+            is_multimodal_provider = (embedding_provider or "").lower() == "gemini"
+
+            if is_multimodal_provider:
+                mime_type = _infer_media_mime(file_name)
+                if mime_type and mime_type in _GEMINI_SUPPORTED_MEDIA_MIMES:
+                    from openviking.core.context import ModalContent
+                    fallback_text = summary or os.path.basename(file_path)
+                    context.set_vectorize(
+                        Vectorize(
+                            text=fallback_text,
+                            media=ModalContent(uri=file_path, mime_type=mime_type),
+                        )
+                    )
+                elif summary:
+                    context.set_vectorize(Vectorize(text=summary))
+                else:
+                    logger.debug(f"Skipping media file {file_path}: unsupported format and no summary")
+                    return
+            elif summary:
+                context.set_vectorize(Vectorize(text=summary))
+            else:
+                logger.debug(f"Skipping media file {file_path}: no multimodal support and no summary")
+                return
         elif summary:
-            # For non-text files, use summary
+            # Fallback for unrecognized non-text files
             context.set_vectorize(Vectorize(text=summary))
         else:
             logger.debug(f"Skipping file {file_path} (no text content or summary)")
@@ -256,6 +340,7 @@ async def vectorize_file(
 async def index_resource(
     uri: str,
     ctx: RequestContext,
+    embedding_provider: Optional[str] = None,
 ) -> None:
     """
     Build vector index for a resource directory.
@@ -304,7 +389,11 @@ async def index_resource(
             # For direct indexing, we might not have summaries.
             # We pass empty summary_dict, vectorize_file will try to read content for text files.
             await vectorize_file(
-                file_path=file_uri, summary_dict={"name": file_name}, parent_uri=uri, ctx=ctx
+                file_path=file_uri,
+                summary_dict={"name": file_name},
+                parent_uri=uri,
+                ctx=ctx,
+                embedding_provider=embedding_provider,
             )
 
     except Exception as e:

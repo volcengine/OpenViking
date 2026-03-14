@@ -568,6 +568,14 @@ class SemanticProcessor(DequeueHandlerBase):
         """Vectorize a single file using its content or summary."""
         from openviking.utils.embedding_utils import vectorize_file
 
+        try:
+            embedding_provider = getattr(
+                getattr(get_openviking_config().embedding, "dense", None), "provider", None
+            )
+        except Exception as e:
+            logger.warning("Failed to resolve embedding provider; multimodal path disabled: %s", e, exc_info=True)
+            embedding_provider = None
+
         active_ctx = ctx or self._current_ctx
         await vectorize_file(
             file_path=file_path,
@@ -575,4 +583,5 @@ class SemanticProcessor(DequeueHandlerBase):
             parent_uri=parent_uri,
             context_type=context_type,
             ctx=active_ctx,
+            embedding_provider=embedding_provider,
         )
