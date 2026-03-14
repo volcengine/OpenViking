@@ -50,7 +50,7 @@ def ensure_config():
 
         # Create default config with empty bot section
         default_config = Config()
-        save_config(default_config, config_path)
+        save_config(default_config, config_path, include_defaults=True)
         logger.info(f"[green]✓[/green] Created default config at {config_path}")
 
     config = load_config(config_path)
@@ -146,13 +146,16 @@ def _merge_ov_server_config(bot_data: dict, ov_data: dict) -> None:
         bot_data["mode"] = "local"
 
 
-def save_config(config: Config, config_path: Path | None = None) -> None:
+def save_config(
+    config: Config, config_path: Path | None = None, include_defaults: bool = False
+) -> None:
     """
     Save configuration to ov.conf's bot field, preserving other sections.
 
     Args:
         config: Configuration to save.
         config_path: Optional path to ov.conf file. Uses default if not provided.
+        include_defaults: Whether to include default values in the saved config.
     """
     path = config_path or get_config_path()
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -167,7 +170,7 @@ def save_config(config: Config, config_path: Path | None = None) -> None:
             pass
 
     # Update bot section - only save fields that were explicitly set
-    bot_data = config.model_dump(exclude_unset=True)
+    bot_data = config.model_dump(exclude_unset=not include_defaults)
     if bot_data:
         full_data["bot"] = convert_to_camel(bot_data)
     else:

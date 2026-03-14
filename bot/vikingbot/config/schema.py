@@ -617,7 +617,8 @@ class Config(BaseSettings):
     @property
     def bot_data_path(self) -> Path:
         """Get expanded bot data path: {storage_workspace}/bot."""
-        return Path(self.storage_workspace).expanduser() / "bot"
+        workspace = self.storage_workspace or "~/.openviking/data"
+        return Path(workspace).expanduser() / "bot"
 
     @property
     def workspace_path(self) -> Path:
