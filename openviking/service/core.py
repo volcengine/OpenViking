@@ -214,6 +214,12 @@ class OpenVikingService:
             logger.debug("Already initialized")
             return
 
+        # Acquire advisory lock on data directory to prevent multi-process
+        # contention (see https://github.com/volcengine/OpenViking/issues/473).
+        from openviking.utils.process_lock import acquire_data_dir_lock
+
+        acquire_data_dir_lock(self._config.storage.workspace)
+
         if self._vikingdb_manager is None:
             self._init_storage(
                 self._config.storage,
