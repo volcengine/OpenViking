@@ -71,10 +71,10 @@ class _SingleAccountBackend:
     async def create_collection(self, name: str, schema: Dict[str, Any]) -> bool:
         try:
             collection_meta = dict(schema)
-            vector_dim = None
+            vector_dim = self.vector_dim
             for field in collection_meta.get("Fields", []):
                 if field.get("FieldType") == "vector":
-                    vector_dim = field.get("Dim")
+                    vector_dim = field.get("Dim", self.vector_dim)
                     break
 
             created = self._adapter.create_collection(
