@@ -16,11 +16,11 @@ class EmbeddingModelConfig(BaseModel):
     input: str = Field(default="multimodal", description="Input type: 'text' or 'multimodal'")
     provider: Optional[str] = Field(
         default="volcengine",
-        description="Provider type: 'openai', 'volcengine', 'vikingdb', 'jina'",
+        description="Provider type: 'openai', 'volcengine', 'vikingdb', 'jina', 'gemini'",
     )
     backend: Optional[str] = Field(
         default="volcengine",
-        description="Backend type (Deprecated, use 'provider' instead): 'openai', 'volcengine', 'vikingdb'",
+        description="Backend type (Deprecated, use 'provider' instead): 'openai', 'volcengine', 'vikingdb', 'gemini'",
     )
     version: Optional[str] = Field(default=None, description="Model version")
     ak: Optional[str] = Field(default=None, description="Access Key ID for VikingDB API")
@@ -30,6 +30,10 @@ class EmbeddingModelConfig(BaseModel):
     max_tokens: Optional[int] = Field(
         default=None,
         description="Maximum token count per embedding request. If None, uses model default (e.g., 8000 for OpenAI).",
+    )
+    task_type: Optional[str] = Field(
+        default=None,
+        description="Gemini task type: RETRIEVAL_DOCUMENT, RETRIEVAL_QUERY, SEMANTIC_SIMILARITY",
     )
 
     model_config = {"extra": "forbid"}
@@ -57,9 +61,9 @@ class EmbeddingModelConfig(BaseModel):
         if not self.provider:
             raise ValueError("Embedding provider is required")
 
-        if self.provider not in ["openai", "volcengine", "vikingdb", "jina"]:
+        if self.provider not in ["openai", "volcengine", "vikingdb", "jina", "gemini"]:
             raise ValueError(
-                f"Invalid embedding provider: '{self.provider}'. Must be one of: 'openai', 'volcengine', 'vikingdb', 'jina'"
+                f"Invalid embedding provider: '{self.provider}'. Must be one of: 'openai', 'volcengine', 'vikingdb', 'jina', 'gemini'"
             )
 
         # Provider-specific validation
@@ -89,12 +93,16 @@ class EmbeddingModelConfig(BaseModel):
             if not self.api_key:
                 raise ValueError("Jina provider requires 'api_key' to be set")
 
+        elif self.provider == "gemini":
+            if not self.api_key:
+                raise ValueError("Gemini provider requires 'api_key' to be set")
+
         return self
 
 
 class EmbeddingConfig(BaseModel):
     """
-    Embedding configuration, supports OpenAI or VolcEngine compatible APIs.
+    Embedding configuration, supports OpenAI, VolcEngine, VikingDB, Jina, or Gemini APIs.
 
     Structure:
     - dense: Configuration for dense embedder
@@ -127,7 +135,7 @@ class EmbeddingConfig(BaseModel):
         """Factory method to create embedder instance based on provider and type.
 
         Args:
-            provider: Provider type ('openai', 'volcengine', 'vikingdb')
+            provider: Provider type ('openai', 'volcengine', 'vikingdb', 'gemini')
             embedder_type: Embedder type ('dense', 'sparse', 'hybrid')
             config: EmbeddingModelConfig instance
 
@@ -147,6 +155,7 @@ class EmbeddingConfig(BaseModel):
             VolcengineHybridEmbedder,
             VolcengineSparseEmbedder,
         )
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
 
         # Factory registry: (provider, type) -> (embedder_class, param_builder)
         factory_registry = {
@@ -232,6 +241,15 @@ class EmbeddingConfig(BaseModel):
                     "api_key": cfg.api_key,
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
+                },
+            ),
+            ("gemini", "dense"): (
+                GeminiDenseEmbedder,
+                lambda cfg: {
+                    "model_name": cfg.model,
+                    "api_key": cfg.api_key,
+                    "dimension": cfg.dimension,
+                    "task_type": cfg.task_type,
                 },
             ),
         }

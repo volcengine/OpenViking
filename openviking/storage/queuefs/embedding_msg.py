@@ -1,8 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 import json
-from dataclasses import asdict, dataclass
-from typing import Any, Dict, List, Union
+from dataclasses import asdict, dataclass, field
+from typing import Any, Dict, List, Optional, Union
 from uuid import uuid4
 
 
@@ -11,17 +11,9 @@ class EmbeddingMsg:
     message: Union[str, List[Dict[str, Any]]]
     context_data: Dict[str, Any]
     telemetry_id: str = ""
-
-    def __init__(
-        self,
-        message: Union[str, List[Dict[str, Any]]],
-        context_data: Dict[str, Any],
-        telemetry_id: str = "",
-    ):
-        self.id = str(uuid4())
-        self.message = message
-        self.context_data = context_data
-        self.telemetry_id = telemetry_id
+    media_uri: Optional[str] = None
+    media_mime_type: Optional[str] = None
+    id: str = field(default_factory=lambda: str(uuid4()))
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert embedding message to dictionary format."""
@@ -38,8 +30,10 @@ class EmbeddingMsg:
             message=data["message"],
             context_data=data["context_data"],
             telemetry_id=data.get("telemetry_id", ""),
+            media_uri=data.get("media_uri"),
+            media_mime_type=data.get("media_mime_type"),
+            id=data.get("id", str(uuid4())),
         )
-        obj.id = data.get("id", obj.id)
         return obj
 
     @classmethod

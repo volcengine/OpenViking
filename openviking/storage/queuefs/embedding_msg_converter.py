@@ -24,6 +24,9 @@ class EmbeddingMsgConverter:
         Convert a Context object to EmbeddingMsg.
         """
         vectorization_text = context.get_vectorization_text()
+        # If text is empty but media is present, use URI as fallback so the message isn't dropped
+        if not vectorization_text and getattr(context.vectorize, "media", None) is not None:
+            vectorization_text = context.uri or ""
         if not vectorization_text:
             return None
 
@@ -69,9 +72,17 @@ class EmbeddingMsgConverter:
             resolved_level = int(resolved_level.value)
         context_data["level"] = int(resolved_level)
 
+        media_uri = None
+        media_mime_type = None
+        if getattr(context.vectorize, "media", None) is not None:
+            media_uri = context.vectorize.media.uri
+            media_mime_type = context.vectorize.media.mime_type
+
         embedding_msg = EmbeddingMsg(
             message=vectorization_text,
             context_data=context_data,
             telemetry_id=get_current_telemetry().telemetry_id,
+            media_uri=media_uri,
+            media_mime_type=media_mime_type,
         )
         return embedding_msg
