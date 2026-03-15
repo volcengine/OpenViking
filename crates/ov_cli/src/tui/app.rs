@@ -8,6 +8,41 @@ pub enum Panel {
     Content,
 }
 
+#[derive(Debug, Clone)]
+pub struct VectorRecordsState {
+    pub records: Vec<serde_json::Value>,
+    pub cursor: usize,
+    pub scroll_offset: usize,
+    pub next_page_cursor: Option<String>,
+    pub has_more: bool,
+    pub total_count: Option<u64>,
+}
+
+impl VectorRecordsState {
+    pub fn new() -> Self {
+        Self {
+            records: Vec::new(),
+            cursor: 0,
+            scroll_offset: 0,
+            next_page_cursor: None,
+            has_more: false,
+            total_count: None,
+        }
+    }
+
+    /// Adjust scroll_offset so cursor is visible in the given viewport height
+    pub fn adjust_scroll(&mut self, viewport_height: usize) {
+        if viewport_height == 0 {
+            return;
+        }
+        if self.cursor < self.scroll_offset {
+            self.scroll_offset = self.cursor;
+        } else if self.cursor >= self.scroll_offset + viewport_height {
+            self.scroll_offset = self.cursor - viewport_height + 1;
+        }
+    }
+}
+
 pub struct App {
     pub client: HttpClient,
     pub tree: TreeState,
@@ -18,6 +53,8 @@ pub struct App {
     pub content_line_count: u16,
     pub should_quit: bool,
     pub status_message: String,
+    pub vector_state: VectorRecordsState,
+    pub showing_vector_records: bool,
 }
 
 impl App {
@@ -32,6 +69,8 @@ impl App {
             content_line_count: 0,
             should_quit: false,
             status_message: String::new(),
+            vector_state: VectorRecordsState::new(),
+            showing_vector_records: false,
         }
     }
 
@@ -156,5 +195,90 @@ impl App {
             Panel::Tree => Panel::Content,
             Panel::Content => Panel::Tree,
         };
+    }
+
+    pub async fn load_vector_records(&mut self) {
+        self.status_message = "Loading vector records...".to_string();
+        match self.client.debug_vector_scroll(Some(100), None).await {
+            Ok((records, next_cursor)) => {
+                self.vector_state.records = records;
+                self.vector_state.has_more = next_cursor.is_some();
+                self.vector_state.next_page_cursor = next_cursor;
+                self.vector_state.cursor = 0;
+                self.vector_state.scroll_offset = 0;
+                self.status_message = format!("Loaded {} vector records", self.vector_state.records.len());
+            }
+            Err(e) => {
+                self.status_message = format!("Failed to load vector records: {}", e);
+            }
+        }
+    }
+
+    pub async fn load_next_vector_page(&mut self) {
+        if !self.vector_state.has_more {
+            self.status_message = "No more pages".to_string();
+            return;
+        }
+
+        self.status_message = "Loading next page...".to_string();
+        match self
+            .client
+            .debug_vector_scroll(Some(100), self.vector_state.next_page_cursor.clone())
+            .await
+        {
+            Ok((mut new_records, next_cursor)) => {
+                self.vector_state.records.append(&mut new_records);
+                self.vector_state.has_more = next_cursor.is_some();
+                self.vector_state.next_page_cursor = next_cursor;
+                self.status_message = format!("Loaded {} total vector records", self.vector_state.records.len());
+            }
+            Err(e) => {
+                self.status_message = format!("Failed to load next page: {}", e);
+            }
+        }
+    }
+
+    pub async fn toggle_vector_records_mode(&mut self) {
+        self.showing_vector_records = !self.showing_vector_records;
+        if self.showing_vector_records && self.vector_state.records.is_empty() {
+            self.load_vector_records().await;
+        }
+    }
+
+    pub async fn load_vector_count(&mut self) {
+        self.status_message = "Loading vector count...".to_string();
+        match self.client.debug_vector_count(None).await {
+            Ok(count) => {
+                self.vector_state.total_count = Some(count);
+                self.status_message = format!("Total vector records: {}", count);
+            }
+            Err(e) => {
+                self.status_message = format!("Failed to load count: {}", e);
+            }
+        }
+    }
+
+    pub fn move_vector_cursor_up(&mut self) {
+        if self.vector_state.cursor > 0 {
+            self.vector_state.cursor -= 1;
+        }
+    }
+
+    pub fn move_vector_cursor_down(&mut self) {
+        if !self.vector_state.records.is_empty()
+            && self.vector_state.cursor < self.vector_state.records.len() - 1
+        {
+            self.vector_state.cursor += 1;
+        }
+    }
+
+    pub fn scroll_vector_top(&mut self) {
+        self.vector_state.cursor = 0;
+    }
+
+    pub fn scroll_vector_bottom(&mut self) {
+        if !self.vector_state.records.is_empty() {
+            self.vector_state.cursor = self.vector_state.records.len() - 1;
+        }
     }
 }
