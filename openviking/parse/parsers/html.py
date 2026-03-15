@@ -28,6 +28,7 @@ from openviking.parse.base import (
     lazy_import,
 )
 from openviking.parse.parsers.base_parser import BaseParser
+from openviking.parse.parsers.constants import CODE_EXTENSIONS
 from openviking_cli.utils.config import get_openviking_config
 
 
@@ -52,51 +53,11 @@ class URLTypeDetector:
     - A file download link (and what type)
     """
 
-    # Common code/text file extensions that should be downloaded, not parsed as web pages
-    CODE_EXTENSIONS = {
-        ".py",
-        ".js",
-        ".ts",
-        ".jsx",
-        ".tsx",
-        ".rb",
-        ".go",
-        ".rs",
-        ".java",
-        ".c",
-        ".cpp",
-        ".h",
-        ".hpp",
-        ".cs",
-        ".swift",
-        ".kt",
-        ".scala",
-        ".sh",
-        ".bash",
-        ".zsh",
-        ".r",
-        ".lua",
-        ".pl",
-        ".php",
-        ".yaml",
-        ".yml",
-        ".toml",
-        ".ini",
-        ".cfg",
-        ".conf",
-        ".json",
-        ".xml",
-        ".csv",
-        ".sql",
-        ".dockerfile",
-        ".makefile",
-        ".cmake",
-        ".proto",
-        ".graphql",
-    }
-
     # Extension to URL type mapping
+    # CODE_EXTENSIONS spread comes first so explicit entries below override
+    # (e.g., .html/.htm -> DOWNLOAD_HTML instead of DOWNLOAD_TXT)
     EXTENSION_MAP = {
+        **dict.fromkeys(CODE_EXTENSIONS, URLType.DOWNLOAD_TXT),
         ".pdf": URLType.DOWNLOAD_PDF,
         ".md": URLType.DOWNLOAD_MD,
         ".markdown": URLType.DOWNLOAD_MD,
@@ -105,7 +66,6 @@ class URLTypeDetector:
         ".html": URLType.DOWNLOAD_HTML,
         ".htm": URLType.DOWNLOAD_HTML,
         ".git": URLType.CODE_REPOSITORY,
-        **dict.fromkeys(CODE_EXTENSIONS, URLType.DOWNLOAD_TXT),
     }
 
     # Content-Type to URL type mapping

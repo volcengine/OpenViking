@@ -111,3 +111,10 @@ class TestURLTypeDetectorCodeExtensions:
         url = "https://example.com/paper.pdf"
         url_type, meta = await self.detector.detect(url)
         assert url_type == URLType.DOWNLOAD_PDF
+
+    @pytest.mark.asyncio
+    async def test_html_still_routes_to_download_html(self):
+        """Ensure .html overrides CODE_EXTENSIONS mapping to DOWNLOAD_TXT."""
+        url = "https://example.com/page.html"
+        url_type, meta = await self.detector.detect(url)
+        assert url_type == URLType.DOWNLOAD_HTML
