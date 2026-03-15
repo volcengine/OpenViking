@@ -19,6 +19,7 @@ from openviking.retrieve.retrieval_stats import get_stats_collector
 from openviking.server.identity import RequestContext, Role
 from openviking.storage import VikingDBManager, VikingDBManagerProxy
 from openviking.storage.viking_fs import get_viking_fs
+from openviking.telemetry import get_current_telemetry
 from openviking.utils.time_utils import parse_iso_datetime
 from openviking_cli.retrieve.types import (
     ContextType,
@@ -102,9 +103,7 @@ class HierarchicalRetriever:
             grep_patterns: Keyword match pattern list
             scope_dsl: Additional scope constraints passed from public find/search filter
         """
-
         t0 = time.monotonic()
-
         # Use custom threshold or default threshold
         effective_threshold = score_threshold if score_threshold is not None else self.threshold
 
@@ -234,6 +233,10 @@ class HierarchicalRetriever:
             extra_filter=scope_dsl,
             limit=limit,
         )
+        telemetry = get_current_telemetry()
+        telemetry.count("vector.searches", 1)
+        telemetry.count("vector.scored", len(results))
+        telemetry.count("vector.scanned", len(results))
         return results
 
     def _rerank_scores(
@@ -388,6 +391,10 @@ class HierarchicalRetriever:
                 extra_filter=scope_dsl,
                 limit=pre_filter_limit,
             )
+            telemetry = get_current_telemetry()
+            telemetry.count("vector.searches", 1)
+            telemetry.count("vector.scored", len(results))
+            telemetry.count("vector.scanned", len(results))
 
             if not results:
                 continue
@@ -409,6 +416,7 @@ class HierarchicalRetriever:
                     )
                     continue
 
+                telemetry.count("vector.passed", 1)
                 # Deduplicate by URI and keep the highest-scored candidate.
                 previous = collected_by_uri.get(uri)
                 if previous is None or final_score > previous.get("_final_score", 0):
