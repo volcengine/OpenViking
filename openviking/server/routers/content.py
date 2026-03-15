@@ -6,12 +6,12 @@ from urllib.parse import quote
 
 from fastapi import APIRouter, Body, Depends, Query
 from fastapi.responses import Response as FastAPIResponse
+from pydantic import BaseModel
 
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import ErrorInfo, Response
-from pydantic import BaseModel
 
 
 class ReindexRequest(BaseModel):
@@ -104,9 +104,7 @@ async def reindex(
     if not await viking_fs.exists(uri):
         return Response(
             status="error",
-            error=ErrorInfo(
-                code="NOT_FOUND", message=f"URI not found: {uri}"
-            ),
+            error=ErrorInfo(code="NOT_FOUND", message=f"URI not found: {uri}"),
         )
 
     service = get_service()
