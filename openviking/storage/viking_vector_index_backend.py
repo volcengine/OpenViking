@@ -661,6 +661,13 @@ class VikingVectorIndexBackend:
     def is_closing(self) -> bool:
         return False
 
+    @property
+    def has_queue_manager(self) -> bool:
+        return False
+
+    async def enqueue_embedding_msg(self, _embedding_msg) -> bool:
+        raise NotImplementedError("Queue management requires VikingDBManager")
+
     # =========================================================================
     # Tenant-Aware 方法（保持向后兼容）
     # =========================================================================

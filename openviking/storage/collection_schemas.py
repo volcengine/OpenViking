@@ -13,6 +13,7 @@ import json
 from typing import Any, Dict, Optional
 
 from openviking.models.embedder.base import EmbedResult
+from openviking.models.embedder.volcengine_embedders import is_429_error
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.errors import CollectionNotFoundError
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
@@ -192,7 +193,6 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                 self._initialize_embedder(config)
 
             # Generate embedding vector(s)
-            is_rate_limit_error = False
             if self._embedder:
                 try:
                     # embed() is a blocking HTTP call; offload to thread pool to avoid
@@ -221,12 +221,14 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     error_msg = f"Failed to generate embedding: {e}"
                     logger.error(error_msg)
 
-                    # 检查是否是限流错误
-                    from openviking.models.embedder.volcengine_embedders import is_429_error
-
-                    if is_429_error(e):
-                        is_rate_limit_error = True
-                        logger.info("Rate limit error detected, will attempt to re-enqueue")
+                    if is_429_error(e) and self._vikingdb.has_queue_manager:
+                        try:
+                            await self._vikingdb.enqueue_embedding_msg(embedding_msg)
+                            logger.info(f"Re-enqueued embedding message: {embedding_msg.id}")
+                            self.report_success()
+                            return None
+                        except Exception as requeue_err:
+                            logger.error(f"Failed to re-enqueue message: {requeue_err}")
 
                     self.report_error(error_msg, data)
                     return None
@@ -282,24 +284,6 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                 traceback.print_exc()
                 self.report_error(str(db_err), data)
                 return None
-
-            # 如果是限流错误，尝试重新入队
-            if is_rate_limit_error:
-                try:
-                    # 安全地检查和使用 queue_manager
-                    has_queue_manager = getattr(self._vikingdb, "has_queue_manager", False)
-                    if has_queue_manager:
-                        enqueue_func = getattr(self._vikingdb, "enqueue_embedding_msg", None)
-                        if enqueue_func:
-                            await enqueue_func(embedding_msg)
-                            logger.info(
-                                f"Successfully re-enqueued embedding message: {embedding_msg.id}"
-                            )
-                            # 报告成功，因为我们已经重新入队了
-                            self.report_success()
-                            return None
-                except Exception as requeue_err:
-                    logger.error(f"Failed to re-enqueue message: {requeue_err}")
 
             self.report_success()
             return inserted_data

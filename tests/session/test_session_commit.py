@@ -101,7 +101,6 @@ class TestCommit:
 
         # Look up the record by URI
         records_before = await vikingdb.get_context_by_uri(
-            account_id="default",
             uri=uri,
             limit=1,
             ctx=ctx,
@@ -120,7 +119,6 @@ class TestCommit:
 
         # Verify the count actually changed in storage
         records_after = await vikingdb.get_context_by_uri(
-            account_id="default",
             uri=uri,
             limit=1,
             ctx=ctx,
