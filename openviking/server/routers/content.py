@@ -4,13 +4,22 @@
 
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Body, Depends, Query
 from fastapi.responses import Response as FastAPIResponse
+from pydantic import BaseModel
 
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
-from openviking.server.models import Response
+from openviking.server.models import ErrorInfo, Response
+
+
+class ReindexRequest(BaseModel):
+    """Request to reindex content at a URI."""
+
+    uri: str
+    regenerate: bool = False
+
 
 router = APIRouter(prefix="/api/v1/content", tags=["content"])
 
@@ -73,3 +82,37 @@ async def download(
         media_type="application/octet-stream",
         headers={"Content-Disposition": f"attachment; filename*=UTF-8''{filename}"},
     )
+
+
+@router.post("/reindex")
+async def reindex(
+    request: ReindexRequest = Body(...),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Reindex content at a URI.
+
+    Re-embeds existing .abstract.md/.overview.md content into the vector
+    database. If regenerate=True, also regenerates L0/L1 summaries via LLM
+    before re-embedding.
+    """
+    from openviking.storage.viking_fs import get_viking_fs
+
+    uri = request.uri
+    viking_fs = get_viking_fs()
+
+    # Validate URI exists
+    if not await viking_fs.exists(uri):
+        return Response(
+            status="error",
+            error=ErrorInfo(code="NOT_FOUND", message=f"URI not found: {uri}"),
+        )
+
+    service = get_service()
+    if request.regenerate:
+        # Regenerate L0/L1 via LLM, then auto-enqueue for embedding
+        result = await service.resources.summarize([uri], ctx=_ctx)
+        return Response(status="ok", result=result)
+    else:
+        # Re-embed existing content only
+        result = await service.resources.build_index([uri], ctx=_ctx)
+        return Response(status="ok", result=result)
