@@ -23,6 +23,7 @@ from openviking.models.embedder.base import (
     SparseEmbedderBase,
 )
 from openviking.models.embedder.jina_embedders import JinaDenseEmbedder
+from openviking.models.embedder.minimax_embedders import MinimaxDenseEmbedder
 from openviking.models.embedder.openai_embedders import OpenAIDenseEmbedder
 from openviking.models.embedder.vikingdb_embedders import (
     VikingDBDenseEmbedder,
@@ -45,6 +46,8 @@ __all__ = [
     "CompositeHybridEmbedder",
     # Jina AI implementations
     "JinaDenseEmbedder",
+    # MiniMax implementations
+    "MinimaxDenseEmbedder",
     # OpenAI implementations
     "OpenAIDenseEmbedder",
     # Volcengine implementations
