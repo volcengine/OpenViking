@@ -354,7 +354,16 @@ const memoryPlugin = {
     );
 
     if (cfg.autoRecall || cfg.ingestReplyAssist) {
-      api.on("before_agent_start", async (event: { messages?: unknown[]; prompt: string }) => {
+      api.on("before_agent_start", async (event: { messages?: unknown[]; prompt: string }, ctx?: { agentId?: string }) => {
+        // Dynamically switch agent identity for multi-agent memory isolation.
+        // In multi-agent gateway deployments, the hook context carries the current
+        // agent's ID so we route memory operations to the correct agent_space.
+        const hookAgentId = ctx?.agentId;
+        if (hookAgentId) {
+          const client = await getClient();
+          client.setAgentId(hookAgentId);
+          api.logger.info?.(`memory-openviking: switched to agentId=${hookAgentId} for recall`);
+        }
         const queryText = extractLatestUserText(event.messages) || event.prompt.trim();
         if (!queryText) {
           return;
@@ -474,7 +483,14 @@ const memoryPlugin = {
     if (cfg.autoCapture) {
       let lastProcessedMsgCount = 0;
 
-      api.on("agent_end", async (event: { success?: boolean; messages?: unknown[] }) => {
+      api.on("agent_end", async (event: { success?: boolean; messages?: unknown[] }, ctx?: { agentId?: string }) => {
+        // Dynamically switch agent identity for multi-agent memory isolation
+        const hookAgentId = ctx?.agentId;
+        if (hookAgentId) {
+          const client = await getClient();
+          client.setAgentId(hookAgentId);
+          api.logger.info?.(`memory-openviking: switched to agentId=${hookAgentId} for capture`);
+        }
         if (!event.success || !event.messages || event.messages.length === 0) {
           api.logger.info(
             `memory-openviking: auto-capture skipped (success=${String(event.success)}, messages=${event.messages?.length ?? 0})`,
