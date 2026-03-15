@@ -10,6 +10,15 @@ pub async fn handle_key(app: &mut App, key: KeyEvent) {
         KeyCode::Tab => {
             app.toggle_focus();
         }
+        KeyCode::Char('v') => {
+            app.toggle_vector_records_mode().await;
+        }
+        KeyCode::Char('n') if app.showing_vector_records => {
+            app.load_next_vector_page().await;
+        }
+        KeyCode::Char('c') if app.showing_vector_records => {
+            app.load_vector_count().await;
+        }
         _ => match app.focus {
             Panel::Tree => handle_tree_key(app, key).await,
             Panel::Content => handle_content_key(app, key),
@@ -37,19 +46,37 @@ async fn handle_tree_key(app: &mut App, key: KeyEvent) {
 }
 
 fn handle_content_key(app: &mut App, key: KeyEvent) {
-    match key.code {
-        KeyCode::Char('j') | KeyCode::Down => {
-            app.scroll_content_down();
+    if app.showing_vector_records {
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                app.move_vector_cursor_down();
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                app.move_vector_cursor_up();
+            }
+            KeyCode::Char('g') => {
+                app.scroll_vector_top();
+            }
+            KeyCode::Char('G') => {
+                app.scroll_vector_bottom();
+            }
+            _ => {}
         }
-        KeyCode::Char('k') | KeyCode::Up => {
-            app.scroll_content_up();
+    } else {
+        match key.code {
+            KeyCode::Char('j') | KeyCode::Down => {
+                app.scroll_content_down();
+            }
+            KeyCode::Char('k') | KeyCode::Up => {
+                app.scroll_content_up();
+            }
+            KeyCode::Char('g') => {
+                app.scroll_content_top();
+            }
+            KeyCode::Char('G') => {
+                app.scroll_content_bottom();
+            }
+            _ => {}
         }
-        KeyCode::Char('g') => {
-            app.scroll_content_top();
-        }
-        KeyCode::Char('G') => {
-            app.scroll_content_bottom();
-        }
-        _ => {}
     }
 }
