@@ -81,19 +81,12 @@ class VoyageDenseEmbedder(DenseEmbedderBase):
 
         self._dimension = dimension or get_voyage_model_default_dimension(normalized_model_name)
 
-    def _build_extra_body(self) -> Optional[Dict[str, Any]]:
-        """Build Voyage-specific request fields."""
-        if self.dimension is None:
-            return None
-        return {"output_dimension": self.dimension}
-
     def embed(self, text: str) -> EmbedResult:
         """Perform dense embedding on text."""
         try:
             kwargs: Dict[str, Any] = {"input": text, "model": self.model_name}
-            extra_body = self._build_extra_body()
-            if extra_body:
-                kwargs["extra_body"] = extra_body
+            if self.dimension is not None:
+                kwargs["extra_body"] = {"output_dimension": self.dimension}
 
             response = self.client.embeddings.create(**kwargs)
             vector = response.data[0].embedding
@@ -110,9 +103,8 @@ class VoyageDenseEmbedder(DenseEmbedderBase):
 
         try:
             kwargs: Dict[str, Any] = {"input": texts, "model": self.model_name}
-            extra_body = self._build_extra_body()
-            if extra_body:
-                kwargs["extra_body"] = extra_body
+            if self.dimension is not None:
+                kwargs["extra_body"] = {"output_dimension": self.dimension}
 
             response = self.client.embeddings.create(**kwargs)
             return [EmbedResult(dense_vector=item.embedding) for item in response.data]
