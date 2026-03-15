@@ -1,0 +1,15 @@
+{
+  "name": "@openclaw/contextengine-openviking",
+  "version": "0.0.0",
+  "description": "OpenClaw OpenViking context-engine plugin scaffold",
+  "type": "module",
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ]
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.5",
+    "vitest": "^3.2.4"
+  }
+}
