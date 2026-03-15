@@ -62,7 +62,7 @@ impl TreeState {
     const ROOT_SCOPES: &'static [&'static str] = &["agent", "resources", "session", "user"];
 
     pub async fn load_root(&mut self, client: &HttpClient, uri: &str) {
-        let is_root = uri == "viking://" || uri == "viking:///";
+        let is_root = uri == "viking://" || uri == "viking:///" || uri == "/";
 
         if is_root {
             // Synthesize root scope folders and eagerly load their children
