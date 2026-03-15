@@ -269,3 +269,30 @@ class TestJinaDenseEmbedder:
             dimension=256,
         )
         assert embedder.get_dimension() == 256
+
+    def test_contextualize_init_params_sets_query_default_task(self):
+        params = JinaDenseEmbedder.contextualize_init_params(
+            {"model_name": "jina-embeddings-v5-text-small"},
+            "query",
+        )
+
+        assert params["task"] == "retrieval.query"
+
+    def test_contextualize_init_params_sets_document_default_task(self):
+        params = JinaDenseEmbedder.contextualize_init_params(
+            {"model_name": "jina-embeddings-v5-text-small"},
+            "document",
+        )
+
+        assert params["task"] == "retrieval.passage"
+
+    def test_contextualize_init_params_preserves_explicit_task(self):
+        params = JinaDenseEmbedder.contextualize_init_params(
+            {
+                "model_name": "jina-embeddings-v5-text-small",
+                "task": "classification",
+            },
+            "query",
+        )
+
+        assert params["task"] == "classification"

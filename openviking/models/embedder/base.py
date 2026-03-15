@@ -98,6 +98,15 @@ class EmbedderBase(ABC):
         """
         return [self.embed(text) for text in texts]
 
+    @classmethod
+    def contextualize_init_params(cls, params: Dict[str, Any], context: str) -> Dict[str, Any]:
+        """Apply provider-specific query/document defaults to init kwargs.
+
+        Subclasses can override this to encode contextual embedding behavior
+        without pushing provider-specific branches into config or service code.
+        """
+        return dict(params)
+
     def close(self):
         """Release resources, subclasses can override as needed"""
         pass

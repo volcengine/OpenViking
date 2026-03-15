@@ -71,7 +71,8 @@ class OpenVikingService:
         self._queue_manager: Optional[QueueManager] = None
         self._vikingdb_manager: Optional[VikingDBManager] = None
         self._viking_fs: Optional[VikingFS] = None
-        self._embedder: Optional[Any] = None
+        self._query_embedder: Optional[Any] = None
+        self._document_embedder: Optional[Any] = None
         self._resource_processor: Optional[ResourceProcessor] = None
         self._skill_processor: Optional[SkillProcessor] = None
         self._session_compressor: Optional[SessionCompressor] = None
@@ -95,10 +96,14 @@ class OpenVikingService:
             config.storage, config.embedding.max_concurrent, config.vlm.max_concurrent
         )
 
-        # Initialize embedder
-        self._embedder = config.embedding.get_embedder()
+        # Initialize embedders
+        self._query_embedder = config.embedding.get_query_embedder()
+        self._document_embedder = config.embedding.get_document_embedder()
         logger.info(
-            f"Initialized embedder (dim {config.embedding.dimension}, sparse {self._embedder.is_sparse})"
+            "Initialized embedders (document_dim %d, query_sparse %s, document_sparse %s)",
+            config.embedding.dimension,
+            self._query_embedder.is_sparse,
+            self._document_embedder.is_sparse,
         )
 
     def _init_storage(
@@ -227,8 +232,10 @@ class OpenVikingService:
                 self._config.vlm.max_concurrent,
             )
 
-        if self._embedder is None:
-            self._embedder = self._config.embedding.get_embedder()
+        if self._query_embedder is None:
+            self._query_embedder = self._config.embedding.get_query_embedder()
+        if self._document_embedder is None:
+            self._document_embedder = self._config.embedding.get_document_embedder()
 
         config = get_openviking_config()
 
@@ -240,7 +247,7 @@ class OpenVikingService:
 
         self._viking_fs = init_viking_fs(
             agfs=self._agfs_client,
-            query_embedder=self._embedder,
+            query_embedder=self._query_embedder,
             rerank_config=config.rerank,
             vector_store=self._vikingdb_manager,
             enable_recorder=enable_recorder,
@@ -317,6 +324,8 @@ class OpenVikingService:
             self._agfs_manager = None
 
         self._viking_fs = None
+        self._query_embedder = None
+        self._document_embedder = None
         self._resource_processor = None
         self._skill_processor = None
         self._session_compressor = None

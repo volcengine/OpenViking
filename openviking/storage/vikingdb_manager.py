@@ -152,18 +152,32 @@ class VikingDBManager(VikingVectorIndexBackend):
             logger.error(f"Error getting embedding queue size: {e}")
             return 0
 
-    def get_embedder(self):
-        """
-        Get the embedder instance from configuration.
-
-        Returns:
-            Embedder instance or None if not configured
-        """
+    def get_query_embedder(self):
+        """Get the query-time embedder instance from configuration."""
         try:
             from openviking_cli.utils.config import get_openviking_config
 
             config = get_openviking_config()
-            return config.embedding.get_embedder()
+            return config.embedding.get_query_embedder()
+        except Exception as e:
+            logger.warning(f"Failed to get query embedder from configuration: {e}")
+            return None
+
+    def get_document_embedder(self):
+        """Get the document/index-time embedder instance from configuration."""
+        try:
+            from openviking_cli.utils.config import get_openviking_config
+
+            config = get_openviking_config()
+            return config.embedding.get_document_embedder()
+        except Exception as e:
+            logger.warning(f"Failed to get document embedder from configuration: {e}")
+            return None
+
+    def get_embedder(self):
+        """Backward-compatible alias for the query-time embedder."""
+        try:
+            return self.get_query_embedder()
         except Exception as e:
             logger.warning(f"Failed to get embedder from configuration: {e}")
             return None
@@ -253,6 +267,12 @@ class VikingDBManagerProxy:
 
     async def get_embedding_queue_size(self) -> int:
         return await self._manager.get_embedding_queue_size()
+
+    def get_query_embedder(self):
+        return self._manager.get_query_embedder()
+
+    def get_document_embedder(self):
+        return self._manager.get_document_embedder()
 
     def get_embedder(self):
         return self._manager.get_embedder()

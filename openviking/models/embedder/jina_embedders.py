@@ -97,6 +97,20 @@ class JinaDenseEmbedder(DenseEmbedderBase):
             extra_body["late_chunking"] = self.late_chunking
         return extra_body if extra_body else None
 
+    @classmethod
+    def contextualize_init_params(cls, params: Dict[str, Any], context: str) -> Dict[str, Any]:
+        """Apply Jina retrieval defaults for query/document contexts."""
+        contextual_params = dict(params)
+        if contextual_params.get("task") is not None:
+            return contextual_params
+
+        if context == "query":
+            contextual_params["task"] = "retrieval.query"
+        elif context == "document":
+            contextual_params["task"] = "retrieval.passage"
+
+        return contextual_params
+
     def embed(self, text: str) -> EmbedResult:
         """Perform dense embedding on text
 

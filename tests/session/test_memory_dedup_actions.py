@@ -32,6 +32,9 @@ class _DummyVikingDB:
     def __init__(self):
         self._embedder = None
 
+    def get_query_embedder(self):
+        return self._embedder
+
     def get_embedder(self):
         return self._embedder
 
@@ -79,6 +82,15 @@ def _make_existing(uri_suffix: str = "existing.md") -> Context:
 
 
 class TestMemoryDeduplicatorPayload:
+    def test_uses_query_embedder_for_prefiltering(self):
+        query_embedder = _DummyEmbedder()
+        vikingdb = MagicMock()
+        vikingdb.get_query_embedder.return_value = query_embedder
+
+        dedup = MemoryDeduplicator(vikingdb=vikingdb)
+
+        assert dedup.embedder is query_embedder
+
     def test_create_with_empty_list_is_valid(self):
         dedup = MemoryDeduplicator(vikingdb=_DummyVikingDB())
         existing = [_make_existing("a.md")]
@@ -155,7 +167,7 @@ class TestMemoryDeduplicatorPayload:
         existing = _make_existing("pref_hit.md")
 
         vikingdb = MagicMock()
-        vikingdb.get_embedder.return_value = _DummyEmbedder()
+        vikingdb.get_query_embedder.return_value = _DummyEmbedder()
         vikingdb.search_similar_memories = AsyncMock(
             return_value=[
                 {
@@ -189,7 +201,7 @@ class TestMemoryDeduplicatorPayload:
     @pytest.mark.asyncio
     async def test_find_similar_memories_accepts_low_score_when_threshold_is_zero(self):
         vikingdb = MagicMock()
-        vikingdb.get_embedder.return_value = _DummyEmbedder()
+        vikingdb.get_query_embedder.return_value = _DummyEmbedder()
         vikingdb.search_similar_memories = AsyncMock(
             return_value=[
                 {
@@ -374,7 +386,7 @@ class TestSessionCompressorDedupActions:
         new_memory = _make_existing("created.md")
 
         vikingdb = MagicMock()
-        vikingdb.get_embedder.return_value = None
+        vikingdb.get_query_embedder.return_value = None
         vikingdb.delete_uris = AsyncMock(return_value=None)
         vikingdb.enqueue_embedding_msg = AsyncMock()
 
@@ -412,7 +424,7 @@ class TestSessionCompressorDedupActions:
         target = _make_existing("merge_target.md")
 
         vikingdb = MagicMock()
-        vikingdb.get_embedder.return_value = None
+        vikingdb.get_query_embedder.return_value = None
         vikingdb.delete_uris = AsyncMock(return_value=None)
         vikingdb.enqueue_embedding_msg = AsyncMock()
 
@@ -467,7 +479,7 @@ class TestSessionCompressorDedupActions:
         target = _make_existing("merge_target_fail.md")
 
         vikingdb = MagicMock()
-        vikingdb.get_embedder.return_value = None
+        vikingdb.get_query_embedder.return_value = None
         vikingdb.delete_uris = AsyncMock(return_value=None)
         vikingdb.enqueue_embedding_msg = AsyncMock()
 
@@ -513,7 +525,7 @@ class TestSessionCompressorDedupActions:
         call_order = []
 
         vikingdb = MagicMock()
-        vikingdb.get_embedder.return_value = None
+        vikingdb.get_query_embedder.return_value = None
         vikingdb.delete_uris = AsyncMock(return_value=None)
         vikingdb.enqueue_embedding_msg = AsyncMock()
 
