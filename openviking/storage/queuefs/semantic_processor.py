@@ -3,6 +3,9 @@
 """SemanticProcessor: Processes messages from SemanticQueue, generates .abstract.md and .overview.md."""
 
 import asyncio
+import threading
+from contextlib import nullcontext
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 
 from openviking.parse.parsers.constants import (
@@ -24,12 +27,19 @@ from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecutor
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.viking_fs import get_viking_fs
+from openviking.telemetry import bind_telemetry, resolve_telemetry
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import VikingURI
 from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+
+@dataclass
+class RequestQueueStats:
+    processed: int = 0
+    error_count: int = 0
 
 
 class SemanticProcessor(DequeueHandlerBase):
@@ -43,6 +53,14 @@ class SemanticProcessor(DequeueHandlerBase):
     4. Enqueue to EmbeddingQueue for vectorization
     """
 
+    _stats_lock = threading.Lock()
+    _dag_stats_by_telemetry_id: Dict[str, DagStats] = {}
+    _dag_stats_by_uri: Dict[str, DagStats] = {}
+    _dag_stats_order: List[Tuple[str, str]] = []
+    _request_stats_by_telemetry_id: Dict[str, RequestQueueStats] = {}
+    _request_stats_order: List[str] = []
+    _max_cached_stats = 256
+
     def __init__(self, max_concurrent_llm: int = 100):
         """
         Initialize SemanticProcessor.
@@ -54,6 +72,61 @@ class SemanticProcessor(DequeueHandlerBase):
         self._dag_executor: Optional[SemanticDagExecutor] = None
         self._current_ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
         self._current_msg: Optional[SemanticMsg] = None
+
+    @classmethod
+    def _cache_dag_stats(cls, telemetry_id: str, uri: str, stats: DagStats) -> None:
+        with cls._stats_lock:
+            if telemetry_id:
+                cls._dag_stats_by_telemetry_id[telemetry_id] = stats
+            cls._dag_stats_by_uri[uri] = stats
+            cls._dag_stats_order.append((telemetry_id, uri))
+            if len(cls._dag_stats_order) > cls._max_cached_stats:
+                old_telemetry_id, old_uri = cls._dag_stats_order.pop(0)
+                if old_telemetry_id:
+                    cls._dag_stats_by_telemetry_id.pop(old_telemetry_id, None)
+                cls._dag_stats_by_uri.pop(old_uri, None)
+
+    @classmethod
+    def consume_dag_stats(
+        cls,
+        telemetry_id: str = "",
+        uri: Optional[str] = None,
+    ) -> Optional[DagStats]:
+        with cls._stats_lock:
+            if telemetry_id and telemetry_id in cls._dag_stats_by_telemetry_id:
+                stats = cls._dag_stats_by_telemetry_id.pop(telemetry_id, None)
+                if uri:
+                    cls._dag_stats_by_uri.pop(uri, None)
+                return stats
+            if uri and uri in cls._dag_stats_by_uri:
+                return cls._dag_stats_by_uri.pop(uri, None)
+        return None
+
+    @classmethod
+    def _merge_request_stats(
+        cls,
+        telemetry_id: str,
+        processed: int = 0,
+        error_count: int = 0,
+    ) -> None:
+        if not telemetry_id:
+            return
+        with cls._stats_lock:
+            stats = cls._request_stats_by_telemetry_id.setdefault(telemetry_id, RequestQueueStats())
+            stats.processed += processed
+            stats.error_count += error_count
+            cls._request_stats_order.append(telemetry_id)
+            if len(cls._request_stats_order) > cls._max_cached_stats:
+                old_telemetry_id = cls._request_stats_order.pop(0)
+                if old_telemetry_id != telemetry_id:
+                    cls._request_stats_by_telemetry_id.pop(old_telemetry_id, None)
+
+    @classmethod
+    def consume_request_stats(cls, telemetry_id: str) -> Optional[RequestQueueStats]:
+        if not telemetry_id:
+            return None
+        with cls._stats_lock:
+            return cls._request_stats_by_telemetry_id.pop(telemetry_id, None)
 
     @staticmethod
     def _owner_space_for_uri(uri: str, ctx: RequestContext) -> str:
@@ -152,6 +225,8 @@ class SemanticProcessor(DequeueHandlerBase):
 
     async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """Process dequeued SemanticMsg, recursively process all subdirectories."""
+        msg: Optional[SemanticMsg] = None
+        collector = None
         try:
             import json
 
@@ -164,61 +239,77 @@ class SemanticProcessor(DequeueHandlerBase):
             # data is guaranteed to be not None at this point
             assert data is not None
             msg = SemanticMsg.from_dict(data)
-            self._current_msg = msg
-            self._current_ctx = self._ctx_from_semantic_msg(msg)
-            logger.info(
-                f"Processing semantic generation for: {msg.uri} (recursive={msg.recursive})"
-            )
+            collector = resolve_telemetry(msg.telemetry_id)
+            telemetry_ctx = bind_telemetry(collector) if collector is not None else nullcontext()
 
-            if msg.recursive:
-                executor = SemanticDagExecutor(
-                    processor=self,
-                    context_type=msg.context_type,
-                    max_concurrent_llm=self.max_concurrent_llm,
-                    ctx=self._current_ctx,
-                )
-                self._dag_executor = executor
-                await executor.run(msg.uri)
-                logger.info(f"Completed semantic generation for: {msg.uri}")
-                self.report_success()
-                return None
-            else:
-                # Non-recursive processing: directly process this directory
-                children_uris = []
-                file_paths = []
-
-                # Collect immediate children info only (no recursion)
-                viking_fs = get_viking_fs()
-                try:
-                    entries = await viking_fs.ls(msg.uri, ctx=self._current_ctx)
-                    for entry in entries:
-                        name = entry.get("name", "")
-                        if not name or name.startswith(".") or name in [".", ".."]:
-                            continue
-
-                        item_uri = VikingURI(msg.uri).join(name).uri
-
-                        if entry.get("isDir", False):
-                            children_uris.append(item_uri)
-                        else:
-                            file_paths.append(item_uri)
-                except Exception as e:
-                    logger.warning(f"Failed to list directory {msg.uri}: {e}")
-
-                # Process this directory
-                await self._process_single_directory(
-                    uri=msg.uri,
-                    context_type=msg.context_type,
-                    children_uris=children_uris,
-                    file_paths=file_paths,
+            with telemetry_ctx:
+                self._current_msg = msg
+                self._current_ctx = self._ctx_from_semantic_msg(msg)
+                logger.info(
+                    f"Processing semantic generation for: {msg.uri} (recursive={msg.recursive})"
                 )
 
+                if msg.recursive:
+                    executor = SemanticDagExecutor(
+                        processor=self,
+                        context_type=msg.context_type,
+                        max_concurrent_llm=self.max_concurrent_llm,
+                        ctx=self._current_ctx,
+                    )
+                    self._dag_executor = executor
+                    await executor.run(msg.uri)
+                    self._cache_dag_stats(
+                        msg.telemetry_id,
+                        msg.uri,
+                        executor.get_stats(),
+                    )
+                else:
+                    children_uris = []
+                    file_paths = []
+
+                    viking_fs = get_viking_fs()
+                    try:
+                        entries = await viking_fs.ls(msg.uri, ctx=self._current_ctx)
+                        for entry in entries:
+                            name = entry.get("name", "")
+                            if not name or name.startswith(".") or name in [".", ".."]:
+                                continue
+
+                            item_uri = VikingURI(msg.uri).join(name).uri
+
+                            if entry.get("isDir", False):
+                                children_uris.append(item_uri)
+                            else:
+                                file_paths.append(item_uri)
+                    except Exception as e:
+                        logger.warning(f"Failed to list directory {msg.uri}: {e}")
+
+                    await self._process_single_directory(
+                        uri=msg.uri,
+                        context_type=msg.context_type,
+                        children_uris=children_uris,
+                        file_paths=file_paths,
+                    )
+                    self._cache_dag_stats(
+                        msg.telemetry_id,
+                        msg.uri,
+                        DagStats(
+                            total_nodes=1,
+                            pending_nodes=0,
+                            in_progress_nodes=0,
+                            done_nodes=1,
+                        ),
+                    )
+
+                self._merge_request_stats(msg.telemetry_id, processed=1)
                 logger.info(f"Completed semantic generation for: {msg.uri}")
                 self.report_success()
                 return None
 
         except Exception as e:
             logger.error(f"Failed to process semantic message: {e}", exc_info=True)
+            if msg is not None:
+                self._merge_request_stats(msg.telemetry_id, error_count=1)
             self.report_error(str(e), data)
             return None
         finally:

@@ -12,6 +12,7 @@ from openviking.models.embedder.base import (
     HybridEmbedderBase,
     SparseEmbedderBase,
 )
+from openviking.telemetry import get_current_telemetry
 
 
 class OpenAIDenseEmbedder(DenseEmbedderBase):
@@ -79,6 +80,25 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             # Use default value, text-embedding-3-small defaults to 1536
             return 1536
 
+    def _update_telemetry_token_usage(self, response) -> None:
+        usage = getattr(response, "usage", None)
+        if not usage:
+            return
+
+        def _usage_value(key: str, default: int = 0) -> int:
+            if isinstance(usage, dict):
+                return int(usage.get(key, default) or default)
+            return int(getattr(usage, key, default) or default)
+
+        prompt_tokens = _usage_value("prompt_tokens", 0)
+        total_tokens = _usage_value("total_tokens", prompt_tokens)
+        output_tokens = max(total_tokens - prompt_tokens, 0)
+        get_current_telemetry().add_token_usage_by_source(
+            "embedding",
+            prompt_tokens,
+            output_tokens,
+        )
+
     def embed(self, text: str) -> EmbedResult:
         """Perform dense embedding on text
 
@@ -97,6 +117,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
                 kwargs["dimensions"] = self.dimension
 
             response = self.client.embeddings.create(**kwargs)
+            self._update_telemetry_token_usage(response)
             vector = response.data[0].embedding
 
             return EmbedResult(dense_vector=vector)
@@ -126,6 +147,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
                 kwargs["dimensions"] = self.dimension
 
             response = self.client.embeddings.create(**kwargs)
+            self._update_telemetry_token_usage(response)
 
             return [EmbedResult(dense_vector=item.embedding) for item in response.data]
         except openai.APIError as e:

@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from openviking.client import LocalClient, Session
 from openviking.service.debug_service import SystemStatus
+from openviking.telemetry import TelemetryRequest
 from openviking_cli.client.base import BaseClient
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
@@ -169,10 +170,12 @@ class AsyncOpenViking:
             session_id=session_id, role=role, content=content, parts=parts
         )
 
-    async def commit_session(self, session_id: str) -> Dict[str, Any]:
+    async def commit_session(
+        self, session_id: str, telemetry: TelemetryRequest = False
+    ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
         await self._ensure_initialized()
-        return await self._client.commit_session(session_id)
+        return await self._client.commit_session(session_id, telemetry=telemetry)
 
     # ============= Resource methods =============
 
@@ -187,6 +190,7 @@ class AsyncOpenViking:
         timeout: float = None,
         build_index: bool = True,
         summarize: bool = False,
+        telemetry: TelemetryRequest = False,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -201,10 +205,10 @@ class AsyncOpenViking:
             parent: Target parent URI (must already exist).
             build_index: Whether to build vector index immediately (default: True).
             summarize: Whether to generate summary (default: False).
+            telemetry: Whether to attach operation telemetry data to the result.
         """
         await self._ensure_initialized()
 
-        # Validate that only one of 'to' or 'parent' is set
         if to and parent:
             raise ValueError("Cannot specify both 'to' and 'parent' at the same time.")
 
@@ -218,6 +222,7 @@ class AsyncOpenViking:
             timeout=timeout,
             build_index=build_index,
             summarize=summarize,
+            telemetry=telemetry,
             **kwargs,
         )
 
@@ -251,6 +256,7 @@ class AsyncOpenViking:
         data: Any,
         wait: bool = False,
         timeout: float = None,
+        telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add skill to OpenViking.
 
@@ -263,6 +269,7 @@ class AsyncOpenViking:
             data=data,
             wait=wait,
             timeout=timeout,
+            telemetry=telemetry,
         )
 
     # ============= Search methods =============
@@ -276,6 +283,7 @@ class AsyncOpenViking:
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        telemetry: TelemetryRequest = False,
     ):
         """
         Complex search with session context.
@@ -300,6 +308,7 @@ class AsyncOpenViking:
             limit=limit,
             score_threshold=score_threshold,
             filter=filter,
+            telemetry=telemetry,
         )
 
     async def find(
@@ -309,6 +318,7 @@ class AsyncOpenViking:
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        telemetry: TelemetryRequest = False,
     ):
         """Semantic search"""
         await self._ensure_initialized()
@@ -318,6 +328,7 @@ class AsyncOpenViking:
             limit=limit,
             score_threshold=score_threshold,
             filter=filter,
+            telemetry=telemetry,
         )
 
     # ============= FS methods =============
