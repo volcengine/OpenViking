@@ -89,10 +89,6 @@ impl TreeState {
                     }
                     node.children = children;
                     node.children_loaded = true;
-                    // Keep root scopes collapsed by default so user has to press "." to expand
-                    // if !node.children.is_empty() {
-                    //     node.expanded = true;
-                    // }
                 }
                 // Always show all scopes
                 root_nodes.push(node);
