@@ -108,6 +108,21 @@ enum Commands {
         #[arg(long)]
         timeout: Option<f64>,
     },
+    /// Re-generate L0/L1 and rebuild vector index for new or modified resources
+    Reindex {
+        /// Root URI to scan (default: all resources)
+        #[arg(default_value = "viking://resources/")]
+        uri: String,
+        /// Re-process even if content appears up-to-date
+        #[arg(long)]
+        force: bool,
+        /// Wait until processing is complete
+        #[arg(long)]
+        wait: bool,
+        /// Wait timeout in seconds (only used with --wait)
+        #[arg(long)]
+        timeout: Option<f64>,
+    },
     /// List relations of a resource
     Relations {
         /// Viking URI
@@ -546,6 +561,9 @@ async fn main() {
         Commands::AddSkill { data, wait, timeout } => {
             handle_add_skill(data, wait, timeout, ctx).await
         }
+        Commands::Reindex { uri, force, wait, timeout } => {
+            handle_reindex(uri, force, wait, timeout, ctx).await
+        }
         Commands::Relations { uri } => {
             handle_relations(uri, ctx).await
         }
@@ -726,6 +744,19 @@ async fn handle_add_skill(
     let client = ctx.get_client();
     commands::resources::add_skill(
         &client, &data, wait, timeout, ctx.output_format, ctx.compact
+    ).await
+}
+
+async fn handle_reindex(
+    uri: String,
+    force: bool,
+    wait: bool,
+    timeout: Option<f64>,
+    ctx: CliContext,
+) -> Result<()> {
+    let client = ctx.get_client();
+    commands::resources::reindex(
+        &client, &uri, force, wait, timeout, ctx.output_format, ctx.compact
     ).await
 }
 

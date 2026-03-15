@@ -211,6 +211,49 @@ def create_server(host: str = "127.0.0.1", port: int = 2033) -> FastMCP:
 
         return await asyncio.to_thread(_add_sync)
 
+    @mcp.tool()
+    async def reindex(
+        uri: str = "viking://resources/",
+        force: bool = False,
+    ) -> str:
+        """
+        Re-generate L0/L1 summaries and rebuild the vector index for new or modified resources.
+
+        Scans AGFS under the given URI and detects:
+        - New files (no .abstract.md yet)
+        - Modified files (L2 content newer than .abstract.md)
+
+        Use force=True to unconditionally re-process everything.
+
+        Args:
+            uri: Root URI to scan (default: all resources).
+            force: Re-process even if content appears up-to-date.
+        """
+        config_path = _config_path
+        data_path = _data_path
+
+        def _reindex_sync():
+            with open(config_path, "r") as f:
+                config_dict = json.load(f)
+
+            config = OpenVikingConfig.from_dict(config_dict)
+            client = ov.SyncOpenViking(path=data_path, config=config)
+
+            try:
+                client.initialize()
+                result = client.reindex(uri=uri, force=force, wait=True, timeout=600)
+                new = result.get("new", 0)
+                modified = result.get("modified", 0)
+                skipped = result.get("skipped", 0)
+                return (
+                    f"Reindex complete: {new} new, {modified} modified, "
+                    f"{skipped} skipped (unchanged)."
+                )
+            finally:
+                client.close()
+
+        return await asyncio.to_thread(_reindex_sync)
+
     @mcp.resource("openviking://status")
     def server_status() -> str:
         """Get the current server status and configuration."""

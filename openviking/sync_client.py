@@ -113,6 +113,18 @@ class SyncOpenViking:
             )
         )
 
+    def reindex(
+        self,
+        uri: str = "viking://resources/",
+        force: bool = False,
+        wait: bool = False,
+        timeout: float = None,
+    ) -> Dict[str, Any]:
+        """Re-generate L0/L1 and rebuild vector index for new or modified resources."""
+        return run_async(
+            self._async_client.reindex(uri=uri, force=force, wait=wait, timeout=timeout)
+        )
+
     def add_skill(
         self,
         data: Any,

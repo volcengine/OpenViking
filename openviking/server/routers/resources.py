@@ -134,6 +134,32 @@ async def add_resource(
     return Response(status="ok", result=result)
 
 
+class ReindexRequest(BaseModel):
+    """Request model for reindex."""
+
+    uri: str = "viking://resources/"
+    force: bool = False
+    wait: bool = False
+    timeout: Optional[float] = None
+
+
+@router.post("/resources/reindex")
+async def reindex(
+    request: ReindexRequest,
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Re-generate L0/L1 and rebuild vector index for new or modified resources."""
+    service = get_service()
+    result = await service.resources.reindex(
+        uri=request.uri,
+        ctx=_ctx,
+        force=request.force,
+        wait=request.wait,
+        timeout=request.timeout,
+    )
+    return Response(status="ok", result=result)
+
+
 @router.post("/skills")
 async def add_skill(
     request: AddSkillRequest,

@@ -607,6 +607,22 @@ impl HttpClient {
         }
     }
 
+    pub async fn reindex(
+        &self,
+        uri: &str,
+        force: bool,
+        wait: bool,
+        timeout: Option<f64>,
+    ) -> Result<serde_json::Value> {
+        let body = serde_json::json!({
+            "uri": uri,
+            "force": force,
+            "wait": wait,
+            "timeout": timeout,
+        });
+        self.post("/api/v1/resources/reindex", &body).await
+    }
+
     // ============ Relation Methods ============
 
     pub async fn relations(&self, uri: &str) -> Result<serde_json::Value> {

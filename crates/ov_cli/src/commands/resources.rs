@@ -39,6 +39,20 @@ pub async fn add_resource(
     Ok(())
 }
 
+pub async fn reindex(
+    client: &HttpClient,
+    uri: &str,
+    force: bool,
+    wait: bool,
+    timeout: Option<f64>,
+    format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let result = client.reindex(uri, force, wait, timeout).await?;
+    output_success(&result, format, compact);
+    Ok(())
+}
+
 pub async fn add_skill(
     client: &HttpClient,
     data: &str,

@@ -216,6 +216,17 @@ class AsyncOpenViking:
             **kwargs,
         )
 
+    async def reindex(
+        self,
+        uri: str = "viking://resources/",
+        force: bool = False,
+        wait: bool = False,
+        timeout: float = None,
+    ) -> Dict[str, Any]:
+        """Re-generate L0/L1 and rebuild vector index for new or modified resources."""
+        await self._ensure_initialized()
+        return await self._client.reindex(uri=uri, force=force, wait=wait, timeout=timeout)
+
     async def wait_processed(self, timeout: float = None) -> Dict[str, Any]:
         """Wait for all queued processing to complete."""
         await self._ensure_initialized()

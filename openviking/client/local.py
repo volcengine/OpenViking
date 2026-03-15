@@ -99,6 +99,22 @@ class LocalClient(BaseClient):
         """Wait for all processing to complete."""
         return await self._service.resources.wait_processed(timeout=timeout)
 
+    async def reindex(
+        self,
+        uri: str = "viking://resources/",
+        force: bool = False,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Re-generate L0/L1 and rebuild vector index for new or modified resources."""
+        return await self._service.resources.reindex(
+            uri=uri,
+            ctx=self._ctx,
+            force=force,
+            wait=wait,
+            timeout=timeout,
+        )
+
     async def build_index(self, resource_uris: Union[str, List[str]], **kwargs) -> Dict[str, Any]:
         """Manually trigger index building."""
         if isinstance(resource_uris, str):

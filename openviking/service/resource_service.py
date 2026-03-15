@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager
-from openviking.storage.queuefs import get_queue_manager
+from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.viking_fs import VikingFS
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking.utils.skill_processor import SkillProcessor
@@ -209,6 +209,172 @@ class ResourceService:
         """
         self._ensure_initialized()
         return await self._resource_processor.summarize(resource_uris, ctx, **kwargs)
+
+    async def reindex(
+        self,
+        uri: str = "viking://resources/",
+        ctx: Optional["RequestContext"] = None,
+        force: bool = False,
+        wait: bool = False,
+        timeout: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Re-generate L0/L1 summaries and rebuild vector index for stale or new entries.
+
+        Scans the AGFS tree under *uri*.  For every leaf directory that
+        contains L2 content files:
+
+        * **New** – no ``.abstract.md`` exists → enqueue for semantic processing.
+        * **Modified** – L2 file ``modTime`` is newer than ``.abstract.md`` →
+          delete old vectors, enqueue for re-processing.
+        * **force=True** – unconditionally re-process everything.
+
+        Args:
+            uri: Root URI to scan (default: all resources).
+            ctx: Request context.
+            force: Re-process even if L0/L1 appear up-to-date.
+            wait: Block until all queued processing finishes.
+            timeout: Maximum seconds to wait (only when *wait* is True).
+
+        Returns:
+            Summary dict with counts of *skipped*, *new*, *modified*, and
+            *enqueued* entries.
+        """
+        self._ensure_initialized()
+
+        viking_fs = self._viking_fs
+        vikingdb = self._vikingdb
+
+        stats: Dict[str, int] = {"scanned": 0, "skipped": 0, "new": 0, "modified": 0, "enqueued": 0}
+        dirs_to_reindex: list[str] = []
+
+        # Walk the tree and decide which directories need re-processing.
+        entries = await viking_fs.ls(uri, show_all_hidden=True, node_limit=100000, ctx=ctx)
+        await self._collect_stale_dirs(viking_fs, uri, entries, force, dirs_to_reindex, stats, ctx)
+
+        # Delete existing vectors and enqueue semantic processing for each stale dir.
+        if dirs_to_reindex:
+            queue_manager = get_queue_manager()
+            semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
+
+            for dir_uri in dirs_to_reindex:
+                # Remove old vectors so they get rebuilt
+                if vikingdb:
+                    try:
+                        await vikingdb.remove_by_uri(dir_uri, ctx=ctx)
+                    except Exception as e:
+                        logger.warning(f"Failed to remove old vectors for {dir_uri}: {e}")
+
+                msg = SemanticMsg(
+                    uri=dir_uri,
+                    context_type=self._context_type_for_uri(dir_uri),
+                    recursive=False,  # we already collected individual dirs
+                    account_id=ctx.account_id if ctx else "default",
+                    user_id=ctx.user.user_id if ctx else "default",
+                    agent_id=ctx.user.agent_id if ctx else "default",
+                    role=ctx.role.value if ctx else "root",
+                )
+                await semantic_queue.enqueue(msg)
+                stats["enqueued"] += 1
+
+            logger.info(f"Reindex enqueued {stats['enqueued']} directories under {uri}")
+
+        if wait:
+            qm = get_queue_manager()
+            try:
+                status = await qm.wait_complete(timeout=timeout)
+            except TimeoutError as exc:
+                raise DeadlineExceededError("queue processing", timeout) from exc
+            stats["queue_status"] = {
+                name: {
+                    "processed": s.processed,
+                    "error_count": s.error_count,
+                    "errors": [{"message": e.message} for e in s.errors],
+                }
+                for name, s in status.items()
+            }
+
+        return stats
+
+    async def _collect_stale_dirs(
+        self,
+        viking_fs: "VikingFS",
+        parent_uri: str,
+        entries: List[Dict[str, Any]],
+        force: bool,
+        result: list[str],
+        stats: Dict[str, int],
+        ctx: Optional["RequestContext"] = None,
+    ) -> None:
+        """Recursively collect directory URIs that need re-indexing."""
+        from datetime import datetime
+
+        abstract_mtime = None
+        has_l2_files = False
+        max_l2_mtime = None
+
+        for entry in entries:
+            name = entry.get("name", "")
+            is_dir = entry.get("isDir", False)
+            entry_uri = entry.get("uri", f"{parent_uri}/{name}")
+
+            if is_dir and not name.startswith("."):
+                # Recurse into subdirectories
+                sub_entries = await viking_fs.ls(entry_uri, show_all_hidden=True, node_limit=100000, ctx=ctx)
+                await self._collect_stale_dirs(viking_fs, entry_uri, sub_entries, force, result, stats, ctx)
+                continue
+
+            mod_time_str = entry.get("modTime", "")
+
+            if name == ".abstract.md" and mod_time_str:
+                try:
+                    abstract_mtime = datetime.fromisoformat(mod_time_str)
+                except (ValueError, TypeError):
+                    pass
+                continue
+
+            # Skip other hidden/meta files
+            if name.startswith("."):
+                continue
+
+            # This is an L2 content file
+            if not is_dir:
+                has_l2_files = True
+                if mod_time_str:
+                    try:
+                        file_mtime = datetime.fromisoformat(mod_time_str)
+                        if max_l2_mtime is None or file_mtime > max_l2_mtime:
+                            max_l2_mtime = file_mtime
+                    except (ValueError, TypeError):
+                        pass
+
+        stats["scanned"] += 1
+
+        if not has_l2_files:
+            stats["skipped"] += 1
+            return
+
+        if force:
+            stats["modified"] += 1
+            result.append(parent_uri)
+        elif abstract_mtime is None:
+            # No .abstract.md → new, never indexed
+            stats["new"] += 1
+            result.append(parent_uri)
+        elif max_l2_mtime and max_l2_mtime > abstract_mtime:
+            # L2 files modified after last indexing
+            stats["modified"] += 1
+            result.append(parent_uri)
+        else:
+            stats["skipped"] += 1
+
+    @staticmethod
+    def _context_type_for_uri(uri: str) -> str:
+        """Derive context_type from URI scope."""
+        if "memory" in uri or "memories" in uri:
+            return "memory"
+        if "skill" in uri:
+            return "skill"
+        return "resource"
 
     async def wait_processed(self, timeout: Optional[float] = None) -> Dict[str, Any]:
         """Wait for all queued processing to complete.
