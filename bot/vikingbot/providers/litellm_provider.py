@@ -4,9 +4,9 @@ import json
 import os
 from typing import Any
 
-from loguru import logger
 import litellm
 from litellm import acompletion
+from loguru import logger
 
 from vikingbot.integrations.langfuse import LangfuseClient
 from vikingbot.providers.base import LLMProvider, LLMResponse, ToolCallRequest
@@ -104,6 +104,64 @@ class LiteLLMProvider(LLMProvider):
                     kwargs.update(overrides)
                     return
 
+    def _handle_system_message(
+        self, model: str, messages: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """
+        Handle system message for providers that don't support it (e.g. MiniMax).
+        Merges system message into the first user message or converts to user role.
+        """
+        # Check for MiniMax
+        if model.startswith("minimax/") or "/minimax/" in model:
+            # Create a copy to avoid modifying the original list
+            new_messages = []
+
+            # Helper to merge content
+            def merge_content(base_content, new_content):
+                if isinstance(base_content, str) and isinstance(new_content, str):
+                    return f"{new_content}\n\n{base_content}"
+                if isinstance(base_content, list):
+                    base_content = list(base_content)
+                    base_content.insert(0, {"type": "text", "text": f"{new_content}\n\n"})
+                    return base_content
+                return f"{new_content}\n\n{str(base_content)}"
+
+            # First pass: identify system messages
+            system_contents = []
+            cleaned_messages = []
+
+            for msg in messages:
+                if msg.get("role") == "system":
+                    system_contents.append(msg.get("content", ""))
+                else:
+                    cleaned_messages.append(msg)
+
+            # If no system messages, return as is
+            if not system_contents:
+                return messages
+
+            # Combine all system prompts
+            full_system_prompt = "\n\n".join([str(c) for c in system_contents])
+
+            # Merge into the first user message if available
+            merged = False
+            for msg in cleaned_messages:
+                if not merged and msg.get("role") == "user":
+                    msg = msg.copy()
+                    msg["content"] = merge_content(msg.get("content", ""), full_system_prompt)
+                    new_messages.append(msg)
+                    merged = True
+                else:
+                    new_messages.append(msg)
+
+            # If no user message found, create one at the beginning
+            if not merged:
+                new_messages.insert(0, {"role": "user", "content": full_system_prompt})
+
+            return new_messages
+
+        return messages
+
     async def chat(
         self,
         messages: list[dict[str, Any]],
@@ -128,6 +186,9 @@ class LiteLLMProvider(LLMProvider):
             LLMResponse with content and/or tool calls.
         """
         model = self._resolve_model(model or self.default_model)
+
+        # Handle system message for MiniMax and others that don't support it
+        messages = self._handle_system_message(model, messages)
 
         kwargs: dict[str, Any] = {
             "model": model,
