@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """OpenAI Embedder Implementation"""
 
+import logging
 from typing import Any, Dict, List, Optional
 
 import openai
@@ -13,6 +14,8 @@ from openviking.models.embedder.base import (
     SparseEmbedderBase,
 )
 from openviking.telemetry import get_current_telemetry
+
+logger = logging.getLogger(__name__)
 
 
 class OpenAIDenseEmbedder(DenseEmbedderBase):
@@ -38,6 +41,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         api_base: Optional[str] = None,
         dimension: Optional[int] = None,
         config: Optional[Dict[str, Any]] = None,
+        max_tokens: Optional[int] = None,
     ):
         """Initialize OpenAI Dense Embedder
 
@@ -47,11 +51,12 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             api_base: API base URL, optional
             dimension: Dimension (if model supports), optional
             config: Additional configuration dict
+            max_tokens: Maximum token count per embedding request, None to use default (8000)
 
         Raises:
             ValueError: If api_key is not provided and env vars are not set
         """
-        super().__init__(model_name, config)
+        super().__init__(model_name, config, max_tokens=max_tokens)
 
         self.api_key = api_key
         self.api_base = api_base
@@ -66,15 +71,43 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             client_kwargs["base_url"] = self.api_base
         self.client = openai.OpenAI(**client_kwargs)
 
+        # Initialize tiktoken encoder
+        self._tiktoken_enc = None
+        try:
+            import tiktoken
+
+            self._tiktoken_enc = tiktoken.encoding_for_model(model_name)
+        except Exception:
+            logger.info(
+                "tiktoken unavailable for model '%s', will use character-based estimation",
+                model_name,
+            )
+
         # Auto-detect dimension
         self._dimension = dimension
         if self._dimension is None:
             self._dimension = self._detect_dimension()
 
+    @property
+    def max_tokens(self) -> int:
+        """OpenAI embedding models have 8192 token limit; use 8000 for safety buffer.
+
+        Can be overridden via the max_tokens constructor parameter.
+        """
+        if self._max_tokens is not None:
+            return self._max_tokens
+        return 8000
+
+    def _estimate_tokens(self, text: str) -> int:
+        """Estimate tokens using tiktoken if available, fallback to len(text) // 3."""
+        if self._tiktoken_enc is not None:
+            return len(self._tiktoken_enc.encode(text))
+        return len(text) // 3
+
     def _detect_dimension(self) -> int:
         """Detect dimension by making an actual API call"""
         try:
-            result = self.embed("test")
+            result = self._embed_single("test")
             return len(result.dense_vector) if result.dense_vector else 1536
         except Exception:
             # Use default value, text-embedding-3-small defaults to 1536
@@ -99,8 +132,8 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             output_tokens,
         )
 
-    def embed(self, text: str) -> EmbedResult:
-        """Perform dense embedding on text
+    def _embed_single(self, text: str) -> EmbedResult:
+        """Perform raw embedding without chunking logic.
 
         Args:
             text: Input text
@@ -126,8 +159,30 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         except Exception as e:
             raise RuntimeError(f"Embedding failed: {str(e)}") from e
 
+    def embed(self, text: str) -> EmbedResult:
+        """Embed single text, with automatic chunking for oversized input.
+
+        Args:
+            text: Input text
+
+        Returns:
+            EmbedResult: Result containing only dense_vector
+
+        Raises:
+            RuntimeError: When API call fails
+        """
+        if not text:
+            return self._embed_single(text)
+
+        if self._estimate_tokens(text) > self.max_tokens:
+            return self._chunk_and_embed(text)
+        return self._embed_single(text)
+
     def embed_batch(self, texts: List[str]) -> List[EmbedResult]:
-        """Batch embedding (OpenAI native support)
+        """Batch embedding with automatic chunking for oversized inputs.
+
+        Short texts are batched together via the OpenAI API for efficiency.
+        Oversized texts are individually chunked and embedded.
 
         Args:
             texts: List of texts
@@ -141,19 +196,33 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         if not texts:
             return []
 
-        try:
-            kwargs = {"input": texts, "model": self.model_name}
-            if self.dimension:
-                kwargs["dimensions"] = self.dimension
+        results: List[Optional[EmbedResult]] = [None] * len(texts)
+        short_indices: List[int] = []
+        short_texts: List[str] = []
 
-            response = self.client.embeddings.create(**kwargs)
-            self._update_telemetry_token_usage(response)
+        for i, text in enumerate(texts):
+            if text and self._estimate_tokens(text) > self.max_tokens:
+                results[i] = self._chunk_and_embed(text)
+            else:
+                short_indices.append(i)
+                short_texts.append(text)
 
-            return [EmbedResult(dense_vector=item.embedding) for item in response.data]
-        except openai.APIError as e:
-            raise RuntimeError(f"OpenAI API error: {e.message}") from e
-        except Exception as e:
-            raise RuntimeError(f"Batch embedding failed: {str(e)}") from e
+        if short_texts:
+            try:
+                kwargs = {"input": short_texts, "model": self.model_name}
+                if self.dimension:
+                    kwargs["dimensions"] = self.dimension
+
+                response = self.client.embeddings.create(**kwargs)
+                self._update_telemetry_token_usage(response)
+                for idx, item in zip(short_indices, response.data):
+                    results[idx] = EmbedResult(dense_vector=item.embedding)
+            except openai.APIError as e:
+                raise RuntimeError(f"OpenAI API error: {e.message}") from e
+            except Exception as e:
+                raise RuntimeError(f"Batch embedding failed: {str(e)}") from e
+
+        return results  # type: ignore[return-value]
 
     def get_dimension(self) -> int:
         """Get embedding dimension
