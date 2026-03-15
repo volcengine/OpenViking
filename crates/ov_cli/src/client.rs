@@ -734,4 +734,48 @@ impl HttpClient {
         );
         self.post(&path, &serde_json::json!({})).await
     }
+
+    // ============ Debug Vector Methods ============
+
+    /// Get paginated vector records
+    pub async fn debug_vector_scroll(
+        &self,
+        limit: Option<u32>,
+        cursor: Option<String>,
+    ) -> Result<(Vec<serde_json::Value>, Option<String>)> {
+        let mut params = Vec::new();
+        if let Some(l) = limit {
+            params.push(("limit".to_string(), l.to_string()));
+        }
+        if let Some(c) = cursor {
+            params.push(("cursor".to_string(), c));
+        }
+
+        let result: serde_json::Value = self.get("/api/v1/debug/vector/scroll", &params).await?;
+        let records = result["records"]
+            .as_array()
+            .ok_or_else(|| Error::Parse("Missing records in response".to_string()))?
+            .clone();
+        let next_cursor = result["next_cursor"].as_str().map(|s| s.to_string());
+
+        Ok((records, next_cursor))
+    }
+
+    /// Get count of vector records
+    pub async fn debug_vector_count(
+        &self,
+        filter: Option<&serde_json::Value>,
+    ) -> Result<u64> {
+        let mut params = Vec::new();
+        if let Some(f) = filter {
+            params.push(("filter".to_string(), serde_json::to_string(f)?));
+        }
+
+        let result: serde_json::Value = self.get("/api/v1/debug/vector/count", &params).await?;
+        let count = result["count"]
+            .as_u64()
+            .ok_or_else(|| Error::Parse("Missing count in response".to_string()))?;
+
+        Ok(count)
+    }
 }
