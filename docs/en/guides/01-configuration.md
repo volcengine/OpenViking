@@ -110,6 +110,38 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 }
 ```
 
+#### Separate Query and Document Dense Embedders
+
+`embedding.dense` is the base dense embedding configuration. `embedding.dense_query`
+and `embedding.dense_document` are optional partial overrides that are merged onto
+that base config for query-time retrieval and document/index-time embedding.
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "jina",
+      "api_key": "jina_xxx",
+      "model": "jina-embeddings-v5-text-small",
+      "dimension": 1024
+    },
+    "dense_query": {
+      "dimension": 512
+    },
+    "dense_document": {
+      "model": "jina-embeddings-v5-text-small",
+      "dimension": 1024
+    }
+  }
+}
+```
+
+Notes:
+- `dense_query` and `dense_document` only override the fields you set. Unspecified fields inherit from `dense`.
+- Index creation and document writes use the document embedder config. The vector schema dimension follows `dense_document.dimension` when set, otherwise `dense.dimension`.
+- Retrieval uses the query embedder config.
+- Provider-specific query/document behavior is implemented by each embedder. For example, Jina defaults to `retrieval.query` for query embeddings and `retrieval.passage` for document embeddings.
+
 **Parameters**
 
 | Parameter | Type | Description |

@@ -200,8 +200,8 @@ class TestQuickStartLite(unittest.TestCase):
         mock_embedder.embed.side_effect = side_effect_embed
 
         # --- 3. Patch Factories ---
-        # We STILL need to patch get_embedder/get_vlm_instance because we don't want to use the REAL factories
-        # (which would try to instantiate Volcengine clients and fail without real network/auth).
+        # We STILL need to patch the embedder/VLM factories because we don't want to use the REAL
+        # clients (which would try to instantiate networked providers and fail without auth).
         # BUT, we are now providing a valid CONFIG FILE so that the config loading phase passes validation naturally.
 
         # NOTE: We do NOT use patch.dict(os.environ, env_vars) here anymore.
@@ -215,7 +215,11 @@ class TestQuickStartLite(unittest.TestCase):
         with (
             patch.dict(os.environ, env_override),
             patch(
-                "openviking_cli.utils.config.EmbeddingConfig.get_embedder",
+                "openviking_cli.utils.config.EmbeddingConfig.get_query_embedder",
+                return_value=mock_embedder,
+            ),
+            patch(
+                "openviking_cli.utils.config.EmbeddingConfig.get_document_embedder",
                 return_value=mock_embedder,
             ),
             patch("openviking_cli.utils.config.VLMConfig.get_vlm_instance", return_value=mock_vlm),

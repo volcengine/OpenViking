@@ -46,7 +46,6 @@ class ResourceProcessor:
     ):
         """Initialize coordinated writer."""
         self.vikingdb = vikingdb
-        self.embedder = vikingdb.get_embedder()
         self.media_storage = media_storage
         self.tree_builder = TreeBuilder()
         self._vlm_processor = None

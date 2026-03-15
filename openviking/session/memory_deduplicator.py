@@ -84,7 +84,7 @@ class MemoryDeduplicator:
     ):
         """Initialize deduplicator."""
         self.vikingdb = vikingdb
-        self.embedder = self.vikingdb.get_embedder()
+        self.embedder = self.vikingdb.get_query_embedder()
 
     async def deduplicate(
         self,

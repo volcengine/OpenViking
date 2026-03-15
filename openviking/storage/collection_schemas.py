@@ -147,7 +147,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
 
     def _initialize_embedder(self, config: "OpenVikingConfig"):
         """Initialize the embedder instance from config."""
-        self._embedder = config.embedding.get_embedder()
+        self._embedder = config.embedding.get_document_embedder()
 
     @staticmethod
     def _seed_uri_for_id(uri: str, level: Any) -> str:
