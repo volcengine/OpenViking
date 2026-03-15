@@ -148,9 +148,11 @@ class VLMConfig(BaseModel):
         return self.get_vlm_instance().get_completion(prompt, thinking)
 
     async def get_completion_async(
-        self, prompt: str, thinking: bool = False, max_retries: int = 0
+        self, prompt: str, thinking: bool = False, max_retries: int | None = None
     ) -> str:
-        """Get LLM completion asynchronously, max_retries=0 means no retry."""
+        """Get LLM completion asynchronously. Uses self.max_retries if not specified."""
+        if max_retries is None:
+            max_retries = self.max_retries
         return await self.get_vlm_instance().get_completion_async(prompt, thinking, max_retries)
 
     def is_available(self) -> bool:

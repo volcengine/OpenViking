@@ -36,6 +36,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         dimension: Optional[int] = None,
+        input_type: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
     ):
         """Initialize OpenAI Dense Embedder
@@ -45,6 +46,8 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             api_key: API key, if None will read from env vars (OPENVIKING_EMBEDDING_API_KEY or OPENAI_API_KEY)
             api_base: API base URL, optional
             dimension: Dimension (if model supports), optional
+            input_type: Input type for task-specific embeddings, optional.
+                      Valid values: query, document, passage
             config: Additional configuration dict
 
         Raises:
@@ -55,6 +58,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         self.api_key = api_key
         self.api_base = api_base
         self.dimension = dimension
+        self.input_type = input_type
 
         if not self.api_key:
             raise ValueError("api_key is required")
@@ -79,6 +83,13 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             # Use default value, text-embedding-3-small defaults to 1536
             return 1536
 
+    def _build_extra_body(self) -> Optional[Dict[str, Any]]:
+        """Build extra_body dict for OpenAI-specific parameters"""
+        extra_body = {}
+        if self.input_type is not None:
+            extra_body["input_type"] = self.input_type
+        return extra_body if extra_body else None
+
     def embed(self, text: str) -> EmbedResult:
         """Perform dense embedding on text
 
@@ -92,9 +103,11 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             RuntimeError: When API call fails
         """
         try:
-            kwargs = {"input": text, "model": self.model_name}
-            if self.dimension:
-                kwargs["dimensions"] = self.dimension
+            kwargs: Dict[str, Any] = {"input": text, "model": self.model_name}
+
+            extra_body = self._build_extra_body()
+            if extra_body:
+                kwargs["extra_body"] = extra_body
 
             response = self.client.embeddings.create(**kwargs)
             vector = response.data[0].embedding
@@ -121,9 +134,11 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             return []
 
         try:
-            kwargs = {"input": texts, "model": self.model_name}
-            if self.dimension:
-                kwargs["dimensions"] = self.dimension
+            kwargs: Dict[str, Any] = {"input": texts, "model": self.model_name}
+
+            extra_body = self._build_extra_body()
+            if extra_body:
+                kwargs["extra_body"] = extra_body
 
             response = self.client.embeddings.create(**kwargs)
 

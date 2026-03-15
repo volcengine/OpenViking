@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -14,6 +14,26 @@ class EmbeddingModelConfig(BaseModel):
     dimension: Optional[int] = Field(default=None, description="Embedding dimension")
     batch_size: int = Field(default=32, description="Batch size for embedding generation")
     input: str = Field(default="multimodal", description="Input type: 'text' or 'multimodal'")
+    input_type: Optional[str] = Field(
+        default=None,
+        description="Input type for OpenAI/Jina: 'query', 'document', or 'passage'",
+    )
+    input_type_query: Optional[str] = Field(
+        default=None,
+        description="OpenAI input type for query embeddings (e.g. 'query')",
+    )
+    input_type_document: Optional[str] = Field(
+        default=None,
+        description="OpenAI input type for document/passage embeddings (e.g. 'document' or 'passage')",
+    )
+    task_query: Optional[str] = Field(
+        default=None,
+        description="Jina task for query embeddings (e.g. 'retrieval.query')",
+    )
+    task_document: Optional[str] = Field(
+        default=None,
+        description="Jina task for document embeddings (e.g. 'retrieval.passage')",
+    )
     provider: Optional[str] = Field(
         default="volcengine",
         description="Provider type: 'openai', 'volcengine', 'vikingdb', 'jina'",
@@ -39,6 +59,16 @@ class EmbeddingModelConfig(BaseModel):
 
             if backend is not None and provider is None:
                 data["provider"] = backend
+            for key in (
+                "input_type",
+                "input_type_query",
+                "input_type_document",
+                "task_query",
+                "task_document",
+            ):
+                value = data.get(key)
+                if isinstance(value, str):
+                    data[key] = value.lower()
         return data
 
     @model_validator(mode="after")
@@ -153,6 +183,7 @@ class EmbeddingConfig(BaseModel):
                     "api_key": cfg.api_key,
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
+                    "input_type": cfg.input_type,
                 },
             ),
             ("volcengine", "dense"): (
@@ -227,6 +258,7 @@ class EmbeddingConfig(BaseModel):
                     "api_key": cfg.api_key,
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
+                    "task": cfg.task_document,
                 },
             ),
         }
@@ -252,21 +284,83 @@ class EmbeddingConfig(BaseModel):
             ValueError: If configuration is invalid or unsupported
         """
         from openviking.models.embedder import CompositeHybridEmbedder
+        from openviking.models.embedder.base import DenseEmbedderBase, SparseEmbedderBase
 
         if self.hybrid:
-            return self._create_embedder(self.hybrid.provider.lower(), "hybrid", self.hybrid)
+            provider = self._require_provider(self.hybrid.provider)
+            return self._create_embedder(provider, "hybrid", self.hybrid)
 
         if self.dense and self.sparse:
-            dense_embedder = self._create_embedder(self.dense.provider.lower(), "dense", self.dense)
-            sparse_embedder = self._create_embedder(
-                self.sparse.provider.lower(), "sparse", self.sparse
+            dense_provider = self._require_provider(self.dense.provider)
+            dense_embedder = cast(
+                DenseEmbedderBase,
+                self._create_embedder(dense_provider, "dense", self.dense),
             )
+            sparse_embedder = self._create_embedder(
+                self._require_provider(self.sparse.provider), "sparse", self.sparse
+            )
+            sparse_embedder = cast(SparseEmbedderBase, sparse_embedder)
             return CompositeHybridEmbedder(dense_embedder, sparse_embedder)
 
         if self.dense:
-            return self._create_embedder(self.dense.provider.lower(), "dense", self.dense)
+            provider = self._require_provider(self.dense.provider)
+            return self._create_embedder(provider, "dense", self.dense)
 
         raise ValueError("No embedding configuration found (dense, sparse, or hybrid)")
+
+    def get_query_embedder(self):
+        """Get embedder instance for query embeddings."""
+        return self._get_contextual_embedder("query")
+
+    def get_document_embedder(self):
+        """Get embedder instance for document/passage embeddings."""
+        return self._get_contextual_embedder("document")
+
+    def _get_contextual_embedder(self, context: str):
+        from openviking.models.embedder import (
+            JinaDenseEmbedder,
+            OpenAIDenseEmbedder,
+        )
+
+        if not self.dense:
+            return self.get_embedder()
+
+        provider = (self.dense.provider or "").lower()
+        if provider == "openai":
+            if self.dense.input_type:
+                input_type = "query" if context == "query" else self.dense.input_type
+            else:
+                input_type = None
+
+            if not self.dense.model:
+                raise ValueError("Embedding model name is required")
+
+            return OpenAIDenseEmbedder(
+                model_name=self.dense.model,
+                api_key=self.dense.api_key,
+                api_base=self.dense.api_base,
+                dimension=self.dense.dimension,
+                input_type=input_type,
+            )
+
+        if provider == "jina":
+            if self.dense.task_document:
+                task = "retrieval.query" if context == "query" else self.dense.task_document
+            else:
+                task = None
+
+            if not self.dense.model:
+                raise ValueError("Embedding model name is required")
+
+            return JinaDenseEmbedder(
+                model_name=self.dense.model,
+                api_key=self.dense.api_key,
+                api_base=self.dense.api_base,
+                dimension=self.dense.dimension,
+                task=task,
+            )
+
+        return self.get_embedder()
 
     @property
     def dimension(self) -> int:
@@ -280,3 +374,9 @@ class EmbeddingConfig(BaseModel):
         if self.dense:
             return self.dense.dimension or 2048
         return 2048
+
+    @staticmethod
+    def _require_provider(provider: Optional[str]) -> str:
+        if not provider:
+            raise ValueError("Embedding provider is required")
+        return provider.lower()
