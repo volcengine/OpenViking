@@ -13,6 +13,11 @@ from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Session-internal files that should never be summarized by the semantic pipeline.
+# These are canonical archives (e.g. session transcripts) whose content provides
+# no additional retrieval value and would only waste tokens and add latency.
+_SKIP_FILENAMES = frozenset({"messages.jsonl"})
+
 
 @dataclass
 class DirNode:
@@ -130,7 +135,7 @@ class SemanticDagExecutor:
 
         for entry in entries:
             name = entry.get("name", "")
-            if not name or name.startswith(".") or name in [".", ".."]:
+            if not name or name.startswith(".") or name in [".", ".."] or name in _SKIP_FILENAMES:
                 continue
 
             item_uri = VikingURI(uri).join(name).uri
