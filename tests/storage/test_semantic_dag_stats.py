@@ -1,6 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
 from openviking.server.identity import RequestContext, Role
@@ -18,6 +20,9 @@ class _FakeVikingFS:
 
     async def write_file(self, path, content, ctx=None):
         self.writes.append((path, content))
+
+    def _uri_to_path(self, uri, ctx=None):
+        return uri.replace("viking://", "/local/acc1/")
 
 
 class _FakeProcessor:
@@ -58,6 +63,22 @@ async def test_semantic_dag_stats_collects_nodes(monkeypatch):
     }
     fake_fs = _FakeVikingFS(tree)
     monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+
+    # Mock transaction layer: TransactionContext as no-op passthrough
+    mock_tx = MagicMock()
+    mock_tx.commit = AsyncMock()
+    monkeypatch.setattr(
+        "openviking.storage.transaction.context_manager.TransactionContext.__aenter__",
+        AsyncMock(return_value=mock_tx),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.transaction.context_manager.TransactionContext.__aexit__",
+        AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.transaction.transaction_manager.get_transaction_manager",
+        lambda: MagicMock(),
+    )
 
     processor = _FakeProcessor()
     ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)

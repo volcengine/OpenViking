@@ -242,7 +242,32 @@ class SemanticDagExecutor:
                 results.append(item)
         return results
 
+    async def _execute_overview(
+        self,
+        dir_uri: str,
+        file_summaries: List[Dict[str, str]],
+        children_abstracts: List[Dict[str, str]],
+    ) -> str:
+        """Generate overview/abstract, write files, and vectorize a directory."""
+        async with self._llm_sem:
+            overview = await self._processor._generate_overview(
+                dir_uri, file_summaries, children_abstracts
+            )
+        abstract = self._processor._extract_abstract_from_overview(overview)
+        await self._viking_fs.write_file(f"{dir_uri}/.overview.md", overview, ctx=self._ctx)
+        await self._viking_fs.write_file(f"{dir_uri}/.abstract.md", abstract, ctx=self._ctx)
+        try:
+            await self._processor._vectorize_directory_simple(
+                dir_uri, self._context_type, abstract, overview, ctx=self._ctx
+            )
+        except Exception as e:
+            logger.error(f"Failed to vectorize directory {dir_uri}: {e}", exc_info=True)
+        return abstract
+
     async def _overview_task(self, dir_uri: str) -> None:
+        from openviking.storage.errors import LockAcquisitionError
+        from openviking.storage.transaction import TransactionContext, get_transaction_manager
+
         node = self._nodes.get(dir_uri)
         if not node:
             return
@@ -251,40 +276,27 @@ class SemanticDagExecutor:
             file_summaries = self._finalize_file_summaries(node)
             children_abstracts = self._finalize_children_abstracts(node)
 
+        abstract = ""
         try:
-            async with self._llm_sem:
-                overview = await self._processor._generate_overview(
-                    dir_uri, file_summaries, children_abstracts
-                )
-            abstract = self._processor._extract_abstract_from_overview(overview)
-
-            try:
-                await self._viking_fs.write_file(f"{dir_uri}/.overview.md", overview, ctx=self._ctx)
-                await self._viking_fs.write_file(f"{dir_uri}/.abstract.md", abstract, ctx=self._ctx)
-            except Exception as e:
-                logger.warning(f"Failed to write overview/abstract for {dir_uri}: {e}")
-
-            try:
-                await self._processor._vectorize_directory_simple(
-                    dir_uri, self._context_type, abstract, overview, ctx=self._ctx
-                )
-            except Exception as e:
-                logger.error(f"Failed to vectorize directory {dir_uri}: {e}", exc_info=True)
-
+            dir_path = self._viking_fs._uri_to_path(dir_uri, ctx=self._ctx)
+            async with TransactionContext(
+                get_transaction_manager(), "semantic_dag", [dir_path], lock_mode="point"
+            ) as tx:
+                abstract = await self._execute_overview(dir_uri, file_summaries, children_abstracts)
+                await tx.commit()
+        except LockAcquisitionError:
+            logger.info(f"[SemanticDag] {dir_uri} does not exist or is locked, skipping")
         except Exception as e:
             logger.error(f"Failed to generate overview for {dir_uri}: {e}", exc_info=True)
-            abstract = ""
         finally:
             self._stats.done_nodes += 1
             self._stats.in_progress_nodes = max(0, self._stats.in_progress_nodes - 1)
-
-        parent_uri = self._parent.get(dir_uri)
-        if parent_uri is None:
-            if self._root_done:
-                self._root_done.set()
-            return
-
-        await self._on_child_done(parent_uri, dir_uri, abstract)
+            parent_uri = self._parent.get(dir_uri)
+            if parent_uri is None:
+                if self._root_done:
+                    self._root_done.set()
+            else:
+                await self._on_child_done(parent_uri, dir_uri, abstract)
 
     def get_stats(self) -> DagStats:
         return DagStats(

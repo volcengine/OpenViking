@@ -1,10 +1,8 @@
-import pytest
-import asyncio
-import os
 import json
-import shutil
-from pathlib import Path
-from unittest.mock import MagicMock, AsyncMock, patch
+import os
+from unittest.mock import AsyncMock, patch
+
+import pytest
 
 from openviking.async_client import AsyncOpenViking
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
@@ -96,6 +94,7 @@ async def test_add_resource_indexing_logic(test_config, tmp_path):
         patch("openviking.utils.agfs_utils.create_agfs_client", return_value=mock_agfs),
         patch("openviking.agfs_manager.AGFSManager.start"),
         patch("openviking.agfs_manager.AGFSManager.stop"),
+        patch("openviking.storage.transaction.get_transaction_manager", return_value=None),
     ):
         mock_summarize.return_value = {"status": "success"}
 

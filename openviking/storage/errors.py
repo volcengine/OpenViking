@@ -29,3 +29,15 @@ class ConnectionError(StorageException):
 
 class SchemaError(StorageException):
     """Raised when schema validation fails."""
+
+
+class TransactionError(VikingDBException):
+    """Raised when a transaction operation fails."""
+
+
+class LockAcquisitionError(TransactionError):
+    """Raised when lock acquisition fails."""
+
+
+class TransactionRollbackError(TransactionError):
+    """Raised when transaction rollback fails."""

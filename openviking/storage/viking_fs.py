@@ -289,15 +289,61 @@ class VikingFS:
 
         This method is idempotent: deleting a non-existent file succeeds
         after cleaning up any orphan index records.
+
+        Wrapped in a transaction: deletes VectorDB records first, then FS files.
+        On rollback, VectorDB records are restored from snapshot.
         """
+        from openviking.storage.transaction import TransactionContext, get_transaction_manager
+
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         target_uri = self._path_to_uri(path, ctx=ctx)
         uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx)
         uris_to_delete.append(target_uri)
-        result = self.agfs.rm(path, recursive=recursive)
-        await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
-        return result
+
+        tx_manager = get_transaction_manager()
+        if not tx_manager:
+            # Fallback: no transaction support
+            result = self.agfs.rm(path, recursive=recursive)
+            await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
+            return result
+
+        # Check existence and determine lock strategy
+        try:
+            stat = self.agfs.stat(path)
+            is_dir = stat.get("isDir", False) if isinstance(stat, dict) else False
+        except Exception:
+            # Path does not exist: clean up any orphan index records and return
+            await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
+            logger.info(f"[VikingFS] rm target not found, cleaned orphan index: {uri}")
+            return {}
+
+        if is_dir:
+            lock_paths = [path]
+            lock_mode = "subtree"
+        else:
+            parent = path.rsplit("/", 1)[0] if "/" in path else path
+            lock_paths = [parent]
+            lock_mode = "point"
+
+        async with TransactionContext(tx_manager, "rm", lock_paths, lock_mode=lock_mode) as tx:
+            # Snapshot vector records for rollback
+            records_snapshot = await self._snapshot_vector_records(uris_to_delete, ctx=ctx)
+
+            # Step 1: Delete from VectorDB first
+            seq_vdb = tx.record_undo(
+                "vectordb_delete", {"uris": uris_to_delete, "records_snapshot": records_snapshot}
+            )
+            await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
+            tx.mark_completed(seq_vdb)
+
+            # Step 2: Delete from FS
+            seq_fs = tx.record_undo("fs_rm", {"uri": path, "recursive": recursive})
+            result = self.agfs.rm(path, recursive=recursive)
+            tx.mark_completed(seq_fs)
+
+            await tx.commit()
+            return result
 
     async def mv(
         self,
@@ -305,7 +351,14 @@ class VikingFS:
         new_uri: str,
         ctx: Optional[RequestContext] = None,
     ) -> Dict[str, Any]:
-        """Move file/directory + recursively update vector index."""
+        """Move file/directory + recursively update vector index.
+
+        Implemented as cp + rm to avoid lock files being carried by FS mv.
+        On rollback, the copy is deleted and the source remains intact.
+        """
+        from openviking.pyagfs.helpers import cp as agfs_cp
+        from openviking.storage.transaction import TransactionContext, get_transaction_manager
+
         self._ensure_access(old_uri, ctx)
         self._ensure_access(new_uri, ctx)
         old_path = self._uri_to_path(old_uri, ctx=ctx)
@@ -314,15 +367,79 @@ class VikingFS:
         uris_to_move = await self._collect_uris(old_path, recursive=True, ctx=ctx)
         uris_to_move.append(target_uri)
 
+        tx_manager = get_transaction_manager()
+        if not tx_manager:
+            # Fallback: no transaction support
+            try:
+                result = self.agfs.mv(old_path, new_path)
+                await self._update_vector_store_uris(uris_to_move, old_uri, new_uri, ctx=ctx)
+                return result
+            except AGFSHTTPError as e:
+                if e.status_code == 404:
+                    await self._delete_from_vector_store(uris_to_move, ctx=ctx)
+                    logger.info(f"[VikingFS] mv source not found, cleaned orphan index: {old_uri}")
+                raise
+
+        # Verify source exists and determine type before locking
         try:
-            result = self.agfs.mv(old_path, new_path)
+            stat = self.agfs.stat(old_path)
+            is_dir = stat.get("isDir", False) if isinstance(stat, dict) else False
+        except Exception:
+            raise FileNotFoundError(f"mv source not found: {old_uri}")
+
+        dst_parent = new_path.rsplit("/", 1)[0] if "/" in new_path else new_path
+
+        async with TransactionContext(
+            tx_manager,
+            "mv",
+            [old_path],
+            lock_mode="mv",
+            mv_dst_path=dst_parent,
+            src_is_dir=is_dir,
+        ) as tx:
+            # Step 1: Copy source to destination
+            seq_cp = tx.record_undo("fs_write_new", {"uri": new_path})
+            try:
+                agfs_cp(self.agfs, old_path, new_path, recursive=is_dir)
+            except Exception as e:
+                if "not found" in str(e).lower():
+                    await self._delete_from_vector_store(uris_to_move, ctx=ctx)
+                    logger.info(f"[VikingFS] mv source not found, cleaned orphan index: {old_uri}")
+                raise
+            tx.mark_completed(seq_cp)
+
+            # Step 2: Remove carried lock file from the copy (directory only)
+            if is_dir:
+                carried_lock = new_path.rstrip("/") + "/.path.ovlock"
+                try:
+                    self.agfs.rm(carried_lock)
+                except Exception:
+                    pass
+
+            # Step 3: Update VectorDB URIs
+            old_uri_stripped = old_uri.rstrip("/")
+            old_parent_uri = (
+                old_uri_stripped.rsplit("/", 1)[0] + "/" if "/" in old_uri_stripped else ""
+            )
+            seq_vdb = tx.record_undo(
+                "vectordb_update_uri",
+                {
+                    "old_uri": old_uri,
+                    "new_uri": new_uri,
+                    "old_parent_uri": old_parent_uri,
+                    "uris": uris_to_move,
+                },
+            )
             await self._update_vector_store_uris(uris_to_move, old_uri, new_uri, ctx=ctx)
-            return result
-        except AGFSHTTPError as e:
-            if e.status_code == 404:
-                await self._delete_from_vector_store(uris_to_move, ctx=ctx)
-                logger.info(f"[VikingFS] mv source not found, cleaned orphan index: {old_uri}")
-            raise
+            tx.mark_completed(seq_vdb)
+
+            # Step 4: Remove source (lock file gets deleted along with it)
+            seq_rm = tx.record_undo("fs_rm", {"uri": old_path, "recursive": is_dir})
+            self.agfs.rm(old_path, recursive=is_dir)
+            tx.mark_completed(seq_rm)
+
+            await tx.commit()
+            return {}
 
     async def grep(
         self,
@@ -1083,6 +1200,33 @@ class VikingFS:
 
     # ========== Vector Sync Helper Methods ==========
 
+    async def _snapshot_vector_records(
+        self, uris: List[str], ctx: Optional[RequestContext] = None
+    ) -> List[Dict[str, Any]]:
+        """Snapshot vector records for the given URIs (for rollback).
+
+        Queries VectorDB metadata (without embedding vectors) so that
+        records can be restored during rollback.
+        """
+        vector_store = self._get_vector_store()
+        if not vector_store:
+            return []
+
+        real_ctx = self._ctx_or_default(ctx)
+        snapshots = []
+        for uri in uris:
+            try:
+                records = await vector_store.get_context_by_uri(
+                    account_id=real_ctx.account_id,
+                    uri=uri,
+                    limit=10,
+                )
+                if records:
+                    snapshots.extend(records)
+            except Exception as e:
+                logger.debug(f"[VikingFS] Failed to snapshot vector record for {uri}: {e}")
+        return snapshots
+
     async def _collect_uris(
         self, path: str, recursive: bool, ctx: Optional[RequestContext] = None
     ) -> List[str]:
@@ -1294,6 +1438,12 @@ class VikingFS:
         """
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
+        # Verify the file exists before reading, because AGFS read returns
+        # empty bytes for non-existent files instead of raising an error.
+        try:
+            self.agfs.stat(path)
+        except Exception:
+            raise NotFoundError(uri, "file")
         try:
             content = self.agfs.read(path)
         except Exception:

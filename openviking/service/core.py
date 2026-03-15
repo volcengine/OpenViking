@@ -136,12 +136,20 @@ class OpenVikingService:
             vectordb_config=config.vectordb, queue_manager=self._queue_manager
         )
 
-        # Configure queues if QueueManager is available
+        # Configure queues if QueueManager is available.
+        # Workers are NOT started here — start() is called after VikingFS is initialized
+        # in initialize(), so that recovered tasks don't race against VikingFS init.
         if self._queue_manager:
-            self._queue_manager.setup_standard_queues(self._vikingdb_manager)
+            self._queue_manager.setup_standard_queues(self._vikingdb_manager, start=False)
 
         # Initialize TransactionManager
-        self._transaction_manager = init_transaction_manager(agfs=self._agfs_client)
+        tx_cfg = config.transaction
+        self._transaction_manager = init_transaction_manager(
+            agfs=self._agfs_client,
+            max_parallel_locks=tx_cfg.max_parallel_locks,
+            lock_timeout=tx_cfg.lock_timeout,
+            lock_expire=tx_cfg.lock_expire,
+        )
 
     @property
     def _agfs(self) -> Any:
@@ -248,6 +256,14 @@ class OpenVikingService:
         if enable_recorder:
             logger.info("VikingFS IO Recorder enabled")
 
+        # Start queue workers now that VikingFS is ready.
+        # Doing it here (rather than in _init_storage) ensures that any tasks
+        # recovered from a previous crash are not processed before VikingFS is
+        # initialized, which would cause "VikingFS not initialized" errors.
+        if self._queue_manager:
+            self._queue_manager.start()
+            logger.info("QueueManager workers started")
+
         # Initialize directories
         directory_initializer = DirectoryInitializer(vikingdb=self._vikingdb_manager)
         self._directory_initializer = directory_initializer
@@ -297,7 +313,7 @@ class OpenVikingService:
     async def close(self) -> None:
         """Close OpenViking and release resources."""
         if self._transaction_manager:
-            self._transaction_manager.stop()
+            await self._transaction_manager.stop()
             self._transaction_manager = None
 
         if self._vikingdb_manager:

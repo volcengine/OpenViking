@@ -66,14 +66,6 @@ async def test_tree(client: httpx.AsyncClient):
     assert body["status"] == "ok"
 
 
-async def test_stat_after_add_resource(client_with_resource):
-    client, uri = client_with_resource
-    resp = await client.get("/api/v1/fs/stat", params={"uri": uri})
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-
-
 async def test_stat_not_found(client: httpx.AsyncClient):
     resp = await client.get(
         "/api/v1/fs/stat",
@@ -84,18 +76,28 @@ async def test_stat_not_found(client: httpx.AsyncClient):
     assert body["status"] == "error"
 
 
-async def test_rm_resource(client_with_resource):
-    client, uri = client_with_resource
-    resp = await client.request("DELETE", "/api/v1/fs", params={"uri": uri, "recursive": True})
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "ok"
-
-
-async def test_mv_resource(client_with_resource):
+async def test_resource_ops(client_with_resource):
+    """Test stat, ls_recursive, mv, rm on a single shared resource."""
     import uuid
 
     client, uri = client_with_resource
-    # Use a unique name to avoid conflicts with leftover data
+
+    # stat
+    resp = await client.get("/api/v1/fs/stat", params={"uri": uri})
+    assert resp.status_code == 200
+    assert resp.json()["status"] == "ok"
+
+    # ls recursive
+    resp = await client.get(
+        "/api/v1/fs/ls",
+        params={"uri": "viking://", "recursive": True},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert isinstance(body["result"], list)
+
+    # mv
     unique = uuid.uuid4().hex[:8]
     new_uri = uri.rstrip("/") + f"_mv_{unique}/"
     resp = await client.post(
@@ -105,14 +107,7 @@ async def test_mv_resource(client_with_resource):
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
 
-
-async def test_ls_recursive(client_with_resource):
-    client, _ = client_with_resource
-    resp = await client.get(
-        "/api/v1/fs/ls",
-        params={"uri": "viking://", "recursive": True},
-    )
+    # rm (on the moved uri)
+    resp = await client.request("DELETE", "/api/v1/fs", params={"uri": new_uri, "recursive": True})
     assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    assert isinstance(body["result"], list)
+    assert resp.json()["status"] == "ok"

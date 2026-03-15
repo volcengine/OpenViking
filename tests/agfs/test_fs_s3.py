@@ -46,7 +46,8 @@ def load_agfs_config() -> AGFSConfig:
 
 
 AGFS_CONF = load_agfs_config()
-AGFS_CONF.mode = "http-client"
+if AGFS_CONF is not None:
+    AGFS_CONF.mode = "http-client"
 
 # 2. Skip tests if no S3 config found or backend is not S3
 pytestmark = pytest.mark.skipif(
