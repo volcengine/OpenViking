@@ -137,6 +137,27 @@ With `input: "multimodal"`, OpenViking can embed text, images (PNG, JPG, etc.), 
 - `vikingdb`: VikingDB Embedding API
 - `jina`: Jina AI Embedding API
 - `voyage`: Voyage AI Embedding API
+- `minimax`: MiniMax Embedding API
+
+**minimax provider example:**
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "minimax",
+      "api_key": "your-minimax-api-key",
+      "model": "embo-01",
+      "dimension": 1536,
+      "query_param": "query",
+      "document_param": "db",
+      "extra_headers": {
+        "GroupId": "your-group-id"
+      }
+    }
+  }
+}
+```
 
 **vikingdb provider example:**
 
