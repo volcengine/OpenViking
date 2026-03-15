@@ -3,6 +3,11 @@
 """Session management module."""
 
 from openviking.session.compressor import ExtractionStats, SessionCompressor
+from openviking.session.memory_archiver import (
+    ArchivalCandidate,
+    ArchivalResult,
+    MemoryArchiver,
+)
 from openviking.session.memory_deduplicator import (
     DedupDecision,
     DedupResult,
@@ -26,6 +31,10 @@ __all__ = [
     # Compressor
     "SessionCompressor",
     "ExtractionStats",
+    # Memory Archiver
+    "MemoryArchiver",
+    "ArchivalCandidate",
+    "ArchivalResult",
     # Memory Extractor
     "MemoryExtractor",
     "MemoryCategory",
