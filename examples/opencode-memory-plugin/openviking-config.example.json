@@ -3,6 +3,7 @@
   "apiKey": "your-api-key-here",
   "enabled": true,
   "timeoutMs": 30000,
+  "agentId": "",
   "autoCommit": {
     "enabled": true,
     "intervalMinutes": 10

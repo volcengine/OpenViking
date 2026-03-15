@@ -279,6 +279,8 @@ interface OpenVikingConfig {
   apiKey: string
   enabled: boolean
   timeoutMs: number
+  /** Identifies this agent to OpenViking (sent as X-OpenViking-Agent header). Enables per-agent memory isolation. */
+  agentId?: string
   autoCommit?: {
     enabled: boolean
     intervalMinutes: number
@@ -345,6 +347,7 @@ const DEFAULT_CONFIG: OpenVikingConfig = {
   apiKey: "",
   enabled: true,
   timeoutMs: 30000,
+  agentId: "",
   autoCommit: {
     enabled: true,
     intervalMinutes: 10
@@ -378,6 +381,9 @@ function loadConfig(): OpenVikingConfig {
       if (process.env.OPENVIKING_API_KEY) {
         config.apiKey = process.env.OPENVIKING_API_KEY
       }
+      if (process.env.OPENVIKING_AGENT_ID) {
+        config.agentId = process.env.OPENVIKING_AGENT_ID
+      }
 
       return config
     }
@@ -394,6 +400,9 @@ function loadConfig(): OpenVikingConfig {
   }
   if (process.env.OPENVIKING_API_KEY) {
     config.apiKey = process.env.OPENVIKING_API_KEY
+  }
+  if (process.env.OPENVIKING_AGENT_ID) {
+    config.agentId = process.env.OPENVIKING_AGENT_ID
   }
   if (config.autoCommit) {
     config.autoCommit.intervalMinutes = getAutoCommitIntervalMinutes(config)
@@ -422,6 +431,9 @@ async function makeRequest<T = any>(config: OpenVikingConfig, options: HttpReque
 
   if (config.apiKey) {
     headers["X-API-Key"] = config.apiKey
+  }
+  if (config.agentId) {
+    headers["X-OpenViking-Agent"] = config.agentId
   }
 
   const controller = new AbortController()
