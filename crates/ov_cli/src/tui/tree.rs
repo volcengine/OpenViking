@@ -74,7 +74,7 @@ impl TreeState {
                     mod_time: None,
                 },
                 depth: 0,
-                expanded: false,
+                expanded: true,
                 children_loaded: false,
                 children: Vec::new(),
             };
