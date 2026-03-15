@@ -10,6 +10,7 @@ from typing import Dict, List, Optional
 from openviking.storage import VikingDBManager
 from openviking.storage.observers import (
     QueueObserver,
+    RetrievalObserver,
     TransactionObserver,
     VikingDBObserver,
     VLMObserver,
@@ -154,6 +155,17 @@ class ObserverService:
         )
 
     @property
+    def retrieval(self) -> ComponentStatus:
+        """Get retrieval quality status."""
+        observer = RetrievalObserver()
+        return ComponentStatus(
+            name="retrieval",
+            is_healthy=observer.is_healthy(),
+            has_errors=observer.has_errors(),
+            status=observer.get_status_table(),
+        )
+
+    @property
     def system(self) -> SystemStatus:
         """Get system overall status."""
         components = {
@@ -161,6 +173,7 @@ class ObserverService:
             "vikingdb": self.vikingdb,
             "vlm": self.vlm,
             "transaction": self.transaction,
+            "retrieval": self.retrieval,
         }
         errors = [f"{c.name} has errors" for c in components.values() if c.has_errors]
         return SystemStatus(

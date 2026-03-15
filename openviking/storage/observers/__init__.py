@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 from .base_observer import BaseObserver
 from .queue_observer import QueueObserver
+from .retrieval_observer import RetrievalObserver
 from .transaction_observer import TransactionObserver
 from .vikingdb_observer import VikingDBObserver
 from .vlm_observer import VLMObserver
@@ -9,6 +10,7 @@ from .vlm_observer import VLMObserver
 __all__ = [
     "BaseObserver",
     "QueueObserver",
+    "RetrievalObserver",
     "TransactionObserver",
     "VikingDBObserver",
     "VLMObserver",

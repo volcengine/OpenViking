@@ -9,11 +9,13 @@ and rerank-based relevance scoring.
 
 import heapq
 import logging
+import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from openviking.models.embedder.base import EmbedResult
 from openviking.retrieve.memory_lifecycle import hotness_score
+from openviking.retrieve.retrieval_stats import get_stats_collector
 from openviking.server.identity import RequestContext, Role
 from openviking.storage import VikingDBManager, VikingDBManagerProxy
 from openviking.storage.viking_fs import get_viking_fs
@@ -100,6 +102,8 @@ class HierarchicalRetriever:
             grep_patterns: Keyword match pattern list
             scope_dsl: Additional scope constraints passed from public find/search filter
         """
+
+        t0 = time.monotonic()
 
         # Use custom threshold or default threshold
         effective_threshold = score_threshold if score_threshold is not None else self.threshold
@@ -193,9 +197,21 @@ class HierarchicalRetriever:
         # Step 6: Convert results
         matched = await self._convert_to_matched_contexts(candidates, ctx=ctx)
 
+        final = matched[:limit]
+
+        # Record retrieval stats for the observer.
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        get_stats_collector().record_query(
+            context_type=query.context_type.value if query.context_type else "unknown",
+            result_count=len(final),
+            scores=[m.score for m in final],
+            latency_ms=elapsed_ms,
+            rerank_used=self._rerank_client is not None and mode == RetrieverMode.THINKING,
+        )
+
         return QueryResult(
             query=query,
-            matched_contexts=matched[:limit],
+            matched_contexts=final,
             searched_directories=root_uris,
         )
 
