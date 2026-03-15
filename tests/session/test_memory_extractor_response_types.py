@@ -7,6 +7,7 @@ Covers issue #605: Ollama models may return a JSON list instead of the
 expected {"memories": [...]} dict, causing AttributeError on .get().
 """
 
+
 def _normalize_parsed_data(data):
     """
     Replicate the type-checking logic added in memory_extractor.py:extract().
