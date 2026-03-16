@@ -19,11 +19,17 @@ logger = logging.getLogger(__name__)
 
 
 class OpenAIDenseEmbedder(DenseEmbedderBase):
-    """OpenAI Dense Embedder Implementation
+    """OpenAI-Compatible Dense Embedder Implementation
 
-    Supports OpenAI embedding models such as text-embedding-3-small, text-embedding-3-large, etc.
+    Supports OpenAI embedding models (e.g., text-embedding-3-small, text-embedding-3-large)
+    and OpenAI-compatible third-party models that support non-symmetric embeddings.
+
+    Note: Official OpenAI models are symmetric and do not support the input_type parameter.
+    Non-symmetric mode (context='query'/'document') is only supported by OpenAI-compatible
+    third-party models (e.g., BGE-M3, Jina, Cohere, etc.) that implement the input_type parameter.
 
     Example:
+        >>> # Symmetric mode (official OpenAI models)
         >>> embedder = OpenAIDenseEmbedder(
         ...     model_name="text-embedding-3-small",
         ...     api_key="sk-xxx",
@@ -32,6 +38,17 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         >>> result = embedder.embed("Hello world")
         >>> print(len(result.dense_vector))
         1536
+
+        >>> # Non-symmetric mode (OpenAI-compatible third-party models)
+        >>> query_embedder = OpenAIDenseEmbedder(
+        ...     model_name="bge-m3",
+        ...     api_key="your-api-key",
+        ...     api_base="https://your-api-endpoint.com/v1",
+        ...     context="query",
+        ...     query_param="query",
+        ...     document_param="passage"
+        ... )
+        >>> query_vector = query_embedder.embed("search query")
     """
 
     def __init__(
@@ -40,21 +57,46 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         dimension: Optional[int] = None,
+        context: Optional[str] = None,
+        query_param: Optional[str] = None,
+        document_param: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
         max_tokens: Optional[int] = None,
     ):
-        """Initialize OpenAI Dense Embedder
+        """Initialize OpenAI-Compatible Dense Embedder
 
         Args:
-            model_name: OpenAI model name, defaults to text-embedding-3-small
+            model_name: Model name. For official OpenAI models (e.g., text-embedding-3-small),
+                       use symmetric mode (context=None, query_param=None, document_param=None).
+                       For OpenAI-compatible third-party models (e.g., BGE-M3, Jina, Cohere), use
+                       non-symmetric mode with context='query'/'document'.
             api_key: API key, if None will read from env vars (OPENVIKING_EMBEDDING_API_KEY or OPENAI_API_KEY)
-            api_base: API base URL, optional
+            api_base: API base URL, optional. Required for third-party OpenAI-compatible APIs.
             dimension: Dimension (if model supports), optional
+            context: Embedding context, either 'query' or 'document'. When both query_param
+                     and document_param are None (the default), the model is treated as symmetric
+                     and no input_type is sent to the API. Set query_param and/or document_param
+                     to enable non-symmetric mode. Only supported by OpenAI-compatible third-party
+                     models, not official OpenAI models.
+            query_param: The input_type value for query-side embeddings, e.g. 'query' or
+                         'search_query'. Defaults to 'query' when non-symmetric mode is active.
+                         Setting this (or document_param) activates non-symmetric mode.
+                         Only supported by OpenAI-compatible third-party models.
+            document_value: The input_type value for document-side embeddings, e.g. 'passage'
+                            or 'document'. Defaults to 'passage' when non-symmetric mode is
+                            active. Setting this (or query_value) activates non-symmetric mode.
+                            Only supported by OpenAI-compatible third-party models.
             config: Additional configuration dict
             max_tokens: Maximum token count per embedding request, None to use default (8000)
 
         Raises:
             ValueError: If api_key is not provided and env vars are not set
+
+        Note:
+            Official OpenAI models (e.g., text-embedding-3-small, text-embedding-3-large) are
+            symmetric and do not support the input_type parameter. Non-symmetric mode is only
+            supported by OpenAI-compatible third-party models (e.g., BGE-M3, Jina, Cohere) that
+            implement the input_type parameter.
         """
         super().__init__(model_name, config, max_tokens=max_tokens)
 
@@ -62,6 +104,19 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         self.api_base = api_base
         self.dimension = dimension
 
+        # Symmetric by default: only activate input_type if user explicitly sets either value
+        non_symmetric = query_param is not None or document_param is not None
+        if not non_symmetric:
+            self.input_type: Optional[str] = None
+        elif context == "query":
+            self.input_type = query_param if query_param is not None else "query"
+        elif context == "document":
+            self.input_type = document_param if document_param is not None else "passage"
+        else:
+            self.input_type = None
+
+        if not self.api_key:
+            raise ValueError("api_key is required")
         # Allow missing api_key when api_base is set (e.g. local OpenAI-compatible servers)
         if not self.api_key and not self.api_base:
             raise ValueError("api_key is required (or set api_base for local servers)")
@@ -134,6 +189,18 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             output_tokens,
         )
 
+    def _build_extra_body(self) -> Optional[Dict[str, Any]]:
+        """Build extra_body dict for OpenAI-compatible parameters
+
+        Returns:
+            Dict containing input_type if non-symmetric mode is active.
+            Only supported by OpenAI-compatible third-party models.
+        """
+        extra_body = {}
+        if self.input_type is not None:
+            extra_body["input_type"] = self.input_type
+        return extra_body if extra_body else None
+
     def _embed_single(self, text: str) -> EmbedResult:
         """Perform raw embedding without chunking logic.
 
@@ -147,9 +214,11 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             RuntimeError: When API call fails
         """
         try:
-            kwargs = {"input": text, "model": self.model_name}
-            if self.dimension:
-                kwargs["dimensions"] = self.dimension
+            kwargs: Dict[str, Any] = {"input": text, "model": self.model_name}
+
+            extra_body = self._build_extra_body()
+            if extra_body:
+                kwargs["extra_body"] = extra_body
 
             response = self.client.embeddings.create(**kwargs)
             self._update_telemetry_token_usage(response)
@@ -211,9 +280,11 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
 
         if short_texts:
             try:
-                kwargs = {"input": short_texts, "model": self.model_name}
-                if self.dimension:
-                    kwargs["dimensions"] = self.dimension
+                kwargs: Dict[str, Any] = {"input": short_texts, "model": self.model_name}
+
+                extra_body = self._build_extra_body()
+                if extra_body:
+                    kwargs["extra_body"] = extra_body
 
                 response = self.client.embeddings.create(**kwargs)
                 self._update_telemetry_token_usage(response)

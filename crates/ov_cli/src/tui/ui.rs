@@ -147,14 +147,16 @@ fn render_vector_records(frame: &mut Frame, app: &App, area: ratatui::layout::Re
 
     let title = if let Some(total) = app.vector_state.total_count {
         format!(
-            " Vector Records ({}/{}, total: {}) ",
+            " Vector Records for {} ({}/{}, total: {}) ",
+            app.current_uri,
             app.vector_state.cursor + 1,
             app.vector_state.records.len(),
             total
         )
     } else {
         format!(
-            " Vector Records ({}/{}) ",
+            " Vector Records for {} ({}/{}) ",
+            app.current_uri,
             app.vector_state.cursor + 1,
             app.vector_state.records.len()
         )
@@ -184,6 +186,15 @@ fn render_vector_records(frame: &mut Frame, app: &App, area: ratatui::layout::Re
         .skip(app.vector_state.scroll_offset)
         .take(viewport_height)
         .map(|record| {
+            let context_type = record
+                .get("context_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("(no type)");
+            let level_str = record
+                .get("level")
+                .and_then(|v| v.as_i64())
+                .map(|l| l.to_string())
+                .unwrap_or("(no level)".to_string());
             let id = record
                 .get("id")
                 .and_then(|v| v.as_str())
@@ -193,6 +204,20 @@ fn render_vector_records(frame: &mut Frame, app: &App, area: ratatui::layout::Re
                 .and_then(|v| v.as_str())
                 .unwrap_or("(no uri)");
             let line = Line::from(vec![
+                Span::styled(
+                    context_type,
+                    Style::default()
+                        .fg(Color::Green)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" "),
+                Span::styled(
+                    level_str,
+                    Style::default()
+                        .fg(Color::Magenta)
+                        .add_modifier(Modifier::BOLD),
+                ),
+                Span::raw(" "),
                 Span::styled(
                     id,
                     Style::default()

@@ -115,10 +115,10 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `max_concurrent` | int | Maximum concurrent embedding requests (`embedding.max_concurrent`, default: `10`) |
-| `provider` | str | `"volcengine"`, `"openai"`, `"vikingdb"`, or `"jina"` |
+| `provider` | str | `"volcengine"`, `"openai"`, `"vikingdb"`, `"jina"`, or `"voyage"` |
 | `api_key` | str | API key |
 | `model` | str | Model name |
-| `dimension` | int | Vector dimension |
+| `dimension` | int | Vector dimension. For Voyage, this maps to `output_dimension` |
 | `input` | str | Input type: `"text"` or `"multimodal"` |
 | `batch_size` | int | Batch size for embedding requests |
 
@@ -136,6 +136,7 @@ With `input: "multimodal"`, OpenViking can embed text, images (PNG, JPG, etc.), 
 - `volcengine`: Volcengine Embedding API
 - `vikingdb`: VikingDB Embedding API
 - `jina`: Jina AI Embedding API
+- `voyage`: Voyage AI Embedding API
 
 **vikingdb provider example:**
 
@@ -174,6 +175,39 @@ Available Jina models:
 - `jina-embeddings-v5-text-nano`: 239M params, 768 dim, max seq 8192
 
 Get your API key at https://jina.ai
+
+**voyage provider example:**
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "voyage",
+      "api_key": "pa-xxx",
+      "api_base": "https://api.voyageai.com/v1",
+      "model": "voyage-4-lite",
+      "dimension": 1024
+    }
+  }
+}
+```
+
+Supported Voyage text embedding models include:
+- `voyage-4-lite`
+- `voyage-4`
+- `voyage-4-large`
+- `voyage-code-3`
+- `voyage-context-3`
+- `voyage-3`
+- `voyage-3.5`
+- `voyage-3.5-lite`
+- `voyage-finance-2`
+- `voyage-law-2`
+
+If `dimension` is omitted, OpenViking uses the model's default output dimension when creating the vector schema.
+
+OpenViking currently configures a single dense embedder for both indexing and query-time retrieval, so provider-specific query/document modes are not exposed in config yet.
+OpenViking also expects dense float vectors throughout storage and retrieval, so Voyage quantized output dtypes are not exposed in config.
 
 **Local deployment (GGUF/MLX):** Jina embedding models are open-weight and available in GGUF and MLX formats on [Hugging Face](https://huggingface.co/jinaai). You can run them locally with any OpenAI-compatible server (e.g. llama.cpp, MLX, vLLM) and point the `api_base` to your local endpoint:
 
