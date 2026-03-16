@@ -55,6 +55,7 @@ export class OpenVikingClient {
     private readonly apiKey: string,
     private agentId: string,
     private readonly timeoutMs: number,
+    private readonly maxRetries: number = 0,
   ) {}
 
   /**
@@ -78,42 +79,55 @@ export class OpenVikingClient {
   }
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), this.timeoutMs);
-    try {
-      const headers = new Headers(init.headers ?? {});
-      if (this.apiKey) {
-        headers.set("X-API-Key", this.apiKey);
-      }
-      if (this.agentId) {
-        headers.set("X-OpenViking-Agent", this.agentId);
-      }
-      if (init.body && !headers.has("Content-Type")) {
-        headers.set("Content-Type", "application/json");
-      }
+    let lastError: Error | null = null;
+    const maxAttempts = 1 + Math.max(0, this.maxRetries);
 
-      const response = await fetch(`${this.baseUrl}${path}`, {
-        ...init,
-        headers,
-        signal: controller.signal,
-      });
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), this.timeoutMs);
+      try {
+        const headers = new Headers(init.headers ?? {});
+        if (this.apiKey) {
+          headers.set("X-API-Key", this.apiKey);
+        }
+        if (this.agentId) {
+          headers.set("X-OpenViking-Agent", this.agentId);
+        }
+        if (init.body && !headers.has("Content-Type")) {
+          headers.set("Content-Type", "application/json");
+        }
 
-      const payload = (await response.json().catch(() => ({}))) as {
-        status?: string;
-        result?: T;
-        error?: { code?: string; message?: string };
-      };
+        const response = await fetch(`${this.baseUrl}${path}`, {
+          ...init,
+          headers,
+          signal: controller.signal,
+        });
 
-      if (!response.ok || payload.status === "error") {
-        const code = payload.error?.code ? ` [${payload.error.code}]` : "";
-        const message = payload.error?.message ?? `HTTP ${response.status}`;
-        throw new Error(`OpenViking request failed${code}: ${message}`);
+        const payload = (await response.json().catch(() => ({}))) as {
+          status?: string;
+          result?: T;
+          error?: { code?: string; message?: string };
+        };
+
+        if (!response.ok || payload.status === "error") {
+          const code = payload.error?.code ? ` [${payload.error.code}]` : "";
+          const message = payload.error?.message ?? `HTTP ${response.status}`;
+          throw new Error(`OpenViking request failed${code}: ${message}`);
+        }
+
+        return (payload.result ?? payload) as T;
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        if (attempt < maxAttempts) {
+          const delay = Math.min(1000 * 2 ** (attempt - 1), 5000);
+          await new Promise((resolve) => setTimeout(resolve, delay));
+          continue;
+        }
+      } finally {
+        clearTimeout(timer);
       }
-
-      return (payload.result ?? payload) as T;
-    } finally {
-      clearTimeout(timer);
     }
+    throw lastError || new Error("Request failed after retries");
   }
 
   async healthCheck(): Promise<void> {

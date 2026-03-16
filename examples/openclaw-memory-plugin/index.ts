@@ -81,7 +81,7 @@ const memoryPlugin = {
         });
       }
     } else {
-      clientPromise = Promise.resolve(new OpenVikingClient(cfg.baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs));
+      clientPromise = Promise.resolve(new OpenVikingClient(cfg.baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs, cfg.maxRetries));
     }
 
     const getClient = (): Promise<OpenVikingClient> => clientPromise;
@@ -481,9 +481,10 @@ const memoryPlugin = {
     }
 
     if (cfg.autoCapture) {
-      let lastProcessedMsgCount = 0;
+      const lastProcessedMsgCountMap = new Map<string, number>();
 
       api.on("agent_end", async (event: { success?: boolean; messages?: unknown[] }, ctx?: { agentId?: string }) => {
+        const agentKey = ctx?.agentId || "default";
         // Dynamically switch agent identity for multi-agent memory isolation
         const hookAgentId = ctx?.agentId;
         if (hookAgentId) {
@@ -499,8 +500,9 @@ const memoryPlugin = {
         }
         try {
           const messages = event.messages;
+          const lastProcessedMsgCount = lastProcessedMsgCountMap.get(agentKey) || 0;
           const { texts: newTexts, newCount } = extractNewTurnTexts(messages, lastProcessedMsgCount);
-          lastProcessedMsgCount = messages.length;
+          lastProcessedMsgCountMap.set(agentKey, messages.length);
 
           if (newTexts.length === 0) {
             api.logger.info("memory-openviking: auto-capture skipped (no new user/assistant messages)");
@@ -632,7 +634,7 @@ const memoryPlugin = {
           });
           try {
             await waitForHealth(baseUrl, timeoutMs, intervalMs);
-            const client = new OpenVikingClient(baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs);
+            const client = new OpenVikingClient(baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs, cfg.maxRetries);
             localClientCache.set(localCacheKey, { client, process: child });
             resolveLocalClient(client);
             rejectLocalClient = null;
