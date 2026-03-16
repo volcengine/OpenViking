@@ -182,7 +182,7 @@ async def vectorize_directory_meta(
             uri=uri,
             parent_uri=parent_uri,
             is_leaf=False,
-            abstract=overview,
+            abstract=abstract,
             context_type=context_type,
             level=ContextLevel.OVERVIEW,
             user=ctx.user,
