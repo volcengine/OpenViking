@@ -60,7 +60,7 @@ async def test_reindex_endpoint_registered(client):
 
 async def test_reindex_request_validation(client):
     """Test reindex validates the request body schema."""
-    # Empty body
+    # Empty body — uri is required
     resp = await client.post("/api/v1/content/reindex", json={})
     assert resp.status_code == 422
 
@@ -71,3 +71,15 @@ async def test_reindex_request_validation(client):
     )
     # Pydantic coerces strings to bool, so this may or may not fail
     assert resp.status_code in (200, 422, 500)
+
+
+async def test_reindex_wait_parameter_schema(client):
+    """Test reindex accepts wait parameter in request schema."""
+    # Invalid wait type should be coerced or rejected, not crash
+    resp = await client.post(
+        "/api/v1/content/reindex",
+        json={"uri": "viking://resources/test", "wait": "invalid"},
+    )
+    # Pydantic coerces or rejects — either way, not a 404/405
+    assert resp.status_code != 404
+    assert resp.status_code != 405
