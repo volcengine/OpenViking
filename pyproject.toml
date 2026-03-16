@@ -180,7 +180,9 @@ openviking = [
     "lib/libagfsbinding.dylib",
     "lib/libagfsbinding.dll",
     "bin/ov",
-    "bin/ov.exe"
+    "bin/ov.exe",
+    "storage/vectordb/engine/*.so",
+    "storage/vectordb/engine/*.pyd",
 ]
 vikingbot = [
     "**/*.mjs",

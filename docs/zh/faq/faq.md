@@ -125,6 +125,7 @@ pip install openviking --upgrade --force-reinstall
 | `openai` | OpenAI Embedding API |
 | `vikingdb` | VikingDB Embedding API |
 | `jina` | Jina AI Embedding API |
+| `ollama` | Ollama（本地 OpenAI 兼容服务器，无需 API Key） |
 
 支持 Dense、Sparse 和 Hybrid 三种 Embedding 模式。
 

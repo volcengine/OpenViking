@@ -160,6 +160,39 @@ def _validate_path_param(value: str, name: str) -> Optional[JSONResponse]:
     return None
 
 
+def _validate_fs_path(path_str: str) -> Optional[JSONResponse]:
+    """Validate file system path to prevent directory traversal attacks."""
+    if not path_str:
+        # Empty path is allowed (means current directory)
+        return None
+
+    # Reject absolute paths
+    if path_str.startswith("/") or path_str.startswith("\\"):
+        return _error_response(
+            status_code=400,
+            code="INVALID_PATH",
+            message="Absolute paths are not allowed",
+        )
+
+    # Check for Windows drive letters (C:, D:, etc.)
+    if len(path_str) >= 2 and path_str[1] == ":":
+        return _error_response(
+            status_code=400,
+            code="INVALID_PATH",
+            message="Absolute paths are not allowed",
+        )
+
+    # Check for parent directory traversal
+    if ".." in path_str:
+        return _error_response(
+            status_code=400,
+            code="INVALID_PATH",
+            message="Path traversal sequences (..) are not allowed",
+        )
+
+    return None
+
+
 def _create_proxy_router() -> APIRouter:
     router = APIRouter(prefix=PROXY_PREFIX, tags=["console"])
 
@@ -172,10 +205,18 @@ def _create_proxy_router() -> APIRouter:
 
     @router.get("/ov/fs/ls")
     async def fs_ls(request: Request):
+        path = request.query_params.get("path", "")
+        invalid = _validate_fs_path(path)
+        if invalid:
+            return invalid
         return await _forward_request(request, "/api/v1/fs/ls")
 
     @router.get("/ov/fs/tree")
     async def fs_tree(request: Request):
+        path = request.query_params.get("path", "")
+        invalid = _validate_fs_path(path)
+        if invalid:
+            return invalid
         return await _forward_request(request, "/api/v1/fs/tree")
 
     @router.get("/ov/fs/stat")

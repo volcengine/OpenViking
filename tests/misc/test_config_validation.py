@@ -156,6 +156,50 @@ def test_embedding_validation():
     else:
         print(f"   Fail (provider='volcengine' should have priority, got '{config_b.provider}')")
 
+    # Test 5: Ollama provider (no API key required)
+    print("\n5. Test Ollama provider (no API key required)...")
+    try:
+        _ = EmbeddingConfig(
+            dense=EmbeddingModelConfig(
+                provider="ollama",
+                model="nomic-embed-text",
+                dimension=768,
+            )
+        )
+        print("   Pass (Ollama does not require API key)")
+    except ValueError as e:
+        print(f"   Fail: {e}")
+
+    # Test 6: Ollama provider with custom api_base
+    print("\n6. Test Ollama provider with custom api_base...")
+    try:
+        _ = EmbeddingConfig(
+            dense=EmbeddingModelConfig(
+                provider="ollama",
+                model="nomic-embed-text",
+                api_base="http://localhost:11434/v1",
+                dimension=768,
+            )
+        )
+        print("   Pass")
+    except ValueError as e:
+        print(f"   Fail: {e}")
+
+    # Test 7: OpenAI provider with api_base but no api_key (local OpenAI-compatible server)
+    print("\n7. Test OpenAI provider with api_base but no api_key...")
+    try:
+        _ = EmbeddingConfig(
+            dense=EmbeddingModelConfig(
+                provider="openai",
+                model="text-embedding-3-small",
+                api_base="http://localhost:8080/v1",
+                dimension=1536,
+            )
+        )
+        print("   Pass (OpenAI provider allows missing api_key when api_base is set)")
+    except ValueError as e:
+        print(f"   Fail: {e}")
+
 
 def test_vlm_validation():
     """Test VLM config validation"""

@@ -447,3 +447,84 @@ class TestBaseMaxTokensConfigurable:
 
         embedder = ConcreteEmbedder(model_name="test", max_tokens=32768)
         assert embedder.max_tokens == 32768
+
+
+@patch("openai.OpenAI")
+class TestOpenAIEmbedderWithoutApiKey:
+    """Test cases for OpenAI embedder without api_key (local servers)."""
+
+    def test_init_with_api_base_no_api_key(self, mock_openai_class):
+        """OpenAIDenseEmbedder should initialize with api_base but no api_key."""
+        mock_client = _make_mock_openai_client()
+        mock_openai_class.return_value = mock_client
+
+        mod = _load_openai_embedders()
+        OpenAIDenseEmbedder = mod.OpenAIDenseEmbedder
+
+        # Should NOT raise when api_base is set but api_key is not
+        embedder = OpenAIDenseEmbedder(
+            model_name="text-embedding-3-small",
+            api_base="http://localhost:11434/v1",
+            dimension=DIMENSION,
+        )
+
+        assert embedder is not None
+        # Verify OpenAI client was initialized with placeholder key
+        mock_openai_class.assert_called_once()
+        call_kwargs = mock_openai_class.call_args[1]
+        assert call_kwargs["api_key"] == "no-key"
+        assert call_kwargs["base_url"] == "http://localhost:11434/v1"
+
+    def test_init_without_api_key_or_api_base_raises(self, mock_openai_class):
+        """OpenAIDenseEmbedder should raise when neither api_key nor api_base is set."""
+        mock_client = _make_mock_openai_client()
+        mock_openai_class.return_value = mock_client
+
+        mod = _load_openai_embedders()
+        OpenAIDenseEmbedder = mod.OpenAIDenseEmbedder
+
+        # Should raise when neither is provided
+        with pytest.raises(ValueError, match="api_key is required"):
+            OpenAIDenseEmbedder(
+                model_name="text-embedding-3-small",
+                dimension=DIMENSION,
+            )
+
+    def test_init_with_api_key_works_normally(self, mock_openai_class):
+        """OpenAIDenseEmbedder should work normally with api_key provided."""
+        mock_client = _make_mock_openai_client()
+        mock_openai_class.return_value = mock_client
+
+        mod = _load_openai_embedders()
+        OpenAIDenseEmbedder = mod.OpenAIDenseEmbedder
+
+        embedder = OpenAIDenseEmbedder(
+            model_name="text-embedding-3-small",
+            api_key="test-api-key",
+            dimension=DIMENSION,
+        )
+
+        assert embedder is not None
+        mock_openai_class.assert_called_once()
+        call_kwargs = mock_openai_class.call_args[1]
+        assert call_kwargs["api_key"] == "test-api-key"
+
+    def test_embed_with_api_base_no_api_key(self, mock_openai_class):
+        """Embedding should work with api_base but no api_key (local server)."""
+        mock_client = _make_mock_openai_client()
+        mock_openai_class.return_value = mock_client
+
+        mod = _load_openai_embedders()
+        OpenAIDenseEmbedder = mod.OpenAIDenseEmbedder
+
+        embedder = OpenAIDenseEmbedder(
+            model_name="text-embedding-3-small",
+            api_base="http://localhost:11434/v1",
+            dimension=DIMENSION,
+        )
+
+        result = embedder.embed("Hello world")
+
+        assert result.dense_vector is not None
+        assert len(result.dense_vector) == DIMENSION
+        mock_client.embeddings.create.assert_called()

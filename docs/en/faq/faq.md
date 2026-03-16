@@ -126,6 +126,7 @@ Config files at the default path `~/.openviking/ov.conf` are loaded automaticall
 | `openai` | OpenAI Embedding API |
 | `vikingdb` | VikingDB Embedding API |
 | `jina` | Jina AI Embedding API |
+| `ollama` | Ollama (local OpenAI-compatible server, no API key required) |
 
 Supports Dense, Sparse, and Hybrid embedding modes.
 

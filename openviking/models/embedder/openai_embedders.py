@@ -62,11 +62,13 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         self.api_base = api_base
         self.dimension = dimension
 
-        if not self.api_key:
-            raise ValueError("api_key is required")
+        # Allow missing api_key when api_base is set (e.g. local OpenAI-compatible servers)
+        if not self.api_key and not self.api_base:
+            raise ValueError("api_key is required (or set api_base for local servers)")
 
         # Initialize OpenAI client
-        client_kwargs = {"api_key": self.api_key}
+        # Use a placeholder api_key when not provided (for local OpenAI-compatible servers)
+        client_kwargs = {"api_key": self.api_key or "no-key"}
         if self.api_base:
             client_kwargs["base_url"] = self.api_base
         self.client = openai.OpenAI(**client_kwargs)
