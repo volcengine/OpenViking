@@ -97,29 +97,36 @@ Crash recovery: Journal records the post_action; replayed automatically on resta
 
 | Problem | Solution |
 |---------|----------|
-| Messages cleared but archive not written -> conversation data lost | Split into two transactions + checkpoint |
+| Messages cleared but archive not written -> conversation data lost | Phase 1 without transaction (incomplete archive has no side effects) + Phase 2 with redo transaction |
 
-LLM calls have unpredictable latency (5s~60s+), so they cannot be inside a transaction. Split into:
+LLM calls have unpredictable latency (5s~60s+) and cannot be inside a lock-holding transaction. The design splits into two phases:
 
 ```
-Transaction 1 (Archive):
-  1. Write archive (history/archive_N/messages.jsonl + summaries)
-  2. Clear messages.jsonl
-  3. Write checkpoint (status="archived")
-  4. Commit
+Phase 1 — Archive (no transaction, no lock):
+  1. Generate archive summary (LLM)
+  2. Write archive (history/archive_N/messages.jsonl + summaries)
+  3. Clear messages.jsonl
+  4. Clear in-memory message list
 
-LLM call (no transaction):
-  Extract memories from archived messages
-
-Transaction 2 (Memory write):
-  1. Write memory files
-  2. Write relations
-  3. Update checkpoint (status="completed")
-  4. Register post_action: enqueue SemanticQueue
-  5. Commit
+Phase 2 — Memory extraction + write (transaction, lock_mode="none", redo semantics):
+  1. Record init_info (archive_uri, session_uri, user identity)
+  2. Extract memories from archived messages (LLM)
+  3. Write current message state
+  4. Write relations
+  5. Register post_action: enqueue SemanticQueue
+  6. Commit
 ```
 
-Crash recovery: Read checkpoint, resume from the appropriate step based on status.
+**Redo semantics**: Phase 2 does not register undo log entries. On crash recovery, memory extraction and writing are re-executed from the archive (`_redo_session_memory`) instead of being rolled back.
+
+**Crash recovery analysis**:
+
+| Crash point | State | Recovery action |
+|------------|-------|----------------|
+| During Phase 1 archive write | No transaction | Incomplete archive; next commit scans history/ for index, unaffected |
+| Phase 1 archive complete but messages not cleared | No transaction | Archive complete + messages still present = redundant but safe |
+| During Phase 2 memory extraction/write | Journal EXEC | On startup: `_redo_session_memory` redoes extraction + write + enqueue from archive |
+| After Phase 2 commit | Journal COMMIT | On startup: replay `post_action("enqueue_semantic")` |
 
 ## TransactionContext
 
@@ -153,6 +160,7 @@ async with TransactionContext(tx_manager, "rm", [path], lock_mode="subtree") as 
 | `point` | Write operations | Lock the specified path; conflicts with any lock on the same path and any SUBTREE lock on ancestors |
 | `subtree` | Delete operations | Lock the subtree root; conflicts with any lock on the same path, any lock on descendants, and any SUBTREE lock on ancestors |
 | `mv` | Move operations | Directory move: SUBTREE lock on both source and destination; File move: POINT lock on source parent and destination (controlled by `src_is_dir`) |
+| `none` | Lock-free operations | Skip lock acquisition, transition directly to EXEC status. Used for session.commit Phase 2 and other scenarios that don't require path mutual exclusion |
 
 ## Lock Types (POINT vs SUBTREE)
 
@@ -288,7 +296,9 @@ Rollback           -> execute undo log -> release locks -> delete journal
 |------------------------|----------------|
 | `COMMIT` + non-empty post_actions | Replay post_actions -> release locks -> delete journal |
 | `COMMIT` + empty post_actions / `RELEASED` | Release locks -> delete journal |
-| `EXEC` / `FAIL` / `RELEASING` | Execute undo log rollback (`recover_all=True`) -> release locks -> delete journal |
+| `EXEC` / `FAIL` / `RELEASING` (`session_memory` operation) | Redo memory extraction + write from archive (`_redo_session_memory`) -> release locks -> delete journal |
+| `EXEC` / `FAIL` / `RELEASING` (all undo entries completed) | Roll forward (treat as committed, replay post_actions) -> release locks -> delete journal |
+| `EXEC` / `FAIL` / `RELEASING` (other) | Execute undo log rollback (`recover_all=True`) -> release locks -> delete journal |
 | `INIT` / `ACQUIRE` | Clean up orphan locks (using init_info.lock_paths) -> delete journal (no changes were made) |
 
 ### Defense Summary
@@ -298,7 +308,7 @@ Rollback           -> execute undo log -> release locks -> delete journal
 | Crash during transaction | Journal + undo log rollback | On restart |
 | Crash after commit, before enqueue | Journal post_actions replay | On restart |
 | Crash after enqueue, before worker processes | QueueFS SQLite persistence | Worker auto-pulls after restart |
-| Crash during session.commit LLM call | Checkpoint file recovery | On restart, re-invoke LLM |
+| Crash during session.commit Phase 2 | Journal + redo (re-extract memories from archive) | On restart |
 | Orphan index | Cleaned on L2 on-demand load | When user accesses |
 | Crash between lock creation and journal update | init_info records intended lock paths; recovery checks and cleans orphan locks | On restart |
 

@@ -97,29 +97,36 @@ Storage Layer (VikingFS, VectorDB, QueueManager)
 
 | 问题 | 方案 |
 |------|------|
-| 消息已清空但 archive 未写入 → 对话数据丢失 | 拆为两段事务 + checkpoint |
+| 消息已清空但 archive 未写入 → 对话数据丢失 | Phase 1 无事务（archive 不完整无副作用）+ Phase 2 redo 事务 |
 
-LLM 调用耗时不可控（5s~60s+），放在事务内会长时间持锁。因此拆为：
+LLM 调用耗时不可控（5s~60s+），不能放在持锁事务内。设计拆为两个阶段：
 
 ```
-第一段事务（归档）：
-  1. 写 archive（history/archive_N/messages.jsonl + 摘要）
-  2. 清空 messages.jsonl
-  3. 写 checkpoint（status="archived"）
-  4. 提交
+Phase 1 — 归档（无事务、无锁）：
+  1. 生成归档摘要（LLM）
+  2. 写 archive（history/archive_N/messages.jsonl + 摘要）
+  3. 清空 messages.jsonl
+  4. 清空内存中的消息列表
 
-LLM 调用（无事务）：
-  从归档消息提取 memories
-
-第二段事务（memory 写入）：
-  1. 写 memory 文件
-  2. 写 relations
-  3. 更新 checkpoint（status="completed"）
-  4. 注册 post_action: enqueue SemanticQueue
-  5. 提交
+Phase 2 — 记忆提取 + 写入（事务，lock_mode="none"，redo 语义）：
+  1. 记录 init_info（archive_uri、session_uri、用户身份信息）
+  2. 从归档消息提取 memories（LLM）
+  3. 写当前消息状态
+  4. 写 relations
+  5. 注册 post_action: enqueue SemanticQueue
+  6. 提交
 ```
 
-崩溃恢复：读 checkpoint，根据 status 决定从哪一步继续。
+**Redo 语义**：Phase 2 不注册 undo log。崩溃恢复时从 archive 重新执行记忆提取和写入（`_redo_session_memory`），而非回滚。
+
+**崩溃恢复分析**：
+
+| 崩溃时间点 | 状态 | 恢复动作 |
+|-----------|------|---------|
+| Phase 1 写 archive 中途 | 无事务 | archive 不完整，下次 commit 从 history/ 扫描 index，不受影响 |
+| Phase 1 archive 完成但 messages 未清空 | 无事务 | archive 完整 + messages 仍在 = 数据冗余但安全 |
+| Phase 2 记忆提取/写入中途 | journal EXEC | 启动恢复：`_redo_session_memory` 从 archive 重做提取+写入+入队 |
+| Phase 2 commit 后 | journal COMMIT | 启动恢复：重放 `post_action("enqueue_semantic")` |
 
 ## TransactionContext
 
@@ -153,6 +160,7 @@ async with TransactionContext(tx_manager, "rm", [path], lock_mode="subtree") as 
 | `point` | 写操作 | 锁定指定路径；与同路径的任何锁和祖先目录的 SUBTREE 锁冲突 |
 | `subtree` | 删除操作 | 锁定子树根节点；与同路径的任何锁、后代目录的任何锁和祖先目录的 SUBTREE 锁冲突 |
 | `mv` | 移动操作 | 目录移动：源和目标均加 SUBTREE 锁；文件移动：源父目录和目标均加 POINT 锁（通过 `src_is_dir` 控制） |
+| `none` | 无锁操作 | 跳过锁获取，直接进入 EXEC 状态。用于 session.commit Phase 2 等不需要路径互斥的场景 |
 
 ## 锁类型（POINT vs SUBTREE）
 
@@ -288,7 +296,9 @@ VectorDB 回滚操作需要 `RequestContext`（包含 account_id、user_id、age
 |---------------------|---------|
 | `COMMIT` + post_actions 非空 | 重放 post_actions → 删锁 → 删 journal |
 | `COMMIT` + post_actions 为空 / `RELEASED` | 删锁 → 删 journal |
-| `EXEC` / `FAIL` / `RELEASING` | 执行 undo log 回滚（`recover_all=True`） → 删锁 → 删 journal |
+| `EXEC` / `FAIL` / `RELEASING`（`session_memory` 操作） | 从 archive 重做记忆提取+写入（`_redo_session_memory`） → 删锁 → 删 journal |
+| `EXEC` / `FAIL` / `RELEASING`（所有 undo 均 completed） | 前滚（视为已提交，重放 post_actions） → 删锁 → 删 journal |
+| `EXEC` / `FAIL` / `RELEASING`（其他） | 执行 undo log 回滚（`recover_all=True`） → 删锁 → 删 journal |
 | `INIT` / `ACQUIRE` | 通过 init_info.lock_paths 清理孤儿锁 → 删 journal（变更未执行） |
 
 ### 防线总结
@@ -298,7 +308,7 @@ VectorDB 回滚操作需要 `RequestContext`（包含 account_id、user_id、age
 | 事务内崩溃 | journal + undo log 回滚 | 重启时 |
 | 提交后 enqueue 前崩溃 | journal post_actions 重放 | 重启时 |
 | enqueue 后 worker 处理前崩溃 | QueueFS SQLite 持久化 | worker 重启后自动拉取 |
-| session.commit LLM 调用中崩溃 | checkpoint 文件恢复 | 重启时重新调用 LLM |
+| session.commit Phase 2 中崩溃 | journal + redo（从 archive 重做记忆提取） | 重启时 |
 | 孤儿索引 | L2 按需加载时清理 | 用户访问时 |
 | 加锁后 journal 更新前崩溃 | init_info 记录预期锁路径，恢复时检查并清理孤儿锁 | 重启时 |
 

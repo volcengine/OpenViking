@@ -184,8 +184,7 @@ class TransactionManager:
         Recovery strategy by status:
           COMMITTED + post_actions  → replay post_actions (enqueue etc.), then clean up
           COMMITTED, no post_actions / RELEASED → just clean up
-          EXEC / FAIL / RELEASING, all ops completed → roll forward (commit), then clean up
-          EXEC / FAIL / RELEASING, partial ops       → rollback completed+partial ops, then clean up
+          EXEC / FAIL / RELEASING   → rollback completed+partial ops, then clean up
           INIT / ACQUIRE            → nothing executed yet, just clean up
         """
         from openviking.storage.transaction.undo import execute_rollback
@@ -226,22 +225,6 @@ class TransactionManager:
                     await self._redo_session_memory(tx)
                 except Exception as e:
                     logger.warning(f"Redo session_memory failed for tx {tx_id}: {e}")
-            elif (
-                tx.status == TransactionStatus.EXEC
-                and tx.undo_log
-                and all(e.completed for e in tx.undo_log)
-            ):
-                # All operations completed successfully but commit didn't persist.
-                # Roll forward: treat as committed to avoid data loss from rollback
-                # of irreversible operations (e.g. mv's fs_rm).
-                logger.info(f"All ops completed for tx {tx_id}, rolling forward (commit)")
-                if tx.post_actions:
-                    try:
-                        await self._execute_post_actions(tx.post_actions)
-                    except Exception as e:
-                        logger.warning(
-                            f"Post-action replay during roll-forward failed for tx {tx_id}: {e}"
-                        )
             else:
                 # Default: rollback completed+partial ops
                 # Pass recover_all=True so partial (completed=False) ops are also reversed,
