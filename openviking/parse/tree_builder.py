@@ -160,4 +160,3 @@ class TreeBuilder:
         tree.add_context(root_context)
 
         return tree
-

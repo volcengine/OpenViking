@@ -131,6 +131,8 @@ def _merge_vlm_model_config(bot_data: dict, vlm_data: dict) -> None:
         bot_data["agents"]["provider"] = provider if provider else ""
         bot_data["agents"]["api_base"] = vlm_data.get("api_base", "")
         bot_data["agents"]["api_key"] = vlm_data.get("api_key", "")
+        if "extra_headers" in vlm_data and vlm_data["extra_headers"] is not None:
+            bot_data["agents"]["extra_headers"] = vlm_data["extra_headers"]
 
 
 def _merge_ov_server_config(bot_data: dict, ov_data: dict) -> None:

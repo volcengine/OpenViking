@@ -47,6 +47,7 @@ class DagStats:
 @dataclass
 class VectorizeTask:
     """Vectorize task information."""
+
     task_type: str  # "file" or "directory"
     uri: str
     context_type: str
@@ -104,14 +105,22 @@ class SemanticDagExecutor:
             return None
 
         if self._incremental_update:
+
             async def sync_diff_callback() -> None:
                 try:
-                    root_tree = await self._processor._collect_tree_info(self._root_uri, ctx=self._ctx)
-                    target_tree = await self._processor._collect_tree_info(self._target_uri, ctx=self._ctx)
+                    root_tree = await self._processor._collect_tree_info(
+                        self._root_uri, ctx=self._ctx
+                    )
+                    target_tree = await self._processor._collect_tree_info(
+                        self._target_uri, ctx=self._ctx
+                    )
                     diff = await self._processor._compute_diff(
-                        root_tree, target_tree, self._root_uri, self._target_uri,
+                        root_tree,
+                        target_tree,
+                        self._root_uri,
+                        self._target_uri,
                         ctx=self._ctx,
-                        file_change_status=self._file_change_status
+                        file_change_status=self._file_change_status,
                     )
                     logger.info(
                         f"[SyncDiff] Diff computed: "
@@ -127,7 +136,9 @@ class SemanticDagExecutor:
                     try:
                         await self._viking_fs.rm(self._root_uri, recursive=True, ctx=self._ctx)
                     except Exception as e:
-                        logger.warning(f"[SyncDiff] Failed to delete root directory {self._root_uri}: {e}")
+                        logger.warning(
+                            f"[SyncDiff] Failed to delete root directory {self._root_uri}: {e}"
+                        )
                 except Exception as e:
                     logger.error(
                         f"[SyncDiff] Error in sync_diff_callback: "
@@ -138,6 +149,7 @@ class SemanticDagExecutor:
 
             return sync_diff_callback
         else:
+
             async def move_temp_to_target_callback() -> None:
                 try:
                     target_exists = await self._viking_fs.exists(self._target_uri, ctx=self._ctx)
@@ -339,9 +351,13 @@ class SemanticDagExecutor:
                 async with self._overview_cache_lock:
                     if parent_uri not in self._overview_cache:
                         overview_path = f"{parent_uri}/.overview.md"
-                        overview_content = await self._viking_fs.read_file(overview_path, ctx=self._ctx)
+                        overview_content = await self._viking_fs.read_file(
+                            overview_path, ctx=self._ctx
+                        )
                         if overview_content:
-                            self._overview_cache[parent_uri] = self._processor._parse_overview_md(overview_content)
+                            self._overview_cache[parent_uri] = self._processor._parse_overview_md(
+                                overview_content
+                            )
                         else:
                             self._overview_cache[parent_uri] = {}
 

@@ -143,7 +143,9 @@ class SessionCompressor:
         finally:
             self._pending_semantic_changes.clear()
 
-    async def _index_memory(self, memory: Context, ctx: RequestContext, change_type: str = "added") -> bool:
+    async def _index_memory(
+        self, memory: Context, ctx: RequestContext, change_type: str = "added"
+    ) -> bool:
         """Add memory to vectorization queue and record semantic change.
 
         Args:
@@ -257,7 +259,9 @@ class SessionCompressor:
             for candidate in candidates:
                 # Profile: skip dedup, always merge
                 if candidate.category in ALWAYS_MERGE_CATEGORIES:
-                    memory = await self.extractor.create_memory(candidate, user, session_id, ctx=ctx)
+                    memory = await self.extractor.create_memory(
+                        candidate, user, session_id, ctx=ctx
+                    )
                     if memory:
                         memories.append(memory)
                         stats.created += 1
@@ -284,7 +288,9 @@ class SessionCompressor:
                             candidate.success_time = tool_stats.get(
                                 "success_time", candidate.success_time
                             )
-                            candidate.duration_ms = tool_stats.get("duration_ms", candidate.duration_ms)
+                            candidate.duration_ms = tool_stats.get(
+                                "duration_ms", candidate.duration_ms
+                            )
                             candidate.prompt_tokens = tool_stats.get(
                                 "prompt_tokens", candidate.prompt_tokens
                             )
@@ -372,7 +378,9 @@ class SessionCompressor:
                             else:
                                 stats.skipped += 1
 
-                    memory = await self.extractor.create_memory(candidate, user, session_id, ctx=ctx)
+                    memory = await self.extractor.create_memory(
+                        candidate, user, session_id, ctx=ctx
+                    )
                     if memory:
                         memories.append(memory)
                         stats.created += 1

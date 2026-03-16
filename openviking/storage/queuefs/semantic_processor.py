@@ -3,6 +3,8 @@
 """SemanticProcessor: Processes messages from SemanticQueue, generates .abstract.md and .overview.md."""
 
 import asyncio
+import threading
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -25,6 +27,7 @@ from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecutor
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.viking_fs import get_viking_fs
+from openviking.telemetry import bind_telemetry, resolve_telemetry
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import VikingURI
 from openviking_cli.utils.config import get_openviking_config
@@ -44,6 +47,11 @@ class DiffResult:
     deleted_dirs: List[str] = field(default_factory=list)
 
 
+class RequestQueueStats:
+    processed: int = 0
+    error_count: int = 0
+
+
 class SemanticProcessor(DequeueHandlerBase):
     """
     Semantic processor, generates .abstract.md and .overview.md bottom-up.
@@ -54,6 +62,14 @@ class SemanticProcessor(DequeueHandlerBase):
     3. Generate .abstract.md and .overview.md for this directory
     4. Enqueue to EmbeddingQueue for vectorization
     """
+
+    _stats_lock = threading.Lock()
+    _dag_stats_by_telemetry_id: Dict[str, DagStats] = {}
+    _dag_stats_by_uri: Dict[str, DagStats] = {}
+    _dag_stats_order: List[Tuple[str, str]] = []
+    _request_stats_by_telemetry_id: Dict[str, RequestQueueStats] = {}
+    _request_stats_order: List[str] = []
+    _max_cached_stats = 256
 
     def __init__(self, max_concurrent_llm: int = 100):
         """
@@ -66,6 +82,61 @@ class SemanticProcessor(DequeueHandlerBase):
         self._dag_executor: Optional[SemanticDagExecutor] = None
         self._current_ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
         self._current_msg: Optional[SemanticMsg] = None
+
+    @classmethod
+    def _cache_dag_stats(cls, telemetry_id: str, uri: str, stats: DagStats) -> None:
+        with cls._stats_lock:
+            if telemetry_id:
+                cls._dag_stats_by_telemetry_id[telemetry_id] = stats
+            cls._dag_stats_by_uri[uri] = stats
+            cls._dag_stats_order.append((telemetry_id, uri))
+            if len(cls._dag_stats_order) > cls._max_cached_stats:
+                old_telemetry_id, old_uri = cls._dag_stats_order.pop(0)
+                if old_telemetry_id:
+                    cls._dag_stats_by_telemetry_id.pop(old_telemetry_id, None)
+                cls._dag_stats_by_uri.pop(old_uri, None)
+
+    @classmethod
+    def consume_dag_stats(
+        cls,
+        telemetry_id: str = "",
+        uri: Optional[str] = None,
+    ) -> Optional[DagStats]:
+        with cls._stats_lock:
+            if telemetry_id and telemetry_id in cls._dag_stats_by_telemetry_id:
+                stats = cls._dag_stats_by_telemetry_id.pop(telemetry_id, None)
+                if uri:
+                    cls._dag_stats_by_uri.pop(uri, None)
+                return stats
+            if uri and uri in cls._dag_stats_by_uri:
+                return cls._dag_stats_by_uri.pop(uri, None)
+        return None
+
+    @classmethod
+    def _merge_request_stats(
+        cls,
+        telemetry_id: str,
+        processed: int = 0,
+        error_count: int = 0,
+    ) -> None:
+        if not telemetry_id:
+            return
+        with cls._stats_lock:
+            stats = cls._request_stats_by_telemetry_id.setdefault(telemetry_id, RequestQueueStats())
+            stats.processed += processed
+            stats.error_count += error_count
+            cls._request_stats_order.append(telemetry_id)
+            if len(cls._request_stats_order) > cls._max_cached_stats:
+                old_telemetry_id = cls._request_stats_order.pop(0)
+                if old_telemetry_id != telemetry_id:
+                    cls._request_stats_by_telemetry_id.pop(old_telemetry_id, None)
+
+    @classmethod
+    def consume_request_stats(cls, telemetry_id: str) -> Optional[RequestQueueStats]:
+        if not telemetry_id:
+            return None
+        with cls._stats_lock:
+            return cls._request_stats_by_telemetry_id.pop(telemetry_id, None)
 
     @staticmethod
     def _owner_space_for_uri(uri: str, ctx: RequestContext) -> str:
@@ -129,7 +200,8 @@ class SemanticProcessor(DequeueHandlerBase):
 
     async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """Process dequeued SemanticMsg, recursively process all subdirectories."""
-        msg = None
+        msg: Optional[SemanticMsg] = None
+        collector = None
         try:
             import json
 
@@ -141,40 +213,58 @@ class SemanticProcessor(DequeueHandlerBase):
 
             assert data is not None
             msg = SemanticMsg.from_dict(data)
-            self._current_msg = msg
-            self._current_ctx = self._ctx_from_semantic_msg(msg)
-            logger.info(f"Processing semantic generation for: {msg})")
-
-            if msg.context_type == "memory":
-                await self._process_memory_directory(msg)
-            else:
-                is_incremental = False
-                viking_fs = get_viking_fs()
-                if msg.target_uri:
-                    target_exists = await viking_fs.exists(msg.target_uri, ctx=self._current_ctx)
-                    if target_exists:
-                        is_incremental = True
-                        logger.info(f"Target URI exists, using incremental update: {msg.target_uri}")
-
-                executor = SemanticDagExecutor(
-                    processor=self,
-                    context_type=msg.context_type,
-                    max_concurrent_llm=self.max_concurrent_llm,
-                    ctx=self._current_ctx,
-                    incremental_update=is_incremental,
-                    target_uri=msg.target_uri,
-                    semantic_msg_id=msg.id,
-                    recursive=msg.recursive,
+            collector = resolve_telemetry(msg.telemetry_id)
+            telemetry_ctx = bind_telemetry(collector) if collector is not None else nullcontext()
+            with telemetry_ctx:
+                self._current_msg = msg
+                self._current_ctx = self._ctx_from_semantic_msg(msg)
+                logger.info(
+                    f"Processing semantic generation for: {msg.uri} (recursive={msg.recursive})"
                 )
-                self._dag_executor = executor
-                await executor.run(msg.uri)
 
-            logger.info(f"Completed semantic generation for: {msg.uri}")
-            self.report_success()
-            return None
+                logger.info(f"Processing semantic generation for: {msg})")
+
+                if msg.context_type == "memory":
+                    await self._process_memory_directory(msg)
+                else:
+                    is_incremental = False
+                    viking_fs = get_viking_fs()
+                    if msg.target_uri:
+                        target_exists = await viking_fs.exists(
+                            msg.target_uri, ctx=self._current_ctx
+                        )
+                        if target_exists:
+                            is_incremental = True
+                            logger.info(
+                                f"Target URI exists, using incremental update: {msg.target_uri}"
+                            )
+
+                    executor = SemanticDagExecutor(
+                        processor=self,
+                        context_type=msg.context_type,
+                        max_concurrent_llm=self.max_concurrent_llm,
+                        ctx=self._current_ctx,
+                        incremental_update=is_incremental,
+                        target_uri=msg.target_uri,
+                        semantic_msg_id=msg.id,
+                        recursive=msg.recursive,
+                    )
+                    self._dag_executor = executor
+                    await executor.run(msg.uri)
+                    self._cache_dag_stats(
+                        msg.telemetry_id,
+                        msg.uri,
+                        executor.get_stats(),
+                    )
+                self._merge_request_stats(msg.telemetry_id, processed=1)
+                logger.info(f"Completed semantic generation for: {msg.uri}")
+                self.report_success()
+                return None
 
         except Exception as e:
             logger.error(f"Failed to process semantic message: {e}", exc_info=True)
+            if msg is not None:
+                self._merge_request_stats(msg.telemetry_id, error_count=1)
             self.report_error(str(e), data)
             return None
         finally:
@@ -229,16 +319,15 @@ class SemanticProcessor(DequeueHandlerBase):
                 old_overview = await viking_fs.read_file(f"{dir_uri}/.overview.md", ctx=ctx)
                 if old_overview:
                     existing_summaries = self._parse_overview_md(old_overview)
-                    logger.info(f"Parsed {len(existing_summaries)} existing summaries from overview.md")
+                    logger.info(
+                        f"Parsed {len(existing_summaries)} existing summaries from overview.md"
+                    )
             except Exception as e:
                 logger.debug(f"No existing overview.md found for {dir_uri}: {e}")
 
         changed_files: Set[str] = set()
         if msg.changes:
-            changed_files = set(
-                msg.changes.get("added", []) +
-                msg.changes.get("modified", [])
-            )
+            changed_files = set(msg.changes.get("added", []) + msg.changes.get("modified", []))
             deleted_files = set(msg.changes.get("deleted", []))
             logger.info(
                 f"Processing memory directory {dir_uri} with changes: "
@@ -251,10 +340,7 @@ class SemanticProcessor(DequeueHandlerBase):
             file_name = file_path.split("/")[-1]
 
             if file_path not in changed_files and file_name in existing_summaries:
-                file_summaries.append({
-                    "name": file_name,
-                    "summary": existing_summaries[file_name]
-                })
+                file_summaries.append({"name": file_name, "summary": existing_summaries[file_name]})
                 logger.debug(f"Reused existing summary for {file_name}")
             else:
                 try:

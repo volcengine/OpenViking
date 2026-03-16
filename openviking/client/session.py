@@ -9,6 +9,7 @@ from dataclasses import asdict
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.message.part import Part
+from openviking.telemetry import TelemetryRequest
 from openviking_cli.session.user_id import UserIdentifier
 
 if TYPE_CHECKING:
@@ -57,13 +58,13 @@ class Session:
             return await self._client.add_message(self.session_id, role, parts=parts_dicts)
         return await self._client.add_message(self.session_id, role, content=content)
 
-    async def commit(self) -> Dict[str, Any]:
+    async def commit(self, telemetry: TelemetryRequest = False) -> Dict[str, Any]:
         """Commit the session (archive messages and extract memories).
 
         Returns:
             Commit result
         """
-        return await self._client.commit_session(self.session_id)
+        return await self._client.commit_session(self.session_id, telemetry=telemetry)
 
     async def delete(self) -> None:
         """Delete the session."""

@@ -55,6 +55,10 @@ async fn run_loop(client: HttpClient, uri: &str) -> Result<()> {
             area.height.saturating_sub(3) as usize
         };
         app.tree.adjust_scroll(tree_height);
+        // Adjust vector scroll before rendering
+        if app.showing_vector_records {
+            app.vector_state.adjust_scroll(tree_height);
+        }
 
         terminal.draw(|frame| ui::render(frame, &app))?;
 

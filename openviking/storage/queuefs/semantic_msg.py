@@ -37,8 +37,11 @@ class SemanticMsg:
     role: str = "root"
     # Additional flags
     skip_vectorization: bool = False
+    telemetry_id: str = ""
     target_uri: str = ""
-    changes: Optional[Dict[str, List[str]]] = None  # {"added": [...], "modified": [...], "deleted": [...]}
+    changes: Optional[Dict[str, List[str]]] = (
+        None  # {"added": [...], "modified": [...], "deleted": [...]}
+    )
 
     def __init__(
         self,
@@ -50,6 +53,7 @@ class SemanticMsg:
         agent_id: str = "default",
         role: str = "root",
         skip_vectorization: bool = False,
+        telemetry_id: str = "",
         target_uri: str = "",
         changes: Optional[Dict[str, List[str]]] = None,
     ):
@@ -62,6 +66,7 @@ class SemanticMsg:
         self.agent_id = agent_id
         self.role = role
         self.skip_vectorization = skip_vectorization
+        self.telemetry_id = telemetry_id
         self.target_uri = target_uri
         self.changes = changes
 
@@ -99,6 +104,7 @@ class SemanticMsg:
             agent_id=data.get("agent_id", "default"),
             role=data.get("role", "root"),
             skip_vectorization=data.get("skip_vectorization", False),
+            telemetry_id=data.get("telemetry_id", ""),
             target_uri=data.get("target_uri", ""),
             changes=data.get("changes"),
         )

@@ -81,7 +81,7 @@ async def test_file_change_status_initialized(monkeypatch):
         max_concurrent_llm=2,
         ctx=ctx,
     )
-    assert hasattr(executor, '_file_change_status')
+    assert hasattr(executor, "_file_change_status")
     assert executor._file_change_status == {}
 
 
@@ -173,40 +173,32 @@ async def test_compute_diff_uses_precomputed_status(monkeypatch):
     root_uri = "viking://resources/root"
     target_uri = "viking://resources/target"
 
-    root_tree = {
-        root_uri: (
-            [],
-            [f"{root_uri}/file1.txt", f"{root_uri}/file2.txt"]
-        )
-    }
+    root_tree = {root_uri: ([], [f"{root_uri}/file1.txt", f"{root_uri}/file2.txt"])}
 
-    target_tree = {
-        target_uri: (
-            [],
-            [f"{target_uri}/file1.txt", f"{target_uri}/file2.txt"]
-        )
-    }
+    target_tree = {target_uri: ([], [f"{target_uri}/file1.txt", f"{target_uri}/file2.txt"])}
 
     file_change_status = {
         f"{root_uri}/file1.txt": False,
         f"{root_uri}/file2.txt": True,
     }
 
-    fake_fs = _FakeVikingFS({}, {
-        f"{root_uri}/file1.txt": "content1",
-        f"{target_uri}/file1.txt": "content1",
-        f"{root_uri}/file2.txt": "content2_new",
-        f"{target_uri}/file2.txt": "content2_old",
-    })
-    monkeypatch.setattr("openviking.storage.queuefs.semantic_processor.get_viking_fs", lambda: fake_fs)
+    fake_fs = _FakeVikingFS(
+        {},
+        {
+            f"{root_uri}/file1.txt": "content1",
+            f"{target_uri}/file1.txt": "content1",
+            f"{root_uri}/file2.txt": "content2_new",
+            f"{target_uri}/file2.txt": "content2_old",
+        },
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs", lambda: fake_fs
+    )
 
     ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
 
     diff = await processor._compute_diff(
-        root_tree, target_tree,
-        root_uri, target_uri,
-        ctx=ctx,
-        file_change_status=file_change_status
+        root_tree, target_tree, root_uri, target_uri, ctx=ctx, file_change_status=file_change_status
     )
 
     assert f"{root_uri}/file1.txt" not in diff.updated_files
@@ -224,35 +216,27 @@ async def test_compute_diff_without_precomputed_status(monkeypatch):
     root_uri = "viking://resources/root"
     target_uri = "viking://resources/target"
 
-    root_tree = {
-        root_uri: (
-            [],
-            [f"{root_uri}/file1.txt", f"{root_uri}/file2.txt"]
-        )
-    }
+    root_tree = {root_uri: ([], [f"{root_uri}/file1.txt", f"{root_uri}/file2.txt"])}
 
-    target_tree = {
-        target_uri: (
-            [],
-            [f"{target_uri}/file1.txt", f"{target_uri}/file2.txt"]
-        )
-    }
+    target_tree = {target_uri: ([], [f"{target_uri}/file1.txt", f"{target_uri}/file2.txt"])}
 
-    fake_fs = _FakeVikingFS({}, {
-        f"{root_uri}/file1.txt": "content1",
-        f"{target_uri}/file1.txt": "content1",
-        f"{root_uri}/file2.txt": "content2_new",
-        f"{target_uri}/file2.txt": "content2_old",
-    })
-    monkeypatch.setattr("openviking.storage.queuefs.semantic_processor.get_viking_fs", lambda: fake_fs)
+    fake_fs = _FakeVikingFS(
+        {},
+        {
+            f"{root_uri}/file1.txt": "content1",
+            f"{target_uri}/file1.txt": "content1",
+            f"{root_uri}/file2.txt": "content2_new",
+            f"{target_uri}/file2.txt": "content2_old",
+        },
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs", lambda: fake_fs
+    )
 
     ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
 
     diff = await processor._compute_diff(
-        root_tree, target_tree,
-        root_uri, target_uri,
-        ctx=ctx,
-        file_change_status=None
+        root_tree, target_tree, root_uri, target_uri, ctx=ctx, file_change_status=None
     )
 
     assert f"{root_uri}/file1.txt" not in diff.updated_files
@@ -271,16 +255,13 @@ async def test_optimization_reduces_file_reads(monkeypatch):
     target_uri = "viking://resources/target"
 
     root_tree = {
-        root_uri: (
-            [],
-            [f"{root_uri}/file1.txt", f"{root_uri}/file2.txt", f"{root_uri}/file3.txt"]
-        )
+        root_uri: ([], [f"{root_uri}/file1.txt", f"{root_uri}/file2.txt", f"{root_uri}/file3.txt"])
     }
 
     target_tree = {
         target_uri: (
             [],
-            [f"{target_uri}/file1.txt", f"{target_uri}/file2.txt", f"{target_uri}/file3.txt"]
+            [f"{target_uri}/file1.txt", f"{target_uri}/file2.txt", f"{target_uri}/file3.txt"],
         )
     }
 
@@ -290,42 +271,46 @@ async def test_optimization_reduces_file_reads(monkeypatch):
         f"{root_uri}/file3.txt": False,
     }
 
-    fake_fs = _FakeVikingFS({}, {
-        f"{root_uri}/file1.txt": "content1",
-        f"{target_uri}/file1.txt": "content1",
-        f"{root_uri}/file2.txt": "content2_new",
-        f"{target_uri}/file2.txt": "content2_old",
-        f"{root_uri}/file3.txt": "content3",
-        f"{target_uri}/file3.txt": "content3",
-    })
-    monkeypatch.setattr("openviking.storage.queuefs.semantic_processor.get_viking_fs", lambda: fake_fs)
+    fake_fs = _FakeVikingFS(
+        {},
+        {
+            f"{root_uri}/file1.txt": "content1",
+            f"{target_uri}/file1.txt": "content1",
+            f"{root_uri}/file2.txt": "content2_new",
+            f"{target_uri}/file2.txt": "content2_old",
+            f"{root_uri}/file3.txt": "content3",
+            f"{target_uri}/file3.txt": "content3",
+        },
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs", lambda: fake_fs
+    )
 
     ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
 
     await processor._compute_diff(
-        root_tree, target_tree,
-        root_uri, target_uri,
-        ctx=ctx,
-        file_change_status=file_change_status
+        root_tree, target_tree, root_uri, target_uri, ctx=ctx, file_change_status=file_change_status
     )
 
     total_reads_with_optimization = sum(fake_fs.read_count.values())
 
-    fake_fs_no_opt = _FakeVikingFS({}, {
-        f"{root_uri}/file1.txt": "content1",
-        f"{target_uri}/file1.txt": "content1",
-        f"{root_uri}/file2.txt": "content2_new",
-        f"{target_uri}/file2.txt": "content2_old",
-        f"{root_uri}/file3.txt": "content3",
-        f"{target_uri}/file3.txt": "content3",
-    })
-    monkeypatch.setattr("openviking.storage.queuefs.semantic_processor.get_viking_fs", lambda: fake_fs_no_opt)
+    fake_fs_no_opt = _FakeVikingFS(
+        {},
+        {
+            f"{root_uri}/file1.txt": "content1",
+            f"{target_uri}/file1.txt": "content1",
+            f"{root_uri}/file2.txt": "content2_new",
+            f"{target_uri}/file2.txt": "content2_old",
+            f"{root_uri}/file3.txt": "content3",
+            f"{target_uri}/file3.txt": "content3",
+        },
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs", lambda: fake_fs_no_opt
+    )
 
     await processor._compute_diff(
-        root_tree, target_tree,
-        root_uri, target_uri,
-        ctx=ctx,
-        file_change_status=None
+        root_tree, target_tree, root_uri, target_uri, ctx=ctx, file_change_status=None
     )
 
     total_reads_without_optimization = sum(fake_fs_no_opt.read_count.values())
@@ -442,16 +427,13 @@ async def test_compute_diff_partial_precomputed_status(monkeypatch):
     target_uri = "viking://resources/target"
 
     root_tree = {
-        root_uri: (
-            [],
-            [f"{root_uri}/file1.txt", f"{root_uri}/file2.txt", f"{root_uri}/file3.txt"]
-        )
+        root_uri: ([], [f"{root_uri}/file1.txt", f"{root_uri}/file2.txt", f"{root_uri}/file3.txt"])
     }
 
     target_tree = {
         target_uri: (
             [],
-            [f"{target_uri}/file1.txt", f"{target_uri}/file2.txt", f"{target_uri}/file3.txt"]
+            [f"{target_uri}/file1.txt", f"{target_uri}/file2.txt", f"{target_uri}/file3.txt"],
         )
     }
 
@@ -459,23 +441,25 @@ async def test_compute_diff_partial_precomputed_status(monkeypatch):
         f"{root_uri}/file1.txt": False,
     }
 
-    fake_fs = _FakeVikingFS({}, {
-        f"{root_uri}/file1.txt": "content1",
-        f"{target_uri}/file1.txt": "content1",
-        f"{root_uri}/file2.txt": "content2",
-        f"{target_uri}/file2.txt": "content2",
-        f"{root_uri}/file3.txt": "content3_changed",
-        f"{target_uri}/file3.txt": "content3",
-    })
-    monkeypatch.setattr("openviking.storage.queuefs.semantic_processor.get_viking_fs", lambda: fake_fs)
+    fake_fs = _FakeVikingFS(
+        {},
+        {
+            f"{root_uri}/file1.txt": "content1",
+            f"{target_uri}/file1.txt": "content1",
+            f"{root_uri}/file2.txt": "content2",
+            f"{target_uri}/file2.txt": "content2",
+            f"{root_uri}/file3.txt": "content3_changed",
+            f"{target_uri}/file3.txt": "content3",
+        },
+    )
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.get_viking_fs", lambda: fake_fs
+    )
 
     ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
 
     diff = await processor._compute_diff(
-        root_tree, target_tree,
-        root_uri, target_uri,
-        ctx=ctx,
-        file_change_status=file_change_status
+        root_tree, target_tree, root_uri, target_uri, ctx=ctx, file_change_status=file_change_status
     )
 
     assert f"{root_uri}/file1.txt" not in diff.updated_files

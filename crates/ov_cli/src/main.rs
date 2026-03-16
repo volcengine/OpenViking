@@ -333,8 +333,8 @@ enum Commands {
     },
     /// Interactive TUI file explorer
     Tui {
-        /// Viking URI to start browsing (default: viking://)
-        #[arg(default_value = "viking://")]
+        /// Viking URI to start browsing (default: /)
+        #[arg(default_value = "/")]
         uri: String,
     },
     /// Chat with vikingbot agent
