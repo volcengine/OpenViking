@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
-from typing import Any, Optional
+from typing import Any, Optional, cast
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -14,6 +14,30 @@ class EmbeddingModelConfig(BaseModel):
     dimension: Optional[int] = Field(default=None, description="Embedding dimension")
     batch_size: int = Field(default=32, description="Batch size for embedding generation")
     input: str = Field(default="multimodal", description="Input type: 'text' or 'multimodal'")
+    input_type: Optional[str] = Field(
+        default=None,
+        description="Input type for non-contextual OpenAI embeddings: 'query', 'document', or 'passage'",
+    )
+    query_param: Optional[str] = Field(
+        default=None,
+        description=(
+            "Parameter value for query-side embeddings when using get_query_embedder(). "
+            "For OpenAI-compatible models, this maps to 'input_type' (e.g., 'query', 'search_query'). "
+            "For Jina models, this maps to 'task' (e.g., 'retrieval.query'). "
+            "Setting this or document_param activates non-symmetric mode. "
+            "Leave both unset for symmetric models."
+        ),
+    )
+    document_param: Optional[str] = Field(
+        default=None,
+        description=(
+            "Parameter value for document-side embeddings when using get_document_embedder(). "
+            "For OpenAI-compatible models, this maps to 'input_type' (e.g., 'passage', 'document'). "
+            "For Jina models, this maps to 'task' (e.g., 'retrieval.passage'). "
+            "Setting this or query_param activates non-symmetric mode. "
+            "Leave both unset for symmetric models."
+        ),
+    )
     provider: Optional[str] = Field(
         default="volcengine",
         description="Provider type: 'openai', 'volcengine', 'vikingdb', 'jina', 'gemini'", 'ollama'",
@@ -47,6 +71,10 @@ class EmbeddingModelConfig(BaseModel):
 
             if backend is not None and provider is None:
                 data["provider"] = backend
+            for key in ("input_type", "query_value", "document_value", "query_task", "document_task"):
+                value = data.get(key)
+                if isinstance(value, str):
+                    data[key] = value.lower()
         return data
 
     @model_validator(mode="after")
@@ -136,13 +164,16 @@ class EmbeddingConfig(BaseModel):
             )
         return self
 
-    def _create_embedder(self, provider: str, embedder_type: str, config: EmbeddingModelConfig):
+    def _create_embedder(self, provider: str, embedder_type: str, config: EmbeddingModelConfig, context: Optional[str] = None):
         """Factory method to create embedder instance based on provider and type.
 
         Args:
-            provider: Provider type ('openai', 'volcengine', 'vikingdb', 'gemini')
+            provider: Provider type ('openai', 'volcengine', 'vikingdb', 'jina', 'gemini')
             embedder_type: Embedder type ('dense', 'sparse', 'hybrid')
             config: EmbeddingModelConfig instance
+            context: Optional embedding context ('query' or 'document') for non-symmetric models.
+                     When provided, the embedder will apply the appropriate input_type or task.
+                     Leave None for symmetric models or when using a single embedder for all inputs.
 
         Returns:
             Embedder instance
@@ -171,6 +202,9 @@ class EmbeddingConfig(BaseModel):
                     "api_key": cfg.api_key or "no-key",  # Placeholder for local OpenAI-compatible servers
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
+                    "context": context,
+                    **({"query_param": cfg.query_param} if cfg.query_param else {}),
+                    **({"document_param": cfg.document_param} if cfg.document_param else {}),
                     "max_tokens": cfg.max_tokens,
                 },
             ),
@@ -246,6 +280,9 @@ class EmbeddingConfig(BaseModel):
                     "api_key": cfg.api_key,
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
+                    "context": context,
+                    **({"query_param": cfg.query_param} if cfg.query_param else {}),
+                    **({"document_param": cfg.document_param} if cfg.document_param else {}),
                 },
             ),
             ("gemini", "dense"): (
@@ -291,21 +328,56 @@ class EmbeddingConfig(BaseModel):
             ValueError: If configuration is invalid or unsupported
         """
         from openviking.models.embedder import CompositeHybridEmbedder
+        from openviking.models.embedder.base import DenseEmbedderBase, SparseEmbedderBase
 
         if self.hybrid:
-            return self._create_embedder(self.hybrid.provider.lower(), "hybrid", self.hybrid)
+            provider = self._require_provider(self.hybrid.provider)
+            return self._create_embedder(provider, "hybrid", self.hybrid)
 
         if self.dense and self.sparse:
-            dense_embedder = self._create_embedder(self.dense.provider.lower(), "dense", self.dense)
-            sparse_embedder = self._create_embedder(
-                self.sparse.provider.lower(), "sparse", self.sparse
+            dense_provider = self._require_provider(self.dense.provider)
+            dense_embedder = cast(
+                DenseEmbedderBase,
+                self._create_embedder(dense_provider, "dense", self.dense),
             )
+            sparse_embedder = self._create_embedder(
+                self._require_provider(self.sparse.provider), "sparse", self.sparse
+            )
+            sparse_embedder = cast(SparseEmbedderBase, sparse_embedder)
             return CompositeHybridEmbedder(dense_embedder, sparse_embedder)
 
         if self.dense:
-            return self._create_embedder(self.dense.provider.lower(), "dense", self.dense)
+            provider = self._require_provider(self.dense.provider)
+            return self._create_embedder(provider, "dense", self.dense)
 
         raise ValueError("No embedding configuration found (dense, sparse, or hybrid)")
+
+    def get_query_embedder(self):
+        """Get embedder instance for query embeddings."""
+        return self._get_contextual_embedder("query")
+
+    def get_document_embedder(self):
+        """Get embedder instance for document/passage embeddings."""
+        return self._get_contextual_embedder("document")
+
+    def _get_contextual_embedder(self, context: str):
+        if not self.dense:
+            return self.get_embedder()
+
+        provider = (self.dense.provider or "").lower()
+        if provider == "openai":
+            # OpenAI models are symmetric by default (no input_type sent).
+            # Non-symmetric mode is activated implicitly when the user sets
+            # query_param or document_param in the config.
+            non_symmetric = self.dense.query_param is not None or self.dense.document_param is not None
+            effective_context = context if non_symmetric else None
+            return self._create_embedder(provider, "dense", self.dense, context=effective_context)
+
+        if provider == "jina":
+            # Jina models are non-symmetric by default (task is always sent).
+            return self._create_embedder(provider, "dense", self.dense, context=context)
+
+        return self.get_embedder()
 
     @property
     def dimension(self) -> int:
@@ -319,3 +391,9 @@ class EmbeddingConfig(BaseModel):
         if self.dense:
             return self.dense.dimension or 2048
         return 2048
+
+    @staticmethod
+    def _require_provider(provider: Optional[str]) -> str:
+        if not provider:
+            raise ValueError("Embedding provider is required")
+        return provider.lower()

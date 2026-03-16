@@ -1,485 +1,240 @@
-# Install OpenViking Memory for OpenClaw
+# Installing OpenViking for OpenClaw
 
-Give [OpenClaw](https://github.com/openclaw/openclaw) long-term memory powered by [OpenViking](https://github.com/volcengine/OpenViking). After setup, OpenClaw will automatically **remember** facts from conversations and **recall** relevant context before responding.
+Provide long-term memory capabilities for [OpenClaw](https://github.com/openclaw/openclaw) via [OpenViking](https://github.com/volcengine/OpenViking). After installing, OpenClaw will automatically **remember** important information from conversations and **recall** relevant content before replying. The latest version of OpenViking releases the [WebConsole](https://www.google.com/search?q=https://github.com/volcengine/OpenViking/tree/main/openviking/console) to facilitate debugging and operations. Method 3 in this document also provides instructions on how to verify that memories are written via the WebConsole interface, offering user-friendly and easy-to-understand usage guidelines. We welcome you to try it out and provide feedback.
 
 ---
 
-## One-Click Install
+## One-Click Installation
 
-**Prerequisites:** Python >= 3.10, Node.js >= 22. The installer checks these and prompts you to install any missing components.
+**Prerequisites:** Python >= 3.10, Node.js >= 22. The setup helper will automatically check and prompt you to install any missing components.
 
-### Option A: npm (recommended, all platforms)
+### Method A: npm Installation (Recommended, Cross-platform)
 
 ```bash
 npm install -g openclaw-openviking-setup-helper
 ov-install
+
 ```
 
-Non-interactive mode:
+Non-interactive mode (uses default configuration):
 
 ```bash
 ov-install -y
+
 ```
 
 Install to a specific OpenClaw instance:
 
 ```bash
 ov-install --workdir ~/.openclaw-second
+
 ```
 
-### Option B: curl (Linux / macOS)
+### Method B: curl One-Click Installation (Linux / macOS)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-memory-plugin/install.sh | bash
+
 ```
 
 Non-interactive mode:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-memory-plugin/install.sh | bash -s -y
+
 ```
 
 Install to a specific OpenClaw instance:
 
 ```bash
 curl -fsSL ... | bash -s -- --workdir ~/.openclaw-openclaw-second
+
 ```
 
-Remote mode (connect to an existing OpenViking server, no Python/OpenViking required):
-
-```bash
-# The script will prompt for mode selection (local/remote)
-curl -fsSL ... | bash
-```
-
-The installer will: 1) select target OpenClaw instance (auto-detects multiple instances), 2) select mode (local/remote), 3) validate environment and install (local mode), 4) configure and deploy the memory plugin.
+The script will automatically detect multiple OpenClaw instances and let you choose. It will also prompt you to select local/remote mode—remote mode connects to a remote OpenViking service and does not require installing Python.
 
 ---
 
-## 1. Quick Start (Let OpenClaw Install It)
+## Prerequisites
 
-Copy the skill file into OpenClaw's skill directory, then let OpenClaw handle the rest:
+| Component | Version Requirement | Purpose |
+| --- | --- | --- |
+| **Python** | >= 3.10 | OpenViking Runtime |
+| **Node.js** | >= 22 | OpenClaw Runtime |
+| **Volcengine Ark API Key** | — | Embedding + VLM model calls |
 
-**Linux / macOS:**
+Quick check:
 
 ```bash
-mkdir -p ~/.openclaw/skills/install-openviking-memory
-cp examples/openclaw-memory-plugin/skills/install-openviking-memory/SKILL.md \
-   ~/.openclaw/skills/install-openviking-memory/
+python3 --version   # >= 3.10
+node -v              # >= v22
+openclaw --version   # Installed
+
 ```
 
-**Windows (cmd):**
-
-```cmd
-mkdir "%USERPROFILE%\.openclaw\skills\install-openviking-memory"
-copy examples\openclaw-memory-plugin\skills\install-openviking-memory\SKILL.md ^
-     "%USERPROFILE%\.openclaw\skills\install-openviking-memory\"
-```
-
-Then tell OpenClaw: **"Install OpenViking memory"** — it will read the skill and complete the setup.
-
-For manual installation, continue reading.
+* Python: [https://www.python.org/downloads/](https://www.python.org/downloads/)
+* Node.js: [https://nodejs.org/](https://nodejs.org/)
+* OpenClaw: `npm install -g openclaw && openclaw onboard`
 
 ---
 
-## 2. Prerequisites
+## Method 1: Local Deployment (Recommended)
 
-### Overview
+Start the OpenViking service locally, suitable for personal use.
 
-| Component | Version | Purpose | Required? |
-|-----------|---------|---------|-----------|
-| **Python** | >= 3.10 | OpenViking runtime | Yes |
-| **Node.js** | >= 22 | OpenClaw runtime + setup helper | Yes |
-| **cmake** | — | Compile C++ extensions (OpenViking + OpenClaw's node-llama-cpp) | Yes |
-| **g++ (gcc-c++)** | — | C++ compiler | Yes |
-| **Go** | >= 1.19 | Compile AGFS server (Linux source install only) | Source install only |
-| **Volcengine Ark API Key** | — | Embedding + VLM model calls | Yes |
-
-> **PyPI vs Source install:**
-> - `pip install openviking --upgrade --force-reinstall` (pre-built package): needs Python, cmake, g++ — **no Go required**
-> - `pip install -e . --force-reinstall` (source install): needs Python, cmake, g++ **and Go >= 1.19** (to compile AGFS on Linux)
-> - **Windows** users can use pre-built wheel packages without Go
-
-### Quick Check
+### Step 1: Install OpenViking
 
 ```bash
-python3 --version     # >= 3.10
-node -v               # >= v22
-cmake --version       # installed
-g++ --version         # installed
-go version            # >= go1.25 (source install only)
+python3 -m pip install openviking --upgrade
+
 ```
 
-If all commands pass, skip ahead to [Section 4: Installation Steps](#4-installation-steps).
+Verification: `python3 -c "import openviking; print('ok')"`
 
----
+> Encountered `externally-managed-environment`? Use the one-click installation script (which handles venv automatically) or create it manually:
+> `python3 -m venv ~/.openviking/venv && ~/.openviking/venv/bin/pip install openviking`
 
-## 3. Environment Setup (Linux)
+### Step 2: Run the Setup Helper
 
-> Skip this section if your system already meets the prerequisites above.
-
-### 3.1 Install Build Tools
-
-> Already installed? Run `cmake --version && g++ --version` — if both show output, skip this step.
-
-**RHEL / CentOS / openEuler / Fedora:**
-
-```bash
-sudo dnf install -y gcc gcc-c++ cmake make
-```
-
-**Ubuntu / Debian:**
-
-```bash
-sudo apt update
-sudo apt install -y build-essential cmake
-```
-
-### 3.2 Install Python 3.10+
-
-> Already installed? Run `python3 --version` — if it shows >= 3.10, skip this step.
-
-Many Linux distributions (e.g. openEuler 22.03, CentOS 7/8) ship with Python 3.9 or older, and their repositories often do not include Python 3.10+ packages. Building from source is recommended.
-
-#### Option A: Build from Source (recommended)
-
-```bash
-# 1. Install build dependencies
-# RHEL / CentOS / openEuler / Fedora:
-sudo dnf install -y gcc make openssl-devel bzip2-devel libffi-devel \
-    zlib-devel readline-devel sqlite-devel xz-devel tk-devel
-
-# Ubuntu / Debian:
-# sudo apt install -y build-essential libssl-dev libbz2-dev libffi-dev \
-#     zlib1g-dev libreadline-dev libsqlite3-dev liblzma-dev tk-dev
-
-# 2. Download and build
-cd /tmp
-curl -O https://www.python.org/ftp/python/3.11.12/Python-3.11.12.tgz
-tar xzf Python-3.11.12.tgz
-cd Python-3.11.12
-./configure --prefix=/usr/local --enable-optimizations --enable-shared \
-    LDFLAGS="-Wl,-rpath /usr/local/lib"
-make -j$(nproc)
-sudo make altinstall
-
-# 3. Create symlinks so python3 / pip3 point to the new version
-sudo ln -sf /usr/local/bin/python3.11 /usr/local/bin/python3
-sudo ln -sf /usr/local/bin/pip3.11 /usr/local/bin/pip3
-
-# 4. Verify
-python3 --version   # Any version >= 3.10 is acceptable
-```
-
-> **Tip:** Use `altinstall` instead of `install` to avoid overwriting the system default Python. `/usr/local/bin` typically has higher priority in `PATH`, so the symlinks make `python3` point to the new version.
-
-#### Option B: Install via Package Manager (available on some distros)
-
-```bash
-# RHEL / CentOS / openEuler / Fedora (may not be available)
-sudo dnf install -y python3.11 python3.11-devel python3.11-pip
-
-# Ubuntu 22.04+ ships with Python 3.10
-sudo apt install -y python3 python3-dev python3-pip python3-venv
-
-# Ubuntu 20.04 or older, add the deadsnakes PPA first
-sudo add-apt-repository ppa:deadsnakes/ppa
-sudo apt install -y python3.11 python3.11-dev python3.11-venv
-```
-
-> If `dnf install python3.11` reports `No match for argument`, your repository does not have this package. Please use the source build method above.
-
-After installation, upgrade pip:
-
-```bash
-python3 -m pip install --upgrade pip
-```
-
-> Downloads slow? See [Appendix: Network Acceleration](#8-network-acceleration-mirrors--proxies) to configure pip mirrors.
-
-### 3.3 Install Node.js >= 22
-
-> Already installed? Run `node -v` — if it shows >= v22, skip this step.
-
-OpenClaw requires Node.js >= 22. The setup helper script also needs Node.js.
-
-#### Option A: Install via NodeSource (recommended)
-
-```bash
-# RHEL / CentOS / openEuler / Fedora
-curl -fsSL https://rpm.nodesource.com/setup_22.x | sudo bash -
-sudo dnf install -y nodejs
-
-# Ubuntu / Debian
-# curl -fsSL https://deb.nodesource.com/setup_22.x | sudo bash -
-# sudo apt install -y nodejs
-```
-
-#### Option B: Install via nvm (no root required)
-
-```bash
-curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.1/install.sh | bash
-source ~/.bashrc
-nvm install 22
-nvm use 22
-```
-
-#### Option C: Download binary package manually
-
-```bash
-wget https://nodejs.org/dist/v22.14.0/node-v22.14.0-linux-x64.tar.xz
-sudo tar -C /usr/local -xJf node-v22.14.0-linux-x64.tar.xz
-echo 'export PATH=$PATH:/usr/local/node-v22.14.0-linux-x64/bin' >> ~/.bashrc
-source ~/.bashrc
-```
-
-> For ARM architecture, replace `linux-x64` with `linux-arm64`.
-
-Verify:
-
-```bash
-node -v   # >= v22
-npm -v
-```
-
-### 3.4 Install Go >= 1.19 (source install only)
-
-> Already installed? Run `go version` — if it shows >= go1.25, skip this step.
-> Also skippable if using `pip install openviking --upgrade --force-reinstall` (pre-built package).
-
-Go is required on Linux to compile the AGFS server when installing from source.
-
-```bash
-# Download (for ARM use go1.25.6.linux-arm64.tar.gz)
-wget https://go.dev/dl/go1.25.6.linux-amd64.tar.gz
-
-# Extract
-sudo rm -rf /usr/local/go
-sudo tar -C /usr/local -xzf go1.25.6.linux-amd64.tar.gz
-
-# Configure environment variables
-cat >> ~/.bashrc << 'EOF'
-export GOROOT=/usr/local/go
-export GOPATH=$HOME/go
-export PATH=$PATH:$GOROOT/bin:$GOPATH/bin
-EOF
-source ~/.bashrc
-
-# Verify
-go version   # >= go1.25
-```
-
-> Go module downloads slow? See [Appendix: Network Acceleration](#8-network-acceleration-mirrors--proxies) to configure GOPROXY.
-
-### 3.5 Verify Environment
-
-```bash
-python3 --version     # >= 3.10
-node -v               # >= v22
-cmake --version       # installed
-g++ --version         # installed
-go version            # >= go1.25 (source install only)
-```
-
-All checks pass? Proceed to installation.
-
----
-
-## 4. Installation Steps
-
-### 4.1 Install OpenClaw
-
-> **Prerequisite:** cmake and g++ must be installed (OpenClaw depends on `node-llama-cpp`, which compiles C++ code during installation).
-
-```bash
-npm install -g openclaw
-```
-
-> Downloads slow? See [Appendix: Network Acceleration](#8-network-acceleration-mirrors--proxies) to configure npm mirrors.
-
-Run the onboarding wizard to configure your LLM:
-
-```bash
-openclaw onboard
-```
-
-Verify:
-
-```bash
-openclaw --version
-```
-
-### 4.2 Install OpenViking
-
-```bash
-git clone https://github.com/volcengine/OpenViking.git
-cd OpenViking
-```
-
-#### Option A: Install from PyPI (recommended, no Go needed)
-
-```bash
-python3 -m pip install openviking --upgrade --force-reinstall
-```
-
-#### Option B: Install from Source (developer mode, requires Go)
-
-**Linux / macOS:**
-
-```bash
-go version && cmake --version && g++ --version   # Confirm tools are installed
-python3 -m pip install -e .
-```
-
-**Windows:**
-
-```powershell
-python -m pip install -e .
-```
-
-> **Note:** Go >= 1.19 is **required** on Linux for source install (to compile AGFS). To force-skip (advanced users only):
-> ```bash
-> OPENVIKING_SKIP_AGFS_BUILD=1 python3 -m pip install -e .
-> ```
-
-Verify:
-
-```bash
-python3 -c "import openviking; print('ok')"
-```
-
-### 4.3 Run the Setup Helper
-
-#### Option A: npm global install (recommended)
+#### Method A: Global npm Installation (Recommended)
 
 ```bash
 npm install -g openclaw-openviking-setup-helper
 ov-install
+
 ```
 
-Non-interactive mode:
+#### Method B: Run from Repository
 
 ```bash
-ov-install -y
-```
-
-#### Option B: Run from repo
-
-From the OpenViking repo root:
-
-```bash
+git clone https://github.com/volcengine/OpenViking.git
+cd OpenViking
 npx ./examples/openclaw-memory-plugin/setup-helper
+
 ```
 
-The helper will walk you through:
+The setup helper will prompt you to enter your Ark API Key and automatically generate a configuration file.
 
-1. **Environment check** — verifies cmake, g++, Python, Go, OpenClaw
-2. **Install OpenViking** (if not already installed)
-3. **Interactive configuration** — prompts for:
-   - Data storage path (defaults to absolute path, e.g. `/home/yourname/.openviking/data`)
-   - Volcengine Ark API Key
-   - VLM model name (default: `doubao-seed-2-0-pro-260215`)
-   - Embedding model name (default: `doubao-embedding-vision-251215`)
-   - Server ports (default: 1933 / 1833)
-4. **Generate config** — creates `~/.openviking/ov.conf`
-5. **Deploy plugin** — registers `memory-openviking` with OpenClaw
-6. **Write env file** — generates `~/.openclaw/openviking.env`
-
-> Non-interactive mode: `npx ./examples/openclaw-memory-plugin/setup-helper -y`
-
-### 4.4 Start and Verify
-
-**Linux / macOS:**
+### Step 3: Start
 
 ```bash
 source ~/.openclaw/openviking.env && openclaw gateway
-```
-
-**Windows (cmd):**
-
-```cmd
-call "%USERPROFILE%\.openclaw\openviking.env.bat" && openclaw gateway
-```
-
-You should see:
 
 ```
-[gateway] listening on ws://127.0.0.1:18789
-[gateway] memory-openviking: local server started (http://127.0.0.1:1933, config: ...)
-```
 
-Check plugin status:
+Seeing `memory-openviking: local server started` indicates success.
+
+### Step 4: Verify
 
 ```bash
 openclaw status
-# Memory line should show: enabled (plugin memory-openviking)
+# The Memory row should display: enabled (plugin memory-openviking)
+
 ```
-
-Test memory:
-
-```bash
-openclaw tui
-```
-
-Say: "Please remember: my favorite programming language is Python."
-
-In a later conversation, ask: "What is my favorite programming language?"
-
-OpenClaw should recall the answer from OpenViking memory.
 
 ---
 
-## 5. Daily Usage
+## Method 2: Connecting to Remote OpenViking
 
-Each time you want to use OpenClaw with memory:
+Already have a running OpenViking service? Simply configure the OpenClaw plugin to point to the remote address; **no Python / OpenViking installation is required**.
 
-**Linux / macOS:**
+**Prerequisites:** An existing OpenViking service address + API Key (if authentication is enabled on the server side).
 
-```bash
-source ~/.openclaw/openviking.env && openclaw gateway
-```
-
-**Windows (cmd):**
-
-```cmd
-call "%USERPROFILE%\.openclaw\openviking.env.bat" && openclaw gateway
-```
-
-> **Convenience (Linux/macOS):** Add to `~/.bashrc`:
-> ```bash
-> alias openclaw-start='source ~/.openclaw/openviking.env && openclaw gateway'
-> ```
-
-### 5.1 Enable or Disable the Memory Plugin
-
-Disable the OpenViking memory plugin:
+### Step 1: Deploy Plugin Code
 
 ```bash
-openclaw config set plugins.slots.memory none
+git clone https://github.com/volcengine/OpenViking.git
+cd OpenViking/examples/openclaw-memory-plugin
+npm install
+openclaw plugin link .
+
 ```
 
-Enable the OpenViking memory plugin:
+### Step 2: Configure Remote Connection
 
 ```bash
+openclaw config set plugins.enabled true --json
 openclaw config set plugins.slots.memory memory-openviking
+openclaw config set plugins.entries.memory-openviking.config.mode remote
+openclaw config set plugins.entries.memory-openviking.config.baseUrl "http://your-server:1933"
+openclaw config set plugins.entries.memory-openviking.config.apiKey "your-api-key"
+openclaw config set plugins.entries.memory-openviking.config.autoRecall true --json
+openclaw config set plugins.entries.memory-openviking.config.autoCapture true --json
+
 ```
 
-If the gateway is already running, restart it after changing the slot.
+### Step 3: Start and Verify
 
-The plugin automatically starts and stops the OpenViking server.
+```bash
+openclaw gateway
+openclaw status
+
+```
+
+## Method 3: Integrating Openclaw with OpenViking on Volcengine ECS
+
+This section primarily introduces how to connect Openclaw to OpenViking on Volcengine ECS and use the WebConsole to verify the data write. For details, please refer to the [documentation](https://www.volcengine.com/docs/6396/2249500?lang=zh).
+
+Please note that to protect the system Python from being corrupted, the ECS instance has restrictions on deployments in the root directory and does not allow installing global packages directly using `pip`. It is recommended to create a virtual environment first and complete the following steps within it.
+
+**Prerequisites:** An existing ECS OpenClaw instance.
+
+### Step 1: npm Installation
+
+```python
+npm install -g openclaw-openviking-setup-helper
+ov-install
+
+```
+
+This installation mode already includes built-in VLM and embedding models in OpenViking. If no modifications are needed, simply press Enter and follow the prompts to enter your API key. After the installation is complete, a configuration file will be automatically generated. To modify it, enter `vim ~/.openviking/ov.conf`, press `i` to enter edit mode, press the `Esc` key to exit edit mode, then type `:wq` and press Enter to save and exit the file.
+
+Load the OpenClaw environment variables in the terminal:
+
+```bash
+source /root/.openclaw/openviking.env
+
+```
+
+### Step 2: Start OpenViking
+
+First, start the OpenViking Server:
+
+```python
+python -m openviking.server.bootstrap
+
+```
+
+Next, start the web console. Before starting, you need to confirm whether the instance's security group has opened TCP port 8020 in the inbound rules. If not, please configure the instance security group first:
+
+```python
+python -m openviking.console.bootstrap --host 0.0.0.0 --port 8020 --openviking-url http://127.0.0.1:1933
+
+```
+
+In the instance, find your server's public IP, and use it to access: `http://<your-server-public-ip>:8020`
+
+You can now start experiencing the web console 🎉
+
+You can directly query file information on the web interface to verify whether the OpenViking `memory-plugin` memory write is effective; you can also verify if `memory-openviking` is reading memories in the OpenClaw logs. The verification method is as follows:
+
+```bash
+grep -i inject /tmp/openclaw/openclaw-2026-03-13.log | awk -F'"' '{for(i=1;i<=NF;i++) if($i ~ /^[0-9]{2}:[0-9]{2}:[0-9]{2}/) {time=$i; break}} /injecting [0-9]+ memories/ {print time, "memory-openviking:", gensub(/.*(injecting [0-9]+ memories).*/, "\\1", "1")}'
+
+```
+
+Alternatively, you can directly run `grep "inject" /tmp/openclaw/openclaw-2026-03-13.log` to view all the information.
 
 ---
 
-## 6. Configuration Reference
+## Configuration Reference
 
-### `~/.openviking/ov.conf`
+### `~/.openviking/ov.conf` (Local Mode)
 
 ```json
 {
-  "server": {
-    "host": "127.0.0.1",
-    "port": 1933
-  },
+  "root_api_key": null,
+  "server": { "host": "127.0.0.1", "port": 1933 },
   "storage": {
     "workspace": "/home/yourname/.openviking/data",
     "vectordb": { "backend": "local" },
@@ -488,7 +243,7 @@ The plugin automatically starts and stops the OpenViking server.
   "embedding": {
     "dense": {
       "provider": "volcengine",
-      "api_key": "<your-api-key>",
+      "api_key": "<your-ark-api-key>",
       "model": "doubao-embedding-vision-251215",
       "api_base": "https://ark.cn-beijing.volces.com/api/v3",
       "dimension": 1024,
@@ -497,293 +252,80 @@ The plugin automatically starts and stops the OpenViking server.
   },
   "vlm": {
     "provider": "volcengine",
-    "api_key": "<your-api-key>",
+    "api_key": "<your-ark-api-key>",
     "model": "doubao-seed-2-0-pro-260215",
-    "api_base": "https://ark.cn-beijing.volces.com/api/v3",
-    "temperature": 0.1,
-    "max_retries": 3
+    "api_base": "https://ark.cn-beijing.volces.com/api/v3"
   }
 }
+
 ```
 
-> **Note:** `workspace` must be an **absolute path** (e.g. `/home/yourname/.openviking/data`). Tilde (`~`) and relative paths are not supported. The setup helper fills this in automatically.
+> `root_api_key`: Once set, all HTTP requests must carry the `X-API-Key` header. Defaults to `null` in local mode (authentication disabled).
+
+### `agentId` Configuration (Plugin Configuration)
+
+The Agent identifier passed to the server via the `X-OpenViking-Agent` header, used to distinguish different OpenClaw instances.
+
+Customization method:
+
+```bash
+# Specify in the plugin configuration
+openclaw config set plugins.entries.memory-openviking.config.agentId "my-agent"
+
+```
+
+If not configured, the plugin will automatically generate a random, unique ID (format: `openclaw-<hostname>-<random>`).
 
 ### `~/.openclaw/openviking.env`
 
-Auto-generated by the setup helper:
+Automatically generated by the setup helper, recording environment variables such as the Python path:
 
 ```bash
 export OPENVIKING_PYTHON='/usr/local/bin/python3'
-export OPENVIKING_GO_PATH='/usr/local/go/bin'  # optional
-```
 
-Windows version (`openviking.env.bat`):
-
-```cmd
-set OPENVIKING_PYTHON=C:\path\to\python.exe
-set OPENVIKING_GO_PATH=C:\path\to\go\bin
-```
-
-### Setup Helper Options
-
-```
-npx ./examples/openclaw-memory-plugin/setup-helper [options]
-
-  -y, --yes              Non-interactive, use defaults
-  --workdir <path>       OpenClaw config directory (default: ~/.openclaw)
-  -h, --help             Show help
-
-Environment variables:
-  OPENVIKING_PYTHON       Python interpreter path
-  OPENVIKING_CONFIG_FILE  Custom ov.conf path
-  OPENVIKING_REPO         Local repo path (auto-detected when run from repo)
-  OPENVIKING_ARK_API_KEY  Volcengine API Key (skip prompt in -y mode)
 ```
 
 ---
 
-## 7. Troubleshooting
-
-### Installation Issues
-
-#### `cmake not found` / `g++ not found`
-
-OpenClaw depends on `node-llama-cpp` (compiles C++), and OpenViking's C++ extensions also need cmake/g++.
+## Daily Usage
 
 ```bash
-# RHEL / CentOS / openEuler
-sudo dnf install -y gcc gcc-c++ cmake make
-
-# Ubuntu / Debian
-sudo apt install -y build-essential cmake
-```
-
-#### `No matching distribution found for python-multipart>=0.0.22`
-
-pip is using Python 3.9. Make sure you're using Python 3.10+:
-
-```bash
-python3 --version        # Confirm >= 3.10
-python3 -m pip install -e .
-```
-
-#### `fatal error: Python.h: No such file or directory`
-
-Missing Python development headers:
-
-```bash
-# RHEL / CentOS / openEuler
-sudo dnf install -y python3-devel   # or python3.11-devel
-
-# Ubuntu / Debian
-sudo apt install -y python3-dev     # or python3.11-dev
-```
-
-> If Python was built from source, development headers are already included.
-
-#### `Go compiler not found` / AGFS build failure
-
-Go >= 1.19 is **required** on Linux for source install. See [3.4 Install Go](#34-install-go--119-source-install-only).
-
-```bash
-go version              # Confirm >= 1.19
-python3 -m pip install -e .
-```
-
-#### Go module download timeout (`dial tcp: i/o timeout`)
-
-Configure Go proxy. See [Appendix: Network Acceleration](#8-network-acceleration-mirrors--proxies).
-
-#### npm `ERR_INVALID_URL`
-
-Usually caused by malformed proxy environment variables. Proxy URLs **must** include the `http://` prefix:
-
-```bash
-# Wrong
-export https_proxy=192.168.1.1:7897
-
-# Correct
-export https_proxy=http://192.168.1.1:7897
-```
-
-Or clear proxies entirely:
-
-```bash
-unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY
-```
-
-#### npm `ENOTEMPTY`
-
-Previous install was interrupted. Clean up and retry:
-
-```bash
-rm -rf $(npm root -g)/openclaw $(npm root -g)/.openclaw-*
-npm install -g openclaw
-```
-
-### Runtime Issues
-
-#### Plugin not showing in gateway output
-
-- Did you load the env file before `openclaw gateway`?
-  - Linux/macOS: `source ~/.openclaw/openviking.env`
-  - Windows: `call "%USERPROFILE%\.openclaw\openviking.env.bat"`
-- Run `openclaw status` to check plugin state
-- Re-run setup:
-
-```bash
-# npm install (recommended)
-ov-install
-
-# or from repo
-npx ./examples/openclaw-memory-plugin/setup-helper
-```
-
-#### `health check timeout at http://127.0.0.1:1933`
-
-A stale process is occupying the port. Kill it and restart:
-
-```bash
-# Linux / macOS
-lsof -ti tcp:1933 tcp:1833 | xargs kill -9
+# Start
 source ~/.openclaw/openviking.env && openclaw gateway
+
+# Disable memory
+openclaw config set plugins.slots.memory none
+
+# Enable memory
+openclaw config set plugins.slots.memory memory-openviking
+
 ```
-
-```cmd
-REM Windows
-for /f "tokens=5" %a in ('netstat -ano ^| findstr "LISTENING" ^| findstr ":1933 :1833"') do taskkill /PID %a /F
-call "%USERPROFILE%\.openclaw\openviking.env.bat" && openclaw gateway
-```
-
-#### `extracted 0 memories`
-
-Model configuration in `ov.conf` is incorrect. Check:
-
-- `embedding.dense.api_key` is a valid Volcengine Ark API key
-- `vlm.api_key` is set (usually the same key)
-- `vlm.model` is a model name (e.g. `doubao-seed-2-0-pro-260215`), **not** the API key
-
-### Python Version Issues
-
-#### `TypeError: unsupported operand type(s) for |: 'type' and 'NoneType'`
-
-Python version is below 3.10 (`X | None` syntax requires 3.10+). Upgrade Python — see [3.2 Install Python](#32-install-python-310).
-
-#### `pip install -e .` installs to the wrong Python
-
-Use an explicit Python path:
-
-```bash
-python3.11 -m pip install -e .
-export OPENVIKING_PYTHON=python3.11
-npx ./examples/openclaw-memory-plugin/setup-helper
-```
-
-#### Error: `externally-managed-environment` / `This environment is externally managed`
-
-On Ubuntu, Debian and similar systems, the system Python is managed (PEP 668) and does not allow installing packages with `pip` into the system environment. Two options:
-
-1. **Recommended:** Use the one-line install script; it will create a venv at `~/.openviking/venv` and install OpenViking there automatically.
-   ```bash
-   curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-memory-plugin/install.sh | bash
-   ```
-
-2. **Manual install:** Install `python3-venv`, create a venv, and install OpenViking inside it:
-   ```bash
-   sudo apt install -y python3-venv   # or python3-full
-   python3 -m venv ~/.openviking/venv
-   ~/.openviking/venv/bin/pip install openviking
-   export OPENVIKING_PYTHON=~/.openviking/venv/bin/python
-   ```
-   Alternatively use pipx: `pipx install openviking` (install pipx first: `apt install pipx`).
 
 ---
 
-## 8. Network Acceleration (Mirrors & Proxies)
+## Troubleshooting
 
-> Use these if package downloads are slow in your network environment.
-
-### pip Mirror
-
-```bash
-# Permanent (recommended)
-python3 -m pip config set global.index-url https://pypi.tuna.tsinghua.edu.cn/simple
-python3 -m pip config set global.trusted-host pypi.tuna.tsinghua.edu.cn
-
-# Alternatives
-# Alibaba Cloud: https://mirrors.aliyun.com/pypi/simple/
-# Huawei Cloud:  https://repo.huaweicloud.com/repository/pypi/simple/
-# Tencent Cloud: https://mirrors.cloud.tencent.com/pypi/simple/
-```
-
-Single-use:
-
-```bash
-python3 -m pip install openviking --upgrade --force-reinstall -i https://pypi.tuna.tsinghua.edu.cn/simple
-```
-
-### npm Mirror
-
-```bash
-# Permanent (recommended)
-npm config set registry https://registry.npmmirror.com
-
-# Single-use
-npm install -g openclaw --registry=https://registry.npmmirror.com
-```
-
-### Go Proxy
-
-```bash
-# goproxy.cn (recommended)
-go env -w GOPROXY=https://goproxy.cn,direct
-
-# Alibaba Cloud
-# go env -w GOPROXY=https://mirrors.aliyun.com/goproxy/,direct
-
-# Disable checksum verification (may be needed for some modules)
-go env -w GONOSUMCHECK=*
-
-# Verify
-go env GOPROXY
-```
-
-> Takes effect globally for the current user. Subsequent `pip install -e .` builds that compile AGFS will use this automatically.
+| Symptom | Cause | Fix |
+| --- | --- | --- |
+| `port occupied` | Port occupied by another process | Change port: `openclaw config set plugins.entries.memory-openviking.config.port 1934` |
+| `extracted 0 memories` | API Key or model name configured incorrectly | Check the `api_key` and `model` fields in `ov.conf` |
+| Plugin not loaded | Environment variables not loaded | Execute `source ~/.openclaw/openviking.env` before starting |
+| `externally-managed-environment` | Python PEP 668 restriction | Use venv or the one-click installation script |
+| `TypeError: unsupported operand type(s) for｜` | Python < 3.10 | Upgrade Python to 3.10+ |
 
 ---
 
-## 9. Uninstall
-
-**Linux / macOS:**
+## Uninstallation
 
 ```bash
-# Stop services
 lsof -ti tcp:1933 tcp:1833 tcp:18789 | xargs kill -9
+npm uninstall -g openclaw && rm -rf ~/.openclaw
+python3 -m pip uninstall openviking -y && rm -rf ~/.openviking
 
-# Remove OpenClaw
-npm uninstall -g openclaw
-rm -rf ~/.openclaw
-
-# Remove OpenViking
-python3 -m pip uninstall openviking -y
-rm -rf ~/.openviking
-```
-
-**Windows (cmd):**
-
-```cmd
-REM Stop services
-for /f "tokens=5" %a in ('netstat -ano ^| findstr "LISTENING" ^| findstr ":1933 :1833 :18789"') do taskkill /PID %a /F
-
-REM Remove OpenClaw
-npm uninstall -g openclaw
-rmdir /s /q "%USERPROFILE%\.openclaw"
-
-REM Remove OpenViking
-python -m pip uninstall openviking -y
-rmdir /s /q "%USERPROFILE%\.openviking"
 ```
 
 ---
 
-**See also:** [INSTALL-ZH.md](./INSTALL-ZH.md) (Chinese version)
+**See also:** [INSTALL-ZH.md](https://github.com/volcengine/OpenViking/blob/main/examples/openclaw-memory-plugin/INSTALL-ZH.md) (Chinese) · [INSTALL-AGENT.md](https://www.google.com/search?q=./INSTALL-AGENT.md) (Agent Install Guide)
+
+---

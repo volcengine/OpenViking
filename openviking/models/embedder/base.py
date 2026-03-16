@@ -95,7 +95,8 @@ class EmbedderBase(ABC):
     def _estimate_tokens(self, text: str) -> int:
         """Estimate token count for the given text.
 
-        Tries tiktoken (for OpenAI models) first, falls back to len(text) // 3.
+        Tries tiktoken (for OpenAI models) first, falls back to a character-based
+        heuristic that accounts for multi-byte (CJK) characters.
 
         Args:
             text: Input text
@@ -113,7 +114,9 @@ class EmbedderBase(ABC):
                 "tiktoken unavailable for model '%s', using character-based estimation",
                 self.model_name,
             )
-            return len(text) // 3
+            # Use the higher of char-based and byte-based estimates so that
+            # CJK text (3 bytes per char in UTF-8) is not underestimated.
+            return max(len(text) // 3, len(text.encode("utf-8")) // 4)
 
     def _chunk_text(self, text: str) -> List[str]:
         """Split text into chunks, each within max_tokens.
