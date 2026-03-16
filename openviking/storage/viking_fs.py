@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from openviking.pyagfs.exceptions import AGFSHTTPError
 from openviking.server.identity import RequestContext, Role
+from openviking.telemetry import get_current_telemetry
 from openviking.utils.time_utils import format_simplified, get_current_timestamp, parse_iso_datetime
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
@@ -606,6 +607,7 @@ class VikingFS:
         Returns:
             FindResult
         """
+        telemetry = get_current_telemetry()
         from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
         from openviking_cli.retrieve import (
             ContextType,
@@ -665,11 +667,13 @@ class VikingFS:
             elif ctx.context_type == ContextType.SKILL:
                 skills.append(ctx)
 
-        return FindResult(
+        find_result = FindResult(
             memories=memories,
             resources=resources,
             skills=skills,
         )
+        telemetry.set("vector.returned", find_result.total)
+        return find_result
 
     async def search(
         self,
@@ -693,6 +697,7 @@ class VikingFS:
         Returns:
             FindResult
         """
+        telemetry = get_current_telemetry()
         from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
         from openviking.retrieve.intent_analyzer import IntentAnalyzer
         from openviking_cli.retrieve import (
@@ -763,6 +768,7 @@ class VikingFS:
                     )
                     for ctx_type in [ContextType.MEMORY, ContextType.RESOURCE, ContextType.SKILL]
                 ]
+        telemetry.set("search.typed_queries_count", len(typed_queries))
 
         # Concurrent execution
         storage = self._get_vector_store()
@@ -799,13 +805,15 @@ class VikingFS:
                 elif ctx.context_type == ContextType.SKILL:
                     skills.append(ctx)
 
-        return FindResult(
+        find_result = FindResult(
             memories=memories,
             resources=resources,
             skills=skills,
             query_plan=query_plan,
             query_results=query_results,
         )
+        telemetry.set("vector.returned", find_result.total)
+        return find_result
 
     # ========== Relation Management ==========
 

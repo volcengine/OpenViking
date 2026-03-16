@@ -37,6 +37,7 @@ class SemanticMsg:
     role: str = "root"
     # Additional flags
     skip_vectorization: bool = False
+    telemetry_id: str = ""
 
     def __init__(
         self,
@@ -48,6 +49,7 @@ class SemanticMsg:
         agent_id: str = "default",
         role: str = "root",
         skip_vectorization: bool = False,
+        telemetry_id: str = "",
     ):
         self.id = str(uuid4())
         self.uri = uri
@@ -58,6 +60,7 @@ class SemanticMsg:
         self.agent_id = agent_id
         self.role = role
         self.skip_vectorization = skip_vectorization
+        self.telemetry_id = telemetry_id
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert object to dictionary."""
@@ -93,6 +96,7 @@ class SemanticMsg:
             agent_id=data.get("agent_id", "default"),
             role=data.get("role", "root"),
             skip_vectorization=data.get("skip_vectorization", False),
+            telemetry_id=data.get("telemetry_id", ""),
         )
         if "id" in data and data["id"]:
             obj.id = data["id"]

@@ -45,13 +45,11 @@ class TestAddResource:
         observer = client.observer
         assert observer.queue is not None
 
-    async def test_add_resource_with_target(
-        self, client: AsyncOpenViking, sample_markdown_file: Path
-    ):
+    async def test_add_resource_with_to(self, client: AsyncOpenViking, sample_markdown_file: Path):
         """Test adding resource to specified target"""
         result = await client.add_resource(
             path=str(sample_markdown_file),
-            target="viking://resources/custom/",
+            to="viking://resources/custom/",
             reason="Test resource",
         )
 
