@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -39,13 +40,23 @@ class _FakeProcessor:
     def _extract_abstract_from_overview(self, overview):
         return "abstract"
 
-    async def _vectorize_directory_simple(self, uri, context_type, abstract, overview, ctx=None):
+    async def _vectorize_directory(
+        self, uri, context_type, abstract, overview, ctx=None, semantic_msg_id=None
+    ):
         self.vectorized_dirs.append(uri)
 
     async def _vectorize_single_file(
-        self, parent_uri, context_type, file_path, summary_dict, ctx=None
+        self, parent_uri, context_type, file_path, summary_dict, ctx=None, semantic_msg_id=None
     ):
         self.vectorized_files.append(file_path)
+
+    async def _vectorize_directory_simple(self, uri, context_type, abstract, overview, ctx=None):
+        await self._vectorize_directory(uri, context_type, abstract, overview, ctx=ctx)
+
+
+class _DummyTracker:
+    async def register(self, **_kwargs):
+        return None
 
 
 @pytest.mark.asyncio
@@ -63,6 +74,10 @@ async def test_semantic_dag_stats_collects_nodes(monkeypatch):
     }
     fake_fs = _FakeVikingFS(tree)
     monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
+        lambda: _DummyTracker(),
+    )
 
     # Mock transaction layer: TransactionContext as no-op passthrough
     mock_tx = MagicMock()
@@ -89,6 +104,7 @@ async def test_semantic_dag_stats_collects_nodes(monkeypatch):
         ctx=ctx,
     )
     await executor.run(root_uri)
+    await asyncio.sleep(0)
 
     stats = executor.get_stats()
     assert isinstance(stats, DagStats)

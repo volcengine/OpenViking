@@ -7,6 +7,7 @@ Handles coordinated writes and self-iteration processes
 as described in the OpenViking design document.
 """
 
+import asyncio
 import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
@@ -123,7 +124,7 @@ class ResourceProcessor:
         }
         telemetry = get_current_telemetry()
 
-        # ============ Phase 1: Parse source (Parser generates L0/L1 and writes to temp) ============
+        # ============ Phase 1: Parse source and writes to temp viking fs ============
         try:
             parse_start = time.perf_counter()
             media_processor = self._get_media_processor()
@@ -187,10 +188,10 @@ class ResourceProcessor:
                     parent_uri=parent,
                     source_path=parse_result.source_path,
                     source_format=parse_result.source_format,
-                    trigger_semantic=True,
                 )
                 if context_tree and context_tree.root:
                     result["root_uri"] = context_tree.root.uri
+                    result["temp_uri"] = context_tree.root.temp_uri
             telemetry.set(
                 "resource.finalize.duration_ms",
                 round((time.perf_counter() - finalize_start) * 1000, 3),
@@ -209,8 +210,52 @@ class ResourceProcessor:
 
             return result
 
+        # ============ Phase 3.5: 首次添加立即落盘 ============
+        root_uri = result.get("root_uri")
+        temp_uri = result.get("temp_uri")  # temp_doc_uri
+
+        if root_uri and temp_uri:
+            viking_fs = get_viking_fs()
+            target_exists = await viking_fs.exists(root_uri, ctx=ctx)
+            if not target_exists:
+                # 第一次添加：事务保护下将 temp 移到 final
+                from openviking.storage.transaction import (
+                    TransactionContext,
+                    get_transaction_manager,
+                )
+
+                dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
+                parent_path = dst_path.rsplit("/", 1)[0] if "/" in dst_path else dst_path
+
+                # 确保父目录存在
+                parent_uri = "/".join(root_uri.rsplit("/", 1)[:-1])
+                if parent_uri:
+                    await viking_fs.mkdir(parent_uri, exist_ok=True, ctx=ctx)
+
+                async with TransactionContext(
+                    get_transaction_manager(),
+                    "finalize_from_temp",
+                    [parent_path],
+                    lock_mode="point",
+                ) as tx:
+                    seq = tx.record_undo("fs_write_new", {"uri": dst_path})
+                    src_path = viking_fs._uri_to_path(temp_uri, ctx=ctx)
+                    await asyncio.to_thread(viking_fs.agfs.mv, src_path, dst_path)
+                    tx.mark_completed(seq)
+                    await tx.commit()
+
+                # 清理 temp 根目录
+                try:
+                    await viking_fs.delete_temp(parse_result.temp_dir_path, ctx=ctx)
+                except Exception:
+                    pass
+
+                # 更新 temp_uri → DAG 直接在 final 上跑
+                result["temp_uri"] = root_uri
+
         # ============ Phase 4: Optional Steps ============
         build_index = kwargs.get("build_index", True)
+        temp_uri_for_summarize = result.get("temp_uri") or parse_result.temp_dir_path
         if summarize:
             # Explicit summarization request.
             # If build_index is ALSO True, we want vectorization.
@@ -221,6 +266,7 @@ class ResourceProcessor:
                     resource_uris=[result["root_uri"]],
                     ctx=ctx,
                     skip_vectorization=skip_vec,
+                    temp_uris=[temp_uri_for_summarize],
                     **kwargs,
                 )
             except Exception as e:
@@ -232,7 +278,11 @@ class ResourceProcessor:
             # We assume this means "Ingest and Index", which requires summarization.
             try:
                 await self._get_summarizer().summarize(
-                    resource_uris=[result["root_uri"]], ctx=ctx, skip_vectorization=False, **kwargs
+                    resource_uris=[result["root_uri"]],
+                    ctx=ctx,
+                    skip_vectorization=False,
+                    temp_uris=[temp_uri_for_summarize],
+                    **kwargs,
                 )
             except Exception as e:
                 logger.error(f"Auto-index failed: {e}")

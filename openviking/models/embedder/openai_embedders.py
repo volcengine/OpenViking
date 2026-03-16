@@ -62,6 +62,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         document_param: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
         max_tokens: Optional[int] = None,
+        input_type: Optional[str] = None,
     ):
         """Initialize OpenAI-Compatible Dense Embedder
 
@@ -104,22 +105,24 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         self.api_base = api_base
         self.dimension = dimension
 
-        # Symmetric by default: only activate input_type if user explicitly sets either value
-        non_symmetric = query_param is not None or document_param is not None
-        if not non_symmetric:
-            self.input_type: Optional[str] = None
-        elif context == "query":
-            self.input_type = query_param if query_param is not None else "query"
-        elif context == "document":
-            self.input_type = document_param if document_param is not None else "passage"
+        # Direct input_type overrides context-based logic
+        if input_type is not None:
+            self.input_type: Optional[str] = input_type
         else:
-            self.input_type = None
+            # Symmetric by default: only activate input_type if user explicitly sets either value
+            non_symmetric = query_param is not None or document_param is not None
+            if not non_symmetric:
+                self.input_type = None
+            elif context == "query":
+                self.input_type = query_param if query_param is not None else "query"
+            elif context == "document":
+                self.input_type = document_param if document_param is not None else "passage"
+            else:
+                self.input_type = None
 
-        if not self.api_key:
-            raise ValueError("api_key is required")
         # Allow missing api_key when api_base is set (e.g. local OpenAI-compatible servers)
         if not self.api_key and not self.api_base:
-            raise ValueError("api_key is required (or set api_base for local servers)")
+            raise ValueError("api_key is required")
 
         # Initialize OpenAI client
         # Use a placeholder api_key when not provided (for local OpenAI-compatible servers)

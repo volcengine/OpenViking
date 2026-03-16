@@ -4,8 +4,6 @@
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from openviking.models.embedder import OpenAIDenseEmbedder
 
 
@@ -294,10 +292,11 @@ class TestOpenAIDenseEmbedder:
         )
 
         mock_telemetry = MagicMock()
-        mock_telemetry_module = MagicMock()
-        mock_telemetry_module.get_current_telemetry.return_value = mock_telemetry
 
-        with patch("importlib.import_module", return_value=mock_telemetry_module):
+        with patch(
+            "openviking.models.embedder.openai_embedders.get_current_telemetry",
+            return_value=mock_telemetry,
+        ):
             result = embedder.embed("Hello world")
 
         assert result.dense_vector is not None

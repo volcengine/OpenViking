@@ -61,6 +61,7 @@ class JinaDenseEmbedder(DenseEmbedderBase):
         document_param: str = "retrieval.passage",
         late_chunking: Optional[bool] = None,
         config: Optional[Dict[str, Any]] = None,
+        task: Optional[str] = None,
     ):
         """Initialize Jina AI Dense Embedder
 
@@ -89,8 +90,11 @@ class JinaDenseEmbedder(DenseEmbedderBase):
         self.api_key = api_key
         self.api_base = api_base or "https://api.jina.ai/v1"
         self.dimension = dimension
-        if context == "query":
-            self.task: Optional[str] = query_param
+        # Direct task overrides context-based logic
+        if task is not None:
+            self.task: Optional[str] = task
+        elif context == "query":
+            self.task = query_param
         elif context == "document":
             self.task = document_param
         else:

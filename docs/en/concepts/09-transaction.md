@@ -76,22 +76,36 @@ Transaction flow:
 
 Rollback: Step 3 fails -> move file back to original location.
 
-### add_resource (TreeBuilder.finalize_from_temp)
+### add_resource
 
 | Problem | Solution |
 |---------|----------|
-| File moved from temp to final directory, then crash -> file exists but never searchable | Transaction wrapper for mv + post_action protects enqueue |
+| File moved from temp to final directory, then crash -> file exists but never searchable | Two separate paths for first-time add vs incremental update |
 
-Transaction flow:
+First-time add and incremental update are two independent paths:
+
+**First-time add** (target does not exist) — handled in `ResourceProcessor.process_resource` Phase 3.5:
 
 ```
-1. Begin transaction, lock final_uri (lock_mode="point")
-2. mv temp directory -> final location
-3. Register post_action: enqueue SemanticQueue
-4. Commit -> execute post_action -> release lock -> delete journal
+1. Begin transaction, lock parent_path of final_uri (lock_mode="point")
+2. Record undo: fs_write_new (uri=dst_path)
+3. agfs.mv temp directory -> final location
+4. Commit -> release lock -> delete journal
+5. Clean up temp directory
+6. Enqueue SemanticMsg(uri=final, target_uri=None) -> DAG runs on final, no callback
 ```
 
-Crash recovery: Journal records the post_action; replayed automatically on restart.
+Crash recovery: Undo deletes the incomplete dst_path; re-run `add_resource` to retry.
+
+**Incremental update** (target already exists) — temp stays in place:
+
+```
+1. Enqueue SemanticMsg(uri=temp, target_uri=final) -> DAG runs on temp
+2. DAG completion triggers sync_diff_callback or move_temp_to_target_callback
+3. Each VikingFS.rm / VikingFS.mv inside callbacks creates its own independent transaction
+```
+
+Note: DAG callbacks do NOT wrap operations in an outer TransactionContext. Each `VikingFS.rm` and `VikingFS.mv` has its own transaction internally. An outer lock would conflict with these inner locks (e.g. outer POINT lock on target_path vs inner SUBTREE lock from `rm`) causing deadlock.
 
 ### session.commit()
 

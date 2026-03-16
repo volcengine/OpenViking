@@ -76,22 +76,36 @@ Storage Layer (VikingFS, VectorDB, QueueManager)
 
 回滚：第 3 步失败 → 把文件移回原位。
 
-### add_resource (TreeBuilder.finalize_from_temp)
+### add_resource
 
 | 问题 | 方案 |
 |------|------|
-| 文件从临时目录移到正式目录后崩溃 → 文件存在但永远搜不到 | 事务包装 mv + post_action 保护 enqueue |
+| 文件从临时目录移到正式目录后崩溃 → 文件存在但永远搜不到 | 首次添加与增量更新分离为两条独立路径 |
 
-事务流程：
+首次添加和增量更新是两条独立路径：
+
+**首次添加**（target 不存在）— 在 `ResourceProcessor.process_resource` Phase 3.5 中处理：
 
 ```
-1. 开始事务，加锁（lock_mode="point"，锁 final_uri）
-2. mv 临时目录 → 正式位置
-3. 注册 post_action: enqueue SemanticQueue
-4. 提交 → 执行 post_action → 删锁 → 删 journal
+1. 开始事务，锁 final_uri 的父目录（lock_mode="point"）
+2. 记录 undo: fs_write_new（uri=dst_path）
+3. agfs.mv 临时目录 → 正式位置
+4. 提交 → 删锁 → 删 journal
+5. 清理临时目录
+6. 入队 SemanticMsg(uri=final, target_uri=None) → DAG 在 final 上跑，无 callback
 ```
 
-崩溃恢复：journal 中记录了 post_action，重启时自动重放 enqueue。
+崩溃恢复：undo 删除不完整的 dst_path；重新执行 `add_resource` 即可重试。
+
+**增量更新**（target 已存在）— temp 保持不动：
+
+```
+1. 入队 SemanticMsg(uri=temp, target_uri=final) → DAG 在 temp 上跑
+2. DAG 完成后触发 sync_diff_callback 或 move_temp_to_target_callback
+3. callback 内的每个 VikingFS.rm / VikingFS.mv 各自创建独立事务
+```
+
+注意：DAG callback 不在外层包裹 TransactionContext。每个 `VikingFS.rm` 和 `VikingFS.mv` 内部各自有独立事务保护。外层锁会与内部锁冲突（如外层 POINT lock on target_path 与内部 `rm` 的 SUBTREE lock 冲突）导致死锁。
 
 ### session.commit()
 

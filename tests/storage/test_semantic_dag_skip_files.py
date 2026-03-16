@@ -58,13 +58,23 @@ class _FakeProcessor:
     def _extract_abstract_from_overview(self, overview):
         return "abstract"
 
-    async def _vectorize_directory_simple(self, uri, context_type, abstract, overview, ctx=None):
+    async def _vectorize_directory(
+        self, uri, context_type, abstract, overview, ctx=None, semantic_msg_id=None
+    ):
         pass
 
+    async def _vectorize_directory_simple(self, uri, context_type, abstract, overview, ctx=None):
+        await self._vectorize_directory(uri, context_type, abstract, overview, ctx=ctx)
+
     async def _vectorize_single_file(
-        self, parent_uri, context_type, file_path, summary_dict, ctx=None
+        self, parent_uri, context_type, file_path, summary_dict, ctx=None, semantic_msg_id=None
     ):
         self.vectorized_files.append(file_path)
+
+
+class _DummyTracker:
+    async def register(self, **_kwargs):
+        return None
 
 
 @pytest.mark.asyncio
@@ -81,6 +91,10 @@ async def test_messages_jsonl_excluded_from_summary(monkeypatch):
     }
     fake_fs = _FakeVikingFS(tree)
     monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
+        lambda: _DummyTracker(),
+    )
 
     processor = _FakeProcessor()
     ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
@@ -114,6 +128,10 @@ async def test_messages_jsonl_excluded_in_subdirectory(monkeypatch):
     }
     fake_fs = _FakeVikingFS(tree)
     monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
+        lambda: _DummyTracker(),
+    )
 
     processor = _FakeProcessor()
     ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)

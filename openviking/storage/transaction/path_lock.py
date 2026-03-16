@@ -67,7 +67,7 @@ class PathLock:
 
     def _read_token(self, lock_path: str) -> Optional[str]:
         try:
-            content = self._agfs.cat(lock_path)
+            content = self._agfs.read(lock_path)
             if isinstance(content, bytes):
                 token = content.decode("utf-8").strip()
             else:

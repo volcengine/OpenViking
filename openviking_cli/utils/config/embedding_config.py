@@ -67,7 +67,15 @@ class EmbeddingModelConfig(BaseModel):
 
             if backend is not None and provider is None:
                 data["provider"] = backend
-            for key in ("input_type", "query_value", "document_value", "query_task", "document_task"):
+            for key in (
+                "input_type",
+                "query_param",
+                "document_param",
+                "query_value",
+                "document_value",
+                "query_task",
+                "document_task",
+            ):
                 value = data.get(key)
                 if isinstance(value, str):
                     data[key] = value.lower()
@@ -176,7 +184,13 @@ class EmbeddingConfig(BaseModel):
             )
         return self
 
-    def _create_embedder(self, provider: str, embedder_type: str, config: EmbeddingModelConfig, context: Optional[str] = None):
+    def _create_embedder(
+        self,
+        provider: str,
+        embedder_type: str,
+        config: EmbeddingModelConfig,
+        context: Optional[str] = None,
+    ):
         """Factory method to create embedder instance based on provider and type.
 
         Args:
@@ -211,7 +225,8 @@ class EmbeddingConfig(BaseModel):
                 OpenAIDenseEmbedder,
                 lambda cfg: {
                     "model_name": cfg.model,
-                    "api_key": cfg.api_key or "no-key",  # Placeholder for local OpenAI-compatible servers
+                    "api_key": cfg.api_key
+                    or "no-key",  # Placeholder for local OpenAI-compatible servers
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
                     "context": context,
@@ -302,7 +317,8 @@ class EmbeddingConfig(BaseModel):
                 OpenAIDenseEmbedder,
                 lambda cfg: {
                     "model_name": cfg.model,
-                    "api_key": cfg.api_key or "no-key",  # Ollama ignores the key, but client requires non-empty
+                    "api_key": cfg.api_key
+                    or "no-key",  # Ollama ignores the key, but client requires non-empty
                     "api_base": cfg.api_base or "http://localhost:11434/v1",
                     "dimension": cfg.dimension,
                     "max_tokens": cfg.max_tokens,
@@ -381,13 +397,18 @@ class EmbeddingConfig(BaseModel):
             # OpenAI models are symmetric by default (no input_type sent).
             # Non-symmetric mode is activated implicitly when the user sets
             # query_param or document_param in the config.
-            non_symmetric = self.dense.query_param is not None or self.dense.document_param is not None
+            non_symmetric = (
+                self.dense.query_param is not None or self.dense.document_param is not None
+            )
             effective_context = context if non_symmetric else None
             return self._create_embedder(provider, "dense", self.dense, context=effective_context)
 
         if provider == "jina":
-            # Jina models are non-symmetric by default (task is always sent).
-            return self._create_embedder(provider, "dense", self.dense, context=context)
+            non_symmetric = (
+                self.dense.query_param is not None or self.dense.document_param is not None
+            )
+            effective_context = context if non_symmetric else None
+            return self._create_embedder(provider, "dense", self.dense, context=effective_context)
 
         return self.get_embedder()
 
