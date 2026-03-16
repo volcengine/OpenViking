@@ -274,6 +274,9 @@ class _PyBytesRow:
 try:
     import openviking.storage.vectordb.engine as engine
 
+    if getattr(engine, "ENGINE_VARIANT", "unavailable") == "unavailable":
+        raise ImportError("vectordb engine backend is unavailable")
+
     # Use C++ implementation if available
     BytesRow = engine.BytesRow
     Schema = engine.Schema

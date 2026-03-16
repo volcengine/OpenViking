@@ -44,6 +44,16 @@
         "input": "multimodal"
     }
   },
+  "embedding_ollama_example": {
+    "_comment": "For local deployment with Ollama (no API key required):",
+    "dense": {
+        "provider": "ollama",
+        "model": "nomic-embed-text",
+        "api_base": "http://localhost:11434/v1",
+        "dimension": 768,
+        "input": "text"
+    }
+  },
   "vlm": {
     "model": "doubao-seed-2-0-pro-260215",
     "api_key": "{your-api-key}",

@@ -16,7 +16,7 @@ class EmbeddingModelConfig(BaseModel):
     input: str = Field(default="multimodal", description="Input type: 'text' or 'multimodal'")
     provider: Optional[str] = Field(
         default="volcengine",
-        description="Provider type: 'openai', 'volcengine', 'vikingdb', 'jina'",
+        description="Provider type: 'openai', 'volcengine', 'vikingdb', 'jina', 'ollama'",
     )
     backend: Optional[str] = Field(
         default="volcengine",
@@ -27,6 +27,10 @@ class EmbeddingModelConfig(BaseModel):
     sk: Optional[str] = Field(default=None, description="Access Key Secretfor VikingDB API")
     region: Optional[str] = Field(default=None, description="Region for VikingDB API")
     host: Optional[str] = Field(default=None, description="Host for VikingDB API")
+    max_tokens: Optional[int] = Field(
+        default=None,
+        description="Maximum token count per embedding request. If None, uses model default (e.g., 8000 for OpenAI).",
+    )
 
     model_config = {"extra": "forbid"}
 
@@ -53,15 +57,20 @@ class EmbeddingModelConfig(BaseModel):
         if not self.provider:
             raise ValueError("Embedding provider is required")
 
-        if self.provider not in ["openai", "volcengine", "vikingdb", "jina"]:
+        if self.provider not in ["openai", "volcengine", "vikingdb", "jina", "ollama"]:
             raise ValueError(
-                f"Invalid embedding provider: '{self.provider}'. Must be one of: 'openai', 'volcengine', 'vikingdb', 'jina'"
+                f"Invalid embedding provider: '{self.provider}'. Must be one of: 'openai', 'volcengine', 'vikingdb', 'jina', 'ollama'"
             )
 
         # Provider-specific validation
         if self.provider == "openai":
-            if not self.api_key:
+            # Allow missing api_key when api_base is set (e.g. local OpenAI-compatible servers)
+            if not self.api_key and not self.api_base:
                 raise ValueError("OpenAI provider requires 'api_key' to be set")
+
+        elif self.provider == "ollama":
+            # Ollama runs locally, no API key required
+            pass
 
         elif self.provider == "volcengine":
             if not self.api_key:
@@ -150,9 +159,10 @@ class EmbeddingConfig(BaseModel):
                 OpenAIDenseEmbedder,
                 lambda cfg: {
                     "model_name": cfg.model,
-                    "api_key": cfg.api_key,
+                    "api_key": cfg.api_key or "no-key",  # Placeholder for local OpenAI-compatible servers
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
+                    "max_tokens": cfg.max_tokens,
                 },
             ),
             ("volcengine", "dense"): (
@@ -227,6 +237,17 @@ class EmbeddingConfig(BaseModel):
                     "api_key": cfg.api_key,
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
+                },
+            ),
+            # Ollama: local OpenAI-compatible embedding server, no real API key needed
+            ("ollama", "dense"): (
+                OpenAIDenseEmbedder,
+                lambda cfg: {
+                    "model_name": cfg.model,
+                    "api_key": cfg.api_key or "no-key",  # Ollama ignores the key, but client requires non-empty
+                    "api_base": cfg.api_base or "http://localhost:11434/v1",
+                    "dimension": cfg.dimension,
+                    "max_tokens": cfg.max_tokens,
                 },
             ),
         }
