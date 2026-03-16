@@ -224,11 +224,10 @@ class Session:
         return run_async(self.commit_async())
 
     async def commit_async(self) -> Dict[str, Any]:
-        """Async commit session: two-phase transaction with checkpoint.
+        """Async commit session: two-phase approach.
 
-        Phase 1 (Archive): Lock session, write archive, clear messages, write checkpoint.
-        LLM call (no transaction): Extract long-term memories.
-        Phase 2 (Memory): Lock session, write memories + relations, update checkpoint.
+        Phase 1 (Archive, no transaction): Write archive, clear messages.
+        Phase 2 (Memory, transaction with redo semantics): Extract memories, write, enqueue.
         """
         from openviking.storage.transaction import TransactionContext, get_transaction_manager
 
@@ -245,9 +244,8 @@ class Session:
             return result
 
         tx_manager = get_transaction_manager()
-        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
 
-        # ===== Phase 1: Archive =====
+        # ===== Preparation (no transaction) =====
         self._compression.compression_index += 1
         messages_to_archive = self._messages.copy()
 
@@ -255,58 +253,62 @@ class Session:
         archive_abstract = self._extract_abstract_from_summary(summary)
         archive_overview = summary
 
-        async with TransactionContext(
-            tx_manager, "session_archive", [session_path], lock_mode="point"
-        ) as tx:
-            archive_uri = (
-                f"{self._session_uri}/history/archive_{self._compression.compression_index:03d}"
-            )
-            archive_path = self._viking_fs._uri_to_path(archive_uri, ctx=self.ctx)
-            seq = tx.record_undo("fs_write_new", {"uri": archive_path})
-            await self._write_archive_async(
-                index=self._compression.compression_index,
-                messages=messages_to_archive,
-                abstract=archive_abstract,
-                overview=archive_overview,
-            )
-            await self._write_to_agfs_async(messages=[])
-            await self._write_checkpoint_async(
-                {"status": "archived", "archive_index": self._compression.compression_index}
-            )
-            tx.mark_completed(seq)
-            await tx.commit()
+        # ===== Phase 1: Archive (no transaction, no lock) =====
+        archive_uri = (
+            f"{self._session_uri}/history/archive_{self._compression.compression_index:03d}"
+        )
+        await self._write_archive_async(
+            index=self._compression.compression_index,
+            messages=messages_to_archive,
+            abstract=archive_abstract,
+            overview=archive_overview,
+        )
+        await self._write_to_agfs_async(messages=[])
+        self._messages.clear()
 
         self._compression.original_count += len(messages_to_archive)
         result["archived"] = True
-        self._messages.clear()
         logger.info(
             f"Archived: {len(messages_to_archive)} messages → "
             f"history/archive_{self._compression.compression_index:03d}/"
         )
 
-        # ===== LLM call (no transaction) =====
-        if self._session_compressor:
-            logger.info(
-                f"Starting memory extraction from {len(messages_to_archive)} archived messages"
-            )
-            memories = await self._session_compressor.extract_long_term_memories(
-                messages=messages_to_archive,
-                user=self.user,
-                session_id=self.session_id,
-                ctx=self.ctx,
-            )
-            logger.info(f"Extracted {len(memories)} memories")
-            result["memories_extracted"] = len(memories)
-            self._stats.memories_extracted += len(memories)
-            get_current_telemetry().set("memory.extracted", len(memories))
-
-        # ===== Phase 2: Memory write =====
+        # ===== Phase 2: Memory extraction + write (transaction, redo semantics) =====
         async with TransactionContext(
-            tx_manager, "session_memory", [session_path], lock_mode="point"
+            tx_manager,
+            "session_memory",
+            [],
+            lock_mode="none",
         ) as tx:
+            # Store redo info so _recover_one can redo from archive on crash
+            tx.record.init_info.update(
+                {
+                    "archive_uri": archive_uri,
+                    "session_uri": self._session_uri,
+                    "account_id": self.ctx.account_id,
+                    "user_id": self.ctx.user.user_id,
+                    "agent_id": self.ctx.user.agent_id,
+                    "role": self.ctx.role.value,
+                }
+            )
+
+            if self._session_compressor:
+                logger.info(
+                    f"Starting memory extraction from {len(messages_to_archive)} archived messages"
+                )
+                memories = await self._session_compressor.extract_long_term_memories(
+                    messages=messages_to_archive,
+                    user=self.user,
+                    session_id=self.session_id,
+                    ctx=self.ctx,
+                )
+                logger.info(f"Extracted {len(memories)} memories")
+                result["memories_extracted"] = len(memories)
+                self._stats.memories_extracted += len(memories)
+                get_current_telemetry().set("memory.extracted", len(memories))
+
             await self._write_to_agfs_async(self._messages)
             await self._write_relations_async()
-            await self._write_checkpoint_async({"status": "completed"})
             tx.add_post_action(
                 "enqueue_semantic",
                 {

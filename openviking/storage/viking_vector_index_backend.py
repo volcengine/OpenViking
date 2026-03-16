@@ -834,7 +834,7 @@ class VikingVectorIndexBackend:
         # so fetch and update all of them.
         records = await self.filter(
             filter=And([Eq("uri", uri), Eq("account_id", ctx.account_id)]),
-            limit=1,
+            limit=100,
             ctx=ctx,
         )
         if not records:

@@ -184,7 +184,8 @@ class TransactionManager:
         Recovery strategy by status:
           COMMITTED + post_actions  → replay post_actions (enqueue etc.), then clean up
           COMMITTED, no post_actions / RELEASED → just clean up
-          EXEC / FAIL / RELEASING   → rollback completed+partial ops, then clean up
+          EXEC / FAIL / RELEASING, all ops completed → roll forward (commit), then clean up
+          EXEC / FAIL / RELEASING, partial ops       → rollback completed+partial ops, then clean up
           INIT / ACQUIRE            → nothing executed yet, just clean up
         """
         from openviking.storage.transaction.undo import execute_rollback
@@ -217,18 +218,43 @@ class TransactionManager:
             if not tx.locks:
                 await self._cleanup_orphan_locks_from_init_info(tx_id, tx.init_info)
         else:
-            # EXEC / FAIL / RELEASING: process crashed mid-operation — rollback
-            # Pass recover_all=True so partial (completed=False) ops are also reversed,
-            # e.g. a directory mv that started but never finished still leaves residue.
-            try:
-                await execute_rollback(
-                    tx.undo_log,
-                    self._agfs,
-                    vector_store=self._vector_store,
-                    recover_all=True,
-                )
-            except Exception as e:
-                logger.warning(f"Rollback during recovery failed for tx {tx_id}: {e}")
+            # EXEC / FAIL / RELEASING: process crashed mid-operation
+            operation = tx.init_info.get("operation", "")
+            if operation == "session_memory":
+                # Redo: re-extract memories from archive and write
+                try:
+                    await self._redo_session_memory(tx)
+                except Exception as e:
+                    logger.warning(f"Redo session_memory failed for tx {tx_id}: {e}")
+            elif (
+                tx.status == TransactionStatus.EXEC
+                and tx.undo_log
+                and all(e.completed for e in tx.undo_log)
+            ):
+                # All operations completed successfully but commit didn't persist.
+                # Roll forward: treat as committed to avoid data loss from rollback
+                # of irreversible operations (e.g. mv's fs_rm).
+                logger.info(f"All ops completed for tx {tx_id}, rolling forward (commit)")
+                if tx.post_actions:
+                    try:
+                        await self._execute_post_actions(tx.post_actions)
+                    except Exception as e:
+                        logger.warning(
+                            f"Post-action replay during roll-forward failed for tx {tx_id}: {e}"
+                        )
+            else:
+                # Default: rollback completed+partial ops
+                # Pass recover_all=True so partial (completed=False) ops are also reversed,
+                # e.g. a directory mv that started but never finished still leaves residue.
+                try:
+                    await execute_rollback(
+                        tx.undo_log,
+                        self._agfs,
+                        vector_store=self._vector_store,
+                        recover_all=True,
+                    )
+                except Exception as e:
+                    logger.warning(f"Rollback during recovery failed for tx {tx_id}: {e}")
 
         # Release any lock files still present
         await self._path_lock.release(tx)
@@ -274,6 +300,86 @@ class TransactionManager:
                     logger.info(f"Removed orphan lock for tx {tx_id}: {lock_file}")
             except Exception as e:
                 logger.warning(f"Failed to check orphan lock {lock_file}: {e}")
+
+    async def _redo_session_memory(self, tx: TransactionRecord) -> None:
+        """Redo a session_memory transaction from its archived messages.
+
+        On crash during Phase 2 of session commit, we redo memory extraction
+        from the archive rather than rolling back.
+        """
+        import json
+
+        from openviking.message import Message
+        from openviking.server.identity import RequestContext, Role
+        from openviking_cli.session.user_id import UserIdentifier
+
+        archive_uri = tx.init_info.get("archive_uri")
+        session_uri = tx.init_info.get("session_uri")
+        account_id = tx.init_info.get("account_id", "default")
+        user_id = tx.init_info.get("user_id", "default")
+        agent_id = tx.init_info.get("agent_id", "default")
+        role_str = tx.init_info.get("role", "root")
+
+        if not archive_uri or not session_uri:
+            logger.warning("Cannot redo session_memory: missing archive_uri or session_uri")
+            return
+
+        # 1. Read archived messages from AGFS
+        messages_path = f"{archive_uri}/messages.jsonl"
+        try:
+            agfs_path = messages_path.replace("viking://", "")
+            content = self._agfs.cat(agfs_path)
+            if isinstance(content, bytes):
+                content = content.decode("utf-8")
+        except Exception as e:
+            logger.warning(f"Cannot read archive for redo: {messages_path}: {e}")
+            return
+
+        messages = []
+        for line in content.strip().split("\n"):
+            if line.strip():
+                try:
+                    messages.append(Message.from_dict(json.loads(line)))
+                except Exception:
+                    pass
+
+        if not messages:
+            logger.warning(f"No messages found in archive for redo: {archive_uri}")
+            return
+
+        # 2. Build request context for memory extraction
+        user = UserIdentifier(user_id=user_id, agent_id=agent_id)
+        ctx = RequestContext(user=user, role=Role(role_str), account_id=account_id)
+
+        # 3. Re-extract memories
+        from openviking.session.compressor import SessionCompressor
+
+        compressor = SessionCompressor()
+        session_id = session_uri.rstrip("/").rsplit("/", 1)[-1]
+        memories = await compressor.extract_long_term_memories(
+            messages=messages,
+            user=user,
+            session_id=session_id,
+            ctx=ctx,
+        )
+        logger.info(f"Redo: extracted {len(memories)} memories from {archive_uri}")
+
+        # 4. Enqueue semantic processing
+        await self._execute_post_actions(
+            [
+                {
+                    "type": "enqueue_semantic",
+                    "params": {
+                        "uri": session_uri,
+                        "context_type": "memory",
+                        "account_id": account_id,
+                        "user_id": user_id,
+                        "agent_id": agent_id,
+                        "role": role_str,
+                    },
+                }
+            ]
+        )
 
     def create_transaction(self, init_info: Optional[Dict[str, Any]] = None) -> TransactionRecord:
         """Create a new transaction.

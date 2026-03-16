@@ -343,10 +343,8 @@ class SemanticProcessor(DequeueHandlerBase):
                 # 1. Collect .abstract.md from subdirectories
                 children_abstracts = await self._collect_children_abstracts(children_uris)
 
-                # 2. Generate file summaries (vectorize inline, not via enqueue)
-                file_summaries = await self._generate_file_summaries(
-                    file_paths, context_type=context_type, parent_uri=uri, enqueue_files=False
-                )
+                # 2. Concurrently generate summaries for files in directory
+                file_summaries = await self._generate_file_summaries(file_paths)
 
                 # 3. Generate .overview.md
                 overview = await self._generate_overview(uri, file_summaries, children_abstracts)
@@ -360,22 +358,23 @@ class SemanticProcessor(DequeueHandlerBase):
 
                 logger.debug(f"Generated overview and abstract for {uri}")
 
-                # 6. Vectorize directory and files (all inside the lock)
-                try:
-                    await self._vectorize_directory_simple(uri, context_type, abstract, overview)
-                except Exception as e:
-                    logger.error(f"Failed to vectorize directory {uri}: {e}", exc_info=True)
-
-                for fp, summary in zip(file_paths, file_summaries):
-                    try:
-                        await self._vectorize_single_file(
+                # 6. Vectorize directory and files concurrently
+                vectorize_tasks = [
+                    self._vectorize_directory_simple(uri, context_type, abstract, overview),
+                    *(
+                        self._vectorize_single_file(
                             parent_uri=uri,
                             context_type=context_type,
                             file_path=fp,
                             summary_dict=summary,
                         )
-                    except Exception as e:
-                        logger.error(f"Failed to vectorize file {fp}: {e}", exc_info=True)
+                        for fp, summary in zip(file_paths, file_summaries)
+                    ),
+                ]
+                results = await asyncio.gather(*vectorize_tasks, return_exceptions=True)
+                for result in results:
+                    if isinstance(result, Exception):
+                        logger.error(f"Vectorization failed: {result}", exc_info=True)
 
                 await tx.commit()
         except LockAcquisitionError:
@@ -395,32 +394,12 @@ class SemanticProcessor(DequeueHandlerBase):
     async def _generate_file_summaries(
         self,
         file_paths: List[str],
-        context_type: Optional[str] = None,
-        parent_uri: Optional[str] = None,
-        enqueue_files: bool = False,
     ) -> List[Dict[str, str]]:
         """Concurrently generate file summaries."""
         if not file_paths:
             return []
 
-        async def generate_one_summary(file_path: str) -> Dict[str, str]:
-            summary = await self._generate_single_file_summary(file_path, ctx=self._current_ctx)
-            if enqueue_files and context_type and parent_uri:
-                try:
-                    await self._vectorize_single_file(
-                        parent_uri=parent_uri,
-                        context_type=context_type,
-                        file_path=file_path,
-                        summary_dict=summary,
-                    )
-                except Exception as e:
-                    logger.error(
-                        f"Failed to vectorize file {file_path}: {e}",
-                        exc_info=True,
-                    )
-            return summary
-
-        tasks = [generate_one_summary(fp) for fp in file_paths]
+        tasks = [self._generate_single_file_summary(fp, ctx=self._current_ctx) for fp in file_paths]
         return await asyncio.gather(*tasks)
 
     async def _generate_text_summary(

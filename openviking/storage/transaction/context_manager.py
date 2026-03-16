@@ -74,7 +74,15 @@ class TransactionContext:
             logger.warning(f"[Transaction] Failed to write journal for {tx_id}: {e}")
 
         success = False
-        if self._lock_mode == "subtree":
+        if self._lock_mode == "none":
+            # No lock acquisition — transition directly to EXEC status
+            tx = self._tx_manager.get_transaction(tx_id)
+            if tx:
+                from openviking.storage.transaction.transaction_record import TransactionStatus
+
+                tx.update_status(TransactionStatus.EXEC)
+            success = True
+        elif self._lock_mode == "subtree":
             for path in self._lock_paths:
                 success = await self._tx_manager.acquire_lock_subtree(tx_id, path)
                 if not success:

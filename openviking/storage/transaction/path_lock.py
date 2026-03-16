@@ -172,10 +172,6 @@ class PathLock:
                 if self.is_lock_stale(lock_path, self._lock_expire):
                     logger.warning(f"[POINT] Removing stale lock: {lock_path}")
                     await self._remove_lock_file(lock_path)
-                    if asyncio.get_running_loop().time() >= deadline:
-                        logger.warning(f"[POINT] Timeout waiting for lock on: {path}")
-                        return False
-                    await asyncio.sleep(_POLL_INTERVAL)
                     continue
                 if asyncio.get_running_loop().time() >= deadline:
                     logger.warning(f"[POINT] Timeout waiting for lock on: {path}")
@@ -190,12 +186,6 @@ class PathLock:
                         f"[POINT] Removing stale ancestor SUBTREE lock: {ancestor_conflict}"
                     )
                     await self._remove_lock_file(ancestor_conflict)
-                    if asyncio.get_running_loop().time() >= deadline:
-                        logger.warning(
-                            f"[POINT] Timeout waiting for ancestor SUBTREE lock: {ancestor_conflict}"
-                        )
-                        return False
-                    await asyncio.sleep(_POLL_INTERVAL)
                     continue
                 if asyncio.get_running_loop().time() >= deadline:
                     logger.warning(
@@ -261,10 +251,6 @@ class PathLock:
                 if self.is_lock_stale(lock_path, self._lock_expire):
                     logger.warning(f"[SUBTREE] Removing stale lock: {lock_path}")
                     await self._remove_lock_file(lock_path)
-                    if asyncio.get_running_loop().time() >= deadline:
-                        logger.warning(f"[SUBTREE] Timeout waiting for lock on: {path}")
-                        return False
-                    await asyncio.sleep(_POLL_INTERVAL)
                     continue
                 if asyncio.get_running_loop().time() >= deadline:
                     logger.warning(f"[SUBTREE] Timeout waiting for lock on: {path}")
@@ -280,12 +266,6 @@ class PathLock:
                         f"[SUBTREE] Removing stale ancestor SUBTREE lock: {ancestor_conflict}"
                     )
                     await self._remove_lock_file(ancestor_conflict)
-                    if asyncio.get_running_loop().time() >= deadline:
-                        logger.warning(
-                            f"[SUBTREE] Timeout waiting for ancestor SUBTREE lock: {ancestor_conflict}"
-                        )
-                        return False
-                    await asyncio.sleep(_POLL_INTERVAL)
                     continue
                 if asyncio.get_running_loop().time() >= deadline:
                     logger.warning(
@@ -300,12 +280,6 @@ class PathLock:
                 if self.is_lock_stale(desc_conflict, self._lock_expire):
                     logger.warning(f"[SUBTREE] Removing stale descendant lock: {desc_conflict}")
                     await self._remove_lock_file(desc_conflict)
-                    if asyncio.get_running_loop().time() >= deadline:
-                        logger.warning(
-                            f"[SUBTREE] Timeout waiting for descendant lock: {desc_conflict}"
-                        )
-                        return False
-                    await asyncio.sleep(_POLL_INTERVAL)
                     continue
                 if asyncio.get_running_loop().time() >= deadline:
                     logger.warning(
