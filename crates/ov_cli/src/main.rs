@@ -697,7 +697,17 @@ async fn handle_add_resource(
     let strict = !no_strict;
     let directly_upload_media = !no_directly_upload_media;
 
-    let client = ctx.get_client();
+    let effective_timeout = if wait {
+        timeout.unwrap_or(60.0).max(ctx.config.timeout)
+    } else {
+        ctx.config.timeout
+    };
+    let client = client::HttpClient::new(
+        &ctx.config.url,
+        ctx.config.api_key.clone(),
+        ctx.config.agent_id.clone(),
+        effective_timeout,
+    );
     commands::resources::add_resource(
         &client,
         &path,

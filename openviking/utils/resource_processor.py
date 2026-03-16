@@ -120,7 +120,7 @@ class ResourceProcessor:
             "source_path": None,
         }
 
-        # ============ Phase 1: Parse source (Parser generates L0/L1 and writes to temp) ============
+        # ============ Phase 1: Parse source and writes to temp viking fs ============
         try:
             media_processor = self._get_media_processor()
             viking_fs = get_viking_fs()
@@ -175,10 +175,10 @@ class ResourceProcessor:
                     parent_uri=parent,
                     source_path=parse_result.source_path,
                     source_format=parse_result.source_format,
-                    trigger_semantic=True,
                 )
                 if context_tree and context_tree.root:
                     result["root_uri"] = context_tree.root.uri
+                    result["temp_uri"] = context_tree.root.temp_uri
         except Exception as e:
             result["status"] = "error"
             result["errors"].append(f"Finalize from temp error: {e}")
@@ -194,6 +194,7 @@ class ResourceProcessor:
 
         # ============ Phase 4: Optional Steps ============
         build_index = kwargs.get("build_index", True)
+        temp_uri_for_summarize = result.get("temp_uri") or parse_result.temp_dir_path
         if summarize:
             # Explicit summarization request.
             # If build_index is ALSO True, we want vectorization.
@@ -204,6 +205,7 @@ class ResourceProcessor:
                     resource_uris=[result["root_uri"]],
                     ctx=ctx,
                     skip_vectorization=skip_vec,
+                    temp_uris=[temp_uri_for_summarize],
                     **kwargs,
                 )
             except Exception as e:
@@ -215,7 +217,11 @@ class ResourceProcessor:
             # We assume this means "Ingest and Index", which requires summarization.
             try:
                 await self._get_summarizer().summarize(
-                    resource_uris=[result["root_uri"]], ctx=ctx, skip_vectorization=False, **kwargs
+                    resource_uris=[result["root_uri"]],
+                    ctx=ctx,
+                    skip_vectorization=False,
+                    temp_uris=[temp_uri_for_summarize],
+                    **kwargs,
                 )
             except Exception as e:
                 logger.error(f"Auto-index failed: {e}")

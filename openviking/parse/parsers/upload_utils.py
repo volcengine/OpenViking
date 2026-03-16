@@ -40,6 +40,7 @@ _EXTENSIONLESS_TEXT_NAMES: Set[str] = {
     "NEWS",
     "NOTICE",
     "TODO",
+    "BUILD",
 }
 
 
