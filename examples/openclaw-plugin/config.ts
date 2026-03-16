@@ -16,6 +16,8 @@ export type MemoryOpenVikingConfig = {
   timeoutMs?: number;
   autoCapture?: boolean;
   captureMode?: "semantic" | "keyword";
+  /** Minimum sanitized text length (chars) required to trigger auto-capture. Default 50. */
+  captureMinLength?: number;
   captureMaxLength?: number;
   autoRecall?: boolean;
   recallLimit?: number;
@@ -41,6 +43,7 @@ const DEFAULT_PORT = 1933;
 const DEFAULT_TARGET_URI = "viking://user/memories";
 const DEFAULT_TIMEOUT_MS = 15000;
 const DEFAULT_CAPTURE_MODE = "semantic";
+const DEFAULT_CAPTURE_MIN_LENGTH = 50;
 const DEFAULT_CAPTURE_MAX_LENGTH = 24000;
 const DEFAULT_RECALL_LIMIT = 6;
 const DEFAULT_RECALL_SCORE_THRESHOLD = 0.15;
@@ -131,6 +134,7 @@ export const memoryOpenVikingConfigSchema = {
         "timeoutMs",
         "autoCapture",
         "captureMode",
+        "captureMinLength",
         "captureMaxLength",
         "autoRecall",
         "recallLimit",
@@ -185,6 +189,10 @@ export const memoryOpenVikingConfigSchema = {
       timeoutMs: Math.max(1000, Math.floor(toNumber(cfg.timeoutMs, DEFAULT_TIMEOUT_MS))),
       autoCapture: cfg.autoCapture !== false,
       captureMode: captureMode ?? DEFAULT_CAPTURE_MODE,
+      captureMinLength: Math.max(
+        1,
+        Math.min(1000, Math.floor(toNumber(cfg.captureMinLength, DEFAULT_CAPTURE_MIN_LENGTH))),
+      ),
       captureMaxLength: Math.max(
         200,
         Math.min(200_000, Math.floor(toNumber(cfg.captureMaxLength, DEFAULT_CAPTURE_MAX_LENGTH))),
@@ -289,6 +297,12 @@ export const memoryOpenVikingConfigSchema = {
       placeholder: DEFAULT_CAPTURE_MODE,
       advanced: true,
       help: '"semantic" captures all eligible user text and relies on OpenViking extraction; "keyword" uses trigger regex first.',
+    },
+    captureMinLength: {
+      label: "Capture Min Length",
+      placeholder: String(DEFAULT_CAPTURE_MIN_LENGTH),
+      advanced: true,
+      help: "Minimum sanitized text length (chars) required to trigger auto-capture. Shorter messages are skipped to save VLM tokens.",
     },
     captureMaxLength: {
       label: "Capture Max Length",
