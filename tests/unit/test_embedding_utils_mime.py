@@ -59,22 +59,14 @@ def test_infer_media_mime(filename, expected_mime):
     assert _infer_media_mime(filename) == expected_mime
 
 
-def test_gemini_supported_media_mimes_covers_all_types():
-    """_GEMINI_SUPPORTED_MEDIA_MIMES must include image, video, audio, and PDF."""
-    from openviking.utils.embedding_utils import _GEMINI_SUPPORTED_MEDIA_MIMES
-    assert any(m.startswith("image/") for m in _GEMINI_SUPPORTED_MEDIA_MIMES)
-    assert any(m.startswith("video/") for m in _GEMINI_SUPPORTED_MEDIA_MIMES)
-    assert any(m.startswith("audio/") for m in _GEMINI_SUPPORTED_MEDIA_MIMES)
-    assert "application/pdf" in _GEMINI_SUPPORTED_MEDIA_MIMES
-
 
 @pytest.mark.parametrize(
     "fname,provider,expect_media",
     [
-        ("photo.png", "gemini", True),
-        ("clip.mp4", "gemini", True),
-        ("song.mp3", "gemini", True),
-        ("doc.pdf", "gemini", True),
+        ("photo.png", "gemini", False),   # text-only embedder → no media
+        ("clip.mp4", "gemini", False),    # text-only embedder → no media
+        ("song.mp3", "gemini", False),    # text-only embedder → no media
+        ("doc.pdf", "gemini", False),     # text-only embedder → no media
         ("photo.png", "openai", False),   # non-gemini → no media
         ("clip.mp4", None, False),         # no provider → no media
     ],

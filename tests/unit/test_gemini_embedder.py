@@ -8,9 +8,6 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from openviking.core.context import ModalContent, Vectorize
-
-
 def _make_mock_embedding(values):
     emb = MagicMock()
     emb.values = values
@@ -21,13 +18,6 @@ def _make_mock_result(values_list):
     result = MagicMock()
     result.embeddings = [_make_mock_embedding(v) for v in values_list]
     return result
-
-
-def test_supported_mimes_includes_video_and_pdf():
-    from openviking.models.embedder.gemini_embedders import _SUPPORTED_MULTIMODAL_MIMES
-    assert "video/mp4" in _SUPPORTED_MULTIMODAL_MIMES
-    assert "application/pdf" in _SUPPORTED_MULTIMODAL_MIMES
-    assert "image/jpeg" in _SUPPORTED_MULTIMODAL_MIMES
 
 
 def test_input_token_limit_constant():
@@ -62,10 +52,10 @@ class TestGeminiDenseEmbedderInit:
         assert embedder.get_dimension() == 3072
 
     @patch("openviking.models.embedder.gemini_embedders.genai.Client")
-    def test_supports_multimodal_true(self, mock_client_class):
+    def test_supports_multimodal_false(self, mock_client_class):
         from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
         embedder = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="key")
-        assert embedder.supports_multimodal is True
+        assert embedder.supports_multimodal is False
 
 
 class TestGeminiDenseEmbedderEmbed:
@@ -105,92 +95,6 @@ class TestGeminiDenseEmbedderEmbed:
         embedder = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="key")
         with pytest.raises(RuntimeError, match="Gemini embedding failed"):
             embedder.embed("hello")
-
-
-class TestGeminiDenseEmbedderEmbedMultimodal:
-    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
-    def test_embed_multimodal_with_image_bytes(self, mock_client_class):
-        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
-        mock_client = mock_client_class.return_value
-        mock_client.models.embed_content.return_value = _make_mock_result([[0.5, 0.6]])
-        embedder = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="key", dimension=2)
-        vectorize = Vectorize(
-            text="a screenshot of an IDE",
-            media=ModalContent(
-                mime_type="image/png",
-                uri="viking://agent/resources/shot.png",
-                data=b"\x89PNG\r\n",
-            ),
-        )
-        result = embedder.embed_multimodal(vectorize)
-        assert result.dense_vector is not None
-        mock_client.models.embed_content.assert_called_once()
-
-    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
-    def test_embed_multimodal_falls_back_when_no_media(self, mock_client_class):
-        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
-        mock_client = mock_client_class.return_value
-        mock_client.models.embed_content.return_value = _make_mock_result([[0.1]])
-        embedder = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="key", dimension=1)
-        result = embedder.embed_multimodal(Vectorize(text="plain text"))
-        assert result.dense_vector is not None
-
-    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
-    def test_embed_multimodal_falls_back_on_unsupported_mime(self, mock_client_class):
-        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
-        mock_client = mock_client_class.return_value
-        mock_client.models.embed_content.return_value = _make_mock_result([[0.1]])
-        embedder = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="key", dimension=1)
-        v = Vectorize(
-            text="summary",
-            media=ModalContent(mime_type="video/flv", uri="vid.flv", data=b"data"),
-        )
-        result = embedder.embed_multimodal(v)
-        assert result.dense_vector is not None
-
-    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
-    def test_embed_multimodal_falls_back_on_api_error_with_warning(self, mock_client_class, caplog):
-        import logging
-        from google.genai.errors import APIError
-        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
-        mock_client = mock_client_class.return_value
-        mock_response = MagicMock()
-        mock_response.status_code = 400
-        mock_client.models.embed_content.side_effect = [
-            APIError(400, {}, response=mock_response),
-            _make_mock_result([[0.1]]),
-        ]
-        embedder = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="key", dimension=1)
-        v = Vectorize(
-            text="doc text",
-            media=ModalContent(mime_type="image/jpeg", uri="img.jpg", data=b"bytes"),
-        )
-        with caplog.at_level(logging.WARNING):
-            result = embedder.embed_multimodal(v)
-        assert result.dense_vector is not None
-        assert mock_client.models.embed_content.call_count == 2
-        assert any("fallback" in r.message.lower() for r in caplog.records)
-
-
-class TestGeminiDenseEmbedderTransientError:
-    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
-    def test_embed_multimodal_raises_on_transient_error(self, mock_client_class):
-        """429/5xx errors in multimodal embed must raise RuntimeError (caller retries)."""
-        from google.genai.errors import APIError
-        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
-
-        mock_client = mock_client_class.return_value
-        mock_response = MagicMock()
-        mock_response.status_code = 429
-        mock_client.models.embed_content.side_effect = APIError(429, {}, response=mock_response)
-
-        embedder = GeminiDenseEmbedder("gemini-embedding-2-preview", api_key="key", dimension=1)
-        v = Vectorize(
-            text="doc",
-            media=ModalContent(mime_type="image/jpeg", uri="img.jpg", data=b"bytes"),
-        )
-        with pytest.raises(RuntimeError, match="transient"):
-            embedder.embed_multimodal(v)
 
 
 class TestGeminiDenseEmbedderBatch:

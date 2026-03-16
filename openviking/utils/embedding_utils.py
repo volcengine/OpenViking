@@ -29,10 +29,6 @@ _IMAGE_MIME_MAP = {
     ".svg": "image/svg+xml",
 }
 
-# Use the embedder's allowlist as the single source of truth for image MIME types.
-from openviking.models.embedder.gemini_embedders import _SUPPORTED_MULTIMODAL_MIMES as _GEMINI_MULTIMODAL_MIMES
-_GEMINI_SUPPORTED_IMAGE_MIMES = frozenset(m for m in _GEMINI_MULTIMODAL_MIMES if m.startswith("image/"))
-
 _MIME_MAP_VIDEO = {
     ".mp4": "video/mp4",
     ".mpeg": "video/mpeg",
@@ -52,9 +48,6 @@ _MIME_MAP_AUDIO = {
 _MIME_MAP_PDF = {
     ".pdf": "application/pdf",
 }
-
-_GEMINI_SUPPORTED_MEDIA_MIMES = frozenset(_GEMINI_MULTIMODAL_MIMES)
-
 
 def _infer_image_mime(file_name: str) -> Optional[str]:
     """Return MIME type for image file by extension, or None if unknown."""
@@ -296,28 +289,10 @@ async def vectorize_file(
             ResourceContentType.VIDEO,
             ResourceContentType.AUDIO,
         ) or is_pdf:
-            is_multimodal_provider = (embedding_provider or "").lower() == "gemini"
-
-            if is_multimodal_provider:
-                mime_type = _infer_media_mime(file_name)
-                if mime_type and mime_type in _GEMINI_SUPPORTED_MEDIA_MIMES:
-                    from openviking.core.context import ModalContent
-                    fallback_text = summary or os.path.basename(file_path)
-                    context.set_vectorize(
-                        Vectorize(
-                            text=fallback_text,
-                            media=ModalContent(uri=file_path, mime_type=mime_type),
-                        )
-                    )
-                elif summary:
-                    context.set_vectorize(Vectorize(text=summary))
-                else:
-                    logger.debug(f"Skipping media file {file_path}: unsupported format and no summary")
-                    return
-            elif summary:
+            if summary:
                 context.set_vectorize(Vectorize(text=summary))
             else:
-                logger.debug(f"Skipping media file {file_path}: no multimodal support and no summary")
+                logger.debug(f"Skipping media file {file_path}: no summary available")
                 return
         elif summary:
             # Fallback for unrecognized non-text files

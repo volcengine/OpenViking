@@ -24,30 +24,6 @@ from openviking.models.embedder.base import (
 
 logger = logging.getLogger("gemini_embedders")
 
-_SUPPORTED_MULTIMODAL_MIMES = frozenset({
-    # Images
-    "image/jpeg",
-    "image/png",
-    "image/gif",
-    "image/webp",
-    # Audio
-    "audio/mpeg",
-    "audio/mp3",
-    "audio/wav",
-    "audio/ogg",
-    "audio/flac",
-    # Video
-    "video/mp4",
-    "video/mpeg",
-    "video/mov",
-    "video/avi",
-    "video/webm",
-    "video/wmv",
-    "video/3gpp",
-    # Documents
-    "application/pdf",
-})
-
 _TEXT_BATCH_SIZE = 100
 
 # Maximum input tokens per Gemini embedding request (model hard limit).
@@ -88,10 +64,6 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
             config_kwargs["task_type"] = self.task_type
         self._embed_config = types.EmbedContentConfig(**config_kwargs)
 
-    @property
-    def supports_multimodal(self) -> bool:
-        return True
-
     def embed(self, text: str) -> EmbedResult:
         try:
             result = self.client.models.embed_content(
@@ -103,37 +75,6 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
             return EmbedResult(dense_vector=vector)
         except APIError as e:
             raise RuntimeError(f"Gemini embedding failed (code={e.code}): {e}") from e
-
-    def embed_multimodal(self, vectorize: "Vectorize") -> EmbedResult:  # type: ignore[name-defined]
-        media = getattr(vectorize, "media", None)
-        if (
-            media is None
-            or media.data is None
-            or media.mime_type not in _SUPPORTED_MULTIMODAL_MIMES
-        ):
-            return self.embed(vectorize.text)
-
-        parts: List[Any] = []
-        if vectorize.text:
-            parts.append(types.Part.from_text(text=vectorize.text))
-        parts.append(types.Part.from_bytes(data=media.data, mime_type=media.mime_type))
-
-        try:
-            result = self.client.models.embed_content(
-                model=self.model_name,
-                contents=[types.Content(parts=parts)],
-                config=self._embed_config,
-            )
-            vector = truncate_and_normalize(list(result.embeddings[0].values), self._dimension)
-            return EmbedResult(dense_vector=vector)
-        except APIError as e:
-            if e.code in (429, 502, 503, 504):
-                raise RuntimeError(f"Gemini transient error (code={e.code}), caller should retry") from e
-            logger.warning(
-                f"Gemini multimodal embed failed (code={e.code}) for {media.uri!r} — "
-                f"falling back to text. [multimodal_fallback=True]"
-            )
-            return self.embed(vectorize.text)
 
     def embed_batch(self, texts: List[str]) -> List[EmbedResult]:
         if not texts:
