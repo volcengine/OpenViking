@@ -190,7 +190,7 @@ fn render_vector_records(frame: &mut Frame, app: &App, area: ratatui::layout::Re
                 .get("context_type")
                 .and_then(|v| v.as_str())
                 .unwrap_or("(no type)");
-            let level = record
+            let level_str = record
                 .get("level")
                 .and_then(|v| v.as_i64())
                 .map(|l| l.to_string())
@@ -212,7 +212,7 @@ fn render_vector_records(frame: &mut Frame, app: &App, area: ratatui::layout::Re
                 ),
                 Span::raw(" "),
                 Span::styled(
-                    &level,
+                    level_str,
                     Style::default()
                         .fg(Color::Magenta)
                         .add_modifier(Modifier::BOLD),
