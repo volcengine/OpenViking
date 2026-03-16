@@ -98,8 +98,6 @@ class TreeBuilder:
         Args:
             to_uri: Exact target URI (must not exist)
             parent_uri: Target parent URI (must exist)
-            trigger_semantic: Whether to automatically trigger semantic generation.
-                              Default is False (handled by ResourceProcessor/Summarizer).
         """
 
         viking_fs = get_viking_fs()

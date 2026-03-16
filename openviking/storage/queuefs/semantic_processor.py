@@ -390,7 +390,7 @@ class SemanticProcessor(DequeueHandlerBase):
             try:
                 entries = await viking_fs.ls(dir_uri, show_all_hidden=True, ctx=ctx)
             except Exception as e:
-                logger.warning(f"[SyncDiff] Failed to list {dir_uri}: {e}")
+                logger.error(f"[SyncDiff] Failed to list {dir_uri}: {e}")
                 return files, dirs
 
             for entry in entries:
@@ -422,7 +422,7 @@ class SemanticProcessor(DequeueHandlerBase):
                         diff.deleted_dirs.append(target_conflict_dir)
                         target_dirs.pop(name, None)
                     except Exception as e:
-                        logger.warning(
+                        logger.error(
                             f"[SyncDiff] Failed to delete directory for file conflict: {target_conflict_dir}, error={e}"
                         )
                     target_file = None
@@ -433,7 +433,7 @@ class SemanticProcessor(DequeueHandlerBase):
                         diff.deleted_files.append(target_file)
                         target_files.pop(name, None)
                     except Exception as e:
-                        logger.warning(
+                        logger.error(
                             f"[SyncDiff] Failed to delete file for dir conflict: {target_file}, error={e}"
                         )
                     continue
@@ -443,9 +443,7 @@ class SemanticProcessor(DequeueHandlerBase):
                         await viking_fs.rm(target_file, ctx=ctx)
                         diff.deleted_files.append(target_file)
                     except Exception as e:
-                        logger.warning(
-                            f"[SyncDiff] Failed to delete file: {target_file}, error={e}"
-                        )
+                        logger.error(f"[SyncDiff] Failed to delete file: {target_file}, error={e}")
                     continue
 
                 if root_file and target_file:
@@ -458,7 +456,7 @@ class SemanticProcessor(DequeueHandlerBase):
                                 root_file, target_file, ctx=ctx
                             )
                         except Exception as e:
-                            logger.warning(
+                            logger.error(
                                 f"[SyncDiff] Failed to compare file content for {root_file}: {e}, treating as unchanged"
                             )
                             changed = False
@@ -467,13 +465,13 @@ class SemanticProcessor(DequeueHandlerBase):
                         try:
                             await viking_fs.rm(target_file, ctx=ctx)
                         except Exception as e:
-                            logger.warning(
+                            logger.error(
                                 f"[SyncDiff] Failed to remove old file before update: {target_file}, error={e}"
                             )
                         try:
                             await viking_fs.mv(root_file, target_file, ctx=ctx)
                         except Exception as e:
-                            logger.warning(
+                            logger.error(
                                 f"[SyncDiff] Failed to move updated file: {root_file} -> {target_file}, error={e}"
                             )
                     continue
@@ -484,7 +482,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     try:
                         await viking_fs.mv(root_file, target_file_uri, ctx=ctx)
                     except Exception as e:
-                        logger.warning(
+                        logger.error(
                             f"[SyncDiff] Failed to move added file: {root_file} -> {target_file_uri}, error={e}"
                         )
 
@@ -500,7 +498,7 @@ class SemanticProcessor(DequeueHandlerBase):
                         diff.deleted_files.append(target_conflict_file)
                         target_files.pop(name, None)
                     except Exception as e:
-                        logger.warning(
+                        logger.error(
                             f"[SyncDiff] Failed to delete file for dir conflict: {target_conflict_file}, error={e}"
                         )
                     target_subdir = None
@@ -510,7 +508,7 @@ class SemanticProcessor(DequeueHandlerBase):
                         await viking_fs.rm(target_subdir, recursive=True, ctx=ctx)
                         diff.deleted_dirs.append(target_subdir)
                     except Exception as e:
-                        logger.warning(
+                        logger.error(
                             f"[SyncDiff] Failed to delete directory: {target_subdir}, error={e}"
                         )
                     continue
@@ -521,7 +519,7 @@ class SemanticProcessor(DequeueHandlerBase):
                     try:
                         await viking_fs.mv(root_subdir, target_subdir_uri, ctx=ctx)
                     except Exception as e:
-                        logger.warning(
+                        logger.error(
                             f"[SyncDiff] Failed to move added directory: {root_subdir} -> {target_subdir_uri}, error={e}"
                         )
                     continue
@@ -542,7 +540,7 @@ class SemanticProcessor(DequeueHandlerBase):
         try:
             await viking_fs.rm(root_uri, recursive=True, ctx=ctx)
         except Exception as e:
-            logger.warning(f"[SyncDiff] Failed to delete root directory {root_uri}: {e}")
+            logger.error(f"[SyncDiff] Failed to delete root directory {root_uri}: {e}")
         return diff
 
     async def _collect_children_abstracts(
