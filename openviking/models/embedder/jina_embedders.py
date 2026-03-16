@@ -22,18 +22,32 @@ class JinaDenseEmbedder(DenseEmbedderBase):
     """Jina AI Dense Embedder Implementation
 
     Uses Jina AI embedding API via OpenAI-compatible client.
-    Supports task-specific embeddings and Matryoshka dimension reduction.
+    Supports task-specific embeddings (non-symmetric) and Matryoshka dimension reduction.
+
+    Jina models are non-symmetric by default and require the 'task' parameter to distinguish
+    between query and document embeddings. This is different from official OpenAI models,
+    which are symmetric and do not support the input_type parameter.
 
     Example:
-        >>> embedder = JinaDenseEmbedder(
+        >>> # Query embedding
+        >>> query_embedder = JinaDenseEmbedder(
         ...     model_name="jina-embeddings-v5-text-small",
         ...     api_key="jina_xxx",
         ...     dimension=512,
-        ...     task="retrieval.query"
+        ...     context="query"
         ... )
-        >>> result = embedder.embed("Hello world")
-        >>> print(len(result.dense_vector))
+        >>> query_vector = query_embedder.embed("search query")
+        >>> print(len(query_vector.dense_vector))
         512
+
+        >>> # Document embedding
+        >>> doc_embedder = JinaDenseEmbedder(
+        ...     model_name="jina-embeddings-v5-text-small",
+        ...     api_key="jina_xxx",
+        ...     dimension=512,
+        ...     context="document"
+        ... )
+        >>> doc_vector = doc_embedder.embed("document content")
     """
 
     def __init__(
@@ -42,7 +56,9 @@ class JinaDenseEmbedder(DenseEmbedderBase):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         dimension: Optional[int] = None,
-        task: Optional[str] = None,
+        context: Optional[str] = None,
+        query_param: str = "retrieval.query",
+        document_param: str = "retrieval.passage",
         late_chunking: Optional[bool] = None,
         config: Optional[Dict[str, Any]] = None,
     ):
@@ -53,9 +69,15 @@ class JinaDenseEmbedder(DenseEmbedderBase):
             api_key: API key, required
             api_base: API base URL, defaults to https://api.jina.ai/v1
             dimension: Dimension for Matryoshka reduction, optional
-            task: Task type for task-specific embeddings, optional.
-                  Valid values: retrieval.query, retrieval.passage,
-                  text-matching, classification, separation
+            context: Embedding context, either 'query' or 'document'. Jina models are
+                     non-symmetric by default; task is always sent unless context is None.
+                     Pass None to disable task (e.g. for symmetric deployments via OpenAI
+                     compatible endpoint).
+            query_param: Task value for query-side embeddings. Defaults to 'retrieval.query'.
+                        Override for models with different task naming conventions.
+            document_param: Task value for document-side embeddings. Defaults to
+                           'retrieval.passage'. Override for models with different task
+                           naming conventions.
             late_chunking: Enable late chunking via extra_body, optional
             config: Additional configuration dict
 
@@ -67,7 +89,12 @@ class JinaDenseEmbedder(DenseEmbedderBase):
         self.api_key = api_key
         self.api_base = api_base or "https://api.jina.ai/v1"
         self.dimension = dimension
-        self.task = task
+        if context == "query":
+            self.task: Optional[str] = query_param
+        elif context == "document":
+            self.task = document_param
+        else:
+            self.task = None
         self.late_chunking = late_chunking
 
         if not self.api_key:

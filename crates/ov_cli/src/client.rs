@@ -742,6 +742,7 @@ impl HttpClient {
         &self,
         limit: Option<u32>,
         cursor: Option<String>,
+        uri_prefix: Option<String>,
     ) -> Result<(Vec<serde_json::Value>, Option<String>)> {
         let mut params = Vec::new();
         if let Some(l) = limit {
@@ -749,6 +750,9 @@ impl HttpClient {
         }
         if let Some(c) = cursor {
             params.push(("cursor".to_string(), c));
+        }
+        if let Some(u) = uri_prefix {
+            params.push(("uri".to_string(), u));
         }
 
         let result: serde_json::Value = self.get("/api/v1/debug/vector/scroll", &params).await?;
@@ -765,10 +769,14 @@ impl HttpClient {
     pub async fn debug_vector_count(
         &self,
         filter: Option<&serde_json::Value>,
+        uri_prefix: Option<String>,
     ) -> Result<u64> {
         let mut params = Vec::new();
         if let Some(f) = filter {
             params.push(("filter".to_string(), serde_json::to_string(f)?));
+        }
+        if let Some(u) = uri_prefix {
+            params.push(("uri".to_string(), u));
         }
 
         let result: serde_json::Value = self.get("/api/v1/debug/vector/count", &params).await?;
