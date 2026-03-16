@@ -55,6 +55,7 @@ pub struct App {
     pub status_message: String,
     pub vector_state: VectorRecordsState,
     pub showing_vector_records: bool,
+    pub current_uri: String,
 }
 
 impl App {
@@ -71,6 +72,7 @@ impl App {
             status_message: String::new(),
             vector_state: VectorRecordsState::new(),
             showing_vector_records: false,
+            current_uri: "/".to_string(),
         }
     }
 
@@ -93,6 +95,7 @@ impl App {
             }
         };
 
+        self.current_uri = uri.clone();
         self.content_title = uri.clone();
         self.content_scroll = 0;
 
@@ -114,6 +117,11 @@ impl App {
         }
 
         self.content_line_count = self.content.lines().count() as u16;
+
+        // If in vector mode, reload records with new current_uri
+        if self.showing_vector_records {
+            self.load_vector_records(Some(self.current_uri.clone())).await;
+        }
     }
 
     async fn load_directory_content(&mut self, uri: &str) {
@@ -197,9 +205,13 @@ impl App {
         };
     }
 
-    pub async fn load_vector_records(&mut self) {
+    pub async fn load_vector_records(&mut self, uri_prefix: Option<String>) {
         self.status_message = "Loading vector records...".to_string();
-        match self.client.debug_vector_scroll(Some(100), None).await {
+        match self
+            .client
+            .debug_vector_scroll(Some(100), None, uri_prefix.clone())
+            .await
+        {
             Ok((records, next_cursor)) => {
                 self.vector_state.records = records;
                 self.vector_state.has_more = next_cursor.is_some();
@@ -223,7 +235,11 @@ impl App {
         self.status_message = "Loading next page...".to_string();
         match self
             .client
-            .debug_vector_scroll(Some(100), self.vector_state.next_page_cursor.clone())
+            .debug_vector_scroll(
+                Some(100),
+                self.vector_state.next_page_cursor.clone(),
+                Some(self.current_uri.clone()),
+            )
             .await
         {
             Ok((mut new_records, next_cursor)) => {
@@ -241,13 +257,17 @@ impl App {
     pub async fn toggle_vector_records_mode(&mut self) {
         self.showing_vector_records = !self.showing_vector_records;
         if self.showing_vector_records && self.vector_state.records.is_empty() {
-            self.load_vector_records().await;
+            self.load_vector_records(Some(self.current_uri.clone())).await;
         }
     }
 
     pub async fn load_vector_count(&mut self) {
         self.status_message = "Loading vector count...".to_string();
-        match self.client.debug_vector_count(None).await {
+        match self
+            .client
+            .debug_vector_count(None, Some(self.current_uri.clone()))
+            .await
+        {
             Ok(count) => {
                 self.vector_state.total_count = Some(count);
                 self.status_message = format!("Total vector records: {}", count);

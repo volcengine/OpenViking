@@ -35,6 +35,7 @@ async def debug_health(
 async def debug_vector_scroll(
     limit: int = Query(100, ge=1, le=1000),
     cursor: Optional[str] = None,
+    uri: Optional[str] = None,
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get paginated vector records with tenant isolation."""
@@ -46,7 +47,12 @@ async def debug_vector_scroll(
         )
 
     proxy = VikingDBManagerProxy(service.vikingdb_manager, _ctx)
-    records, next_cursor = await proxy.scroll(limit=limit, cursor=cursor)
+
+    filter_expr = None
+    if uri:
+        filter_expr = {"uri": {"$prefix": uri}}
+
+    records, next_cursor = await proxy.scroll(filter=filter_expr, limit=limit, cursor=cursor)
 
     return Response(status="ok", result={"records": records, "next_cursor": next_cursor})
 
@@ -54,6 +60,7 @@ async def debug_vector_scroll(
 @router.get("/vector/count")
 async def debug_vector_count(
     filter: Optional[str] = None,
+    uri: Optional[str] = None,
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get count of vector records with tenant isolation."""
@@ -77,6 +84,13 @@ async def debug_vector_count(
                 status="error",
                 error=ErrorInfo(code="INVALID_FILTER", message="Invalid filter JSON"),
             )
+
+    if uri:
+        uri_filter = {"uri": {"$prefix": uri}}
+        if filter_expr:
+            filter_expr = {"$and": [filter_expr, uri_filter]}
+        else:
+            filter_expr = uri_filter
 
     count = await proxy.count(filter=filter_expr)
     return Response(status="ok", result={"count": count})

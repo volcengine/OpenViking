@@ -147,14 +147,16 @@ fn render_vector_records(frame: &mut Frame, app: &App, area: ratatui::layout::Re
 
     let title = if let Some(total) = app.vector_state.total_count {
         format!(
-            " Vector Records ({}/{}, total: {}) ",
+            " Vector Records for {} ({}/{}, total: {}) ",
+            app.current_uri,
             app.vector_state.cursor + 1,
             app.vector_state.records.len(),
             total
         )
     } else {
         format!(
-            " Vector Records ({}/{}) ",
+            " Vector Records for {} ({}/{}) ",
+            app.current_uri,
             app.vector_state.cursor + 1,
             app.vector_state.records.len()
         )
