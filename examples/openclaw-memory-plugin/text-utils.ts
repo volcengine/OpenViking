@@ -206,7 +206,7 @@ export function pickRecentUniqueTexts(texts: string[], limit: number): string[] 
   return picked.reverse();
 }
 
-export function getCaptureDecision(text: string, mode: CaptureMode, captureMaxLength: number): {
+export function getCaptureDecision(text: string, mode: CaptureMode, captureMinLength: number, captureMaxLength: number): {
   shouldCapture: boolean;
   reason: string;
   normalizedText: string;
@@ -223,7 +223,7 @@ export function getCaptureDecision(text: string, mode: CaptureMode, captureMaxLe
   }
 
   const compactText = normalizedText.replace(/\s+/g, "");
-  const minLength = resolveCaptureMinLength(compactText);
+  const minLength = Math.max(resolveCaptureMinLength(compactText), captureMinLength);
   if (compactText.length < minLength || normalizedText.length > captureMaxLength) {
     return {
       shouldCapture: false,

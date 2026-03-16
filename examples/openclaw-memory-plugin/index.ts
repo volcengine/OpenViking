@@ -511,7 +511,7 @@ const memoryPlugin = {
           const turnText = newTexts.join("\n");
 
           // 对合并文本做 capture decision（主要检查长度和命令过滤）
-          const decision = getCaptureDecision(turnText, cfg.captureMode, cfg.captureMaxLength);
+          const decision = getCaptureDecision(turnText, cfg.captureMode, cfg.captureMinLength, cfg.captureMaxLength);
           const preview = turnText.length > 80 ? `${turnText.slice(0, 80)}...` : turnText;
           api.logger.info(
             `memory-openviking: capture-check shouldCapture=${String(decision.shouldCapture)} reason=${decision.reason} newMsgCount=${newCount} text="${preview}"`,
