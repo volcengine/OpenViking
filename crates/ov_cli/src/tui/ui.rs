@@ -336,9 +336,26 @@ fn render_status_bar(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) 
                     .fg(Color::Yellow)
                     .add_modifier(Modifier::BOLD),
             ),
-            Span::raw(":top/bottom"),
+            Span::raw(":top/bottom  "),
+
         ]);
     }
+
+    hints.extend_from_slice(&[
+        Span::styled(
+            "d", 
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)), 
+        Span::raw(":delete  "),
+
+        Span::styled(
+            "r", 
+            Style::default()
+                .fg(Color::Yellow)
+                .add_modifier(Modifier::BOLD)),
+        Span::raw(":refresh"),
+    ]);
 
     if !app.status_message.is_empty() {
         hints.push(Span::raw("  |  "));

@@ -3,6 +3,27 @@ use crossterm::event::{KeyCode, KeyEvent};
 use super::app::{App, Panel};
 
 pub async fn handle_key(app: &mut App, key: KeyEvent) {
+    // Check for delete confirmation first
+    if app.delete_confirmation.is_some() {
+        match key.code {
+            KeyCode::Char('y') => {
+                // Confirm deletion
+                if let Some((selected_uri, is_dir)) = app.delete_confirmation.take() {
+                    app.delete_uri(selected_uri, is_dir).await;
+                }
+            }
+            KeyCode::Char('n') => {
+                // Cancel deletion
+                app.delete_confirmation.take();
+                app.set_status_message("Deletion cancelled".to_string());
+            }
+            _ => {
+                // Ignore other keys during confirmation
+            }
+        }
+        return;
+    }
+    
     match key.code {
         KeyCode::Char('q') => {
             app.should_quit = true;
@@ -40,6 +61,25 @@ async fn handle_tree_key(app: &mut App, key: KeyEvent) {
             let client = app.client.clone();
             app.tree.toggle_expand(&client).await;
             app.load_content_for_selected().await;
+        }
+        KeyCode::Char('d') => {
+            // Delete currently selected URI
+            if let Some(selected_uri) = app.tree.selected_uri() {
+                let selected_uri = selected_uri.to_string();
+                let is_dir = app.tree.selected_is_dir().unwrap_or(false);
+                
+                // Set delete confirmation state
+                app.delete_confirmation = Some((selected_uri.clone(), is_dir));
+                app.status_message = format!("Delete {}? (y/n): {}", 
+                    if is_dir { "directory" } else { "file" }, 
+                    selected_uri
+                );
+            } else {
+                app.set_status_message("Nothing selected to delete".to_string());
+            }
+        }
+        KeyCode::Char('r') => {
+            app.reload_entire_tree().await;
         }
         _ => {}
     }

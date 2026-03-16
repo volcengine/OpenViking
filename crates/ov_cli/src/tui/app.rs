@@ -2,6 +2,8 @@ use crate::client::HttpClient;
 
 use super::tree::TreeState;
 
+use std::time::Instant;
+
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Panel {
     Tree,
@@ -53,6 +55,8 @@ pub struct App {
     pub content_line_count: u16,
     pub should_quit: bool,
     pub status_message: String,
+    pub status_message_time: Option<Instant>,
+    pub delete_confirmation: Option<(String, bool)>, // (uri, is_dir)
     pub vector_state: VectorRecordsState,
     pub showing_vector_records: bool,
     pub current_uri: String,
@@ -70,6 +74,8 @@ impl App {
             content_line_count: 0,
             should_quit: false,
             status_message: String::new(),
+            status_message_time: None,
+            delete_confirmation: None,
             vector_state: VectorRecordsState::new(),
             showing_vector_records: false,
             current_uri: "/".to_string(),
@@ -205,6 +211,20 @@ impl App {
         };
     }
 
+    pub fn set_status_message(&mut self, message: String) {
+        self.status_message = message;
+        self.status_message_time = Some(Instant::now());
+    }
+
+    pub fn update_status_message(&mut self) {
+        if let Some(time) = self.status_message_time {
+            if time.elapsed().as_secs() >= 3 {
+                self.status_message.clear();
+                self.status_message_time = None;
+            }
+        }
+    }
+
     pub async fn load_vector_records(&mut self, uri_prefix: Option<String>) {
         self.status_message = "Loading vector records...".to_string();
         match self
@@ -299,6 +319,155 @@ impl App {
     pub fn scroll_vector_bottom(&mut self) {
         if !self.vector_state.records.is_empty() {
             self.vector_state.cursor = self.vector_state.records.len() - 1;
+        }
+    }
+
+    pub async fn reload_entire_tree(&mut self) {
+        let client = self.client.clone();
+        let selected_node = self.tree.selected_uri()
+            .map(|uri| uri.to_string())
+            .unwrap_or_else(|| "viking://".to_string());
+        
+        // Collect expanded nodes before refresh
+        let expanded_nodes: Vec<String> = self.tree.visible
+            .iter()
+            .filter(|r| r.expanded)
+            .map(|r| r.uri.clone())
+            .collect();
+        
+        self.tree.load_root(&client, "viking://").await;
+        
+        // Restore expanded state for previously expanded nodes
+        for uri in &expanded_nodes {
+            self.tree.expand_node_by_uri(&client, uri).await;
+        }
+        
+        // Ensure parent directories of selected node are expanded
+        // so the selected node becomes visible
+        let mut current_path = selected_node.clone();
+        while current_path != "viking://" && current_path != "/" {
+            // Remove the last segment to get parent path
+            if let Some(last_slash) = current_path.rfind('/') {
+                current_path = current_path[..last_slash].to_string();
+                // Expand parent directory
+                self.tree.expand_node_by_uri(&client, &current_path).await;
+            } else {
+                break;
+            }
+        }
+        
+        // Find the node with the original selected URI and set cursor
+        let cursor = self.tree.visible.iter()
+            .position(|r| r.uri == selected_node)
+            .unwrap_or_else(|| {
+                // If selected node not found, try to find its parent directory
+                let mut parent_path = selected_node.clone();
+                while parent_path != "viking://" && parent_path != "/" {
+                    if let Some(last_slash) = parent_path.rfind('/') {
+                        parent_path = parent_path[..last_slash].to_string();
+                        if let Some(pos) = self.tree.visible.iter().position(|r| r.uri == parent_path) {
+                            return pos;
+                        }
+                    } else {
+                        break;
+                    }
+                }
+                0
+            });
+        self.tree.cursor = cursor;
+        self.load_content_for_selected().await;
+        self.set_status_message("Tree refreshed".to_string());
+    }
+
+    pub async fn delete_uri(&mut self, selected_uri: String, is_dir: bool) {
+        let client = self.client.clone();
+        
+        // Collect expanded nodes before deletion
+        let expanded_nodes: Vec<String> = self.tree.visible
+            .iter()
+            .filter(|r| r.expanded)
+            .map(|r| r.uri.clone())
+            .collect();
+        
+        // Determine target URI: next node if exists, otherwise previous node
+        let current_cursor = self.tree.cursor;
+        let target_uri = if current_cursor + 1 < self.tree.visible.len() {
+            // Use next node if it exists
+            self.tree.visible.get(current_cursor + 1).map(|r| r.uri.clone())
+        } else if current_cursor > 0 {
+            // Use previous node if next doesn't exist
+            self.tree.visible.get(current_cursor - 1).map(|r| r.uri.clone())
+        } else {
+            // Fallback to parent if no siblings
+            if let Some(last_slash) = selected_uri.rfind('/') {
+                if last_slash == 0 {
+                    Some("/".to_string())
+                } else {
+                    Some(selected_uri[..last_slash].to_string())
+                }
+            } else {
+                Some("/".to_string())
+            }
+        };
+        
+        match client.rm(&selected_uri, is_dir).await {
+            Ok(_) => {
+                self.set_status_message(format!("Deleted: {}", selected_uri));
+                
+                // Remove deleted node from expanded nodes
+                let mut expanded_nodes = expanded_nodes;
+                expanded_nodes.retain(|uri| uri != &selected_uri);
+                
+                // Reload the root
+                self.tree.load_root(&client, "viking://").await;
+                
+                // Restore expanded state for remaining expanded nodes
+                for uri in &expanded_nodes {
+                    self.tree.expand_node_by_uri(&client, uri).await;
+                }
+                
+                // Ensure parent directories of target URI are expanded
+                if let Some(uri) = &target_uri {
+                    let mut current_path = uri.clone();
+                    while current_path != "viking://" && current_path != "/" {
+                        if let Some(last_slash) = current_path.rfind('/') {
+                            current_path = current_path[..last_slash].to_string();
+                            self.tree.expand_node_by_uri(&client, &current_path).await;
+                        } else {
+                            break;
+                        }
+                    }
+                }
+                
+                // Set cursor to target URI
+                let cursor = if let Some(uri) = target_uri {
+                    self.tree.visible.iter()
+                        .position(|r| r.uri == uri)
+                        .unwrap_or_else(|| {
+                            // If target node not found, try to find its parent directory
+                            let mut current_path = uri.clone();
+                            while current_path != "viking://" && current_path != "/" {
+                                if let Some(last_slash) = current_path.rfind('/') {
+                                    current_path = current_path[..last_slash].to_string();
+                                    if let Some(pos) = self.tree.visible.iter().position(|r| r.uri == current_path) {
+                                        return pos;
+                                    }
+                                } else {
+                                    break;
+                                }
+                            }
+                            0
+                        })
+                } else {
+                    0
+                };
+                self.tree.cursor = cursor;
+                
+                self.load_content_for_selected().await;
+            }
+            Err(e) => {
+                self.set_status_message(format!("Delete failed: {}", e));
+            }
         }
     }
 }
