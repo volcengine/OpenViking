@@ -23,6 +23,7 @@ def _make_channel(allow_from: list[str] | None = None):
         token="fake-token",
         allow_from=allow_from or ["alice"],
         proxy=None,
+        channel_id=lambda: "fake-token",
     )
     return TelegramChannel(config=config, bus=AsyncMock())
 
