@@ -294,10 +294,19 @@ class MemoryExtractor:
             response = await vlm.get_completion_async(prompt)
             logger.debug("Memory extraction LLM raw response: %s", response)
             data = parse_json_from_response(response) or {}
+            if isinstance(data, list):
+                logger.warning(
+                    "Memory extraction received list instead of dict; wrapping as memories"
+                )
+                data = {"memories": data}
+            elif not isinstance(data, dict):
+                logger.warning(
+                    "Memory extraction received unexpected type %s; skipping", type(data).__name__
+                )
+                data = {}
             logger.debug("Memory extraction LLM parsed payload: %s", data)
 
             candidates = []
-            # print(f"memories = {data.get('memories', [])}")
             for mem in data.get("memories", []):
                 category_str = mem.get("category", "patterns")
                 try:

@@ -13,6 +13,7 @@ from typing import Any, Dict, List, Optional, Union
 
 import httpx
 
+from openviking.telemetry import TelemetryRequest, normalize_telemetry_request
 from openviking_cli.client.base import BaseClient
 from openviking_cli.exceptions import (
     AlreadyExistsError,
@@ -196,8 +197,8 @@ class AsyncHTTPClient(BaseClient):
 
     # ============= Internal Helpers =============
 
-    def _handle_response(self, response: httpx.Response) -> Any:
-        """Handle HTTP response and extract result or raise exception."""
+    def _handle_response_data(self, response: httpx.Response) -> Dict[str, Any]:
+        """Handle HTTP response and return the decoded response envelope."""
         try:
             data = response.json()
         except Exception:
@@ -206,7 +207,7 @@ class AsyncHTTPClient(BaseClient):
                     f"HTTP {response.status_code}: {response.text or 'empty response'}",
                     code="INTERNAL",
                 )
-            return None
+            return {}
         if data.get("status") == "error":
             self._raise_exception(data.get("error", {}))
         if not response.is_success:
@@ -214,7 +215,33 @@ class AsyncHTTPClient(BaseClient):
                 data.get("detail", f"HTTP {response.status_code}"),
                 code="UNKNOWN",
             )
-        return data.get("result")
+        return data
+
+    def _handle_response(self, response: httpx.Response) -> Any:
+        """Handle HTTP response and extract result or raise exception."""
+        return self._handle_response_data(response).get("result")
+
+    @staticmethod
+    def _validate_telemetry(telemetry: TelemetryRequest) -> TelemetryRequest:
+        normalize_telemetry_request(telemetry)
+        return telemetry
+
+    @staticmethod
+    def _attach_telemetry(result: Any, response_data: Dict[str, Any]) -> Any:
+        telemetry = response_data.get("telemetry")
+        if telemetry is None:
+            return result
+
+        if result is None:
+            payload: Dict[str, Any] = {}
+            payload["telemetry"] = telemetry
+            return payload
+
+        if isinstance(result, dict):
+            result["telemetry"] = telemetry
+            return result
+
+        return result
 
     def _raise_exception(self, error: Dict[str, Any]) -> None:
         """Raise appropriate exception based on error code."""
@@ -263,6 +290,7 @@ class AsyncHTTPClient(BaseClient):
             for file_path in dir_path.rglob("*"):
                 if file_path.is_file():
                     arcname = file_path.relative_to(dir_path)
+                    arcname = str(arcname).replace("\\", "/")
                     zipf.write(file_path, arcname=arcname)
 
         return str(zip_path)
@@ -295,9 +323,10 @@ class AsyncHTTPClient(BaseClient):
         exclude: Optional[str] = None,
         directly_upload_media: bool = True,
         preserve_structure: Optional[bool] = None,
+        telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
-        # Validate that only one of 'to' or 'parent' is set
+        telemetry = self._validate_telemetry(telemetry)
         if to and parent:
             raise ValueError("Cannot specify both 'to' and 'parent' at the same time.")
 
@@ -313,6 +342,7 @@ class AsyncHTTPClient(BaseClient):
             "include": include,
             "exclude": exclude,
             "directly_upload_media": directly_upload_media,
+            "telemetry": telemetry,
         }
         if preserve_structure is not None:
             request_data["preserve_structure"] = preserve_structure
@@ -338,15 +368,18 @@ class AsyncHTTPClient(BaseClient):
             "/api/v1/resources",
             json=request_data,
         )
-        return self._handle_response(response)
+        response_data = self._handle_response_data(response)
+        return self._attach_telemetry(response_data.get("result"), response_data)
 
     async def add_skill(
         self,
         data: Any,
         wait: bool = False,
         timeout: Optional[float] = None,
+        telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add skill to OpenViking."""
+        telemetry = self._validate_telemetry(telemetry)
         request_data = {
             "wait": wait,
             "timeout": timeout,
@@ -374,9 +407,10 @@ class AsyncHTTPClient(BaseClient):
 
         response = await self._http.post(
             "/api/v1/skills",
-            json=request_data,
+            json={**request_data, "telemetry": telemetry},
         )
-        return self._handle_response(response)
+        response_data = self._handle_response_data(response)
+        return self._attach_telemetry(response_data.get("result"), response_data)
 
     async def wait_processed(self, timeout: Optional[float] = None) -> Dict[str, Any]:
         """Wait for all processing to complete."""
@@ -521,8 +555,10 @@ class AsyncHTTPClient(BaseClient):
         node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
+        telemetry: TelemetryRequest = False,
     ) -> FindResult:
         """Semantic search without session context."""
+        telemetry = self._validate_telemetry(telemetry)
         if target_uri:
             target_uri = VikingURI.normalize(target_uri)
         actual_limit = node_limit if node_limit is not None else limit
@@ -534,9 +570,11 @@ class AsyncHTTPClient(BaseClient):
                 "limit": actual_limit,
                 "score_threshold": score_threshold,
                 "filter": filter,
+                "telemetry": telemetry,
             },
         )
-        return FindResult.from_dict(self._handle_response(response))
+        response_data = self._handle_response_data(response)
+        return FindResult.from_dict(response_data.get("result") or {})
 
     async def search(
         self,
@@ -548,8 +586,10 @@ class AsyncHTTPClient(BaseClient):
         node_limit: Optional[int] = None,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
+        telemetry: TelemetryRequest = False,
     ) -> FindResult:
         """Semantic search with optional session context."""
+        telemetry = self._validate_telemetry(telemetry)
         if target_uri:
             target_uri = VikingURI.normalize(target_uri)
         actual_limit = node_limit if node_limit is not None else limit
@@ -563,9 +603,11 @@ class AsyncHTTPClient(BaseClient):
                 "limit": actual_limit,
                 "score_threshold": score_threshold,
                 "filter": filter,
+                "telemetry": telemetry,
             },
         )
-        return FindResult.from_dict(self._handle_response(response))
+        response_data = self._handle_response_data(response)
+        return FindResult.from_dict(response_data.get("result") or {})
 
     async def grep(
         self,
@@ -658,10 +700,17 @@ class AsyncHTTPClient(BaseClient):
         response = await self._http.delete(f"/api/v1/sessions/{session_id}")
         self._handle_response(response)
 
-    async def commit_session(self, session_id: str) -> Dict[str, Any]:
+    async def commit_session(
+        self, session_id: str, telemetry: TelemetryRequest = False
+    ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
-        response = await self._http.post(f"/api/v1/sessions/{session_id}/commit")
-        return self._handle_response(response)
+        telemetry = self._validate_telemetry(telemetry)
+        response = await self._http.post(
+            f"/api/v1/sessions/{session_id}/commit",
+            json={"telemetry": telemetry},
+        )
+        response_data = self._handle_response_data(response)
+        return self._attach_telemetry(response_data.get("result"), response_data)
 
     async def add_message(
         self,

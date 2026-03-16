@@ -255,10 +255,10 @@ class DirectoryInitializer:
             (1, defn.overview),
         ):
             existing = await self.vikingdb.get_context_by_uri(
-                account_id=ctx.account_id,
                 uri=uri,
                 level=level,
                 limit=1,
+                ctx=ctx,
             )
             if existing:
                 continue

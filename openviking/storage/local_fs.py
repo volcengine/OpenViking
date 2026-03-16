@@ -162,6 +162,8 @@ async def import_ovpack(
 
         # Extract root directory name (assuming first path component is root name)
         first_path = infolist[0].filename
+        # Normalize path separators to handle Windows-created ZIPs
+        first_path = first_path.replace("\\", "/")
         base_name = first_path.split("/")[0]
         if not base_name:
             raise ValueError("Could not determine root directory name from ovpack")
@@ -202,6 +204,8 @@ async def import_ovpack(
             if not zip_path:
                 continue
 
+            # Normalize path separators to handle Windows-created ZIPs
+            zip_path = zip_path.replace("\\", "/")
             safe_zip_path = _validate_ovpack_member_path(zip_path, base_name)
 
             # Handle directory entries

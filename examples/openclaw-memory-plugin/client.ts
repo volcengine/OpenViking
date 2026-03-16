@@ -47,15 +47,35 @@ export function isMemoryUri(uri: string): boolean {
 }
 
 export class OpenVikingClient {
-  private readonly resolvedSpaceByScope: Partial<Record<ScopeName, string>> = {};
+  private resolvedSpaceByScope: Partial<Record<ScopeName, string>> = {};
   private runtimeIdentity: RuntimeIdentity | null = null;
 
   constructor(
     private readonly baseUrl: string,
     private readonly apiKey: string,
-    private readonly agentId: string,
+    private agentId: string,
     private readonly timeoutMs: number,
   ) {}
+
+  /**
+   * Dynamically switch the agent identity for multi-agent memory isolation.
+   * When a shared client serves multiple agents (e.g. in OpenClaw multi-agent
+   * gateway), call this before each agent's recall/capture to route memories
+   * to the correct agent_space = md5(user_id + agent_id)[:12].
+   * Clears cached space resolution so the next request re-derives agent_space.
+   */
+  setAgentId(newAgentId: string): void {
+    if (newAgentId && newAgentId !== this.agentId) {
+      this.agentId = newAgentId;
+      // Clear cached identity and spaces — they depend on agentId
+      this.runtimeIdentity = null;
+      this.resolvedSpaceByScope = {};
+    }
+  }
+
+  getAgentId(): string {
+    return this.agentId;
+  }
 
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
     const controller = new AbortController();
@@ -131,10 +151,10 @@ export class OpenVikingClient {
 
     const identity = await this.getRuntimeIdentity();
     const fallbackSpace =
-      scope === "user" ? identity.userId : md5Short(`${identity.userId}${identity.agentId}`);
+      scope === "user" ? identity.userId : md5Short(`${identity.userId}:${identity.agentId}`);
     const reservedDirs = scope === "user" ? USER_STRUCTURE_DIRS : AGENT_STRUCTURE_DIRS;
     const preferredSpace =
-      scope === "user" ? identity.userId : md5Short(`${identity.userId}${identity.agentId}`);
+      scope === "user" ? identity.userId : md5Short(`${identity.userId}:${identity.agentId}`);
 
     try {
       const entries = await this.ls(`viking://${scope}`);

@@ -68,7 +68,7 @@ class TestToolSkillCalibration:
         tool_parts = [ToolPart(skill_uri="viking://agent/skills/weather", tool_status="completed")]
         candidate = _candidate(MemoryCategory.SKILLS, skill_name="weather使用")
         tool_name, skill_name, status = compressor._get_tool_skill_info(candidate, tool_parts)
-        assert (tool_name, skill_name, status) == ("", "", "completed")
+        assert (tool_name, skill_name, status) == ("", "weather", "completed")
 
     def test_best_match_tie_picks_most_recent_tool_part(self):
         compressor = SessionCompressor.__new__(SessionCompressor)

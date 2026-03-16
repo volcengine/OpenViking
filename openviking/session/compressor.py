@@ -230,7 +230,7 @@ class SessionCompressor:
                 continue
 
             # Dedup check for other categories
-            result = await self.deduplicator.deduplicate(candidate)
+            result = await self.deduplicator.deduplicate(candidate, ctx)
             actions = result.actions or []
             decision = result.decision
 

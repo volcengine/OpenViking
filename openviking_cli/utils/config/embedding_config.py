@@ -47,6 +47,10 @@ class EmbeddingModelConfig(BaseModel):
     sk: Optional[str] = Field(default=None, description="Access Key Secretfor VikingDB API")
     region: Optional[str] = Field(default=None, description="Region for VikingDB API")
     host: Optional[str] = Field(default=None, description="Host for VikingDB API")
+    max_tokens: Optional[int] = Field(
+        default=None,
+        description="Maximum token count per embedding request. If None, uses model default (e.g., 8000 for OpenAI).",
+    )
 
     model_config = {"extra": "forbid"}
 
@@ -184,6 +188,7 @@ class EmbeddingConfig(BaseModel):
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
                     "input_type": cfg.input_type,
+                    "max_tokens": cfg.max_tokens,
                 },
             ),
             ("volcengine", "dense"): (

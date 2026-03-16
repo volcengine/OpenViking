@@ -333,8 +333,8 @@ enum Commands {
     },
     /// Interactive TUI file explorer
     Tui {
-        /// Viking URI to start browsing (default: viking://)
-        #[arg(default_value = "viking://")]
+        /// Viking URI to start browsing (default: /)
+        #[arg(default_value = "/")]
         uri: String,
     },
     /// Chat with vikingbot agent
@@ -389,6 +389,10 @@ enum ObserverCommands {
     Vikingdb,
     /// Get VLM status
     Vlm,
+    /// Get transaction system status
+    Transaction,
+    /// Get retrieval quality metrics
+    Retrieval,
     /// Get overall system status
     System,
 }
@@ -801,6 +805,12 @@ async fn handle_observer(cmd: ObserverCommands, ctx: CliContext) -> Result<()> {
         }
         ObserverCommands::Vlm => {
             commands::observer::vlm(&client, ctx.output_format, ctx.compact).await
+        }
+        ObserverCommands::Transaction => {
+            commands::observer::transaction(&client, ctx.output_format, ctx.compact).await
+        }
+        ObserverCommands::Retrieval => {
+            commands::observer::retrieval(&client, ctx.output_format, ctx.compact).await
         }
         ObserverCommands::System => {
             commands::observer::system(&client, ctx.output_format, ctx.compact).await

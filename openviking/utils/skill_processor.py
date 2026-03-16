@@ -7,6 +7,7 @@ Handles skill parsing, LLM generation, and storage operations.
 """
 
 import tempfile
+import time
 import zipfile
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -18,6 +19,7 @@ from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.viking_fs import VikingFS
+from openviking.telemetry import get_current_telemetry
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
@@ -62,8 +64,13 @@ class SkillProcessor:
             raise ValueError("Skill data cannot be None")
 
         config = get_openviking_config()
+        telemetry = get_current_telemetry()
 
+        parse_start = time.perf_counter()
         skill_dict, auxiliary_files, base_path = self._parse_skill(data)
+        telemetry.set(
+            "skill.parse.duration_ms", round((time.perf_counter() - parse_start) * 1000, 3)
+        )
 
         context = Context(
             uri=f"viking://agent/skills/{skill_dict['name']}",
@@ -84,10 +91,16 @@ class SkillProcessor:
         )
         context.set_vectorize(Vectorize(text=context.abstract))
 
+        overview_start = time.perf_counter()
         overview = await self._generate_overview(skill_dict, config)
+        telemetry.set(
+            "skill.overview.duration_ms",
+            round((time.perf_counter() - overview_start) * 1000, 3),
+        )
 
         skill_dir_uri = f"viking://agent/skills/{context.meta['name']}"
 
+        write_start = time.perf_counter()
         await self._write_skill_content(
             viking_fs=viking_fs,
             skill_dict=skill_dict,
@@ -103,12 +116,18 @@ class SkillProcessor:
             skill_dir_uri=skill_dir_uri,
             ctx=ctx,
         )
+        telemetry.set(
+            "skill.write.duration_ms", round((time.perf_counter() - write_start) * 1000, 3)
+        )
 
+        index_start = time.perf_counter()
         await self._index_skill(
             context=context,
             skill_dir_uri=skill_dir_uri,
         )
-
+        telemetry.set(
+            "skill.index.duration_ms", round((time.perf_counter() - index_start) * 1000, 3)
+        )
         return {
             "status": "success",
             "uri": skill_dir_uri,

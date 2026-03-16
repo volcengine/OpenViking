@@ -23,6 +23,9 @@ from openviking.session.memory_extractor import (
     MergedMemoryPayload,
 )
 from openviking_cli.session.user_id import UserIdentifier
+from tests.utils.mock_context import make_test_ctx
+
+ctx = make_test_ctx()
 
 
 class _DummyVikingDB:
@@ -171,7 +174,7 @@ class TestMemoryDeduplicatorPayload:
         dedup = MemoryDeduplicator(vikingdb=vikingdb)
         candidate = _make_candidate()
 
-        similar = await dedup._find_similar_memories(candidate)
+        similar = await dedup._find_similar_memories(candidate, ctx)
 
         assert len(similar) == 1
         assert similar[0].uri == existing.uri
@@ -203,7 +206,7 @@ class TestMemoryDeduplicatorPayload:
         )
         dedup = MemoryDeduplicator(vikingdb=vikingdb)
 
-        similar = await dedup._find_similar_memories(_make_candidate())
+        similar = await dedup._find_similar_memories(_make_candidate(), ctx)
 
         assert len(similar) == 1
 

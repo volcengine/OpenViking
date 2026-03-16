@@ -82,6 +82,16 @@ async def observer_transaction(
     return Response(status="ok", result=_component_to_dict(component))
 
 
+@router.get("/retrieval")
+async def observer_retrieval(
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Get retrieval quality metrics."""
+    service = get_service()
+    component = service.debug.observer.retrieval
+    return Response(status="ok", result=_component_to_dict(component))
+
+
 @router.get("/system")
 async def observer_system(
     _ctx: RequestContext = Depends(get_request_context),

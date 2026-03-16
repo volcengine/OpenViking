@@ -242,7 +242,9 @@ def scan_directory(
             sub = dir_path / d
             skip, reason = _should_skip_directory(sub, root, ignore_dirs_set)
             if skip:
-                result.skipped.append(f"{sub.relative_to(root)} ({reason})")
+                skipped_path = str(sub.relative_to(root))
+                skipped_path = _normalize_rel_path(skipped_path)
+                result.skipped.append(f"{skipped_path} ({reason})")
             else:
                 kept.append(d)
         dir_names[:] = kept

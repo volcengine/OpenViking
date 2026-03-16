@@ -47,7 +47,7 @@ async def test_embedding_handler_skip_all_work_when_manager_is_closing(monkeypat
     class _ClosingVikingDB:
         is_closing = True
 
-        async def upsert(self, _data):  # pragma: no cover - should never run
+        async def upsert(self, _data, *, ctx):  # pragma: no cover - should never run
             raise AssertionError("upsert should not be called during shutdown")
 
     embedder = _DummyEmbedder()
@@ -78,7 +78,7 @@ async def test_embedding_handler_treats_shutdown_write_lock_as_success(monkeypat
             self.is_closing = False
             self.calls = 0
 
-        async def upsert(self, _data):
+        async def upsert(self, _data, *, ctx):
             self.calls += 1
             self.is_closing = True
             raise RuntimeError("IO error: lock /tmp/LOCK: already held by process")
