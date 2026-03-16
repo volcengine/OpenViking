@@ -251,12 +251,25 @@ class TelegramChannel(BaseChannel):
             "Type /help to see available commands."
         )
 
+    @staticmethod
+    def _build_sender_id(user) -> str:
+        """Build sender_id: ``{numeric_id}`` or ``{numeric_id}|{username}``.
+
+        Centralised so that every handler (commands *and* messages) produces
+        the same format, which ``is_allowed()`` can then match against the
+        ``allowFrom`` list.
+        """
+        sender_id = str(user.id)
+        if user.username:
+            sender_id = f"{sender_id}|{user.username}"
+        return sender_id
+
     async def _forward_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Forward slash commands to the bus for unified handling in AgentLoop."""
         if not update.message or not update.effective_user:
             return
         await self._handle_message(
-            sender_id=str(update.effective_user.id),
+            sender_id=self._build_sender_id(update.effective_user),
             chat_id=str(update.message.chat_id),
             content=update.message.text,
         )
@@ -270,10 +283,7 @@ class TelegramChannel(BaseChannel):
         user = update.effective_user
         chat_id = message.chat_id
 
-        # Use stable numeric ID, but keep username for allowlist compatibility
-        sender_id = str(user.id)
-        if user.username:
-            sender_id = f"{sender_id}|{user.username}"
+        sender_id = self._build_sender_id(user)
 
         # Store chat_id for replies
         self._chat_ids[sender_id] = chat_id
