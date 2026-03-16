@@ -534,7 +534,8 @@ class SemanticProcessor(DequeueHandlerBase):
         Processing order:
         1. Delete files in target that don't exist in root
         2. Move added/updated files from root to target
-        3. Delete directories in target that don't exist in root
+        3. Move added directories' vector data (.abstract.md, .overview.md) from root to target
+        4. Delete directories in target that don't exist in root
 
         Args:
             diff: DiffResult containing operations to perform
@@ -592,6 +593,21 @@ class SemanticProcessor(DequeueHandlerBase):
                 logger.warning(
                     f"[SyncDiff] Failed to move file [{i}/{len(files_to_move)}]: "
                     f"{root_file} -> {target_file}, error={e}"
+                )
+
+        for i, added_dir in enumerate(sorted(diff.added_dirs, key=lambda x: x.count("/")), 1):
+            target_dir = map_to_target(added_dir)
+            try:
+                if await viking_fs.exists(target_dir, ctx=ctx):
+                    await viking_fs.rm(target_dir, recursive=True, ctx=ctx)
+                    logger.debug(f"[SyncDiff] Removed existing target before move: {target_dir}")
+                await viking_fs.mv(added_dir, target_dir, ctx=ctx)
+                logger.debug(f"[SyncDiff] Moved directory: {added_dir} -> {target_dir}")
+            except Exception as e:
+                total_failed += 1
+                logger.warning(
+                    f"[SyncDiff] Failed to move directory [{i}/{len(diff.added_dirs)}]: "
+                    f"{added_dir} -> {target_dir}, error={e}"
                 )
 
         for i, deleted_dir in enumerate(
