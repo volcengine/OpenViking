@@ -50,7 +50,7 @@ async def debug_vector_scroll(
 
     filter_expr = None
     if uri:
-        filter_expr = {"uri": {"$prefix": uri}}
+        filter_expr = {"op": "must", "field": "uri", "conds": [uri]}
 
     records, next_cursor = await proxy.scroll(filter=filter_expr, limit=limit, cursor=cursor)
 
@@ -86,9 +86,15 @@ async def debug_vector_count(
             )
 
     if uri:
-        uri_filter = {"uri": {"$prefix": uri}}
+        uri_filter = {"op": "must", "field": "uri", "conds": [uri]}
         if filter_expr:
-            filter_expr = {"$and": [filter_expr, uri_filter]}
+            # For combining filters, we should use And from expr, but for simplicity, let's use RawDSL for now
+            from openviking.storage.expr import And, RawDSL
+
+            if isinstance(filter_expr, dict):
+                filter_expr = RawDSL(filter_expr)
+            uri_filter = RawDSL(uri_filter)
+            filter_expr = And([filter_expr, uri_filter])
         else:
             filter_expr = uri_filter
 
