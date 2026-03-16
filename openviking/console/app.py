@@ -11,9 +11,10 @@ from pathlib import Path
 from typing import Optional
 
 import httpx
-from fastapi import APIRouter, FastAPI, Request
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from .config import (
     ConsoleConfig,
@@ -45,6 +46,46 @@ _ALLOWED_FORWARD_RESPONSE_HEADERS = {
     # Observability
     "x-request-id",
 }
+
+# Security scheme for console authentication
+security = HTTPBearer()
+
+
+async def verify_console_access(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+) -> None:
+    """Verify that the request has valid authentication for console access.
+    
+    This checks for Bearer token authentication. The token is forwarded to
+    the upstream OpenViking service for validation.
+    """
+    if not credentials or not credentials.credentials:
+        raise HTTPException(
+            status_code=401,
+            detail="Authentication required for console access",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    
+    # Validate token by attempting to call upstream health/status endpoint
+    client: httpx.AsyncClient = request.app.state.upstream_client
+    try:
+        response = await client.get(
+            "/api/v1/system/status",
+            headers={"Authorization": f"Bearer {credentials.credentials}"},
+        )
+        if response.status_code == 401 or response.status_code == 403:
+            raise HTTPException(
+                status_code=401,
+                detail="Invalid or expired authentication token",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+    except httpx.RequestError:
+        # If upstream is unavailable, deny access as a security precaution
+        raise HTTPException(
+            status_code=503,
+            detail="Unable to verify authentication - upstream service unavailable",
+        )
 
 
 def _is_json_content_type(content_type: str) -> bool:
@@ -406,15 +447,15 @@ def create_console_app(
         return {"status": "ok", "service": "openviking-console"}
 
     @app.get("/", include_in_schema=False)
-    async def index_root():
+    async def index_root(request: Request, _auth: None = Depends(verify_console_access)):
         return _console_file_response(index_file)
 
     @app.get("/console", include_in_schema=False)
-    async def index_console():
+    async def index_console(request: Request, _auth: None = Depends(verify_console_access)):
         return _console_file_response(index_file)
 
     @app.get("/console/{path:path}", include_in_schema=False)
-    async def console_assets(path: str):
+    async def console_assets(request: Request, path: str, _auth: None = Depends(verify_console_access)):
         if path.startswith("api/"):
             return _error_response(status_code=404, code="NOT_FOUND", message="Not found")
 
