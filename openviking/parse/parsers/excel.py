@@ -82,7 +82,16 @@ class ExcelParser(BaseParser):
         """Convert legacy .xls spreadsheet to Markdown using xlrd."""
         import xlrd
 
-        wb = xlrd.open_workbook(str(path))
+        # formatting_info=True enables xlrd to detect date cells via XL_CELL_DATE
+        # instead of reporting them as XL_CELL_NUMBER with raw float serials
+        wb = xlrd.open_workbook(str(path), formatting_info=True, on_demand=True)
+        try:
+            return self._build_xls_markdown(wb, path, xlrd)
+        finally:
+            wb.release_resources()
+
+    def _build_xls_markdown(self, wb, path: Path, xlrd) -> str:
+        """Build markdown from xlrd workbook."""
         markdown_parts = []
         markdown_parts.append(f"# {path.stem}")
         markdown_parts.append(f"**Sheets:** {wb.nsheets}")
@@ -106,19 +115,7 @@ class ExcelParser(BaseParser):
             for row_idx in range(rows_to_process):
                 row_data = []
                 for col_idx in range(sheet.ncols):
-                    cell = sheet.cell(row_idx, col_idx)
-                    if cell.ctype == xlrd.XL_CELL_DATE:
-                        try:
-                            dt = xlrd.xldate_as_tuple(cell.value, wb.datemode)
-                            row_data.append(f"{dt[0]:04d}-{dt[1]:02d}-{dt[2]:02d}")
-                        except Exception:
-                            row_data.append(str(cell.value))
-                    elif cell.ctype == xlrd.XL_CELL_BOOLEAN:
-                        row_data.append("TRUE" if cell.value else "FALSE")
-                    elif cell.value is not None:
-                        row_data.append(str(cell.value))
-                    else:
-                        row_data.append("")
+                    row_data.append(self._format_xls_cell(sheet.cell(row_idx, col_idx), wb, xlrd))
                 rows.append(row_data)
 
             if rows:
@@ -134,6 +131,37 @@ class ExcelParser(BaseParser):
             markdown_parts.append("\n\n".join(parts))
 
         return "\n\n".join(markdown_parts)
+
+    @staticmethod
+    def _format_xls_cell(cell, wb, xlrd) -> str:
+        """Format a single xlrd cell value with proper type handling."""
+        if cell.ctype == xlrd.XL_CELL_EMPTY or cell.ctype == xlrd.XL_CELL_BLANK:
+            return ""
+        if cell.ctype == xlrd.XL_CELL_DATE:
+            try:
+                dt = xlrd.xldate_as_tuple(cell.value, wb.datemode)
+                # Include time component if non-zero
+                if dt[3] or dt[4] or dt[5]:
+                    return f"{dt[0]:04d}-{dt[1]:02d}-{dt[2]:02d} {dt[3]:02d}:{dt[4]:02d}:{dt[5]:02d}"
+                return f"{dt[0]:04d}-{dt[1]:02d}-{dt[2]:02d}"
+            except Exception:
+                return str(cell.value)
+        if cell.ctype == xlrd.XL_CELL_BOOLEAN:
+            return "TRUE" if cell.value else "FALSE"
+        if cell.ctype == xlrd.XL_CELL_ERROR:
+            # xlrd error code map
+            error_map = {
+                0x00: "#NULL!", 0x07: "#DIV/0!", 0x0F: "#VALUE!",
+                0x17: "#REF!", 0x1D: "#NAME?", 0x24: "#NUM!", 0x2A: "#N/A",
+            }
+            return error_map.get(cell.value, f"#ERR({cell.value})")
+        if cell.ctype == xlrd.XL_CELL_NUMBER:
+            # Display integers without trailing .0
+            if cell.value == int(cell.value):
+                return str(int(cell.value))
+            return str(cell.value)
+        # XL_CELL_TEXT or fallback
+        return str(cell.value) if cell.value is not None else ""
 
     def _convert_to_markdown(self, path: Path, openpyxl) -> str:
         """Convert Excel spreadsheet to Markdown string."""
