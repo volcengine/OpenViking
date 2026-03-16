@@ -86,3 +86,31 @@ def test_detect_output_language_japanese_with_more_han_than_kana():
     ]
     language = MemoryExtractor._detect_output_language(messages, fallback_language="en")
     assert language == "ja"
+
+
+def test_detect_output_language_chinese_with_single_cyrillic():
+    """Mixed Chinese with single Cyrillic char should be detected as Chinese, not Russian."""
+    messages = [_msg("user", "\u8fd9\u662f\u4e2d\u6587 \u0414 \u518d\u7ee7\u7eed")]
+    language = MemoryExtractor._detect_output_language(messages, fallback_language="en")
+    assert language == "zh-CN"
+
+
+def test_detect_output_language_japanese_with_single_cyrillic():
+    """Mixed Japanese with single Cyrillic char should be detected as Japanese, not Russian."""
+    messages = [_msg("user", "\u3053\u308c\u306f\u65e5\u672c\u8a9e \u042f ")]
+    language = MemoryExtractor._detect_output_language(messages, fallback_language="en")
+    assert language == "ja"
+
+
+def test_detect_output_language_russian_with_threshold():
+    """Russian text with sufficient Cyrillic chars should be detected as Russian."""
+    messages = [_msg("user", "\u042d\u0442\u043e \u0440\u0443\u0441\u0441\u043a\u0438\u0439 \u0442\u0435\u043a\u0441\u0442")]
+    language = MemoryExtractor._detect_output_language(messages, fallback_language="en")
+    assert language == "ru"
+
+
+def test_detect_output_language_insufficient_cyrillic_fallback():
+    """Text with only 1 Cyrillic char among Latin should fallback, not Russian."""
+    messages = [_msg("user", "Hello \u0424 world")]
+    language = MemoryExtractor._detect_output_language(messages, fallback_language="en")
+    assert language == "en"
