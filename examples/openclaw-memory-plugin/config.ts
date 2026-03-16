@@ -14,6 +14,8 @@ export type MemoryOpenVikingConfig = {
   apiKey?: string;
   targetUri?: string;
   timeoutMs?: number;
+  /** Timeout for memory extraction (VLM calls are slower than other operations). Default 120000ms (2 minutes) */
+  extractTimeoutMs?: number;
   autoCapture?: boolean;
   captureMode?: "semantic" | "keyword";
   captureMaxLength?: number;
@@ -29,6 +31,7 @@ const DEFAULT_BASE_URL = "http://127.0.0.1:1933";
 const DEFAULT_PORT = 1933;
 const DEFAULT_TARGET_URI = "viking://user/memories";
 const DEFAULT_TIMEOUT_MS = 15000;
+const DEFAULT_EXTRACT_TIMEOUT_MS = 120000; // VLM extraction is slow, allow up to 2 minutes
 const DEFAULT_CAPTURE_MODE = "semantic";
 const DEFAULT_CAPTURE_MAX_LENGTH = 24000;
 const DEFAULT_RECALL_LIMIT = 6;
@@ -103,6 +106,7 @@ export const memoryOpenVikingConfigSchema = {
         "apiKey",
         "targetUri",
         "timeoutMs",
+        "extractTimeoutMs",
         "autoCapture",
         "captureMode",
         "captureMaxLength",
@@ -151,6 +155,7 @@ export const memoryOpenVikingConfigSchema = {
       apiKey: rawApiKey ? resolveEnvVars(rawApiKey) : "",
       targetUri: typeof cfg.targetUri === "string" ? cfg.targetUri : DEFAULT_TARGET_URI,
       timeoutMs: Math.max(1000, Math.floor(toNumber(cfg.timeoutMs, DEFAULT_TIMEOUT_MS))),
+      extractTimeoutMs: Math.max(10000, Math.floor(toNumber(cfg.extractTimeoutMs, DEFAULT_EXTRACT_TIMEOUT_MS))),
       autoCapture: cfg.autoCapture !== false,
       captureMode: captureMode ?? DEFAULT_CAPTURE_MODE,
       captureMaxLength: Math.max(
