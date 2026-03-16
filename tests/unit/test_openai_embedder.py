@@ -86,8 +86,8 @@ class TestOpenAIDenseEmbedder:
         assert "extra_body" not in call_kwargs
 
     @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
-    def test_embed_with_input_type_query(self, mock_openai_class):
-        """OpenAI embed should include extra_body with input_type='query'"""
+    def test_embed_with_context_query(self, mock_openai_class):
+        """OpenAI embed should include extra_body with input_type='query' when context='query'"""
         mock_client = MagicMock()
         mock_openai_class.return_value = mock_client
 
@@ -101,7 +101,8 @@ class TestOpenAIDenseEmbedder:
         embedder = OpenAIDenseEmbedder(
             model_name="text-embedding-3-small",
             api_key="test-api-key",
-            input_type="query",
+            context="query",
+            query_param="query",
         )
 
         embedder.embed("Hello world")
@@ -111,8 +112,8 @@ class TestOpenAIDenseEmbedder:
         assert call_kwargs["extra_body"] == {"input_type": "query"}
 
     @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
-    def test_embed_with_input_type_document(self, mock_openai_class):
-        """OpenAI embed should include extra_body with input_type='document'"""
+    def test_embed_with_context_document(self, mock_openai_class):
+        """OpenAI embed should include extra_body with input_type='passage' when context='document'"""
         mock_client = MagicMock()
         mock_openai_class.return_value = mock_client
 
@@ -126,14 +127,15 @@ class TestOpenAIDenseEmbedder:
         embedder = OpenAIDenseEmbedder(
             model_name="text-embedding-3-small",
             api_key="test-api-key",
-            input_type="document",
+            context="document",
+            document_param="passage",
         )
 
         embedder.embed("Hello world")
 
         call_kwargs = mock_client.embeddings.create.call_args[1]
         assert "extra_body" in call_kwargs
-        assert call_kwargs["extra_body"] == {"input_type": "document"}
+        assert call_kwargs["extra_body"] == {"input_type": "passage"}
 
     @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
     def test_embed_batch_with_input_type_none(self, mock_openai_class):
@@ -161,8 +163,8 @@ class TestOpenAIDenseEmbedder:
         assert "extra_body" not in call_kwargs
 
     @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
-    def test_embed_batch_with_input_type_query(self, mock_openai_class):
-        """OpenAI embed_batch should include extra_body with input_type='query'"""
+    def test_embed_batch_with_context_query(self, mock_openai_class):
+        """OpenAI embed_batch should include extra_body with input_type='query' when context='query'"""
         mock_client = MagicMock()
         mock_openai_class.return_value = mock_client
 
@@ -178,7 +180,8 @@ class TestOpenAIDenseEmbedder:
         embedder = OpenAIDenseEmbedder(
             model_name="text-embedding-3-small",
             api_key="test-api-key",
-            input_type="query",
+            context="query",
+            query_param="query",
         )
 
         embedder.embed_batch(["Hello", "World"])
@@ -188,8 +191,8 @@ class TestOpenAIDenseEmbedder:
         assert call_kwargs["extra_body"] == {"input_type": "query"}
 
     @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
-    def test_embed_batch_with_input_type_document(self, mock_openai_class):
-        """OpenAI embed_batch should include extra_body with input_type='document'"""
+    def test_embed_batch_with_context_document(self, mock_openai_class):
+        """OpenAI embed_batch should include extra_body with input_type='passage' when context='document'"""
         mock_client = MagicMock()
         mock_openai_class.return_value = mock_client
 
@@ -205,14 +208,15 @@ class TestOpenAIDenseEmbedder:
         embedder = OpenAIDenseEmbedder(
             model_name="text-embedding-3-small",
             api_key="test-api-key",
-            input_type="document",
+            context="document",
+            document_param="passage",
         )
 
         embedder.embed_batch(["Hello", "World"])
 
         call_kwargs = mock_client.embeddings.create.call_args[1]
         assert "extra_body" in call_kwargs
-        assert call_kwargs["extra_body"] == {"input_type": "document"}
+        assert call_kwargs["extra_body"] == {"input_type": "passage"}
 
     @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
     def test_telemetry_skipped_when_no_usage(self, mock_openai_class):

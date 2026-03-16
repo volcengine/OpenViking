@@ -16,23 +16,27 @@ class EmbeddingModelConfig(BaseModel):
     input: str = Field(default="multimodal", description="Input type: 'text' or 'multimodal'")
     input_type: Optional[str] = Field(
         default=None,
-        description="Input type for OpenAI/Jina: 'query', 'document', or 'passage'",
+        description="Input type for non-contextual OpenAI embeddings: 'query', 'document', or 'passage'",
     )
-    input_type_query: Optional[str] = Field(
+    query_param: Optional[str] = Field(
         default=None,
-        description="OpenAI input type for query embeddings (e.g. 'query')",
+        description=(
+            "Parameter value for query-side embeddings when using get_query_embedder(). "
+            "For OpenAI-compatible models, this maps to 'input_type' (e.g., 'query', 'search_query'). "
+            "For Jina models, this maps to 'task' (e.g., 'retrieval.query'). "
+            "Setting this or document_param activates non-symmetric mode. "
+            "Leave both unset for symmetric models."
+        ),
     )
-    input_type_document: Optional[str] = Field(
+    document_param: Optional[str] = Field(
         default=None,
-        description="OpenAI input type for document/passage embeddings (e.g. 'document' or 'passage')",
-    )
-    task_query: Optional[str] = Field(
-        default=None,
-        description="Jina task for query embeddings (e.g. 'retrieval.query')",
-    )
-    task_document: Optional[str] = Field(
-        default=None,
-        description="Jina task for document embeddings (e.g. 'retrieval.passage')",
+        description=(
+            "Parameter value for document-side embeddings when using get_document_embedder(). "
+            "For OpenAI-compatible models, this maps to 'input_type' (e.g., 'passage', 'document'). "
+            "For Jina models, this maps to 'task' (e.g., 'retrieval.passage'). "
+            "Setting this or query_param activates non-symmetric mode. "
+            "Leave both unset for symmetric models."
+        ),
     )
     provider: Optional[str] = Field(
         default="volcengine",
@@ -63,13 +67,7 @@ class EmbeddingModelConfig(BaseModel):
 
             if backend is not None and provider is None:
                 data["provider"] = backend
-            for key in (
-                "input_type",
-                "input_type_query",
-                "input_type_document",
-                "task_query",
-                "task_document",
-            ):
+            for key in ("input_type", "query_value", "document_value", "query_task", "document_task"):
                 value = data.get(key)
                 if isinstance(value, str):
                     data[key] = value.lower()
@@ -153,13 +151,16 @@ class EmbeddingConfig(BaseModel):
             )
         return self
 
-    def _create_embedder(self, provider: str, embedder_type: str, config: EmbeddingModelConfig):
+    def _create_embedder(self, provider: str, embedder_type: str, config: EmbeddingModelConfig, context: Optional[str] = None):
         """Factory method to create embedder instance based on provider and type.
 
         Args:
-            provider: Provider type ('openai', 'volcengine', 'vikingdb')
+            provider: Provider type ('openai', 'volcengine', 'vikingdb', 'jina')
             embedder_type: Embedder type ('dense', 'sparse', 'hybrid')
             config: EmbeddingModelConfig instance
+            context: Optional embedding context ('query' or 'document') for non-symmetric models.
+                     When provided, the embedder will apply the appropriate input_type or task.
+                     Leave None for symmetric models or when using a single embedder for all inputs.
 
         Returns:
             Embedder instance
@@ -187,7 +188,9 @@ class EmbeddingConfig(BaseModel):
                     "api_key": cfg.api_key,
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
-                    "input_type": cfg.input_type,
+                    "context": context,
+                    **({"query_param": cfg.query_param} if cfg.query_param else {}),
+                    **({"document_param": cfg.document_param} if cfg.document_param else {}),
                     "max_tokens": cfg.max_tokens,
                 },
             ),
@@ -263,7 +266,9 @@ class EmbeddingConfig(BaseModel):
                     "api_key": cfg.api_key,
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
-                    "task": cfg.task_document,
+                    "context": context,
+                    **({"query_param": cfg.query_param} if cfg.query_param else {}),
+                    **({"document_param": cfg.document_param} if cfg.document_param else {}),
                 },
             ),
         }
@@ -322,48 +327,21 @@ class EmbeddingConfig(BaseModel):
         return self._get_contextual_embedder("document")
 
     def _get_contextual_embedder(self, context: str):
-        from openviking.models.embedder import (
-            JinaDenseEmbedder,
-            OpenAIDenseEmbedder,
-        )
-
         if not self.dense:
             return self.get_embedder()
 
         provider = (self.dense.provider or "").lower()
         if provider == "openai":
-            if self.dense.input_type:
-                input_type = "query" if context == "query" else self.dense.input_type
-            else:
-                input_type = None
-
-            if not self.dense.model:
-                raise ValueError("Embedding model name is required")
-
-            return OpenAIDenseEmbedder(
-                model_name=self.dense.model,
-                api_key=self.dense.api_key,
-                api_base=self.dense.api_base,
-                dimension=self.dense.dimension,
-                input_type=input_type,
-            )
+            # OpenAI models are symmetric by default (no input_type sent).
+            # Non-symmetric mode is activated implicitly when the user sets
+            # query_param or document_param in the config.
+            non_symmetric = self.dense.query_param is not None or self.dense.document_param is not None
+            effective_context = context if non_symmetric else None
+            return self._create_embedder(provider, "dense", self.dense, context=effective_context)
 
         if provider == "jina":
-            if self.dense.task_document:
-                task = "retrieval.query" if context == "query" else self.dense.task_document
-            else:
-                task = None
-
-            if not self.dense.model:
-                raise ValueError("Embedding model name is required")
-
-            return JinaDenseEmbedder(
-                model_name=self.dense.model,
-                api_key=self.dense.api_key,
-                api_base=self.dense.api_base,
-                dimension=self.dense.dimension,
-                task=task,
-            )
+            # Jina models are non-symmetric by default (task is always sent).
+            return self._create_embedder(provider, "dense", self.dense, context=context)
 
         return self.get_embedder()
 
