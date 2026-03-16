@@ -107,7 +107,18 @@ class ExcelParser(BaseParser):
                 row_data = []
                 for col_idx in range(sheet.ncols):
                     cell = sheet.cell(row_idx, col_idx)
-                    row_data.append(str(cell.value) if cell.value is not None else "")
+                    if cell.ctype == xlrd.XL_CELL_DATE:
+                        try:
+                            dt = xlrd.xldate_as_tuple(cell.value, wb.datemode)
+                            row_data.append(f"{dt[0]:04d}-{dt[1]:02d}-{dt[2]:02d}")
+                        except Exception:
+                            row_data.append(str(cell.value))
+                    elif cell.ctype == xlrd.XL_CELL_BOOLEAN:
+                        row_data.append("TRUE" if cell.value else "FALSE")
+                    elif cell.value is not None:
+                        row_data.append(str(cell.value))
+                    else:
+                        row_data.append("")
                 rows.append(row_data)
 
             if rows:
