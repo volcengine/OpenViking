@@ -35,6 +35,13 @@ async function startServer() {
 
 let initPromise = null
 
+function makeToast(client) {
+  return (message, variant = "warning") =>
+    client.tui.showToast({
+      body: { title: "OpenViking", message, variant, duration: 8000 },
+    }).catch(() => {})
+}
+
 // ── Skill auto-install ────────────────────────────────────────────────────────
 
 function installSkill() {
@@ -80,10 +87,7 @@ async function loadRepos() {
 // ── Init: check deps, start server if needed ─────────────────────────────────
 
 async function _init(client) {
-  const toast = (message, variant = "warning") =>
-    client.tui.showToast({
-      body: { title: "OpenViking", message, variant, duration: 8000 },
-    }).catch(() => {})
+  const toast = makeToast(client)
 
   // server already running
   if (await isHealthy()) return true
@@ -124,10 +128,7 @@ async function init(client) {
  * @type {import('@opencode-ai/plugin').Plugin}
  */
 export async function OpenVikingPlugin({ client }) {
-  const toast = (message, variant = "warning") =>
-    client.tui.showToast({
-      body: { title: "OpenViking", message, variant, duration: 8000 },
-    }).catch(() => {})
+  const toast = makeToast(client)
 
   try {
     installSkill()
