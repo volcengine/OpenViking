@@ -17,22 +17,19 @@ logger = logging.getLogger(__name__)
 # Default dimensions for Google/Gemini embedding models
 GOOGLE_MODEL_DIMENSIONS = {
     "gemini-embedding-2-preview": 3072,  # Gemini Embedding 2 with MRL support
-    "text-embedding-004": 768,  # Updated Google text embedding model
-    "text-embedding-005": 768,  # Latest Google text embedding model
 }
 
 
 class GoogleDenseEmbedder(DenseEmbedderBase):
-    """Google/Gemini AI Dense Embedder Implementation
+    """Google Gemini Embedding 2 Dense Embedder Implementation
 
     Uses native Google Gemini embedding API with Parts format.
+    Supports Gemini Embedding 2 (gemini-embedding-2-preview) only.
     Supports task-specific embeddings and Matryoshka dimension reduction.
-    Supports both simple task_type values and key=value format for multiple parameters.
 
     Example:
         >>> # Simple usage with query/document task types
         >>> embedder = GoogleDenseEmbedder(
-        ...     model_name="gemini-embedding-2-preview",
         ...     api_key="your-gemini-api-key",
         ...     dimension=1024,
         ...     query_param="RETRIEVAL_QUERY",
@@ -43,7 +40,6 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
 
         >>> # Enhanced usage with key=value format
         >>> advanced_embedder = GoogleDenseEmbedder(
-        ...     model_name="gemini-embedding-2-preview",
         ...     api_key="your-gemini-api-key",
         ...     dimension=1024,
         ...     query_param="task_type=RETRIEVAL_QUERY,output_dimensionality=1024",
@@ -63,13 +59,13 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
         max_tokens: Optional[int] = None,
         extra_headers: Optional[Dict[str, str]] = None,
     ):
-        """Initialize Google/Gemini AI Dense Embedder
+        """Initialize Google Gemini Embedding 2 Dense Embedder
 
         Args:
-            model_name: Google/Gemini model name, defaults to gemini-embedding-2-preview
-            api_key: API key, required
+            model_name: Must be "gemini-embedding-2-preview" (default and only supported model)
+            api_key: Google API key, required
             api_base: API base URL, defaults to https://generativelanguage.googleapis.com/v1beta
-            dimension: Dimension for Matryoshka reduction, optional
+            dimension: Dimension for Matryoshka reduction, optional (max 3072)
             query_param: Parameter for query-side embeddings. Supports simple task_type
                         values (e.g., "RETRIEVAL_QUERY") or key=value format
                         (e.g., "task_type=RETRIEVAL_QUERY,output_dimensionality=1024").
@@ -82,7 +78,7 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
             extra_headers: Extra HTTP headers to include in API requests
 
         Raises:
-            ValueError: If api_key is not provided
+            ValueError: If api_key is not provided or unsupported model is specified
         """
         super().__init__(model_name, config)
         self.api_key = api_key
@@ -96,12 +92,17 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
         if not self.api_key:
             raise ValueError("api_key is required")
 
-        # Determine dimension
-        max_dim = GOOGLE_MODEL_DIMENSIONS.get(model_name, 3072)
+        # Determine dimension - only support gemini-embedding-2-preview
+        if model_name not in GOOGLE_MODEL_DIMENSIONS:
+            raise ValueError(
+                f"Unsupported model '{model_name}'. Only 'gemini-embedding-2-preview' is supported."
+            )
+
+        max_dim = GOOGLE_MODEL_DIMENSIONS[model_name]
         if dimension is not None and dimension > max_dim:
             raise ValueError(
                 f"Requested dimension {dimension} exceeds maximum {max_dim} for model '{model_name}'. "
-                f"Google/Gemini models support Matryoshka dimension reduction up to {max_dim}."
+                f"Gemini Embedding 2 supports Matryoshka dimension reduction up to {max_dim}."
             )
         self._dimension = dimension if dimension is not None else max_dim
 
