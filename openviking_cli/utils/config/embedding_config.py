@@ -40,7 +40,11 @@ class EmbeddingModelConfig(BaseModel):
     )
     provider: Optional[str] = Field(
         default="volcengine",
-        description="Provider type: 'openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'voyage'",
+        description=(
+            "Provider type: 'openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'voyage'. "
+            "For OpenRouter or other OpenAI-compatible providers, use 'openai' with "
+            "api_base and extra_headers."
+        ),
     )
     backend: Optional[str] = Field(
         default="volcengine",
@@ -55,6 +59,14 @@ class EmbeddingModelConfig(BaseModel):
         default=None,
         description="Maximum token count per embedding request. If None, uses model default (e.g., 8000 for OpenAI).",
     )
+    extra_headers: Optional[dict[str, str]] = Field(
+        default=None,
+        description=(
+            "Extra HTTP headers for API requests. Passed as default_headers to the OpenAI client. "
+            "Useful for OpenRouter (e.g., {'HTTP-Referer': '...', 'X-Title': '...'}) "
+            "or other OpenAI-compatible providers that require custom headers."
+        ),
+    )
 
     model_config = {"extra": "forbid"}
 
@@ -67,7 +79,13 @@ class EmbeddingModelConfig(BaseModel):
 
             if backend is not None and provider is None:
                 data["provider"] = backend
-            for key in ("input_type", "query_value", "document_value", "query_task", "document_task"):
+            for key in (
+                "input_type",
+                "query_value",
+                "document_value",
+                "query_task",
+                "document_task",
+            ):
                 value = data.get(key)
                 if isinstance(value, str):
                     data[key] = value.lower()
@@ -176,7 +194,13 @@ class EmbeddingConfig(BaseModel):
             )
         return self
 
-    def _create_embedder(self, provider: str, embedder_type: str, config: EmbeddingModelConfig, context: Optional[str] = None):
+    def _create_embedder(
+        self,
+        provider: str,
+        embedder_type: str,
+        config: EmbeddingModelConfig,
+        context: Optional[str] = None,
+    ):
         """Factory method to create embedder instance based on provider and type.
 
         Args:
@@ -211,13 +235,15 @@ class EmbeddingConfig(BaseModel):
                 OpenAIDenseEmbedder,
                 lambda cfg: {
                     "model_name": cfg.model,
-                    "api_key": cfg.api_key or "no-key",  # Placeholder for local OpenAI-compatible servers
+                    "api_key": cfg.api_key
+                    or "no-key",  # Placeholder for local OpenAI-compatible servers
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
                     "context": context,
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                     "max_tokens": cfg.max_tokens,
+                    **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
                 },
             ),
             ("volcengine", "dense"): (
@@ -302,7 +328,8 @@ class EmbeddingConfig(BaseModel):
                 OpenAIDenseEmbedder,
                 lambda cfg: {
                     "model_name": cfg.model,
-                    "api_key": cfg.api_key or "no-key",  # Ollama ignores the key, but client requires non-empty
+                    "api_key": cfg.api_key
+                    or "no-key",  # Ollama ignores the key, but client requires non-empty
                     "api_base": cfg.api_base or "http://localhost:11434/v1",
                     "dimension": cfg.dimension,
                     "max_tokens": cfg.max_tokens,
@@ -381,7 +408,9 @@ class EmbeddingConfig(BaseModel):
             # OpenAI models are symmetric by default (no input_type sent).
             # Non-symmetric mode is activated implicitly when the user sets
             # query_param or document_param in the config.
-            non_symmetric = self.dense.query_param is not None or self.dense.document_param is not None
+            non_symmetric = (
+                self.dense.query_param is not None or self.dense.document_param is not None
+            )
             effective_context = context if non_symmetric else None
             return self._create_embedder(provider, "dense", self.dense, context=effective_context)
 
