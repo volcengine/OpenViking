@@ -129,9 +129,7 @@ class AudioParser(BaseParser):
         """Return supported audio file extensions."""
         return AUDIO_EXTENSIONS
 
-    async def parse(
-        self, source: Union[str, Path], instruction: str = "", **kwargs
-    ) -> ParseResult:
+    async def parse(self, source: Union[str, Path], instruction: str = "", **kwargs) -> ParseResult:
         """
         Parse audio file - extract metadata, transcribe via Whisper, build ResourceNode tree.
 
@@ -198,9 +196,7 @@ class AudioParser(BaseParser):
                     audio_bytes, self.config.transcription_model, ext
                 )
                 if transcript_segments:
-                    full_transcript = "\n".join(
-                        seg["text"] for seg in transcript_segments
-                    )
+                    full_transcript = "\n".join(seg["text"] for seg in transcript_segments)
                 else:
                     # Try plain transcription
                     full_transcript = await self._asr_transcribe(
@@ -274,9 +270,7 @@ class AudioParser(BaseParser):
 
         # Generate semantic info (L0 abstract, L1 overview)
         description = full_transcript if has_transcript else f"Audio file: {file_path.name}"
-        await self._generate_semantic_info(
-            root_node, description, viking_fs, has_transcript
-        )
+        await self._generate_semantic_info(root_node, description, viking_fs, has_transcript)
 
         if not has_transcript:
             warnings.append(
@@ -297,9 +291,7 @@ class AudioParser(BaseParser):
             warnings=warnings,
         )
 
-    def _validate_audio_bytes(
-        self, audio_bytes: bytes, ext: str, file_path: Path
-    ) -> None:
+    def _validate_audio_bytes(self, audio_bytes: bytes, ext: str, file_path: Path) -> None:
         """Validate audio file using magic bytes."""
         ext_lower = ext.lower()
         magic_list = AUDIO_MAGIC_BYTES.get(ext_lower, [])
@@ -391,11 +383,19 @@ class AudioParser(BaseParser):
             segments = []
             if hasattr(response, "segments") and response.segments:
                 for seg in response.segments:
-                    segments.append({
-                        "start": seg.get("start", 0) if isinstance(seg, dict) else getattr(seg, "start", 0),
-                        "end": seg.get("end", 0) if isinstance(seg, dict) else getattr(seg, "end", 0),
-                        "text": seg.get("text", "") if isinstance(seg, dict) else getattr(seg, "text", ""),
-                    })
+                    segments.append(
+                        {
+                            "start": seg.get("start", 0)
+                            if isinstance(seg, dict)
+                            else getattr(seg, "start", 0),
+                            "end": seg.get("end", 0)
+                            if isinstance(seg, dict)
+                            else getattr(seg, "end", 0),
+                            "text": seg.get("text", "")
+                            if isinstance(seg, dict)
+                            else getattr(seg, "text", ""),
+                        }
+                    )
 
             return segments
 
@@ -476,9 +476,7 @@ class AudioParser(BaseParser):
         ]
 
         if has_transcript:
-            overview_parts.append(
-                "- transcript.md: Timestamped transcript from the audio\n"
-            )
+            overview_parts.append("- transcript.md: Timestamped transcript from the audio\n")
 
         overview_parts.append("\n## Usage\n")
         overview_parts.append("### Play Audio\n")
@@ -505,9 +503,7 @@ class AudioParser(BaseParser):
         overview_parts.append(
             f"channels = audio_resource.get_channels()  # {node.meta['channels']}\n"
         )
-        overview_parts.append(
-            f'format = audio_resource.get_format()  # "{node.meta["format"]}"\n'
-        )
+        overview_parts.append(f'format = audio_resource.get_format()  # "{node.meta["format"]}"\n')
         overview_parts.append("```\n")
 
         overview = "".join(overview_parts)

@@ -4,8 +4,6 @@
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from openviking.models.embedder import OpenAIDenseEmbedder
 
 

@@ -4,10 +4,13 @@ import json
 import os
 from pathlib import Path
 from typing import Any
+
 from loguru import logger
+
 from vikingbot.config.schema import Config
 
 CONFIG_PATH = None
+
 
 def get_config_path() -> Path:
     """Get the path to ov.conf config file.

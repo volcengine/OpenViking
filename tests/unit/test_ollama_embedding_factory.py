@@ -9,7 +9,6 @@ Regression tests for two bugs fixed in the ollama factory lambda:
      with the openai factory and the placeholder used inside OpenAIDenseEmbedder.
 """
 
-import pytest
 from unittest.mock import MagicMock, patch
 
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
@@ -27,7 +26,7 @@ def _make_mock_openai_class():
 
 
 def _make_ollama_cfg(**kwargs) -> EmbeddingModelConfig:
-    defaults = dict(provider="ollama", model="nomic-embed-text", dimension=768)
+    defaults = {"provider": "ollama", "model": "nomic-embed-text", "dimension": 768}
     defaults.update(kwargs)
     return EmbeddingModelConfig(**defaults)
 
