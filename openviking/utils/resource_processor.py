@@ -85,13 +85,18 @@ class ResourceProcessor:
     ) -> Dict[str, Any]:
         """Expose index building as a standalone method."""
         from openviking_cli.utils.config import get_openviking_config
+
         try:
             ov_config = get_openviking_config()
-            embedding_provider = (
-                getattr(getattr(getattr(ov_config, "embedding", None), "dense", None), "provider", None)
+            embedding_provider = getattr(
+                getattr(getattr(ov_config, "embedding", None), "dense", None), "provider", None
             )
         except Exception as e:
-            logger.warning("Failed to resolve embedding provider; multimodal path disabled: %s", e, exc_info=True)
+            logger.warning(
+                "Failed to resolve embedding provider; multimodal path disabled: %s",
+                e,
+                exc_info=True,
+            )
             embedding_provider = None
         for uri in resource_uris:
             await index_resource(uri, ctx, embedding_provider=embedding_provider)
@@ -224,9 +229,7 @@ class ResourceProcessor:
             viking_fs = get_viking_fs()
             target_exists = await viking_fs.exists(root_uri, ctx=ctx)
             if not target_exists:
-
                 dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
-                parent_path = dst_path.rsplit("/", 1)[0] if "/" in dst_path else dst_path
 
                 # 确保父目录存在
                 parent_uri = "/".join(root_uri.rsplit("/", 1)[:-1])

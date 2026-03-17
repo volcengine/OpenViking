@@ -41,14 +41,13 @@ class EmbeddingModelConfig(BaseModel):
     provider: Optional[str] = Field(
         default="volcengine",
         description=(
-            "Provider type: 'openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini'", 'voyage'. "
-            "For OpenRouter or other OpenAI-compatible providers, use 'openai' with "
-            "api_base and extra_headers."
+            "Provider type: 'openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'voyage', 'gemini'. "
+            "For OpenRouter or other OpenAI-compatible providers, use 'openai' with api_base and extra_headers."
         ),
     )
     backend: Optional[str] = Field(
         default="volcengine",
-        description="Backend type (Deprecated, use 'provider' instead): 'openai', 'volcengine', 'vikingdb', 'voyage'", 'gemini'",
+        description="Backend type (Deprecated, use 'provider' instead).",
     )
     version: Optional[str] = Field(default=None, description="Model version")
     ak: Optional[str] = Field(default=None, description="Access Key ID for VikingDB API")
@@ -62,6 +61,7 @@ class EmbeddingModelConfig(BaseModel):
     task_type: Optional[str] = Field(
         default=None,
         description="Gemini task type: RETRIEVAL_DOCUMENT, RETRIEVAL_QUERY, SEMANTIC_SIMILARITY",
+    )
     extra_headers: Optional[dict[str, str]] = Field(
         default=None,
         description=(
@@ -109,7 +109,7 @@ class EmbeddingModelConfig(BaseModel):
         if self.provider not in ["openai", "volcengine", "vikingdb", "jina", "ollama", "voyage", "gemini"]:
             raise ValueError(
                 f"Invalid embedding provider: '{self.provider}'. Must be one of: "
-                "'openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'voyage'", 'gemini'"
+                "'openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'voyage', 'gemini'"
             )
 
         # Provider-specific validation

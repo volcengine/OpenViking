@@ -443,6 +443,7 @@ class TestWatchE2EErrorHandling:
     @pytest.mark.asyncio
     async def test_watch_without_watch_manager(self, temp_dir: Path, watch_test_file: Path):
         """Test that resource can be added without watch manager."""
+
         class MockResourceProcessor:
             async def process_resource(self, **kwargs):
                 return {"root_uri": kwargs.get("to", "viking://resources/test")}

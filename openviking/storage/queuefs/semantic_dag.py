@@ -101,6 +101,7 @@ class SemanticDagExecutor:
 
     def _create_on_complete_callback(self) -> Callable[[], Awaitable[None]]:
         """Create on_complete callback for incremental update or full update."""
+
         async def noop_callback() -> None:
             return
 
@@ -289,9 +290,7 @@ class SemanticDagExecutor:
         try:
             current_stat = await self._viking_fs.stat(file_path, ctx=self._ctx)
             target_stat = await self._viking_fs.stat(target_path, ctx=self._ctx)
-            current_size = (
-                current_stat.get("size") if isinstance(current_stat, dict) else None
-            )
+            current_size = current_stat.get("size") if isinstance(current_stat, dict) else None
             target_size = target_stat.get("size") if isinstance(target_stat, dict) else None
             if current_size is not None and target_size is not None and current_size != target_size:
                 return True

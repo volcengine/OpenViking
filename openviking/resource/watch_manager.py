@@ -107,9 +107,9 @@ class WatchManager:
     Supports multi-tenant authorization.
     """
 
-    STORAGE_URI = "viking://resources/watch_tasks.json"
-    STORAGE_BAK_URI = "viking://resources/watch_tasks.json.bak"
-    STORAGE_TMP_URI = "viking://resources/watch_tasks.json.tmp"
+    STORAGE_URI = "viking://resources/.watch_tasks.json"
+    STORAGE_BAK_URI = "viking://resources/.watch_tasks.json.bak"
+    STORAGE_TMP_URI = "viking://resources/.watch_tasks.json.tmp"
 
     def __init__(self, viking_fs: Optional[Any] = None):
         """Initialize WatchManager.

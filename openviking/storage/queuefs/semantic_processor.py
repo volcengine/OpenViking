@@ -194,9 +194,7 @@ class SemanticProcessor(DequeueHandlerBase):
         try:
             current_stat = await viking_fs.stat(file_path, ctx=ctx)
             target_stat = await viking_fs.stat(target_file, ctx=ctx)
-            current_size = (
-                current_stat.get("size") if isinstance(current_stat, dict) else None
-            )
+            current_size = current_stat.get("size") if isinstance(current_stat, dict) else None
             target_size = target_stat.get("size") if isinstance(target_stat, dict) else None
             if current_size is not None and target_size is not None and current_size != target_size:
                 return True
@@ -1036,7 +1034,11 @@ class SemanticProcessor(DequeueHandlerBase):
                 getattr(get_openviking_config().embedding, "dense", None), "provider", None
             )
         except Exception as e:
-            logger.warning("Failed to resolve embedding provider; multimodal path disabled: %s", e, exc_info=True)
+            logger.warning(
+                "Failed to resolve embedding provider; multimodal path disabled: %s",
+                e,
+                exc_info=True,
+            )
             embedding_provider = None
 
         active_ctx = ctx or self._current_ctx

@@ -502,10 +502,8 @@ class VikingVectorIndexBackend:
     # =========================================================================
 
     async def upsert(self, data: Dict[str, Any], *, ctx: RequestContext) -> str:
-        copy_data = data.copy()
-        del copy_data["vector"]
         logger.debug(
-            f"[VikingVectorIndexBackend.upsert] Called with ctx.account_id={ctx.account_id}, data={copy_data}"
+            f"[VikingVectorIndexBackend.upsert] Called with ctx.account_id={ctx.account_id}, data={data}"
         )
         backend = self._get_backend_for_context(ctx)
         logger.debug(

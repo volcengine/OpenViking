@@ -291,7 +291,9 @@ class WatchScheduler:
                             f"[WatchScheduler] Deactivated task {task.task_id}: {deactivation_reason}"
                         )
                     else:
-                        await asyncio.shield(self._watch_manager.update_execution_time(task.task_id))
+                        await asyncio.shield(
+                            self._watch_manager.update_execution_time(task.task_id)
+                        )
                         logger.info(
                             f"[WatchScheduler] Updated execution time for task {task.task_id}"
                         )

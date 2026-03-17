@@ -15,9 +15,7 @@ from openviking_cli.exceptions import ConflictError
 from openviking_cli.session.user_id import UserIdentifier
 
 
-async def get_task_by_uri(
-    service: ResourceService, to_uri: str, ctx: RequestContext
-):
+async def get_task_by_uri(service: ResourceService, to_uri: str, ctx: RequestContext):
     return await service._watch_scheduler.watch_manager.get_task_by_uri(
         to_uri=to_uri,
         account_id=ctx.account_id,
