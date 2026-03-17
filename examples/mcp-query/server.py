@@ -45,6 +45,8 @@ def _get_recipe() -> Recipe:
     global _recipe
     if _recipe is None:
         _recipe = Recipe(config_path=_config_path, data_path=_data_path)
+        if _api_key:
+            _recipe.api_key = _api_key
     return _recipe
 
 
