@@ -371,6 +371,19 @@ class PathLock:
         logger.debug(f"[MV] Locks acquired: {src_path} -> {dst_parent_path}")
         return True
 
+    async def refresh(self, owner: LockOwner) -> None:
+        """Rewrite all lock file timestamps to prevent stale cleanup."""
+        for lock_path in list(owner.locks):
+            token = self._read_token(lock_path)
+            if token:
+                parsed_owner_id, _, lock_type = _parse_fencing_token(token)
+                if parsed_owner_id == owner.id:
+                    new_token = _make_fencing_token(owner.id, lock_type)
+                    try:
+                        self._agfs.write(lock_path, new_token.encode("utf-8"))
+                    except Exception as e:
+                        logger.warning(f"Failed to refresh lock {lock_path}: {e}")
+
     async def release(self, owner: LockOwner) -> None:
         lock_count = len(owner.locks)
         for lock_path in reversed(owner.locks):

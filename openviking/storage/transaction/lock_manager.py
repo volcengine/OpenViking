@@ -94,6 +94,12 @@ class LockManager:
             src_is_dir=src_is_dir,
         )
 
+    def get_handle(self, handle_id: str) -> Optional[LockHandle]:
+        return self._handles.get(handle_id)
+
+    async def refresh_lock(self, handle: LockHandle) -> None:
+        await self._path_lock.refresh(handle)
+
     async def release(self, handle: LockHandle) -> None:
         await self._path_lock.release(handle)
         self._handles.pop(handle.id, None)

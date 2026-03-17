@@ -290,7 +290,10 @@ class VikingFS:
         after cleaning up any orphan index records.
 
         Acquires a path lock, deletes VectorDB records, then FS files.
+        Raises ResourceBusyError when the target is locked by an ongoing
+        operation (e.g. semantic processing).
         """
+        from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
         from openviking.storage.transaction import LockContext, get_lock_manager
 
         self._ensure_access(uri, ctx)
@@ -317,12 +320,15 @@ class VikingFS:
             lock_paths = [parent]
             lock_mode = "point"
 
-        async with LockContext(get_lock_manager(), lock_paths, lock_mode=lock_mode):
-            uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx)
-            uris_to_delete.append(target_uri)
-            await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
-            result = self.agfs.rm(path, recursive=recursive)
-            return result
+        try:
+            async with LockContext(get_lock_manager(), lock_paths, lock_mode=lock_mode):
+                uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx)
+                uris_to_delete.append(target_uri)
+                await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
+                result = self.agfs.rm(path, recursive=recursive)
+                return result
+        except LockAcquisitionError:
+            raise ResourceBusyError(f"Resource is being processed: {uri}")
 
     async def mv(
         self,

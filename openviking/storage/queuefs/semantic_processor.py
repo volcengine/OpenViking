@@ -239,6 +239,14 @@ class SemanticProcessor(DequeueHandlerBase):
                                 f"Target URI exists, using incremental update: {msg.target_uri}"
                             )
 
+                    # Re-acquire lifecycle lock if handle was lost (e.g. server restart)
+                    if msg.lifecycle_lock_handle_id:
+                        lock_uri = msg.target_uri or msg.uri
+                        msg.lifecycle_lock_handle_id = await self._ensure_lifecycle_lock(
+                            msg.lifecycle_lock_handle_id,
+                            viking_fs._uri_to_path(lock_uri, ctx=self._current_ctx),
+                        )
+
                     executor = SemanticDagExecutor(
                         processor=self,
                         context_type=msg.context_type,
@@ -248,6 +256,7 @@ class SemanticProcessor(DequeueHandlerBase):
                         target_uri=msg.target_uri,
                         semantic_msg_id=msg.id,
                         recursive=msg.recursive,
+                        lifecycle_lock_handle_id=msg.lifecycle_lock_handle_id,
                     )
                     self._dag_executor = executor
                     await executor.run(msg.uri)
@@ -268,6 +277,22 @@ class SemanticProcessor(DequeueHandlerBase):
             self.report_error(str(e), data)
             return None
         finally:
+            # Safety net: release lifecycle lock if still held (e.g. on exception
+            # before the DAG executor took ownership)
+            if msg and msg.lifecycle_lock_handle_id:
+                try:
+                    from openviking.storage.transaction import get_lock_manager
+
+                    lm = get_lock_manager()
+                    handle = lm.get_handle(msg.lifecycle_lock_handle_id)
+                    if handle:
+                        await lm.release(handle)
+                        logger.info(
+                            f"[SemanticProcessor] Safety-net released lifecycle lock "
+                            f"{msg.lifecycle_lock_handle_id}"
+                        )
+                except Exception:
+                    pass
             self._current_msg = None
             self._current_ctx = None
 
@@ -276,63 +301,24 @@ class SemanticProcessor(DequeueHandlerBase):
             return None
         return self._dag_executor.get_stats()
 
-    async def _process_single_directory(
-        self,
-        uri: str,
-        context_type: str,
-        children_uris: List[str],
-        file_paths: List[str],
-    ) -> None:
-        """Process single directory, generate .abstract.md and .overview.md."""
-        from openviking.storage.errors import LockAcquisitionError
-        from openviking.storage.transaction import LockContext, get_lock_manager
+    @staticmethod
+    async def _ensure_lifecycle_lock(handle_id: str, lock_path: str) -> str:
+        """If the handle is missing (server restart), re-acquire a SUBTREE lock.
 
-        viking_fs = get_viking_fs()
-        dir_path = viking_fs._uri_to_path(uri, ctx=self._current_ctx)
+        Returns the (possibly new) handle ID, or "" on failure.
+        """
+        from openviking.storage.transaction import get_lock_manager
 
-        try:
-            async with LockContext(get_lock_manager(), [dir_path], lock_mode="point"):
-                # 1. Collect .abstract.md from subdirectories
-                children_abstracts = await self._collect_children_abstracts(children_uris)
-
-                # 2. Concurrently generate summaries for files in directory
-                tasks = [
-                    self._generate_single_file_summary(fp, ctx=self._current_ctx)
-                    for fp in file_paths
-                ]
-                file_summaries = await asyncio.gather(*tasks)
-
-                # 3. Generate .overview.md
-                overview = await self._generate_overview(uri, file_summaries, children_abstracts)
-
-                # 4. Extract abstract from overview
-                abstract = self._extract_abstract_from_overview(overview)
-
-                # 5. Write files
-                await viking_fs.write_file(f"{uri}/.overview.md", overview, ctx=self._current_ctx)
-                await viking_fs.write_file(f"{uri}/.abstract.md", abstract, ctx=self._current_ctx)
-
-                logger.debug(f"Generated overview and abstract for {uri}")
-
-                # 6. Vectorize directory and files concurrently
-                vectorize_tasks = [
-                    self._vectorize_directory_simple(uri, context_type, abstract, overview),
-                    *(
-                        self._vectorize_single_file(
-                            parent_uri=uri,
-                            context_type=context_type,
-                            file_path=fp,
-                            summary_dict=summary,
-                        )
-                        for fp, summary in zip(file_paths, file_summaries)
-                    ),
-                ]
-                results = await asyncio.gather(*vectorize_tasks, return_exceptions=True)
-                for result in results:
-                    if isinstance(result, Exception):
-                        logger.error(f"Vectorization failed: {result}", exc_info=True)
-        except LockAcquisitionError:
-            logger.info(f"[SemanticProcessor] {uri} does not exist or is locked, skipping")
+        lm = get_lock_manager()
+        if lm.get_handle(handle_id):
+            return handle_id
+        new_handle = lm.create_handle()
+        if await lm.acquire_subtree(new_handle, lock_path):
+            logger.info(f"Re-acquired lifecycle lock on {lock_path} (handle {new_handle.id})")
+            return new_handle.id
+        logger.warning(f"Failed to re-acquire lifecycle lock on {lock_path}")
+        await lm.release(new_handle)
+        return ""
 
     async def _process_memory_directory(self, msg: SemanticMsg) -> None:
         """Process a memory directory with special handling.

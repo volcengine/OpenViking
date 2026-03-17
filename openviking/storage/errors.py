@@ -37,3 +37,7 @@ class LockError(VikingDBException):
 
 class LockAcquisitionError(LockError):
     """Raised when lock acquisition fails."""
+
+
+class ResourceBusyError(LockError):
+    """Raised when a resource is locked by an ongoing operation (e.g. semantic processing)."""

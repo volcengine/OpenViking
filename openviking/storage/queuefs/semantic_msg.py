@@ -39,6 +39,7 @@ class SemanticMsg:
     skip_vectorization: bool = False
     telemetry_id: str = ""
     target_uri: str = ""
+    lifecycle_lock_handle_id: str = ""
     changes: Optional[Dict[str, List[str]]] = (
         None  # {"added": [...], "modified": [...], "deleted": [...]}
     )
@@ -55,6 +56,7 @@ class SemanticMsg:
         skip_vectorization: bool = False,
         telemetry_id: str = "",
         target_uri: str = "",
+        lifecycle_lock_handle_id: str = "",
         changes: Optional[Dict[str, List[str]]] = None,
     ):
         self.id = str(uuid4())
@@ -68,6 +70,7 @@ class SemanticMsg:
         self.skip_vectorization = skip_vectorization
         self.telemetry_id = telemetry_id
         self.target_uri = target_uri
+        self.lifecycle_lock_handle_id = lifecycle_lock_handle_id
         self.changes = changes
 
     def to_dict(self) -> Dict[str, Any]:
@@ -106,6 +109,7 @@ class SemanticMsg:
             skip_vectorization=data.get("skip_vectorization", False),
             telemetry_id=data.get("telemetry_id", ""),
             target_uri=data.get("target_uri", ""),
+            lifecycle_lock_handle_id=data.get("lifecycle_lock_handle_id", ""),
             changes=data.get("changes"),
         )
         if "id" in data and data["id"]:
