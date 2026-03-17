@@ -92,6 +92,32 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 
 </details>
 
+<details>
+<summary><b>Google Gemini (Multimodal)</b></summary>
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "gemini",
+      "api_key": "your-google-api-key",
+      "model": "gemini-embedding-2-preview",
+      "dimension": 3072,
+      "task_type": "RETRIEVAL_DOCUMENT"
+    }
+  }
+}
+```
+
+支持文本、图片（PNG/JPEG/GIF/WebP）、视频（MP4/MOV/AVI/MKV/FLV/WMV/MPEG）、音频（WAV/MP3/AIFF/AAC/OGG/FLAC）和 PDF 文件。
+在 https://aistudio.google.com/app/apikey 获取您的 API 密钥。
+
+| Model | Dimension | Input Types | Token Limit |
+|-------|-----------|-------------|-------------|
+| `gemini-embedding-2-preview` | 128–3072 (default 3072) | text + image + video + audio + PDF | 8192 |
+
+</details>
+
 ## 配置部分
 
 ### embedding
@@ -121,7 +147,7 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | `max_concurrent` | int | 最大并发 Embedding 请求数（`embedding.max_concurrent`，默认：`10`） |
-| `provider` | str | `"volcengine"`、`"openai"`、`"vikingdb"` 或 `"jina"` |
+| `provider` | str | `"volcengine"`、`"openai"`、`"vikingdb"`、`"jina"` 或 `"gemini"` |
 | `api_key` | str | API Key |
 | `model` | str | 模型名称 |
 | `dimension` | int | 向量维度 |
@@ -142,6 +168,7 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 - `volcengine`: 火山引擎 Embedding API
 - `vikingdb`: VikingDB Embedding API
 - `jina`: Jina AI Embedding API
+- `gemini`: Google Gemini Embedding API
 
 **vikingdb provider 配置示例:**
 
@@ -178,6 +205,22 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 可用 Jina 模型:
 - `jina-embeddings-v5-text-small`: 677M 参数, 1024 维, 最大序列长度 32768 (默认)
 - `jina-embeddings-v5-text-nano`: 239M 参数, 768 维, 最大序列长度 8192
+
+**gemini provider 配置示例:**
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "gemini",
+      "api_key": "your-google-api-key",
+      "model": "gemini-embedding-2-preview",
+      "dimension": 3072,
+      "task_type": "RETRIEVAL_DOCUMENT"
+    }
+  }
+}
+```
 
 **本地部署 (GGUF/MLX):** Jina 嵌入模型是开源的, 在 [Hugging Face](https://huggingface.co/jinaai) 上提供 GGUF 和 MLX 格式。可以使用任何 OpenAI 兼容的推理服务器 (如 llama.cpp、MLX、vLLM) 本地运行, 并将 `api_base` 指向本地端点:
 

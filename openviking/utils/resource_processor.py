@@ -84,8 +84,17 @@ class ResourceProcessor:
         self, resource_uris: List[str], ctx: RequestContext, **kwargs
     ) -> Dict[str, Any]:
         """Expose index building as a standalone method."""
+        from openviking_cli.utils.config import get_openviking_config
+        try:
+            ov_config = get_openviking_config()
+            embedding_provider = (
+                getattr(getattr(getattr(ov_config, "embedding", None), "dense", None), "provider", None)
+            )
+        except Exception as e:
+            logger.warning("Failed to resolve embedding provider; multimodal path disabled: %s", e, exc_info=True)
+            embedding_provider = None
         for uri in resource_uris:
-            await index_resource(uri, ctx)
+            await index_resource(uri, ctx, embedding_provider=embedding_provider)
         return {"status": "success", "message": f"Indexed {len(resource_uris)} resources"}
 
     async def summarize(

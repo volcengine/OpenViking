@@ -319,6 +319,15 @@ class DenseEmbedderBase(EmbedderBase):
         """
         pass
 
+    @property
+    def supports_multimodal(self) -> bool:
+        """True when this embedder natively embeds image/audio bytes."""
+        return False
+
+    def embed_multimodal(self, vectorize: "Vectorize") -> "EmbedResult":
+        """Default implementation falls back to text — no breaking change."""
+        return self.embed(getattr(vectorize, "text", str(vectorize)))
+
 
 class SparseEmbedderBase(EmbedderBase):
     """Sparse embedder base class that returns sparse vectors

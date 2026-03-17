@@ -1,0 +1,16 @@
+{
+  "_comment": [
+    "Gemini Embedding 2 alternative configuration for OpenViking.",
+    "Set GEMINI_API_KEY in your environment before starting the server.",
+    "// Supported: 128–3072 (recommended: 768, 1536, 3072). Default: 3072"
+  ],
+  "embedding": {
+    "dense": {
+      "model": "gemini-embedding-2-preview",
+      "api_key": "${GEMINI_API_KEY}",
+      "dimension": 3072,
+      "provider": "gemini",
+      "task_type": "RETRIEVAL_DOCUMENT"
+    }
+  }
+}

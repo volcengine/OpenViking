@@ -250,6 +250,52 @@ def test_vlm_validation():
         print(f"   Fail (provider='volcengine' should have priority, got '{config_b.provider}')")
 
 
+import pytest
+
+
+def test_gemini_provider_valid():
+    from openviking_cli.utils.config.embedding_config import EmbeddingModelConfig
+    cfg = EmbeddingModelConfig(
+        model="gemini-embedding-2-preview", provider="gemini", api_key="test-key", dimension=3072
+    )
+    assert cfg.provider == "gemini"
+    assert cfg.dimension == 3072
+
+
+def test_gemini_provider_requires_api_key():
+    from openviking_cli.utils.config.embedding_config import EmbeddingModelConfig
+    with pytest.raises(ValueError, match="api_key"):
+        EmbeddingModelConfig(model="gemini-embedding-2-preview", provider="gemini")
+
+
+def test_gemini_task_type_field():
+    from openviking_cli.utils.config.embedding_config import EmbeddingModelConfig
+    cfg = EmbeddingModelConfig(
+        model="gemini-embedding-2-preview",
+        provider="gemini",
+        api_key="test-key",
+        task_type="RETRIEVAL_DOCUMENT",
+    )
+    assert cfg.task_type == "RETRIEVAL_DOCUMENT"
+
+
+def test_gemini_factory_creates_gemini_embedder():
+    from unittest.mock import patch
+    from openviking_cli.utils.config.embedding_config import EmbeddingConfig
+    with patch("openviking.models.embedder.gemini_embedders.genai.Client"):
+        cfg = EmbeddingConfig(
+            dense={
+                "model": "gemini-embedding-2-preview",
+                "provider": "gemini",
+                "api_key": "test-key",
+                "task_type": "RETRIEVAL_DOCUMENT",
+            }
+        )
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+        embedder = cfg.get_embedder()
+        assert isinstance(embedder, GeminiDenseEmbedder)
+
+
 if __name__ == "__main__":
     print("\nStarting config validator tests...\n")
 

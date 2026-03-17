@@ -29,7 +29,18 @@ export type LocalClientCacheEntry = {
   process: ReturnType<typeof spawn> | null;
 };
 
+export type PendingClientEntry = {
+  promise: Promise<OpenVikingClient>;
+  resolve: (c: OpenVikingClient) => void;
+  reject: (err: unknown) => void;
+};
+
 export const localClientCache = new Map<string, LocalClientCacheEntry>();
+
+// Module-level pending promise map: shared across all plugin registrations so
+// that both [gateway] and [plugins] contexts await the same promise and
+// don't create duplicate pending promises that never resolve.
+export const localClientPendingPromises = new Map<string, PendingClientEntry>();
 
 const MEMORY_URI_PATTERNS = [
   /^viking:\/\/user\/(?:[^/]+\/)?memories(?:\/|$)/,

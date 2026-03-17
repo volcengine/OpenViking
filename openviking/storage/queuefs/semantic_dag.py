@@ -519,6 +519,7 @@ class SemanticDagExecutor:
                         dir_uri, file_summaries, children_abstracts
                     )
                 abstract = self._processor._extract_abstract_from_overview(overview)
+                overview, abstract = self._processor._enforce_size_limits(overview, abstract)
 
             try:
                 await self._viking_fs.write_file(f"{dir_uri}/.overview.md", overview, ctx=self._ctx)

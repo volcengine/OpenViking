@@ -71,7 +71,7 @@ class VolcEngineVLM(OpenAIVLM):
 
         response = client.chat.completions.create(**kwargs)
         self._update_token_usage_from_response(response)
-        return response.choices[0].message.content or ""
+        return self._clean_response(response.choices[0].message.content or "")
 
     async def get_completion_async(
         self, prompt: str, thinking: bool = False, max_retries: int = 0
@@ -90,7 +90,7 @@ class VolcEngineVLM(OpenAIVLM):
             try:
                 response = await client.chat.completions.create(**kwargs)
                 self._update_token_usage_from_response(response)
-                return response.choices[0].message.content or ""
+                return self._clean_response(response.choices[0].message.content or "")
             except Exception as e:
                 last_error = e
                 if attempt < max_retries:
@@ -238,7 +238,7 @@ class VolcEngineVLM(OpenAIVLM):
 
         response = client.chat.completions.create(**kwargs)
         self._update_token_usage_from_response(response)
-        return response.choices[0].message.content or ""
+        return self._clean_response(response.choices[0].message.content or "")
 
     async def get_vision_completion_async(
         self,
@@ -263,4 +263,4 @@ class VolcEngineVLM(OpenAIVLM):
 
         response = await client.chat.completions.create(**kwargs)
         self._update_token_usage_from_response(response)
-        return response.choices[0].message.content or ""
+        return self._clean_response(response.choices[0].message.content or "")

@@ -26,6 +26,7 @@ from .parser_config import (
     ImageConfig,
     MarkdownConfig,
     PDFConfig,
+    SemanticConfig,
     TextConfig,
     VideoConfig,
 )
@@ -92,6 +93,11 @@ class OpenVikingConfig(BaseModel):
 
     directory: DirectoryConfig = Field(
         default_factory=lambda: DirectoryConfig(), description="Directory parsing configuration"
+    )
+
+    semantic: SemanticConfig = Field(
+        default_factory=lambda: SemanticConfig(),
+        description="Semantic processing configuration (overview/abstract limits)",
     )
 
     auto_generate_l0: bool = Field(

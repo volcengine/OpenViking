@@ -1,6 +1,26 @@
 # Installing OpenViking for OpenClaw
 
-Provide long-term memory capabilities for [OpenClaw](https://github.com/openclaw/openclaw) via [OpenViking](https://github.com/volcengine/OpenViking). After installing, OpenClaw will automatically **remember** important information from conversations and **recall** relevant content before replying. The latest version of OpenViking releases the [WebConsole](https://www.google.com/search?q=https://github.com/volcengine/OpenViking/tree/main/openviking/console) to facilitate debugging and operations. Method 3 in this document also provides instructions on how to verify that memories are written via the WebConsole interface, offering user-friendly and easy-to-understand usage guidelines. We welcome you to try it out and provide feedback.
+Provide long-term memory capabilities for [OpenClaw](https://github.com/openclaw/openclaw) via [OpenViking](https://github.com/volcengine/OpenViking). After installing, OpenClaw will automatically **remember** important information from conversations and **recall** relevant content before replying. The latest version of OpenViking includes a [WebConsole](https://github.com/volcengine/OpenViking/tree/main/openviking/console) for debugging and operations. Method 3 in this document also provides instructions on how to verify that memories are written via the WebConsole interface. We welcome you to try it out and provide feedback.
+
+> **⚠️ OpenClaw >= 2026.3.12 Compatibility Issue**
+>
+> OpenClaw `2026.3.12` and later have a known issue that causes conversations to hang after loading the plugin.
+> This is not a bug in our plugin — the root cause is OpenClaw 3.12's slug generator (automatic conversation naming),
+> which has a hardcoded 15s timeout that cascades when the LLM provider responds slowly, blocking the entire
+> session initialization pipeline. Additionally, 3.12's new plugin trust mechanism may affect loading order for
+> locally installed plugins. A separate issue: the `before_agent_start` auto-recall hook lacks timeout protection,
+> which can cause the agent to hang silently ([#673](https://github.com/volcengine/OpenViking/issues/673)).
+>
+> **Workaround:** Downgrade to `2026.3.11`: `npm install -g openclaw@2026.3.11`
+>
+> Upstream fix PRs: openclaw/openclaw#34673, openclaw/openclaw#33547.
+> See [#591](https://github.com/volcengine/OpenViking/issues/591) for details.
+
+> **🚀 Plugin 2.0 In Design**
+>
+> We are designing Plugin 2.0, rebuilt on the context-engine architecture — the best practice for integrating
+> OpenViking with AI coding assistants. Join the discussion:
+> https://github.com/volcengine/OpenViking/discussions/525
 
 ---
 
@@ -96,21 +116,13 @@ Verification: `python3 -c "import openviking; print('ok')"`
 
 ### Step 2: Run the Setup Helper
 
-#### Method A: Global npm Installation (Recommended)
-
 ```bash
+# Method A: npm install (recommended, cross-platform)
 npm install -g openclaw-openviking-setup-helper
 ov-install
 
-```
-
-#### Method B: Run from Repository
-
-```bash
-git clone https://github.com/volcengine/OpenViking.git
-cd OpenViking
-npx ./examples/openclaw-memory-plugin/setup-helper
-
+# Method B: curl one-click (Linux / macOS)
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-memory-plugin/install.sh | bash
 ```
 
 The setup helper will prompt you to enter your Ark API Key and automatically generate a configuration file.
@@ -140,17 +152,23 @@ Already have a running OpenViking service? Simply configure the OpenClaw plugin 
 
 **Prerequisites:** An existing OpenViking service address + API Key (if authentication is enabled on the server side).
 
-### Step 1: Deploy Plugin Code
+### Step 1: Install Plugin
 
 ```bash
-git clone https://github.com/volcengine/OpenViking.git
-cd OpenViking/examples/openclaw-memory-plugin
-npm install
-openclaw plugin link .
-
+npm install -g openclaw-openviking-setup-helper
+ov-install
+# Select remote mode, enter your OpenViking server URL and API Key
 ```
 
-### Step 2: Configure Remote Connection
+### Step 2: Start and Verify
+
+```bash
+openclaw gateway restart
+openclaw status
+```
+
+<details>
+<summary>Manual configuration (without setup helper)</summary>
 
 ```bash
 openclaw config set plugins.enabled true --json
@@ -158,18 +176,12 @@ openclaw config set plugins.slots.memory memory-openviking
 openclaw config set plugins.entries.memory-openviking.config.mode remote
 openclaw config set plugins.entries.memory-openviking.config.baseUrl "http://your-server:1933"
 openclaw config set plugins.entries.memory-openviking.config.apiKey "your-api-key"
+openclaw config set plugins.entries.memory-openviking.config.agentId "your-agent-id"
 openclaw config set plugins.entries.memory-openviking.config.autoRecall true --json
 openclaw config set plugins.entries.memory-openviking.config.autoCapture true --json
-
 ```
 
-### Step 3: Start and Verify
-
-```bash
-openclaw gateway
-openclaw status
-
-```
+</details>
 
 ## Method 3: Integrating Openclaw with OpenViking on Volcengine ECS
 

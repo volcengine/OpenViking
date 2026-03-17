@@ -40,11 +40,15 @@ class EmbeddingModelConfig(BaseModel):
     )
     provider: Optional[str] = Field(
         default="volcengine",
-        description="Provider type: 'openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'voyage'",
+        description=(
+            "Provider type: 'openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini'", 'voyage'. "
+            "For OpenRouter or other OpenAI-compatible providers, use 'openai' with "
+            "api_base and extra_headers."
+        ),
     )
     backend: Optional[str] = Field(
         default="volcengine",
-        description="Backend type (Deprecated, use 'provider' instead): 'openai', 'volcengine', 'vikingdb', 'voyage'",
+        description="Backend type (Deprecated, use 'provider' instead): 'openai', 'volcengine', 'vikingdb', 'voyage'", 'gemini'",
     )
     version: Optional[str] = Field(default=None, description="Model version")
     ak: Optional[str] = Field(default=None, description="Access Key ID for VikingDB API")
@@ -54,6 +58,17 @@ class EmbeddingModelConfig(BaseModel):
     max_tokens: Optional[int] = Field(
         default=None,
         description="Maximum token count per embedding request. If None, uses model default (e.g., 8000 for OpenAI).",
+    )
+    task_type: Optional[str] = Field(
+        default=None,
+        description="Gemini task type: RETRIEVAL_DOCUMENT, RETRIEVAL_QUERY, SEMANTIC_SIMILARITY",
+    extra_headers: Optional[dict[str, str]] = Field(
+        default=None,
+        description=(
+            "Extra HTTP headers for API requests. Passed as default_headers to the OpenAI client. "
+            "Useful for OpenRouter (e.g., {'HTTP-Referer': '...', 'X-Title': '...'}) "
+            "or other OpenAI-compatible providers that require custom headers."
+        ),
     )
 
     model_config = {"extra": "forbid"}
@@ -67,7 +82,13 @@ class EmbeddingModelConfig(BaseModel):
 
             if backend is not None and provider is None:
                 data["provider"] = backend
-            for key in ("input_type", "query_value", "document_value", "query_task", "document_task"):
+            for key in (
+                "input_type",
+                "query_value",
+                "document_value",
+                "query_task",
+                "document_task",
+            ):
                 value = data.get(key)
                 if isinstance(value, str):
                     data[key] = value.lower()
@@ -85,10 +106,10 @@ class EmbeddingModelConfig(BaseModel):
         if not self.provider:
             raise ValueError("Embedding provider is required")
 
-        if self.provider not in ["openai", "volcengine", "vikingdb", "jina", "ollama", "voyage"]:
+        if self.provider not in ["openai", "volcengine", "vikingdb", "jina", "ollama", "voyage", "gemini"]:
             raise ValueError(
                 f"Invalid embedding provider: '{self.provider}'. Must be one of: "
-                "'openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'voyage'"
+                "'openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'voyage'", 'gemini'"
             )
 
         # Provider-specific validation
@@ -123,6 +144,9 @@ class EmbeddingModelConfig(BaseModel):
             if not self.api_key:
                 raise ValueError("Jina provider requires 'api_key' to be set")
 
+        elif self.provider == "gemini":
+            if not self.api_key:
+                raise ValueError("Gemini provider requires 'api_key' to be set")
         elif self.provider == "voyage":
             if not self.api_key:
                 raise ValueError("Voyage provider requires 'api_key' to be set")
@@ -147,7 +171,7 @@ class EmbeddingModelConfig(BaseModel):
 
 class EmbeddingConfig(BaseModel):
     """
-    Embedding configuration, supports OpenAI or VolcEngine compatible APIs.
+    Embedding configuration, supports OpenAI, VolcEngine, VikingDB, Jina, or Gemini APIs.
 
     Structure:
     - dense: Configuration for dense embedder
@@ -176,11 +200,17 @@ class EmbeddingConfig(BaseModel):
             )
         return self
 
-    def _create_embedder(self, provider: str, embedder_type: str, config: EmbeddingModelConfig, context: Optional[str] = None):
+    def _create_embedder(
+        self,
+        provider: str,
+        embedder_type: str,
+        config: EmbeddingModelConfig,
+        context: Optional[str] = None,
+    ):
         """Factory method to create embedder instance based on provider and type.
 
         Args:
-            provider: Provider type ('openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'voyage')
+            provider: Provider type ('openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'voyage', 'gemini'))
             embedder_type: Embedder type ('dense', 'sparse', 'hybrid')
             config: EmbeddingModelConfig instance
             context: Optional embedding context ('query' or 'document') for non-symmetric models.
@@ -204,6 +234,7 @@ class EmbeddingConfig(BaseModel):
             VolcengineSparseEmbedder,
             VoyageDenseEmbedder,
         )
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
 
         # Factory registry: (provider, type) -> (embedder_class, param_builder)
         factory_registry = {
@@ -211,13 +242,15 @@ class EmbeddingConfig(BaseModel):
                 OpenAIDenseEmbedder,
                 lambda cfg: {
                     "model_name": cfg.model,
-                    "api_key": cfg.api_key or "no-key",  # Placeholder for local OpenAI-compatible servers
+                    "api_key": cfg.api_key
+                    or "no-key",  # Placeholder for local OpenAI-compatible servers
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
                     "context": context,
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                     "max_tokens": cfg.max_tokens,
+                    **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
                 },
             ),
             ("volcengine", "dense"): (
@@ -297,12 +330,22 @@ class EmbeddingConfig(BaseModel):
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                 },
             ),
+            ("gemini", "dense"): (
+                GeminiDenseEmbedder,
+                lambda cfg: {
+                    "model_name": cfg.model,
+                    "api_key": cfg.api_key,
+                    "dimension": cfg.dimension,
+                    "task_type": cfg.task_type,
+                },
+            ),
             # Ollama: local OpenAI-compatible embedding server, no real API key needed
             ("ollama", "dense"): (
                 OpenAIDenseEmbedder,
                 lambda cfg: {
                     "model_name": cfg.model,
-                    "api_key": cfg.api_key or "no-key",  # Ollama ignores the key, but client requires non-empty
+                    "api_key": cfg.api_key
+                    or "no-key",  # Ollama ignores the key, but client requires non-empty
                     "api_base": cfg.api_base or "http://localhost:11434/v1",
                     "dimension": cfg.dimension,
                     "max_tokens": cfg.max_tokens,
@@ -381,7 +424,9 @@ class EmbeddingConfig(BaseModel):
             # OpenAI models are symmetric by default (no input_type sent).
             # Non-symmetric mode is activated implicitly when the user sets
             # query_param or document_param in the config.
-            non_symmetric = self.dense.query_param is not None or self.dense.document_param is not None
+            non_symmetric = (
+                self.dense.query_param is not None or self.dense.document_param is not None
+            )
             effective_context = context if non_symmetric else None
             return self._create_embedder(provider, "dense", self.dense, context=effective_context)
 

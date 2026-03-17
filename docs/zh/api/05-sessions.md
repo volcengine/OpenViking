@@ -328,6 +328,71 @@ openviking session add-message a1b2c3d4 --role user --content "How do I authenti
 
 ---
 
+### used()
+
+记录会话中实际使用的上下文和技能。调用 `commit()` 时，会根据此使用数据更新 `active_count`。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| contexts | List[str] | 否 | None | 实际使用的上下文 URI 列表 |
+| skill | Dict[str, Any] | 否 | None | 技能使用记录，包含 `uri`、`input`、`output`、`success` 字段 |
+
+**Python SDK (Embedded / HTTP)**
+
+```python
+session = client.session(session_id="a1b2c3d4")
+session.load()
+
+# 记录使用的上下文
+session.used(contexts=["viking://resources/docs/auth/"])
+
+# 记录使用的技能
+session.used(skill={
+    "uri": "viking://skills/search-web/",
+    "input": {"query": "OAuth"},
+    "output": "Results...",
+    "success": True
+})
+```
+
+**HTTP API**
+
+```
+POST /api/v1/sessions/{session_id}/used
+```
+
+```bash
+# 记录使用的上下文
+curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{"contexts": ["viking://resources/docs/auth/"]}'
+
+# 记录使用的技能
+curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{"skill": {"uri": "viking://skills/search-web/", "input": {"query": "OAuth"}, "output": "Results...", "success": true}}'
+```
+
+**响应**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "session_id": "a1b2c3d4",
+    "contexts_used": 1,
+    "skills_used": 0
+  },
+  "time": 0.1
+}
+```
+
+---
+
 ### commit()
 
 提交会话，归档消息并提取记忆。
@@ -501,7 +566,13 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages \
   -H "X-API-Key: your-key" \
   -d '{"role": "assistant", "content": "Based on the documentation, you can configure embedding..."}'
 
-# 步骤 5：提交会话
+# 步骤 5：记录使用的上下文
+curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{"contexts": ["viking://resources/docs/embedding/"]}'
+
+# 步骤 6：提交会话
 curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/commit \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key"

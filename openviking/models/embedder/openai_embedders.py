@@ -62,6 +62,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         document_param: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
         max_tokens: Optional[int] = None,
+        extra_headers: Optional[Dict[str, str]] = None,
     ):
         """Initialize OpenAI-Compatible Dense Embedder
 
@@ -88,6 +89,8 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
                             Only supported by OpenAI-compatible third-party models.
             config: Additional configuration dict
             max_tokens: Maximum token count per embedding request, None to use default (8000)
+            extra_headers: Extra HTTP headers to include in API requests (e.g., for OpenRouter:
+                          {'HTTP-Referer': 'https://your-site.com', 'X-Title': 'Your App'})
 
         Raises:
             ValueError: If api_key is not provided and env vars are not set
@@ -115,8 +118,6 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         else:
             self.input_type = None
 
-        if not self.api_key:
-            raise ValueError("api_key is required")
         # Allow missing api_key when api_base is set (e.g. local OpenAI-compatible servers)
         if not self.api_key and not self.api_base:
             raise ValueError("api_key is required (or set api_base for local servers)")
@@ -126,6 +127,9 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         client_kwargs = {"api_key": self.api_key or "no-key"}
         if self.api_base:
             client_kwargs["base_url"] = self.api_base
+        # 透传自定义请求头（如 OpenRouter 要求的 HTTP-Referer / X-Title）
+        if extra_headers:
+            client_kwargs["default_headers"] = extra_headers
         self.client = openai.OpenAI(**client_kwargs)
 
         # Initialize tiktoken encoder

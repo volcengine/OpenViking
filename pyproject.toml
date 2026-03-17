@@ -70,6 +70,7 @@ dependencies = [
     "tree-sitter-go>=0.23.0",
     "tree-sitter-c-sharp>=0.23.0",
     "loguru>=0.7.3",
+    "google-genai>=0.8.0",
 ]
 
 [tool.uv.sources]
@@ -84,7 +85,9 @@ test = [
     "ragas>=0.1.0",
     "datasets>=2.0.0",
     "pandas>=2.0.0",
+    "anyio>=4.0",
 ]
+gemini-async = ["anyio>=4.0"]
 dev = [
     "mypy>=1.0.0",
     "ruff>=0.1.0",
@@ -208,6 +211,9 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
 addopts = "-v --cov=openviking --cov-report=term-missing"
+markers = [
+    "integration: tests that call real external APIs (require env vars)",
+]
 
 [tool.ruff]
 line-length = 100
@@ -246,4 +252,6 @@ line-ending = "auto"
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",
+    "pytest-asyncio>=1.3.0",
+    "pytest-cov>=7.0.0",
 ]

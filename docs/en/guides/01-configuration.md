@@ -87,6 +87,32 @@ Create `~/.openviking/ov.conf` in your project directory:
 
 </details>
 
+<details>
+<summary><b>Google Gemini (Multimodal)</b></summary>
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "gemini",
+      "api_key": "your-google-api-key",
+      "model": "gemini-embedding-2-preview",
+      "dimension": 3072,
+      "task_type": "RETRIEVAL_DOCUMENT"
+    }
+  }
+}
+```
+
+Supports text, images (PNG/JPEG/GIF/WebP), video (MP4/MOV/AVI/MKV/FLV/WMV/MPEG), audio (WAV/MP3/AIFF/AAC/OGG/FLAC), and PDF.
+Get your API key at https://aistudio.google.com/app/apikey
+
+| Model | Dimension | Input Types | Token Limit |
+|-------|-----------|-------------|-------------|
+| `gemini-embedding-2-preview` | 128–3072 (default 3072) | text + image + video + audio + PDF | 8192 |
+
+</details>
+
 ## Configuration Sections
 
 ### embedding
@@ -115,7 +141,7 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `max_concurrent` | int | Maximum concurrent embedding requests (`embedding.max_concurrent`, default: `10`) |
-| `provider` | str | `"volcengine"`, `"openai"`, `"vikingdb"`, `"jina"`, or `"voyage"` |
+| `provider` | str | `"volcengine"`, `"openai"`, `"vikingdb"`, `"jina"`, `"gemini"` or `"gemini"` |
 | `api_key` | str | API key |
 | `model` | str | Model name |
 | `dimension` | int | Vector dimension. For Voyage, this maps to `output_dimension` |
@@ -136,6 +162,7 @@ With `input: "multimodal"`, OpenViking can embed text, images (PNG, JPG, etc.), 
 - `volcengine`: Volcengine Embedding API
 - `vikingdb`: VikingDB Embedding API
 - `jina`: Jina AI Embedding API
+- `gemini`: Google Gemini Embedding API
 - `voyage`: Voyage AI Embedding API
 
 **vikingdb provider example:**
@@ -175,6 +202,22 @@ Available Jina models:
 - `jina-embeddings-v5-text-nano`: 239M params, 768 dim, max seq 8192
 
 Get your API key at https://jina.ai
+
+**gemini provider example:**
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "gemini",
+      "api_key": "your-google-api-key",
+      "model": "gemini-embedding-2-preview",
+      "dimension": 3072,
+      "task_type": "RETRIEVAL_DOCUMENT"
+    }
+  }
+}
+```
 
 **voyage provider example:**
 

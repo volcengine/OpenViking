@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import json
 import threading
+import traceback
 from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
@@ -25,6 +26,7 @@ from openviking.storage.viking_vector_index_backend import VikingVectorIndexBack
 from openviking.telemetry import bind_telemetry, resolve_telemetry
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
+from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
 
 logger = get_logger(__name__)
@@ -119,8 +121,6 @@ async def init_context_collection(storage) -> bool:
     Returns:
         True if collection was created, False if already exists
     """
-    from openviking_cli.utils.config import get_openviking_config
-
     config = get_openviking_config()
     name = config.storage.vectordb.name
     vector_dim = config.embedding.dimension
@@ -154,8 +154,6 @@ class TextEmbeddingHandler(DequeueHandlerBase):
         Args:
             vikingdb: VikingVectorIndexBackend instance for writing to vector database
         """
-        from openviking_cli.utils.config import get_openviking_config
-
         self._vikingdb = vikingdb
         self._embedder = None
         config = get_openviking_config()
@@ -246,11 +244,58 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                 # Generate embedding vector(s)
                 if self._embedder:
                     try:
-                        # embed() is a blocking HTTP call; offload to thread pool to avoid
-                        # blocking the event loop and allow real concurrency.
-                        result: EmbedResult = await asyncio.to_thread(
-                            self._embedder.embed, embedding_msg.message
-                        )
+                        # Multimodal path: read bytes from viking_fs and call embed_multimodal()
+                        if (
+                            embedding_msg.media_uri
+                            and embedding_msg.media_mime_type
+                            and getattr(self._embedder, "supports_multimodal", False)
+                        ):
+                            # Security: validate media_uri matches the record's own URI to prevent
+                            # forged queue messages from reading arbitrary files.
+                            expected_uri = embedding_msg.context_data.get("uri", "")
+                            if embedding_msg.media_uri != expected_uri:
+                                logger.warning(
+                                    f"media_uri {embedding_msg.media_uri!r} does not match context uri "
+                                    f"{expected_uri!r}, falling back to text embedding"
+                                )
+                                result: EmbedResult = await asyncio.to_thread(
+                                    self._embedder.embed, embedding_msg.message
+                                )
+                            else:
+                                # TODO(security): reconstruct a tenant-scoped RequestContext from
+                                # context_data["account_id"] to prevent ROOT-context file reads.
+                                try:
+                                    from openviking.core.context import ModalContent, Vectorize
+                                    from openviking.storage.viking_fs import get_viking_fs
+
+                                    viking_fs = get_viking_fs()
+                                    raw_bytes = await viking_fs.read_file_bytes(
+                                        embedding_msg.media_uri, ctx=None
+                                    )
+                                    vectorize = Vectorize(
+                                        text=embedding_msg.message,
+                                        media=ModalContent(
+                                            mime_type=embedding_msg.media_mime_type,
+                                            uri=embedding_msg.media_uri,
+                                            data=raw_bytes,
+                                        ),
+                                    )
+                                    result: EmbedResult = await asyncio.to_thread(
+                                        self._embedder.embed_multimodal, vectorize
+                                    )
+                                except Exception as e:
+                                    logger.warning(
+                                        f"Multimodal embed failed for {embedding_msg.media_uri!r}: {e}, "
+                                        "falling back to text embedding"
+                                    )
+                                    result: EmbedResult = await asyncio.to_thread(
+                                        self._embedder.embed, embedding_msg.message
+                                    )
+                        else:
+                            # Text embed path: blocking HTTP call offloaded to thread pool
+                            result: EmbedResult = await asyncio.to_thread(
+                                self._embedder.embed, embedding_msg.message
+                            )
                     except Exception as embed_err:
                         error_msg = f"Failed to generate embedding: {embed_err}"
                         logger.error(error_msg)
@@ -333,8 +378,6 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         self.report_success()
                         return None
                     logger.error(f"Failed to write to vector database: {db_err}")
-                    import traceback
-
                     traceback.print_exc()
                     self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
                     self.report_error(str(db_err), data)
@@ -346,8 +389,6 @@ class TextEmbeddingHandler(DequeueHandlerBase):
 
         except Exception as e:
             logger.error(f"Error processing embedding message: {e}")
-            import traceback
-
             traceback.print_exc()
             if embedding_msg is not None:
                 self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
