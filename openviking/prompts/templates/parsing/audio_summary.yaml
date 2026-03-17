@@ -1,0 +1,44 @@
+metadata:
+  id: "parsing.audio_summary"
+  name: "Audio Summary"
+  description: "Generate concise audio summary from transcript for semantic parsing"
+  version: "1.0.0"
+  language: "en"
+  category: "parsing"
+
+variables:
+  - name: "transcript"
+    type: "string"
+    description: "Full audio transcript text"
+    required: true
+    max_length: 30000
+  - name: "duration"
+    type: "string"
+    description: "Audio duration in seconds"
+    default: "unknown"
+    required: false
+  - name: "format"
+    type: "string"
+    description: "Audio file format"
+    default: "unknown"
+    required: false
+
+template: |
+  Please analyze this audio transcript and generate a concise summary for semantic indexing.
+
+  Audio duration: {{ duration }}s
+  Audio format: {{ format }}
+
+  Transcript:
+  {{ transcript }}
+
+  Generate a comprehensive summary that includes:
+  1. Main topic or subject of the audio
+  2. Key points discussed
+  3. Any notable speakers or perspectives
+  4. Important conclusions or takeaways
+
+  Keep the summary clear and factual, suitable for semantic search and understanding.
+
+llm_config:
+  temperature: 0.0
