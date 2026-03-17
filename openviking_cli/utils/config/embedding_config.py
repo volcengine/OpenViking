@@ -40,7 +40,11 @@ class EmbeddingModelConfig(BaseModel):
     )
     provider: Optional[str] = Field(
         default="volcengine",
-        description="Provider type: 'openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'voyage'",
+        description=(
+            "Provider type: 'openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'voyage'. "
+            "For OpenRouter or other OpenAI-compatible providers, use 'openai' with "
+            "api_base and extra_headers."
+        ),
     )
     backend: Optional[str] = Field(
         default="volcengine",
@@ -54,6 +58,14 @@ class EmbeddingModelConfig(BaseModel):
     max_tokens: Optional[int] = Field(
         default=None,
         description="Maximum token count per embedding request. If None, uses model default (e.g., 8000 for OpenAI).",
+    )
+    extra_headers: Optional[dict[str, str]] = Field(
+        default=None,
+        description=(
+            "Extra HTTP headers for API requests. Passed as default_headers to the OpenAI client. "
+            "Useful for OpenRouter (e.g., {'HTTP-Referer': '...', 'X-Title': '...'}) "
+            "or other OpenAI-compatible providers that require custom headers."
+        ),
     )
 
     model_config = {"extra": "forbid"}
@@ -233,6 +245,7 @@ class EmbeddingConfig(BaseModel):
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                     "max_tokens": cfg.max_tokens,
+                    **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
                 },
             ),
             ("volcengine", "dense"): (
