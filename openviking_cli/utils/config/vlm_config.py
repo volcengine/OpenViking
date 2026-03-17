@@ -27,7 +27,7 @@ class VLMConfig(BaseModel):
     default_provider: Optional[str] = Field(default=None, description="Default provider name")
 
     max_tokens: Optional[int] = Field(
-        default=4096, description="Maximum tokens for VLM completion output"
+        default=None, description="Maximum tokens for VLM completion output (None = provider default)"
     )
 
     thinking: bool = Field(default=False, description="Enable thinking mode for VolcEngine models")

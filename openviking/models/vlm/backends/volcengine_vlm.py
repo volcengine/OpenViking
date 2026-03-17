@@ -68,7 +68,7 @@ class VolcEngineVLM(OpenAIVLM):
             "temperature": self.temperature,
             "thinking": {"type": "disabled" if not thinking else "enabled"},
         }
-        if self.max_tokens:
+        if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
 
         response = client.chat.completions.create(**kwargs)
@@ -86,7 +86,7 @@ class VolcEngineVLM(OpenAIVLM):
             "temperature": self.temperature,
             "thinking": {"type": "disabled" if not thinking else "enabled"},
         }
-        if self.max_tokens:
+        if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
 
         last_error = None
@@ -239,7 +239,7 @@ class VolcEngineVLM(OpenAIVLM):
             "temperature": self.temperature,
             "thinking": {"type": "disabled" if not thinking else "enabled"},
         }
-        if self.max_tokens:
+        if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
 
         response = client.chat.completions.create(**kwargs)
@@ -266,7 +266,7 @@ class VolcEngineVLM(OpenAIVLM):
             "temperature": self.temperature,
             "thinking": {"type": "disabled" if not thinking else "enabled"},
         }
-        if self.max_tokens:
+        if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
 
         response = await client.chat.completions.create(**kwargs)
