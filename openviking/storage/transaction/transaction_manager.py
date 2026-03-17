@@ -331,7 +331,7 @@ class TransactionManager:
             return
 
         # 2. Build request context for memory extraction
-        user = UserIdentifier(user_id=user_id, agent_id=agent_id)
+        user = UserIdentifier(account_id=account_id, user_id=user_id, agent_id=agent_id)
         ctx = RequestContext(user=user, role=Role(role_str), account_id=account_id)
 
         # 3. Re-extract memories
