@@ -13,6 +13,7 @@ Supported providers:
 - Volcengine: Dense, Sparse, Hybrid
 - Jina AI: Dense only
 - Voyage AI: Dense only
+- Google/Gemini: Dense only
 """
 
 from openviking.models.embedder.base import (
@@ -23,9 +24,9 @@ from openviking.models.embedder.base import (
     HybridEmbedderBase,
     SparseEmbedderBase,
 )
+from openviking.models.embedder.google_embedders import GoogleDenseEmbedder
 from openviking.models.embedder.jina_embedders import JinaDenseEmbedder
 from openviking.models.embedder.openai_embedders import OpenAIDenseEmbedder
-from openviking.models.embedder.voyage_embedders import VoyageDenseEmbedder
 from openviking.models.embedder.vikingdb_embedders import (
     VikingDBDenseEmbedder,
     VikingDBHybridEmbedder,
@@ -36,6 +37,7 @@ from openviking.models.embedder.volcengine_embedders import (
     VolcengineHybridEmbedder,
     VolcengineSparseEmbedder,
 )
+from openviking.models.embedder.voyage_embedders import VoyageDenseEmbedder
 
 __all__ = [
     # Base classes
@@ -45,6 +47,8 @@ __all__ = [
     "SparseEmbedderBase",
     "HybridEmbedderBase",
     "CompositeHybridEmbedder",
+    # Google/Gemini implementations
+    "GoogleDenseEmbedder",
     # Jina AI implementations
     "JinaDenseEmbedder",
     # OpenAI implementations

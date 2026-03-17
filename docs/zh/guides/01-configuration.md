@@ -121,7 +121,7 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | `max_concurrent` | int | 最大并发 Embedding 请求数（`embedding.max_concurrent`，默认：`10`） |
-| `provider` | str | `"volcengine"`、`"openai"`、`"vikingdb"` 或 `"jina"` |
+| `provider` | str | `"volcengine"`、`"openai"`、`"vikingdb"`、`"jina"`、`"voyage"` 或 `"google"` |
 | `api_key` | str | API Key |
 | `model` | str | 模型名称 |
 | `dimension` | int | 向量维度 |

@@ -115,7 +115,7 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `max_concurrent` | int | Maximum concurrent embedding requests (`embedding.max_concurrent`, default: `10`) |
-| `provider` | str | `"volcengine"`, `"openai"`, `"vikingdb"`, `"jina"`, or `"voyage"` |
+| `provider` | str | `"volcengine"`, `"openai"`, `"vikingdb"`, `"jina"`, `"voyage"`, or `"google"` |
 | `api_key` | str | API key |
 | `model` | str | Model name |
 | `dimension` | int | Vector dimension. For Voyage, this maps to `output_dimension` |
@@ -128,6 +128,9 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 |-------|-----------|------------|-------|
 | `doubao-embedding-vision-250615` | 1024 | multimodal | Recommended |
 | `doubao-embedding-250615` | 1024 | text | Text only |
+| `gemini-embedding-2-preview` | 3072 | text | Google Gemini Embedding 2 with MRL |
+| `text-embedding-004` | 768 | text | Google text embedding model |
+| `text-embedding-005` | 768 | text | Latest Google text embedding model |
 
 With `input: "multimodal"`, OpenViking can embed text, images (PNG, JPG, etc.), and mixed content.
 
@@ -137,6 +140,7 @@ With `input: "multimodal"`, OpenViking can embed text, images (PNG, JPG, etc.), 
 - `vikingdb`: VikingDB Embedding API
 - `jina`: Jina AI Embedding API
 - `voyage`: Voyage AI Embedding API
+- `google`: Google/Gemini AI Embedding API
 
 **vikingdb provider example:**
 
@@ -191,6 +195,29 @@ Get your API key at https://jina.ai
   }
 }
 ```
+
+**google provider example:**
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "google",
+      "api_key": "your-google-api-key",
+      "model": "gemini-embedding-2-preview",
+      "dimension": 1024,
+      "query_param": "RETRIEVAL_QUERY",
+      "document_param": "RETRIEVAL_DOCUMENT"
+    }
+  }
+}
+```
+
+For Google/Gemini embeddings:
+- `query_param` and `document_param` support task-specific embeddings
+- Valid task types: `RETRIEVAL_QUERY`, `RETRIEVAL_DOCUMENT`, `SEMANTIC_SIMILARITY`, `CLASSIFICATION`, `CLUSTERING`
+- Enhanced format: `"task_type=RETRIEVAL_QUERY,output_dimensionality=1024"`
+- Get your API key at https://aistudio.google.com/app/apikey
 
 Supported Voyage text embedding models include:
 - `voyage-4-lite`
