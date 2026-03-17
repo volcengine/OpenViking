@@ -3,7 +3,7 @@
 """Tests for StatsAggregator."""
 
 from datetime import datetime, timedelta, timezone
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -92,9 +92,7 @@ class TestStatsAggregator:
         """Records should be classified into cold/warm/hot based on score."""
         now = datetime.now(timezone.utc)
         # Recent + high access -> hot
-        hot_record = _make_memory_record(
-            "cases", active_count=50, updated_at=now
-        )
+        hot_record = _make_memory_record("cases", active_count=50, updated_at=now)
         # Old + no access -> cold
         cold_record = _make_memory_record(
             "cases", active_count=0, updated_at=now - timedelta(days=60)

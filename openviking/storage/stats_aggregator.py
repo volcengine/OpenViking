@@ -173,10 +173,7 @@ class StatsAggregator:
 
             # Filter by category using URI prefix
             category_prefix = f"/{category}/"
-            return [
-                r for r in records
-                if category_prefix in r.get("uri", "")
-            ]
+            return [r for r in records if category_prefix in r.get("uri", "")]
         except Exception as e:
             logger.error("Error querying memories for category %s: %s", category, e)
             return []

@@ -59,9 +59,7 @@ async def get_session_stats(
     service = get_service()
     aggregator = _get_aggregator()
     try:
-        result = await aggregator.get_session_extraction_stats(
-            session_id, service, _ctx
-        )
+        result = await aggregator.get_session_extraction_stats(session_id, service, _ctx)
         return Response(status="ok", result=result)
     except Exception as e:
         logger.warning("Failed to get session stats for %s: %s", session_id, e)

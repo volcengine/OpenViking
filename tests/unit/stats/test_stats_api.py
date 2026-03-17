@@ -2,14 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for the stats API router."""
 
-from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from openviking.server.models import Response
 from openviking.server.routers.stats import router
 
 
@@ -46,10 +44,9 @@ def client(mock_service, mock_ctx):
     app = FastAPI()
     app.include_router(router)
 
-    with patch(
-        "openviking.server.routers.stats.get_service", return_value=mock_service
-    ), patch(
-        "openviking.server.routers.stats.get_request_context", return_value=mock_ctx
+    with (
+        patch("openviking.server.routers.stats.get_service", return_value=mock_service),
+        patch("openviking.server.routers.stats.get_request_context", return_value=mock_ctx),
     ):
         yield TestClient(app)
 
