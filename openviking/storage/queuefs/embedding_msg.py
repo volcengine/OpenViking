@@ -18,17 +18,12 @@ class EmbeddingMsg:
         message: Union[str, List[Dict[str, Any]]],
         context_data: Dict[str, Any],
         telemetry_id: str = "",
-        media_uri: Optional[str] = None,
-        media_mime_type: Optional[str] = None,
-        id: Optional[str] = None,
         semantic_msg_id: Optional[str] = None,
     ):
-        self.id = id or str(uuid4())
+        self.id = str(uuid4())
         self.message = message
         self.context_data = context_data
         self.telemetry_id = telemetry_id
-        self.media_uri = media_uri
-        self.media_mime_type = media_mime_type
         self.semantic_msg_id = semantic_msg_id
 
     def to_dict(self) -> Dict[str, Any]:
@@ -42,7 +37,7 @@ class EmbeddingMsg:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "EmbeddingMsg":
         """Create an embedding message object from dictionary."""
-        obj = cls(
+        obj = EmbeddingMsg(
             message=data["message"],
             context_data=data["context_data"],
             telemetry_id=data.get("telemetry_id", ""),
