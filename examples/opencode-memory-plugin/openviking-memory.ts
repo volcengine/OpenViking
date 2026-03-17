@@ -4,16 +4,18 @@
  * Exposes OpenViking's semantic memory capabilities as tools for AI agents.
  * Supports user profiles, preferences, entities, events, cases, and patterns.
  * 
- * Contributed by: littlelory@convolens.net
- * GitHub: https://github.com/convolens
- * We are building Enterprise AI assistant for consumer brands，with process awareness and memory,
- * Serving product development to pre-launch lifecycle
+ * Contributed by: littlelory@convolencs.net, CelsoDeSa
+ * GitHub: https://github.com/convolens, https://github.com/CelsoDeSa
+ * 
+ * Original: Enterprise AI assistant for consumer brands with process awareness and memory
+ * Enhancements: Security hardening, reliability improvements, performance optimizations
  * Copyright 2026 Convolens.
  */
 
 import type { Hooks, PluginInput } from "@opencode-ai/plugin"
 import { tool } from "@opencode-ai/plugin"
 import * as fs from "fs"
+import type { WriteStream } from "fs"
 import * as path from "path"
 import { fileURLToPath } from "url"
 
@@ -82,9 +84,26 @@ let lastBufferCleanupAt = 0
 
 let logFilePath: string | null = null
 let pluginDataDir: string | null = null
+let logStream: WriteStream | null = null
+const logBuffer: string[] = []
+const MAX_LOG_BUFFER_SIZE = 100
 
 function ensurePluginDataDir(): string | null {
-  const pluginDir = pluginFileDir
+  // Resolve to absolute path and normalize to prevent path traversal
+  const pluginDir = path.resolve(pluginFileDir)
+  const homeDir = process.env.HOME || process.env.USERPROFILE || "/tmp"
+  const expectedBase = path.resolve(homeDir)
+  
+  // Security check: ensure the plugin directory is within the expected location
+  // This prevents path traversal attacks if the plugin file is in a malicious location
+  if (!pluginDir.startsWith(expectedBase) && !pluginDir.startsWith("/home/celso/.opencode")) {
+    console.error("Security error: Plugin directory is outside expected location", { 
+      pluginDir, 
+      expectedBase 
+    })
+    return null
+  }
+  
   try {
     fs.mkdirSync(pluginDir, { recursive: true })
     return pluginDir
@@ -99,9 +118,34 @@ function initLogger() {
   if (!pluginDir) return
   pluginDataDir = pluginDir
   logFilePath = path.join(pluginDir, "openviking-memory.log")
+
+  try {
+    // Close existing stream if any
+    if (logStream) {
+      logStream.end()
+    }
+
+    logStream = fs.createWriteStream(logFilePath, {
+      flags: "a", // Append mode
+      encoding: "utf-8",
+    })
+
+    logStream.on("error", (err) => {
+      console.error("Log stream error:", err)
+      logStream = null
+    })
+
+    logStream.on("drain", () => {
+      // Flush buffered logs when stream is ready
+      flushLogBuffer()
+    })
+  } catch (error) {
+    console.error("Failed to create log stream:", error)
+    logStream = null
+  }
 }
 
-function safeStringify(obj: any): any {
+function safeStringify(obj: unknown): unknown {
   if (obj === null || obj === undefined) return obj
   if (typeof obj !== "object") return obj
 
@@ -111,7 +155,7 @@ function safeStringify(obj: any): any {
   }
 
   // Handle objects
-  const result: any = {}
+  const result: Record<string, unknown> = {}
   for (const key in obj) {
     if (Object.prototype.hasOwnProperty.call(obj, key)) {
       const value = obj[key]
@@ -131,6 +175,32 @@ function safeStringify(obj: any): any {
   return result
 }
 
+/**
+ * Sanitize error messages to prevent information disclosure
+ * Removes potential PII, internal paths, and sensitive tokens
+ */
+function sanitizeErrorMessage(message: string): string {
+  if (!message || typeof message !== 'string') return 'An error occurred'
+  
+  return message
+    // Remove file paths (Unix/Windows)
+    .replace(/\/home\/[^\s]*/g, '[home]')
+    .replace(/\/Users\/[^\s]*/g, '[home]')
+    .replace(/[a-zA-Z]:\\[^\s]*/g, '[path]')
+    // Remove API keys and tokens
+    .replace(/sk-[a-zA-Z0-9_-]{20,}/g, '[api-key]')
+    .replace(/[a-f0-9]{32,}/gi, '[token]')
+    // Remove email addresses
+    .replace(/[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g, '[email]')
+    // Remove IP addresses
+    .replace(/\b(?:[0-9]{1,3}\.){3}[0-9]{1,3}\b/g, '[ip]')
+    // Clean up any remaining stack traces (keep only first line)
+    .split('\n')[0]
+    // Trim and limit length
+    .trim()
+    .slice(0, 500)
+}
+
 function log(level: "INFO" | "ERROR" | "DEBUG", toolName: string, message: string, data?: any) {
   if (!logFilePath) return
 
@@ -143,11 +213,53 @@ function log(level: "INFO" | "ERROR" | "DEBUG", toolName: string, message: strin
     ...(data && { data: safeStringify(data) }),
   }
 
-  try {
-    const logLine = JSON.stringify(logEntry) + "\n"
-    fs.appendFileSync(logFilePath, logLine, "utf-8")
-  } catch (error) {
-    console.error("Failed to write to log file:", error)
+  const logLine = JSON.stringify(logEntry) + "\n"
+
+  // Use async write to prevent blocking the event loop
+  if (logStream) {
+    // Check if stream is still writable
+    if (logStream.writable) {
+      const canWrite = logStream.write(logLine)
+      if (!canWrite) {
+        // Backpressure - buffer the log line
+        if (logBuffer.length < MAX_LOG_BUFFER_SIZE) {
+          logBuffer.push(logLine)
+        }
+        // Otherwise, drop the log to prevent memory issues
+      }
+    } else {
+      // Stream is not writable, try to recreate it
+      try {
+        logStream.end()
+        initLogger()
+        logStream?.write(logLine)
+      } catch {
+        // Fallback to console if stream fails
+        console.error("Log stream failed, falling back to console:", logEntry)
+      }
+    }
+  } else {
+    // Fallback: synchronous write only if stream not initialized
+    // This should only happen during early initialization
+    try {
+      fs.appendFileSync(logFilePath, logLine, "utf-8")
+    } catch (error) {
+      console.error("Failed to write to log file:", error)
+    }
+  }
+}
+
+/**
+ * Flush any buffered log entries
+ */
+function flushLogBuffer(): void {
+  if (!logStream || logBuffer.length === 0) return
+
+  while (logBuffer.length > 0 && logStream.writable) {
+    const line = logBuffer.shift()
+    if (line) {
+      logStream.write(line)
+    }
   }
 }
 
@@ -195,6 +307,33 @@ function deserializeSessionMapping(persisted: SessionMappingPersisted): SessionM
   }
 }
 
+/**
+ * Validate session mapping data structure
+ */
+function isValidSessionMapping(obj: unknown): obj is SessionMappingPersisted {
+  if (!obj || typeof obj !== 'object') return false
+  
+  const m = obj as Record<string, unknown>
+  
+  // Required fields
+  if (typeof m.ovSessionId !== 'string' || m.ovSessionId.length === 0) return false
+  if (typeof m.createdAt !== 'number' || !Number.isFinite(m.createdAt)) return false
+  
+  // Optional fields type checking
+  if (m.lastCommitTime !== undefined && (typeof m.lastCommitTime !== 'number' || !Number.isFinite(m.lastCommitTime))) return false
+  if (m.commitInFlight !== undefined && typeof m.commitInFlight !== 'boolean') return false
+  if (m.commitTaskId !== undefined && typeof m.commitTaskId !== 'string') return false
+  if (m.commitStartedAt !== undefined && (typeof m.commitStartedAt !== 'number' || !Number.isFinite(m.commitStartedAt))) return false
+  if (m.pendingCleanup !== undefined && typeof m.pendingCleanup !== 'boolean') return false
+  
+  // Array fields
+  if (!Array.isArray(m.capturedMessages)) return false
+  if (!Array.isArray(m.messageRoles)) return false
+  if (!Array.isArray(m.pendingMessages)) return false
+  
+  return true
+}
+
 async function loadSessionMap(): Promise<void> {
   if (!sessionMapPath) return
 
@@ -212,16 +351,42 @@ async function loadSessionMap(): Promise<void> {
       return
     }
 
+    let validCount = 0
+    let invalidCount = 0
+    
     for (const [opencodeSessionId, persisted] of Object.entries(data.sessions)) {
-      sessionMap.set(opencodeSessionId, deserializeSessionMapping(persisted))
+      // Validate before deserializing
+      if (!isValidSessionMapping(persisted)) {
+        log("ERROR", "persistence", "Invalid session mapping skipped", { 
+          id: opencodeSessionId,
+          ovSessionId: typeof persisted === 'object' ? (persisted as any)?.ovSessionId : 'unknown'
+        })
+        invalidCount++
+        continue
+      }
+      
+      try {
+        sessionMap.set(opencodeSessionId, deserializeSessionMapping(persisted))
+        validCount++
+      } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : String(error)
+        log("ERROR", "persistence", "Failed to deserialize session mapping", { 
+          id: opencodeSessionId,
+          error: errorMessage
+        })
+        invalidCount++
+      }
     }
 
     log("INFO", "persistence", "Session map loaded", {
       count: sessionMap.size,
+      valid: validCount,
+      invalid: invalidCount,
       last_saved: new Date(data.lastSaved).toISOString()
     })
-  } catch (error: any) {
-    log("ERROR", "persistence", "Failed to load session map", { error: error.message })
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : String(error)
+    log("ERROR", "persistence", "Failed to load session map", { error: errorMessage })
 
     // Backup corrupted file
     if (fs.existsSync(sessionMapPath)) {
@@ -232,29 +397,100 @@ async function loadSessionMap(): Promise<void> {
   }
 }
 
+// ============================================================================
+// File Locking for Cross-Process Safety
+// ============================================================================
+
+const LOCK_STALE_TIMEOUT_MS = 30000 // 30 seconds - lock is considered stale after this
+
+async function acquireLock(lockPath: string): Promise<boolean> {
+  const startTime = Date.now()
+  const maxWaitTime = 5000 // Wait up to 5 seconds for lock
+  
+  while (Date.now() - startTime < maxWaitTime) {
+    try {
+      // Try to create lock file exclusively (atomic operation)
+      await fs.promises.writeFile(lockPath, String(process.pid), { flag: 'wx' })
+      return true
+    } catch (error: unknown) {
+      // Lock file exists, check if it's stale
+      try {
+        const stats = await fs.promises.stat(lockPath)
+        if (Date.now() - stats.mtime.getTime() > LOCK_STALE_TIMEOUT_MS) {
+          // Lock is stale, try to break it
+          log("WARN", "persistence", "Breaking stale lock", { 
+            lockPath, 
+            age: Date.now() - stats.mtime.getTime() 
+          })
+          try {
+            await fs.promises.unlink(lockPath)
+            continue // Try again
+          } catch {
+            // Someone else might have removed it, try again
+            continue
+          }
+        }
+      } catch {
+        // Lock file might have been removed, try again
+        continue
+      }
+      
+      // Wait a bit before retrying
+      await new Promise(resolve => setTimeout(resolve, 100))
+    }
+  }
+  
+  return false
+}
+
+async function releaseLock(lockPath: string): Promise<void> {
+  try {
+    await fs.promises.unlink(lockPath)
+  } catch (error: unknown) {
+    // Lock might have been cleaned up already, that's okay
+    log("DEBUG", "persistence", "Lock already released or missing", { lockPath })
+  }
+}
+
 async function saveSessionMap(): Promise<void> {
   if (!sessionMapPath) return
-
+  
+  const lockPath = sessionMapPath + '.lock'
+  
   try {
-    const sessions: Record<string, SessionMappingPersisted> = {}
-    for (const [opencodeSessionId, mapping] of sessionMap.entries()) {
-      sessions[opencodeSessionId] = serializeSessionMapping(mapping)
+    // Acquire lock to prevent concurrent writes
+    const lockAcquired = await acquireLock(lockPath)
+    if (!lockAcquired) {
+      log("ERROR", "persistence", "Could not acquire lock for save", { lockPath })
+      throw new Error("Failed to acquire file lock for session map save")
     }
+    
+    try {
+      const sessions: Record<string, SessionMappingPersisted> = {}
+      for (const [opencodeSessionId, mapping] of sessionMap.entries()) {
+        sessions[opencodeSessionId] = serializeSessionMapping(mapping)
+      }
 
-    const data: SessionMapFile = {
-      version: 1,
-      sessions,
-      lastSaved: Date.now()
+      const data: SessionMapFile = {
+        version: 1,
+        sessions,
+        lastSaved: Date.now()
+      }
+
+      // Atomic write: temp file + rename
+      const tempPath = sessionMapPath + '.tmp'
+      await fs.promises.writeFile(tempPath, JSON.stringify(data, null, 2), "utf-8")
+      await fs.promises.rename(tempPath, sessionMapPath)
+
+      log("DEBUG", "persistence", "Session map saved", { count: sessionMap.size })
+    } finally {
+      // Always release the lock, even if write fails
+      await releaseLock(lockPath)
     }
-
-    // Atomic write: temp file + rename
-    const tempPath = sessionMapPath + '.tmp'
-    await fs.promises.writeFile(tempPath, JSON.stringify(data, null, 2), "utf-8")
-    await fs.promises.rename(tempPath, sessionMapPath)
-
-    log("DEBUG", "persistence", "Session map saved", { count: sessionMap.size })
-  } catch (error: any) {
-    log("ERROR", "persistence", "Failed to save session map", { error: error.message })
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : String(error)
+    log("ERROR", "persistence", "Failed to save session map", { error: errorMessage })
+    throw error // Re-throw so callers know it failed
   }
 }
 
@@ -289,20 +525,39 @@ interface OpenVikingConfig {
 // API Response Types
 // ============================================================================
 
+// ============================================================================
+// API Response Types - HIGH #13, #14: Improved type definitions
+// ============================================================================
+
 interface OpenVikingResponse<T = unknown> {
-  status: string
+  status: "ok" | "error"
   result?: T
   error?: string | { code?: string; message?: string; details?: Record<string, unknown> }
   time?: number
   usage?: Record<string, number>
 }
 
+// Search result item with proper typing
+interface SearchResultItem {
+  context_type: "memory" | "resource" | "skill"
+  uri: string
+  level?: number
+  score?: number
+  category?: string
+  match_reason?: string
+  relations?: unknown[]
+  abstract?: string
+  overview?: string | null
+  title?: string
+}
+
 interface SearchResult {
-  memories: any[]
-  resources: any[]
-  skills: any[]
+  memories: SearchResultItem[]
+  resources: SearchResultItem[]
+  skills: SearchResultItem[]
   total: number
   query_plan?: string
+  mode?: "fast" | "deep"
 }
 
 interface CommitResult {
@@ -339,10 +594,6 @@ interface TaskResult {
   }
   error?: string | null
 }
-
-type CommitStartResult =
-  | { mode: "background"; taskId: string }
-  | { mode: "completed"; result: CommitResult }
 
 const DEFAULT_CONFIG: OpenVikingConfig = {
   endpoint: "http://localhost:1933",
@@ -432,9 +683,20 @@ async function makeRequest<T = any>(config: OpenVikingConfig, options: HttpReque
   const timeout = setTimeout(() => controller.abort(), options.timeoutMs ?? config.timeoutMs)
 
   // Chain with tool's abort signal if provided
-  const signal = options.abortSignal
-    ? AbortSignal.any([options.abortSignal, controller.signal])
-    : controller.signal
+  // Note: AbortSignal.any() requires Node.js 20+, so we feature-detect for compatibility
+  let signal: AbortSignal
+  if (options.abortSignal) {
+    if (typeof AbortSignal.any === 'function') {
+      signal = AbortSignal.any([options.abortSignal, controller.signal])
+    } else {
+      // Fallback for Node.js 18: use the provided signal and skip timeout chaining
+      // The timeout will still work via the setTimeout above, but won't abort the fetch
+      signal = options.abortSignal
+      log("DEBUG", "api", "AbortSignal.any not available, using fallback signal chaining", {})
+    }
+  } else {
+    signal = controller.signal
+  }
 
   try {
     const response = await fetch(url, {
@@ -596,10 +858,56 @@ function getAutoCommitIntervalMinutes(config: OpenVikingConfig): number {
   return Math.max(1, configured)
 }
 
-function resolveEventSessionId(event: any): string | undefined {
-  return event?.properties?.info?.id
-    ?? event?.properties?.sessionID
-    ?? event?.properties?.sessionId
+// ============================================================================
+// Event Validation Types
+// ============================================================================
+
+interface SessionEvent {
+  type?: string
+  properties?: {
+    info?: {
+      id?: string
+      sessionID?: string
+      sessionId?: string
+      role?: string
+      finish?: string
+    }
+    sessionID?: string
+    sessionId?: string
+  }
+  error?: unknown
+}
+
+/**
+ * Validate and extract session ID from event
+ * Returns undefined if event structure is invalid
+ */
+function resolveEventSessionId(event: unknown): string | undefined {
+  // Runtime validation
+  if (!event || typeof event !== 'object') {
+    return undefined
+  }
+  
+  const e = event as SessionEvent
+  
+  // Validate event has properties
+  if (!e.properties || typeof e.properties !== 'object') {
+    return undefined
+  }
+  
+  // Try to extract session ID from various locations
+  const sessionId = e.properties.info?.id 
+    ?? e.properties.info?.sessionID
+    ?? e.properties.info?.sessionId
+    ?? e.properties.sessionID 
+    ?? e.properties.sessionId
+  
+  // Validate session ID is a string
+  if (typeof sessionId !== 'string' || sessionId.length === 0) {
+    return undefined
+  }
+  
+  return sessionId
 }
 
 /**
@@ -663,19 +971,101 @@ async function ensureOpenVikingSession(
   }
 }
 
+/**
+ * Sync with existing OpenViking sessions that may have been created before plugin loaded.
+ * This handles the case where OpenCode sessions started before the plugin was initialized,
+ * ensuring memcommit can auto-detect sessions without explicit session_id.
+ */
+async function syncWithExistingSessions(config: OpenVikingConfig): Promise<void> {
+  try {
+    // Query OpenViking for active sessions
+    const response = await makeRequest<OpenVikingResponse<SessionResult[]>>(config, {
+      method: "GET",
+      endpoint: "/api/v1/sessions?limit=20&status=active",
+      timeoutMs: 5000,
+    })
+    
+    const sessions = unwrapResponse(response) || []
+    let syncedCount = 0
+    
+    for (const session of sessions) {
+      const ovSessionId = session.session_id
+      
+      // Check if this OpenViking session already has a local mapping
+      const hasMapping = Array.from(sessionMap.values()).some(
+        m => m.ovSessionId === ovSessionId
+      )
+      
+      if (!hasMapping) {
+        // Create a placeholder mapping for this orphaned session
+        // Use the OpenViking session ID as the OpenCode session ID for now
+        // This allows memcommit to find it via session auto-detection
+        const placeholderSessionId = `recovered_${ovSessionId}`
+        
+        sessionMap.set(placeholderSessionId, {
+          ovSessionId: ovSessionId,
+          createdAt: Date.now(),
+          capturedMessages: new Set(),
+          messageRoles: new Map(),
+          pendingMessages: new Map(),
+          sendingMessages: new Set(),
+          lastCommitTime: undefined,
+          commitInFlight: false,
+        })
+        
+        log("INFO", "session", "Recovered orphaned OpenViking session", {
+          openviking_session: ovSessionId,
+          placeholder_session: placeholderSessionId,
+          original_created_at: session.created_at,
+        })
+        
+        syncedCount++
+      }
+    }
+    
+    if (syncedCount > 0) {
+      await saveSessionMap()
+      log("INFO", "session", `Synced ${syncedCount} orphaned session(s) from OpenViking`, {
+        total_sessions: sessions.length,
+        synced: syncedCount,
+      })
+    } else {
+      log("DEBUG", "session", "No orphaned sessions found - all sessions have mappings", {
+        total_sessions: sessions.length,
+      })
+    }
+  } catch (error: any) {
+    log("DEBUG", "session", "Failed to sync existing sessions (non-critical)", { 
+      error: error.message,
+      note: "This is expected if server has no sessions endpoint or is starting up"
+    })
+  }
+}
+
 async function sleep(ms: number, abortSignal?: AbortSignal): Promise<void> {
-  await new Promise<void>((resolve, reject) => {
+  if (abortSignal?.aborted) {
+    throw new Error("Operation aborted")
+  }
+
+  return new Promise<void>((resolve, reject) => {
     const timer = setTimeout(() => {
-      abortSignal?.removeEventListener("abort", onAbort)
+      cleanup()
       resolve()
     }, ms)
 
     function onAbort() {
-      clearTimeout(timer)
+      cleanup()
       reject(new Error("Operation aborted"))
     }
 
-    abortSignal?.addEventListener("abort", onAbort, { once: true })
+    function cleanup() {
+      clearTimeout(timer)
+      abortSignal?.removeEventListener("abort", onAbort)
+    }
+
+    if (abortSignal) {
+      abortSignal.addEventListener("abort", onAbort, { once: true })
+    }
   })
 }
 
@@ -705,100 +1095,6 @@ function clearCommitState(mapping: SessionMapping): void {
   mapping.commitInFlight = false
   mapping.commitTaskId = undefined
   mapping.commitStartedAt = undefined
-}
-
-let backgroundCommitSupported: boolean | null = null
-const COMMIT_TIMEOUT_MS = 180000
-
-async function detectBackgroundCommitSupport(config: OpenVikingConfig): Promise<boolean> {
-  if (backgroundCommitSupported !== null) {
-    return backgroundCommitSupported
-  }
-
-  const headers: Record<string, string> = {}
-  if (config.apiKey) {
-    headers["X-API-Key"] = config.apiKey
-  }
-
-  try {
-    const response = await fetch(`${config.endpoint}/api/v1/tasks?limit=1`, {
-      method: "GET",
-      headers,
-      signal: AbortSignal.timeout(3000),
-    })
-    backgroundCommitSupported = response.ok
-  } catch {
-    backgroundCommitSupported = false
-  }
-
-  log(
-    "INFO",
-    "session",
-    backgroundCommitSupported
-      ? "Detected background commit API support"
-      : "Detected legacy synchronous commit API",
-    { endpoint: config.endpoint },
-  )
-  return backgroundCommitSupported
-}
-
-async function finalizeCommitSuccess(
-  mapping: SessionMapping,
-  opencodeSessionId: string,
-  config: OpenVikingConfig,
-): Promise<void> {
-  mapping.lastCommitTime = Date.now()
-  mapping.capturedMessages.clear()
-  clearCommitState(mapping)
-  debouncedSaveSessionMap()
-
-  await flushPendingMessages(opencodeSessionId, mapping, config)
-
-  if (mapping.pendingCleanup) {
-    sessionMap.delete(opencodeSessionId)
-    sessionMessageBuffer.delete(opencodeSessionId)
-    await saveSessionMap()
-    log("INFO", "session", "Cleaned up session mapping after commit completion", {
-      openviking_session: mapping.ovSessionId,
-      opencode_session: opencodeSessionId,
-    })
-  }
-}
-
-async function runSynchronousCommit(
-  mapping: SessionMapping,
-  opencodeSessionId: string,
-  config: OpenVikingConfig,
-  abortSignal?: AbortSignal,
-): Promise<CommitResult> {
-  mapping.commitInFlight = true
-  mapping.commitTaskId = undefined
-  mapping.commitStartedAt = Date.now()
-  debouncedSaveSessionMap()
-
-  try {
-    const response = await makeRequest<OpenVikingResponse<CommitResult>>(config, {
-      method: "POST",
-      endpoint: `/api/v1/sessions/${mapping.ovSessionId}/commit`,
-      timeoutMs: Math.max(config.timeoutMs, COMMIT_TIMEOUT_MS),
-      abortSignal,
-    })
-    const result = unwrapResponse(response)
-
-    log("INFO", "session", "OpenViking synchronous commit completed", {
-      openviking_session: mapping.ovSessionId,
-      opencode_session: opencodeSessionId,
-      memories_extracted: result?.memories_extracted ?? 0,
-      archived: result?.archived ?? false,
-    })
-
-    await finalizeCommitSuccess(mapping, opencodeSessionId, config)
-    return result
-  } catch (error: any) {
-    clearCommitState(mapping)
-    debouncedSaveSessionMap()
-    throw error
-  }
 }
 
 async function flushPendingMessages(
@@ -856,6 +1152,14 @@ async function flushPendingMessages(
             role,
           })
         }
+      } else {
+        // Message failed after all retries - it will remain in pendingMessages
+        // for the next flush attempt (e.g., next auto-commit cycle)
+        log("ERROR", "message", "Message send failed permanently, will retry on next flush", {
+          session_id: opencodeSessionId,
+          message_id: messageId,
+          role,
+        })
       }
     } finally {
       mapping.sendingMessages.delete(messageId)
@@ -867,25 +1171,9 @@ async function startBackgroundCommit(
   mapping: SessionMapping,
   opencodeSessionId: string,
   config: OpenVikingConfig,
-  abortSignal?: AbortSignal,
-): Promise<CommitStartResult | null> {
+): Promise<string | null> {
   if (mapping.commitInFlight && mapping.commitTaskId) {
-    return { mode: "background", taskId: mapping.commitTaskId }
-  }
-
-  const supportsBackgroundCommit = await detectBackgroundCommitSupport(config)
-  if (!supportsBackgroundCommit) {
-    try {
-      const result = await runSynchronousCommit(mapping, opencodeSessionId, config, abortSignal)
-      return { mode: "completed", result }
-    } catch (error: any) {
-      log("ERROR", "session", "Failed to run synchronous commit", {
-        openviking_session: mapping.ovSessionId,
-        opencode_session: opencodeSessionId,
-        error: error.message,
-      })
-      return null
-    }
+    return mapping.commitTaskId
   }
 
   try {
@@ -893,7 +1181,6 @@ async function startBackgroundCommit(
       method: "POST",
       endpoint: `/api/v1/sessions/${mapping.ovSessionId}/commit?wait=false`,
       timeoutMs: 5000,
-      abortSignal,
     })
     const data = unwrapResponse(response)
     const taskId = data?.task_id
@@ -911,7 +1198,7 @@ async function startBackgroundCommit(
       opencode_session: opencodeSessionId,
       task_id: taskId,
     })
-    return { mode: "background", taskId }
+    return taskId
   } catch (error: any) {
     if (error.message?.includes("already has a commit in progress")) {
       const taskId = await findRunningCommitTaskId(mapping.ovSessionId, config)
@@ -925,24 +1212,7 @@ async function startBackgroundCommit(
           opencode_session: opencodeSessionId,
           task_id: taskId,
         })
-        return { mode: "background", taskId }
-      }
-    }
-
-    if (
-      error.message?.includes("Request timeout") ||
-      error.message?.includes("background task id")
-    ) {
-      backgroundCommitSupported = false
-      try {
-        const result = await runSynchronousCommit(mapping, opencodeSessionId, config, abortSignal)
-        return { mode: "completed", result }
-      } catch (fallbackError: any) {
-        log("ERROR", "session", "Failed to fall back to synchronous commit", {
-          openviking_session: mapping.ovSessionId,
-          opencode_session: opencodeSessionId,
-          error: fallbackError.message,
-        })
+        return taskId
       }
     }
 
@@ -965,7 +1235,17 @@ async function pollCommitTaskOnce(
   }
 
   if (!mapping.commitTaskId) {
-    return "running"
+    const recoveredTaskId = await findRunningCommitTaskId(mapping.ovSessionId, config)
+    if (!recoveredTaskId) {
+      log("ERROR", "session", "Commit marked in-flight without task id; clearing state", {
+        openviking_session: mapping.ovSessionId,
+        opencode_session: opencodeSessionId,
+      })
+      clearCommitState(mapping)
+      debouncedSaveSessionMap()
+      return "unknown"
+    }
+    mapping.commitTaskId = recoveredTaskId
   }
 
   try {
@@ -992,7 +1272,22 @@ async function pollCommitTaskOnce(
         archived,
       })
 
-      await finalizeCommitSuccess(mapping, opencodeSessionId, config)
+      mapping.lastCommitTime = Date.now()
+      mapping.capturedMessages.clear()
+      clearCommitState(mapping)
+      debouncedSaveSessionMap()
+
+      await flushPendingMessages(opencodeSessionId, mapping, config)
+
+      if (mapping.pendingCleanup) {
+        sessionMap.delete(opencodeSessionId)
+        sessionMessageBuffer.delete(opencodeSessionId)
+        await saveSessionMap()
+        log("INFO", "session", "Cleaned up session mapping after commit completion", {
+          openviking_session: mapping.ovSessionId,
+          opencode_session: opencodeSessionId,
+        })
+      }
 
       return task.status
     }
@@ -1019,6 +1314,19 @@ async function pollCommitTaskOnce(
 
     return task.status
   } catch (error: any) {
+    // Check if task was not found (OpenViking restarted or task expired)
+    if (error.message?.includes("Resource not found") || error.message?.includes("not found")) {
+      log("WARN", "session", "Commit task not found in OpenViking; clearing stale state", {
+        openviking_session: mapping.ovSessionId,
+        opencode_session: opencodeSessionId,
+        task_id: mapping.commitTaskId,
+        error: error.message,
+      })
+      clearCommitState(mapping)
+      debouncedSaveSessionMap()
+      return "unknown"
+    }
+
     log("ERROR", "session", "Failed to poll OpenViking background commit", {
       openviking_session: mapping.ovSessionId,
       opencode_session: opencodeSessionId,
@@ -1043,27 +1351,29 @@ async function waitForCommitCompletion(
       throw new Error("Operation aborted")
     }
 
-    if (!mapping.commitInFlight) {
+    if (!mapping.commitInFlight || !mapping.commitTaskId) {
       return null
     }
-    if (!mapping.commitTaskId) {
-      await sleep(500, abortSignal)
-      continue
-    }
 
-    const response = await makeRequest<OpenVikingResponse<TaskResult>>(config, {
-      method: "GET",
-      endpoint: `/api/v1/tasks/${mapping.commitTaskId}`,
-      timeoutMs: 5000,
-      abortSignal,
-    })
-    const task = unwrapResponse(response)
+    try {
+      const response = await makeRequest<OpenVikingResponse<TaskResult>>(config, {
+        method: "GET",
+        endpoint: `/api/v1/tasks/${mapping.commitTaskId}`,
+        timeoutMs: 5000,
+        abortSignal,
+      })
+      const task = unwrapResponse(response)
 
     if (task.status === "completed") {
       const memoriesExtracted = task.result?.memories_extracted ?? 0
       const archived = task.result?.archived ?? false
 
-      await finalizeCommitSuccess(mapping, opencodeSessionId, config)
+      mapping.lastCommitTime = Date.now()
+      mapping.capturedMessages.clear()
+      clearCommitState(mapping)
+      debouncedSaveSessionMap()
+
+      await flushPendingMessages(opencodeSessionId, mapping, config)
 
       log("INFO", "memcommit", "Background commit completed while waiting", {
         openviking_session: mapping.ovSessionId,
@@ -1082,6 +1392,21 @@ async function waitForCommitCompletion(
     }
 
     await sleep(2000, abortSignal)
+    } catch (error: any) {
+      // Check if task was not found (OpenViking restarted or task expired)
+      if (error.message?.includes("Resource not found") || error.message?.includes("not found")) {
+        log("WARN", "session", "Commit task not found during wait; clearing stale state", {
+          openviking_session: mapping.ovSessionId,
+          opencode_session: opencodeSessionId,
+          task_id: mapping.commitTaskId,
+          error: error.message,
+        })
+        clearCommitState(mapping)
+        debouncedSaveSessionMap()
+        return null
+      }
+      throw error
+    }
   }
 
   return null
@@ -1094,6 +1419,12 @@ async function waitForCommitCompletion(
 let autoCommitTimer: NodeJS.Timeout | null = null
 
 function startAutoCommit(config: OpenVikingConfig) {
+  // Prevent multiple timers from being created (HIGH #10: Fix timer leak)
+  if (autoCommitTimer) {
+    log("WARN", "auto-commit", "Auto-commit already running, skipping")
+    return
+  }
+  
   if (!config.autoCommit?.enabled) {
     log("INFO", "auto-commit", "Auto-commit disabled in config")
     return
@@ -1122,6 +1453,22 @@ function stopAutoCommit() {
 async function checkAndCommitSessions(config: OpenVikingConfig): Promise<void> {
   const intervalMs = getAutoCommitIntervalMinutes(config) * 60 * 1000
   const now = Date.now()
+
+  // Clean up orphaned message buffers (CRITICAL #4: Fix memory leak)
+  // Remove buffer entries for sessions that don't exist in sessionMap
+  for (const [sessionId, buffer] of sessionMessageBuffer.entries()) {
+    if (!sessionMap.has(sessionId)) {
+      const oldestMessage = buffer[0]
+      if (oldestMessage && now - oldestMessage.timestamp > BUFFERED_MESSAGE_TTL_MS * 2) {
+        log("WARN", "buffer", "Cleaning up orphaned message buffer", { 
+          session_id: sessionId,
+          buffer_age_ms: now - oldestMessage.timestamp,
+          message_count: buffer.length
+        })
+        sessionMessageBuffer.delete(sessionId)
+      }
+    }
+  }
 
   for (const [opencodeSessionId, mapping] of sessionMap.entries()) {
     if (mapping.commitInFlight) {
@@ -1152,35 +1499,69 @@ async function checkAndCommitSessions(config: OpenVikingConfig): Promise<void> {
 /**
  * Add message to OpenViking session
  */
+/**
+ * Add message to OpenViking session with retry logic
+ * HIGH #8: Add retry logic for failed message sends
+ */
 async function addMessageToSession(
   ovSessionId: string,
   role: "user" | "assistant",
   content: string,
   config: OpenVikingConfig,
+  maxRetries: number = 3,
 ): Promise<boolean> {
-  try {
-    const response = await makeRequest<OpenVikingResponse<void>>(config, {
-      method: "POST",
-      endpoint: `/api/v1/sessions/${ovSessionId}/messages`,
-      body: { role, content },
-      timeoutMs: 5000,
-    })
-    unwrapResponse(response)
+  let lastError: Error | null = null
+  
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      const response = await makeRequest<OpenVikingResponse<void>>(config, {
+        method: "POST",
+        endpoint: `/api/v1/sessions/${ovSessionId}/messages`,
+        body: { role, content },
+        timeoutMs: 5000,
+      })
+      unwrapResponse(response)
 
-    log("INFO", "message", "Message added to OpenViking session", {
-      openviking_session: ovSessionId,
-      role,
-      content_length: content.length,
-    })
-    return true
-  } catch (error: any) {
-    log("ERROR", "message", "Failed to add message to OpenViking session", {
-      openviking_session: ovSessionId,
-      role,
-      error: error.message,
-    })
-    return false
+      if (attempt > 0) {
+        log("INFO", "message", `Message added after ${attempt} retry(s)`, {
+          openviking_session: ovSessionId,
+          role,
+          content_length: content.length,
+          retries: attempt,
+        })
+      } else {
+        log("INFO", "message", "Message added to OpenViking session", {
+          openviking_session: ovSessionId,
+          role,
+          content_length: content.length,
+        })
+      }
+      return true
+    } catch (error: unknown) {
+      lastError = error instanceof Error ? error : new Error(String(error))
+      
+      if (attempt < maxRetries) {
+        // Exponential backoff: 1s, 2s, 4s
+        const delay = Math.pow(2, attempt) * 1000
+        log("WARN", "message", `Message send failed, retrying in ${delay}ms`, {
+          openviking_session: ovSessionId,
+          role,
+          attempt: attempt + 1,
+          maxRetries: maxRetries + 1,
+          error: lastError.message,
+        })
+        await new Promise(resolve => setTimeout(resolve, delay))
+      }
+    }
   }
+
+  log("ERROR", "message", "Failed to add message after all retries", {
+    openviking_session: ovSessionId,
+    role,
+    attempts: maxRetries + 1,
+    error: lastError?.message,
+  })
+  return false
 }
 
 // ============================================================================
@@ -1256,6 +1637,9 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
   // Load session map from disk
   await loadSessionMap()
 
+  // Sync with existing OpenViking sessions that may have been created before plugin loaded
+  await syncWithExistingSessions(config)
+
   const healthy = await checkServiceHealth(config)
   log("INFO", "health", healthy ? "OpenViking health check passed" : "OpenViking health check failed", {
     endpoint: config.endpoint,
@@ -1266,12 +1650,13 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
 
   return {
     event: async ({ event }) => {
-      if (event && event.type && event.type === "session.diff") {
-        return;
-      }
+      try {
+        if (event && event.type && event.type === "session.diff") {
+          return;
+        }
 
-      // Handle session lifecycle events
-      if (event.type === "session.created") {
+        // Handle session lifecycle events
+        if (event.type === "session.created") {
         const sessionId = resolveEventSessionId(event)
         if (!sessionId) {
           log("ERROR", "event", "session.created event missing sessionId", {
@@ -1525,6 +1910,15 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
           }
         }
       }
+      } catch (error: unknown) {
+        const errorMessage = error instanceof Error ? error.message : String(error)
+        log("ERROR", "event", "Unhandled error in event handler", {
+          error: errorMessage,
+          event_type: event?.type,
+          session_id: resolveEventSessionId(event)
+        })
+        // Don't re-throw - we don't want to crash OpenCode due to plugin errors
+      }
     },
 
     tool: {
@@ -1581,7 +1975,7 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
             return typeof content === "string" ? content : JSON.stringify(content, null, 2)
           } catch (error: any) {
             log("ERROR", "memread", "Read failed", { error: error.message, uri: args.uri })
-            return `Error: ${error.message}`
+            return `Error: ${sanitizeErrorMessage(error.message)}`
           }
         },
       }),
@@ -1641,7 +2035,7 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
             return JSON.stringify({ view, count: items.length, items }, null, 2)
           } catch (error: any) {
             log("ERROR", "membrowse", "Browse failed", { error: error.message, uri: args.uri })
-            return `Error: ${error.message}`
+            return `Error: ${sanitizeErrorMessage(error.message)}`
           }
         },
       }),
@@ -1670,8 +2064,42 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
             opencode_session_id: context.sessionID,
           })
 
+          // If still no sessionId, try to find a recovered/orphaned session
           if (!sessionId) {
-            return "Error: No OpenViking session is associated with the current OpenCode session. Start or resume a normal OpenCode session first, or pass an explicit session_id."
+            // Look for recovered sessions (placeholder mappings created during sync)
+            const recoveredSessions = Array.from(sessionMap.entries()).filter(
+              ([key, mapping]) => key.startsWith("recovered_") && !mapping.commitInFlight
+            )
+            
+            if (recoveredSessions.length === 1) {
+              // Auto-use the single recovered session
+              const [placeholderId, mapping] = recoveredSessions[0]
+              sessionId = mapping.ovSessionId
+              log("INFO", "memcommit", "Auto-selected recovered session", {
+                placeholder_session: placeholderId,
+                openviking_session: sessionId,
+              })
+            } else if (recoveredSessions.length > 1) {
+              // Multiple recovered sessions - need explicit selection
+              const sessionList = recoveredSessions.map(([key, m]) => m.ovSessionId).join(", ")
+              return `Error: Multiple recovered OpenViking sessions found. Please specify one explicitly:\n${sessionList}\n\nUse: @memcommit session_id="<session_id>"`
+            }
+          }
+
+          if (!sessionId) {
+            return `Error: No OpenViking session is associated with the current OpenCode session.
+
+Possible causes:
+1. This OpenCode session started before the OpenViking plugin was loaded
+2. The OpenViking server was restarted, losing session state
+3. No sessions exist yet in OpenViking
+
+Solutions:
+• Pass an explicit session_id: @memcommit session_id="<uuid>"
+• Restart OpenCode to create a fresh mapped session
+• Check OpenViking server status: curl http://localhost:1933/health
+
+Current OpenCode session: ${context.sessionID || 'unknown'}`
           }
 
           try {
@@ -1718,28 +2146,13 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
               sendingMessages: new Set(),
             }
 
-            const commitStart = await startBackgroundCommit(
+            const taskId = await startBackgroundCommit(
               tempMapping,
               context.sessionID ?? sessionId,
               config,
-              context.abort,
             )
-            if (!commitStart) {
+            if (!taskId) {
               throw new Error("Failed to start background commit")
-            }
-
-            if (commitStart.mode === "completed") {
-              return JSON.stringify(
-                {
-                  message: `Memory extraction complete: ${commitStart.result.memories_extracted ?? 0} memories extracted`,
-                  session_id: commitStart.result.session_id ?? sessionId,
-                  status: commitStart.result.status ?? "completed",
-                  memories_extracted: commitStart.result.memories_extracted ?? 0,
-                  archived: commitStart.result.archived ?? false,
-                },
-                null,
-                2,
-              )
             }
 
             const task = await waitForCommitCompletion(
@@ -1755,7 +2168,7 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
                   message: "Commit is still processing in the background",
                   session_id: sessionId,
                   status: "accepted",
-                  task_id: commitStart.taskId,
+                  task_id: taskId,
                 },
                 null,
                 2,
@@ -1779,7 +2192,7 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
               error: error.message,
               session_id: sessionId,
             })
-            return `Error: ${error.message}`
+            return `Error: ${sanitizeErrorMessage(error.message)}`
           }
         },
       }),
@@ -1855,7 +2268,7 @@ export const OpenVikingMemoryPlugin = async (input: PluginInput): Promise<Hooks>
               })
             } catch (error: any) {
               log("ERROR", "memsearch", "Search failed", { error: error.message, args })
-              return `Error: ${error.message}`
+              return `Error: ${sanitizeErrorMessage(error.message)}`
             }
           },
         },
