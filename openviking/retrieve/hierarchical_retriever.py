@@ -18,6 +18,7 @@ from openviking.retrieve.memory_lifecycle import hotness_score
 from openviking.retrieve.retrieval_stats import get_stats_collector
 from openviking.server.identity import RequestContext, Role
 from openviking.storage import VikingDBManager, VikingDBManagerProxy
+from openviking.storage.memory_relation_store import MemoryRelationStore, RelationType
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.time_utils import parse_iso_datetime
@@ -56,6 +57,7 @@ class HierarchicalRetriever:
         storage: VikingDBManager,
         embedder: Optional[Any],
         rerank_config: Optional[RerankConfig] = None,
+        memory_relation_store: Optional[MemoryRelationStore] = None,
     ):
         """Initialize hierarchical retriever with rerank_config.
 
@@ -63,10 +65,13 @@ class HierarchicalRetriever:
             storage: VikingVectorIndexBackend instance
             embedder: Embedder instance (supports dense/sparse/hybrid)
             rerank_config: Rerank configuration (optional, will fallback to vector search only)
+            memory_relation_store: Optional memory relation store for filtering
+                superseded memories during retrieval.
         """
         self.vector_store = storage
         self.embedder = embedder
         self.rerank_config = rerank_config
+        self.memory_relation_store = memory_relation_store
 
         # Use rerank threshold if available, otherwise use a default
         self.threshold = rerank_config.threshold if rerank_config else 0
@@ -92,6 +97,7 @@ class HierarchicalRetriever:
         score_threshold: Optional[float] = None,
         score_gte: bool = False,
         scope_dsl: Optional[Dict[str, Any]] = None,
+        follow_relations: bool = False,
     ) -> QueryResult:
         """
         Execute hierarchical retrieval.
@@ -102,12 +108,15 @@ class HierarchicalRetriever:
             score_gte: True uses >=, False uses >
             grep_patterns: Keyword match pattern list
             scope_dsl: Additional scope constraints passed from public find/search filter
+            follow_relations: When True and a memory_relation_store is configured,
+                filter out superseded memories and surface related memories as
+                additional context (up to MAX_RELATIONS).
         """
         t0 = time.monotonic()
         # Use custom threshold or default threshold
         effective_threshold = score_threshold if score_threshold is not None else self.threshold
 
-        # 创建 proxy 包装器，绑定当前 ctx
+        # Create proxy wrapper bound to current ctx
         vector_proxy = VikingDBManagerProxy(self.vector_store, ctx)
 
         target_dirs = [d for d in (query.target_directories or []) if d]
@@ -173,7 +182,7 @@ class HierarchicalRetriever:
             mode=mode,
         )
 
-        # 从 global_results 中提取 level 2 的文件作为初始候选者
+        # Extract level 2 files from global_results as initial candidates
         initial_candidates = [r for r in global_results if r.get("level", 2) == 2]
 
         # Step 4: Recursive search
@@ -195,6 +204,10 @@ class HierarchicalRetriever:
 
         # Step 6: Convert results
         matched = await self._convert_to_matched_contexts(candidates, ctx=ctx)
+
+        # Step 6b: Filter superseded memories and add related context
+        if follow_relations and self.memory_relation_store:
+            matched = await self._apply_memory_relations(matched)
 
         final = matched[:limit]
 
@@ -291,13 +304,11 @@ class HierarchicalRetriever:
             docs = [str(r.get("abstract", "")) for r in global_results]
             query_scores = self._rerank_scores(query, docs, default_scores)
             for i, r in enumerate(global_results):
-                # 只添加非 level 2 的项目到起始点
                 if r.get("level", 2) != 2:
                     points.append((r["uri"], query_scores[i]))
                     seen.add(r["uri"])
         else:
             for r in global_results:
-                # 只添加非 level 2 的项目到起始点
                 if r.get("level", 2) != 2:
                     points.append((r["uri"], r["_score"]))
                     seen.add(r["uri"])
@@ -352,12 +363,11 @@ class HierarchicalRetriever:
         prev_topk_uris: set = set()
         convergence_rounds = 0
 
-        # 添加初始候选者（level 2 文件）
+        # Add initial candidates (level 2 files)
         if initial_candidates:
             for r in initial_candidates:
                 uri = r.get("uri", "")
                 if uri:
-                    # 只添加 level 2 的文件
                     if r.get("level", 2) == 2:
                         score = r.get("_score", 0.0)
                         r["_final_score"] = score
@@ -385,7 +395,7 @@ class HierarchicalRetriever:
             results = await vector_proxy.search_children_in_tenant(
                 parent_uri=current_uri,
                 query_vector=query_vector,
-                sparse_query_vector=sparse_query_vector,  # Pass sparse vector
+                sparse_query_vector=sparse_query_vector,
                 context_type=context_type,
                 target_directories=target_dirs,
                 extra_filter=scope_dsl,
@@ -417,7 +427,6 @@ class HierarchicalRetriever:
                     continue
 
                 telemetry.count("vector.passed", 1)
-                # Deduplicate by URI and keep the highest-scored candidate.
                 previous = collected_by_uri.get(uri)
                 if previous is None or final_score > previous.get("_final_score", 0):
                     r["_final_score"] = final_score
@@ -428,7 +437,6 @@ class HierarchicalRetriever:
                         final_score,
                     )
 
-                # Only recurse into directories (L0/L1). L2 files are terminal hits.
                 if uri not in visited and r.get("level", 2) != 2:
                     heapq.heappush(dir_queue, (-final_score, uri))
 
@@ -442,7 +450,6 @@ class HierarchicalRetriever:
 
             if current_topk_uris == prev_topk_uris and len(current_topk_uris) >= limit:
                 convergence_rounds += 1
-
                 if convergence_rounds >= self.MAX_CONVERGENCE_ROUNDS:
                     break
             else:
@@ -525,6 +532,56 @@ class HierarchicalRetriever:
         # Re-sort by blended score so hotness boost can change ranking
         results.sort(key=lambda x: x.score, reverse=True)
         return results
+
+    async def _apply_memory_relations(
+        self, matched: List[MatchedContext]
+    ) -> List[MatchedContext]:
+        """Filter superseded memories and annotate with related-memory context.
+
+        When a memory has been superseded (another memory has a ``supersedes``
+        relation pointing to it), remove it from results so the caller only
+        sees the latest version. Additionally, surface ``related_to`` memories
+        as extra RelatedContext entries (up to MAX_RELATIONS per result).
+        """
+        if not self.memory_relation_store:
+            return matched
+
+        filtered: List[MatchedContext] = []
+        for mc in matched:
+            # Strip level suffix to get the canonical URI for relation lookup.
+            canonical_uri = mc.uri
+            for suffix in (".abstract.md", ".overview.md"):
+                if canonical_uri.endswith(f"/{suffix}"):
+                    canonical_uri = canonical_uri[: -(len(suffix) + 1)]
+                    break
+
+            if await self.memory_relation_store.is_superseded(canonical_uri):
+                logger.debug(
+                    "[retrieve] Filtering superseded memory: %s", canonical_uri
+                )
+                continue
+
+            # Add related_to memories as additional context.
+            related_rels = await self.memory_relation_store.query(
+                canonical_uri, relation_type=RelationType.RELATED_TO, direction="both"
+            )
+            existing_uris = {r.uri for r in mc.relations}
+            added = 0
+            for rel in related_rels:
+                if added >= self.MAX_RELATIONS:
+                    break
+                peer_uri = (
+                    rel.target_uri if rel.source_uri == canonical_uri else rel.source_uri
+                )
+                if peer_uri not in existing_uris:
+                    mc.relations.append(
+                        RelatedContext(uri=peer_uri, abstract=rel.metadata.get("abstract", ""))
+                    )
+                    existing_uris.add(peer_uri)
+                    added += 1
+
+            filtered.append(mc)
+        return filtered
 
     @classmethod
     def _append_level_suffix(cls, uri: str, level: int) -> str:

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Response models and error codes for OpenViking HTTP Server."""
 
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel
 
@@ -22,6 +22,24 @@ class Response(BaseModel):
     result: Optional[Any] = None
     error: Optional[ErrorInfo] = None
     telemetry: Optional[Dict[str, Any]] = None
+
+
+class MemoryRelationResponse(BaseModel):
+    """Response model for a single memory relation."""
+
+    id: str
+    source_uri: str
+    target_uri: str
+    relation_type: str
+    created_at: str
+    metadata: Optional[dict] = None
+
+
+class MemoryRelationListResponse(BaseModel):
+    """Response model for a list of memory relations."""
+
+    relations: List[MemoryRelationResponse]
+    total: int
 
 
 # Error code to HTTP status code mapping

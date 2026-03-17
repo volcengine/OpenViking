@@ -18,6 +18,11 @@ from openviking.models.embedder.base import EmbedResult
 from openviking.prompts import render_prompt
 from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager
+from openviking.storage.memory_relation_store import (
+    MemoryRelation,
+    MemoryRelationStore,
+    RelationType,
+)
 from openviking.telemetry import get_current_telemetry
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
@@ -84,9 +89,18 @@ class MemoryDeduplicator:
     def __init__(
         self,
         vikingdb: VikingDBManager,
+        relation_store: Optional[MemoryRelationStore] = None,
     ):
-        """Initialize deduplicator."""
+        """Initialize deduplicator.
+
+        Args:
+            vikingdb: VikingDB manager for vector search.
+            relation_store: Optional memory relation store. When provided,
+                MERGE decisions automatically create ``supersedes`` relations
+                and DELETE decisions create ``contradicts`` relations.
+        """
         self.vikingdb = vikingdb
+        self.relation_store = relation_store
         config = get_openviking_config()
         self.embedder = config.embedding.get_query_embedder()
 
@@ -117,7 +131,7 @@ class MemoryDeduplicator:
         # Step 2: LLM decision
         decision, reason, actions = await self._llm_decision(candidate, similar_memories)
 
-        return DedupResult(
+        result = DedupResult(
             decision=decision,
             candidate=candidate,
             similar_memories=similar_memories,
@@ -125,6 +139,46 @@ class MemoryDeduplicator:
             reason=reason,
             query_vector=query_vector,
         )
+
+        # Step 3: Record relations for merge/delete actions
+        await self._record_dedup_relations(result)
+
+        return result
+
+    async def _record_dedup_relations(self, result: DedupResult) -> None:
+        """Create memory relations based on dedup actions.
+
+        - MERGE -> supersedes (new candidate supersedes old memory)
+        - DELETE -> contradicts (audit trail before deletion)
+        """
+        if not self.relation_store or not result.actions:
+            return
+
+        candidate_uri = getattr(result.candidate, "uri", "")
+        if not candidate_uri:
+            # Build a provisional URI from category + abstract for tracking.
+            candidate_uri = (
+                f"pending://{result.candidate.category.value}"
+                f"/{result.candidate.abstract[:40]}"
+            )
+
+        for action in result.actions:
+            if action.decision == MemoryActionDecision.MERGE:
+                relation = MemoryRelation(
+                    source_uri=candidate_uri,
+                    target_uri=action.memory.uri,
+                    relation_type=RelationType.SUPERSEDES,
+                    metadata={"reason": action.reason, "dedup_decision": "merge"},
+                )
+                await self.relation_store.create(relation)
+            elif action.decision == MemoryActionDecision.DELETE:
+                relation = MemoryRelation(
+                    source_uri=candidate_uri,
+                    target_uri=action.memory.uri,
+                    relation_type=RelationType.CONTRADICTS,
+                    metadata={"reason": action.reason, "dedup_decision": "delete"},
+                )
+                await self.relation_store.create(relation)
 
     async def _find_similar_memories(
         self,
@@ -406,7 +460,7 @@ class MemoryDeduplicator:
 
         normalized = " ".join(str(text).strip().split())
         # Prefer common separators used by extraction templates.
-        for sep in ("：", ":", "-", "—"):
+        for sep in ("\uff1a", ":", "-", "\u2014"):
             if sep in normalized:
                 left = normalized.split(sep, 1)[0].strip().lower()
                 if left:

@@ -42,6 +42,42 @@ class CollectionSchemas:
     """
 
     @staticmethod
+    def memory_relation_collection(name: str) -> Dict[str, Any]:
+        """
+        Get the schema for the memory relation collection.
+
+        Stores typed edges between memory URIs for conflict detection,
+        supersession tracking, and related-context retrieval.
+        No vector field needed - relations are queried by URI and type.
+
+        Args:
+            name: Collection name
+
+        Returns:
+            Schema definition for the memory relation collection
+        """
+        return {
+            "CollectionName": name,
+            "Description": "Memory relation graph (supersedes, contradicts, related_to, derived_from)",
+            "Fields": [
+                {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+                {"FieldName": "source_uri", "FieldType": "string"},
+                {"FieldName": "target_uri", "FieldType": "string"},
+                {"FieldName": "relation_type", "FieldType": "string"},
+                {"FieldName": "created_at", "FieldType": "date_time"},
+                {"FieldName": "metadata", "FieldType": "string"},
+                {"FieldName": "account_id", "FieldType": "string"},
+            ],
+            "ScalarIndex": [
+                "source_uri",
+                "target_uri",
+                "relation_type",
+                "created_at",
+                "account_id",
+            ],
+        }
+
+    @staticmethod
     def context_collection(name: str, vector_dim: int) -> Dict[str, Any]:
         """
         Get the schema for the unified context collection.
