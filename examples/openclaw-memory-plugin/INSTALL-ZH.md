@@ -170,6 +170,7 @@ openclaw config set plugins.entries.memory-openviking.config.autoCapture true --
 ```
 
 </details>
+
 ## 方式三 火山引擎 ECS 版 Openclaw 接入 OpenViking
 
 本部分主要介绍如何在火山引擎ECS上接入OpenViking，并使用WebConsole验证写入。详情可见[文档](https://www.volcengine.com/docs/6396/2249500?lang=zh)。
