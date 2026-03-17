@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """VLM base interface and abstract classes"""
 
+import re
 from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Any, Dict, List, Union
@@ -9,6 +10,8 @@ from typing import Any, Dict, List, Union
 from openviking.utils.time_utils import format_iso8601
 
 from .token_usage import TokenUsageTracker
+
+_THINK_TAG_RE = re.compile(r"<think>[\s\S]*?</think>")
 
 
 class VLMBase(ABC):
@@ -57,6 +60,10 @@ class VLMBase(ABC):
     ) -> str:
         """Get vision completion asynchronously"""
         pass
+
+    def _clean_response(self, content: str) -> str:
+        """Strip reasoning tags (e.g. ``<think>...</think>``) from model output."""
+        return _THINK_TAG_RE.sub("", content).strip()
 
     def is_available(self) -> bool:
         """Check if available"""
