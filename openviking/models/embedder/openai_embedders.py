@@ -40,15 +40,25 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         1536
 
         >>> # Non-symmetric mode (OpenAI-compatible third-party models)
-        >>> query_embedder = OpenAIDenseEmbedder(
+        >>> embedder = OpenAIDenseEmbedder(
         ...     model_name="bge-m3",
         ...     api_key="your-api-key",
         ...     api_base="https://your-api-endpoint.com/v1",
-        ...     context="query",
         ...     query_param="query",
         ...     document_param="passage"
         ... )
-        >>> query_vector = query_embedder.embed("search query")
+        >>> query_vector = embedder.embed("search query", is_query=True)
+        >>> doc_vector = embedder.embed("document text", is_query=False)
+        
+        >>> # Multiple parameters with key=value format
+        >>> advanced_embedder = OpenAIDenseEmbedder(
+        ...     model_name="custom-model",
+        ...     api_key="your-api-key",
+        ...     api_base="https://your-api-endpoint.com/v1",
+        ...     query_param="input_type=query,task=search,domain=finance",
+        ...     document_param="input_type=passage,task=index,domain=finance"
+        ... )
+        >>> advanced_vector = advanced_embedder.embed("financial query", is_query=True)
     """
 
     def __init__(
@@ -73,14 +83,14 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             api_key: API key, if None will read from env vars (OPENVIKING_EMBEDDING_API_KEY or OPENAI_API_KEY)
             api_base: API base URL, optional. Required for third-party OpenAI-compatible APIs.
             dimension: Dimension (if model supports), optional
-            query_param: The input_type value for query-side embeddings, e.g. 'query' or
-                         'search_query'. Defaults to None.
+            query_param: Parameter for query-side embeddings. Supports simple values (e.g., 'query') 
+                         or key=value format (e.g., 'input_type=query,task=search'). Defaults to None.
                          Setting this (or document_param) activates non-symmetric mode.
                          Only supported by OpenAI-compatible third-party models.
-            document_param: The input_type value for document-side embeddings, e.g. 'passage'
-                            or 'document'. Defaults to None. Setting this (or query_param)
-                            activates non-symmetric mode.
-                            Only supported by OpenAI-compatible third-party models.
+            document_param: Parameter for document-side embeddings. Supports simple values (e.g., 'passage')
+                           or key=value format (e.g., 'input_type=passage,task=index'). Defaults to None. 
+                           Setting this (or query_param) activates non-symmetric mode.
+                           Only supported by OpenAI-compatible third-party models.
             config: Additional configuration dict
             max_tokens: Maximum token count per embedding request, None to use default (8000)
             extra_headers: Extra HTTP headers to include in API requests (e.g., for OpenRouter:
@@ -178,22 +188,59 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             output_tokens,
         )
 
+    def _parse_param_string(self, param: Optional[str]) -> Dict[str, str]:
+        """Parse parameter string to dictionary for key=value format
+        
+        Args:
+            param: Parameter string (e.g., "input_type=query,task=search")
+            
+        Returns:
+            Dictionary of parsed parameters
+        """
+        if not param:
+            return {}
+            
+        result = {}
+        
+        # Split by comma for multiple parameters
+        parts = [p.strip() for p in param.split(",")]
+        
+        for part in parts:
+            if "=" in part:
+                key, value = part.split("=", 1)
+                result[key.strip()] = value.strip()
+                
+        return result
+
     def _build_extra_body(self, is_query: bool = False) -> Optional[Dict[str, Any]]:
         """Build extra_body dict for OpenAI-compatible parameters
 
+        Args:
+            is_query: Flag to indicate if this is for query embeddings
+            
         Returns:
-            Dict containing input_type if non-symmetric mode is active.
+            Dict containing input_type and other parameters if non-symmetric mode is active.
+            Supports key=value format for multiple parameters (e.g., "input_type=query,task=search").
             Only supported by OpenAI-compatible third-party models.
         """
         extra_body = {}
-        input_type = None
+        
+        # Determine which parameter to use based on is_query flag
+        active_param = None
         if is_query and self.query_param is not None:
-            input_type = self.query_param
+            active_param = self.query_param
         elif not is_query and self.document_param is not None:
-            input_type = self.document_param
-
-        if input_type is not None:
-            extra_body["input_type"] = input_type
+            active_param = self.document_param
+            
+        if active_param:
+            if "=" in active_param:
+                # Parse key=value format (e.g., "input_type=query,task=search")
+                parsed = self._parse_param_string(active_param)
+                extra_body.update(parsed)
+            else:
+                # Simple format (e.g., "query" -> {"input_type": "query"})
+                extra_body["input_type"] = active_param
+                
         return extra_body if extra_body else None
 
     def _embed_single(self, text: str, is_query: bool = False) -> EmbedResult:
