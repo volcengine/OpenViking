@@ -68,7 +68,7 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
         Args:
             model_name: Google/Gemini model name, defaults to gemini-embedding-2-preview
             api_key: API key, required
-            api_base: API base URL, defaults to https://generativelanguage.googleapis.com/v1/
+            api_base: API base URL, defaults to https://generativelanguage.googleapis.com/v1beta
             dimension: Dimension for Matryoshka reduction, optional
             query_param: Parameter for query-side embeddings. Supports simple task_type
                         values (e.g., "RETRIEVAL_QUERY") or key=value format
@@ -86,7 +86,7 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
         """
         super().__init__(model_name, config)
         self.api_key = api_key
-        self.api_base = api_base or "https://generativelanguage.googleapis.com/v1/"
+        self.api_base = api_base or "https://generativelanguage.googleapis.com/v1beta"
         self.dimension = dimension
         self.query_param = query_param
         self.document_param = document_param
@@ -189,22 +189,17 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
         """
         try:
             # Build the URL for the embedding endpoint
-            url = f"{self.api_base}models/{self.model_name}:embedContent"
+            url = f"{self.api_base}/models/{self.model_name}:embedContent"
 
             # Build request headers
-            headers = {"Content-Type": "application/json", **self.extra_headers}
-
-            # Add API key to headers
-            if "?" in url:
-                url += f"&key={self.api_key}"
-            else:
-                url += f"?key={self.api_key}"
+            headers = {
+                "Content-Type": "application/json",
+                "x-goog-api-key": self.api_key,
+                **self.extra_headers,
+            }
 
             # Build request body using Parts API
-            request_body = {
-                "model": f"models/{self.model_name}",
-                "content": {"parts": [{"text": text}]},
-            }
+            request_body = {"content": {"parts": [{"text": text}]}}
 
             # Add task-specific parameters
             request_params = self._build_request_params(is_query=is_query)
