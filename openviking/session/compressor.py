@@ -66,16 +66,100 @@ class SessionCompressor:
         self.vikingdb = vikingdb
         self.extractor = MemoryExtractor()
         self.deduplicator = MemoryDeduplicator(vikingdb=vikingdb)
+        self._pending_semantic_changes: Dict[str, Dict[str, set]] = {}
 
-    async def _index_memory(self, memory: Context, ctx: RequestContext) -> bool:
-        """Add memory to vectorization queue and trigger parent directory semantic generation."""
+    def _record_semantic_change(
+        self, file_uri: str, change_type: str, parent_uri: Optional[str] = None
+    ) -> None:
+        """Record a file change for batch semantic processing.
+
+        Args:
+            file_uri: The URI of the file that changed
+            change_type: One of "added", "modified", "deleted"
+            parent_uri: Optional parent directory URI. If not provided, will be derived from file_uri
+        """
+        if change_type not in ("added", "modified", "deleted"):
+            logger.warning(f"Invalid change_type: {change_type}, skipping")
+            return
+
+        if not parent_uri:
+            parent_uri = "/".join(file_uri.rsplit("/", 1)[:-1])
+
+        if not parent_uri:
+            logger.warning(f"Could not determine parent URI for {file_uri}, skipping")
+            return
+
+        if parent_uri not in self._pending_semantic_changes:
+            self._pending_semantic_changes[parent_uri] = {
+                "added": set(),
+                "modified": set(),
+                "deleted": set(),
+            }
+
+        self._pending_semantic_changes[parent_uri][change_type].add(file_uri)
+        logger.debug(f"Recorded semantic change: {change_type} {file_uri} in {parent_uri}")
+
+    async def _flush_semantic_operations(self, ctx: RequestContext) -> None:
+        """Flush all pending semantic operations.
+
+        This method should be called after all memory changes are complete.
+        It will deduplicate parent URIs and enqueue semantic operations with change info.
+        """
+        if not self._pending_semantic_changes:
+            return
+
+        try:
+            from openviking.storage.queuefs import get_queue_manager
+            from openviking.storage.queuefs.semantic_msg import SemanticMsg
+
+            queue_manager = get_queue_manager()
+            semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
+
+            for parent_uri, changes in self._pending_semantic_changes.items():
+                changes_dict = {
+                    "added": list(changes["added"]),
+                    "modified": list(changes["modified"]),
+                    "deleted": list(changes["deleted"]),
+                }
+
+                msg = SemanticMsg(
+                    uri=parent_uri,
+                    context_type="memory",
+                    account_id=ctx.account_id,
+                    user_id=ctx.user.user_id,
+                    agent_id=ctx.user.agent_id,
+                    role=ctx.role.value,
+                    changes=changes_dict,
+                )
+                await semantic_queue.enqueue(msg)
+                logger.info(
+                    f"Enqueued semantic generation for {parent_uri} with changes: "
+                    f"added={len(changes['added'])}, modified={len(changes['modified'])}, "
+                    f"deleted={len(changes['deleted'])}"
+                )
+
+        except Exception as e:
+            logger.error(f"Failed to flush semantic operations: {e}", exc_info=True)
+        finally:
+            self._pending_semantic_changes.clear()
+
+    async def _index_memory(
+        self, memory: Context, ctx: RequestContext, change_type: str = "added"
+    ) -> bool:
+        """Add memory to vectorization queue and record semantic change.
+
+        Args:
+            memory: The memory context to index
+            ctx: Request context
+            change_type: One of "added" or "modified"
+        """
         from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 
         embedding_msg = EmbeddingMsgConverter.from_context(memory)
         await self.vikingdb.enqueue_embedding_msg(embedding_msg)
         logger.info(f"Enqueued memory for vectorization: {memory.uri}")
 
-        await self.extractor._enqueue_semantic_for_parent(memory.uri, ctx)
+        self._record_semantic_change(memory.uri, change_type, parent_uri=memory.parent_uri)
         return True
 
     async def _merge_into_existing(
@@ -108,7 +192,7 @@ class SessionCompressor:
                 "Merged memory %s with abstract %s", target_memory.uri, target_memory.abstract
             )
             target_memory.set_vectorize(Vectorize(text=payload.content))
-            await self._index_memory(target_memory, ctx)
+            await self._index_memory(target_memory, ctx, change_type="modified")
             return True
         except Exception as e:
             logger.error(f"Failed to merge memory {target_memory.uri}: {e}")
@@ -129,6 +213,8 @@ class SessionCompressor:
             await self.vikingdb.delete_uris(ctx, [memory.uri])
         except Exception as e:
             logger.warning(f"Failed to remove vector record for {memory.uri}: {e}")
+
+        self._record_semantic_change(memory.uri, "deleted", parent_uri=memory.parent_uri)
         return True
 
     async def extract_long_term_memories(
@@ -147,162 +233,177 @@ class SessionCompressor:
         if not ctx:
             return []
 
-        if strict_extract_errors:
-            # Intentionally let extraction errors bubble up so caller (task tracker)
-            # can mark background commit tasks as failed with an explicit error.
-            candidates = await self.extractor.extract_strict(context, user, session_id)
-        else:
-            candidates = await self.extractor.extract(context, user, session_id)
+        self._pending_semantic_changes.clear()
 
-        if not candidates:
-            return []
+        try:
+            if strict_extract_errors:
+                # Intentionally let extraction errors bubble up so caller (task tracker)
+                # can mark background commit tasks as failed with an explicit error.
+                candidates = await self.extractor.extract_strict(context, user, session_id)
+            else:
+                candidates = await self.extractor.extract(context, user, session_id)
 
-        memories: List[Context] = []
-        stats = ExtractionStats()
-        viking_fs = get_viking_fs()
+            if not candidates:
+                return []
 
-        tool_parts = self._extract_tool_parts(messages)
-        from .tool_skill_utils import collect_skill_stats, collect_tool_stats
+            memories: List[Context] = []
+            stats = ExtractionStats()
+            viking_fs = get_viking_fs()
 
-        tool_stats_map = collect_tool_stats(tool_parts)
-        skill_stats_map = collect_skill_stats(tool_parts)
+            tool_parts = self._extract_tool_parts(messages)
+            from .tool_skill_utils import collect_skill_stats, collect_tool_stats
 
-        for candidate in candidates:
-            # Profile: skip dedup, always merge
-            if candidate.category in ALWAYS_MERGE_CATEGORIES:
-                memory = await self.extractor.create_memory(candidate, user, session_id, ctx=ctx)
-                if memory:
-                    memories.append(memory)
-                    stats.created += 1
-                    await self._index_memory(memory, ctx)
-                else:
-                    stats.skipped += 1
-                continue
+            tool_stats_map = collect_tool_stats(tool_parts)
+            skill_stats_map = collect_skill_stats(tool_parts)
 
-            # Tool/Skill Memory: 特殊合并逻辑
-            if candidate.category in TOOL_SKILL_CATEGORIES:
-                if isinstance(candidate, ToolSkillCandidateMemory):
-                    tool_name, skill_name, tool_status = self._get_tool_skill_info(
-                        candidate, tool_parts
+            for candidate in candidates:
+                # Profile: skip dedup, always merge
+                if candidate.category in ALWAYS_MERGE_CATEGORIES:
+                    memory = await self.extractor.create_memory(
+                        candidate, user, session_id, ctx=ctx
                     )
-                    candidate.tool_status = tool_status
-                    if tool_name:
-                        candidate.tool_name = tool_name
-                    if skill_name:
-                        candidate.skill_name = skill_name
-
-                    if tool_name and candidate.call_time == 0:
-                        tool_stats = tool_stats_map.get(tool_name, {})
-                        candidate.call_time = tool_stats.get("call_count", candidate.call_time)
-                        candidate.success_time = tool_stats.get(
-                            "success_time", candidate.success_time
-                        )
-                        candidate.duration_ms = tool_stats.get("duration_ms", candidate.duration_ms)
-                        candidate.prompt_tokens = tool_stats.get(
-                            "prompt_tokens", candidate.prompt_tokens
-                        )
-                        candidate.completion_tokens = tool_stats.get(
-                            "completion_tokens", candidate.completion_tokens
-                        )
-
-                    if skill_name and candidate.call_time == 0:
-                        skill_stats = skill_stats_map.get(skill_name, {})
-                        candidate.call_time = skill_stats.get("call_count", candidate.call_time)
-                        candidate.success_time = skill_stats.get(
-                            "success_time", candidate.success_time
-                        )
-                    if skill_name:
-                        memory = await self.extractor._merge_skill_memory(
-                            skill_name, candidate, ctx=ctx
-                        )
-                    elif tool_name:
-                        memory = await self.extractor._merge_tool_memory(
-                            tool_name, candidate, ctx=ctx
-                        )
-                    else:
-                        logger.warning("No tool_name or skill_name found, skipping")
-                        stats.skipped += 1
-                        continue
                     if memory:
                         memories.append(memory)
-                        stats.merged += 1
+                        stats.created += 1
                         await self._index_memory(memory, ctx)
-                continue
+                    else:
+                        stats.skipped += 1
+                    continue
 
-            # Dedup check for other categories
-            result = await self.deduplicator.deduplicate(candidate, ctx)
-            actions = result.actions or []
-            decision = result.decision
+                # Tool/Skill Memory: 特殊合并逻辑
+                if candidate.category in TOOL_SKILL_CATEGORIES:
+                    if isinstance(candidate, ToolSkillCandidateMemory):
+                        tool_name, skill_name, tool_status = self._get_tool_skill_info(
+                            candidate, tool_parts
+                        )
+                        candidate.tool_status = tool_status
+                        if tool_name:
+                            candidate.tool_name = tool_name
+                        if skill_name:
+                            candidate.skill_name = skill_name
 
-            # Safety net: create+merge should be treated as none.
-            if decision == DedupDecision.CREATE and any(
-                a.decision == MemoryActionDecision.MERGE for a in actions
-            ):
-                logger.warning(
-                    f"Dedup returned create with merge action, normalizing to none: "
-                    f"{candidate.abstract}"
-                )
-                decision = DedupDecision.NONE
+                        if tool_name and candidate.call_time == 0:
+                            tool_stats = tool_stats_map.get(tool_name, {})
+                            candidate.call_time = tool_stats.get("call_count", candidate.call_time)
+                            candidate.success_time = tool_stats.get(
+                                "success_time", candidate.success_time
+                            )
+                            candidate.duration_ms = tool_stats.get(
+                                "duration_ms", candidate.duration_ms
+                            )
+                            candidate.prompt_tokens = tool_stats.get(
+                                "prompt_tokens", candidate.prompt_tokens
+                            )
+                            candidate.completion_tokens = tool_stats.get(
+                                "completion_tokens", candidate.completion_tokens
+                            )
 
-            if decision == DedupDecision.SKIP:
-                stats.skipped += 1
-                continue
+                        if skill_name and candidate.call_time == 0:
+                            skill_stats = skill_stats_map.get(skill_name, {})
+                            candidate.call_time = skill_stats.get("call_count", candidate.call_time)
+                            candidate.success_time = skill_stats.get(
+                                "success_time", candidate.success_time
+                            )
+                        if skill_name:
+                            memory = await self.extractor._merge_skill_memory(
+                                skill_name, candidate, ctx=ctx
+                            )
+                        elif tool_name:
+                            memory = await self.extractor._merge_tool_memory(
+                                tool_name, candidate, ctx=ctx
+                            )
+                        else:
+                            logger.warning("No tool_name or skill_name found, skipping")
+                            stats.skipped += 1
+                            continue
+                        if memory:
+                            memories.append(memory)
+                            stats.merged += 1
+                            await self._index_memory(memory, ctx, change_type="modified")
+                    continue
 
-            if decision == DedupDecision.NONE:
-                if not actions:
+                # Dedup check for other categories
+                result = await self.deduplicator.deduplicate(candidate, ctx)
+                actions = result.actions or []
+                decision = result.decision
+
+                # Safety net: create+merge should be treated as none.
+                if decision == DedupDecision.CREATE and any(
+                    a.decision == MemoryActionDecision.MERGE for a in actions
+                ):
+                    logger.warning(
+                        f"Dedup returned create with merge action, normalizing to none: "
+                        f"{candidate.abstract}"
+                    )
+                    decision = DedupDecision.NONE
+
+                if decision == DedupDecision.SKIP:
                     stats.skipped += 1
                     continue
 
-                for action in actions:
-                    if action.decision == MemoryActionDecision.DELETE:
-                        if viking_fs and await self._delete_existing_memory(
-                            action.memory, viking_fs, ctx=ctx
-                        ):
-                            stats.deleted += 1
-                        else:
-                            stats.skipped += 1
-                    elif action.decision == MemoryActionDecision.MERGE:
-                        if candidate.category in MERGE_SUPPORTED_CATEGORIES and viking_fs:
-                            if await self._merge_into_existing(
-                                candidate, action.memory, viking_fs, ctx=ctx
+                if decision == DedupDecision.NONE:
+                    if not actions:
+                        stats.skipped += 1
+                        continue
+
+                    for action in actions:
+                        if action.decision == MemoryActionDecision.DELETE:
+                            if viking_fs and await self._delete_existing_memory(
+                                action.memory, viking_fs, ctx=ctx
                             ):
-                                stats.merged += 1
+                                stats.deleted += 1
                             else:
                                 stats.skipped += 1
-                        else:
-                            # events/cases don't support MERGE, treat as SKIP
-                            stats.skipped += 1
-                continue
+                        elif action.decision == MemoryActionDecision.MERGE:
+                            if candidate.category in MERGE_SUPPORTED_CATEGORIES and viking_fs:
+                                if await self._merge_into_existing(
+                                    candidate, action.memory, viking_fs, ctx=ctx
+                                ):
+                                    stats.merged += 1
+                                else:
+                                    stats.skipped += 1
+                            else:
+                                # events/cases don't support MERGE, treat as SKIP
+                                stats.skipped += 1
+                    continue
 
-            if decision == DedupDecision.CREATE:
-                # create can optionally include delete actions (delete first, then create)
-                for action in actions:
-                    if action.decision == MemoryActionDecision.DELETE:
-                        if viking_fs and await self._delete_existing_memory(
-                            action.memory, viking_fs, ctx=ctx
-                        ):
-                            stats.deleted += 1
-                        else:
-                            stats.skipped += 1
+                if decision == DedupDecision.CREATE:
+                    # create can optionally include delete actions (delete first, then create)
+                    for action in actions:
+                        if action.decision == MemoryActionDecision.DELETE:
+                            if viking_fs and await self._delete_existing_memory(
+                                action.memory, viking_fs, ctx=ctx
+                            ):
+                                stats.deleted += 1
+                            else:
+                                stats.skipped += 1
 
-                memory = await self.extractor.create_memory(candidate, user, session_id, ctx=ctx)
-                if memory:
-                    memories.append(memory)
-                    stats.created += 1
-                    await self._index_memory(memory, ctx)
-                else:
-                    stats.skipped += 1
+                    memory = await self.extractor.create_memory(
+                        candidate, user, session_id, ctx=ctx
+                    )
+                    if memory:
+                        memories.append(memory)
+                        stats.created += 1
+                        await self._index_memory(memory, ctx)
+                    else:
+                        stats.skipped += 1
 
-        # Extract URIs used in messages, create relations
-        used_uris = self._extract_used_uris(messages)
-        if used_uris and memories:
-            await self._create_relations(memories, used_uris, ctx=ctx)
+            # Extract URIs used in messages, create relations
+            used_uris = self._extract_used_uris(messages)
+            if used_uris and memories:
+                await self._create_relations(memories, used_uris, ctx=ctx)
 
-        logger.info(
-            f"Memory extraction: created={stats.created}, "
-            f"merged={stats.merged}, deleted={stats.deleted}, skipped={stats.skipped}"
-        )
-        return memories
+            await self._flush_semantic_operations(ctx)
+
+            logger.info(
+                f"Memory extraction: created={stats.created}, "
+                f"merged={stats.merged}, deleted={stats.deleted}, skipped={stats.skipped}"
+            )
+            return memories
+
+        except Exception:
+            self._pending_semantic_changes.clear()
+            raise
 
     def _extract_tool_parts(self, messages: List[Message]) -> List:
         """Extract all ToolPart from messages."""

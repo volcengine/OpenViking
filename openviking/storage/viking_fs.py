@@ -361,6 +361,22 @@ class VikingFS:
         path = self._uri_to_path(uri, ctx=ctx)
         return self.agfs.stat(path)
 
+    async def exists(self, uri: str, ctx: Optional[RequestContext] = None) -> bool:
+        """Check if a URI exists.
+
+        Args:
+            uri: Viking URI
+            ctx: Request context
+
+        Returns:
+            bool: True if the URI exists, False otherwise
+        """
+        try:
+            await self.stat(uri, ctx=ctx)
+            return True
+        except Exception:
+            return False
+
     async def glob(
         self,
         pattern: str,
@@ -1086,7 +1102,7 @@ class VikingFS:
     async def _collect_uris(
         self, path: str, recursive: bool, ctx: Optional[RequestContext] = None
     ) -> List[str]:
-        """Recursively collect all URIs (for rm/mv)."""
+        """Recursively collect all URIs (for rm/mv), including directories."""
         uris = []
 
         async def _collect(p: str):
@@ -1097,6 +1113,7 @@ class VikingFS:
                         continue
                     full_path = f"{p}/{name}".replace("//", "/")
                     if entry.get("isDir"):
+                        uris.append(self._path_to_uri(full_path, ctx=ctx))
                         if recursive:
                             await _collect(full_path)
                     else:
@@ -1146,23 +1163,8 @@ class VikingFS:
 
         for uri in uris:
             try:
-                records = await vector_store.get_context_by_uri(
-                    uri=uri,
-                    limit=1,
-                    ctx=self._ctx_or_default(ctx),
-                )
-
-                if not records or "id" not in records[0]:
-                    continue
-
-                record = records[0]
-
                 new_uri = uri.replace(old_base_uri, new_base_uri, 1)
-
-                old_parent_uri = record.get("parent_uri", "")
-                new_parent_uri = (
-                    old_parent_uri.replace(old_base_uri, new_base_uri, 1) if old_parent_uri else ""
-                )
+                new_parent_uri = VikingURI(new_uri).parent.uri
 
                 await vector_store.update_uri_mapping(
                     ctx=self._ctx_or_default(ctx),

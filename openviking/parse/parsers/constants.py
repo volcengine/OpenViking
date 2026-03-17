@@ -191,6 +191,7 @@ DOCUMENTATION_EXTENSIONS = {
     ".texi",
     ".texinfo",
     ".wiki",
+    ".conf",
 }
 
 # File type constants for consistent return values

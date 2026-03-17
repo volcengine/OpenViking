@@ -830,15 +830,54 @@ class VikingVectorIndexBackend:
         new_uri: str,
         new_parent_uri: str,
     ) -> bool:
+        import hashlib
+
         records = await self.filter(
             filter=And([Eq("uri", uri), Eq("account_id", ctx.account_id)]),
-            limit=1,
+            limit=100,
             ctx=ctx,
         )
-        if not records or "id" not in records[0]:
+        if not records:
             return False
-        updated = {**records[0], "uri": new_uri, "parent_uri": new_parent_uri}
-        return bool(await self.upsert(updated, ctx=ctx))
+
+        def _seed_uri_for_id(uri: str, level: int) -> str:
+            if level == 0:
+                return uri if uri.endswith("/.abstract.md") else f"{uri}/.abstract.md"
+            if level == 1:
+                return uri if uri.endswith("/.overview.md") else f"{uri}/.overview.md"
+            return uri
+
+        success = False
+        ids_to_delete: List[str] = []
+        for record in records:
+            if "id" not in record:
+                continue
+            raw_level = record.get("level", 2)
+            try:
+                level = int(raw_level)
+            except (TypeError, ValueError):
+                level = 2
+
+            seed_uri = _seed_uri_for_id(new_uri, level)
+            id_seed = f"{ctx.account_id}:{seed_uri}"
+            new_id = hashlib.md5(id_seed.encode("utf-8")).hexdigest()
+
+            updated = {
+                **record,
+                "id": new_id,
+                "uri": new_uri,
+                "parent_uri": new_parent_uri,
+            }
+            if await self.upsert(updated, ctx=ctx):
+                success = True
+                old_id = record.get("id")
+                if old_id and old_id != new_id:
+                    ids_to_delete.append(old_id)
+
+        if ids_to_delete:
+            await self.delete(list(set(ids_to_delete)), ctx=ctx)
+
+        return success
 
     async def increment_active_count(self, ctx: RequestContext, uris: List[str]) -> int:
         updated = 0

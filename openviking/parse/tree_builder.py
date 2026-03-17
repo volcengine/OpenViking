@@ -20,7 +20,6 @@ IMPORTANT (v5.0 Architecture):
 - Content splitting is handled by Parser, not TreeBuilder
 """
 
-import asyncio
 import logging
 from typing import TYPE_CHECKING, Optional
 
@@ -28,9 +27,7 @@ from openviking.core.building_tree import BuildingTree
 from openviking.core.context import Context
 from openviking.parse.parsers.media.utils import get_media_base_uri, get_media_type
 from openviking.server.identity import RequestContext
-from openviking.storage.queuefs import SemanticMsg, get_queue_manager
 from openviking.storage.viking_fs import get_viking_fs
-from openviking.telemetry import get_current_telemetry
 from openviking.utils import parse_code_hosting_url
 from openviking_cli.utils.uri import VikingURI
 
@@ -94,7 +91,6 @@ class TreeBuilder:
         parent_uri: Optional[str] = None,
         source_path: Optional[str] = None,
         source_format: Optional[str] = None,
-        trigger_semantic: bool = False,
     ) -> "BuildingTree":
         """
         Finalize processing by moving from temp to AGFS.
@@ -102,8 +98,6 @@ class TreeBuilder:
         Args:
             to_uri: Exact target URI (must not exist)
             parent_uri: Target parent URI (must exist)
-            trigger_semantic: Whether to automatically trigger semantic generation.
-                              Default is False (handled by ResourceProcessor/Summarizer).
         """
 
         viking_fs = get_viking_fs()
@@ -139,16 +133,6 @@ class TreeBuilder:
         base_uri = parent_uri or auto_base_uri
         # 3. Determine candidate_uri
         if to_uri:
-            # Exact target URI: must not exist yet
-            try:
-                await viking_fs.stat(to_uri, ctx=ctx)
-                # If we get here, it already exists
-                raise FileExistsError(f"Target URI already exists: {to_uri}")
-            except FileExistsError:
-                raise
-            except Exception:
-                # It doesn't exist, good to use
-                pass
             candidate_uri = to_uri
         else:
             if parent_uri:
@@ -161,35 +145,8 @@ class TreeBuilder:
                     raise ValueError(f"Parent URI is not a directory: {parent_uri}")
             candidate_uri = VikingURI(base_uri).join(final_doc_name).uri
 
-        final_uri = await self._resolve_unique_uri(candidate_uri, ctx=ctx)
+        final_uri = candidate_uri
 
-        if final_uri != candidate_uri:
-            logger.info(f"[TreeBuilder] Resolved name conflict: {candidate_uri} -> {final_uri}")
-        else:
-            logger.info(f"[TreeBuilder] Finalizing from temp: {final_uri}")
-
-        # 4. Move directory tree from temp to final location in AGFS
-        await self._move_temp_to_dest(viking_fs, temp_doc_uri, final_uri, ctx=ctx)
-        logger.info(f"[TreeBuilder] Moved temp tree: {temp_doc_uri} -> {final_uri}")
-
-        # 5. Cleanup temporary root directory
-        try:
-            await viking_fs.delete_temp(temp_uri, ctx=ctx)
-            logger.info(f"[TreeBuilder] Cleaned up temp root: {temp_uri}")
-        except Exception as e:
-            logger.warning(f"[TreeBuilder] Failed to cleanup temp root: {e}")
-
-        # 6. Enqueue to SemanticQueue for async semantic generation
-        if trigger_semantic:
-            try:
-                await self._enqueue_semantic_generation(final_uri, "resource", ctx=ctx)
-                logger.info(f"[TreeBuilder] Enqueued semantic generation for: {final_uri}")
-            except Exception as e:
-                logger.error(
-                    f"[TreeBuilder] Failed to enqueue semantic generation: {e}", exc_info=True
-                )
-
-        # 7. Return simple BuildingTree (no scanning needed)
         tree = BuildingTree(
             source_path=source_path,
             source_format=source_format,
@@ -197,121 +154,7 @@ class TreeBuilder:
         tree._root_uri = final_uri
 
         # Create a minimal Context object for the root so that tree.root is not None
-        root_context = Context(uri=final_uri)
+        root_context = Context(uri=final_uri, temp_uri=temp_doc_uri)
         tree.add_context(root_context)
 
         return tree
-
-    async def _resolve_unique_uri(
-        self, uri: str, max_attempts: int = 100, ctx: Optional[RequestContext] = None
-    ) -> str:
-        """Return a URI that does not collide with an existing resource.
-
-        If *uri* is free, return it unchanged.  Otherwise append ``_1``,
-        ``_2``, … until a free name is found (like macOS Finder / Windows
-        Explorer).
-        """
-        viking_fs = get_viking_fs()
-
-        async def _exists(u: str) -> bool:
-            try:
-                await viking_fs.stat(u, ctx=ctx)
-                return True
-            except Exception:
-                return False
-
-        if not await _exists(uri):
-            return uri
-
-        for i in range(1, max_attempts + 1):
-            candidate = f"{uri}_{i}"
-            if not await _exists(candidate):
-                return candidate
-
-        raise FileExistsError(f"Cannot resolve unique name for {uri} after {max_attempts} attempts")
-
-    async def _move_temp_to_dest(
-        self, viking_fs, src_uri: str, dst_uri: str, ctx: RequestContext
-    ) -> None:
-        """Move temp directory to final destination using a single native AGFS mv call.
-
-        Temp files have no vector records yet, so no vector index update is needed.
-        """
-        src_path = viking_fs._uri_to_path(src_uri, ctx=ctx)
-        dst_path = viking_fs._uri_to_path(dst_uri, ctx=ctx)
-        await self._ensure_parent_dirs(dst_uri, ctx=ctx)
-        await asyncio.to_thread(viking_fs.agfs.mv, src_path, dst_path)
-
-    async def _ensure_parent_dirs(self, uri: str, ctx: RequestContext) -> None:
-        """Recursively create parent directories."""
-        viking_fs = get_viking_fs()
-        parent = VikingURI(uri).parent
-        if not parent:
-            return
-        parent_uri = parent.uri
-        # Recursively ensure parent's parent exists
-        await self._ensure_parent_dirs(parent_uri, ctx=ctx)
-
-        # Create parent directory (ignore if already exists)
-        try:
-            await viking_fs.mkdir(parent_uri, exist_ok=True, ctx=ctx)
-            logger.debug(f"Created parent directory: {parent_uri}")
-        except Exception as e:
-            # Directory may already exist, ignore error
-            if "exist" not in str(e).lower():
-                logger.debug(f"Parent dir {parent_uri} may already exist: {e}")
-
-    async def _enqueue_semantic_generation(
-        self, uri: str, context_type: str, ctx: RequestContext
-    ) -> None:
-        """
-        Enqueue a directory for semantic generation.
-
-        Args:
-            uri: Directory URI to enqueue
-            context_type: resource/memory/skill
-        """
-
-        queue_manager = get_queue_manager()
-
-        # Get semantic queue
-        semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
-
-        # Sort by depth (descending) for bottom-up processing
-        msg = SemanticMsg(
-            uri=uri,
-            context_type=context_type,
-            account_id=ctx.account_id,
-            user_id=ctx.user.user_id,
-            agent_id=ctx.user.agent_id,
-            role=ctx.role.value,
-            telemetry_id=get_current_telemetry().telemetry_id,
-        )
-        await semantic_queue.enqueue(msg)
-
-    async def _load_content(self, uri: str, content_type: str) -> str:
-        """Helper to load content with proper type handling"""
-        import json
-
-        if content_type == "abstract":
-            result = await get_viking_fs().abstract(uri)
-        elif content_type == "overview":
-            result = await get_viking_fs().overview(uri)
-        elif content_type == "detail":
-            result = await get_viking_fs().read_file(uri)
-        else:
-            return ""
-
-        # Handle different return types
-        if isinstance(result, str):
-            return result
-        elif isinstance(result, bytes):
-            return result.decode("utf-8")
-        elif hasattr(result, "to_dict") and not isinstance(result, list):
-            # Handle FindResult by converting to dict (skip lists)
-            return str(result.to_dict())
-        elif isinstance(result, list):
-            # Handle list results
-            return json.dumps(result)
-        else:
-            return str(result)

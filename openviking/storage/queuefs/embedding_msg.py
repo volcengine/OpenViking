@@ -14,6 +14,20 @@ class EmbeddingMsg:
     media_uri: Optional[str] = None
     media_mime_type: Optional[str] = None
     id: str = field(default_factory=lambda: str(uuid4()))
+    semantic_msg_id: Optional[str] = None
+
+    def __init__(
+        self,
+        message: Union[str, List[Dict[str, Any]]],
+        context_data: Dict[str, Any],
+        telemetry_id: str = "",
+        semantic_msg_id: Optional[str] = None,
+    ):
+        self.id = str(uuid4())
+        self.message = message
+        self.context_data = context_data
+        self.telemetry_id = telemetry_id
+        self.semantic_msg_id = semantic_msg_id
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert embedding message to dictionary format."""
@@ -33,6 +47,7 @@ class EmbeddingMsg:
             media_uri=data.get("media_uri"),
             media_mime_type=data.get("media_mime_type"),
             id=data.get("id", str(uuid4())),
+            semantic_msg_id=data.get("semantic_msg_id"),
         )
         return obj
 

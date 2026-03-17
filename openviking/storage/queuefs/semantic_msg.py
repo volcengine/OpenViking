@@ -5,7 +5,7 @@
 import json
 from dataclasses import asdict, dataclass
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
 
@@ -16,7 +16,7 @@ class SemanticMsg:
     Attributes:
         id: Unique identifier (UUID)
         uri: Directory URI to process
-        context_type: Type of context (resource, memory, skill)
+        context_type: Type of context (resource, memory, skill, session)
         status: Processing status (pending/processing/completed)
         timestamp: Creation timestamp
         recursive: Whether to recursively process subdirectories.
@@ -27,7 +27,7 @@ class SemanticMsg:
 
     id: str  # UUID
     uri: str  # Directory URI
-    context_type: str  # resource, memory, skill
+    context_type: str  # resource, memory, skill, session
     status: str = "pending"  # pending/processing/completed
     timestamp: int = int(datetime.now().timestamp())
     recursive: bool = True  # Whether to recursively process subdirectories
@@ -38,6 +38,10 @@ class SemanticMsg:
     # Additional flags
     skip_vectorization: bool = False
     telemetry_id: str = ""
+    target_uri: str = ""
+    changes: Optional[Dict[str, List[str]]] = (
+        None  # {"added": [...], "modified": [...], "deleted": [...]}
+    )
 
     def __init__(
         self,
@@ -50,6 +54,8 @@ class SemanticMsg:
         role: str = "root",
         skip_vectorization: bool = False,
         telemetry_id: str = "",
+        target_uri: str = "",
+        changes: Optional[Dict[str, List[str]]] = None,
     ):
         self.id = str(uuid4())
         self.uri = uri
@@ -61,6 +67,8 @@ class SemanticMsg:
         self.role = role
         self.skip_vectorization = skip_vectorization
         self.telemetry_id = telemetry_id
+        self.target_uri = target_uri
+        self.changes = changes
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert object to dictionary."""
@@ -97,6 +105,8 @@ class SemanticMsg:
             role=data.get("role", "root"),
             skip_vectorization=data.get("skip_vectorization", False),
             telemetry_id=data.get("telemetry_id", ""),
+            target_uri=data.get("target_uri", ""),
+            changes=data.get("changes"),
         )
         if "id" in data and data["id"]:
             obj.id = data["id"]

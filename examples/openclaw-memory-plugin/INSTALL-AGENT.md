@@ -104,24 +104,11 @@ Check if `~/.openviking/ov.conf` already exists:
 > "Please provide your Volcengine Ark API Key (used for Embedding and VLM model calls).
 > Get one at https://console.volcengine.com/ark if you don't have one."
 
-Check if the OpenViking repo is available locally:
-
-```bash
-ls examples/openclaw-memory-plugin/setup-helper/package.json 2>/dev/null
-```
-
-- In repo: Run setup helper directly
-- Not in repo: Clone first
-
-```bash
-git clone https://github.com/volcengine/OpenViking.git /tmp/OpenViking
-cd /tmp/OpenViking
-```
-
 Run the setup helper:
 
 ```bash
-npx ./examples/openclaw-memory-plugin/setup-helper
+npm install -g openclaw-openviking-setup-helper
+ov-install
 ```
 
 At the interactive prompts:
@@ -194,18 +181,15 @@ openclaw --version
 
 > Remote mode does **not** require Python — OpenViking runs on the remote server.
 
-### Step R3: Deploy Plugin and Configure
-
-Get the plugin code:
+### Step R3: Install Plugin and Configure
 
 ```bash
-git clone https://github.com/volcengine/OpenViking.git /tmp/OpenViking
-cd /tmp/OpenViking/examples/openclaw-memory-plugin
-npm install
-openclaw plugin link .
+npm install -g openclaw-openviking-setup-helper
+ov-install
+# Select remote mode, enter OpenViking server URL and API Key
 ```
 
-Configure remote connection (substitute user-provided values). If targeting a non-default instance, prefix each command with `OPENCLAW_STATE_DIR=<workdir>`:
+Alternatively, configure manually (substitute user-provided values). If targeting a non-default instance, prefix each command with `OPENCLAW_STATE_DIR=<workdir>`:
 
 ```bash
 openclaw config set plugins.enabled true --json
