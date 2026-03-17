@@ -82,13 +82,13 @@ class LockManager:
         self,
         handle: LockHandle,
         src: str,
-        dst: str,
+        dst_parent: str,
         src_is_dir: bool = True,
         timeout: Optional[float] = None,
     ) -> bool:
         return await self._path_lock.acquire_mv(
             src,
-            dst,
+            dst_parent,
             handle,
             timeout=timeout if timeout is not None else self._lock_timeout,
             src_is_dir=src_is_dir,

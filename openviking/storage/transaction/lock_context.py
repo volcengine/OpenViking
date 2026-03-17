@@ -21,13 +21,13 @@ class LockContext:
         lock_manager: LockManager,
         paths: list[str],
         lock_mode: str = "point",
-        mv_dst_path: Optional[str] = None,
+        mv_dst_parent_path: Optional[str] = None,
         src_is_dir: bool = True,
     ):
         self._manager = lock_manager
         self._paths = paths
         self._lock_mode = lock_mode
-        self._mv_dst_path = mv_dst_path
+        self._mv_dst_parent_path = mv_dst_parent_path
         self._src_is_dir = src_is_dir
         self._handle: Optional[LockHandle] = None
 
@@ -41,12 +41,12 @@ class LockContext:
                 if not success:
                     break
         elif self._lock_mode == "mv":
-            if self._mv_dst_path is None:
-                raise LockAcquisitionError("mv lock mode requires mv_dst_path")
+            if self._mv_dst_parent_path is None:
+                raise LockAcquisitionError("mv lock mode requires mv_dst_parent_path")
             success = await self._manager.acquire_mv(
                 self._handle,
                 self._paths[0],
-                self._mv_dst_path,
+                self._mv_dst_parent_path,
                 src_is_dir=self._src_is_dir,
             )
         else:  # "point"

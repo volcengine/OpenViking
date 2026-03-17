@@ -731,56 +731,6 @@ class Session:
             except Exception as e:
                 logger.warning(f"Failed to create relation to {usage.uri}: {e}")
 
-    def _write_checkpoint(self, data: Dict[str, Any]) -> None:
-        """Write a commit checkpoint file for crash recovery."""
-        if not self._viking_fs:
-            return
-
-        checkpoint = {
-            **data,
-            "session_id": self.session_id,
-            "compression_index": self._compression.compression_index,
-            "timestamp": get_current_timestamp(),
-        }
-        run_async(
-            self._viking_fs.write_file(
-                f"{self._session_uri}/.commit_checkpoint.json",
-                json.dumps(checkpoint, ensure_ascii=False),
-                ctx=self.ctx,
-            )
-        )
-
-    async def _write_checkpoint_async(self, data: Dict[str, Any]) -> None:
-        """Write a commit checkpoint file for crash recovery (async)."""
-        if not self._viking_fs:
-            return
-
-        checkpoint = {
-            **data,
-            "session_id": self.session_id,
-            "compression_index": self._compression.compression_index,
-            "timestamp": get_current_timestamp(),
-        }
-        await self._viking_fs.write_file(
-            f"{self._session_uri}/.commit_checkpoint.json",
-            json.dumps(checkpoint, ensure_ascii=False),
-            ctx=self.ctx,
-        )
-
-    def _read_checkpoint(self) -> Optional[Dict[str, Any]]:
-        """Read commit checkpoint file if it exists."""
-        if not self._viking_fs:
-            return None
-        try:
-            content = run_async(
-                self._viking_fs.read_file(
-                    f"{self._session_uri}/.commit_checkpoint.json", ctx=self.ctx
-                )
-            )
-            return json.loads(content)
-        except Exception:
-            return None
-
     async def _write_relations_async(self) -> None:
         """Create relations to used contexts/tools (async)."""
         if not self._viking_fs:

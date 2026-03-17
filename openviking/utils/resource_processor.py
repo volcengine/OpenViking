@@ -213,6 +213,7 @@ class ResourceProcessor:
         # ============ Phase 3.5: 首次添加立即落盘 ============
         root_uri = result.get("root_uri")
         temp_uri = result.get("temp_uri")  # temp_doc_uri
+        candidate_uri = getattr(context_tree, "_candidate_uri", None) if context_tree else None
 
         if root_uri and temp_uri:
             viking_fs = get_viking_fs()
@@ -230,6 +231,13 @@ class ResourceProcessor:
                     await viking_fs.mkdir(parent_uri, exist_ok=True, ctx=ctx)
 
                 async with LockContext(get_lock_manager(), [parent_path], lock_mode="point"):
+                    # Re-resolve URI inside lock to prevent TOCTOU race where
+                    # concurrent add_resource calls resolve to the same final_uri.
+                    if candidate_uri:
+                        root_uri = await self.tree_builder._resolve_unique_uri(candidate_uri)
+                        result["root_uri"] = root_uri
+                        dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
+
                     src_path = viking_fs._uri_to_path(temp_uri, ctx=ctx)
                     await asyncio.to_thread(viking_fs.agfs.mv, src_path, dst_path)
 

@@ -67,7 +67,7 @@ class TestLockContextMv:
         agfs_client.mkdir(src)
         agfs_client.mkdir(dst)
 
-        async with LockContext(lm, [src], lock_mode="mv", mv_dst_path=dst) as handle:
+        async with LockContext(lm, [src], lock_mode="mv", mv_dst_parent_path=dst) as handle:
             assert len(handle.locks) == 2
 
 

@@ -204,7 +204,7 @@ async with LockContext(lock_manager, [path], lock_mode="subtree"):
     pass
 
 # MV 锁（移动操作）
-async with LockContext(lock_manager, [src], lock_mode="mv", mv_dst_path=dst):
+async with LockContext(lock_manager, [src], lock_mode="mv", mv_dst_parent_path=dst):
     # 执行操作...
     pass
 ```

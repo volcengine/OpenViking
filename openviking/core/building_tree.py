@@ -28,6 +28,7 @@ class BuildingTree:
         self._contexts: List["Context"] = []
         self._uri_map: Dict[str, "Context"] = {}
         self._root_uri: Optional[str] = None
+        self._candidate_uri: Optional[str] = None
 
     def add_context(self, context: "Context") -> None:
         """Add a context to the tree."""

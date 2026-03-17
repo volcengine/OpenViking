@@ -80,7 +80,7 @@ class TestLockContextMv:
         agfs_client.mkdir(src)
         agfs_client.mkdir(dst)
 
-        async with LockContext(lock_manager, [src], lock_mode="mv", mv_dst_path=dst):
+        async with LockContext(lock_manager, [src], lock_mode="mv", mv_dst_parent_path=dst):
             src_token = agfs_client.cat(f"{src}/{LOCK_FILE_NAME}")
             dst_token = agfs_client.cat(f"{dst}/{LOCK_FILE_NAME}")
             src_token_str = src_token.decode("utf-8") if isinstance(src_token, bytes) else src_token

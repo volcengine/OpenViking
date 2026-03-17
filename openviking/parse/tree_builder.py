@@ -177,6 +177,8 @@ class TreeBuilder:
             source_format=source_format,
         )
         tree._root_uri = final_uri
+        if not to_uri:
+            tree._candidate_uri = candidate_uri
 
         # Create a minimal Context object for the root so that tree.root is not None
         root_context = Context(uri=final_uri, temp_uri=temp_doc_uri)

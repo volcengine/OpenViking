@@ -328,17 +328,32 @@ class PathLock:
     async def acquire_mv(
         self,
         src_path: str,
-        dst_path: str,
+        dst_parent_path: str,
         owner: LockOwner,
         timeout: float = 0.0,
         src_is_dir: bool = True,
     ) -> bool:
+        """Acquire locks for a move operation.
+
+        Args:
+            src_path: Source path to lock.
+            dst_parent_path: Parent directory of the destination to lock.
+                Callers typically pass the destination's parent so that the
+                lock covers sibling-level conflicts without requiring the
+                target to exist yet.
+            owner: Lock owner handle.
+            timeout: Maximum seconds to wait for each lock.
+            src_is_dir: Whether the source is a directory (SUBTREE lock)
+                or a file (POINT lock on parent).
+        """
         if src_is_dir:
             if not await self.acquire_subtree(src_path, owner, timeout=timeout):
                 logger.warning(f"[MV] Failed to acquire SUBTREE lock on source: {src_path}")
                 return False
-            if not await self.acquire_subtree(dst_path, owner, timeout=timeout):
-                logger.warning(f"[MV] Failed to acquire SUBTREE lock on destination: {dst_path}")
+            if not await self.acquire_subtree(dst_parent_path, owner, timeout=timeout):
+                logger.warning(
+                    f"[MV] Failed to acquire SUBTREE lock on destination parent: {dst_parent_path}"
+                )
                 await self.release(owner)
                 return False
         else:
@@ -346,12 +361,14 @@ class PathLock:
             if not await self.acquire_point(src_parent, owner, timeout=timeout):
                 logger.warning(f"[MV] Failed to acquire POINT lock on source parent: {src_parent}")
                 return False
-            if not await self.acquire_point(dst_path, owner, timeout=timeout):
-                logger.warning(f"[MV] Failed to acquire POINT lock on destination: {dst_path}")
+            if not await self.acquire_point(dst_parent_path, owner, timeout=timeout):
+                logger.warning(
+                    f"[MV] Failed to acquire POINT lock on destination parent: {dst_parent_path}"
+                )
                 await self.release(owner)
                 return False
 
-        logger.debug(f"[MV] Locks acquired: {src_path} -> {dst_path}")
+        logger.debug(f"[MV] Locks acquired: {src_path} -> {dst_parent_path}")
         return True
 
     async def release(self, owner: LockOwner) -> None:

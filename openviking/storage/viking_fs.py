@@ -357,7 +357,7 @@ class VikingFS:
             get_lock_manager(),
             [old_path],
             lock_mode="mv",
-            mv_dst_path=dst_parent,
+            mv_dst_parent_path=dst_parent,
             src_is_dir=is_dir,
         ):
             uris_to_move = await self._collect_uris(old_path, recursive=True, ctx=ctx)
