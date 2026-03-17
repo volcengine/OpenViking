@@ -354,12 +354,8 @@ class SemanticProcessor(DequeueHandlerBase):
                     file_summaries.append({"name": file_name, "summary": ""})
 
         overview = await self._generate_overview(dir_uri, file_summaries, [])
-        semantic = get_openviking_config().semantic
-        if len(overview) > semantic.overview_max_chars:
-            overview = overview[: semantic.overview_max_chars]
         abstract = self._extract_abstract_from_overview(overview)
-        if len(abstract) > semantic.abstract_max_chars:
-            abstract = abstract[: semantic.abstract_max_chars - 3] + "..."
+        overview, abstract = self._enforce_size_limits(overview, abstract)
 
         try:
             await viking_fs.write_file(f"{dir_uri}/.overview.md", overview, ctx=ctx)
@@ -691,6 +687,15 @@ class SemanticProcessor(DequeueHandlerBase):
 
         return "\n".join(content_lines).strip()
 
+    def _enforce_size_limits(self, overview: str, abstract: str) -> Tuple[str, str]:
+        """Enforce max size limits on overview and abstract."""
+        semantic = get_openviking_config().semantic
+        if len(overview) > semantic.overview_max_chars:
+            overview = overview[: semantic.overview_max_chars]
+        if len(abstract) > semantic.abstract_max_chars:
+            abstract = abstract[: semantic.abstract_max_chars - 3] + "..."
+        return overview, abstract
+
     def _parse_overview_md(self, overview_content: str) -> Dict[str, str]:
         """Parse overview.md and extract file summaries.
 
@@ -791,10 +796,11 @@ class SemanticProcessor(DequeueHandlerBase):
 
         # Budget guard: check if prompt would be oversized
         estimated_size = len(file_summaries_str) + len(children_abstracts_str)
-        if (
-            estimated_size > semantic.max_overview_prompt_chars
-            and len(file_summaries) > semantic.overview_batch_size
-        ):
+        over_budget = estimated_size > semantic.max_overview_prompt_chars
+        many_files = len(file_summaries) > semantic.overview_batch_size
+
+        if over_budget and many_files:
+            # Many files, oversized prompt → batch and merge
             logger.info(
                 f"Overview prompt for {dir_uri} exceeds budget "
                 f"({estimated_size} chars, {len(file_summaries)} files). "
@@ -802,6 +808,27 @@ class SemanticProcessor(DequeueHandlerBase):
             )
             overview = await self._batched_generate_overview(
                 dir_uri, file_summaries, children_abstracts, file_index_map
+            )
+        elif over_budget:
+            # Few files but long summaries → truncate summaries to fit budget
+            logger.info(
+                f"Overview prompt for {dir_uri} exceeds budget "
+                f"({estimated_size} chars) with {len(file_summaries)} files. "
+                f"Truncating summaries to fit."
+            )
+            budget = semantic.max_overview_prompt_chars
+            budget -= len(children_abstracts_str)
+            per_file = max(100, budget // max(len(file_summaries), 1))
+            truncated_lines = []
+            for idx, item in enumerate(file_summaries, 1):
+                summary = item["summary"][:per_file]
+                truncated_lines.append(f"[{idx}] {item['name']}: {summary}")
+            file_summaries_str = "\n".join(truncated_lines)
+            overview = await self._single_generate_overview(
+                dir_uri,
+                file_summaries_str,
+                children_abstracts_str,
+                file_index_map,
             )
         else:
             overview = await self._single_generate_overview(
@@ -878,20 +905,29 @@ class SemanticProcessor(DequeueHandlerBase):
         ]
         logger.info(f"Generating overview for {dir_uri} in {len(batches)} batches")
 
-        # Generate partial overview per batch
-        partial_overviews = []
-        for batch_idx, batch in enumerate(batches):
-            batch_lines = []
-            for idx, item in enumerate(batch, 1):
-                batch_lines.append(f"[{idx}] {item['name']}: {item['summary']}")
-            batch_str = "\n".join(batch_lines)
+        # Build children abstracts string (used in first batch + merge)
+        children_abstracts_str = (
+            "\n".join(f"- {item['name']}/: {item['abstract']}" for item in children_abstracts)
+            if children_abstracts
+            else "None"
+        )
 
-            # Only include children abstracts in the first batch
-            children_str = "None"
-            if batch_idx == 0 and children_abstracts:
-                children_str = "\n".join(
-                    f"- {item['name']}/: {item['abstract']}" for item in children_abstracts
-                )
+        # Generate partial overview per batch using global file indices
+        partial_overviews = []
+        global_offset = 0
+        for batch_idx, batch in enumerate(batches):
+            # Build per-batch index map using global offsets
+            batch_lines = []
+            batch_index_map = {}
+            for local_idx, item in enumerate(batch):
+                global_idx = global_offset + local_idx + 1
+                batch_index_map[global_idx] = item["name"]
+                batch_lines.append(f"[{global_idx}] {item['name']}: {item['summary']}")
+            batch_str = "\n".join(batch_lines)
+            global_offset += len(batch)
+
+            # Include children abstracts in the first batch
+            children_str = children_abstracts_str if batch_idx == 0 else "None"
 
             try:
                 prompt = render_prompt(
@@ -903,6 +939,16 @@ class SemanticProcessor(DequeueHandlerBase):
                     },
                 )
                 partial = await vlm.get_completion_async(prompt)
+
+                # Replace [number] references per batch using batch-local map
+                def make_replacer(idx_map):
+                    def replacer(match):
+                        idx = int(match.group(1))
+                        return idx_map.get(idx, match.group(0))
+
+                    return replacer
+
+                partial = re.sub(r"\[(\d+)\]", make_replacer(batch_index_map), partial)
                 partial_overviews.append(partial.strip())
             except Exception as e:
                 logger.warning(
@@ -915,36 +961,27 @@ class SemanticProcessor(DequeueHandlerBase):
 
         # If only one batch succeeded, use it directly
         if len(partial_overviews) == 1:
-            overview = partial_overviews[0]
-        else:
-            # Merge partials into a final overview
-            combined = "\n\n---\n\n".join(partial_overviews)
-            try:
-                prompt = render_prompt(
-                    "semantic.overview_generation",
-                    {
-                        "dir_name": dir_name,
-                        "file_summaries": combined,
-                        "children_abstracts": "None",
-                    },
-                )
-                overview = await vlm.get_completion_async(prompt)
-                overview = overview.strip()
-            except Exception as e:
-                logger.error(
-                    f"Failed to merge partial overviews for {dir_uri}: {e}",
-                    exc_info=True,
-                )
-                overview = partial_overviews[0]
+            return partial_overviews[0]
 
-        # Post-process: replace [number] with actual file name
-        def replace_index(match):
-            idx = int(match.group(1))
-            return file_index_map.get(idx, match.group(0))
-
-        overview = re.sub(r"\[(\d+)\]", replace_index, overview)
-
-        return overview
+        # Merge partials into a final overview (include children for context)
+        combined = "\n\n---\n\n".join(partial_overviews)
+        try:
+            prompt = render_prompt(
+                "semantic.overview_generation",
+                {
+                    "dir_name": dir_name,
+                    "file_summaries": combined,
+                    "children_abstracts": children_abstracts_str,
+                },
+            )
+            overview = await vlm.get_completion_async(prompt)
+            return overview.strip()
+        except Exception as e:
+            logger.error(
+                f"Failed to merge partial overviews for {dir_uri}: {e}",
+                exc_info=True,
+            )
+            return partial_overviews[0]
 
     async def _vectorize_directory(
         self,
