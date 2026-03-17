@@ -5,7 +5,8 @@ import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { Type } from "@sinclair/typebox";
 import { memoryOpenVikingConfigSchema } from "./config.js";
 
-import { OpenVikingClient, localClientCache, isMemoryUri } from "./client.js";
+import { OpenVikingClient, localClientCache, localClientPendingPromises, isMemoryUri } from "./client.js";
+import type { PendingClientEntry } from "./client.js";
 import type { FindResultItem } from "./client.js";
 import {
   getCaptureDecision,
@@ -51,7 +52,6 @@ const memoryPlugin = {
     let resolveLocalClient: ((c: OpenVikingClient) => void) | null = null;
     let rejectLocalClient: ((err: unknown) => void) | null = null;
     let localUnavailableReason: string | null = null;
-    const autoRecallTimeoutMs = 5_000;
 
     const markLocalUnavailable = (reason: string, err?: unknown) => {
       if (!localUnavailableReason) {
@@ -75,10 +75,18 @@ const memoryPlugin = {
         localProcess = cached.process;
         clientPromise = Promise.resolve(cached.client);
       } else {
-        clientPromise = new Promise<OpenVikingClient>((resolve, reject) => {
-          resolveLocalClient = resolve;
-          rejectLocalClient = reject;
-        });
+        const existingPending = localClientPendingPromises.get(localCacheKey);
+        if (existingPending) {
+          clientPromise = existingPending.promise;
+        } else {
+          const entry = {} as PendingClientEntry;
+          entry.promise = new Promise<OpenVikingClient>((resolve, reject) => {
+            entry.resolve = resolve;
+            entry.reject = reject;
+          });
+          clientPromise = entry.promise;
+          localClientPendingPromises.set(localCacheKey, entry);
+        }
       }
     } else {
       clientPromise = Promise.resolve(new OpenVikingClient(cfg.baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs));
@@ -379,6 +387,7 @@ const memoryPlugin = {
           } else {
             try {
               const candidateLimit = Math.max(cfg.recallLimit * 4, 20);
+              api.logger.info?.(`memory-openviking: autoRecall searching (query="${queryText.slice(0, 80)}", limit=${candidateLimit})`);
               // 同时检索 user 和 agent 两个位置的记忆
               const [userSettled, agentSettled] = await Promise.allSettled([
                 getClient().then((client) =>
@@ -398,6 +407,8 @@ const memoryPlugin = {
               ]);
               const userResult = userSettled.status === "fulfilled" ? userSettled.value : { memories: [] };
               const agentResult = agentSettled.status === "fulfilled" ? agentSettled.value : { memories: [] };
+              api.logger.info?.(`memory-openviking: autoRecall done (user=${userResult.memories?.length ?? 0}, agent=${agentResult.memories?.length ?? 0})`);
+
               if (userSettled.status === "rejected") {
                 api.logger.warn(`memory-openviking: user memories search failed: ${String(userSettled.reason)}`);
               }
@@ -556,7 +567,16 @@ const memoryPlugin = {
     api.registerService({
       id: "memory-openviking",
       start: async () => {
-        if (cfg.mode === "local" && resolveLocalClient) {
+        // Claim the pending entry — only the first start() call to claim it spawns the process.
+        // Subsequent start() calls (from other registrations sharing the same promise) fall through.
+        const pendingEntry = localClientPendingPromises.get(localCacheKey);
+        const isSpawner = cfg.mode === "local" && !!pendingEntry;
+        if (isSpawner) {
+          localClientPendingPromises.delete(localCacheKey);
+          resolveLocalClient = pendingEntry!.resolve;
+          rejectLocalClient = pendingEntry!.reject;
+        }
+        if (isSpawner) {
           const timeoutMs = 60_000;
           const intervalMs = 500;
 
@@ -636,12 +656,14 @@ const memoryPlugin = {
             localClientCache.set(localCacheKey, { client, process: child });
             resolveLocalClient(client);
             rejectLocalClient = null;
+            localClientPendingPromises.delete(localCacheKey);
             api.logger.info(
               `memory-openviking: local server started (${baseUrl}, config: ${cfg.configPath})`,
             );
           } catch (err) {
             localProcess = null;
             child.kill("SIGTERM");
+            localClientPendingPromises.delete(localCacheKey);
             markLocalUnavailable("startup failed", err);
             if (stderrChunks.length) {
               api.logger.warn(
@@ -658,6 +680,7 @@ const memoryPlugin = {
         }
       },
       stop: () => {
+        localClientPendingPromises.delete(localCacheKey);
         if (localProcess) {
           localProcess.kill("SIGTERM");
           localClientCache.delete(localCacheKey);
