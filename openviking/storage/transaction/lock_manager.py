@@ -125,10 +125,15 @@ class LockManager:
                 logger.error(f"Redo recovery failed for {task_id}: {e}", exc_info=True)
 
     async def _redo_session_memory(self, info: Dict[str, Any]) -> None:
-        """Re-extract memories from archive."""
+        """Re-extract memories from archive.
+
+        Lets exceptions from _enqueue_semantic propagate so the caller
+        can decide whether to mark the redo task as done.
+        """
         from openviking.message import Message
         from openviking.server.identity import RequestContext, Role
         from openviking.session.compressor import SessionCompressor
+        from openviking.storage.viking_fs import get_viking_fs
         from openviking_cli.session.user_id import UserIdentifier
 
         archive_uri = info.get("archive_uri")
@@ -139,51 +144,46 @@ class LockManager:
         role_str = info.get("role", "root")
 
         if not archive_uri or not session_uri:
-            logger.warning("Cannot redo session_memory: missing archive_uri or session_uri")
-            return
+            raise ValueError("Cannot redo session_memory: missing archive_uri or session_uri")
 
-        # 1. Read archived messages
-        messages_path = f"{archive_uri}/messages.jsonl"
-        try:
-            agfs_path = messages_path.replace("viking://", "")
-            content = self._agfs.cat(agfs_path)
-            if isinstance(content, bytes):
-                content = content.decode("utf-8")
-        except Exception as e:
-            logger.warning(f"Cannot read archive for redo: {messages_path}: {e}")
-            return
-
-        messages = []
-        for line in content.strip().split("\n"):
-            if line.strip():
-                try:
-                    messages.append(Message.from_dict(json.loads(line)))
-                except Exception:
-                    pass
-
-        if not messages:
-            logger.warning(f"No messages found in archive for redo: {archive_uri}")
-            return
-
-        # 2. Build request context
+        # 1. Build request context (needed for path conversion below)
         user = UserIdentifier(account_id=account_id, user_id=user_id, agent_id=agent_id)
         ctx = RequestContext(user=user, role=Role(role_str))
 
-        # 3. Re-extract memories (best-effort: skip if compressor not available)
-        session_id = session_uri.rstrip("/").rsplit("/", 1)[-1]
+        # 2. Read archived messages
+        messages_uri = f"{archive_uri}/messages.jsonl"
+        viking_fs = get_viking_fs()
+        agfs_path = viking_fs._uri_to_path(messages_uri, ctx=ctx)
+        messages = []
         try:
-            compressor = SessionCompressor(vikingdb=None)
-            memories = await compressor.extract_long_term_memories(
-                messages=messages,
-                user=user,
-                session_id=session_id,
-                ctx=ctx,
-            )
-            logger.info(f"Redo: extracted {len(memories)} memories from {archive_uri}")
+            content = self._agfs.cat(agfs_path)
+            if isinstance(content, bytes):
+                content = content.decode("utf-8")
+            for line in content.strip().split("\n"):
+                if line.strip():
+                    try:
+                        messages.append(Message.from_dict(json.loads(line)))
+                    except Exception:
+                        pass
         except Exception as e:
-            logger.warning(f"Redo: memory extraction skipped ({e}), will retry via queue")
+            logger.warning(f"Cannot read archive for redo: {agfs_path}: {e}")
 
-        # 4. Enqueue semantic processing
+        # 3. Re-extract memories (best-effort, only if archive was readable)
+        if messages:
+            session_id = session_uri.rstrip("/").rsplit("/", 1)[-1]
+            try:
+                compressor = SessionCompressor(vikingdb=None)
+                memories = await compressor.extract_long_term_memories(
+                    messages=messages,
+                    user=user,
+                    session_id=session_id,
+                    ctx=ctx,
+                )
+                logger.info(f"Redo: extracted {len(memories)} memories from {archive_uri}")
+            except Exception as e:
+                logger.warning(f"Redo: memory extraction failed ({e}), falling back to queue")
+
+        # 4. Always enqueue semantic processing as fallback
         await self._enqueue_semantic(
             uri=session_uri,
             context_type="memory",
