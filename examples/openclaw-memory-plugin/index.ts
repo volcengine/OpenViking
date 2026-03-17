@@ -661,7 +661,7 @@ const memoryPlugin = {
             await waitForHealth(baseUrl, timeoutMs, intervalMs);
             const client = new OpenVikingClient(baseUrl, cfg.apiKey, cfg.timeoutMs);
             localClientCache.set(localCacheKey, { client, process: child });
-            resolveLocalClient(client);
+            resolveLocalClient!(client);
             rejectLocalClient = null;
             localClientPendingPromises.delete(localCacheKey);
             api.logger.info(
