@@ -97,7 +97,7 @@ async def get_request_context(
         if not account_header or not user_header:
             raise InvalidArgumentError(
                 "ROOT requests to tenant-scoped APIs must include X-OpenViking-Account "
-                'and X-OpenViking-User headers. Use a user key for regular data access.'
+                "and X-OpenViking-User headers. Use a user key for regular data access."
             )
 
     return RequestContext(
