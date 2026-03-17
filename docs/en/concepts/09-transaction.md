@@ -131,26 +131,36 @@ Operation flow:
 | Problem | Solution |
 |---------|----------|
 | File moved from temp to final directory, then crash -> file exists but never searchable | Two separate paths for first-time add vs incremental update |
+| Resource already on disk but rm deletes it while semantic processing / vectorization is still running -> wasted work | Lifecycle SUBTREE lock held from finalization through processing completion |
 
 **First-time add** (target does not exist) — handled in `ResourceProcessor.process_resource` Phase 3.5:
 
 ```
-1. Acquire lock on parent_path of final_uri (lock_mode="point")
+1. Acquire POINT lock on parent of final_uri
 2. agfs.mv temp directory -> final location
-3. Release lock
-4. Clean up temp directory
-5. Enqueue SemanticMsg -> DAG runs on final
+3. Acquire SUBTREE lock on final_uri (inside POINT lock, eliminating race window)
+4. Release POINT lock
+5. Clean up temp directory
+6. Enqueue SemanticMsg(lifecycle_lock_handle_id=...) -> DAG runs on final
+7. DAG starts lock refresh loop (refreshes timestamp every lock_expire/2 seconds)
+8. DAG complete + all embeddings done -> release SUBTREE lock
 ```
+
+During this period, `rm` attempting to acquire a SUBTREE lock on the same path will fail with `ResourceBusyError`.
 
 **Incremental update** (target already exists) — temp stays in place:
 
 ```
-1. Enqueue SemanticMsg(uri=temp, target_uri=final) -> DAG runs on temp
-2. DAG completion triggers sync_diff_callback or move_temp_to_target_callback
-3. Each VikingFS.rm / VikingFS.mv inside callbacks acquires its own lock
+1. Acquire SUBTREE lock on target_uri (protect existing resource)
+2. Enqueue SemanticMsg(uri=temp, target_uri=final, lifecycle_lock_handle_id=...)
+3. DAG runs on temp, lock refresh loop active
+4. DAG completion triggers sync_diff_callback or move_temp_to_target_callback
+5. Callback completes -> release SUBTREE lock
 ```
 
 Note: DAG callbacks do NOT wrap operations in an outer lock. Each `VikingFS.rm` and `VikingFS.mv` has its own lock internally. An outer lock would conflict with these inner locks causing deadlock.
+
+**Server restart recovery**: SemanticMsg is persisted in QueueFS. On restart, `SemanticProcessor` detects that the `lifecycle_lock_handle_id` handle is missing from the in-memory LockManager and re-acquires a SUBTREE lock.
 
 ### session.commit()
 
@@ -316,6 +326,7 @@ Timeout (default 0 = no-wait) raises LockAcquisitionError
 | Failure scenario | Defense | Recovery timing |
 |-----------------|--------|-----------------|
 | Crash during operation | Lock auto-expires + stale detection | Next acquisition of same path lock |
+| Crash during add_resource semantic processing | Lifecycle lock expires + SemanticProcessor re-acquires on restart | Worker restart |
 | Crash during session.commit Phase 2 | RedoLog marker + redo | On restart |
 | Crash after enqueue, before worker | QueueFS SQLite persistence | Worker restart |
 | Orphan index | L2 on-demand load cleanup | When user accesses |
