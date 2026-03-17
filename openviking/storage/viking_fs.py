@@ -1016,20 +1016,20 @@ class VikingFS:
         safe_parts = [self._shorten_component(p, self._MAX_FILENAME_BYTES) for p in parts]
         return f"/local/{account_id}/{'/'.join(safe_parts)}"
 
-    _INTERNAL_DIRS = {"_system"}
+    _INTERNAL_NAMES = {"_system", ".path.ovlock"}
     _ROOT_PATH = "/local"
 
     def _ls_entries(self, path: str) -> List[Dict[str, Any]]:
         """List directory entries, filtering out internal directories.
 
         At account root (/local/{account}), uses VALID_SCOPES whitelist.
-        At other levels, uses _INTERNAL_DIRS blacklist.
+        At other levels, uses _INTERNAL_NAMES blacklist.
         """
         entries = self.agfs.ls(path)
         parts = [p for p in path.strip("/").split("/") if p]
         if len(parts) == 2 and parts[0] == "local":
             return [e for e in entries if e.get("name") in VikingURI.VALID_SCOPES]
-        return [e for e in entries if e.get("name") not in self._INTERNAL_DIRS]
+        return [e for e in entries if e.get("name") not in self._INTERNAL_NAMES]
 
     def _path_to_uri(self, path: str, ctx: Optional[RequestContext] = None) -> str:
         """/local/{account}/... -> viking://...

@@ -251,3 +251,11 @@ def get_lock_manager() -> LockManager:
 def reset_lock_manager() -> None:
     global _lock_manager
     _lock_manager = None
+
+
+async def release_all_locks() -> None:
+    """Release all active lock handles. **Test-only utility.**"""
+    if _lock_manager is None:
+        return
+    for handle in list(_lock_manager.get_active_handles().values()):
+        await _lock_manager.release(handle)
