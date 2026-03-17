@@ -56,7 +56,7 @@ Version: 1.0
 
         to_uri = "viking://resources/watched_resource"
 
-        print(f"\nAdding resource with watch_interval=60.0 minutes...")
+        print("\nAdding resource with watch_interval=60.0 minutes...")
         result = await client.add_resource(
             path=str(test_file),
             to=to_uri,
@@ -65,12 +65,12 @@ Version: 1.0
             watch_interval=60.0,
         )
 
-        print(f"Resource added successfully!")
+        print("Resource added successfully!")
         print(f"  Root URI: {result['root_uri']}")
 
         status = await client.get_watch_status(to_uri)
         if status:
-            print(f"\nWatch Status:")
+            print("\nWatch Status:")
             print(f"  Is Watched: {status['is_watched']}")
             print(f"  Watch Interval: {status['watch_interval']} minutes")
             print(f"  Task ID: {status['task_id']}")
@@ -103,20 +103,20 @@ async def example_query_watch_status():
         status = await client.get_watch_status(watched_uri)
 
         if status:
-            print(f"  Status: WATCHED")
+            print("  Status: WATCHED")
             print(f"  Interval: {status['watch_interval']} minutes")
             print(f"  Active: {status['is_watched']}")
         else:
-            print(f"  Status: NOT WATCHED")
+            print("  Status: NOT WATCHED")
 
         print(f"\nQuerying watch status for: {unwatched_uri}")
         status = await client.get_watch_status(unwatched_uri)
 
         if status:
-            print(f"  Status: WATCHED")
+            print("  Status: WATCHED")
             print(f"  Interval: {status['watch_interval']} minutes")
         else:
-            print(f"  Status: NOT WATCHED")
+            print("  Status: NOT WATCHED")
 
     finally:
         await client.close()
@@ -140,13 +140,13 @@ async def example_update_watch_interval():
         test_file = Path("./test_resource.md")
         to_uri = "viking://resources/watched_resource"
 
-        print(f"\nCurrent watch status:")
+        print("\nCurrent watch status:")
         status = await client.get_watch_status(to_uri)
         if status:
             print(f"  Interval: {status['watch_interval']} minutes")
             task_id = status["task_id"]
 
-            print(f"\nDeactivating watch task...")
+            print("\nDeactivating watch task...")
             await client._service.resources._watch_manager.update_task(
                 task_id=task_id,
                 account_id=client._service.resources._ctx.account_id,
@@ -155,7 +155,7 @@ async def example_update_watch_interval():
                 is_active=False,
             )
 
-            print(f"Updating watch interval to 120.0 minutes...")
+            print("Updating watch interval to 120.0 minutes...")
             await client.add_resource(
                 path=str(test_file),
                 to=to_uri,
@@ -163,7 +163,7 @@ async def example_update_watch_interval():
                 watch_interval=120.0,
             )
 
-            print(f"\nNew watch status:")
+            print("\nNew watch status:")
             status = await client.get_watch_status(to_uri)
             if status:
                 print(f"  Interval: {status['watch_interval']} minutes")
@@ -193,24 +193,24 @@ async def example_cancel_watch():
         test_file = Path("./test_resource.md")
         to_uri = "viking://resources/watched_resource"
 
-        print(f"\nCurrent watch status:")
+        print("\nCurrent watch status:")
         status = await client.get_watch_status(to_uri)
         if status:
             print(f"  Is Watched: {status['is_watched']}")
 
-            print(f"\nCancelling watch by setting interval to 0...")
+            print("\nCancelling watch by setting interval to 0...")
             await client.add_resource(
                 path=str(test_file),
                 to=to_uri,
                 watch_interval=0,
             )
 
-            print(f"\nNew watch status:")
+            print("\nNew watch status:")
             status = await client.get_watch_status(to_uri)
             if status:
                 print(f"  Is Watched: {status['is_watched']}")
             else:
-                print(f"  Resource is no longer being watched")
+                print("  Resource is no longer being watched")
 
         else:
             print("  Resource is not being watched")
@@ -237,28 +237,28 @@ async def example_handle_conflict():
         test_file = Path("./test_resource.md")
         to_uri = "viking://resources/conflict_example"
 
-        print(f"\nCreating first watch task...")
+        print("\nCreating first watch task...")
         await client.add_resource(
             path=str(test_file),
             to=to_uri,
             watch_interval=30.0,
         )
-        print(f"  First watch task created successfully")
+        print("  First watch task created successfully")
 
-        print(f"\nAttempting to create second watch task for same URI...")
+        print("\nAttempting to create second watch task for same URI...")
         try:
             await client.add_resource(
                 path=str(test_file),
                 to=to_uri,
                 watch_interval=60.0,
             )
-            print(f"  ERROR: This should not happen!")
+            print("  ERROR: This should not happen!")
 
         except ConflictError as e:
-            print(f"  ConflictError caught as expected!")
+            print("  ConflictError caught as expected!")
             print(f"  Error message: {e}")
 
-            print(f"\nProper way to update: cancel first, then create new...")
+            print("\nProper way to update: cancel first, then create new...")
             await client.add_resource(
                 path=str(test_file),
                 to=to_uri,
@@ -270,7 +270,7 @@ async def example_handle_conflict():
                 to=to_uri,
                 watch_interval=60.0,
             )
-            print(f"  Watch task updated successfully!")
+            print("  Watch task updated successfully!")
 
     finally:
         await client.close()
@@ -296,7 +296,7 @@ async def example_multiple_resources():
             ("./resource3.md", "viking://resources/resource3", 120.0),
         ]
 
-        print(f"\nCreating multiple watched resources...")
+        print("\nCreating multiple watched resources...")
         for path, uri, interval in resources:
             Path(path).write_text(f"# {path}\n\nContent for {path}")
             await client.add_resource(
@@ -307,7 +307,7 @@ async def example_multiple_resources():
             )
             print(f"  Created: {uri} (interval: {interval} min)")
 
-        print(f"\nQuerying all watch statuses...")
+        print("\nQuerying all watch statuses...")
         for _, uri, _ in resources:
             status = await client.get_watch_status(uri)
             if status:
@@ -315,7 +315,7 @@ async def example_multiple_resources():
                 print(f"    Interval: {status['watch_interval']} min")
                 print(f"    Active: {status['is_watched']}")
 
-        print(f"\nCancelling all watches...")
+        print("\nCancelling all watches...")
         for _, uri, _ in resources:
             await client.add_resource(
                 path=resources[0][0],
@@ -345,7 +345,7 @@ async def example_reactivate_watch():
         test_file = Path("./test_resource.md")
         to_uri = "viking://resources/reactivate_example"
 
-        print(f"\nCreating watch task...")
+        print("\nCreating watch task...")
         await client.add_resource(
             path=str(test_file),
             to=to_uri,
@@ -356,7 +356,7 @@ async def example_reactivate_watch():
         original_task_id = status["task_id"] if status else None
         print(f"  Task ID: {original_task_id}")
 
-        print(f"\nCancelling watch...")
+        print("\nCancelling watch...")
         await client.add_resource(
             path=str(test_file),
             to=to_uri,
@@ -366,7 +366,7 @@ async def example_reactivate_watch():
         status = await client.get_watch_status(to_uri)
         print(f"  Status after cancel: {'WATCHED' if status else 'NOT WATCHED'}")
 
-        print(f"\nReactivating watch...")
+        print("\nReactivating watch...")
         await client.add_resource(
             path=str(test_file),
             to=to_uri,

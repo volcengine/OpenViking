@@ -168,7 +168,9 @@ async def test_add_resource_with_watch_interval(client: httpx.AsyncClient, sampl
     assert "root_uri" in body["result"]
 
 
-async def test_add_resource_with_default_watch_interval(client: httpx.AsyncClient, sample_markdown_file):
+async def test_add_resource_with_default_watch_interval(
+    client: httpx.AsyncClient, sample_markdown_file
+):
     resp = await client.post(
         "/api/v1/resources",
         json={

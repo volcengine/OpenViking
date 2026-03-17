@@ -7,15 +7,14 @@ import json
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import AsyncGenerator
-from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 import pytest_asyncio
 
-from openviking.resource.watch_manager import WatchManager, WatchTask
+from openviking.resource.watch_manager import WatchManager
 from openviking.resource.watch_scheduler import WatchScheduler
-from openviking.service.resource_service import ResourceService
 from openviking.server.identity import RequestContext, Role
+from openviking.service.resource_service import ResourceService
 from openviking_cli.session.user_id import UserIdentifier
 from tests.utils.mock_agfs import MockLocalAGFS
 
@@ -259,7 +258,6 @@ class TestResourceExistenceCheck:
             viking_fs=MockVikingFS(root_path=str(temp_storage)),
             resource_processor=resource_processor,
             skill_processor=MockSkillProcessor(),
-            watch_manager=None,
             watch_scheduler=None,
         )
 
@@ -301,7 +299,6 @@ class TestResourceExistenceCheck:
             viking_fs=MockVikingFS(root_path=str(temp_storage)),
             resource_processor=resource_processor,
             skill_processor=MockSkillProcessor(),
-            watch_manager=None,
             watch_scheduler=None,
         )
 
@@ -339,7 +336,6 @@ class TestResourceExistenceCheck:
             viking_fs=MockVikingFS(root_path=str(temp_storage)),
             resource_processor=resource_processor,
             skill_processor=MockSkillProcessor(),
-            watch_manager=None,
             watch_scheduler=None,
         )
 
@@ -384,7 +380,6 @@ class TestSchedulerIntegration:
             viking_fs=MockVikingFS(root_path=str(temp_storage)),
             resource_processor=resource_processor,
             skill_processor=MockSkillProcessor(),
-            watch_manager=None,
             watch_scheduler=None,
         )
 
@@ -397,7 +392,7 @@ class TestSchedulerIntegration:
 
         watch_manager = scheduler.watch_manager
 
-        task = await watch_manager.create_task(
+        await watch_manager.create_task(
             path=str(test_file),
             to_uri="viking://resources/test",
             reason="Test task",
@@ -427,7 +422,6 @@ class TestSchedulerIntegration:
             viking_fs=MockVikingFS(root_path=str(temp_storage)),
             resource_processor=resource_processor,
             skill_processor=MockSkillProcessor(),
-            watch_manager=None,
             watch_scheduler=None,
         )
 
@@ -474,7 +468,6 @@ class TestSchedulerIntegration:
             viking_fs=MockVikingFS(root_path=str(temp_storage)),
             resource_processor=resource_processor,
             skill_processor=MockSkillProcessor(),
-            watch_manager=None,
             watch_scheduler=None,
         )
 
@@ -494,7 +487,13 @@ class TestSchedulerIntegration:
             watch_interval=0.001,
         )
 
-        await watch_manager.update_task(task.task_id, is_active=False)
+        await watch_manager.update_task(
+            task_id=task.task_id,
+            account_id=task.account_id,
+            user_id=task.user_id,
+            role="ROOT",
+            is_active=False,
+        )
 
         await asyncio.sleep(0.2)
 

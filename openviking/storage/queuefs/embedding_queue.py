@@ -21,7 +21,9 @@ class EmbeddingQueue(NamedQueue):
         if msg is None:
             logger.warning("Embedding message is None, skipping enqueuing")
             return ""
-        logger.debug(f"Enqueued embedding message: {msg}")
+        copy_msg = msg.to_dict()
+        del copy_msg["message"]
+        logger.debug(f"Enqueued embedding message: {copy_msg}")
         return await super().enqueue(msg.to_dict())
 
     async def dequeue(self) -> Optional[EmbeddingMsg]:

@@ -99,62 +99,43 @@ class SemanticDagExecutor:
         self._overview_cache: Dict[str, Dict[str, str]] = {}
         self._overview_cache_lock = asyncio.Lock()
 
-    def _create_on_complete_callback(self) -> Optional[Callable[[], Awaitable[None]]]:
+    def _create_on_complete_callback(self) -> Callable[[], Awaitable[None]]:
         """Create on_complete callback for incremental update or full update."""
+        async def noop_callback() -> None:
+            return
+
         if not self._target_uri or not self._root_uri:
-            return None
+            return noop_callback
 
-        if self._incremental_update:
+        # If full update, move temp uri to target uri has been handled in the processor
+        if not self._incremental_update:
+            return noop_callback
 
-            async def sync_diff_callback() -> None:
-                try:
-                    diff = await self._processor._sync_topdown_recursive(
-                        self._root_uri,
-                        self._target_uri,
-                        ctx=self._ctx,
-                        file_change_status=self._file_change_status,
-                    )
-                    logger.info(
-                        f"[SyncDiff] Diff computed: "
-                        f"added_files={len(diff.added_files)}, "
-                        f"deleted_files={len(diff.deleted_files)}, "
-                        f"updated_files={len(diff.updated_files)}, "
-                        f"added_dirs={len(diff.added_dirs)}, "
-                        f"deleted_dirs={len(diff.deleted_dirs)}"
-                    )
-                except Exception as e:
-                    logger.error(
-                        f"[SyncDiff] Error in sync_diff_callback: "
-                        f"root_uri={self._root_uri}, target_uri={self._target_uri} "
-                        f"error={e}",
-                        exc_info=True,
-                    )
+        async def sync_diff_callback() -> None:
+            try:
+                diff = await self._processor._sync_topdown_recursive(
+                    self._root_uri,
+                    self._target_uri,
+                    ctx=self._ctx,
+                    file_change_status=self._file_change_status,
+                )
+                logger.info(
+                    f"[SyncDiff] Diff computed: "
+                    f"added_files={len(diff.added_files)}, "
+                    f"deleted_files={len(diff.deleted_files)}, "
+                    f"updated_files={len(diff.updated_files)}, "
+                    f"added_dirs={len(diff.added_dirs)}, "
+                    f"deleted_dirs={len(diff.deleted_dirs)}"
+                )
+            except Exception as e:
+                logger.error(
+                    f"[SyncDiff] Error in sync_diff_callback: "
+                    f"root_uri={self._root_uri}, target_uri={self._target_uri} "
+                    f"error={e}",
+                    exc_info=True,
+                )
 
-            return sync_diff_callback
-        else:
-
-            async def move_temp_to_target_callback() -> None:
-                try:
-                    target_exists = await self._viking_fs.exists(self._target_uri, ctx=self._ctx)
-                    if target_exists:
-                        await self._viking_fs.rm(self._target_uri, recursive=True, ctx=self._ctx)
-                    parent_uri = "/".join(self._target_uri.rsplit("/", 1)[:-1])
-                    if parent_uri:
-                        await self._viking_fs.mkdir(parent_uri, exist_ok=True, ctx=self._ctx)
-                    await self._viking_fs.mv(self._root_uri, self._target_uri, ctx=self._ctx)
-                    logger.info(
-                        f"[MoveTemp] Moved temp uri to target uri: "
-                        f"root_uri={self._root_uri}, target_uri={self._target_uri}"
-                    )
-                except Exception as e:
-                    logger.error(
-                        f"[MoveTemp] Error moving temp uri to target uri: "
-                        f"root_uri={self._root_uri}, target_uri={self._target_uri} "
-                        f"error={e}",
-                        exc_info=True,
-                    )
-
-            return move_temp_to_target_callback
+        return sync_diff_callback
 
     async def run(self, root_uri: str) -> None:
         """Run DAG execution starting from root_uri."""
@@ -203,7 +184,7 @@ class SemanticDagExecutor:
                             semantic_msg_id=task.semantic_msg_id,
                         )
                     )
-        elif on_complete:
+        else:
             try:
                 await on_complete()
             except Exception as e:
@@ -306,6 +287,14 @@ class SemanticDagExecutor:
         if not target_path:
             return True
         try:
+            current_stat = await self._viking_fs.stat(file_path, ctx=self._ctx)
+            target_stat = await self._viking_fs.stat(target_path, ctx=self._ctx)
+            current_size = (
+                current_stat.get("size") if isinstance(current_stat, dict) else None
+            )
+            target_size = target_stat.get("size") if isinstance(target_stat, dict) else None
+            if current_size is not None and target_size is not None and current_size != target_size:
+                return True
             current_content = await self._viking_fs.read_file(file_path, ctx=self._ctx)
             target_content = await self._viking_fs.read_file(target_path, ctx=self._ctx)
             return current_content != target_content

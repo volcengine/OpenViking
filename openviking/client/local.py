@@ -139,6 +139,9 @@ class LocalClient(BaseClient):
             resource_uris = [resource_uris]
         return await self._service.resources.summarize(resource_uris, ctx=self._ctx, **kwargs)
 
+    async def get_watch_status(self, to_uri: str) -> Optional[Dict[str, Any]]:
+        return await self._service.resources.get_watch_status(to_uri=to_uri, ctx=self._ctx)
+
     # ============= File System =============
 
     async def ls(

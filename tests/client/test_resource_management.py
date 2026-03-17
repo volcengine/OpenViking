@@ -4,7 +4,7 @@
 """Resource management tests"""
 
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, patch
 
 from openviking import AsyncOpenViking
 
@@ -137,9 +137,7 @@ class TestWatchIntervalParameter:
         """Test that watch_interval propagates from AsyncOpenViking to LocalClient"""
         from openviking.client import LocalClient
 
-        with patch.object(
-            LocalClient, "add_resource", new_callable=AsyncMock
-        ) as mock_add_resource:
+        with patch.object(LocalClient, "add_resource", new_callable=AsyncMock) as mock_add_resource:
             mock_add_resource.return_value = {"root_uri": "viking://test"}
 
             from openviking import AsyncOpenViking

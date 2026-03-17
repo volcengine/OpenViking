@@ -6,9 +6,9 @@ Resource Service for OpenViking.
 Provides resource management operations: add_resource, add_skill, wait_processed.
 """
 
-
+import json
 import time
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager
@@ -70,7 +70,21 @@ class ResourceService:
         self._resource_processor = resource_processor
         self._skill_processor = skill_processor
         self._watch_scheduler = watch_scheduler
-        self._watch_manager = watch_scheduler.watch_manager if watch_scheduler else None
+
+    def _get_watch_manager(self) -> Optional["WatchManager"]:
+        if not self._watch_scheduler:
+            return None
+        return self._watch_scheduler.watch_manager
+
+    def _sanitize_watch_processor_kwargs(self, processor_kwargs: Dict[str, Any]) -> Dict[str, Any]:
+        sanitized: Dict[str, Any] = {}
+        for key, value in processor_kwargs.items():
+            try:
+                json.dumps(value, ensure_ascii=False)
+            except TypeError:
+                continue
+            sanitized[key] = value
+        return sanitized
 
     def _ensure_initialized(self) -> None:
         """Ensure all dependencies are initialized."""
@@ -183,10 +197,11 @@ class ResourceService:
                     root_uri=result.get("root_uri"),
                 )
                 get_current_telemetry().set("queue.wait.duration_ms", queue_wait_duration_ms)
-
-            if self._watch_manager and to and not skip_watch_management:
+            watch_manager = self._get_watch_manager()
+            if watch_manager and to and not skip_watch_management:
                 if watch_interval > 0:
                     try:
+                        processor_kwargs = self._sanitize_watch_processor_kwargs(kwargs)
                         await self._handle_watch_task_creation(
                             path=path,
                             to_uri=to,
@@ -194,17 +209,24 @@ class ResourceService:
                             reason=reason,
                             instruction=instruction,
                             watch_interval=watch_interval,
+                            build_index=build_index,
+                            summarize=summarize,
+                            processor_kwargs=processor_kwargs,
                             ctx=ctx,
                         )
                     except ConflictError:
                         raise
                     except Exception as e:
-                        logger.warning(f"[ResourceService] Failed to create watch task for {to}: {e}")
+                        logger.warning(
+                            f"[ResourceService] Failed to create watch task for {to}: {e}"
+                        )
                 else:
                     try:
                         await self._handle_watch_task_cancellation(to_uri=to, ctx=ctx)
                     except Exception as e:
-                        logger.warning(f"[ResourceService] Failed to cancel watch task for {to}: {e}")
+                        logger.warning(
+                            f"[ResourceService] Failed to cancel watch task for {to}: {e}"
+                        )
 
             get_current_telemetry().set(
                 "resource.request.duration_ms",
@@ -229,6 +251,9 @@ class ResourceService:
         reason: str,
         instruction: str,
         watch_interval: float,
+        build_index: bool,
+        summarize: bool,
+        processor_kwargs: Dict[str, Any],
         ctx: RequestContext,
     ) -> None:
         """Handle creation or update of watch task.
@@ -245,10 +270,11 @@ class ResourceService:
         Raises:
             ConflictError: If target URI is already used by another active task
         """
-        if not self._watch_manager:
+        watch_manager = self._get_watch_manager()
+        if not watch_manager:
             return
 
-        existing_task = await self._watch_manager.get_task_by_uri(
+        existing_task = await watch_manager.get_task_by_uri(
             to_uri=to_uri,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
@@ -261,7 +287,7 @@ class ResourceService:
                     f"Please cancel the existing task first.",
                     resource=to_uri,
                 )
-            await self._watch_manager.update_task(
+            await watch_manager.update_task(
                 task_id=existing_task.task_id,
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
@@ -272,13 +298,16 @@ class ResourceService:
                 reason=reason,
                 instruction=instruction,
                 watch_interval=watch_interval,
+                build_index=build_index,
+                summarize=summarize,
+                processor_kwargs=processor_kwargs,
                 is_active=True,
             )
             logger.info(
                 f"[ResourceService] Reactivated and updated watch task {existing_task.task_id} for {to_uri}"
             )
         else:
-            task = await self._watch_manager.create_task(
+            task = await watch_manager.create_task(
                 path=path,
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
@@ -288,6 +317,9 @@ class ResourceService:
                 reason=reason,
                 instruction=instruction,
                 watch_interval=watch_interval,
+                build_index=build_index,
+                summarize=summarize,
+                processor_kwargs=processor_kwargs,
             )
             logger.info(f"[ResourceService] Created watch task {task.task_id} for {to_uri}")
 
@@ -298,17 +330,18 @@ class ResourceService:
             to_uri: Target URI to cancel watch for
             ctx: Request context with user identity
         """
-        if not self._watch_manager:
+        watch_manager = self._get_watch_manager()
+        if not watch_manager:
             return
 
-        existing_task = await self._watch_manager.get_task_by_uri(
+        existing_task = await watch_manager.get_task_by_uri(
             to_uri=to_uri,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
             role=ctx.role.value,
         )
         if existing_task:
-            await self._watch_manager.update_task(
+            await watch_manager.update_task(
                 task_id=existing_task.task_id,
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
@@ -433,10 +466,11 @@ class ResourceService:
             - last_execution_time: Optional[str] (last execution time in ISO format)
             - task_id: Optional[str] (task ID)
         """
-        if not self._watch_manager:
+        watch_manager = self._get_watch_manager()
+        if not watch_manager:
             return None
 
-        task = await self._watch_manager.get_task_by_uri(
+        task = await watch_manager.get_task_by_uri(
             to_uri=to_uri,
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
@@ -448,7 +482,11 @@ class ResourceService:
         return {
             "is_watched": task.is_active,
             "watch_interval": task.watch_interval,
-            "next_execution_time": task.next_execution_time.isoformat() if task.next_execution_time else None,
-            "last_execution_time": task.last_execution_time.isoformat() if task.last_execution_time else None,
+            "next_execution_time": task.next_execution_time.isoformat()
+            if task.next_execution_time
+            else None,
+            "last_execution_time": task.last_execution_time.isoformat()
+            if task.last_execution_time
+            else None,
             "task_id": task.task_id,
         }

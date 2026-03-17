@@ -2,16 +2,25 @@
 # SPDX-License-Identifier: Apache-2.0
 """Unit tests for ResourceService.get_watch_status functionality."""
 
-import pytest
-import pytest_asyncio
 from datetime import datetime, timedelta
 from typing import AsyncGenerator
-from unittest.mock import MagicMock
 
-from openviking.resource.watch_manager import WatchManager, WatchTask
-from openviking.service.resource_service import ResourceService
+import pytest
+import pytest_asyncio
+
+from openviking.resource.watch_manager import WatchManager
 from openviking.server.identity import RequestContext, Role
+from openviking.service.resource_service import ResourceService
 from openviking_cli.session.user_id import UserIdentifier
+
+
+async def get_task_by_uri(service: ResourceService, to_uri: str, ctx: RequestContext):
+    return await service._watch_scheduler.watch_manager.get_task_by_uri(
+        to_uri=to_uri,
+        account_id=ctx.account_id,
+        user_id=ctx.user.user_id,
+        role=ctx.role.value,
+    )
 
 
 class MockResourceProcessor:
@@ -52,13 +61,16 @@ async def watch_manager() -> AsyncGenerator[WatchManager, None]:
 @pytest_asyncio.fixture
 async def resource_service(watch_manager: WatchManager) -> AsyncGenerator[ResourceService, None]:
     """Create ResourceService instance with watch support."""
+    from unittest.mock import MagicMock
+
+    scheduler = MagicMock()
+    scheduler.watch_manager = watch_manager
     service = ResourceService(
         vikingdb=MockVikingDB(),
         viking_fs=MockVikingFS(),
         resource_processor=MockResourceProcessor(),
         skill_processor=MockSkillProcessor(),
-        watch_manager=watch_manager,
-        watch_scheduler=None,
+        watch_scheduler=scheduler,
     )
     yield service
 
@@ -118,15 +130,10 @@ class TestGetWatchStatus:
             watch_interval=60.0,
         )
 
-        task = await resource_service._watch_manager.get_task_by_uri(
-            to_uri=to_uri,
-            account_id=request_context.account_id,
-            user_id=request_context.user.user_id,
-            role=request_context.role.value,
-        )
+        task = await get_task_by_uri(resource_service, to_uri, request_context)
         assert task is not None
 
-        await resource_service._watch_manager.update_execution_time(task.task_id)
+        await resource_service._watch_scheduler.watch_manager.update_execution_time(task.task_id)
 
         status = await resource_service.get_watch_status(to_uri, request_context)
 
@@ -168,16 +175,11 @@ class TestGetWatchStatus:
             watch_interval=30.0,
         )
 
-        task = await resource_service._watch_manager.get_task_by_uri(
-            to_uri=to_uri,
-            account_id=request_context.account_id,
-            user_id=request_context.user.user_id,
-            role=request_context.role.value,
-        )
+        task = await get_task_by_uri(resource_service, to_uri, request_context)
         assert task is not None
         assert task.is_active is True
 
-        await resource_service._watch_manager.update_task(
+        await resource_service._watch_scheduler.watch_manager.update_task(
             task_id=task.task_id,
             account_id=request_context.account_id,
             user_id=request_context.user.user_id,
@@ -197,10 +199,9 @@ class TestGetWatchStatus:
             viking_fs=MockVikingFS(),
             resource_processor=MockResourceProcessor(),
             skill_processor=MockSkillProcessor(),
-            watch_manager=None,
             watch_scheduler=None,
         )
-        
+
         ctx = RequestContext(
             user=UserIdentifier("test_account", "test_user", "test_agent"),
             role=Role.USER,
@@ -235,8 +236,12 @@ class TestGetWatchStatus:
 
         assert isinstance(status["is_watched"], bool)
         assert isinstance(status["watch_interval"], float)
-        assert status["next_execution_time"] is None or isinstance(status["next_execution_time"], str)
-        assert status["last_execution_time"] is None or isinstance(status["last_execution_time"], str)
+        assert status["next_execution_time"] is None or isinstance(
+            status["next_execution_time"], str
+        )
+        assert status["last_execution_time"] is None or isinstance(
+            status["last_execution_time"], str
+        )
         assert isinstance(status["task_id"], str)
 
     @pytest.mark.asyncio

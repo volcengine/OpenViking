@@ -174,7 +174,6 @@ class ResourceProcessor:
         # - temp_dir_path: Temporary directory path (Parser wrote all files)
         # - source_path, source_format
 
-        # ============ Phase 2: Pass to and parent directly to TreeBuilder ============
         # ============ Phase 3: TreeBuilder finalizes from temp (scan + move to AGFS) ============
         try:
             finalize_start = time.perf_counter()
@@ -208,7 +207,34 @@ class ResourceProcessor:
                 pass
 
             return result
+        # ============ Phase 3.5: 首次添加立即落盘 ============
+        root_uri = result.get("root_uri")
+        temp_uri = result.get("temp_uri")  # temp_doc_uri
 
+        if root_uri and temp_uri:
+            viking_fs = get_viking_fs()
+            target_exists = await viking_fs.exists(root_uri, ctx=ctx)
+            if not target_exists:
+
+                dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
+                parent_path = dst_path.rsplit("/", 1)[0] if "/" in dst_path else dst_path
+
+                # 确保父目录存在
+                parent_uri = "/".join(root_uri.rsplit("/", 1)[:-1])
+                if parent_uri:
+                    await viking_fs.mkdir(parent_uri, exist_ok=True, ctx=ctx)
+
+                src_path = viking_fs._uri_to_path(temp_uri, ctx=ctx)
+                viking_fs.agfs.mv(src_path, dst_path)
+
+                # 清理 temp 根目录
+                try:
+                    await viking_fs.delete_temp(parse_result.temp_dir_path, ctx=ctx)
+                except Exception:
+                    pass
+
+                # 更新 temp_uri → DAG 直接在 final 上跑
+                result["temp_uri"] = root_uri
         # ============ Phase 4: Optional Steps ============
         build_index = kwargs.get("build_index", True)
         temp_uri_for_summarize = result.get("temp_uri") or parse_result.temp_dir_path

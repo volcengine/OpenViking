@@ -192,6 +192,14 @@ class SemanticProcessor(DequeueHandlerBase):
         """Check if file content has changed compared to target file."""
         viking_fs = get_viking_fs()
         try:
+            current_stat = await viking_fs.stat(file_path, ctx=ctx)
+            target_stat = await viking_fs.stat(target_file, ctx=ctx)
+            current_size = (
+                current_stat.get("size") if isinstance(current_stat, dict) else None
+            )
+            target_size = target_stat.get("size") if isinstance(target_stat, dict) else None
+            if current_size is not None and target_size is not None and current_size != target_size:
+                return True
             current_content = await viking_fs.read_file(file_path, ctx=ctx)
             target_content = await viking_fs.read_file(target_file, ctx=ctx)
             return current_content != target_content
@@ -233,7 +241,8 @@ class SemanticProcessor(DequeueHandlerBase):
                         target_exists = await viking_fs.exists(
                             msg.target_uri, ctx=self._current_ctx
                         )
-                        if target_exists:
+                        # Check if target URI exists and is not the same as the source URI（避免重复处理）
+                        if target_exists and msg.uri != msg.target_uri:
                             is_incremental = True
                             logger.info(
                                 f"Target URI exists, using incremental update: {msg.target_uri}"
@@ -538,7 +547,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
         await sync_dir(root_uri, target_uri)
         try:
-            await viking_fs.rm(root_uri, recursive=True, ctx=ctx)
+            await viking_fs.delete_temp(root_uri, ctx=ctx)
         except Exception as e:
             logger.error(f"[SyncDiff] Failed to delete root directory {root_uri}: {e}")
         return diff

@@ -7,10 +7,11 @@ Provides scheduled task execution for watch tasks.
 """
 
 import asyncio
+from datetime import datetime
 from typing import Any, Optional, Set
 
 from openviking.resource.watch_manager import WatchManager
-from openviking.server.identity import RequestContext, Role, UserIdentifier
+from openviking.server.identity import RequestContext, Role
 from openviking.service.resource_service import ResourceService
 from openviking_cli.utils import get_logger
 
@@ -33,6 +34,7 @@ class WatchScheduler:
         resource_service: ResourceService,
         viking_fs: Optional[Any] = None,
         check_interval: float = DEFAULT_CHECK_INTERVAL,
+        max_concurrency: int = 4,
     ):
         """Initialize WatchScheduler.
 
@@ -43,7 +45,13 @@ class WatchScheduler:
         """
         self._resource_service = resource_service
         self._viking_fs = viking_fs
+        if check_interval <= 0:
+            raise ValueError("check_interval must be > 0")
+        if max_concurrency <= 0:
+            raise ValueError("max_concurrency must be > 0")
         self._check_interval = check_interval
+        self._max_concurrency = max_concurrency
+        self._semaphore = asyncio.Semaphore(max_concurrency)
 
         self._watch_manager: Optional[WatchManager] = None
         self._running = False
@@ -111,24 +119,25 @@ class WatchScheduler:
         Returns:
             True if task was scheduled, False if task is already executing or not found
         """
+        if not self._watch_manager:
+            logger.warning("[WatchScheduler] WatchManager is not initialized")
+            return False
+
         task = await self._watch_manager.get_task(task_id)
         if not task:
             logger.warning(f"[WatchScheduler] Task {task_id} not found")
             return False
 
-        async with self._lock:
-            if task_id in self._executing_tasks:
-                logger.info(f"[WatchScheduler] Task {task_id} is already executing, skipping")
-                return False
-
-            self._executing_tasks.add(task_id)
+        if not await self._try_mark_executing(task_id):
+            logger.info(f"[WatchScheduler] Task {task_id} is already executing, skipping")
+            return False
 
         try:
-            await self._execute_task(task)
+            async with self._semaphore:
+                await self._execute_task(task)
             return True
         finally:
-            async with self._lock:
-                self._executing_tasks.discard(task_id)
+            await asyncio.shield(self._discard_executing(task_id))
 
     async def _run_scheduler(self) -> None:
         """Background task loop that periodically checks and executes due tasks.
@@ -144,7 +153,16 @@ class WatchScheduler:
                 logger.error(f"[WatchScheduler] Error in scheduler loop: {e}", exc_info=True)
 
             try:
-                await asyncio.sleep(self._check_interval)
+                sleep_seconds = self._check_interval
+                if self._watch_manager:
+                    next_time = await self._watch_manager.get_next_execution_time()
+                    if next_time is not None:
+                        now = datetime.now()
+                        sleep_seconds = min(
+                            self._check_interval,
+                            max(0.0, (next_time - now).total_seconds()),
+                        )
+                await asyncio.sleep(sleep_seconds)
             except asyncio.CancelledError:
                 break
 
@@ -155,6 +173,9 @@ class WatchScheduler:
 
         This method is called periodically by the scheduler loop.
         """
+        if not self._watch_manager:
+            return
+
         due_tasks = await self._watch_manager.get_due_tasks()
 
         if not due_tasks:
@@ -162,21 +183,22 @@ class WatchScheduler:
 
         logger.info(f"[WatchScheduler] Found {len(due_tasks)} due tasks")
 
+        tasks_to_run = []
         for task in due_tasks:
-            async with self._lock:
-                if task.task_id in self._executing_tasks:
-                    logger.info(
-                        f"[WatchScheduler] Task {task.task_id} is already executing, skipping"
-                    )
-                    continue
+            if not await self._try_mark_executing(task.task_id):
+                logger.info(f"[WatchScheduler] Task {task.task_id} is already executing, skipping")
+                continue
+            tasks_to_run.append(task)
 
-                self._executing_tasks.add(task.task_id)
-
+        async def run_one(t) -> None:
             try:
-                await self._execute_task(task)
+                async with self._semaphore:
+                    await self._execute_task(t)
             finally:
-                async with self._lock:
-                    self._executing_tasks.discard(task.task_id)
+                await asyncio.shield(self._discard_executing(t.task_id))
+
+        if tasks_to_run:
+            await asyncio.gather(*(asyncio.create_task(run_one(t)) for t in tasks_to_run))
 
     async def _execute_task(self, task) -> None:
         """Execute a single watch task.
@@ -190,6 +212,7 @@ class WatchScheduler:
         """
         logger.info(f"[WatchScheduler] Executing task {task.task_id} for path {task.path}")
 
+        cancelled = False
         should_deactivate = False
         deactivation_reason = ""
 
@@ -203,7 +226,7 @@ class WatchScheduler:
                 )
             else:
                 from openviking_cli.session.user_id import UserIdentifier
-                
+
                 user = UserIdentifier(
                     account_id=task.account_id,
                     user_id=task.user_id,
@@ -214,6 +237,9 @@ class WatchScheduler:
                     role=Role.ROOT,
                 )
 
+                processor_kwargs = dict(getattr(task, "processor_kwargs", {}) or {})
+                processor_kwargs.pop("build_index", None)
+                processor_kwargs.pop("summarize", None)
                 result = await self._resource_service.add_resource(
                     path=task.path,
                     ctx=ctx,
@@ -221,8 +247,11 @@ class WatchScheduler:
                     parent=task.parent_uri,
                     reason=task.reason,
                     instruction=task.instruction,
+                    build_index=getattr(task, "build_index", True),
+                    summarize=getattr(task, "summarize", False),
                     watch_interval=task.watch_interval,
                     skip_watch_management=True,
+                    **processor_kwargs,
                 )
 
                 logger.info(
@@ -230,12 +259,14 @@ class WatchScheduler:
                     f"result: {result.get('root_uri', 'N/A')}"
                 )
 
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
         except FileNotFoundError as e:
             should_deactivate = True
             deactivation_reason = f"Resource not found: {e}"
             logger.error(
-                f"[WatchScheduler] Task {task.task_id} resource not found: {e}. "
-                "Deactivating task."
+                f"[WatchScheduler] Task {task.task_id} resource not found: {e}. Deactivating task."
             )
         except Exception as e:
             logger.error(
@@ -245,27 +276,41 @@ class WatchScheduler:
 
         finally:
             try:
-                if should_deactivate:
-                    await self._watch_manager.update_task(
-                        task_id=task.task_id,
-                        account_id=task.account_id,
-                        user_id=task.user_id,
-                        role="ROOT",
-                        is_active=False
-                    )
-                    logger.info(
-                        f"[WatchScheduler] Deactivated task {task.task_id}: {deactivation_reason}"
-                    )
-                else:
-                    await self._watch_manager.update_execution_time(task.task_id)
-                    logger.info(
-                        f"[WatchScheduler] Updated execution time for task {task.task_id}"
-                    )
+                if not cancelled:
+                    if should_deactivate:
+                        await asyncio.shield(
+                            self._watch_manager.update_task(
+                                task_id=task.task_id,
+                                account_id=task.account_id,
+                                user_id=task.user_id,
+                                role="ROOT",
+                                is_active=False,
+                            )
+                        )
+                        logger.info(
+                            f"[WatchScheduler] Deactivated task {task.task_id}: {deactivation_reason}"
+                        )
+                    else:
+                        await asyncio.shield(self._watch_manager.update_execution_time(task.task_id))
+                        logger.info(
+                            f"[WatchScheduler] Updated execution time for task {task.task_id}"
+                        )
             except Exception as e:
                 logger.error(
                     f"[WatchScheduler] Failed to update task {task.task_id}: {e}",
                     exc_info=True,
                 )
+
+    async def _try_mark_executing(self, task_id: str) -> bool:
+        async with self._lock:
+            if task_id in self._executing_tasks:
+                return False
+            self._executing_tasks.add(task_id)
+            return True
+
+    async def _discard_executing(self, task_id: str) -> None:
+        async with self._lock:
+            self._executing_tasks.discard(task_id)
 
     def _check_resource_exists(self, path: str) -> bool:
         """Check if a resource path exists.
@@ -276,10 +321,11 @@ class WatchScheduler:
         Returns:
             True if resource exists or is a URL, False otherwise
         """
-        if path.startswith("http://") or path.startswith("https://") or path.startswith("git@"):
+        if path.startswith(("http://", "https://", "git@", "ssh://", "git://")):
             return True
 
         from pathlib import Path
+
         try:
             return Path(path).exists()
         except Exception as e:

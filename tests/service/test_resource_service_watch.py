@@ -2,17 +2,28 @@
 # SPDX-License-Identifier: Apache-2.0
 """Integration tests for ResourceService watch functionality."""
 
+from typing import AsyncGenerator
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 import pytest_asyncio
-from pathlib import Path
-from typing import AsyncGenerator
-from unittest.mock import AsyncMock, MagicMock, patch
 
-from openviking.resource.watch_manager import WatchManager, WatchTask
-from openviking.service.resource_service import ResourceService
+from openviking.resource.watch_manager import WatchManager
 from openviking.server.identity import RequestContext, Role
+from openviking.service.resource_service import ResourceService
 from openviking_cli.exceptions import ConflictError
 from openviking_cli.session.user_id import UserIdentifier
+
+
+async def get_task_by_uri(
+    service: ResourceService, to_uri: str, ctx: RequestContext
+):
+    return await service._watch_scheduler.watch_manager.get_task_by_uri(
+        to_uri=to_uri,
+        account_id=ctx.account_id,
+        user_id=ctx.user.user_id,
+        role=ctx.role.value,
+    )
 
 
 class MockResourceProcessor:
@@ -53,13 +64,14 @@ async def watch_manager() -> AsyncGenerator[WatchManager, None]:
 @pytest_asyncio.fixture
 async def resource_service(watch_manager: WatchManager) -> AsyncGenerator[ResourceService, None]:
     """Create ResourceService instance with watch support."""
+    scheduler = MagicMock()
+    scheduler.watch_manager = watch_manager
     service = ResourceService(
         vikingdb=MockVikingDB(),
         viking_fs=MockVikingFS(),
         resource_processor=MockResourceProcessor(),
         skill_processor=MockSkillProcessor(),
-        watch_manager=watch_manager,
-        watch_scheduler=None,
+        watch_scheduler=scheduler,
     )
     yield service
 
@@ -95,7 +107,7 @@ class TestWatchTaskCreation:
         assert result is not None
         assert "root_uri" in result
 
-        task = await resource_service._watch_manager.get_task_by_uri(to_uri)
+        task = await get_task_by_uri(resource_service, to_uri, request_context)
         assert task is not None
         assert task.path == "/test/path"
         assert task.to_uri == to_uri
@@ -103,6 +115,28 @@ class TestWatchTaskCreation:
         assert task.instruction == "Monitor for changes"
         assert task.watch_interval == 30.0
         assert task.is_active is True
+
+    @pytest.mark.asyncio
+    async def test_watch_task_aligns_processor_params(
+        self, resource_service: ResourceService, request_context: RequestContext
+    ):
+        to_uri = "viking://resources/align_processor_params"
+
+        await resource_service.add_resource(
+            path="/test/path",
+            ctx=request_context,
+            to=to_uri,
+            watch_interval=30.0,
+            build_index=False,
+            summarize=True,
+            custom_option="x",
+        )
+
+        task = await get_task_by_uri(resource_service, to_uri, request_context)
+        assert task is not None
+        assert task.build_index is False
+        assert task.summarize is True
+        assert task.processor_kwargs.get("custom_option") == "x"
 
     @pytest.mark.asyncio
     async def test_create_watch_task_with_default_interval(
@@ -118,7 +152,7 @@ class TestWatchTaskCreation:
             watch_interval=60.0,
         )
 
-        task = await resource_service._watch_manager.get_task_by_uri(to_uri)
+        task = await get_task_by_uri(resource_service, to_uri, request_context)
         assert task is not None
         assert task.watch_interval == 60.0
 
@@ -136,7 +170,7 @@ class TestWatchTaskCreation:
             watch_interval=0,
         )
 
-        task = await resource_service._watch_manager.get_task_by_uri(to_uri)
+        task = await get_task_by_uri(resource_service, to_uri, request_context)
         assert task is None
 
     @pytest.mark.asyncio
@@ -153,7 +187,7 @@ class TestWatchTaskCreation:
             watch_interval=-10,
         )
 
-        task = await resource_service._watch_manager.get_task_by_uri(to_uri)
+        task = await get_task_by_uri(resource_service, to_uri, request_context)
         assert task is None
 
 
@@ -199,13 +233,19 @@ class TestWatchTaskConflict:
             watch_interval=30.0,
         )
 
-        task = await resource_service._watch_manager.get_task_by_uri(to_uri)
+        task = await get_task_by_uri(resource_service, to_uri, request_context)
         assert task is not None
         task_id = task.task_id
 
-        await resource_service._watch_manager.update_task(task_id, is_active=False)
+        await resource_service._watch_scheduler.watch_manager.update_task(
+            task_id=task_id,
+            account_id=request_context.account_id,
+            user_id=request_context.user.user_id,
+            role=request_context.role.value,
+            is_active=False,
+        )
 
-        result = await resource_service.add_resource(
+        await resource_service.add_resource(
             path="/test/path2",
             ctx=request_context,
             to=to_uri,
@@ -213,7 +253,7 @@ class TestWatchTaskConflict:
             watch_interval=45.0,
         )
 
-        task = await resource_service._watch_manager.get_task_by_uri(to_uri)
+        task = await get_task_by_uri(resource_service, to_uri, request_context)
         assert task is not None
         assert task.task_id == task_id
         assert task.path == "/test/path2"
@@ -239,7 +279,7 @@ class TestWatchTaskCancellation:
             watch_interval=30.0,
         )
 
-        task = await resource_service._watch_manager.get_task_by_uri(to_uri)
+        task = await get_task_by_uri(resource_service, to_uri, request_context)
         assert task is not None
         assert task.is_active is True
 
@@ -250,7 +290,7 @@ class TestWatchTaskCancellation:
             watch_interval=0,
         )
 
-        task = await resource_service._watch_manager.get_task_by_uri(to_uri)
+        task = await get_task_by_uri(resource_service, to_uri, request_context)
         assert task is not None
         assert task.is_active is False
 
@@ -275,7 +315,7 @@ class TestWatchTaskCancellation:
             watch_interval=-5,
         )
 
-        task = await resource_service._watch_manager.get_task_by_uri(to_uri)
+        task = await get_task_by_uri(resource_service, to_uri, request_context)
         assert task is not None
         assert task.is_active is False
 
@@ -315,11 +355,17 @@ class TestWatchTaskUpdate:
             watch_interval=30.0,
         )
 
-        task = await resource_service._watch_manager.get_task_by_uri(to_uri)
+        task = await get_task_by_uri(resource_service, to_uri, request_context)
         assert task is not None
         original_task_id = task.task_id
 
-        await resource_service._watch_manager.update_task(task.task_id, is_active=False)
+        await resource_service._watch_scheduler.watch_manager.update_task(
+            task_id=task.task_id,
+            account_id=request_context.account_id,
+            user_id=request_context.user.user_id,
+            role=request_context.role.value,
+            is_active=False,
+        )
 
         await resource_service.add_resource(
             path="/test/path2",
@@ -330,7 +376,7 @@ class TestWatchTaskUpdate:
             watch_interval=60.0,
         )
 
-        task = await resource_service._watch_manager.get_task_by_uri(to_uri)
+        task = await get_task_by_uri(resource_service, to_uri, request_context)
         assert task is not None
         assert task.task_id == original_task_id
         assert task.path == "/test/path2"
@@ -344,20 +390,19 @@ class TestResourceProcessingIndependence:
     """Tests that resource processing is independent of watch task management."""
 
     @pytest.mark.asyncio
-    async def test_resource_added_even_if_watch_fails(
-        self, request_context: RequestContext
-    ):
+    async def test_resource_added_even_if_watch_fails(self, request_context: RequestContext):
         """Test that resource is added even if watch task creation fails."""
         failing_watch_manager = MagicMock(spec=WatchManager)
         failing_watch_manager.get_task_by_uri = AsyncMock(side_effect=Exception("DB error"))
+        scheduler = MagicMock()
+        scheduler.watch_manager = failing_watch_manager
 
         service = ResourceService(
             vikingdb=MockVikingDB(),
             viking_fs=MockVikingFS(),
             resource_processor=MockResourceProcessor(),
             skill_processor=MockSkillProcessor(),
-            watch_manager=failing_watch_manager,
-            watch_scheduler=None,
+            watch_scheduler=scheduler,
         )
 
         result = await service.add_resource(
@@ -371,16 +416,13 @@ class TestResourceProcessingIndependence:
         assert "root_uri" in result
 
     @pytest.mark.asyncio
-    async def test_resource_added_without_watch_manager(
-        self, request_context: RequestContext
-    ):
+    async def test_resource_added_without_watch_manager(self, request_context: RequestContext):
         """Test that resource is added when watch_manager is None."""
         service = ResourceService(
             vikingdb=MockVikingDB(),
             viking_fs=MockVikingFS(),
             resource_processor=MockResourceProcessor(),
             skill_processor=MockSkillProcessor(),
-            watch_manager=None,
             watch_scheduler=None,
         )
 

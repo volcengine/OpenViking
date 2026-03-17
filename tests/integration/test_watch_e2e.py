@@ -4,18 +4,15 @@
 
 import asyncio
 import shutil
-from datetime import datetime, timedelta
 from pathlib import Path
-from typing import AsyncGenerator
 
 import pytest
 import pytest_asyncio
 
 from openviking import AsyncOpenViking
-from openviking.resource.watch_manager import WatchManager
 from openviking.resource.watch_scheduler import WatchScheduler
-from openviking.service.resource_service import ResourceService
 from openviking.server.identity import RequestContext, Role
+from openviking.service.resource_service import ResourceService
 from openviking_cli.exceptions import ConflictError
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -87,9 +84,7 @@ class TestWatchE2EBasicFlow:
         assert status["next_execution_time"] is not None
 
     @pytest.mark.asyncio
-    async def test_query_watch_status(
-        self, e2e_client: AsyncOpenViking, watch_test_file: Path
-    ):
+    async def test_query_watch_status(self, e2e_client: AsyncOpenViking, watch_test_file: Path):
         """Test querying watch status for resources."""
         client = e2e_client
 
@@ -117,9 +112,7 @@ class TestWatchE2EBasicFlow:
         assert unwatched_status is None
 
     @pytest.mark.asyncio
-    async def test_update_watch_interval(
-        self, e2e_client: AsyncOpenViking, watch_test_file: Path
-    ):
+    async def test_update_watch_interval(self, e2e_client: AsyncOpenViking, watch_test_file: Path):
         """Test updating watch interval."""
         client = e2e_client
 
@@ -136,7 +129,13 @@ class TestWatchE2EBasicFlow:
         assert status["watch_interval"] == 30.0
         task_id = status["task_id"]
 
-        await client._service.resources._watch_manager.update_task(task_id, is_active=False)
+        await client._service.resources._watch_scheduler.watch_manager.update_task(
+            task_id=task_id,
+            account_id=client._service.user.account_id,
+            user_id=client._service.user.user_id,
+            role="ROOT",
+            is_active=False,
+        )
 
         await client.add_resource(
             path=str(watch_test_file),
@@ -150,9 +149,7 @@ class TestWatchE2EBasicFlow:
         assert status["task_id"] == task_id
 
     @pytest.mark.asyncio
-    async def test_cancel_watch(
-        self, e2e_client: AsyncOpenViking, watch_test_file: Path
-    ):
+    async def test_cancel_watch(self, e2e_client: AsyncOpenViking, watch_test_file: Path):
         """Test cancelling watch by setting interval to 0 or negative."""
         client = e2e_client
 
@@ -253,9 +250,7 @@ class TestWatchE2ESchedulerExecution:
     """End-to-end tests for scheduler execution."""
 
     @pytest.mark.asyncio
-    async def test_scheduler_executes_watch_task(
-        self, temp_dir: Path, watch_test_file: Path
-    ):
+    async def test_scheduler_executes_watch_task(self, temp_dir: Path, watch_test_file: Path):
         """Test that scheduler executes watch tasks on schedule."""
         execution_count = 0
 
@@ -274,13 +269,11 @@ class TestWatchE2ESchedulerExecution:
 
         resource_service = ResourceService(
             vikingdb=MockVikingDB(),
-            viking_fs=None,
+            viking_fs=object(),
             resource_processor=MockResourceProcessor(),
             skill_processor=MockSkillProcessor(),
-            watch_manager=None,
             watch_scheduler=None,
         )
-
         scheduler = WatchScheduler(
             resource_service=resource_service,
             viking_fs=None,
@@ -308,10 +301,9 @@ class TestWatchE2ESchedulerExecution:
         await watch_manager.clear_all_tasks()
 
     @pytest.mark.asyncio
-    async def test_scheduler_updates_execution_time(
-        self, temp_dir: Path, watch_test_file: Path
-    ):
+    async def test_scheduler_updates_execution_time(self, temp_dir: Path, watch_test_file: Path):
         """Test that scheduler updates execution time after task execution."""
+
         class MockResourceProcessor:
             async def process_resource(self, **kwargs):
                 return {"root_uri": kwargs.get("to", "viking://resources/test")}
@@ -325,10 +317,9 @@ class TestWatchE2ESchedulerExecution:
 
         resource_service = ResourceService(
             vikingdb=MockVikingDB(),
-            viking_fs=None,
+            viking_fs=object(),
             resource_processor=MockResourceProcessor(),
             skill_processor=MockSkillProcessor(),
-            watch_manager=None,
             watch_scheduler=None,
         )
 
@@ -450,22 +441,8 @@ class TestWatchE2EErrorHandling:
     """End-to-end tests for error handling."""
 
     @pytest.mark.asyncio
-    async def test_watch_without_watch_manager(
-        self, temp_dir: Path, watch_test_file: Path
-    ):
+    async def test_watch_without_watch_manager(self, temp_dir: Path, watch_test_file: Path):
         """Test that resource can be added without watch manager."""
-        from openviking.storage.vikingfs import VikingFS
-        from openviking.storage.vikingdb_manager import VikingDBManager
-
-        storage_path = temp_dir / "no_watch_manager_test"
-        storage_path.mkdir(parents=True, exist_ok=True)
-
-        vikingdb = VikingDBManager(path=str(storage_path))
-        await vikingdb.initialize()
-
-        viking_fs = VikingFS(root_path=str(storage_path))
-        await viking_fs.initialize()
-
         class MockResourceProcessor:
             async def process_resource(self, **kwargs):
                 return {"root_uri": kwargs.get("to", "viking://resources/test")}
@@ -475,11 +452,10 @@ class TestWatchE2EErrorHandling:
                 return {"status": "ok"}
 
         resource_service = ResourceService(
-            vikingdb=vikingdb,
-            viking_fs=viking_fs,
+            vikingdb=object(),
+            viking_fs=object(),
             resource_processor=MockResourceProcessor(),
             skill_processor=MockSkillProcessor(),
-            watch_manager=None,
             watch_scheduler=None,
         )
 
@@ -498,13 +474,8 @@ class TestWatchE2EErrorHandling:
         assert result is not None
         assert "root_uri" in result
 
-        await viking_fs.close()
-        await vikingdb.close()
-
     @pytest.mark.asyncio
-    async def test_watch_status_nonexistent_resource(
-        self, e2e_client: AsyncOpenViking
-    ):
+    async def test_watch_status_nonexistent_resource(self, e2e_client: AsyncOpenViking):
         """Test getting watch status for nonexistent resource."""
         client = e2e_client
 

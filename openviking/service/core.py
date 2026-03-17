@@ -11,7 +11,6 @@ from typing import Any, Optional
 
 from openviking.agfs_manager import AGFSManager
 from openviking.core.directories import DirectoryInitializer
-from openviking.resource.watch_manager import WatchManager
 from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.server.identity import RequestContext, Role
 from openviking.service.debug_service import DebugService
@@ -135,7 +134,9 @@ class OpenVikingService:
             logger.warning("AGFS client not initialized, skipping queue manager")
 
         # Initialize VikingDBManager with QueueManager
-        self._vikingdb_manager = VikingDBManager(vectordb_config=config.vectordb, queue_manager=self._queue_manager)
+        self._vikingdb_manager = VikingDBManager(
+            vectordb_config=config.vectordb, queue_manager=self._queue_manager
+        )
 
         # Configure queues if QueueManager is available
         if self._queue_manager:
