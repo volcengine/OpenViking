@@ -7,12 +7,14 @@ Handles coordinated writes and self-iteration processes
 as described in the OpenViking design document.
 """
 
+import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.parse.tree_builder import TreeBuilder
 from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import get_viking_fs
+from openviking.telemetry import get_current_telemetry
 from openviking.utils.embedding_utils import index_resource
 from openviking.utils.summarizer import Summarizer
 from openviking_cli.utils import get_logger
@@ -119,9 +121,11 @@ class ResourceProcessor:
             "errors": [],
             "source_path": None,
         }
+        telemetry = get_current_telemetry()
 
-        # ============ Phase 1: Parse source (Parser generates L0/L1 and writes to temp) ============
+        # ============ Phase 1: Parse source and writes to temp viking fs ============
         try:
+            parse_start = time.perf_counter()
             media_processor = self._get_media_processor()
             viking_fs = get_viking_fs()
             # Use reason as instruction fallback so it influences L0/L1
@@ -149,10 +153,17 @@ class ResourceProcessor:
             if parse_result.warnings:
                 result["errors"].extend(parse_result.warnings)
 
+            telemetry.set(
+                "resource.parse.duration_ms",
+                round((time.perf_counter() - parse_start) * 1000, 3),
+            )
+            telemetry.set("resource.parse.warnings_count", len(parse_result.warnings or []))
+
         except Exception as e:
             result["status"] = "error"
             result["errors"].append(f"Parse error: {e}")
             logger.error(f"[ResourceProcessor] Parse error: {e}")
+            telemetry.set_error("resource_processor.parse", "PROCESSING_ERROR", str(e))
             import traceback
 
             traceback.print_exc()
@@ -166,6 +177,7 @@ class ResourceProcessor:
         # ============ Phase 2: Pass to and parent directly to TreeBuilder ============
         # ============ Phase 3: TreeBuilder finalizes from temp (scan + move to AGFS) ============
         try:
+            finalize_start = time.perf_counter()
             with get_viking_fs().bind_request_context(ctx):
                 context_tree = await self.tree_builder.finalize_from_temp(
                     temp_dir_path=parse_result.temp_dir_path,
@@ -175,13 +187,18 @@ class ResourceProcessor:
                     parent_uri=parent,
                     source_path=parse_result.source_path,
                     source_format=parse_result.source_format,
-                    trigger_semantic=True,
                 )
                 if context_tree and context_tree.root:
                     result["root_uri"] = context_tree.root.uri
+                    result["temp_uri"] = context_tree.root.temp_uri
+            telemetry.set(
+                "resource.finalize.duration_ms",
+                round((time.perf_counter() - finalize_start) * 1000, 3),
+            )
         except Exception as e:
             result["status"] = "error"
             result["errors"].append(f"Finalize from temp error: {e}")
+            telemetry.set_error("resource_processor.finalize", "PROCESSING_ERROR", str(e))
 
             # Cleanup temporary directory on error (via VikingFS)
             try:
@@ -194,6 +211,7 @@ class ResourceProcessor:
 
         # ============ Phase 4: Optional Steps ============
         build_index = kwargs.get("build_index", True)
+        temp_uri_for_summarize = result.get("temp_uri") or parse_result.temp_dir_path
         if summarize:
             # Explicit summarization request.
             # If build_index is ALSO True, we want vectorization.
@@ -204,6 +222,7 @@ class ResourceProcessor:
                     resource_uris=[result["root_uri"]],
                     ctx=ctx,
                     skip_vectorization=skip_vec,
+                    temp_uris=[temp_uri_for_summarize],
                     **kwargs,
                 )
             except Exception as e:
@@ -215,7 +234,11 @@ class ResourceProcessor:
             # We assume this means "Ingest and Index", which requires summarization.
             try:
                 await self._get_summarizer().summarize(
-                    resource_uris=[result["root_uri"]], ctx=ctx, skip_vectorization=False, **kwargs
+                    resource_uris=[result["root_uri"]],
+                    ctx=ctx,
+                    skip_vectorization=False,
+                    temp_uris=[temp_uri_for_summarize],
+                    **kwargs,
                 )
             except Exception as e:
                 logger.error(f"Auto-index failed: {e}")

@@ -99,7 +99,7 @@ class OpenVikingService:
         )
 
         # Initialize embedder
-        self._embedder = config.embedding.get_embedder()
+        self._embedder = config.embedding.get_query_embedder()
         logger.info(
             f"Initialized embedder (dim {config.embedding.dimension}, sparse {self._embedder.is_sparse})"
         )
@@ -135,15 +135,15 @@ class OpenVikingService:
             logger.warning("AGFS client not initialized, skipping queue manager")
 
         # Initialize VikingDBManager with QueueManager
-        self._vikingdb_manager = VikingDBManager(
-            vectordb_config=config.vectordb, queue_manager=self._queue_manager
-        )
+        self._vikingdb_manager = VikingDBManager(vectordb_config=config.vectordb, queue_manager=self._queue_manager)
 
         # Configure queues if QueueManager is available
         if self._queue_manager:
             self._queue_manager.setup_standard_queues(self._vikingdb_manager)
 
-        # Initialize TransactionManager
+        # Initialize TransactionManager (fail-fast if AGFS missing)
+        if self._agfs_client is None:
+            raise RuntimeError("AGFS client not initialized for TransactionManager")
         self._transaction_manager = init_transaction_manager(agfs=self._agfs_client)
 
     @property
@@ -244,7 +244,14 @@ class OpenVikingService:
         enable_recorder = os.environ.get("OPENVIKING_ENABLE_RECORDER", "").lower() == "true"
 
         # Create context collection
+        if self._vikingdb_manager is None:
+            raise RuntimeError("VikingDBManager not initialized")
         await init_context_collection(self._vikingdb_manager)
+
+        if self._agfs_client is None:
+            raise RuntimeError("AGFS client not initialized")
+        if self._embedder is None:
+            raise RuntimeError("Embedder not initialized")
 
         self._viking_fs = init_viking_fs(
             agfs=self._agfs_client,
@@ -269,7 +276,9 @@ class OpenVikingService:
         )
 
         # Initialize processors
-        self._resource_processor = ResourceProcessor(vikingdb=self._vikingdb_manager)
+        self._resource_processor = ResourceProcessor(
+            vikingdb=self._vikingdb_manager,
+        )
         self._skill_processor = SkillProcessor(vikingdb=self._vikingdb_manager)
         self._session_compressor = SessionCompressor(vikingdb=self._vikingdb_manager)
 

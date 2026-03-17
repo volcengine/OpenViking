@@ -26,6 +26,7 @@ from openviking.parse.parsers.powerpoint import PowerPointParser
 from openviking.parse.parsers.text import TextParser
 
 # Import markitdown-inspired parsers
+from openviking.parse.parsers.legacy_doc import LegacyDocParser
 from openviking.parse.parsers.word import WordParser
 from openviking.parse.parsers.zip_parser import ZipParser
 
@@ -62,6 +63,7 @@ class ParserRegistry:
 
         # Register markitdown-inspired parsers (built-in)
         self.register("word", WordParser())
+        self.register("legacy_doc", LegacyDocParser())
         self.register("powerpoint", PowerPointParser())
         self.register("excel", ExcelParser())
         self.register("epub", EPubParser())

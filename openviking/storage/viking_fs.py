@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
 from openviking.pyagfs.exceptions import AGFSHTTPError
 from openviking.server.identity import RequestContext, Role
+from openviking.telemetry import get_current_telemetry
 from openviking.utils.time_utils import format_simplified, get_current_timestamp, parse_iso_datetime
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
@@ -360,6 +361,22 @@ class VikingFS:
         path = self._uri_to_path(uri, ctx=ctx)
         return self.agfs.stat(path)
 
+    async def exists(self, uri: str, ctx: Optional[RequestContext] = None) -> bool:
+        """Check if a URI exists.
+
+        Args:
+            uri: Viking URI
+            ctx: Request context
+
+        Returns:
+            bool: True if the URI exists, False otherwise
+        """
+        try:
+            await self.stat(uri, ctx=ctx)
+            return True
+        except Exception:
+            return False
+
     async def glob(
         self,
         pattern: str,
@@ -606,6 +623,7 @@ class VikingFS:
         Returns:
             FindResult
         """
+        telemetry = get_current_telemetry()
         from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
         from openviking_cli.retrieve import (
             ContextType,
@@ -665,11 +683,13 @@ class VikingFS:
             elif ctx.context_type == ContextType.SKILL:
                 skills.append(ctx)
 
-        return FindResult(
+        find_result = FindResult(
             memories=memories,
             resources=resources,
             skills=skills,
         )
+        telemetry.set("vector.returned", find_result.total)
+        return find_result
 
     async def search(
         self,
@@ -693,6 +713,7 @@ class VikingFS:
         Returns:
             FindResult
         """
+        telemetry = get_current_telemetry()
         from openviking.retrieve.hierarchical_retriever import HierarchicalRetriever
         from openviking.retrieve.intent_analyzer import IntentAnalyzer
         from openviking_cli.retrieve import (
@@ -763,6 +784,7 @@ class VikingFS:
                     )
                     for ctx_type in [ContextType.MEMORY, ContextType.RESOURCE, ContextType.SKILL]
                 ]
+        telemetry.set("search.typed_queries_count", len(typed_queries))
 
         # Concurrent execution
         storage = self._get_vector_store()
@@ -799,13 +821,15 @@ class VikingFS:
                 elif ctx.context_type == ContextType.SKILL:
                     skills.append(ctx)
 
-        return FindResult(
+        find_result = FindResult(
             memories=memories,
             resources=resources,
             skills=skills,
             query_plan=query_plan,
             query_results=query_results,
         )
+        telemetry.set("vector.returned", find_result.total)
+        return find_result
 
     # ========== Relation Management ==========
 
@@ -1078,7 +1102,7 @@ class VikingFS:
     async def _collect_uris(
         self, path: str, recursive: bool, ctx: Optional[RequestContext] = None
     ) -> List[str]:
-        """Recursively collect all URIs (for rm/mv)."""
+        """Recursively collect all URIs (for rm/mv), including directories."""
         uris = []
 
         async def _collect(p: str):
@@ -1089,6 +1113,7 @@ class VikingFS:
                         continue
                     full_path = f"{p}/{name}".replace("//", "/")
                     if entry.get("isDir"):
+                        uris.append(self._path_to_uri(full_path, ctx=ctx))
                         if recursive:
                             await _collect(full_path)
                     else:
@@ -1138,23 +1163,8 @@ class VikingFS:
 
         for uri in uris:
             try:
-                records = await vector_store.get_context_by_uri(
-                    uri=uri,
-                    limit=1,
-                    ctx=self._ctx_or_default(ctx),
-                )
-
-                if not records or "id" not in records[0]:
-                    continue
-
-                record = records[0]
-
                 new_uri = uri.replace(old_base_uri, new_base_uri, 1)
-
-                old_parent_uri = record.get("parent_uri", "")
-                new_parent_uri = (
-                    old_parent_uri.replace(old_base_uri, new_base_uri, 1) if old_parent_uri else ""
-                )
+                new_parent_uri = VikingURI(new_uri).parent.uri
 
                 await vector_store.update_uri_mapping(
                     ctx=self._ctx_or_default(ctx),

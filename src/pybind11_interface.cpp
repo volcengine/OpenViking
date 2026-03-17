@@ -15,7 +15,13 @@
 namespace py = pybind11;
 namespace vdb = vectordb;
 
-PYBIND11_MODULE(engine, m) {
+#ifndef OV_PY_MODULE_NAME
+#define OV_PY_MODULE_NAME engine
+#endif
+
+#define OV_EXPAND_MACRO(name) name
+
+PYBIND11_MODULE(OV_EXPAND_MACRO(OV_PY_MODULE_NAME), m) {
   m.def("init_logging", &vdb::init_logging, "Initialize logging");
 
   py::enum_<vdb::FieldType>(m, "FieldType")

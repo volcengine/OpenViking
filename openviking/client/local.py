@@ -9,6 +9,11 @@ from typing import Any, Dict, List, Optional, Union
 
 from openviking.server.identity import RequestContext, Role
 from openviking.service import OpenVikingService
+from openviking.telemetry import TelemetryRequest
+from openviking.telemetry.execution import (
+    attach_telemetry_payload,
+    run_with_telemetry,
+)
 from openviking_cli.client.base import BaseClient
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import run_async
@@ -62,25 +67,37 @@ class LocalClient(BaseClient):
         instruction: str = "",
         wait: bool = False,
         timeout: Optional[float] = None,
+        build_index: bool = True,
+        summarize: bool = False,
+        telemetry: TelemetryRequest = False,
         watch_interval: float = 0,
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
-        # Validate that only one of 'to' or 'parent' is set
         if to and parent:
             raise ValueError("Cannot specify both 'to' and 'parent' at the same time.")
 
-        return await self._service.resources.add_resource(
-            path=path,
-            ctx=self._ctx,
-            to=to,
-            parent=parent,
-            reason=reason,
-            instruction=instruction,
-            wait=wait,
-            timeout=timeout,
-            watch_interval=watch_interval,
-            **kwargs,
+        execution = await run_with_telemetry(
+            operation="resources.add_resource",
+            telemetry=telemetry,
+            fn=lambda: self._service.resources.add_resource(
+                path=path,
+                ctx=self._ctx,
+                to=to,
+                parent=parent,
+                reason=reason,
+                instruction=instruction,
+                wait=wait,
+                timeout=timeout,
+                build_index=build_index,
+                summarize=summarize,
+                watch_interval=watch_interval,
+                **kwargs,
+            ),
+        )
+        return attach_telemetry_payload(
+            execution.result,
+            execution.telemetry,
         )
 
     async def add_skill(
@@ -88,13 +105,22 @@ class LocalClient(BaseClient):
         data: Any,
         wait: bool = False,
         timeout: Optional[float] = None,
+        telemetry: TelemetryRequest = False,
     ) -> Dict[str, Any]:
         """Add skill to OpenViking."""
-        return await self._service.resources.add_skill(
-            data=data,
-            ctx=self._ctx,
-            wait=wait,
-            timeout=timeout,
+        execution = await run_with_telemetry(
+            operation="resources.add_skill",
+            telemetry=telemetry,
+            fn=lambda: self._service.resources.add_skill(
+                data=data,
+                ctx=self._ctx,
+                wait=wait,
+                timeout=timeout,
+            ),
+        )
+        return attach_telemetry_payload(
+            execution.result,
+            execution.telemetry,
         )
 
     async def wait_processed(self, timeout: Optional[float] = None) -> Dict[str, Any]:
@@ -198,15 +224,24 @@ class LocalClient(BaseClient):
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
+        telemetry: TelemetryRequest = False,
     ) -> Any:
         """Semantic search without session context."""
-        return await self._service.search.find(
-            query=query,
-            ctx=self._ctx,
-            target_uri=target_uri,
-            limit=limit,
-            score_threshold=score_threshold,
-            filter=filter,
+        execution = await run_with_telemetry(
+            operation="search.find",
+            telemetry=telemetry,
+            fn=lambda: self._service.search.find(
+                query=query,
+                ctx=self._ctx,
+                target_uri=target_uri,
+                limit=limit,
+                score_threshold=score_threshold,
+                filter=filter,
+            ),
+        )
+        return attach_telemetry_payload(
+            execution.result,
+            execution.telemetry,
         )
 
     async def search(
@@ -217,20 +252,33 @@ class LocalClient(BaseClient):
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
+        telemetry: TelemetryRequest = False,
     ) -> Any:
         """Semantic search with optional session context."""
-        session = None
-        if session_id:
-            session = self._service.sessions.session(self._ctx, session_id)
-            await session.load()
-        return await self._service.search.search(
-            query=query,
-            ctx=self._ctx,
-            target_uri=target_uri,
-            session=session,
-            limit=limit,
-            score_threshold=score_threshold,
-            filter=filter,
+
+        async def _search():
+            session = None
+            if session_id:
+                session = self._service.sessions.session(self._ctx, session_id)
+                await session.load()
+            return await self._service.search.search(
+                query=query,
+                ctx=self._ctx,
+                target_uri=target_uri,
+                session=session,
+                limit=limit,
+                score_threshold=score_threshold,
+                filter=filter,
+            )
+
+        execution = await run_with_telemetry(
+            operation="search.search",
+            telemetry=telemetry,
+            fn=_search,
+        )
+        return attach_telemetry_payload(
+            execution.result,
+            execution.telemetry,
         )
 
     async def grep(self, uri: str, pattern: str, case_insensitive: bool = False) -> Dict[str, Any]:
@@ -286,9 +334,19 @@ class LocalClient(BaseClient):
         """Delete a session."""
         await self._service.sessions.delete(session_id, self._ctx)
 
-    async def commit_session(self, session_id: str) -> Dict[str, Any]:
+    async def commit_session(
+        self, session_id: str, telemetry: TelemetryRequest = False
+    ) -> Dict[str, Any]:
         """Commit a session (archive and extract memories)."""
-        return await self._service.sessions.commit(session_id, self._ctx)
+        execution = await run_with_telemetry(
+            operation="session.commit",
+            telemetry=telemetry,
+            fn=lambda: self._service.sessions.commit(session_id, self._ctx),
+        )
+        return attach_telemetry_payload(
+            execution.result,
+            execution.telemetry,
+        )
 
     async def add_message(
         self,

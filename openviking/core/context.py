@@ -56,6 +56,7 @@ class Context:
         self,
         uri: str,
         parent_uri: Optional[str] = None,
+        temp_uri: Optional[str] = None,
         is_leaf: bool = False,
         abstract: str = "",
         context_type: Optional[str] = None,
@@ -78,6 +79,7 @@ class Context:
         self.id = id or str(uuid4())
         self.uri = uri
         self.parent_uri = parent_uri
+        self.temp_uri = temp_uri
         self.is_leaf = is_leaf
         self.abstract = abstract
         self.context_type = context_type or self._derive_context_type()
@@ -159,6 +161,7 @@ class Context:
             "id": self.id,
             "uri": self.uri,
             "parent_uri": self.parent_uri,
+            "temp_uri": self.temp_uri,
             "is_leaf": self.is_leaf,
             "abstract": self.abstract,
             "context_type": self.context_type,
@@ -194,6 +197,7 @@ class Context:
         obj = cls(
             uri=data["uri"],
             parent_uri=data.get("parent_uri"),
+            temp_uri=data.get("temp_uri"),
             is_leaf=data.get("is_leaf", False),
             abstract=data.get("abstract", ""),
             context_type=data.get("context_type"),

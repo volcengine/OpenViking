@@ -15,11 +15,13 @@ import pytest_asyncio
 import uvicorn
 
 from openviking import AsyncOpenViking
+from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
 from openviking.server.app import create_app
 from openviking.server.config import ServerConfig
 from openviking.server.identity import RequestContext, Role
 from openviking.service.core import OpenVikingService
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.embedding_config import EmbeddingConfig
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -42,6 +44,27 @@ This is a sample markdown document for server testing.
 - Feature 1: Resource management
 - Feature 2: Semantic search
 """
+
+
+def _install_fake_embedder(monkeypatch):
+    """Use an in-process fake embedder so server tests never hit external APIs."""
+    dimension = 2048
+
+    class FakeEmbedder(DenseEmbedderBase):
+        def __init__(self):
+            super().__init__(model_name="test-fake-embedder")
+
+        def embed(self, text: str) -> EmbedResult:
+            return EmbedResult(dense_vector=[0.1] * dimension)
+
+        def embed_batch(self, texts: list[str]) -> list[EmbedResult]:
+            return [self.embed(text) for text in texts]
+
+        def get_dimension(self) -> int:
+            return dimension
+
+    monkeypatch.setattr(EmbeddingConfig, "get_embedder", lambda self: FakeEmbedder())
+    return FakeEmbedder
 
 
 # ---------------------------------------------------------------------------
@@ -69,12 +92,14 @@ def sample_markdown_file(temp_dir: Path) -> Path:
 
 
 @pytest_asyncio.fixture(scope="function")
-async def service(temp_dir: Path):
+async def service(temp_dir: Path, monkeypatch):
     """Create and initialize an OpenVikingService in embedded mode."""
+    fake_embedder_cls = _install_fake_embedder(monkeypatch)
     svc = OpenVikingService(
         path=str(temp_dir / "data"), user=UserIdentifier.the_default_user("test_user")
     )
     await svc.initialize()
+    svc.viking_fs.query_embedder = fake_embedder_cls()
     yield svc
     await svc.close()
 
@@ -118,14 +143,16 @@ async def client_with_resource(client, service, sample_markdown_file):
 
 
 @pytest_asyncio.fixture(scope="function")
-async def running_server(temp_dir: Path):
+async def running_server(temp_dir: Path, monkeypatch):
     """Start a real uvicorn server in a background thread."""
     await AsyncOpenViking.reset()
+    fake_embedder_cls = _install_fake_embedder(monkeypatch)
 
     svc = OpenVikingService(
         path=str(temp_dir / "sdk_data"), user=UserIdentifier.the_default_user("sdk_test_user")
     )
     await svc.initialize()
+    svc.viking_fs.query_embedder = fake_embedder_cls()
 
     config = ServerConfig()
     fastapi_app = create_app(config=config, service=svc)

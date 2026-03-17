@@ -137,7 +137,8 @@ class TestJinaDenseEmbedder:
         embedder = JinaDenseEmbedder(
             model_name="jina-embeddings-v5-text-small",
             api_key="test-api-key",
-            task="retrieval.query",
+            context="query",
+            query_param="retrieval.query",
         )
         embedder.embed("Hello world")
 
@@ -244,7 +245,8 @@ class TestJinaDenseEmbedder:
         embedder = JinaDenseEmbedder(
             model_name="jina-embeddings-v5-text-small",
             api_key="test-api-key",
-            task="retrieval.passage",
+            context="document",
+            document_param="retrieval.passage",
             late_chunking=True,
         )
         extra_body = embedder._build_extra_body()

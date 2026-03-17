@@ -7,7 +7,7 @@ OpenViking plugin for [OpenCode](https://opencode.ai). Injects your indexed code
 Install the latest OpenViking and configure `~/.openviking/ov.conf`:
 
 ```bash
-pip install openviking --upgrade --force-reinstall
+pip install openviking --upgrade
 ```
 
 ```json
@@ -39,7 +39,7 @@ For other providers (Volcengine, Anthropic, DeepSeek, Ollama, etc.) see the [Ope
 Before starting OpenCode, make sure the OpenViking server is running. If it's not already started:
 
 ```bash
-openviking-server --config ~/.openviking/ov.conf > /tmp/openviking.log 2>&1 &
+openviking-server > /tmp/openviking.log 2>&1 &
 ```
 
 ## Usage in OpenCode

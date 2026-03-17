@@ -71,7 +71,7 @@ class AlreadyExistsError(OpenVikingError):
 
 
 class ConflictError(OpenVikingError):
-    """Resource conflict (e.g., duplicate active watch task)."""
+    """Resource conflict (e.g., locked by another operation)."""
 
     def __init__(self, message: str, resource: Optional[str] = None):
         details = {"resource": resource} if resource else {}

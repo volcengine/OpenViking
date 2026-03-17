@@ -40,7 +40,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--request-timeout-sec",
         type=float,
-        default=30.0,
+        default=3600.0,
         help="Upstream request timeout in seconds",
     )
     parser.add_argument(

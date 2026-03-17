@@ -80,6 +80,14 @@ class VLMBase(ABC):
             prompt_tokens=prompt_tokens,
             completion_tokens=completion_tokens,
         )
+        # Operation-level telemetry aggregation (no-op when telemetry is disabled).
+        try:
+            from openviking.telemetry import get_current_telemetry
+
+            get_current_telemetry().add_token_usage(prompt_tokens, completion_tokens)
+        except Exception:
+            # Telemetry must never break model inference.
+            pass
 
     def get_token_usage(self) -> Dict[str, Any]:
         """Get token usage
