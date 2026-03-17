@@ -1,6 +1,6 @@
-# Transaction Mechanism
+# Path Locks and Crash Recovery
 
-OpenViking's transaction mechanism protects the consistency of core write operations (`rm`, `mv`, `add_resource`, `session.commit`), ensuring that VikingFS, VectorDB, and QueueManager remain consistent even when failures occur.
+OpenViking uses two simple primitives — **path locks** and **redo log** — to protect the consistency of core write operations (`rm`, `mv`, `add_resource`, `session.commit`), ensuring that VikingFS, VectorDB, and QueueManager remain consistent even when failures occur.
 
 ## Design Philosophy
 
@@ -10,11 +10,11 @@ OpenViking is a context database where FS is the source of truth and VectorDB is
 
 ## Design Principles
 
-1. **Transactions cover synchronous operations only**: FS + VectorDB operations run inside transactions; SemanticQueue/EmbeddingQueue enqueue runs after commit (as post_actions) — they are idempotent and retriable
-2. **On by default**: All data operations automatically use transactions; no extra configuration needed
-3. **Write-exclusive**: Path locks ensure only one write transaction can operate on a path at a time
-4. **Undo Log model**: Record reverse operations before each change; replay them in reverse order on failure
-5. **Persistent journal**: Each transaction writes a journal file to AGFS for crash recovery
+1. **Write-exclusive**: Path locks ensure only one write operation can operate on a path at a time
+2. **On by default**: All data operations automatically acquire locks; no extra configuration needed
+3. **Lock as protection**: LockContext acquires locks on entry, releases on exit — no undo/journal/commit semantics
+4. **Only session_memory needs crash recovery**: RedoLog re-executes memory extraction after a process crash
+5. **Queue operations run outside locks**: SemanticQueue/EmbeddingQueue enqueue operations are idempotent and retriable
 
 ## Architecture
 
@@ -22,22 +22,62 @@ OpenViking is a context database where FS is the source of truth and VectorDB is
 Service Layer (rm / mv / add_resource / session.commit)
     |
     v
-+--[TransactionContext async context manager]--+
-|                                              |
-|  1. Create transaction + write journal       |
-|  2. Acquire path lock (poll + timeout)       |
-|  3. Execute operations (FS + VectorDB)       |
-|  4. Record Undo Log (mark completed)         |
-|  5. Commit / Rollback                        |
-|  6. Execute post_actions (enqueue etc)       |
-|  7. Release lock + clean up journal          |
-|                                              |
-|  On exception: reverse Undo Log + unlock     |
-+----------------------------------------------+
++--[LockContext async context manager]--+
+|                                       |
+|  1. Create LockHandle                 |
+|  2. Acquire path lock (poll+timeout)  |
+|  3. Execute operations (FS+VectorDB)  |
+|  4. Release lock                      |
+|                                       |
+|  On exception: auto-release lock,     |
+|  exception propagates unchanged       |
++---------------------------------------+
     |
     v
 Storage Layer (VikingFS, VectorDB, QueueManager)
 ```
+
+## Two Core Components
+
+### Component 1: PathLock + LockManager + LockContext (Path Lock System)
+
+**PathLock** implements file-based distributed locks with two lock types — POINT and SUBTREE — using fencing tokens to prevent TOCTOU races and automatic stale lock detection and cleanup.
+
+**LockHandle** is a lightweight lock holder token:
+
+```python
+@dataclass
+class LockHandle:
+    id: str          # Unique ID used to generate fencing tokens
+    locks: list[str] # Acquired lock file paths
+    created_at: float # Creation time
+```
+
+**LockManager** is a global singleton managing lock lifecycle:
+- Creates/releases LockHandles
+- Background cleanup of leaked locks (in-process safety net)
+- Executes RedoLog recovery on startup
+
+**LockContext** is an async context manager encapsulating the lock/unlock lifecycle:
+
+```python
+from openviking.storage.transaction import LockContext, get_lock_manager
+
+async with LockContext(get_lock_manager(), [path], lock_mode="point") as handle:
+    # Perform operations under lock protection
+    ...
+# Lock automatically released on exit (including exceptions)
+```
+
+### Component 2: RedoLog (Crash Recovery)
+
+Used only for the memory extraction phase of `session.commit`. Writes a marker before the operation, deletes it after success, and scans for leftover markers on startup to redo.
+
+```
+/local/_system/redo/{task_id}/redo.json
+```
+
+Memory extraction is idempotent — re-extracting from the same archive produces the same result.
 
 ## Consistency Issues and Solutions
 
@@ -47,34 +87,44 @@ Storage Layer (VikingFS, VectorDB, QueueManager)
 |---------|----------|
 | Delete file first, then index -> file gone but index remains -> search returns non-existent file | **Reverse order**: delete index first, then file. Index deletion failure -> both file and index intact |
 
-Transaction flow:
+**Locking strategy** (depends on target type):
+- Deleting a **directory**: `lock_mode="subtree"`, locks the directory itself
+- Deleting a **file**: `lock_mode="point"`, locks the file's parent directory
+
+Operation flow:
 
 ```
-1. Begin transaction, acquire lock (lock_mode="subtree")
-2. Snapshot VectorDB records (for rollback recovery)
+1. Check whether target is a directory or file, choose lock mode
+2. Acquire lock
 3. Delete VectorDB index -> immediately invisible to search
 4. Delete FS file
-5. Commit -> release lock -> delete journal
+5. Release lock
 ```
 
-Rollback: Step 4 fails -> restore VectorDB records from snapshot.
+VectorDB deletion fails -> exception thrown, lock auto-released, file and index both intact. FS deletion fails -> VectorDB already deleted but file remains, retry is safe.
 
 ### mv(old_uri, new_uri)
 
 | Problem | Solution |
 |---------|----------|
-| File moved to new path but index points to old path -> search returns old path (doesn't exist) | Transaction wrapper; rollback on failure |
+| File moved to new path but index points to old path -> search returns old path (doesn't exist) | Copy first then update index; clean up copy on failure |
 
-Transaction flow:
+**Locking strategy** (handled automatically via `lock_mode="mv"`):
+- Moving a **directory**: SUBTREE lock on both source path and destination parent
+- Moving a **file**: POINT lock on both source's parent and destination parent
+
+Operation flow:
 
 ```
-1. Begin transaction, acquire lock (lock_mode="mv", SUBTREE on both source and destination for directories)
-2. Move FS file
-3. Update VectorDB URIs
-4. Commit -> release lock -> delete journal
+1. Check whether source is a directory or file, set src_is_dir
+2. Acquire mv lock (internally chooses SUBTREE or POINT based on src_is_dir)
+3. Copy to new location (source still intact, safe)
+4. If directory, remove the lock file carried over by cp into the copy
+5. Update VectorDB URIs
+   - Failure -> clean up copy, source and old index intact, consistent state
+6. Delete source
+7. Release lock
 ```
-
-Rollback: Step 3 fails -> move file back to original location.
 
 ### add_resource
 
@@ -82,99 +132,93 @@ Rollback: Step 3 fails -> move file back to original location.
 |---------|----------|
 | File moved from temp to final directory, then crash -> file exists but never searchable | Two separate paths for first-time add vs incremental update |
 
-First-time add and incremental update are two independent paths:
-
 **First-time add** (target does not exist) — handled in `ResourceProcessor.process_resource` Phase 3.5:
 
 ```
-1. Begin transaction, lock parent_path of final_uri (lock_mode="point")
-2. Record undo: fs_write_new (uri=dst_path)
-3. agfs.mv temp directory -> final location
-4. Commit -> release lock -> delete journal
-5. Clean up temp directory
-6. Enqueue SemanticMsg(uri=final, target_uri=None) -> DAG runs on final, no callback
+1. Acquire lock on parent_path of final_uri (lock_mode="point")
+2. agfs.mv temp directory -> final location
+3. Release lock
+4. Clean up temp directory
+5. Enqueue SemanticMsg -> DAG runs on final
 ```
-
-Crash recovery: Undo deletes the incomplete dst_path; re-run `add_resource` to retry.
 
 **Incremental update** (target already exists) — temp stays in place:
 
 ```
 1. Enqueue SemanticMsg(uri=temp, target_uri=final) -> DAG runs on temp
 2. DAG completion triggers sync_diff_callback or move_temp_to_target_callback
-3. Each VikingFS.rm / VikingFS.mv inside callbacks creates its own independent transaction
+3. Each VikingFS.rm / VikingFS.mv inside callbacks acquires its own lock
 ```
 
-Note: DAG callbacks do NOT wrap operations in an outer TransactionContext. Each `VikingFS.rm` and `VikingFS.mv` has its own transaction internally. An outer lock would conflict with these inner locks (e.g. outer POINT lock on target_path vs inner SUBTREE lock from `rm`) causing deadlock.
+Note: DAG callbacks do NOT wrap operations in an outer lock. Each `VikingFS.rm` and `VikingFS.mv` has its own lock internally. An outer lock would conflict with these inner locks causing deadlock.
 
 ### session.commit()
 
 | Problem | Solution |
 |---------|----------|
-| Messages cleared but archive not written -> conversation data lost | Phase 1 without transaction (incomplete archive has no side effects) + Phase 2 with redo transaction |
+| Messages cleared but archive not written -> conversation data lost | Phase 1 without lock (incomplete archive has no side effects) + Phase 2 with RedoLog |
 
-LLM calls have unpredictable latency (5s~60s+) and cannot be inside a lock-holding transaction. The design splits into two phases:
+LLM calls have unpredictable latency (5s~60s+) and cannot be inside a lock-holding operation. The design splits into two phases:
 
 ```
-Phase 1 — Archive (no transaction, no lock):
+Phase 1 — Archive (no lock):
   1. Generate archive summary (LLM)
   2. Write archive (history/archive_N/messages.jsonl + summaries)
   3. Clear messages.jsonl
   4. Clear in-memory message list
 
-Phase 2 — Memory extraction + write (transaction, lock_mode="none", redo semantics):
-  1. Record init_info (archive_uri, session_uri, user identity)
+Phase 2 — Memory extraction + write (RedoLog):
+  1. Write redo marker (archive_uri, session_uri, user identity)
   2. Extract memories from archived messages (LLM)
   3. Write current message state
   4. Write relations
-  5. Register post_action: enqueue SemanticQueue
-  6. Commit
+  5. Directly enqueue SemanticQueue
+  6. Delete redo marker
 ```
-
-**Redo semantics**: Phase 2 does not register undo log entries. On crash recovery, memory extraction and writing are re-executed from the archive (`_redo_session_memory`) instead of being rolled back.
 
 **Crash recovery analysis**:
 
 | Crash point | State | Recovery action |
 |------------|-------|----------------|
-| During Phase 1 archive write | No transaction | Incomplete archive; next commit scans history/ for index, unaffected |
-| Phase 1 archive complete but messages not cleared | No transaction | Archive complete + messages still present = redundant but safe |
-| During Phase 2 memory extraction/write | Journal EXEC | On startup: `_redo_session_memory` redoes extraction + write + enqueue from archive |
-| After Phase 2 commit | Journal COMMIT | On startup: replay `post_action("enqueue_semantic")` |
+| During Phase 1 archive write | No marker | Incomplete archive; next commit scans history/ for index, unaffected |
+| Phase 1 archive complete but messages not cleared | No marker | Archive complete + messages still present = redundant but safe |
+| During Phase 2 memory extraction/write | Redo marker exists | On startup: redo extraction + write + enqueue from archive |
+| Phase 2 complete | Redo marker deleted | No recovery needed |
 
-## TransactionContext
+## LockContext
 
-`TransactionContext` is an **async** context manager that encapsulates the full transaction lifecycle:
+`LockContext` is an **async** context manager that encapsulates lock acquisition and release:
 
 ```python
-from openviking.storage.transaction import TransactionContext, get_transaction_manager
+from openviking.storage.transaction import LockContext, get_lock_manager
 
-tx_manager = get_transaction_manager()
+lock_manager = get_lock_manager()
 
-async with TransactionContext(tx_manager, "rm", [path], lock_mode="subtree") as tx:
-    # Record undo (call before making changes)
-    seq = tx.record_undo("vectordb_delete", {"record_ids": ids, "records_snapshot": snapshot})
-    # Execute change
-    delete_from_vector_store(uris)
-    # Mark completed
-    tx.mark_completed(seq)
+# Point lock (write operations, semantic processing)
+async with LockContext(lock_manager, [path], lock_mode="point"):
+    # Perform operations...
+    pass
 
-    # Register post-commit action (optional)
-    tx.add_post_action("enqueue_semantic", {"uri": uri, ...})
+# Subtree lock (delete operations)
+async with LockContext(lock_manager, [path], lock_mode="subtree"):
+    # Perform operations...
+    pass
 
-    # Commit
-    await tx.commit()
-# Auto-rollback if commit() not called
+# MV lock (move operations)
+async with LockContext(lock_manager, [src], lock_mode="mv", mv_dst_path=dst):
+    # Perform operations...
+    pass
 ```
 
 **Lock modes**:
 
 | lock_mode | Use case | Behavior |
 |-----------|----------|----------|
-| `point` | Write operations | Lock the specified path; conflicts with any lock on the same path and any SUBTREE lock on ancestors |
+| `point` | Write operations, semantic processing | Lock the specified path; conflicts with any lock on the same path and any SUBTREE lock on ancestors |
 | `subtree` | Delete operations | Lock the subtree root; conflicts with any lock on the same path, any lock on descendants, and any SUBTREE lock on ancestors |
 | `mv` | Move operations | Directory move: SUBTREE lock on both source and destination; File move: POINT lock on source parent and destination (controlled by `src_is_dir`) |
-| `none` | Lock-free operations | Skip lock acquisition, transition directly to EXEC status. Used for session.commit Phase 2 and other scenarios that don't require path mutual exclusion |
+
+**Exception handling**: `__aexit__` always releases locks and does not swallow exceptions. Lock acquisition failure raises `LockAcquisitionError`.
 
 ## Lock Types (POINT vs SUBTREE)
 
@@ -188,33 +232,6 @@ The lock mechanism uses two lock types to handle different conflict patterns:
 - **POINT (P)**: Used for write and semantic-processing operations. Only locks a single directory. Blocks if any ancestor holds a SUBTREE lock.
 - **SUBTREE (S)**: Used for rm and mv operations. Logically covers the entire subtree but only writes **one lock file** at the root. Before acquiring, scans all descendants and ancestor directories for conflicting locks.
 
-## Undo Log
-
-Each transaction maintains an Undo Log recording the reverse action for each step:
-
-| op_type | Forward operation | Rollback action |
-|---------|-------------------|-----------------|
-| `fs_mv` | Move file | Move back |
-| `fs_rm` | Delete file | Skip (irreversible; rm is always the last step by design) |
-| `fs_write_new` | Create new file/directory | Delete |
-| `fs_mkdir` | Create directory | Delete |
-| `vectordb_delete` | Delete index records | Restore from snapshot |
-| `vectordb_upsert` | Insert index records | Delete |
-| `vectordb_update_uri` | Update URI | Restore old value |
-
-Rollback rules: Only entries with `completed=True` are rolled back, in **reverse order**. Each step has independent try-catch (best-effort). During crash recovery, `recover_all=True` also reverses uncompleted entries to clean up partial operations.
-
-### Context Reconstruction
-
-VectorDB rollback operations require a `RequestContext` (containing account_id, user_id, agent_id, role). Since the original context is unavailable during crash recovery, `_ctx_*` fields are serialized into undo params when calling record_undo:
-
-- `_ctx_account_id`: Account ID
-- `_ctx_user_id`: User ID
-- `_ctx_agent_id`: Agent ID
-- `_ctx_role`: Role
-
-During rollback, `_reconstruct_ctx()` rebuilds the context from these fields. If reconstruction fails (missing fields), the VectorDB rollback step is skipped with a warning.
-
 ## Lock Mechanism
 
 ### Lock Protocol
@@ -223,7 +240,7 @@ Lock file path: `{path}/.path.ovlock`
 
 Lock file content (Fencing Token):
 ```
-{transaction_id}:{time_ns}:{lock_type}
+{handle_id}:{time_ns}:{lock_type}
 ```
 
 Where `lock_type` is `P` (POINT) or `S` (SUBTREE).
@@ -233,7 +250,7 @@ Where `lock_type` is `P` (POINT) or `S` (SUBTREE).
 ```
 loop until timeout (poll interval: 200ms):
     1. Check target directory exists
-    2. Check if target directory is locked by another transaction
+    2. Check if target directory is locked by another operation
        - Stale lock? -> remove and retry
        - Active lock? -> wait
     3. Check all ancestor directories for SUBTREE locks
@@ -241,8 +258,8 @@ loop until timeout (poll interval: 200ms):
        - Active lock? -> wait
     4. Write POINT (P) lock file
     5. TOCTOU double-check: re-scan ancestors for SUBTREE locks
-       - Conflict found: compare (timestamp, tx_id)
-       - Later one (larger timestamp/tx_id) backs off (removes own lock) to prevent livelock
+       - Conflict found: compare (timestamp, handle_id)
+       - Later one (larger timestamp/handle_id) backs off (removes own lock) to prevent livelock
        - Wait and retry
     6. Verify lock file ownership (fencing token matches)
     7. Success
@@ -255,19 +272,19 @@ Timeout (default 0 = no-wait) raises LockAcquisitionError
 ```
 loop until timeout (poll interval: 200ms):
     1. Check target directory exists
-    2. Check if target directory is locked by another transaction
+    2. Check if target directory is locked by another operation
        - Stale lock? -> remove and retry
        - Active lock? -> wait
     3. Check all ancestor directories for SUBTREE locks
        - Stale lock? -> remove and retry
        - Active lock? -> wait
-    4. Scan all descendant directories for any locks by other transactions
+    4. Scan all descendant directories for any locks by other operations
        - Stale lock? -> remove and retry
        - Active lock? -> wait
     5. Write SUBTREE (S) lock file (only one file, at the root path)
     6. TOCTOU double-check: re-scan descendants and ancestors
-       - Conflict found: compare (timestamp, tx_id)
-       - Later one (larger timestamp/tx_id) backs off (removes own lock) to prevent livelock
+       - Conflict found: compare (timestamp, handle_id)
+       - Later one (larger timestamp/handle_id) backs off (removes own lock) to prevent livelock
        - Wait and retry
     7. Verify lock file ownership (fencing token matches)
     8. Success
@@ -279,72 +296,33 @@ Timeout (default 0 = no-wait) raises LockAcquisitionError
 
 **Stale lock detection**: PathLock checks the fencing token timestamp. Locks older than `lock_expire` (default 300s) are considered stale and are removed automatically during acquisition.
 
-**Transaction timeout**: TransactionManager checks active transactions every 60 seconds. Transactions with `updated_at` exceeding the transaction timeout (default 3600s) are rolled back.
+**In-process cleanup**: LockManager checks active LockHandles every 60 seconds. Handles created more than 3600 seconds ago are force-released.
 
-## Transaction Journal
-
-Each transaction persists a journal in AGFS:
-
-```
-/local/_system/transactions/{tx_id}/journal.json
-```
-
-Contains: transaction ID, status, lock paths, init_info, undo_log, post_actions.
-
-### Lifecycle
-
-```
-Create transaction -> write journal (INIT)
-Acquire lock       -> update journal (ACQUIRE -> EXEC)
-Execute changes    -> update journal per step (mark undo entry completed)
-Commit             -> update journal (COMMIT + post_actions)
-                   -> execute post_actions -> release locks -> delete journal
-Rollback           -> execute undo log -> release locks -> delete journal
-```
+**Orphan locks**: Lock files left behind after a process crash are automatically removed via stale lock detection when any operation next attempts to acquire a lock on the same path.
 
 ## Crash Recovery
 
-`TransactionManager.start()` automatically scans for residual journals on startup:
+`LockManager.start()` automatically scans for leftover markers in `/local/_system/redo/` on startup:
 
-| Journal status at crash | Recovery action |
-|------------------------|----------------|
-| `COMMIT` + non-empty post_actions | Replay post_actions -> release locks -> delete journal |
-| `COMMIT` + empty post_actions / `RELEASED` | Release locks -> delete journal |
-| `EXEC` / `FAIL` / `RELEASING` (`session_memory` operation) | Redo memory extraction + write from archive (`_redo_session_memory`) -> release locks -> delete journal |
-| `EXEC` / `FAIL` / `RELEASING` (all undo entries completed) | Roll forward (treat as committed, replay post_actions) -> release locks -> delete journal |
-| `EXEC` / `FAIL` / `RELEASING` (other) | Execute undo log rollback (`recover_all=True`) -> release locks -> delete journal |
-| `INIT` / `ACQUIRE` | Clean up orphan locks (using init_info.lock_paths) -> delete journal (no changes were made) |
+| Scenario | Recovery action |
+|----------|----------------|
+| session_memory extraction crash | Redo memory extraction + write + enqueue from archive |
+| Crash while holding lock | Lock file remains in AGFS; stale detection auto-cleans on next acquisition (default 300s expiry) |
+| Crash after enqueue, before worker processes | QueueFS SQLite persistence; worker auto-pulls after restart |
+| Orphan index | Cleaned on L2 on-demand load |
 
 ### Defense Summary
 
 | Failure scenario | Defense | Recovery timing |
 |-----------------|--------|-----------------|
-| Crash during transaction | Journal + undo log rollback | On restart |
-| Crash after commit, before enqueue | Journal post_actions replay | On restart |
-| Crash after enqueue, before worker processes | QueueFS SQLite persistence | Worker auto-pulls after restart |
-| Crash during session.commit Phase 2 | Journal + redo (re-extract memories from archive) | On restart |
-| Orphan index | Cleaned on L2 on-demand load | When user accesses |
-| Crash between lock creation and journal update | init_info records intended lock paths; recovery checks and cleans orphan locks | On restart |
-
-## Transaction State Machine
-
-```
-INIT -> ACQUIRE -> EXEC -> COMMIT -> RELEASING -> RELEASED
-                    |
-                   FAIL -> RELEASING -> RELEASED
-```
-
-- `INIT`: Transaction created, waiting for lock
-- `ACQUIRE`: Acquiring lock
-- `EXEC`: Transaction operations executing
-- `COMMIT`: Committed, post_actions may be pending
-- `FAIL`: Execution failed, entering rollback
-- `RELEASING`: Releasing locks
-- `RELEASED`: Locks released, transaction complete
+| Crash during operation | Lock auto-expires + stale detection | Next acquisition of same path lock |
+| Crash during session.commit Phase 2 | RedoLog marker + redo | On restart |
+| Crash after enqueue, before worker | QueueFS SQLite persistence | Worker restart |
+| Orphan index | L2 on-demand load cleanup | When user accesses |
 
 ## Configuration
 
-The transaction mechanism is enabled by default with no extra configuration needed. **The default behavior is no-wait**: if the path is locked, `LockAcquisitionError` is raised immediately. To allow wait/retry, configure the `storage.transaction` section:
+Path locks are enabled by default with no extra configuration needed. **The default behavior is no-wait**: if the path is locked, `LockAcquisitionError` is raised immediately. To allow wait/retry, configure the `storage.transaction` section:
 
 ```json
 {
@@ -364,7 +342,7 @@ The transaction mechanism is enabled by default with no extra configuration need
 
 ### QueueFS Persistence
 
-The transaction mechanism relies on QueueFS using the SQLite backend to ensure enqueued tasks survive process restarts. This is the default configuration and requires no manual setup.
+The lock mechanism relies on QueueFS using the SQLite backend to ensure enqueued tasks survive process restarts. This is the default configuration and requires no manual setup.
 
 ## Related Documentation
 

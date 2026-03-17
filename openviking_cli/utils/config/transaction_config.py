@@ -29,9 +29,4 @@ class TransactionConfig(BaseModel):
         ),
     )
 
-    max_parallel_locks: int = Field(
-        default=8,
-        description="Maximum parallel lock operations during recursive rm/mv.",
-    )
-
     model_config = {"extra": "forbid"}

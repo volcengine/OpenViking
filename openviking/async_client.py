@@ -97,10 +97,10 @@ class AsyncOpenViking:
                 await cls._instance.close()
                 cls._instance = None
 
-        # Also reset transaction manager singleton
-        from openviking.storage.transaction import reset_transaction_manager
+        # Also reset lock manager singleton
+        from openviking.storage.transaction import reset_lock_manager
 
-        reset_transaction_manager()
+        reset_lock_manager()
 
     # ============= Session methods =============
 

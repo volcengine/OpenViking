@@ -289,16 +289,13 @@ class VikingFS:
         This method is idempotent: deleting a non-existent file succeeds
         after cleaning up any orphan index records.
 
-        Wrapped in a transaction: deletes VectorDB records first, then FS files.
-        On rollback, VectorDB records are restored from snapshot.
+        Acquires a path lock, deletes VectorDB records, then FS files.
         """
-        from openviking.storage.transaction import TransactionContext, get_transaction_manager
+        from openviking.storage.transaction import LockContext, get_lock_manager
 
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         target_uri = self._path_to_uri(path, ctx=ctx)
-
-        tx_manager = get_transaction_manager()
 
         # Check existence and determine lock strategy
         try:
@@ -320,36 +317,11 @@ class VikingFS:
             lock_paths = [parent]
             lock_mode = "point"
 
-        async with TransactionContext(tx_manager, "rm", lock_paths, lock_mode=lock_mode) as tx:
-            # Collect URIs inside the lock to avoid race conditions
+        async with LockContext(get_lock_manager(), lock_paths, lock_mode=lock_mode):
             uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx)
             uris_to_delete.append(target_uri)
-
-            # Snapshot vector records for rollback
-            records_snapshot = await self._snapshot_vector_records(uris_to_delete, ctx=ctx)
-
-            # Step 1: Delete from VectorDB first
-            real_ctx = self._ctx_or_default(ctx)
-            seq_vdb = tx.record_undo(
-                "vectordb_delete",
-                {
-                    "uris": uris_to_delete,
-                    "records_snapshot": records_snapshot,
-                    "_ctx_account_id": real_ctx.account_id,
-                    "_ctx_user_id": real_ctx.user.user_id,
-                    "_ctx_agent_id": real_ctx.user.agent_id,
-                    "_ctx_role": real_ctx.role.value,
-                },
-            )
             await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
-            tx.mark_completed(seq_vdb)
-
-            # Step 2: Delete from FS
-            seq_fs = tx.record_undo("fs_rm", {"uri": path, "recursive": recursive})
             result = self.agfs.rm(path, recursive=recursive)
-            tx.mark_completed(seq_fs)
-
-            await tx.commit()
             return result
 
     async def mv(
@@ -361,18 +333,16 @@ class VikingFS:
         """Move file/directory + recursively update vector index.
 
         Implemented as cp + rm to avoid lock files being carried by FS mv.
-        On rollback, the copy is deleted and the source remains intact.
+        On VectorDB update failure the copy is cleaned up so the source stays intact.
         """
         from openviking.pyagfs.helpers import cp as agfs_cp
-        from openviking.storage.transaction import TransactionContext, get_transaction_manager
+        from openviking.storage.transaction import LockContext, get_lock_manager
 
         self._ensure_access(old_uri, ctx)
         self._ensure_access(new_uri, ctx)
         old_path = self._uri_to_path(old_uri, ctx=ctx)
         new_path = self._uri_to_path(new_uri, ctx=ctx)
         target_uri = self._path_to_uri(old_path, ctx=ctx)
-
-        tx_manager = get_transaction_manager()
 
         # Verify source exists and determine type before locking
         try:
@@ -383,20 +353,17 @@ class VikingFS:
 
         dst_parent = new_path.rsplit("/", 1)[0] if "/" in new_path else new_path
 
-        async with TransactionContext(
-            tx_manager,
-            "mv",
+        async with LockContext(
+            get_lock_manager(),
             [old_path],
             lock_mode="mv",
             mv_dst_path=dst_parent,
             src_is_dir=is_dir,
-        ) as tx:
-            # Collect URIs inside the lock to avoid race conditions
+        ):
             uris_to_move = await self._collect_uris(old_path, recursive=True, ctx=ctx)
             uris_to_move.append(target_uri)
 
-            # Step 1: Copy source to destination
-            seq_cp = tx.record_undo("fs_write_new", {"uri": new_path})
+            # Copy source to destination (source still intact)
             try:
                 agfs_cp(self.agfs, old_path, new_path, recursive=is_dir)
             except Exception as e:
@@ -404,9 +371,8 @@ class VikingFS:
                     await self._delete_from_vector_store(uris_to_move, ctx=ctx)
                     logger.info(f"[VikingFS] mv source not found, cleaned orphan index: {old_uri}")
                 raise
-            tx.mark_completed(seq_cp)
 
-            # Step 2: Remove carried lock file from the copy (directory only)
+            # Remove carried lock file from the copy (directory only)
             if is_dir:
                 carried_lock = new_path.rstrip("/") + "/.path.ovlock"
                 try:
@@ -414,34 +380,18 @@ class VikingFS:
                 except Exception:
                     pass
 
-            # Step 3: Update VectorDB URIs
-            old_uri_stripped = old_uri.rstrip("/")
-            old_parent_uri = (
-                old_uri_stripped.rsplit("/", 1)[0] + "/" if "/" in old_uri_stripped else ""
-            )
-            real_ctx = self._ctx_or_default(ctx)
-            seq_vdb = tx.record_undo(
-                "vectordb_update_uri",
-                {
-                    "old_uri": old_uri,
-                    "new_uri": new_uri,
-                    "old_parent_uri": old_parent_uri,
-                    "uris": uris_to_move,
-                    "_ctx_account_id": real_ctx.account_id,
-                    "_ctx_user_id": real_ctx.user.user_id,
-                    "_ctx_agent_id": real_ctx.user.agent_id,
-                    "_ctx_role": real_ctx.role.value,
-                },
-            )
-            await self._update_vector_store_uris(uris_to_move, old_uri, new_uri, ctx=ctx)
-            tx.mark_completed(seq_vdb)
+            # Update VectorDB URIs (on failure, clean up the copy)
+            try:
+                await self._update_vector_store_uris(uris_to_move, old_uri, new_uri, ctx=ctx)
+            except Exception:
+                try:
+                    self.agfs.rm(new_path, recursive=is_dir)
+                except Exception:
+                    pass
+                raise
 
-            # Step 4: Remove source (lock file gets deleted along with it)
-            seq_rm = tx.record_undo("fs_rm", {"uri": old_path, "recursive": is_dir})
+            # Delete source
             self.agfs.rm(old_path, recursive=is_dir)
-            tx.mark_completed(seq_rm)
-
-            await tx.commit()
             return {}
 
     async def grep(
@@ -1131,7 +1081,7 @@ class VikingFS:
             return True
 
         scope = parts[0]
-        if scope in {"resources", "temp", "transactions"}:
+        if scope in {"resources", "temp"}:
             return True
         if scope == "_system":
             return False
@@ -1205,33 +1155,6 @@ class VikingFS:
         return None
 
     # ========== Vector Sync Helper Methods ==========
-
-    async def _snapshot_vector_records(
-        self, uris: List[str], ctx: Optional[RequestContext] = None
-    ) -> List[Dict[str, Any]]:
-        """Snapshot vector records for the given URIs (for rollback).
-
-        Queries VectorDB metadata (without embedding vectors) so that
-        records can be restored during rollback.
-        """
-        vector_store = self._get_vector_store()
-        if not vector_store:
-            return []
-
-        real_ctx = self._ctx_or_default(ctx)
-        snapshots = []
-        for uri in uris:
-            try:
-                records = await vector_store.get_context_by_uri(
-                    uri=uri,
-                    limit=10,
-                    ctx=real_ctx,
-                )
-                if records:
-                    snapshots.extend(records)
-            except Exception as e:
-                logger.debug(f"[VikingFS] Failed to snapshot vector record for {uri}: {e}")
-        return snapshots
 
     async def _collect_uris(
         self, path: str, recursive: bool, ctx: Optional[RequestContext] = None

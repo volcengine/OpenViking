@@ -640,15 +640,14 @@ For startup and deployment details see [Deployment](./03-deployment.md), for aut
 
 ## storage.transaction Section
 
-The transaction mechanism is enabled by default and usually requires no configuration. **The default behavior is no-wait**: if the target path is already locked by another transaction, the operation fails immediately with `LockAcquisitionError`. Set `lock_timeout` to a positive value to allow polling/retry.
+Path locks are enabled by default and usually require no configuration. **The default behavior is no-wait**: if the target path is already locked by another operation, the operation fails immediately with `LockAcquisitionError`. Set `lock_timeout` to a positive value to allow polling/retry.
 
 ```json
 {
   "storage": {
     "transaction": {
       "lock_timeout": 5.0,
-      "lock_expire": 300.0,
-      "max_parallel_locks": 8
+      "lock_expire": 300.0
     }
   }
 }
@@ -658,9 +657,8 @@ The transaction mechanism is enabled by default and usually requires no configur
 |-----------|------|-------------|---------|
 | `lock_timeout` | float | Path lock acquisition timeout (seconds). `0` = fail immediately if locked (default). `> 0` = wait/retry up to this many seconds, then raise `LockAcquisitionError`. | `0.0` |
 | `lock_expire` | float | Stale lock expiry threshold (seconds). Locks held longer than this by a crashed process are force-released. | `300.0` |
-| `max_parallel_locks` | int | Max parallel locks during recursive locking for rm/mv operations | `8` |
 
-For details on the transaction mechanism, see [Transaction Mechanism](../concepts/09-transaction.md).
+For details on the lock mechanism, see [Path Locks and Crash Recovery](../concepts/09-transaction.md).
 
 ## Full Schema
 
@@ -698,8 +696,7 @@ For details on the transaction mechanism, see [Transaction Mechanism](../concept
     },
     "transaction": {
       "lock_timeout": 0.0,
-      "lock_expire": 300.0,
-      "max_parallel_locks": 8
+      "lock_expire": 300.0
     },
     "vectordb": {
       "backend": "local|remote",

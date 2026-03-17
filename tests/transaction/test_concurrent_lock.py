@@ -5,8 +5,8 @@
 import asyncio
 import uuid
 
+from openviking.storage.transaction.lock_handle import LockHandle
 from openviking.storage.transaction.path_lock import PathLock
-from openviking.storage.transaction.transaction_record import TransactionRecord
 
 
 class TestConcurrentLock:
@@ -17,7 +17,7 @@ class TestConcurrentLock:
         results = {}
 
         async def holder(tx_id):
-            tx = TransactionRecord(id=tx_id)
+            tx = LockHandle(id=tx_id)
             ok = await lock.acquire_point(test_dir, tx, timeout=5.0)
             if ok:
                 await asyncio.sleep(0.3)
@@ -45,7 +45,7 @@ class TestConcurrentLock:
         child_result = {}
 
         async def parent_holder():
-            tx = TransactionRecord(id="tx-sub-parent")
+            tx = LockHandle(id="tx-sub-parent")
             ok = await lock.acquire_subtree(test_dir, tx, timeout=5.0)
             assert ok is True
             parent_acquired.set()
@@ -55,7 +55,7 @@ class TestConcurrentLock:
 
         async def child_worker():
             await parent_acquired.wait()
-            tx = TransactionRecord(id="tx-sub-child")
+            tx = LockHandle(id="tx-sub-child")
             ok = await lock.acquire_point(child, tx, timeout=5.0)
             child_result["ok"] = ok
             child_result["after_release"] = parent_released.is_set()
@@ -80,7 +80,7 @@ class TestConcurrentLock:
         parent_result = {}
 
         async def child_holder():
-            tx = TransactionRecord(id="tx-rev-child")
+            tx = LockHandle(id="tx-rev-child")
             ok = await lock.acquire_point(child, tx, timeout=5.0)
             assert ok is True
             child_acquired.set()
@@ -90,7 +90,7 @@ class TestConcurrentLock:
 
         async def parent_worker():
             await child_acquired.wait()
-            tx = TransactionRecord(id="tx-rev-parent")
+            tx = LockHandle(id="tx-rev-parent")
             ok = await lock.acquire_subtree(test_dir, tx, timeout=5.0)
             parent_result["ok"] = ok
             parent_result["after_release"] = child_released.is_set()

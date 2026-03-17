@@ -285,17 +285,13 @@ class SemanticProcessor(DequeueHandlerBase):
     ) -> None:
         """Process single directory, generate .abstract.md and .overview.md."""
         from openviking.storage.errors import LockAcquisitionError
-        from openviking.storage.transaction import TransactionContext, get_transaction_manager
+        from openviking.storage.transaction import LockContext, get_lock_manager
 
         viking_fs = get_viking_fs()
         dir_path = viking_fs._uri_to_path(uri, ctx=self._current_ctx)
 
         try:
-            # No undo entries recorded: semantic files (.overview.md / .abstract.md) are
-            # regenerable, so residual writes after a crash are acceptable.
-            async with TransactionContext(
-                get_transaction_manager(), "semantic", [dir_path], lock_mode="point"
-            ) as tx:
+            async with LockContext(get_lock_manager(), [dir_path], lock_mode="point"):
                 # 1. Collect .abstract.md from subdirectories
                 children_abstracts = await self._collect_children_abstracts(children_uris)
 
@@ -335,8 +331,6 @@ class SemanticProcessor(DequeueHandlerBase):
                 for result in results:
                     if isinstance(result, Exception):
                         logger.error(f"Vectorization failed: {result}", exc_info=True)
-
-                await tx.commit()
         except LockAcquisitionError:
             logger.info(f"[SemanticProcessor] {uri} does not exist or is locked, skipping")
 

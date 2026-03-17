@@ -3,7 +3,7 @@ import time
 from typing import Optional, Tuple
 
 from openviking.pyagfs import AGFSClient
-from openviking.storage.transaction.transaction_record import TransactionRecord
+from openviking.storage.transaction.lock_handle import LockOwner
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -19,8 +19,8 @@ LOCK_TYPE_SUBTREE = "S"
 _POLL_INTERVAL = 0.2
 
 
-def _make_fencing_token(tx_id: str, lock_type: str = LOCK_TYPE_POINT) -> str:
-    return f"{tx_id}:{time.time_ns()}:{lock_type}"
+def _make_fencing_token(owner_id: str, lock_type: str = LOCK_TYPE_POINT) -> str:
+    return f"{owner_id}:{time.time_ns()}:{lock_type}"
 
 
 def _parse_fencing_token(token: str) -> Tuple[str, int, str]:
@@ -29,20 +29,20 @@ def _parse_fencing_token(token: str) -> Tuple[str, int, str]:
         rest = token[:-2]
         idx = rest.rfind(":")
         if idx >= 0:
-            tx_id_part = rest[:idx]
+            owner_id_part = rest[:idx]
             ts_part = rest[idx + 1 :]
             try:
-                return tx_id_part, int(ts_part), lock_type
+                return owner_id_part, int(ts_part), lock_type
             except ValueError:
                 pass
         return rest, 0, lock_type
 
     if ":" in token:
         idx = token.rfind(":")
-        tx_id_part = token[:idx]
+        owner_id_part = token[:idx]
         ts_part = token[idx + 1 :]
         try:
-            return tx_id_part, int(ts_part), LOCK_TYPE_POINT
+            return owner_id_part, int(ts_part), LOCK_TYPE_POINT
         except ValueError:
             pass
 
@@ -76,25 +76,25 @@ class PathLock:
         except Exception:
             return None
 
-    async def _is_locked_by_other(self, lock_path: str, transaction_id: str) -> bool:
+    async def _is_locked_by_other(self, lock_path: str, owner_id: str) -> bool:
         token = self._read_token(lock_path)
         if token is None:
             return False
         lock_owner, _, _ = _parse_fencing_token(token)
-        return lock_owner != transaction_id
+        return lock_owner != owner_id
 
     async def _create_lock_file(
-        self, lock_path: str, transaction_id: str, lock_type: str = LOCK_TYPE_POINT
+        self, lock_path: str, owner_id: str, lock_type: str = LOCK_TYPE_POINT
     ) -> None:
-        token = _make_fencing_token(transaction_id, lock_type)
+        token = _make_fencing_token(owner_id, lock_type)
         self._agfs.write(lock_path, token.encode("utf-8"))
 
-    async def _verify_lock_ownership(self, lock_path: str, transaction_id: str) -> bool:
+    async def _verify_lock_ownership(self, lock_path: str, owner_id: str) -> bool:
         token = self._read_token(lock_path)
         if token is None:
             return False
         lock_owner, _, _ = _parse_fencing_token(token)
-        return lock_owner == transaction_id
+        return lock_owner == owner_id
 
     async def _remove_lock_file(self, lock_path: str) -> bool:
         try:
@@ -115,19 +115,19 @@ class PathLock:
         age = (time.time_ns() - ts) / 1e9
         return age > expire_seconds
 
-    async def _check_ancestors_for_subtree(self, path: str, exclude_tx_id: str) -> Optional[str]:
+    async def _check_ancestors_for_subtree(self, path: str, exclude_owner_id: str) -> Optional[str]:
         parent = self._get_parent_path(path)
         while parent:
             lock_path = self._get_lock_path(parent)
             token = self._read_token(lock_path)
             if token is not None:
                 owner_id, _, lock_type = _parse_fencing_token(token)
-                if owner_id != exclude_tx_id and lock_type == LOCK_TYPE_SUBTREE:
+                if owner_id != exclude_owner_id and lock_type == LOCK_TYPE_SUBTREE:
                     return lock_path
             parent = self._get_parent_path(parent)
         return None
 
-    async def _scan_descendants_for_locks(self, path: str, exclude_tx_id: str) -> Optional[str]:
+    async def _scan_descendants_for_locks(self, path: str, exclude_owner_id: str) -> Optional[str]:
         try:
             entries = self._agfs.ls(path)
             if not isinstance(entries, list):
@@ -145,19 +145,17 @@ class PathLock:
                 token = self._read_token(subdir_lock)
                 if token is not None:
                     owner_id, _, _ = _parse_fencing_token(token)
-                    if owner_id != exclude_tx_id:
+                    if owner_id != exclude_owner_id:
                         return subdir_lock
-                result = await self._scan_descendants_for_locks(subdir, exclude_tx_id)
+                result = await self._scan_descendants_for_locks(subdir, exclude_owner_id)
                 if result:
                     return result
         except Exception as e:
             logger.warning(f"Failed to scan descendants of {path}: {e}")
         return None
 
-    async def acquire_point(
-        self, path: str, transaction: TransactionRecord, timeout: float = 0.0
-    ) -> bool:
-        transaction_id = transaction.id
+    async def acquire_point(self, path: str, owner: LockOwner, timeout: float = 0.0) -> bool:
+        owner_id = owner.id
         lock_path = self._get_lock_path(path)
         deadline = asyncio.get_running_loop().time() + timeout
 
@@ -168,7 +166,7 @@ class PathLock:
             return False
 
         while True:
-            if await self._is_locked_by_other(lock_path, transaction_id):
+            if await self._is_locked_by_other(lock_path, owner_id):
                 if self.is_lock_stale(lock_path, self._lock_expire):
                     logger.warning(f"[POINT] Removing stale lock: {lock_path}")
                     await self._remove_lock_file(lock_path)
@@ -179,7 +177,7 @@ class PathLock:
                 await asyncio.sleep(_POLL_INTERVAL)
                 continue
 
-            ancestor_conflict = await self._check_ancestors_for_subtree(path, transaction_id)
+            ancestor_conflict = await self._check_ancestors_for_subtree(path, owner_id)
             if ancestor_conflict:
                 if self.is_lock_stale(ancestor_conflict, self._lock_expire):
                     logger.warning(
@@ -196,22 +194,22 @@ class PathLock:
                 continue
 
             try:
-                await self._create_lock_file(lock_path, transaction_id, LOCK_TYPE_POINT)
+                await self._create_lock_file(lock_path, owner_id, LOCK_TYPE_POINT)
             except Exception as e:
                 logger.error(f"[POINT] Failed to create lock file: {e}")
                 return False
 
             backed_off = False
-            conflict_after = await self._check_ancestors_for_subtree(path, transaction_id)
+            conflict_after = await self._check_ancestors_for_subtree(path, owner_id)
             if conflict_after:
                 their_token = self._read_token(conflict_after)
                 if their_token:
-                    their_tx_id, their_ts, _ = _parse_fencing_token(their_token)
+                    their_owner_id, their_ts, _ = _parse_fencing_token(their_token)
                     my_token = self._read_token(lock_path)
                     _, my_ts, _ = (
                         _parse_fencing_token(my_token) if my_token else ("", 0, LOCK_TYPE_POINT)
                     )
-                    if (my_ts, transaction_id) > (their_ts, their_tx_id):
+                    if (my_ts, owner_id) > (their_ts, their_owner_id):
                         logger.debug(f"[POINT] Backing off (livelock guard) on {path}")
                         await self._remove_lock_file(lock_path)
                         backed_off = True
@@ -222,21 +220,19 @@ class PathLock:
                 await asyncio.sleep(_POLL_INTERVAL)
                 continue
 
-            if not await self._verify_lock_ownership(lock_path, transaction_id):
+            if not await self._verify_lock_ownership(lock_path, owner_id):
                 logger.debug(f"[POINT] Lock ownership verification failed: {path}")
                 if asyncio.get_running_loop().time() >= deadline:
                     return False
                 await asyncio.sleep(_POLL_INTERVAL)
                 continue
 
-            transaction.add_lock(lock_path)
+            owner.add_lock(lock_path)
             logger.debug(f"[POINT] Lock acquired: {lock_path}")
             return True
 
-    async def acquire_subtree(
-        self, path: str, transaction: TransactionRecord, timeout: float = 0.0
-    ) -> bool:
-        transaction_id = transaction.id
+    async def acquire_subtree(self, path: str, owner: LockOwner, timeout: float = 0.0) -> bool:
+        owner_id = owner.id
         lock_path = self._get_lock_path(path)
         deadline = asyncio.get_running_loop().time() + timeout
 
@@ -247,7 +243,7 @@ class PathLock:
             return False
 
         while True:
-            if await self._is_locked_by_other(lock_path, transaction_id):
+            if await self._is_locked_by_other(lock_path, owner_id):
                 if self.is_lock_stale(lock_path, self._lock_expire):
                     logger.warning(f"[SUBTREE] Removing stale lock: {lock_path}")
                     await self._remove_lock_file(lock_path)
@@ -258,8 +254,8 @@ class PathLock:
                 await asyncio.sleep(_POLL_INTERVAL)
                 continue
 
-            # Check ancestor paths for SUBTREE locks held by other transactions
-            ancestor_conflict = await self._check_ancestors_for_subtree(path, transaction_id)
+            # Check ancestor paths for SUBTREE locks held by other owners
+            ancestor_conflict = await self._check_ancestors_for_subtree(path, owner_id)
             if ancestor_conflict:
                 if self.is_lock_stale(ancestor_conflict, self._lock_expire):
                     logger.warning(
@@ -275,7 +271,7 @@ class PathLock:
                 await asyncio.sleep(_POLL_INTERVAL)
                 continue
 
-            desc_conflict = await self._scan_descendants_for_locks(path, transaction_id)
+            desc_conflict = await self._scan_descendants_for_locks(path, owner_id)
             if desc_conflict:
                 if self.is_lock_stale(desc_conflict, self._lock_expire):
                     logger.warning(f"[SUBTREE] Removing stale descendant lock: {desc_conflict}")
@@ -290,24 +286,24 @@ class PathLock:
                 continue
 
             try:
-                await self._create_lock_file(lock_path, transaction_id, LOCK_TYPE_SUBTREE)
+                await self._create_lock_file(lock_path, owner_id, LOCK_TYPE_SUBTREE)
             except Exception as e:
                 logger.error(f"[SUBTREE] Failed to create lock file: {e}")
                 return False
 
             backed_off = False
-            conflict_after = await self._scan_descendants_for_locks(path, transaction_id)
+            conflict_after = await self._scan_descendants_for_locks(path, owner_id)
             if not conflict_after:
-                conflict_after = await self._check_ancestors_for_subtree(path, transaction_id)
+                conflict_after = await self._check_ancestors_for_subtree(path, owner_id)
             if conflict_after:
                 their_token = self._read_token(conflict_after)
                 if their_token:
-                    their_tx_id, their_ts, _ = _parse_fencing_token(their_token)
+                    their_owner_id, their_ts, _ = _parse_fencing_token(their_token)
                     my_token = self._read_token(lock_path)
                     _, my_ts, _ = (
                         _parse_fencing_token(my_token) if my_token else ("", 0, LOCK_TYPE_SUBTREE)
                     )
-                    if (my_ts, transaction_id) > (their_ts, their_tx_id):
+                    if (my_ts, owner_id) > (their_ts, their_owner_id):
                         logger.debug(f"[SUBTREE] Backing off (livelock guard) on {path}")
                         await self._remove_lock_file(lock_path)
                         backed_off = True
@@ -318,14 +314,14 @@ class PathLock:
                 await asyncio.sleep(_POLL_INTERVAL)
                 continue
 
-            if not await self._verify_lock_ownership(lock_path, transaction_id):
+            if not await self._verify_lock_ownership(lock_path, owner_id):
                 logger.debug(f"[SUBTREE] Lock ownership verification failed: {path}")
                 if asyncio.get_running_loop().time() >= deadline:
                     return False
                 await asyncio.sleep(_POLL_INTERVAL)
                 continue
 
-            transaction.add_lock(lock_path)
+            owner.add_lock(lock_path)
             logger.debug(f"[SUBTREE] Lock acquired: {lock_path}")
             return True
 
@@ -333,35 +329,35 @@ class PathLock:
         self,
         src_path: str,
         dst_path: str,
-        transaction: TransactionRecord,
+        owner: LockOwner,
         timeout: float = 0.0,
         src_is_dir: bool = True,
     ) -> bool:
         if src_is_dir:
-            if not await self.acquire_subtree(src_path, transaction, timeout=timeout):
+            if not await self.acquire_subtree(src_path, owner, timeout=timeout):
                 logger.warning(f"[MV] Failed to acquire SUBTREE lock on source: {src_path}")
                 return False
-            if not await self.acquire_subtree(dst_path, transaction, timeout=timeout):
+            if not await self.acquire_subtree(dst_path, owner, timeout=timeout):
                 logger.warning(f"[MV] Failed to acquire SUBTREE lock on destination: {dst_path}")
-                await self.release(transaction)
+                await self.release(owner)
                 return False
         else:
             src_parent = src_path.rsplit("/", 1)[0] if "/" in src_path else src_path
-            if not await self.acquire_point(src_parent, transaction, timeout=timeout):
+            if not await self.acquire_point(src_parent, owner, timeout=timeout):
                 logger.warning(f"[MV] Failed to acquire POINT lock on source parent: {src_parent}")
                 return False
-            if not await self.acquire_point(dst_path, transaction, timeout=timeout):
+            if not await self.acquire_point(dst_path, owner, timeout=timeout):
                 logger.warning(f"[MV] Failed to acquire POINT lock on destination: {dst_path}")
-                await self.release(transaction)
+                await self.release(owner)
                 return False
 
         logger.debug(f"[MV] Locks acquired: {src_path} -> {dst_path}")
         return True
 
-    async def release(self, transaction: TransactionRecord) -> None:
-        lock_count = len(transaction.locks)
-        for lock_path in reversed(transaction.locks):
+    async def release(self, owner: LockOwner) -> None:
+        lock_count = len(owner.locks)
+        for lock_path in reversed(owner.locks):
             await self._remove_lock_file(lock_path)
-            transaction.remove_lock(lock_path)
+            owner.remove_lock(lock_path)
 
-        logger.debug(f"Released {lock_count} locks for transaction {transaction.id}")
+        logger.debug(f"Released {lock_count} locks for owner {owner.id}")

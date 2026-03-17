@@ -40,6 +40,9 @@ class _FakeProcessor:
     def _extract_abstract_from_overview(self, overview):
         return "abstract"
 
+    def _enforce_size_limits(self, overview, abstract):
+        return overview, abstract
+
     async def _vectorize_directory(
         self, uri, context_type, abstract, overview, ctx=None, semantic_msg_id=None
     ):
@@ -79,19 +82,18 @@ async def test_semantic_dag_stats_collects_nodes(monkeypatch):
         lambda: _DummyTracker(),
     )
 
-    # Mock transaction layer: TransactionContext as no-op passthrough
-    mock_tx = MagicMock()
-    mock_tx.commit = AsyncMock()
+    # Mock lock layer: LockContext as no-op passthrough
+    mock_handle = MagicMock()
     monkeypatch.setattr(
-        "openviking.storage.transaction.context_manager.TransactionContext.__aenter__",
-        AsyncMock(return_value=mock_tx),
+        "openviking.storage.transaction.lock_context.LockContext.__aenter__",
+        AsyncMock(return_value=mock_handle),
     )
     monkeypatch.setattr(
-        "openviking.storage.transaction.context_manager.TransactionContext.__aexit__",
+        "openviking.storage.transaction.lock_context.LockContext.__aexit__",
         AsyncMock(return_value=False),
     )
     monkeypatch.setattr(
-        "openviking.storage.transaction.get_transaction_manager",
+        "openviking.storage.transaction.get_lock_manager",
         lambda: MagicMock(),
     )
 

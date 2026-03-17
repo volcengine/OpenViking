@@ -226,10 +226,12 @@ class Session:
     async def commit_async(self) -> Dict[str, Any]:
         """Async commit session: two-phase approach.
 
-        Phase 1 (Archive, no transaction): Write archive, clear messages.
-        Phase 2 (Memory, transaction with redo semantics): Extract memories, write, enqueue.
+        Phase 1 (Archive): Write archive, clear messages.
+        Phase 2 (Memory, redo-log protected): Extract memories, write, enqueue.
         """
-        from openviking.storage.transaction import TransactionContext, get_transaction_manager
+        import uuid
+
+        from openviking.storage.transaction import get_lock_manager
 
         result = {
             "session_id": self.session_id,
@@ -243,9 +245,7 @@ class Session:
             get_current_telemetry().set("memory.extracted", 0)
             return result
 
-        tx_manager = get_transaction_manager()
-
-        # ===== Preparation (no transaction) =====
+        # ===== Preparation =====
         self._compression.compression_index += 1
         messages_to_archive = self._messages.copy()
 
@@ -253,7 +253,7 @@ class Session:
         archive_abstract = self._extract_abstract_from_summary(summary)
         archive_overview = summary
 
-        # ===== Phase 1: Archive (no transaction, no lock) =====
+        # ===== Phase 1: Archive (no lock) =====
         archive_uri = (
             f"{self._session_uri}/history/archive_{self._compression.compression_index:03d}"
         )
@@ -273,54 +273,57 @@ class Session:
             f"history/archive_{self._compression.compression_index:03d}/"
         )
 
-        # ===== Phase 2: Memory extraction + write (transaction, redo semantics) =====
-        async with TransactionContext(
-            tx_manager,
-            "session_memory",
-            [],
-            lock_mode="none",
-        ) as tx:
-            # Store redo info so _recover_one can redo from archive on crash
-            tx.record.init_info.update(
-                {
-                    "archive_uri": archive_uri,
-                    "session_uri": self._session_uri,
-                    "account_id": self.ctx.account_id,
-                    "user_id": self.ctx.user.user_id,
-                    "agent_id": self.ctx.user.agent_id,
-                    "role": self.ctx.role.value,
-                }
-            )
+        # ===== Phase 2: Memory extraction + write (redo-log protected) =====
+        redo_log = get_lock_manager().redo_log
+        task_id = str(uuid.uuid4())
+        redo_log.write_pending(
+            task_id,
+            {
+                "archive_uri": archive_uri,
+                "session_uri": self._session_uri,
+                "account_id": self.ctx.account_id,
+                "user_id": self.ctx.user.user_id,
+                "agent_id": self.ctx.user.agent_id,
+                "role": self.ctx.role.value,
+            },
+        )
 
-            if self._session_compressor:
-                logger.info(
-                    f"Starting memory extraction from {len(messages_to_archive)} archived messages"
-                )
-                memories = await self._session_compressor.extract_long_term_memories(
-                    messages=messages_to_archive,
-                    user=self.user,
-                    session_id=self.session_id,
-                    ctx=self.ctx,
-                )
-                logger.info(f"Extracted {len(memories)} memories")
-                result["memories_extracted"] = len(memories)
-                self._stats.memories_extracted += len(memories)
-                get_current_telemetry().set("memory.extracted", len(memories))
-
-            await self._write_to_agfs_async(self._messages)
-            await self._write_relations_async()
-            tx.add_post_action(
-                "enqueue_semantic",
-                {
-                    "uri": self._session_uri,
-                    "context_type": "memory",
-                    "account_id": self.ctx.account_id,
-                    "user_id": self.ctx.user.user_id,
-                    "agent_id": self.ctx.user.agent_id,
-                    "role": self.ctx.role.value,
-                },
+        if self._session_compressor:
+            logger.info(
+                f"Starting memory extraction from {len(messages_to_archive)} archived messages"
             )
-            await tx.commit()
+            memories = await self._session_compressor.extract_long_term_memories(
+                messages=messages_to_archive,
+                user=self.user,
+                session_id=self.session_id,
+                ctx=self.ctx,
+            )
+            logger.info(f"Extracted {len(memories)} memories")
+            result["memories_extracted"] = len(memories)
+            self._stats.memories_extracted += len(memories)
+            get_current_telemetry().set("memory.extracted", len(memories))
+
+        await self._write_to_agfs_async(self._messages)
+        await self._write_relations_async()
+
+        # Enqueue semantic processing directly
+        from openviking.storage.queuefs import get_queue_manager
+        from openviking.storage.queuefs.semantic_msg import SemanticMsg
+
+        queue_manager = get_queue_manager()
+        if queue_manager:
+            msg = SemanticMsg(
+                uri=self._session_uri,
+                context_type="memory",
+                account_id=self.ctx.account_id,
+                user_id=self.ctx.user.user_id,
+                agent_id=self.ctx.user.agent_id,
+                role=self.ctx.role.value,
+            )
+            semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC)
+            await semantic_queue.enqueue(msg)
+
+        redo_log.mark_done(task_id)
 
         # Update active_count
         active_count_updated = await self._update_active_counts_async()

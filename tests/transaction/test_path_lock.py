@@ -5,6 +5,7 @@
 import time
 from unittest.mock import MagicMock
 
+from openviking.storage.transaction.lock_handle import LockHandle
 from openviking.storage.transaction.path_lock import (
     LOCK_FILE_NAME,
     LOCK_TYPE_POINT,
@@ -13,7 +14,6 @@ from openviking.storage.transaction.path_lock import (
     _make_fencing_token,
     _parse_fencing_token,
 )
-from openviking.storage.transaction.transaction_record import TransactionRecord
 
 
 class TestFencingToken:
@@ -55,20 +55,20 @@ class TestFencingToken:
 class TestPathLockStale:
     def test_is_lock_stale_no_file(self):
         agfs = MagicMock()
-        agfs.cat.side_effect = Exception("not found")
+        agfs.read.side_effect = Exception("not found")
         lock = PathLock(agfs)
         assert lock.is_lock_stale("/test/.path.ovlock") is True
 
     def test_is_lock_stale_legacy_token(self):
         agfs = MagicMock()
-        agfs.cat.return_value = b"tx-old-format"
+        agfs.read.return_value = b"tx-old-format"
         lock = PathLock(agfs)
         assert lock.is_lock_stale("/test/.path.ovlock") is True
 
     def test_is_lock_stale_recent_token(self):
         agfs = MagicMock()
         token = _make_fencing_token("tx-1")
-        agfs.cat.return_value = token.encode("utf-8")
+        agfs.read.return_value = token.encode("utf-8")
         lock = PathLock(agfs)
         assert lock.is_lock_stale("/test/.path.ovlock", expire_seconds=300.0) is False
 
@@ -78,7 +78,7 @@ class TestPathLockBehavior:
 
     async def test_acquire_point_creates_lock_file(self, agfs_client, test_dir):
         lock = PathLock(agfs_client)
-        tx = TransactionRecord(id="tx-point-1")
+        tx = LockHandle(id="tx-point-1")
 
         ok = await lock.acquire_point(test_dir, tx, timeout=3.0)
         assert ok is True
@@ -93,7 +93,7 @@ class TestPathLockBehavior:
 
     async def test_acquire_subtree_creates_lock_file(self, agfs_client, test_dir):
         lock = PathLock(agfs_client)
-        tx = TransactionRecord(id="tx-subtree-1")
+        tx = LockHandle(id="tx-subtree-1")
 
         ok = await lock.acquire_subtree(test_dir, tx, timeout=3.0)
         assert ok is True
@@ -108,7 +108,7 @@ class TestPathLockBehavior:
 
     async def test_acquire_point_dir_not_found(self, agfs_client):
         lock = PathLock(agfs_client)
-        tx = TransactionRecord(id="tx-no-dir")
+        tx = LockHandle(id="tx-no-dir")
 
         ok = await lock.acquire_point("/local/nonexistent-path-xyz", tx, timeout=0.5)
         assert ok is False
@@ -116,30 +116,32 @@ class TestPathLockBehavior:
 
     async def test_release_removes_lock_file(self, agfs_client, test_dir):
         lock = PathLock(agfs_client)
-        tx = TransactionRecord(id="tx-release-1")
+        tx = LockHandle(id="tx-release-1")
 
         await lock.acquire_point(test_dir, tx, timeout=3.0)
         lock_path = f"{test_dir}/{LOCK_FILE_NAME}"
 
         await lock.release(tx)
 
-        # Lock file should be gone
+        # Lock file should be gone (use stat, not cat — cat returns b'' for deleted files)
         try:
-            agfs_client.cat(lock_path)
+            agfs_client.stat(lock_path)
             raise AssertionError("Lock file should have been removed")
+        except AssertionError:
+            raise
         except Exception:
             pass  # Expected: file not found
 
     async def test_sequential_acquire_works(self, agfs_client, test_dir):
         lock = PathLock(agfs_client)
 
-        tx1 = TransactionRecord(id="tx-seq-1")
+        tx1 = LockHandle(id="tx-seq-1")
         ok1 = await lock.acquire_point(test_dir, tx1, timeout=3.0)
         assert ok1 is True
 
         await lock.release(tx1)
 
-        tx2 = TransactionRecord(id="tx-seq-2")
+        tx2 = LockHandle(id="tx-seq-2")
         ok2 = await lock.acquire_point(test_dir, tx2, timeout=3.0)
         assert ok2 is True
 
@@ -153,11 +155,11 @@ class TestPathLockBehavior:
         agfs_client.mkdir(child)
 
         lock = PathLock(agfs_client)
-        tx_parent = TransactionRecord(id="tx-parent-subtree")
+        tx_parent = LockHandle(id="tx-parent-subtree")
         ok = await lock.acquire_subtree(test_dir, tx_parent, timeout=3.0)
         assert ok is True
 
-        tx_child = TransactionRecord(id="tx-child-point")
+        tx_child = LockHandle(id="tx-child-point")
         blocked = await lock.acquire_point(child, tx_child, timeout=0.5)
         assert blocked is False
 
@@ -171,11 +173,11 @@ class TestPathLockBehavior:
         agfs_client.mkdir(child)
 
         lock = PathLock(agfs_client)
-        tx_child = TransactionRecord(id="tx-desc-point")
+        tx_child = LockHandle(id="tx-desc-point")
         ok = await lock.acquire_point(child, tx_child, timeout=3.0)
         assert ok is True
 
-        tx_parent = TransactionRecord(id="tx-parent-sub")
+        tx_parent = LockHandle(id="tx-parent-sub")
         blocked = await lock.acquire_subtree(test_dir, tx_parent, timeout=0.5)
         assert blocked is False
 
@@ -191,7 +193,7 @@ class TestPathLockBehavior:
         agfs_client.mkdir(dst)
 
         lock = PathLock(agfs_client)
-        tx = TransactionRecord(id="tx-mv-1")
+        tx = LockHandle(id="tx-mv-1")
         ok = await lock.acquire_mv(src, dst, tx, timeout=3.0)
         assert ok is True
 
@@ -223,8 +225,8 @@ class TestPathLockBehavior:
         agfs_client.mkdir(dir_b)
 
         lock = PathLock(agfs_client)
-        tx_a = TransactionRecord(id="tx-sib-a")
-        tx_b = TransactionRecord(id="tx-sib-b")
+        tx_a = LockHandle(id="tx-sib-a")
+        tx_b = LockHandle(id="tx-sib-b")
 
         ok_a = await lock.acquire_point(dir_a, tx_a, timeout=3.0)
         ok_b = await lock.acquire_point(dir_b, tx_b, timeout=3.0)
@@ -251,7 +253,7 @@ class TestPathLockBehavior:
 
         # New transaction should succeed by auto-removing the stale lock
         lock = PathLock(agfs_client, lock_expire=300.0)
-        tx = TransactionRecord(id="tx-new-owner")
+        tx = LockHandle(id="tx-new-owner")
         ok = await lock.acquire_point(target, tx, timeout=2.0)
         assert ok is True
 
@@ -276,7 +278,7 @@ class TestPathLockBehavior:
         agfs_client.write(parent_lock, stale_token.encode("utf-8"))
 
         lock = PathLock(agfs_client, lock_expire=300.0)
-        tx = TransactionRecord(id="tx-child-new")
+        tx = LockHandle(id="tx-child-new")
         ok = await lock.acquire_point(child, tx, timeout=2.0)
         assert ok is True
 
@@ -295,12 +297,12 @@ class TestPathLockBehavior:
         agfs_client.mkdir(target)
 
         lock = PathLock(agfs_client)
-        tx1 = TransactionRecord(id="tx-hold")
+        tx1 = LockHandle(id="tx-hold")
         ok1 = await lock.acquire_point(target, tx1, timeout=3.0)
         assert ok1 is True
 
         # Second acquire with timeout=0 should fail immediately
-        tx2 = TransactionRecord(id="tx-blocked")
+        tx2 = LockHandle(id="tx-blocked")
         t0 = time.monotonic()
         ok2 = await lock.acquire_point(target, tx2, timeout=0.0)
         elapsed = time.monotonic() - t0
@@ -318,11 +320,11 @@ class TestPathLockBehavior:
         agfs_client.mkdir(target)
 
         lock = PathLock(agfs_client)
-        tx1 = TransactionRecord(id="tx-sub1")
+        tx1 = LockHandle(id="tx-sub1")
         ok1 = await lock.acquire_subtree(target, tx1, timeout=3.0)
         assert ok1 is True
 
-        tx2 = TransactionRecord(id="tx-sub2")
+        tx2 = LockHandle(id="tx-sub2")
         ok2 = await lock.acquire_subtree(target, tx2, timeout=0.5)
         assert ok2 is False
 

@@ -1,17 +1,17 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 from .base_observer import BaseObserver
+from .lock_observer import LockObserver
 from .queue_observer import QueueObserver
 from .retrieval_observer import RetrievalObserver
-from .transaction_observer import TransactionObserver
 from .vikingdb_observer import VikingDBObserver
 from .vlm_observer import VLMObserver
 
 __all__ = [
     "BaseObserver",
+    "LockObserver",
     "QueueObserver",
     "RetrievalObserver",
-    "TransactionObserver",
     "VikingDBObserver",
     "VLMObserver",
 ]

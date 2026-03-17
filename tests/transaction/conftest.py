@@ -11,9 +11,9 @@ import pytest
 from openviking.agfs_manager import AGFSManager
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.collection_schemas import CollectionSchemas
-from openviking.storage.transaction.journal import TransactionJournal
+from openviking.storage.transaction.lock_manager import LockManager
 from openviking.storage.transaction.path_lock import LOCK_FILE_NAME, _make_fencing_token
-from openviking.storage.transaction.transaction_manager import TransactionManager
+from openviking.storage.transaction.redo_log import RedoLog
 from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
 from openviking.utils.agfs_utils import create_agfs_client
 from openviking_cli.session.user_id import UserIdentifier
@@ -55,7 +55,6 @@ def _mkdir_ok(agfs_client, path):
 
 @pytest.fixture
 def test_dir(agfs_client):
-    """每个测试独享隔离目录，自动清理。"""
     path = f"/local/tx-tests/{uuid.uuid4().hex}"
     _mkdir_ok(agfs_client, "/local")
     _mkdir_ok(agfs_client, "/local/tx-tests")
@@ -102,20 +101,20 @@ def request_ctx():
 
 
 # ---------------------------------------------------------------------------
-# Transaction fixtures
+# Lock fixtures
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture
-def tx_manager(agfs_client, vector_store):
-    """Function-scoped TransactionManager with real backends."""
-    return TransactionManager(agfs_client=agfs_client, vector_store=vector_store)
+def lock_manager(agfs_client):
+    """Function-scoped LockManager with real AGFS backend."""
+    return LockManager(agfs=agfs_client, lock_timeout=1.0, lock_expire=1.0)
 
 
 @pytest.fixture
-def journal(agfs_client):
-    """Function-scoped TransactionJournal with real AGFS backend."""
-    return TransactionJournal(agfs_client)
+def redo_log(agfs_client):
+    """Function-scoped RedoLog with real AGFS backend."""
+    return RedoLog(agfs_client)
 
 
 # ---------------------------------------------------------------------------

@@ -506,7 +506,7 @@ class SemanticDagExecutor:
 
     async def _overview_task(self, dir_uri: str) -> None:
         from openviking.storage.errors import LockAcquisitionError
-        from openviking.storage.transaction import TransactionContext, get_transaction_manager
+        from openviking.storage.transaction import LockContext, get_lock_manager
 
         node = self._nodes.get(dir_uri)
         if not node:
@@ -538,18 +538,13 @@ class SemanticDagExecutor:
 
             dir_path = self._viking_fs._uri_to_path(dir_uri, ctx=self._ctx)
             try:
-                # No undo entries recorded: semantic files (.overview.md / .abstract.md) are
-                # regenerable, so residual writes after a crash are acceptable.
-                async with TransactionContext(
-                    get_transaction_manager(), "semantic_dag", [dir_path], lock_mode="point"
-                ) as tx:
+                async with LockContext(get_lock_manager(), [dir_path], lock_mode="point"):
                     await self._viking_fs.write_file(
                         f"{dir_uri}/.overview.md", overview, ctx=self._ctx
                     )
                     await self._viking_fs.write_file(
                         f"{dir_uri}/.abstract.md", abstract, ctx=self._ctx
                     )
-                    await tx.commit()
             except LockAcquisitionError:
                 logger.info(f"[SemanticDag] {dir_uri} does not exist or is locked, skipping")
 

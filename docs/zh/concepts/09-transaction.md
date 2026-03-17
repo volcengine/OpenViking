@@ -1,6 +1,6 @@
-# 事务机制
+# 路径锁与崩溃恢复
 
-OpenViking 的事务机制保护核心写操作（`rm`、`mv`、`add_resource`、`session.commit`）的一致性，确保 VikingFS、VectorDB、QueueManager 三个子系统在故障时不会出现数据不一致。
+OpenViking 通过**路径锁**和**Redo Log** 两个简单原语保护核心写操作（`rm`、`mv`、`add_resource`、`session.commit`）的一致性，确保 VikingFS、VectorDB、QueueManager 三个子系统在故障时不会出现数据不一致。
 
 ## 设计哲学
 
@@ -10,34 +10,73 @@ OpenViking 是上下文数据库，FS 是源数据，VectorDB 是派生索引。
 
 ## 设计原则
 
-1. **事务只覆盖同步部分**：FS + VectorDB 操作在事务内；SemanticQueue/EmbeddingQueue 的 enqueue 在事务提交后执行（post_actions），它们是幂等的，失败可重试
-2. **默认生效**：所有数据操作命令自动开启事务机制，用户无需额外配置
-3. **写互斥**：通过路径锁保证同一路径同一时间只有一个写事务
-4. **Undo Log 模型**：变更前记录反向操作，失败时反序执行回滚
-5. **事务日志持久化**：每个事务在 AGFS 中写入 journal 文件，支持崩溃恢复
+1. **写互斥**：通过路径锁保证同一路径同一时间只有一个写操作
+2. **默认生效**：所有数据操作命令自动加锁，用户无需额外配置
+3. **锁即保护**：进入 LockContext 时加锁，退出时释放，没有 undo/journal/commit 语义
+4. **仅 session_memory 需要崩溃恢复**：通过 RedoLog 在进程崩溃后重做记忆提取
+5. **Queue 操作在锁外执行**：SemanticQueue/EmbeddingQueue 的 enqueue 是幂等的，失败可重试
 
 ## 架构
 
 ```
 Service Layer (rm / mv / add_resource / session.commit)
-    │
-    ▼
-┌──[TransactionContext 异步上下文管理器]──┐
-│                                         │
-│  1. 创建事务 + 写 journal               │
-│  2. 获取路径锁（轮询 + 超时）           │
-│  3. 执行操作（FS + VectorDB）           │
-│  4. 记录 Undo Log（每步完成后标记）     │
-│  5. Commit / Rollback                   │
-│  6. 执行 post_actions（enqueue 等）     │
-│  7. 释放锁 + 清理 journal               │
-│                                         │
-│  异常时：反序执行 Undo Log → 释放锁     │
-└─────────────────────────────────────────┘
-    │
-    ▼
+    |
+    v
++--[LockContext 异步上下文管理器]-------+
+|                                       |
+|  1. 创建 LockHandle                  |
+|  2. 获取路径锁（轮询 + 超时）        |
+|  3. 执行操作（FS + VectorDB）        |
+|  4. 释放锁                           |
+|                                       |
+|  异常时：自动释放锁，异常原样传播    |
++---------------------------------------+
+    |
+    v
 Storage Layer (VikingFS, VectorDB, QueueManager)
 ```
+
+## 两个核心组件
+
+### 组件 1：PathLock + LockManager + LockContext（路径锁系统）
+
+**PathLock** 实现基于文件的分布式锁，支持 POINT 和 SUBTREE 两种锁类型，使用 fencing token 防止 TOCTOU 竞争，自动检测并清理过期锁。
+
+**LockHandle** 是轻量的锁持有者令牌：
+
+```python
+@dataclass
+class LockHandle:
+    id: str          # 唯一标识，用于生成 fencing token
+    locks: list[str] # 已获取的锁文件路径
+    created_at: float # 创建时间
+```
+
+**LockManager** 是全局单例，管理锁生命周期：
+- 创建/释放 LockHandle
+- 后台清理泄漏的锁（进程内安全网）
+- 启动时执行 RedoLog 恢复
+
+**LockContext** 是异步上下文管理器，封装加锁/解锁生命周期：
+
+```python
+from openviking.storage.transaction import LockContext, get_lock_manager
+
+async with LockContext(get_lock_manager(), [path], lock_mode="point") as handle:
+    # 在锁保护下执行操作
+    ...
+# 退出时自动释放锁（包括异常情况）
+```
+
+### 组件 2：RedoLog（崩溃恢复）
+
+仅用于 `session.commit` 的记忆提取阶段。操作前写标记，成功后删标记，启动时扫描遗留标记并重做。
+
+```
+/local/_system/redo/{task_id}/redo.json
+```
+
+Memory 提取是幂等的 — 从同一个 archive 重新提取会得到相同结果。
 
 ## 一致性问题与解决方案
 
@@ -45,136 +84,140 @@ Storage Layer (VikingFS, VectorDB, QueueManager)
 
 | 问题 | 方案 |
 |------|------|
-| 先删文件再删索引 → 文件已删但索引残留 → 搜索返回不存在的文件 | **调换顺序**：先删索引再删文件。索引删除失败 → 文件和索引都在，搜索正常 |
+| 先删文件再删索引 -> 文件已删但索引残留 -> 搜索返回不存在的文件 | **调换顺序**：先删索引再删文件。索引删除失败 -> 文件和索引都在，搜索正常 |
 
-事务流程：
+**加锁策略**（根据目标类型区分）：
+- 删除**目录**：`lock_mode="subtree"`，锁目录自身
+- 删除**文件**：`lock_mode="point"`，锁文件的父目录
+
+操作流程：
 
 ```
-1. 开始事务，加锁（lock_mode="subtree"）
-2. 快照 VectorDB 中受影响的记录（用于回滚恢复）
-3. 删除 VectorDB 索引 → 搜索立刻不可见
+1. 检查目标是目录还是文件，选择锁模式
+2. 获取锁
+3. 删除 VectorDB 索引 -> 搜索立刻不可见
 4. 删除 FS 文件
-5. 提交 → 删锁 → 删 journal
+5. 释放锁
 ```
 
-回滚：第 4 步失败 → 从快照恢复 VectorDB 记录，文件和索引都在。
+VectorDB 删除失败 -> 直接抛异常，锁自动释放，文件和索引都在。FS 删除失败 -> VectorDB 已删但文件还在，重试即可。
 
 ### mv(old_uri, new_uri)
 
 | 问题 | 方案 |
 |------|------|
-| 文件移到新路径但索引指向旧路径 → 搜索返回旧路径（不存在） | 事务包装，移动失败则回滚 |
+| 文件移到新路径但索引指向旧路径 -> 搜索返回旧路径（不存在） | 先 copy 再更新索引，失败时清理副本 |
 
-事务流程：
+**加锁策略**（通过 `lock_mode="mv"` 自动处理）：
+- 移动**目录**：源路径和目标父目录各加 SUBTREE 锁
+- 移动**文件**：源的父目录和目标父目录各加 POINT 锁
+
+操作流程：
 
 ```
-1. 开始事务，加锁（lock_mode="mv"，目录移动时源和目标均 SUBTREE）
-2. 移动 FS 文件
-3. 更新 VectorDB 中的 URI
-4. 提交 → 删锁 → 删 journal
+1. 检查源是目录还是文件，确定 src_is_dir
+2. 获取 mv 锁（内部根据 src_is_dir 选择 SUBTREE 或 POINT）
+3. Copy 到新位置（源还在，安全）
+4. 如果是目录，删除副本中被 cp 带过去的锁文件
+5. 更新 VectorDB 中的 URI
+   - 失败 -> 清理副本，源和旧索引都在，一致状态
+6. 删除源
+7. 释放锁
 ```
-
-回滚：第 3 步失败 → 把文件移回原位。
 
 ### add_resource
 
 | 问题 | 方案 |
 |------|------|
-| 文件从临时目录移到正式目录后崩溃 → 文件存在但永远搜不到 | 首次添加与增量更新分离为两条独立路径 |
-
-首次添加和增量更新是两条独立路径：
+| 文件从临时目录移到正式目录后崩溃 -> 文件存在但永远搜不到 | 首次添加与增量更新分离为两条独立路径 |
 
 **首次添加**（target 不存在）— 在 `ResourceProcessor.process_resource` Phase 3.5 中处理：
 
 ```
-1. 开始事务，锁 final_uri 的父目录（lock_mode="point"）
-2. 记录 undo: fs_write_new（uri=dst_path）
-3. agfs.mv 临时目录 → 正式位置
-4. 提交 → 删锁 → 删 journal
-5. 清理临时目录
-6. 入队 SemanticMsg(uri=final, target_uri=None) → DAG 在 final 上跑，无 callback
+1. 获取锁，锁 final_uri 的父目录（lock_mode="point"）
+2. agfs.mv 临时目录 -> 正式位置
+3. 释放锁
+4. 清理临时目录
+5. 入队 SemanticMsg -> DAG 在 final 上跑
 ```
-
-崩溃恢复：undo 删除不完整的 dst_path；重新执行 `add_resource` 即可重试。
 
 **增量更新**（target 已存在）— temp 保持不动：
 
 ```
-1. 入队 SemanticMsg(uri=temp, target_uri=final) → DAG 在 temp 上跑
+1. 入队 SemanticMsg(uri=temp, target_uri=final) -> DAG 在 temp 上跑
 2. DAG 完成后触发 sync_diff_callback 或 move_temp_to_target_callback
-3. callback 内的每个 VikingFS.rm / VikingFS.mv 各自创建独立事务
+3. callback 内的每个 VikingFS.rm / VikingFS.mv 各自独立加锁
 ```
 
-注意：DAG callback 不在外层包裹 TransactionContext。每个 `VikingFS.rm` 和 `VikingFS.mv` 内部各自有独立事务保护。外层锁会与内部锁冲突（如外层 POINT lock on target_path 与内部 `rm` 的 SUBTREE lock 冲突）导致死锁。
+注意：DAG callback 不在外层加锁。每个 `VikingFS.rm` 和 `VikingFS.mv` 内部各自有独立锁保护。外层锁会与内部锁冲突导致死锁。
 
 ### session.commit()
 
 | 问题 | 方案 |
 |------|------|
-| 消息已清空但 archive 未写入 → 对话数据丢失 | Phase 1 无事务（archive 不完整无副作用）+ Phase 2 redo 事务 |
+| 消息已清空但 archive 未写入 -> 对话数据丢失 | Phase 1 无锁（archive 不完整无副作用）+ Phase 2 RedoLog |
 
-LLM 调用耗时不可控（5s~60s+），不能放在持锁事务内。设计拆为两个阶段：
+LLM 调用耗时不可控（5s~60s+），不能放在持锁操作内。设计拆为两个阶段：
 
 ```
-Phase 1 — 归档（无事务、无锁）：
+Phase 1 — 归档（无锁）：
   1. 生成归档摘要（LLM）
   2. 写 archive（history/archive_N/messages.jsonl + 摘要）
   3. 清空 messages.jsonl
   4. 清空内存中的消息列表
 
-Phase 2 — 记忆提取 + 写入（事务，lock_mode="none"，redo 语义）：
-  1. 记录 init_info（archive_uri、session_uri、用户身份信息）
+Phase 2 — 记忆提取 + 写入（RedoLog）：
+  1. 写 redo 标记（archive_uri、session_uri、用户身份信息）
   2. 从归档消息提取 memories（LLM）
   3. 写当前消息状态
   4. 写 relations
-  5. 注册 post_action: enqueue SemanticQueue
-  6. 提交
+  5. 直接 enqueue SemanticQueue
+  6. 删除 redo 标记
 ```
-
-**Redo 语义**：Phase 2 不注册 undo log。崩溃恢复时从 archive 重新执行记忆提取和写入（`_redo_session_memory`），而非回滚。
 
 **崩溃恢复分析**：
 
 | 崩溃时间点 | 状态 | 恢复动作 |
 |-----------|------|---------|
-| Phase 1 写 archive 中途 | 无事务 | archive 不完整，下次 commit 从 history/ 扫描 index，不受影响 |
-| Phase 1 archive 完成但 messages 未清空 | 无事务 | archive 完整 + messages 仍在 = 数据冗余但安全 |
-| Phase 2 记忆提取/写入中途 | journal EXEC | 启动恢复：`_redo_session_memory` 从 archive 重做提取+写入+入队 |
-| Phase 2 commit 后 | journal COMMIT | 启动恢复：重放 `post_action("enqueue_semantic")` |
+| Phase 1 写 archive 中途 | 无标记 | archive 不完整，下次 commit 从 history/ 扫描 index，不受影响 |
+| Phase 1 archive 完成但 messages 未清空 | 无标记 | archive 完整 + messages 仍在 = 数据冗余但安全 |
+| Phase 2 记忆提取/写入中途 | redo 标记存在 | 启动恢复：从 archive 重做提取+写入+入队 |
+| Phase 2 完成 | redo 标记已删 | 无需恢复 |
 
-## TransactionContext
+## LockContext
 
-`TransactionContext` 是**异步**上下文管理器，封装事务的完整生命周期：
+`LockContext` 是**异步**上下文管理器，封装锁的获取和释放：
 
 ```python
-from openviking.storage.transaction import TransactionContext, get_transaction_manager
+from openviking.storage.transaction import LockContext, get_lock_manager
 
-tx_manager = get_transaction_manager()
+lock_manager = get_lock_manager()
 
-async with TransactionContext(tx_manager, "rm", [path], lock_mode="subtree") as tx:
-    # 记录 undo（变更前调用）
-    seq = tx.record_undo("vectordb_delete", {"record_ids": ids, "records_snapshot": snapshot})
-    # 执行变更
-    delete_from_vector_store(uris)
-    # 标记完成
-    tx.mark_completed(seq)
+# Point 锁（写操作、语义处理）
+async with LockContext(lock_manager, [path], lock_mode="point"):
+    # 执行操作...
+    pass
 
-    # 注册提交后动作（可选）
-    tx.add_post_action("enqueue_semantic", {"uri": uri, ...})
+# Subtree 锁（删除操作）
+async with LockContext(lock_manager, [path], lock_mode="subtree"):
+    # 执行操作...
+    pass
 
-    # 提交
-    await tx.commit()
-# 未 commit 时自动回滚
+# MV 锁（移动操作）
+async with LockContext(lock_manager, [src], lock_mode="mv", mv_dst_path=dst):
+    # 执行操作...
+    pass
 ```
 
 **锁模式**：
 
 | lock_mode | 用途 | 行为 |
 |-----------|------|------|
-| `point` | 写操作 | 锁定指定路径；与同路径的任何锁和祖先目录的 SUBTREE 锁冲突 |
+| `point` | 写操作、语义处理 | 锁定指定路径；与同路径的任何锁和祖先目录的 SUBTREE 锁冲突 |
 | `subtree` | 删除操作 | 锁定子树根节点；与同路径的任何锁、后代目录的任何锁和祖先目录的 SUBTREE 锁冲突 |
 | `mv` | 移动操作 | 目录移动：源和目标均加 SUBTREE 锁；文件移动：源父目录和目标均加 POINT 锁（通过 `src_is_dir` 控制） |
-| `none` | 无锁操作 | 跳过锁获取，直接进入 EXEC 状态。用于 session.commit Phase 2 等不需要路径互斥的场景 |
+
+**异常处理**：`__aexit__` 总是释放锁，不吞异常。获取锁失败时抛出 `LockAcquisitionError`。
 
 ## 锁类型（POINT vs SUBTREE）
 
@@ -188,33 +231,6 @@ async with TransactionContext(tx_manager, "rm", [path], lock_mode="subtree") as 
 - **POINT (P)**：用于写操作和语义处理。只锁单个目录。若祖先目录持有 SUBTREE 锁则阻塞。
 - **SUBTREE (S)**：用于删除和移动操作。逻辑上覆盖整个子树，但只在根目录写**一个锁文件**。获取前扫描所有后代和祖先目录确认无冲突锁。
 
-## Undo Log
-
-每个事务维护一个 Undo Log，记录每步操作的反向动作：
-
-| op_type | 正向操作 | 回滚动作 |
-|---------|---------|---------|
-| `fs_mv` | 移动文件 | 移回原位 |
-| `fs_rm` | 删除文件 | 跳过（不可逆，设计上 rm 是最后一步） |
-| `fs_write_new` | 创建新文件/目录 | 删除 |
-| `fs_mkdir` | 创建目录 | 删除 |
-| `vectordb_delete` | 删除索引记录 | 从快照恢复 |
-| `vectordb_upsert` | 插入索引记录 | 删除 |
-| `vectordb_update_uri` | 更新 URI | 恢复旧值 |
-
-回滚规则：只回滚 `completed=True` 的条目，**反序执行**。每步独立 try-catch（best-effort）。崩溃恢复时使用 `recover_all=True`，也会回滚未完成的条目以清理部分操作残留。
-
-### 上下文重建
-
-VectorDB 回滚操作需要 `RequestContext`（包含 account_id、user_id、agent_id、role）。由于崩溃恢复时原始上下文不可用，record_undo 时在 undo params 中序列化 `_ctx_*` 字段：
-
-- `_ctx_account_id`：账户 ID
-- `_ctx_user_id`：用户 ID
-- `_ctx_agent_id`：代理 ID
-- `_ctx_role`：角色
-
-回滚时通过 `_reconstruct_ctx()` 从这些字段重建上下文。若重建失败（字段缺失），该 VectorDB 回滚步骤将被跳过并记录警告。
-
 ## 锁机制
 
 ### 锁协议
@@ -223,7 +239,7 @@ VectorDB 回滚操作需要 `RequestContext`（包含 account_id、user_id、age
 
 锁文件内容（Fencing Token）：
 ```
-{transaction_id}:{time_ns}:{lock_type}
+{handle_id}:{time_ns}:{lock_type}
 ```
 
 其中 `lock_type` 为 `P`（POINT）或 `S`（SUBTREE）。
@@ -233,16 +249,16 @@ VectorDB 回滚操作需要 `RequestContext`（包含 account_id、user_id、age
 ```
 循环直到超时（轮询间隔：200ms）：
     1. 检查目标目录存在
-    2. 检查目标路径是否被其他事务锁定
-       - 陈旧锁？ → 移除后重试
-       - 活跃锁？ → 等待
+    2. 检查目标路径是否被其他操作锁定
+       - 陈旧锁？ -> 移除后重试
+       - 活跃锁？ -> 等待
     3. 检查所有祖先目录是否有 SUBTREE 锁
-       - 陈旧锁？ → 移除后重试
-       - 活跃锁？ → 等待
+       - 陈旧锁？ -> 移除后重试
+       - 活跃锁？ -> 等待
     4. 写入 POINT (P) 锁文件
     5. TOCTOU 双重检查：重新扫描祖先目录的 SUBTREE 锁
-       - 发现冲突：比较 (timestamp, tx_id)
-       - 后到者（更大的 timestamp/tx_id）主动让步（删除自己的锁），防止活锁
+       - 发现冲突：比较 (timestamp, handle_id)
+       - 后到者（更大的 timestamp/handle_id）主动让步（删除自己的锁），防止活锁
        - 等待后重试
     6. 验证锁文件归属（fencing token 匹配）
     7. 成功
@@ -255,19 +271,19 @@ VectorDB 回滚操作需要 `RequestContext`（包含 account_id、user_id、age
 ```
 循环直到超时（轮询间隔：200ms）：
     1. 检查目标目录存在
-    2. 检查目标路径是否被其他事务锁定
-       - 陈旧锁？ → 移除后重试
-       - 活跃锁？ → 等待
+    2. 检查目标路径是否被其他操作锁定
+       - 陈旧锁？ -> 移除后重试
+       - 活跃锁？ -> 等待
     3. 检查所有祖先目录是否有 SUBTREE 锁
-       - 陈旧锁？ → 移除后重试
-       - 活跃锁？ → 等待
-    4. 扫描所有后代目录，检查是否有其他事务持有的锁
-       - 陈旧锁？ → 移除后重试
-       - 活跃锁？ → 等待
+       - 陈旧锁？ -> 移除后重试
+       - 活跃锁？ -> 等待
+    4. 扫描所有后代目录，检查是否有其他操作持有的锁
+       - 陈旧锁？ -> 移除后重试
+       - 活跃锁？ -> 等待
     5. 写入 SUBTREE (S) 锁文件（只写一个文件，在根路径）
     6. TOCTOU 双重检查：重新扫描后代目录和祖先目录
-       - 发现冲突：比较 (timestamp, tx_id)
-       - 后到者（更大的 timestamp/tx_id）主动让步（删除自己的锁），防止活锁
+       - 发现冲突：比较 (timestamp, handle_id)
+       - 后到者（更大的 timestamp/handle_id）主动让步（删除自己的锁），防止活锁
        - 等待后重试
     7. 验证锁文件归属（fencing token 匹配）
     8. 成功
@@ -279,72 +295,33 @@ VectorDB 回滚操作需要 `RequestContext`（包含 account_id、user_id、age
 
 **陈旧锁检测**：PathLock 检查 fencing token 中的时间戳。超过 `lock_expire`（默认 300s）的锁被视为陈旧锁，在加锁过程中自动移除。
 
-**事务超时**：TransactionManager 每 60 秒检查活跃事务，`updated_at` 超过事务超时时间（默认 3600s）的事务强制回滚。
+**进程内清理**：LockManager 每 60 秒检查活跃的 LockHandle，创建超过 3600 秒的 handle 强制释放。
 
-## 事务日志（Journal）
-
-每个事务在 AGFS 持久化一份 journal：
-
-```
-/local/_system/transactions/{tx_id}/journal.json
-```
-
-内容包含：事务 ID、状态、锁路径、init_info、undo_log、post_actions。
-
-### 生命周期
-
-```
-创建事务 → 写 journal（INIT）
-获取锁   → 更新 journal（ACQUIRE → EXEC）
-执行变更 → 每步更新 journal（标记 undo entry completed）
-提交     → 更新 journal（COMMIT + post_actions）
-         → 执行 post_actions → 删锁 → 删 journal
-回滚     → 执行 undo log → 删锁 → 删 journal
-```
+**孤儿锁**：进程崩溃后遗留的锁文件，在下次任何操作尝试获取同一路径锁时，通过 stale lock 检测自动移除。
 
 ## 崩溃恢复
 
-`TransactionManager.start()` 启动时自动扫描残留 journal：
+`LockManager.start()` 启动时自动扫描 `/local/_system/redo/` 目录中的遗留标记：
 
-| 崩溃时 journal 状态 | 恢复方式 |
-|---------------------|---------|
-| `COMMIT` + post_actions 非空 | 重放 post_actions → 删锁 → 删 journal |
-| `COMMIT` + post_actions 为空 / `RELEASED` | 删锁 → 删 journal |
-| `EXEC` / `FAIL` / `RELEASING`（`session_memory` 操作） | 从 archive 重做记忆提取+写入（`_redo_session_memory`） → 删锁 → 删 journal |
-| `EXEC` / `FAIL` / `RELEASING`（所有 undo 均 completed） | 前滚（视为已提交，重放 post_actions） → 删锁 → 删 journal |
-| `EXEC` / `FAIL` / `RELEASING`（其他） | 执行 undo log 回滚（`recover_all=True`） → 删锁 → 删 journal |
-| `INIT` / `ACQUIRE` | 通过 init_info.lock_paths 清理孤儿锁 → 删 journal（变更未执行） |
+| 场景 | 恢复方式 |
+|------|---------|
+| session_memory 提取中途崩溃 | 从 archive 重做记忆提取 + 写入 + enqueue |
+| 锁持有期间崩溃 | 锁文件留在 AGFS，下次获取时 stale 检测自动清理（默认 300s 过期）|
+| enqueue 后 worker 处理前崩溃 | QueueFS SQLite 持久化，worker 重启后自动拉取 |
+| 孤儿索引 | L2 按需加载时清理 |
 
 ### 防线总结
 
 | 异常场景 | 防线 | 恢复时机 |
 |---------|------|---------|
-| 事务内崩溃 | journal + undo log 回滚 | 重启时 |
-| 提交后 enqueue 前崩溃 | journal post_actions 重放 | 重启时 |
-| enqueue 后 worker 处理前崩溃 | QueueFS SQLite 持久化 | worker 重启后自动拉取 |
-| session.commit Phase 2 中崩溃 | journal + redo（从 archive 重做记忆提取） | 重启时 |
+| 操作中途崩溃 | 锁自动过期 + stale 检测 | 下次获取同路径锁时 |
+| session.commit Phase 2 崩溃 | RedoLog 标记 + 重做 | 重启时 |
+| enqueue 后 worker 处理前崩溃 | QueueFS SQLite 持久化 | worker 重启后 |
 | 孤儿索引 | L2 按需加载时清理 | 用户访问时 |
-| 加锁后 journal 更新前崩溃 | init_info 记录预期锁路径，恢复时检查并清理孤儿锁 | 重启时 |
-
-## 事务状态机
-
-```
-INIT → ACQUIRE → EXEC → COMMIT → RELEASING → RELEASED
-                   ↓
-                  FAIL → RELEASING → RELEASED
-```
-
-- `INIT`：事务已创建，等待锁获取
-- `ACQUIRE`：正在获取锁
-- `EXEC`：事务操作执行中
-- `COMMIT`：已提交，可能有 post_actions 待执行
-- `FAIL`：执行失败，进入回滚
-- `RELEASING`：正在释放锁
-- `RELEASED`：锁已释放，事务结束
 
 ## 配置
 
-事务机制默认启用，无需额外配置。**默认不等待**：若路径被锁定则立即抛出 `LockAcquisitionError`。如需允许等待重试，可通过 `storage.transaction` 段配置：
+路径锁默认启用，无需额外配置。**默认不等待**：若路径被锁定则立即抛出 `LockAcquisitionError`。如需允许等待重试，可通过 `storage.transaction` 段配置：
 
 ```json
 {
@@ -360,11 +337,11 @@ INIT → ACQUIRE → EXEC → COMMIT → RELEASING → RELEASED
 | 参数 | 类型 | 说明 | 默认值 |
 |------|------|------|--------|
 | `lock_timeout` | float | 获取锁的等待超时（秒）。`0` = 立即失败（默认）；`> 0` = 最多等待此时间 | `0.0` |
-| `lock_expire` | float | 锁过期时间（秒），超过此时间的事务锁将被视为陈旧锁并强制释放 | `300.0` |
+| `lock_expire` | float | 锁过期时间（秒），超过此时间的锁将被视为陈旧锁并强制释放 | `300.0` |
 
 ### QueueFS 持久化
 
-事务机制依赖 QueueFS 使用 SQLite 后端，确保 enqueue 的任务在进程重启后可恢复。这是默认配置，无需手动设置。
+路径锁机制依赖 QueueFS 使用 SQLite 后端，确保 enqueue 的任务在进程重启后可恢复。这是默认配置，无需手动设置。
 
 ## 相关文档
 

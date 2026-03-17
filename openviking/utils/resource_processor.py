@@ -218,11 +218,8 @@ class ResourceProcessor:
             viking_fs = get_viking_fs()
             target_exists = await viking_fs.exists(root_uri, ctx=ctx)
             if not target_exists:
-                # 第一次添加：事务保护下将 temp 移到 final
-                from openviking.storage.transaction import (
-                    TransactionContext,
-                    get_transaction_manager,
-                )
+                # 第一次添加：锁保护下将 temp 移到 final
+                from openviking.storage.transaction import LockContext, get_lock_manager
 
                 dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
                 parent_path = dst_path.rsplit("/", 1)[0] if "/" in dst_path else dst_path
@@ -232,17 +229,9 @@ class ResourceProcessor:
                 if parent_uri:
                     await viking_fs.mkdir(parent_uri, exist_ok=True, ctx=ctx)
 
-                async with TransactionContext(
-                    get_transaction_manager(),
-                    "finalize_from_temp",
-                    [parent_path],
-                    lock_mode="point",
-                ) as tx:
-                    seq = tx.record_undo("fs_write_new", {"uri": dst_path})
+                async with LockContext(get_lock_manager(), [parent_path], lock_mode="point"):
                     src_path = viking_fs._uri_to_path(temp_uri, ctx=ctx)
                     await asyncio.to_thread(viking_fs.agfs.mv, src_path, dst_path)
-                    tx.mark_completed(seq)
-                    await tx.commit()
 
                 # 清理 temp 根目录
                 try:

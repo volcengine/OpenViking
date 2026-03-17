@@ -23,7 +23,7 @@ from openviking.session.compressor import SessionCompressor
 from openviking.storage import VikingDBManager
 from openviking.storage.collection_schemas import init_context_collection
 from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_manager
-from openviking.storage.transaction import TransactionManager, init_transaction_manager
+from openviking.storage.transaction import LockManager, init_lock_manager
 from openviking.storage.viking_fs import VikingFS, init_viking_fs
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking.utils.skill_processor import SkillProcessor
@@ -75,7 +75,7 @@ class OpenVikingService:
         self._resource_processor: Optional[ResourceProcessor] = None
         self._skill_processor: Optional[SkillProcessor] = None
         self._session_compressor: Optional[SessionCompressor] = None
-        self._transaction_manager: Optional[TransactionManager] = None
+        self._lock_manager: Optional[LockManager] = None
         self._directory_initializer: Optional[DirectoryInitializer] = None
 
         # Sub-services
@@ -142,16 +142,14 @@ class OpenVikingService:
         if self._queue_manager:
             self._queue_manager.setup_standard_queues(self._vikingdb_manager, start=False)
 
-        # Initialize TransactionManager (fail-fast if AGFS missing)
+        # Initialize LockManager (fail-fast if AGFS missing)
         if self._agfs_client is None:
-            raise RuntimeError("AGFS client not initialized for TransactionManager")
+            raise RuntimeError("AGFS client not initialized for LockManager")
         tx_cfg = config.transaction
-        self._transaction_manager = init_transaction_manager(
+        self._lock_manager = init_lock_manager(
             agfs=self._agfs_client,
-            max_parallel_locks=tx_cfg.max_parallel_locks,
             lock_timeout=tx_cfg.lock_timeout,
             lock_expire=tx_cfg.lock_expire,
-            vector_store=self._vikingdb_manager,
         )
 
     @property
@@ -170,9 +168,9 @@ class OpenVikingService:
         return self._vikingdb_manager
 
     @property
-    def transaction_manager(self) -> Optional[TransactionManager]:
-        """Get TransactionManager instance."""
-        return self._transaction_manager
+    def lock_manager(self) -> Optional[LockManager]:
+        """Get LockManager instance."""
+        return self._lock_manager
 
     @property
     def session_compressor(self) -> Optional[SessionCompressor]:
@@ -293,10 +291,10 @@ class OpenVikingService:
         self._skill_processor = SkillProcessor(vikingdb=self._vikingdb_manager)
         self._session_compressor = SessionCompressor(vikingdb=self._vikingdb_manager)
 
-        # Start TransactionManager if initialized
-        if self._transaction_manager:
-            await self._transaction_manager.start()
-            logger.info("TransactionManager started")
+        # Start LockManager if initialized
+        if self._lock_manager:
+            await self._lock_manager.start()
+            logger.info("LockManager started")
 
         # Wire up sub-services
         self._fs_service.set_viking_fs(self._viking_fs)
@@ -324,9 +322,9 @@ class OpenVikingService:
 
     async def close(self) -> None:
         """Close OpenViking and release resources."""
-        if self._transaction_manager:
-            await self._transaction_manager.stop()
-            self._transaction_manager = None
+        if self._lock_manager:
+            await self._lock_manager.stop()
+            self._lock_manager = None
 
         if self._vikingdb_manager:
             self._vikingdb_manager.mark_closing()
