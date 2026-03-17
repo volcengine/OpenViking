@@ -34,6 +34,7 @@ WORKDIR /app
 # Copy source required for setup.py artifact builds and native extension build.
 COPY Cargo.toml Cargo.lock ./
 COPY pyproject.toml uv.lock setup.py README.md ./
+COPY build_support/ build_support/
 COPY crates/ crates/
 COPY openviking/ openviking/
 COPY openviking_cli/ openviking_cli/
