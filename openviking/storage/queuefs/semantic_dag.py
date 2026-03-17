@@ -529,7 +529,14 @@ class SemanticDagExecutor:
                     overview = await self._processor._generate_overview(
                         dir_uri, file_summaries, children_abstracts
                     )
+                from openviking_cli.utils.config import get_openviking_config
+
+                semantic = get_openviking_config().semantic
+                if len(overview) > semantic.overview_max_chars:
+                    overview = overview[: semantic.overview_max_chars]
                 abstract = self._processor._extract_abstract_from_overview(overview)
+                if len(abstract) > semantic.abstract_max_chars:
+                    abstract = abstract[: semantic.abstract_max_chars - 3] + "..."
 
             try:
                 await self._viking_fs.write_file(f"{dir_uri}/.overview.md", overview, ctx=self._ctx)
