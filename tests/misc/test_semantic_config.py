@@ -33,13 +33,8 @@ def test_budget_under_limit_no_batching():
     """Small directories should not trigger batching."""
     config = SemanticConfig()
     # 10 file summaries, each ~100 chars = ~1000 chars total
-    summaries = [
-        {"name": f"file_{i}.py", "summary": "x" * 100} for i in range(10)
-    ]
-    total = sum(
-        len(f"[{i}] {s['name']}: {s['summary']}")
-        for i, s in enumerate(summaries, 1)
-    )
+    summaries = [{"name": f"file_{i}.py", "summary": "x" * 100} for i in range(10)]
+    total = sum(len(f"[{i}] {s['name']}: {s['summary']}") for i, s in enumerate(summaries, 1))
     assert total < config.max_overview_prompt_chars
     assert len(summaries) <= config.overview_batch_size
 
@@ -48,13 +43,8 @@ def test_budget_over_limit_triggers_batching():
     """Large directories should exceed budget and require batching."""
     config = SemanticConfig()
     # 200 file summaries, each ~500 chars = ~100000+ chars total
-    summaries = [
-        {"name": f"file_{i}.py", "summary": "x" * 500} for i in range(200)
-    ]
-    total = sum(
-        len(f"[{i}] {s['name']}: {s['summary']}")
-        for i, s in enumerate(summaries, 1)
-    )
+    summaries = [{"name": f"file_{i}.py", "summary": "x" * 500} for i in range(200)]
+    total = sum(len(f"[{i}] {s['name']}: {s['summary']}") for i, s in enumerate(summaries, 1))
     assert total > config.max_overview_prompt_chars
     assert len(summaries) > config.overview_batch_size
 

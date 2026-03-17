@@ -765,7 +765,6 @@ class SemanticProcessor(DequeueHandlerBase):
         Returns:
             Overview content
         """
-        import re
 
         config = get_openviking_config()
         vlm = config.vlm
@@ -781,25 +780,21 @@ class SemanticProcessor(DequeueHandlerBase):
         for idx, item in enumerate(file_summaries, 1):
             file_index_map[idx] = item["name"]
             file_summaries_lines.append(f"[{idx}] {item['name']}: {item['summary']}")
-        file_summaries_str = (
-            "\n".join(file_summaries_lines) if file_summaries_lines else "None"
-        )
+        file_summaries_str = "\n".join(file_summaries_lines) if file_summaries_lines else "None"
 
         # Build subdirectory summary string
         children_abstracts_str = (
-            "\n".join(
-                f"- {item['name']}/: {item['abstract']}"
-                for item in children_abstracts
-            )
+            "\n".join(f"- {item['name']}/: {item['abstract']}" for item in children_abstracts)
             if children_abstracts
             else "None"
         )
 
         # Budget guard: check if prompt would be oversized
         estimated_size = len(file_summaries_str) + len(children_abstracts_str)
-        if estimated_size > semantic.max_overview_prompt_chars and len(
-            file_summaries
-        ) > semantic.overview_batch_size:
+        if (
+            estimated_size > semantic.max_overview_prompt_chars
+            and len(file_summaries) > semantic.overview_batch_size
+        ):
             logger.info(
                 f"Overview prompt for {dir_uri} exceeds budget "
                 f"({estimated_size} chars, {len(file_summaries)} files). "
@@ -879,12 +874,9 @@ class SemanticProcessor(DequeueHandlerBase):
 
         # Split file summaries into batches
         batches = [
-            file_summaries[i : i + batch_size]
-            for i in range(0, len(file_summaries), batch_size)
+            file_summaries[i : i + batch_size] for i in range(0, len(file_summaries), batch_size)
         ]
-        logger.info(
-            f"Generating overview for {dir_uri} in {len(batches)} batches"
-        )
+        logger.info(f"Generating overview for {dir_uri} in {len(batches)} batches")
 
         # Generate partial overview per batch
         partial_overviews = []
@@ -898,8 +890,7 @@ class SemanticProcessor(DequeueHandlerBase):
             children_str = "None"
             if batch_idx == 0 and children_abstracts:
                 children_str = "\n".join(
-                    f"- {item['name']}/: {item['abstract']}"
-                    for item in children_abstracts
+                    f"- {item['name']}/: {item['abstract']}" for item in children_abstracts
                 )
 
             try:
