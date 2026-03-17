@@ -24,6 +24,7 @@ from openviking.models.embedder.base import (
     SparseEmbedderBase,
 )
 from openviking.models.embedder.jina_embedders import JinaDenseEmbedder
+from openviking.models.embedder.google_embedders import GoogleDenseEmbedder
 from openviking.models.embedder.openai_embedders import OpenAIDenseEmbedder
 from openviking.models.embedder.voyage_embedders import VoyageDenseEmbedder
 from openviking.models.embedder.vikingdb_embedders import (
@@ -47,6 +48,8 @@ __all__ = [
     "CompositeHybridEmbedder",
     # Jina AI implementations
     "JinaDenseEmbedder",
+    # Google/Gemini implementations
+    "GoogleDenseEmbedder",
     # OpenAI implementations
     "OpenAIDenseEmbedder",
     # Voyage implementations
