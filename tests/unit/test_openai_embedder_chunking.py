@@ -261,13 +261,13 @@ class TestBaseChunkText:
                 # Simple: 1 token per word
                 return len(text.split())
 
-            def embed(self_inner, text):
+            def embed(self_inner, text, is_query=False):
                 dim = 4
                 vec = [1.0 / dim] * dim
                 return EmbedResult(dense_vector=vec)
 
-            def _embed_single(self_inner, text):
-                return self_inner.embed(text)
+            def _embed_single(self_inner, text, is_query=False):
+                return self_inner.embed(text, is_query=is_query)
 
             def get_dimension(self_inner):
                 return 4
@@ -409,7 +409,9 @@ class TestMaxTokensConfigurable:
         # Need text long enough to produce multiple chunks.
         # Fallback estimation: len(text)//3. With max_tokens=5, need >5 tokens.
         # Fixed-length split has min chunk_size=100, so text must be >100 chars to split.
-        text = "Hello world test. " * 30  # 540 chars -> 180 estimated tokens, well over max_tokens=5
+        text = (
+            "Hello world test. " * 30
+        )  # 540 chars -> 180 estimated tokens, well over max_tokens=5
 
         mock_client.embeddings.create.reset_mock()
         result = embedder.embed(text)
@@ -426,7 +428,7 @@ class TestBaseMaxTokensConfigurable:
         """EmbedderBase without max_tokens should return 8000."""
 
         class ConcreteEmbedder(DenseEmbedderBase):
-            def embed(self, text):
+            def embed(self, text, is_query=False):
                 return EmbedResult(dense_vector=[0.0])
 
             def get_dimension(self):
@@ -439,7 +441,7 @@ class TestBaseMaxTokensConfigurable:
         """EmbedderBase with max_tokens should return the custom value."""
 
         class ConcreteEmbedder(DenseEmbedderBase):
-            def embed(self, text):
+            def embed(self, text, is_query=False):
                 return EmbedResult(dense_vector=[0.0])
 
             def get_dimension(self):

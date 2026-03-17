@@ -96,7 +96,7 @@ class OpenVikingService:
         )
 
         # Initialize embedder
-        self._embedder = config.embedding.get_query_embedder()
+        self._embedder = config.embedding.get_embedder()
         logger.info(
             f"Initialized embedder (dim {config.embedding.dimension}, sparse {self._embedder.is_sparse})"
         )
@@ -132,7 +132,9 @@ class OpenVikingService:
             logger.warning("AGFS client not initialized, skipping queue manager")
 
         # Initialize VikingDBManager with QueueManager
-        self._vikingdb_manager = VikingDBManager(vectordb_config=config.vectordb, queue_manager=self._queue_manager)
+        self._vikingdb_manager = VikingDBManager(
+            vectordb_config=config.vectordb, queue_manager=self._queue_manager
+        )
 
         # Configure queues if QueueManager is available
         if self._queue_manager:

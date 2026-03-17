@@ -123,7 +123,7 @@ class TestJinaDenseEmbedder:
 
     @patch("openviking.models.embedder.jina_embedders.openai.OpenAI")
     def test_embed_with_task(self, mock_openai_class):
-        """Test embedding with task parameter"""
+        """Jina embedder should include task in extra_body when configured."""
         mock_client = MagicMock()
         mock_openai_class.return_value = mock_client
 
@@ -134,15 +134,15 @@ class TestJinaDenseEmbedder:
         mock_response.data = [mock_embedding]
         mock_client.embeddings.create.return_value = mock_response
 
+        # Pass task directly
         embedder = JinaDenseEmbedder(
             model_name="jina-embeddings-v5-text-small",
             api_key="test-api-key",
-            context="query",
             query_param="retrieval.query",
         )
-        embedder.embed("Hello world")
 
-        # Check extra_body was passed with task
+        embedder.embed("Hello world", is_query=True)
+
         call_kwargs = mock_client.embeddings.create.call_args[1]
         assert "extra_body" in call_kwargs
         assert call_kwargs["extra_body"]["task"] == "retrieval.query"
@@ -237,20 +237,25 @@ class TestJinaDenseEmbedder:
         embedder = JinaDenseEmbedder(
             model_name="jina-embeddings-v5-text-small",
             api_key="test-api-key",
+            query_param=None,
+            document_param=None,
         )
         assert embedder._build_extra_body() is None
 
-    def test_build_extra_body_with_params(self):
-        """Test _build_extra_body returns dict with params"""
+    @patch("openviking.models.embedder.jina_embedders.openai.OpenAI")
+    def test_build_extra_body_with_params(self, mock_openai_class):
+        """_build_extra_body should include task and late_chunking."""
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
+
         embedder = JinaDenseEmbedder(
             model_name="jina-embeddings-v5-text-small",
             api_key="test-api-key",
-            context="document",
             document_param="retrieval.passage",
             late_chunking=True,
         )
-        extra_body = embedder._build_extra_body()
-        assert extra_body is not None
+
+        extra_body = embedder._build_extra_body(is_query=False)
         assert extra_body["task"] == "retrieval.passage"
         assert extra_body["late_chunking"] is True
 

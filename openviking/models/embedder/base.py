@@ -188,7 +188,7 @@ class EmbedderBase(ABC):
             start = end
         return chunks
 
-    def _chunk_and_embed(self, text: str) -> EmbedResult:
+    def _chunk_and_embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Chunk text if it exceeds max_tokens, embed each chunk, and merge results.
 
         For text within limits, delegates to _embed_single directly.
@@ -197,13 +197,14 @@ class EmbedderBase(ABC):
 
         Args:
             text: Input text
+            is_query: Flag to indicate if this is a query embedding
 
         Returns:
             EmbedResult with merged embedding
         """
         estimated = self._estimate_tokens(text)
         if estimated <= self.max_tokens:
-            return self._embed_single(text)
+            return self._embed_single(text, is_query=is_query)
 
         chunks = self._chunk_text(text)
         logger.debug(
@@ -215,7 +216,7 @@ class EmbedderBase(ABC):
         results: List[EmbedResult] = []
         weights: List[int] = []
         for chunk in chunks:
-            result = self._embed_single(chunk)
+            result = self._embed_single(chunk, is_query=is_query)
             results.append(result)
             weights.append(self._estimate_tokens(chunk))
 
@@ -239,36 +240,38 @@ class EmbedderBase(ABC):
 
         return EmbedResult(dense_vector=merged_dense)
 
-    def _embed_single(self, text: str) -> EmbedResult:
+    def _embed_single(self, text: str, is_query: bool = False) -> EmbedResult:
         """Embed a single text without chunking logic. Defaults to self.embed().
 
         Subclasses that override embed() with chunking should also override
         this method to provide the raw embedding call.
         """
-        return self.embed(text)
+        return self.embed(text, is_query=is_query)
 
     @abstractmethod
-    def embed(self, text: str) -> EmbedResult:
+    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Embed single text
 
         Args:
             text: Input text
+            is_query: Flag to indicate if this is a query embedding
 
         Returns:
             EmbedResult: Embedding result containing dense_vector, sparse_vector, or both
         """
         pass
 
-    def embed_batch(self, texts: List[str]) -> List[EmbedResult]:
+    def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
         """Batch embedding (default implementation loops, subclasses can override for optimization)
 
         Args:
             texts: List of texts
+            is_query: Flag to indicate if these are query embeddings
 
         Returns:
             List[EmbedResult]: List of embedding results
         """
-        return [self.embed(text) for text in texts]
+        return [self.embed(text, is_query=is_query) for text in texts]
 
     def close(self):
         """Release resources, subclasses can override as needed"""
@@ -299,11 +302,12 @@ class DenseEmbedderBase(EmbedderBase):
     """
 
     @abstractmethod
-    def embed(self, text: str) -> EmbedResult:
+    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform dense embedding on text
 
         Args:
             text: Input text
+            is_query: Flag to indicate if this is a query embedding
 
         Returns:
             EmbedResult: Result containing only dense_vector
@@ -331,11 +335,12 @@ class SparseEmbedderBase(EmbedderBase):
     """
 
     @abstractmethod
-    def embed(self, text: str) -> EmbedResult:
+    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform sparse embedding on text
 
         Args:
             text: Input text
+            is_query: Flag to indicate if this is a query embedding
 
         Returns:
             EmbedResult: Result containing only sparse_vector
@@ -359,11 +364,12 @@ class HybridEmbedderBase(EmbedderBase):
     """
 
     @abstractmethod
-    def embed(self, text: str) -> EmbedResult:
+    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform hybrid embedding on text
 
         Args:
             text: Input text
+            is_query: Flag to indicate if this is a query embedding
 
         Returns:
             EmbedResult: Result containing both dense_vector and sparse_vector
@@ -406,19 +412,19 @@ class CompositeHybridEmbedder(HybridEmbedderBase):
         self.dense_embedder = dense_embedder
         self.sparse_embedder = sparse_embedder
 
-    def embed(self, text: str) -> EmbedResult:
+    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Combine results from both embedders"""
-        dense_res = self.dense_embedder.embed(text)
-        sparse_res = self.sparse_embedder.embed(text)
+        dense_res = self.dense_embedder.embed(text, is_query=is_query)
+        sparse_res = self.sparse_embedder.embed(text, is_query=is_query)
 
         return EmbedResult(
             dense_vector=dense_res.dense_vector, sparse_vector=sparse_res.sparse_vector
         )
 
-    def embed_batch(self, texts: List[str]) -> List[EmbedResult]:
+    def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
         """Combine batch results"""
-        dense_results = self.dense_embedder.embed_batch(texts)
-        sparse_results = self.sparse_embedder.embed_batch(texts)
+        dense_results = self.dense_embedder.embed_batch(texts, is_query=is_query)
+        sparse_results = self.sparse_embedder.embed_batch(texts, is_query=is_query)
 
         return [
             EmbedResult(dense_vector=d.dense_vector, sparse_vector=s.sparse_vector)
