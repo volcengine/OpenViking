@@ -533,9 +533,7 @@ class HierarchicalRetriever:
         results.sort(key=lambda x: x.score, reverse=True)
         return results
 
-    async def _apply_memory_relations(
-        self, matched: List[MatchedContext]
-    ) -> List[MatchedContext]:
+    async def _apply_memory_relations(self, matched: List[MatchedContext]) -> List[MatchedContext]:
         """Filter superseded memories and annotate with related-memory context.
 
         When a memory has been superseded (another memory has a ``supersedes``
@@ -556,9 +554,7 @@ class HierarchicalRetriever:
                     break
 
             if await self.memory_relation_store.is_superseded(canonical_uri):
-                logger.debug(
-                    "[retrieve] Filtering superseded memory: %s", canonical_uri
-                )
+                logger.debug("[retrieve] Filtering superseded memory: %s", canonical_uri)
                 continue
 
             # Add related_to memories as additional context.
@@ -570,9 +566,7 @@ class HierarchicalRetriever:
             for rel in related_rels:
                 if added >= self.MAX_RELATIONS:
                     break
-                peer_uri = (
-                    rel.target_uri if rel.source_uri == canonical_uri else rel.source_uri
-                )
+                peer_uri = rel.target_uri if rel.source_uri == canonical_uri else rel.source_uri
                 if peer_uri not in existing_uris:
                     mc.relations.append(
                         RelatedContext(uri=peer_uri, abstract=rel.metadata.get("abstract", ""))

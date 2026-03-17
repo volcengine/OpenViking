@@ -9,8 +9,6 @@ Tests EmbeddingConfig's ability to create context-specific embedders:
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
 
 
@@ -86,7 +84,7 @@ class TestEmbeddingModelConfigContextFields:
         )
         assert config.input_type == "search_query"
 
-    def test_query_document_param_lowercase_normalization(self):
+    def test_query_document_param_lowercase_normalization_jina(self):
         """Query/document task values should be normalized to lowercase."""
         config = EmbeddingModelConfig(
             model="jina-embeddings-v5-text-small",

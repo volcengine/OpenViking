@@ -409,7 +409,9 @@ class TestMaxTokensConfigurable:
         # Need text long enough to produce multiple chunks.
         # Fallback estimation: len(text)//3. With max_tokens=5, need >5 tokens.
         # Fixed-length split has min chunk_size=100, so text must be >100 chars to split.
-        text = "Hello world test. " * 30  # 540 chars -> 180 estimated tokens, well over max_tokens=5
+        text = (
+            "Hello world test. " * 30
+        )  # 540 chars -> 180 estimated tokens, well over max_tokens=5
 
         mock_client.embeddings.create.reset_mock()
         result = embedder.embed(text)

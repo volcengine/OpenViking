@@ -47,18 +47,14 @@ class TestMemoryRelationStore:
     @pytest.mark.asyncio
     async def test_query_outgoing(self, store, sample_relation):
         await store.create(sample_relation)
-        results = await store.query(
-            sample_relation.source_uri, direction="outgoing"
-        )
+        results = await store.query(sample_relation.source_uri, direction="outgoing")
         assert len(results) == 1
         assert results[0].target_uri == sample_relation.target_uri
 
     @pytest.mark.asyncio
     async def test_query_incoming(self, store, sample_relation):
         await store.create(sample_relation)
-        results = await store.query(
-            sample_relation.target_uri, direction="incoming"
-        )
+        results = await store.query(sample_relation.target_uri, direction="incoming")
         assert len(results) == 1
         assert results[0].source_uri == sample_relation.source_uri
 
@@ -66,14 +62,10 @@ class TestMemoryRelationStore:
     async def test_query_both(self, store, sample_relation):
         await store.create(sample_relation)
         # Query by source
-        results_src = await store.query(
-            sample_relation.source_uri, direction="both"
-        )
+        results_src = await store.query(sample_relation.source_uri, direction="both")
         assert len(results_src) == 1
         # Query by target
-        results_tgt = await store.query(
-            sample_relation.target_uri, direction="both"
-        )
+        results_tgt = await store.query(sample_relation.target_uri, direction="both")
         assert len(results_tgt) == 1
 
     @pytest.mark.asyncio

@@ -70,9 +70,7 @@ class TestDedupRelationRecording:
         await dedup._record_dedup_relations(result)
 
         assert relation_store.count() == 1
-        rels = await relation_store.query(
-            old_memory.uri, direction="incoming"
-        )
+        rels = await relation_store.query(old_memory.uri, direction="incoming")
         assert len(rels) == 1
         assert rels[0].relation_type == RelationType.SUPERSEDES
         assert rels[0].target_uri == old_memory.uri
@@ -101,9 +99,7 @@ class TestDedupRelationRecording:
         await dedup._record_dedup_relations(result)
 
         assert relation_store.count() == 1
-        rels = await relation_store.query(
-            old_memory.uri, direction="incoming"
-        )
+        rels = await relation_store.query(old_memory.uri, direction="incoming")
         assert len(rels) == 1
         assert rels[0].relation_type == RelationType.CONTRADICTS
 
@@ -130,9 +126,7 @@ class TestDedupRelationRecording:
         await dedup._record_dedup_relations(result)
 
     @pytest.mark.asyncio
-    async def test_skip_creates_no_relations(
-        self, relation_store, old_memory, candidate_memory
-    ):
+    async def test_skip_creates_no_relations(self, relation_store, old_memory, candidate_memory):
         """SKIP decisions should not create any relations."""
         result = DedupResult(
             decision=DedupDecision.SKIP,
@@ -149,9 +143,7 @@ class TestDedupRelationRecording:
         assert relation_store.count() == 0
 
     @pytest.mark.asyncio
-    async def test_superseded_memory_detectable(
-        self, relation_store, old_memory, candidate_memory
-    ):
+    async def test_superseded_memory_detectable(self, relation_store, old_memory, candidate_memory):
         """After MERGE, the old memory should be detected as superseded."""
         result = DedupResult(
             decision=DedupDecision.NONE,

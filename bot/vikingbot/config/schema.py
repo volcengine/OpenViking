@@ -40,8 +40,10 @@ class SandboxMode(str, Enum):
     SHARED = "shared"
     PER_CHANNEL = "per-channel"
 
+
 class AgentMemoryMode(str, Enum):
     """Agent memory mode enumeration."""
+
     PER_SESSION = "per-session"
     SHARED = "shared"
     PER_CHANNEL = "per-channel"
@@ -109,7 +111,10 @@ class FeishuChannelConfig(BaseChannelConfig):
     encrypt_key: str = ""
     verification_token: str = ""
     allow_from: list[str] = Field(default_factory=list)  ## 允许更新Agent对话的Feishu用户ID列表
-    thread_require_mention: bool = Field(default=True, description="话题群模式下是否需要@才响应：默认True=所有消息必须@才响应；False=新话题首条消息无需@，后续回复必须@")
+    thread_require_mention: bool = Field(
+        default=True,
+        description="话题群模式下是否需要@才响应：默认True=所有消息必须@才响应；False=新话题首条消息无需@，后续回复必须@",
+    )
 
     def channel_id(self) -> str:
         # Use app_id directly as the ID
@@ -396,7 +401,9 @@ class ProviderConfig(BaseModel):
 
     api_key: str = ""
     api_base: Optional[str] = None
-    extra_headers: Optional[dict[str, str]] = Field(default_factory=dict)  # Custom headers (e.g. APP-Code for AiHubMix)
+    extra_headers: Optional[dict[str, str]] = Field(
+        default_factory=dict
+    )  # Custom headers (e.g. APP-Code for AiHubMix)
 
 
 class ProvidersConfig(BaseModel):

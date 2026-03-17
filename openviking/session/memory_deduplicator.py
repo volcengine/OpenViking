@@ -158,8 +158,7 @@ class MemoryDeduplicator:
         if not candidate_uri:
             # Build a provisional URI from category + abstract for tracking.
             candidate_uri = (
-                f"pending://{result.candidate.category.value}"
-                f"/{result.candidate.abstract[:40]}"
+                f"pending://{result.candidate.category.value}/{result.candidate.abstract[:40]}"
             )
 
         for action in result.actions:
