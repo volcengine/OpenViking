@@ -2,7 +2,10 @@ use crate::client::HttpClient;
 
 use super::tree::TreeState;
 
-use std::time::Instant;
+use std::{pin::Pin, time::Instant};
+
+// Type alias for confirmation callback
+type ConfirmationCallback = Box<dyn for<'a> FnOnce(&'a mut App) -> Pin<Box<dyn Future<Output = ()> + 'a>>>;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum Panel {
@@ -56,7 +59,10 @@ pub struct App {
     pub should_quit: bool,
     pub status_message: String,
     pub status_message_time: Option<Instant>,
-    pub delete_confirmation: Option<(String, bool)>, // (uri, is_dir)
+    pub status_message_locked: bool,
+    pub error_message: String,
+    pub error_message_time: Option<Instant>,
+    pub confirmation: Option<(String, ConfirmationCallback)>,
     pub vector_state: VectorRecordsState,
     pub showing_vector_records: bool,
     pub current_uri: String,
@@ -75,7 +81,10 @@ impl App {
             should_quit: false,
             status_message: String::new(),
             status_message_time: None,
-            delete_confirmation: None,
+            status_message_locked: false,
+            error_message: String::new(),
+            error_message_time: None,
+            confirmation: None,
             vector_state: VectorRecordsState::new(),
             showing_vector_records: false,
             current_uri: "/".to_string(),
@@ -211,18 +220,49 @@ impl App {
         };
     }
 
+    pub fn set_error_message(&mut self, message: String) {
+        self.error_message = message;
+        self.error_message_time = Some(Instant::now());
+    }
+
     pub fn set_status_message(&mut self, message: String) {
+        if self.status_message_locked {
+            let message = format!("Error: Cannot set status message while locked");
+            self.set_error_message(message);
+            return;
+        }
         self.status_message = message;
         self.status_message_time = Some(Instant::now());
     }
 
-    pub fn update_status_message(&mut self) {
-        if let Some(time) = self.status_message_time {
-            if time.elapsed().as_secs() >= 3 {
-                self.status_message.clear();
-                self.status_message_time = None;
+    pub fn update_messages(&mut self) {
+        // Don't clear status message if locked
+        if !self.status_message_locked {
+            if let Some(time) = self.status_message_time {
+                if time.elapsed().as_secs() >= 3 {
+                    self.status_message.clear();
+                    self.status_message_time = None;
+                }
             }
         }
+
+        if let Some(time) = self.error_message_time {
+            if time.elapsed().as_secs() >= 3 {
+                self.error_message.clear();
+                self.error_message_time = None;
+            }
+        }
+    }
+
+    pub fn create_confirmation<F>(&mut self, message: String, on_confirmed: F)
+    where
+        F: for<'a> FnOnce(&'a mut App) -> Pin<Box<dyn Future<Output = ()> + 'a>> + 'static,
+    {
+        self.status_message_locked = true;
+        self.confirmation = Some((
+            message,
+            Box::new(on_confirmed),
+        ));
     }
 
     pub async fn load_vector_records(&mut self, uri_prefix: Option<String>) {
@@ -379,7 +419,23 @@ impl App {
         self.set_status_message("Tree refreshed".to_string());
     }
 
-    pub async fn delete_uri(&mut self, selected_uri: String, is_dir: bool) {
+    pub async fn delete_selected_uri(&mut self) -> bool {
+        if let Some(selected_uri) = self.tree.selected_uri() {
+            let is_dir = self.tree.selected_is_dir().unwrap_or(false);
+            let deleted = self.delete_uri(selected_uri.to_string(), is_dir).await;
+            deleted
+        } else {
+            self.set_status_message("Nothing selected to delete".to_string());
+            true
+        }
+    }
+
+    pub async fn delete_uri(&mut self, selected_uri: String, is_dir: bool) -> bool {
+
+        if !self.tree.allow_deletion(&selected_uri) {
+            return false;
+        }
+
         let client = self.client.clone();
         
         // Collect expanded nodes before deletion
@@ -469,5 +525,7 @@ impl App {
                 self.set_status_message(format!("Delete failed: {}", e));
             }
         }
+
+        true
     }
 }

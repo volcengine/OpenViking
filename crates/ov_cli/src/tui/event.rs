@@ -3,19 +3,26 @@ use crossterm::event::{KeyCode, KeyEvent};
 use super::app::{App, Panel};
 
 pub async fn handle_key(app: &mut App, key: KeyEvent) {
-    // Check for delete confirmation first
-    if app.delete_confirmation.is_some() {
+    // Check for error message first - don't accept any input when error is shown
+    if !app.error_message.is_empty() {
+        return;
+    }
+    
+    // Check for confirmation first
+    if app.confirmation.is_some() {
         match key.code {
             KeyCode::Char('y') => {
-                // Confirm deletion
-                if let Some((selected_uri, is_dir)) = app.delete_confirmation.take() {
-                    app.delete_uri(selected_uri, is_dir).await;
+                // Confirm action
+                if let Some((_, callback)) = app.confirmation.take() {
+                    app.status_message_locked = false;
+                    callback(app).await;
                 }
             }
             KeyCode::Char('n') => {
-                // Cancel deletion
-                app.delete_confirmation.take();
-                app.set_status_message("Deletion cancelled".to_string());
+                // Cancel action
+                app.confirmation.take();
+                app.status_message_locked = false;
+                app.set_status_message("Action cancelled".to_string());
             }
             _ => {
                 // Ignore other keys during confirmation
@@ -67,13 +74,23 @@ async fn handle_tree_key(app: &mut App, key: KeyEvent) {
             if let Some(selected_uri) = app.tree.selected_uri() {
                 let selected_uri = selected_uri.to_string();
                 let is_dir = app.tree.selected_is_dir().unwrap_or(false);
-                
-                // Set delete confirmation state
-                app.delete_confirmation = Some((selected_uri.clone(), is_dir));
-                app.status_message = format!("Delete {}? (y/n): {}", 
+
+                // Create confirmation
+                let message = format!("Delete {}? (y/n): {}", 
                     if is_dir { "directory" } else { "file" }, 
                     selected_uri
                 );
+
+                app.create_confirmation(message, move |app| {
+                    Box::pin(async move {
+                        let deleted = app.delete_selected_uri().await;
+                        if deleted {
+                            app.set_status_message(format!("Deleted {}", selected_uri));
+                        } else {
+                            app.set_error_message("Cannot delete root and scope directories".to_string());
+                        }
+                    })
+                });
             } else {
                 app.set_status_message("Nothing selected to delete".to_string());
             }

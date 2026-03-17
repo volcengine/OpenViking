@@ -61,7 +61,7 @@ async fn run_loop(client: HttpClient, uri: &str) -> Result<()> {
         }
 
         // Update status message (clear after 3 seconds)
-        app.update_status_message();
+        app.update_messages();
 
         terminal.draw(|frame| ui::render(frame, &app))?;
 

@@ -252,6 +252,24 @@ fn render_vector_records(frame: &mut Frame, app: &App, area: ratatui::layout::Re
 }
 
 fn render_status_bar(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
+
+    // Show error message only if present
+    if !app.error_message.is_empty() {
+        let bar = Paragraph::new(app.error_message.clone())
+            .style(Style::default().bg(Color::Red).fg(Color::White));
+        frame.render_widget(bar, area);
+        return;
+    }
+
+    // Show confirmation message if present
+    if let Some((message, _)) = &app.confirmation {
+        let bar = Paragraph::new(message.clone())
+            .style(Style::default().bg(Color::Green).fg(Color::White));
+        frame.render_widget(bar, area);
+        return;
+    }
+
+    // Regular status bar with hints
     let mut hints = vec![
         Span::styled(
             " q",
