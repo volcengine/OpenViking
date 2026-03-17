@@ -1,6 +1,6 @@
 {
   "name": "openviking-opencode",
-  "version": "0.3.0",
+  "version": "0.3.3",
   "description": "OpenCode plugin for OpenViking — injects indexed repo context into the AI assistant and auto-installs the openviking skill",
   "type": "module",
   "main": "index.mjs",

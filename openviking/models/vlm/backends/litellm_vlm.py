@@ -224,7 +224,7 @@ class LiteLLMVLMProvider(VLMBase):
 
         response = completion(**kwargs)
         self._update_token_usage_from_response(response)
-        return response.choices[0].message.content or ""
+        return self._clean_response(response.choices[0].message.content or "")
 
     async def get_completion_async(
         self, prompt: str, thinking: bool = False, max_retries: int = 0
@@ -239,7 +239,7 @@ class LiteLLMVLMProvider(VLMBase):
             try:
                 response = await acompletion(**kwargs)
                 self._update_token_usage_from_response(response)
-                return response.choices[0].message.content or ""
+                return self._clean_response(response.choices[0].message.content or "")
             except Exception as e:
                 last_error = e
                 if attempt < max_retries:
@@ -268,7 +268,7 @@ class LiteLLMVLMProvider(VLMBase):
 
         response = completion(**kwargs)
         self._update_token_usage_from_response(response)
-        return response.choices[0].message.content or ""
+        return self._clean_response(response.choices[0].message.content or "")
 
     async def get_vision_completion_async(
         self,
@@ -289,7 +289,7 @@ class LiteLLMVLMProvider(VLMBase):
 
         response = await acompletion(**kwargs)
         self._update_token_usage_from_response(response)
-        return response.choices[0].message.content or ""
+        return self._clean_response(response.choices[0].message.content or "")
 
     def _update_token_usage_from_response(self, response) -> None:
         """Update token usage from response."""

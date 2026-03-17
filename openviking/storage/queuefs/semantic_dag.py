@@ -534,6 +534,7 @@ class SemanticDagExecutor:
                         dir_uri, file_summaries, children_abstracts
                     )
                 abstract = self._processor._extract_abstract_from_overview(overview)
+                overview, abstract = self._processor._enforce_size_limits(overview, abstract)
 
             dir_path = self._viking_fs._uri_to_path(dir_uri, ctx=self._ctx)
             try:

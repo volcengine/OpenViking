@@ -419,6 +419,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
         overview = await self._generate_overview(dir_uri, file_summaries, [])
         abstract = self._extract_abstract_from_overview(overview)
+        overview, abstract = self._enforce_size_limits(overview, abstract)
 
         try:
             await viking_fs.write_file(f"{dir_uri}/.overview.md", overview, ctx=ctx)
@@ -641,8 +642,8 @@ class SemanticProcessor(DequeueHandlerBase):
                 logger.warning(f"Failed to decode file as UTF-8, skipping: {file_path}")
                 return {"name": file_name, "summary": ""}
 
-        # Limit content length (about 10000 tokens)
-        max_chars = 30000
+        # Limit content length
+        max_chars = get_openviking_config().semantic.max_file_content_chars
         if len(content) > max_chars:
             content = content[:max_chars] + "\n...(truncated)"
 
@@ -750,6 +751,15 @@ class SemanticProcessor(DequeueHandlerBase):
 
         return "\n".join(content_lines).strip()
 
+    def _enforce_size_limits(self, overview: str, abstract: str) -> Tuple[str, str]:
+        """Enforce max size limits on overview and abstract."""
+        semantic = get_openviking_config().semantic
+        if len(overview) > semantic.overview_max_chars:
+            overview = overview[: semantic.overview_max_chars]
+        if len(abstract) > semantic.abstract_max_chars:
+            abstract = abstract[: semantic.abstract_max_chars - 3] + "..."
+        return overview, abstract
+
     def _parse_overview_md(self, overview_content: str) -> Dict[str, str]:
         """Parse overview.md and extract file summaries.
 
@@ -811,6 +821,11 @@ class SemanticProcessor(DequeueHandlerBase):
     ) -> str:
         """Generate directory's .overview.md (L1).
 
+        For small directories, generates a single overview from all file summaries.
+        For large directories that would exceed the prompt budget, splits file
+        summaries into batches, generates a partial overview per batch, then
+        merges the partials into a final overview.
+
         Args:
             dir_uri: Directory URI
             file_summaries: File summary list
@@ -819,9 +834,10 @@ class SemanticProcessor(DequeueHandlerBase):
         Returns:
             Overview content
         """
-        import re
 
-        vlm = get_openviking_config().vlm
+        config = get_openviking_config()
+        vlm = config.vlm
+        semantic = config.semantic
 
         if not vlm.is_available():
             logger.warning("VLM not available, using default overview")
@@ -842,7 +858,64 @@ class SemanticProcessor(DequeueHandlerBase):
             else "None"
         )
 
-        # Generate overview
+        # Budget guard: check if prompt would be oversized
+        estimated_size = len(file_summaries_str) + len(children_abstracts_str)
+        over_budget = estimated_size > semantic.max_overview_prompt_chars
+        many_files = len(file_summaries) > semantic.overview_batch_size
+
+        if over_budget and many_files:
+            # Many files, oversized prompt → batch and merge
+            logger.info(
+                f"Overview prompt for {dir_uri} exceeds budget "
+                f"({estimated_size} chars, {len(file_summaries)} files). "
+                f"Splitting into batches of {semantic.overview_batch_size}."
+            )
+            overview = await self._batched_generate_overview(
+                dir_uri, file_summaries, children_abstracts, file_index_map
+            )
+        elif over_budget:
+            # Few files but long summaries → truncate summaries to fit budget
+            logger.info(
+                f"Overview prompt for {dir_uri} exceeds budget "
+                f"({estimated_size} chars) with {len(file_summaries)} files. "
+                f"Truncating summaries to fit."
+            )
+            budget = semantic.max_overview_prompt_chars
+            budget -= len(children_abstracts_str)
+            per_file = max(100, budget // max(len(file_summaries), 1))
+            truncated_lines = []
+            for idx, item in enumerate(file_summaries, 1):
+                summary = item["summary"][:per_file]
+                truncated_lines.append(f"[{idx}] {item['name']}: {summary}")
+            file_summaries_str = "\n".join(truncated_lines)
+            overview = await self._single_generate_overview(
+                dir_uri,
+                file_summaries_str,
+                children_abstracts_str,
+                file_index_map,
+            )
+        else:
+            overview = await self._single_generate_overview(
+                dir_uri,
+                file_summaries_str,
+                children_abstracts_str,
+                file_index_map,
+            )
+
+        return overview
+
+    async def _single_generate_overview(
+        self,
+        dir_uri: str,
+        file_summaries_str: str,
+        children_abstracts_str: str,
+        file_index_map: Dict[int, str],
+    ) -> str:
+        """Generate overview from a single prompt (small directories)."""
+        import re
+
+        vlm = get_openviking_config().vlm
+
         try:
             prompt = render_prompt(
                 "semantic.overview_generation",
@@ -865,8 +938,114 @@ class SemanticProcessor(DequeueHandlerBase):
             return overview.strip()
 
         except Exception as e:
-            logger.error(f"Failed to generate overview for {dir_uri}: {e}", exc_info=True)
+            logger.error(
+                f"Failed to generate overview for {dir_uri}: {e}",
+                exc_info=True,
+            )
             return f"# {dir_uri.split('/')[-1]}\n\nDirectory overview"
+
+    async def _batched_generate_overview(
+        self,
+        dir_uri: str,
+        file_summaries: List[Dict[str, str]],
+        children_abstracts: List[Dict[str, str]],
+        file_index_map: Dict[int, str],
+    ) -> str:
+        """Generate overview by batching file summaries and merging.
+
+        Splits file summaries into batches, generates a partial overview per
+        batch, then merges all partials into a final overview.
+        """
+        import re
+
+        vlm = get_openviking_config().vlm
+        semantic = get_openviking_config().semantic
+        batch_size = semantic.overview_batch_size
+        dir_name = dir_uri.split("/")[-1]
+
+        # Split file summaries into batches
+        batches = [
+            file_summaries[i : i + batch_size] for i in range(0, len(file_summaries), batch_size)
+        ]
+        logger.info(f"Generating overview for {dir_uri} in {len(batches)} batches")
+
+        # Build children abstracts string (used in first batch + merge)
+        children_abstracts_str = (
+            "\n".join(f"- {item['name']}/: {item['abstract']}" for item in children_abstracts)
+            if children_abstracts
+            else "None"
+        )
+
+        # Generate partial overview per batch using global file indices
+        partial_overviews = []
+        global_offset = 0
+        for batch_idx, batch in enumerate(batches):
+            # Build per-batch index map using global offsets
+            batch_lines = []
+            batch_index_map = {}
+            for local_idx, item in enumerate(batch):
+                global_idx = global_offset + local_idx + 1
+                batch_index_map[global_idx] = item["name"]
+                batch_lines.append(f"[{global_idx}] {item['name']}: {item['summary']}")
+            batch_str = "\n".join(batch_lines)
+            global_offset += len(batch)
+
+            # Include children abstracts in the first batch
+            children_str = children_abstracts_str if batch_idx == 0 else "None"
+
+            try:
+                prompt = render_prompt(
+                    "semantic.overview_generation",
+                    {
+                        "dir_name": dir_name,
+                        "file_summaries": batch_str,
+                        "children_abstracts": children_str,
+                    },
+                )
+                partial = await vlm.get_completion_async(prompt)
+
+                # Replace [number] references per batch using batch-local map
+                def make_replacer(idx_map):
+                    def replacer(match):
+                        idx = int(match.group(1))
+                        return idx_map.get(idx, match.group(0))
+
+                    return replacer
+
+                partial = re.sub(r"\[(\d+)\]", make_replacer(batch_index_map), partial)
+                partial_overviews.append(partial.strip())
+            except Exception as e:
+                logger.warning(
+                    f"Failed to generate partial overview batch "
+                    f"{batch_idx + 1}/{len(batches)} for {dir_uri}: {e}"
+                )
+
+        if not partial_overviews:
+            return f"# {dir_name}\n\nDirectory overview"
+
+        # If only one batch succeeded, use it directly
+        if len(partial_overviews) == 1:
+            return partial_overviews[0]
+
+        # Merge partials into a final overview (include children for context)
+        combined = "\n\n---\n\n".join(partial_overviews)
+        try:
+            prompt = render_prompt(
+                "semantic.overview_generation",
+                {
+                    "dir_name": dir_name,
+                    "file_summaries": combined,
+                    "children_abstracts": children_abstracts_str,
+                },
+            )
+            overview = await vlm.get_completion_async(prompt)
+            return overview.strip()
+        except Exception as e:
+            logger.error(
+                f"Failed to merge partial overviews for {dir_uri}: {e}",
+                exc_info=True,
+            )
+            return partial_overviews[0]
 
     async def _vectorize_directory(
         self,
