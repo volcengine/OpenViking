@@ -76,6 +76,13 @@ class AddMessageRequest(BaseModel):
         return self
 
 
+class UsedRequest(BaseModel):
+    """Request model for recording usage."""
+
+    contexts: Optional[List[str]] = None
+    skill: Optional[Dict[str, Any]] = None
+
+
 class CommitSessionRequest(BaseModel):
     """Request model for session commit."""
 
@@ -294,5 +301,26 @@ async def add_message(
         result={
             "session_id": session_id,
             "message_count": len(session.messages),
+        },
+    )
+
+
+@router.post("/{session_id}/used")
+async def record_used(
+    request: UsedRequest,
+    session_id: str = Path(..., description="Session ID"),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Record actually used contexts and skills in a session."""
+    service = get_service()
+    session = service.sessions.session(_ctx, session_id)
+    await session.load()
+    session.used(contexts=request.contexts, skill=request.skill)
+    return Response(
+        status="ok",
+        result={
+            "session_id": session_id,
+            "contexts_used": session.stats.contexts_used,
+            "skills_used": session.stats.skills_used,
         },
     )

@@ -1,6 +1,24 @@
 # 为 OpenClaw 安装 OpenViking 记忆功能
 
-通过 [OpenViking](https://github.com/volcengine/OpenViking) 为 [OpenClaw](https://github.com/openclaw/openclaw) 提供长效记忆能力。安装完成后，OpenClaw 将自动**记住**对话中的重要信息，并在回复前**回忆**相关内容。OpenViking最新版本发布[WebConsole](https://github.com/volcengine/OpenViking/tree/main/openviking/console),方便调试和运维。文档方式三也为大家提供了如何在WebConsole界面验证记忆被写入，提供好用易懂的使用说明，欢迎大家试用和反馈。
+通过 [OpenViking](https://github.com/volcengine/OpenViking) 为 [OpenClaw](https://github.com/openclaw/openclaw) 提供长效记忆能力。安装完成后，OpenClaw 将自动**记住**对话中的重要信息，并在回复前**回忆**相关内容。OpenViking 最新版本发布了 [WebConsole](https://github.com/volcengine/OpenViking/tree/main/openviking/console)，方便调试和运维。文档方式三也提供了如何在 WebConsole 界面验证记忆写入的说明，欢迎试用和反馈。
+
+> **⚠️ OpenClaw >= 2026.3.12 兼容性问题**
+>
+> OpenClaw `2026.3.12` 及更高版本存在已知兼容性问题，会导致加载插件后对话卡死无响应。
+> 这不是本插件的 bug——根因是 OpenClaw 3.12 的 slug generator（会话自动命名）有硬编码 15s 超时，
+> 当 LLM provider 响应较慢时会逐个 profile 超时重试，阻塞整个会话初始化管线。
+> 此外 3.12 新增的插件信任机制也可能影响本地插件的加载时序。
+> 另一个已知问题：`before_agent_start` 中的 auto-recall 缺少超时保护，可能导致 agent 静默挂起（[#673](https://github.com/volcengine/OpenViking/issues/673)）。
+>
+> **临时方案：** 回退到 `2026.3.11`：`npm install -g openclaw@2026.3.11`
+>
+> 上游修复 PR：openclaw/openclaw#34673、openclaw/openclaw#33547。
+> 详见 [#591](https://github.com/volcengine/OpenViking/issues/591)。
+
+> **🚀 插件 2.0 设计中**
+>
+> 我们正在设计基于 context-engine 架构重构的插件 2.0 版本，将作为 OpenViking 接入 AI 编程助手的最佳实践。
+> 欢迎参与讨论：https://github.com/volcengine/OpenViking/discussions/525
 
 ---
 
@@ -88,19 +106,13 @@ python3 -m pip install openviking --upgrade
 
 ### Step 2: 运行安装助手
 
-#### 方式 A：npm 全局安装（推荐）
-
 ```bash
+# 方式 A：npm 安装（推荐，全平台）
 npm install -g openclaw-openviking-setup-helper
 ov-install
-```
 
-#### 方式 B：从仓库运行
-
-```bash
-git clone https://github.com/volcengine/OpenViking.git
-cd OpenViking
-npx ./examples/openclaw-memory-plugin/setup-helper
+# 方式 B：curl 一键安装（Linux / macOS）
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-memory-plugin/install.sh | bash
 ```
 
 安装助手会提示输入 Ark API Key 并自动生成配置文件。
@@ -128,16 +140,23 @@ openclaw status
 
 **前置：** 已有 OpenViking 服务地址 + API Key（如服务端启用了认证）。
 
-### Step 1: 部署插件代码
+### Step 1: 安装插件
 
 ```bash
-git clone https://github.com/volcengine/OpenViking.git
-cd OpenViking/examples/openclaw-memory-plugin
-npm install
-openclaw plugin link .
+npm install -g openclaw-openviking-setup-helper
+ov-install
+# 选择 remote 模式，填入 OpenViking 服务地址和 API Key
 ```
 
-### Step 2: 配置远端连接
+### Step 2: 启动并验证
+
+```bash
+openclaw gateway restart
+openclaw status
+```
+
+<details>
+<summary>手动配置（不使用安装助手）</summary>
 
 ```bash
 openclaw config set plugins.enabled true --json
@@ -145,16 +164,12 @@ openclaw config set plugins.slots.memory memory-openviking
 openclaw config set plugins.entries.memory-openviking.config.mode remote
 openclaw config set plugins.entries.memory-openviking.config.baseUrl "http://your-server:1933"
 openclaw config set plugins.entries.memory-openviking.config.apiKey "your-api-key"
+openclaw config set plugins.entries.memory-openviking.config.agentId "your-agent-id"
 openclaw config set plugins.entries.memory-openviking.config.autoRecall true --json
 openclaw config set plugins.entries.memory-openviking.config.autoCapture true --json
 ```
 
-### Step 3: 启动并验证
-
-```bash
-openclaw gateway
-openclaw status
-```
+</details>
 ## 方式三 火山引擎 ECS 版 Openclaw 接入 OpenViking
 
 本部分主要介绍如何在火山引擎ECS上接入OpenViking，并使用WebConsole验证写入。详情可见[文档](https://www.volcengine.com/docs/6396/2249500?lang=zh)。
