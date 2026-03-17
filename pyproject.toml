@@ -76,6 +76,9 @@ dependencies = [
 pyagfs = { path = "third_party/agfs/agfs-sdk/python" }
 
 [project.optional-dependencies]
+audio = [
+    "mutagen>=1.47.0",
+]
 test = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
