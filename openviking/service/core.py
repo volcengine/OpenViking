@@ -11,6 +11,8 @@ from typing import Any, Optional
 
 from openviking.agfs_manager import AGFSManager
 from openviking.core.directories import DirectoryInitializer
+from openviking.resource.watch_manager import WatchManager
+from openviking.resource.watch_scheduler import WatchScheduler
 from openviking.server.identity import RequestContext, Role
 from openviking.service.debug_service import DebugService
 from openviking.service.fs_service import FSService
@@ -77,6 +79,7 @@ class OpenVikingService:
         self._session_compressor: Optional[SessionCompressor] = None
         self._transaction_manager: Optional[TransactionManager] = None
         self._directory_initializer: Optional[DirectoryInitializer] = None
+        self._watch_scheduler: Optional[WatchScheduler] = None
 
         # Sub-services
         self._fs_service = FSService()
@@ -167,6 +170,11 @@ class OpenVikingService:
     def session_compressor(self) -> Optional[SessionCompressor]:
         """Get SessionCompressor instance."""
         return self._session_compressor
+
+    @property
+    def watch_scheduler(self) -> Optional[WatchScheduler]:
+        """Get WatchScheduler instance."""
+        return self._watch_scheduler
 
     @property
     def fs(self) -> FSService:
@@ -270,6 +278,13 @@ class OpenVikingService:
             await self._transaction_manager.start()
             logger.info("TransactionManager started")
 
+        self._watch_scheduler = WatchScheduler(
+            resource_service=self._resource_service,
+            viking_fs=self._viking_fs,
+        )
+        await self._watch_scheduler.start()
+        logger.info("WatchScheduler started")
+
         # Wire up sub-services
         self._fs_service.set_viking_fs(self._viking_fs)
         self._relation_service.set_viking_fs(self._viking_fs)
@@ -280,6 +295,7 @@ class OpenVikingService:
             viking_fs=self._viking_fs,
             resource_processor=self._resource_processor,
             skill_processor=self._skill_processor,
+            watch_scheduler=self._watch_scheduler,
         )
         self._session_service.set_dependencies(
             vikingdb=self._vikingdb_manager,
@@ -296,6 +312,11 @@ class OpenVikingService:
 
     async def close(self) -> None:
         """Close OpenViking and release resources."""
+        if self._watch_scheduler:
+            await self._watch_scheduler.stop()
+            self._watch_scheduler = None
+            logger.info("WatchScheduler stopped")
+
         if self._transaction_manager:
             self._transaction_manager.stop()
             self._transaction_manager = None

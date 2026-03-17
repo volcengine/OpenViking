@@ -62,6 +62,7 @@ class LocalClient(BaseClient):
         instruction: str = "",
         wait: bool = False,
         timeout: Optional[float] = None,
+        watch_interval: float = 0,
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
@@ -78,6 +79,7 @@ class LocalClient(BaseClient):
             instruction=instruction,
             wait=wait,
             timeout=timeout,
+            watch_interval=watch_interval,
             **kwargs,
         )
 

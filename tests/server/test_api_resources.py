@@ -86,3 +86,32 @@ async def test_wait_processed_after_add(client: httpx.AsyncClient, sample_markdo
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
+
+
+async def test_add_resource_with_watch_interval(client: httpx.AsyncClient, sample_markdown_file):
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "path": str(sample_markdown_file),
+            "reason": "test resource with watch interval",
+            "watch_interval": 5.0,
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert "root_uri" in body["result"]
+
+
+async def test_add_resource_with_default_watch_interval(client: httpx.AsyncClient, sample_markdown_file):
+    resp = await client.post(
+        "/api/v1/resources",
+        json={
+            "path": str(sample_markdown_file),
+            "reason": "test resource with default watch interval",
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert "root_uri" in body["result"]

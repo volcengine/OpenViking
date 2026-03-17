@@ -182,6 +182,7 @@ class AsyncOpenViking:
         timeout: float = None,
         build_index: bool = True,
         summarize: bool = False,
+        watch_interval: float = 0,
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -213,6 +214,7 @@ class AsyncOpenViking:
             timeout=timeout,
             build_index=build_index,
             summarize=summarize,
+            watch_interval=watch_interval,
             **kwargs,
         )
 

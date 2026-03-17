@@ -480,6 +480,7 @@ impl HttpClient {
         include: Option<String>,
         exclude: Option<String>,
         directly_upload_media: bool,
+        watch_interval: f64,
     ) -> Result<serde_json::Value> {
         let path_obj = Path::new(path);
 
@@ -501,6 +502,7 @@ impl HttpClient {
                     "include": include,
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
+                    "watch_interval": watch_interval,
                 });
 
                 self.post("/api/v1/resources", &body).await
@@ -520,6 +522,7 @@ impl HttpClient {
                     "include": include,
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
+                    "watch_interval": watch_interval,
                 });
 
                 self.post("/api/v1/resources", &body).await
@@ -537,6 +540,7 @@ impl HttpClient {
                     "include": include,
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
+                    "watch_interval": watch_interval,
                 });
 
                 self.post("/api/v1/resources", &body).await
@@ -555,6 +559,7 @@ impl HttpClient {
                 "include": include,
                 "exclude": exclude,
                 "directly_upload_media": directly_upload_media,
+                "watch_interval": watch_interval,
             });
 
             self.post("/api/v1/resources", &body).await
