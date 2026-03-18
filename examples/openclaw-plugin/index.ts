@@ -22,6 +22,7 @@ import {
   IS_WIN,
   waitForHealth,
   quickRecallPrecheck,
+  withTimeout,
   resolvePythonCommand,
   prepareLocalPort,
 } from "./process-manager.js";
@@ -414,7 +415,17 @@ const contextEnginePlugin = {
 
       const hookSessionId = ctx?.sessionId ?? ctx?.sessionKey ?? "";
       const resolvedAgentId = resolveAgentId(hookSessionId);
-      const client = await getClient();
+      let client: OpenVikingClient;
+      try {
+        client = await withTimeout(
+          getClient(),
+          5000,
+          "openviking: client initialization timeout (OpenViking service not ready yet)"
+        );
+      } catch (err) {
+        api.logger.warn?.(`openviking: failed to get client: ${String(err)}`);
+        return;
+      }
       if (resolvedAgentId && client.getAgentId() !== resolvedAgentId) {
         client.setAgentId(resolvedAgentId);
         api.logger.info(`openviking: switched to agentId=${resolvedAgentId} for before_prompt_build`);
