@@ -21,6 +21,7 @@ import {
 import {
   IS_WIN,
   waitForHealth,
+  withTimeout,
   quickRecallPrecheck,
   resolvePythonCommand,
   prepareLocalPort,
@@ -68,6 +69,7 @@ type OpenClawPluginApi = {
 
 const MAX_OPENVIKING_STDERR_LINES = 200;
 const MAX_OPENVIKING_STDERR_CHARS = 256_000;
+const AUTO_RECALL_TIMEOUT_MS = 5_000;
 
 const contextEnginePlugin = {
   id: "openviking",
@@ -438,69 +440,75 @@ const contextEnginePlugin = {
           );
         } else {
           try {
-            const candidateLimit = Math.max(cfg.recallLimit * 4, 20);
-            const [userSettled, agentSettled] = await Promise.allSettled([
-              client.find(queryText, {
-                targetUri: "viking://user/memories",
-                limit: candidateLimit,
-                scoreThreshold: 0,
-              }),
-              client.find(queryText, {
-                targetUri: "viking://agent/memories",
-                limit: candidateLimit,
-                scoreThreshold: 0,
-              }),
-            ]);
+            await withTimeout(
+              (async () => {
+                const candidateLimit = Math.max(cfg.recallLimit * 4, 20);
+                const [userSettled, agentSettled] = await Promise.allSettled([
+                  client.find(queryText, {
+                    targetUri: "viking://user/memories",
+                    limit: candidateLimit,
+                    scoreThreshold: 0,
+                  }),
+                  client.find(queryText, {
+                    targetUri: "viking://agent/memories",
+                    limit: candidateLimit,
+                    scoreThreshold: 0,
+                  }),
+                ]);
 
-            const userResult = userSettled.status === "fulfilled" ? userSettled.value : { memories: [] };
-            const agentResult = agentSettled.status === "fulfilled" ? agentSettled.value : { memories: [] };
-            if (userSettled.status === "rejected") {
-              api.logger.warn(`openviking: user memories search failed: ${String(userSettled.reason)}`);
-            }
-            if (agentSettled.status === "rejected") {
-              api.logger.warn(`openviking: agent memories search failed: ${String(agentSettled.reason)}`);
-            }
+                const userResult = userSettled.status === "fulfilled" ? userSettled.value : { memories: [] };
+                const agentResult = agentSettled.status === "fulfilled" ? agentSettled.value : { memories: [] };
+                if (userSettled.status === "rejected") {
+                  api.logger.warn(`openviking: user memories search failed: ${String(userSettled.reason)}`);
+                }
+                if (agentSettled.status === "rejected") {
+                  api.logger.warn(`openviking: agent memories search failed: ${String(agentSettled.reason)}`);
+                }
 
-            const allMemories = [...(userResult.memories ?? []), ...(agentResult.memories ?? [])];
-            const uniqueMemories = allMemories.filter((memory, index, self) =>
-              index === self.findIndex((m) => m.uri === memory.uri)
-            );
-            const leafOnly = uniqueMemories.filter((m) => m.level === 2);
-            const processed = postProcessMemories(leafOnly, {
-              limit: candidateLimit,
-              scoreThreshold: cfg.recallScoreThreshold,
-            });
-            const memories = pickMemoriesForInjection(processed, cfg.recallLimit, queryText);
+                const allMemories = [...(userResult.memories ?? []), ...(agentResult.memories ?? [])];
+                const uniqueMemories = allMemories.filter((memory, index, self) =>
+                  index === self.findIndex((m) => m.uri === memory.uri)
+                );
+                const leafOnly = uniqueMemories.filter((m) => m.level === 2);
+                const processed = postProcessMemories(leafOnly, {
+                  limit: candidateLimit,
+                  scoreThreshold: cfg.recallScoreThreshold,
+                });
+                const memories = pickMemoriesForInjection(processed, cfg.recallLimit, queryText);
 
-            if (memories.length > 0) {
-              const memoryLines = await Promise.all(
-                memories.map(async (item: FindResultItem) => {
-                  if (item.level === 2) {
-                    try {
-                      const content = await client.read(item.uri);
-                      if (content && typeof content === "string" && content.trim()) {
-                        return `- [${item.category ?? "memory"}] ${content.trim()}`;
+                if (memories.length > 0) {
+                  const memoryLines = await Promise.all(
+                    memories.map(async (item: FindResultItem) => {
+                      if (item.level === 2) {
+                        try {
+                          const content = await client.read(item.uri);
+                          if (content && typeof content === "string" && content.trim()) {
+                            return `- [${item.category ?? "memory"}] ${content.trim()}`;
+                          }
+                        } catch {
+                          // fallback to abstract
+                        }
                       }
-                    } catch {
-                      // fallback to abstract
-                    }
-                  }
-                  return `- [${item.category ?? "memory"}] ${item.abstract ?? item.uri}`;
-                }),
-              );
-              const memoryContext = memoryLines.join("\n");
-              api.logger.info(`openviking: injecting ${memories.length} memories into context`);
-              api.logger.info(
-                `openviking: inject-detail ${toJsonLog({ count: memories.length, memories: summarizeInjectionMemories(memories) })}`,
-              );
-              prependContextParts.push(
-                "<relevant-memories>\nThe following OpenViking memories may be relevant:\n" +
-                  `${memoryContext}\n` +
-                "</relevant-memories>",
-              );
-            }
+                      return `- [${item.category ?? "memory"}] ${item.abstract ?? item.uri}`;
+                    }),
+                  );
+                  const memoryContext = memoryLines.join("\n");
+                  api.logger.info(`openviking: injecting ${memories.length} memories into context`);
+                  api.logger.info(
+                    `openviking: inject-detail ${toJsonLog({ count: memories.length, memories: summarizeInjectionMemories(memories) })}`,
+                  );
+                  prependContextParts.push(
+                    "<relevant-memories>\nThe following OpenViking memories may be relevant:\n" +
+                      `${memoryContext}\n` +
+                    "</relevant-memories>",
+                  );
+                }
+              })(),
+              AUTO_RECALL_TIMEOUT_MS,
+              `openviking: auto-recall timed out after ${AUTO_RECALL_TIMEOUT_MS}ms`,
+            );
           } catch (err) {
-            api.logger.warn(`openviking: auto-recall failed: ${String(err)}`);
+            api.logger.warn(`openviking: auto-recall failed or timed out: ${String(err)}`);
           }
         }
       }
