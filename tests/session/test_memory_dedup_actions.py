@@ -42,7 +42,7 @@ class _DummyEmbedResult:
 
 
 class _DummyEmbedder:
-    def embed(self, _text):
+    def embed(self, _text, is_query: bool = False):
         return _DummyEmbedResult([0.1, 0.2, 0.3])
 
 

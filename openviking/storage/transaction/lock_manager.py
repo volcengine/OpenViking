@@ -52,9 +52,11 @@ class LockManager:
         if self._cleanup_task:
             self._cleanup_task.cancel()
             try:
-                await self._cleanup_task
+                if self._cleanup_task.get_loop() is asyncio.get_running_loop():
+                    await self._cleanup_task
             except asyncio.CancelledError:
                 pass
+            self._cleanup_task = None
         for handle in list(self._handles.values()):
             await self._path_lock.release(handle)
         self._handles.clear()

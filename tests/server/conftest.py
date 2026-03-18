@@ -56,11 +56,11 @@ def _install_fake_embedder(monkeypatch):
         def __init__(self):
             super().__init__(model_name="test-fake-embedder")
 
-        def embed(self, text: str) -> EmbedResult:
+        def embed(self, text: str, is_query: bool = False) -> EmbedResult:
             return EmbedResult(dense_vector=[0.1] * dimension)
 
-        def embed_batch(self, texts: list[str]) -> list[EmbedResult]:
-            return [self.embed(text) for text in texts]
+        def embed_batch(self, texts: list[str], is_query: bool = False) -> list[EmbedResult]:
+            return [self.embed(text, is_query=is_query) for text in texts]
 
         def get_dimension(self) -> int:
             return dimension
