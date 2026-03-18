@@ -277,6 +277,9 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Embed single text, with automatic chunking for oversized input.
 
+        If the initial embedding fails due to input length exceeding the model's
+        limit, retries with progressively smaller chunk sizes.
+
         Args:
             text: Input text
             is_query: Flag to indicate if this is a query embedding
@@ -285,14 +288,39 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             EmbedResult: Result containing only dense_vector
 
         Raises:
-            RuntimeError: When API call fails
+            RuntimeError: When API call fails after all retry attempts
         """
         if not text:
             return self._embed_single(text, is_query=is_query)
 
         if self._estimate_tokens(text) > self.max_tokens:
             return self._chunk_and_embed(text, is_query=is_query)
-        return self._embed_single(text, is_query=is_query)
+
+        try:
+            return self._embed_single(text, is_query=is_query)
+        except RuntimeError as e:
+            error_msg = str(e).lower()
+            if (
+                "too large" in error_msg
+                or "too long" in error_msg
+                or "maximum context length" in error_msg
+            ):
+                # Token estimation was wrong (common with non-OpenAI models).
+                # Retry with chunking at half the current max_tokens.
+                reduced = max(self.max_tokens // 2, 128)
+                logger.warning(
+                    f"Embedding failed due to input length. "
+                    f"Retrying with chunk size {reduced} tokens. "
+                    f"Set embedding.dense.max_tokens in ov.conf to match "
+                    f"your model's actual limit."
+                )
+                saved = self._max_tokens
+                self._max_tokens = reduced
+                try:
+                    return self._chunk_and_embed(text, is_query=is_query)
+                finally:
+                    self._max_tokens = saved
+            raise
 
     def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
         """Batch embedding with automatic chunking for oversized inputs.
