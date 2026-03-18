@@ -220,7 +220,28 @@ class Session:
         self._update_message_in_jsonl()
 
     def commit(self) -> Dict[str, Any]:
-        """Commit session: create archive, extract memories, persist."""
+        """Commit session: create archive, extract memories, persist.
+
+        Warning: This is a synchronous method that uses run_async() internally.
+        If called from an async context, it will block the event loop.
+        Use commit_async() instead when running inside an async application.
+        """
+        import asyncio
+        import warnings
+
+        try:
+            loop = asyncio.get_running_loop()
+            if loop.is_running():
+                warnings.warn(
+                    "Session.commit() called from a running event loop. "
+                    "This will block the event loop and freeze all HTTP endpoints. "
+                    "Use 'await session.commit_async()' instead.",
+                    RuntimeWarning,
+                    stacklevel=2,
+                )
+        except RuntimeError:
+            pass  # No event loop running — safe to proceed
+
         result = {
             "session_id": self.session_id,
             "status": "committed",
