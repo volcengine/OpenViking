@@ -252,11 +252,17 @@ class Session:
         result["archived"] = True
 
         self._messages.clear()
+
+        # 2. Persist cleared messages.jsonl immediately to prevent race condition.
+        # Without this, a concurrent commit could re-read old messages from the
+        # stale file while memory extraction (step 3) is still running.
+        self._write_to_agfs(self._messages)
+
         logger.info(
             f"Archived: {len(messages_to_archive)} messages → history/archive_{self._compression.compression_index:03d}/"
         )
 
-        # 2. Extract long-term memories
+        # 3. Extract long-term memories (may take seconds/minutes with LLM)
         if self._session_compressor:
             logger.info(
                 f"Starting memory extraction from {len(messages_to_archive)} archived messages"
@@ -273,9 +279,6 @@ class Session:
             result["memories_extracted"] = len(memories)
             self._stats.memories_extracted += len(memories)
             get_current_telemetry().set("memory.extracted", len(memories))
-
-        # 3. Write current messages to AGFS
-        self._write_to_agfs(self._messages)
 
         # 4. Create relations
         self._write_relations()
@@ -330,11 +333,17 @@ class Session:
         result["archived"] = True
 
         self._messages.clear()
+
+        # 2. Persist cleared messages.jsonl immediately to prevent race condition.
+        # Without this, a concurrent commit could re-read old messages from the
+        # stale file while memory extraction (step 3) is still running.
+        await self._write_to_agfs_async(self._messages)
+
         logger.info(
             f"Archived: {len(messages_to_archive)} messages → history/archive_{self._compression.compression_index:03d}/"
         )
 
-        # 2. Extract long-term memories
+        # 3. Extract long-term memories (may take seconds/minutes with LLM)
         if self._session_compressor:
             logger.info(
                 f"Starting memory extraction from {len(messages_to_archive)} archived messages"
@@ -349,9 +358,6 @@ class Session:
             result["memories_extracted"] = len(memories)
             self._stats.memories_extracted += len(memories)
             get_current_telemetry().set("memory.extracted", len(memories))
-
-        # 3. Write current messages to AGFS
-        await self._write_to_agfs_async(self._messages)
 
         # 4. Create relations
         await self._write_relations_async()
