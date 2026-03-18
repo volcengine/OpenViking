@@ -4,8 +4,6 @@
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from openviking.models.vlm.backends.openai_vlm import OpenAIVLM
 
 
@@ -19,11 +17,13 @@ class TestVLMExtraHeaders:
         mock_openai_class.return_value = mock_client
 
         headers = {"HTTP-Referer": "https://example.com", "X-Title": "My App"}
-        vlm = OpenAIVLM({
-            "api_key": "sk-test",
-            "api_base": "https://api.openai.com/v1",
-            "extra_headers": headers,
-        })
+        vlm = OpenAIVLM(
+            {
+                "api_key": "sk-test",
+                "api_base": "https://api.openai.com/v1",
+                "extra_headers": headers,
+            }
+        )
 
         # Trigger client creation
         _ = vlm.get_client()
@@ -39,11 +39,13 @@ class TestVLMExtraHeaders:
         mock_async_openai_class.return_value = mock_client
 
         headers = {"HTTP-Referer": "https://example.com", "X-Title": "My App"}
-        vlm = OpenAIVLM({
-            "api_key": "sk-test",
-            "api_base": "https://api.openai.com/v1",
-            "extra_headers": headers,
-        })
+        vlm = OpenAIVLM(
+            {
+                "api_key": "sk-test",
+                "api_base": "https://api.openai.com/v1",
+                "extra_headers": headers,
+            }
+        )
 
         # Trigger async client creation
         _ = vlm.get_async_client()
@@ -58,10 +60,12 @@ class TestVLMExtraHeaders:
         mock_client = MagicMock()
         mock_openai_class.return_value = mock_client
 
-        vlm = OpenAIVLM({
-            "api_key": "sk-test",
-            "api_base": "https://api.openai.com/v1",
-        })
+        vlm = OpenAIVLM(
+            {
+                "api_key": "sk-test",
+                "api_base": "https://api.openai.com/v1",
+            }
+        )
 
         # Trigger client creation
         _ = vlm.get_client()
@@ -76,11 +80,13 @@ class TestVLMExtraHeaders:
         mock_client = MagicMock()
         mock_openai_class.return_value = mock_client
 
-        vlm = OpenAIVLM({
-            "api_key": "sk-test",
-            "api_base": "https://api.openai.com/v1",
-            "extra_headers": {},
-        })
+        vlm = OpenAIVLM(
+            {
+                "api_key": "sk-test",
+                "api_base": "https://api.openai.com/v1",
+                "extra_headers": {},
+            }
+        )
 
         # Trigger client creation
         _ = vlm.get_client()
@@ -111,10 +117,12 @@ class TestVLMBaseExtraHeaders:
                 return ""
 
         headers = {"X-Custom-Header": "custom-value"}
-        vlm = StubVLM({
-            "api_key": "sk-test",
-            "extra_headers": headers,
-        })
+        vlm = StubVLM(
+            {
+                "api_key": "sk-test",
+                "extra_headers": headers,
+            }
+        )
 
         assert vlm.extra_headers == headers
 
@@ -134,9 +142,11 @@ class TestVLMBaseExtraHeaders:
             async def get_vision_completion_async(self, prompt, images, thinking=False):
                 return ""
 
-        vlm = StubVLM({
-            "api_key": "sk-test",
-        })
+        vlm = StubVLM(
+            {
+                "api_key": "sk-test",
+            }
+        )
 
         assert vlm.extra_headers is None
 
