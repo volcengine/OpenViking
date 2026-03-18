@@ -190,7 +190,7 @@ async def test_embedding_handler_binds_registered_operation_telemetry(monkeypatc
             self.storage = SimpleNamespace(vectordb=SimpleNamespace(name="context"))
             self.embedding = SimpleNamespace(
                 dimension=2,
-                get_document_embedder=lambda: _TelemetryAwareEmbedder(),
+                get_embedder=lambda: _TelemetryAwareEmbedder(),
             )
 
     class _DummyVikingDB:

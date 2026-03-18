@@ -40,15 +40,25 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         1536
 
         >>> # Non-symmetric mode (OpenAI-compatible third-party models)
-        >>> query_embedder = OpenAIDenseEmbedder(
+        >>> embedder = OpenAIDenseEmbedder(
         ...     model_name="bge-m3",
         ...     api_key="your-api-key",
         ...     api_base="https://your-api-endpoint.com/v1",
-        ...     context="query",
         ...     query_param="query",
         ...     document_param="passage"
         ... )
-        >>> query_vector = query_embedder.embed("search query")
+        >>> query_vector = embedder.embed("search query", is_query=True)
+        >>> doc_vector = embedder.embed("document text", is_query=False)
+
+        >>> # Multiple parameters with key=value format
+        >>> advanced_embedder = OpenAIDenseEmbedder(
+        ...     model_name="custom-model",
+        ...     api_key="your-api-key",
+        ...     api_base="https://your-api-endpoint.com/v1",
+        ...     query_param="input_type=query,task=search,domain=finance",
+        ...     document_param="input_type=passage,task=index,domain=finance"
+        ... )
+        >>> advanced_vector = advanced_embedder.embed("financial query", is_query=True)
     """
 
     def __init__(
@@ -57,7 +67,6 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         dimension: Optional[int] = None,
-        context: Optional[str] = None,
         query_param: Optional[str] = None,
         document_param: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
@@ -69,25 +78,20 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
 
         Args:
             model_name: Model name. For official OpenAI models (e.g., text-embedding-3-small),
-                       use symmetric mode (context=None, query_param=None, document_param=None).
+                       use symmetric mode (query_param=None, document_param=None).
                        For OpenAI-compatible third-party models (e.g., BGE-M3, Jina, Cohere), use
-                       non-symmetric mode with context='query'/'document'.
+                       non-symmetric mode with query_param/document_param.
             api_key: API key, if None will read from env vars (OPENVIKING_EMBEDDING_API_KEY or OPENAI_API_KEY)
             api_base: API base URL, optional. Required for third-party OpenAI-compatible APIs.
             dimension: Dimension (if model supports), optional
-            context: Embedding context, either 'query' or 'document'. When both query_param
-                     and document_param are None (the default), the model is treated as symmetric
-                     and no input_type is sent to the API. Set query_param and/or document_param
-                     to enable non-symmetric mode. Only supported by OpenAI-compatible third-party
-                     models, not official OpenAI models.
-            query_param: The input_type value for query-side embeddings, e.g. 'query' or
-                         'search_query'. Defaults to 'query' when non-symmetric mode is active.
+            query_param: Parameter for query-side embeddings. Supports simple values (e.g., 'query')
+                         or key=value format (e.g., 'input_type=query,task=search'). Defaults to None.
                          Setting this (or document_param) activates non-symmetric mode.
                          Only supported by OpenAI-compatible third-party models.
-            document_value: The input_type value for document-side embeddings, e.g. 'passage'
-                            or 'document'. Defaults to 'passage' when non-symmetric mode is
-                            active. Setting this (or query_value) activates non-symmetric mode.
-                            Only supported by OpenAI-compatible third-party models.
+            document_param: Parameter for document-side embeddings. Supports simple values (e.g., 'passage')
+                           or key=value format (e.g., 'input_type=passage,task=index'). Defaults to None.
+                           Setting this (or query_param) activates non-symmetric mode.
+                           Only supported by OpenAI-compatible third-party models.
             config: Additional configuration dict
             max_tokens: Maximum token count per embedding request, None to use default (8000)
             extra_headers: Extra HTTP headers to include in API requests (e.g., for OpenRouter:
@@ -107,21 +111,8 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         self.api_key = api_key
         self.api_base = api_base
         self.dimension = dimension
-
-        # Direct input_type overrides context-based logic
-        if input_type is not None:
-            self.input_type: Optional[str] = input_type
-        else:
-            # Symmetric by default: only activate input_type if user explicitly sets either value
-            non_symmetric = query_param is not None or document_param is not None
-            if not non_symmetric:
-                self.input_type = None
-            elif context == "query":
-                self.input_type = query_param if query_param is not None else "query"
-            elif context == "document":
-                self.input_type = document_param if document_param is not None else "passage"
-            else:
-                self.input_type = None
+        self.query_param = query_param
+        self.document_param = document_param
 
         # Allow missing api_key when api_base is set (e.g. local OpenAI-compatible servers)
         if not self.api_key and not self.api_base:
@@ -173,7 +164,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
     def _detect_dimension(self) -> int:
         """Detect dimension by making an actual API call"""
         try:
-            result = self._embed_single("test")
+            result = self._embed_single("test", is_query=False)
             return len(result.dense_vector) if result.dense_vector else 1536
         except Exception:
             # Use default value, text-embedding-3-small defaults to 1536
@@ -198,23 +189,67 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             output_tokens,
         )
 
-    def _build_extra_body(self) -> Optional[Dict[str, Any]]:
-        """Build extra_body dict for OpenAI-compatible parameters
+    def _parse_param_string(self, param: Optional[str]) -> Dict[str, str]:
+        """Parse parameter string to dictionary for key=value format
+
+        Args:
+            param: Parameter string (e.g., "input_type=query,task=search")
 
         Returns:
-            Dict containing input_type if non-symmetric mode is active.
+            Dictionary of parsed parameters
+        """
+        if not param:
+            return {}
+
+        result = {}
+
+        # Split by comma for multiple parameters
+        parts = [p.strip() for p in param.split(",")]
+
+        for part in parts:
+            if "=" in part:
+                key, value = part.split("=", 1)
+                result[key.strip()] = value.strip()
+
+        return result
+
+    def _build_extra_body(self, is_query: bool = False) -> Optional[Dict[str, Any]]:
+        """Build extra_body dict for OpenAI-compatible parameters
+
+        Args:
+            is_query: Flag to indicate if this is for query embeddings
+
+        Returns:
+            Dict containing input_type and other parameters if non-symmetric mode is active.
+            Supports key=value format for multiple parameters (e.g., "input_type=query,task=search").
             Only supported by OpenAI-compatible third-party models.
         """
         extra_body = {}
-        if self.input_type is not None:
-            extra_body["input_type"] = self.input_type
+
+        # Determine which parameter to use based on is_query flag
+        active_param = None
+        if is_query and self.query_param is not None:
+            active_param = self.query_param
+        elif not is_query and self.document_param is not None:
+            active_param = self.document_param
+
+        if active_param:
+            if "=" in active_param:
+                # Parse key=value format (e.g., "input_type=query,task=search")
+                parsed = self._parse_param_string(active_param)
+                extra_body.update(parsed)
+            else:
+                # Simple format (e.g., "query" -> {"input_type": "query"})
+                extra_body["input_type"] = active_param
+
         return extra_body if extra_body else None
 
-    def _embed_single(self, text: str) -> EmbedResult:
+    def _embed_single(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform raw embedding without chunking logic.
 
         Args:
             text: Input text
+            is_query: Flag to indicate if this is a query embedding
 
         Returns:
             EmbedResult: Result containing only dense_vector
@@ -225,7 +260,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         try:
             kwargs: Dict[str, Any] = {"input": text, "model": self.model_name}
 
-            extra_body = self._build_extra_body()
+            extra_body = self._build_extra_body(is_query=is_query)
             if extra_body:
                 kwargs["extra_body"] = extra_body
 
@@ -239,11 +274,12 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         except Exception as e:
             raise RuntimeError(f"Embedding failed: {str(e)}") from e
 
-    def embed(self, text: str) -> EmbedResult:
+    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Embed single text, with automatic chunking for oversized input.
 
         Args:
             text: Input text
+            is_query: Flag to indicate if this is a query embedding
 
         Returns:
             EmbedResult: Result containing only dense_vector
@@ -252,13 +288,13 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             RuntimeError: When API call fails
         """
         if not text:
-            return self._embed_single(text)
+            return self._embed_single(text, is_query=is_query)
 
         if self._estimate_tokens(text) > self.max_tokens:
-            return self._chunk_and_embed(text)
-        return self._embed_single(text)
+            return self._chunk_and_embed(text, is_query=is_query)
+        return self._embed_single(text, is_query=is_query)
 
-    def embed_batch(self, texts: List[str]) -> List[EmbedResult]:
+    def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
         """Batch embedding with automatic chunking for oversized inputs.
 
         Short texts are batched together via the OpenAI API for efficiency.
@@ -266,6 +302,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
 
         Args:
             texts: List of texts
+            is_query: Flag to indicate if these are query embeddings
 
         Returns:
             List[EmbedResult]: List of embedding results
@@ -282,7 +319,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
 
         for i, text in enumerate(texts):
             if text and self._estimate_tokens(text) > self.max_tokens:
-                results[i] = self._chunk_and_embed(text)
+                results[i] = self._chunk_and_embed(text, is_query=is_query)
             else:
                 short_indices.append(i)
                 short_texts.append(text)
@@ -291,7 +328,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             try:
                 kwargs: Dict[str, Any] = {"input": short_texts, "model": self.model_name}
 
-                extra_body = self._build_extra_body()
+                extra_body = self._build_extra_body(is_query=is_query)
                 if extra_body:
                     kwargs["extra_body"] = extra_body
 
@@ -327,7 +364,7 @@ class OpenAISparseEmbedder(SparseEmbedderBase):
             "Consider using VolcengineSparseEmbedder or other providers."
         )
 
-    def embed(self, text: str) -> EmbedResult:
+    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         raise NotImplementedError()
 
 
@@ -343,7 +380,7 @@ class OpenAIHybridEmbedder(HybridEmbedderBase):
             "Consider using VolcengineHybridEmbedder or other providers."
         )
 
-    def embed(self, text: str) -> EmbedResult:
+    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         raise NotImplementedError()
 
     def get_dimension(self) -> int:

@@ -81,7 +81,7 @@ class VoyageDenseEmbedder(DenseEmbedderBase):
 
         self._dimension = dimension or get_voyage_model_default_dimension(normalized_model_name)
 
-    def embed(self, text: str) -> EmbedResult:
+    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform dense embedding on text."""
         try:
             kwargs: Dict[str, Any] = {"input": text, "model": self.model_name}
@@ -96,7 +96,7 @@ class VoyageDenseEmbedder(DenseEmbedderBase):
         except Exception as e:
             raise RuntimeError(f"Embedding failed: {str(e)}") from e
 
-    def embed_batch(self, texts: List[str]) -> List[EmbedResult]:
+    def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
         """Batch embedding."""
         if not texts:
             return []

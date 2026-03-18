@@ -145,11 +145,12 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
             output_tokens,
         )
 
-    def embed(self, text: str) -> EmbedResult:
+    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform dense embedding on text
 
         Args:
             text: Input text
+            is_query: Flag to indicate if this is a query embedding
 
         Returns:
             EmbedResult: Result containing dense_vector
@@ -188,11 +189,12 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
         except Exception as e:
             raise RuntimeError(f"Volcengine embedding failed: {str(e)}") from e
 
-    def embed_batch(self, texts: List[str]) -> List[EmbedResult]:
+    def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
         """Batch embedding
 
         Args:
             texts: List of texts
+            is_query: Flag to indicate if these are query embeddings
 
         Returns:
             List[EmbedResult]: List of embedding results
@@ -267,11 +269,12 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
             ark_kwargs["base_url"] = self.api_base
         self.client = volcenginesdkarkruntime.Ark(**ark_kwargs)
 
-    def embed(self, text: str) -> EmbedResult:
+    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform sparse embedding on text
 
         Args:
             text: Input text
+            is_query: Flag to indicate if this is a query embedding
 
         Returns:
             EmbedResult: Result containing sparse_vector
@@ -304,11 +307,12 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
         except Exception as e:
             raise RuntimeError(f"Volcengine sparse embedding failed: {str(e)}") from e
 
-    def embed_batch(self, texts: List[str]) -> List[EmbedResult]:
+    def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
         """Batch sparse embedding
 
         Args:
             texts: List of texts
+            is_query: Flag to indicate if these are query embeddings
 
         Returns:
             List[EmbedResult]: List of embedding results
@@ -365,11 +369,12 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
         self.client = volcenginesdkarkruntime.Ark(**ark_kwargs)
         self._dimension = dimension or 2048
 
-    def embed(self, text: str) -> EmbedResult:
+    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform hybrid embedding on text
 
         Args:
             text: Input text
+            is_query: Flag to indicate if this is a query embedding
 
         Returns:
             EmbedResult: Result containing both dense_vector and sparse_vector
@@ -407,11 +412,12 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
         except Exception as e:
             raise RuntimeError(f"Volcengine hybrid embedding failed: {str(e)}") from e
 
-    def embed_batch(self, texts: List[str]) -> List[EmbedResult]:
+    def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
         """Batch hybrid embedding
 
         Args:
             texts: List of texts
+            is_query: Flag to indicate if these are query embeddings
 
         Returns:
             List[EmbedResult]: List of embedding results
@@ -421,7 +427,7 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
         """
         if not texts:
             return []
-        return [self.embed(text) for text in texts]
+        return [self.embed(text, is_query=is_query) for text in texts]
 
     def get_dimension(self) -> int:
         return self._dimension

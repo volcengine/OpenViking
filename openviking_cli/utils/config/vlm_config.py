@@ -26,6 +26,10 @@ class VLMConfig(BaseModel):
 
     default_provider: Optional[str] = Field(default=None, description="Default provider name")
 
+    max_tokens: Optional[int] = Field(
+        default=None, description="Maximum tokens for VLM completion output (None = provider default)"
+    )
+
     thinking: bool = Field(default=False, description="Enable thinking mode for VolcEngine models")
 
     max_concurrent: int = Field(
@@ -134,6 +138,7 @@ class VLMConfig(BaseModel):
             "max_retries": self.max_retries,
             "provider": name,
             "thinking": self.thinking,
+            "max_tokens": self.max_tokens,
         }
 
         if config:

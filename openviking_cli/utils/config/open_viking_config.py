@@ -358,7 +358,7 @@ def initialize_openviking_config(
         config.storage.vectordb.backend = config.storage.vectordb.backend or "local"
         # Resolve and update workspace + dependent paths (model_validator won't
         # re-run on attribute assignment, so sync agfs.path / vectordb.path here).
-        workspace_path = Path(path).resolve()
+        workspace_path = Path(path).expanduser().resolve()
         workspace_path.mkdir(parents=True, exist_ok=True)
         resolved = str(workspace_path)
         config.storage.workspace = resolved

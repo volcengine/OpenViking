@@ -96,7 +96,7 @@ class OpenVikingService:
         )
 
         # Initialize embedder
-        self._embedder = config.embedding.get_query_embedder()
+        self._embedder = config.embedding.get_embedder()
         logger.info(
             f"Initialized embedder (dim {config.embedding.dimension}, sparse {self._embedder.is_sparse})"
         )

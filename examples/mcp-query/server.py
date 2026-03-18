@@ -36,6 +36,8 @@ logger = logging.getLogger("openviking-mcp")
 _recipe: Optional[Recipe] = None
 _config_path: str = "./ov.conf"
 _data_path: str = "./data"
+_api_key: str = ""
+_default_uri: str = ""
 
 
 def _get_recipe() -> Recipe:
@@ -43,6 +45,8 @@ def _get_recipe() -> Recipe:
     global _recipe
     if _recipe is None:
         _recipe = Recipe(config_path=_config_path, data_path=_data_path)
+        if _api_key:
+            _recipe.api_key = _api_key
     return _recipe
 
 
@@ -137,6 +141,7 @@ def create_server(host: str = "127.0.0.1", port: int = 2033) -> FastMCP:
             score_threshold: Minimum relevance score (0.0-1.0, default: 0.2).
             target_uri: Optional URI to scope the search to a specific resource.
         """
+        effective_uri = target_uri or _default_uri
 
         def _search_sync():
             recipe = _get_recipe()
@@ -144,7 +149,7 @@ def create_server(host: str = "127.0.0.1", port: int = 2033) -> FastMCP:
                 query=query,
                 top_k=top_k,
                 score_threshold=score_threshold,
-                target_uri=target_uri or None,
+                target_uri=effective_uri or None,
             )
 
         results = await asyncio.to_thread(_search_sync)
@@ -239,14 +244,19 @@ Examples:
   # Use stdio transport (for Claude Desktop integration)
   uv run server.py --transport stdio
 
-  # Connect from Claude CLI
-  claude mcp add --transport http openviking http://localhost:2033/mcp
+  # Connect from Claude CLI (use 127.0.0.1 instead of localhost for Windows compatibility)
+  claude mcp add --transport http openviking http://127.0.0.1:2033/mcp
+
+  # With API key and default search scope
+  uv run server.py --api-key sk-xxx --default-uri viking://user/memories
 
 Environment variables:
-  OV_CONFIG    Path to config file (default: ./ov.conf)
-  OV_DATA      Path to data directory (default: ./data)
-  OV_PORT      Server port (default: 2033)
-  OV_DEBUG     Enable debug logging (set to 1)
+  OV_CONFIG      Path to config file (default: ./ov.conf)
+  OV_DATA        Path to data directory (default: ./data)
+  OV_PORT        Server port (default: 2033)
+  OV_API_KEY     API key for OpenViking server authentication
+  OV_DEFAULT_URI Default target URI for search scoping
+  OV_DEBUG       Enable debug logging (set to 1)
         """,
     )
     parser.add_argument(
@@ -280,15 +290,29 @@ Environment variables:
         default="streamable-http",
         help="Transport type (default: streamable-http)",
     )
+    parser.add_argument(
+        "--api-key",
+        type=str,
+        default=os.getenv("OV_API_KEY", ""),
+        help="API key for OpenViking server authentication (default: $OV_API_KEY)",
+    )
+    parser.add_argument(
+        "--default-uri",
+        type=str,
+        default=os.getenv("OV_DEFAULT_URI", ""),
+        help="Default target URI for search scoping (default: search all)",
+    )
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
 
-    global _config_path, _data_path
+    global _config_path, _data_path, _api_key, _default_uri
     _config_path = args.config
     _data_path = args.data
+    _api_key = args.api_key
+    _default_uri = args.default_uri
 
     if os.getenv("OV_DEBUG") == "1":
         logging.getLogger().setLevel(logging.DEBUG)

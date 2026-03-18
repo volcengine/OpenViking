@@ -248,6 +248,8 @@ class SessionCompressor:
 
             memories: List[Context] = []
             stats = ExtractionStats()
+            # Track created memories' embeddings for batch-internal dedup (#687)
+            batch_memories: list[tuple[list[float], Context]] = []
             viking_fs = get_viking_fs()
 
             tool_parts = self._extract_tool_parts(messages)
@@ -323,7 +325,9 @@ class SessionCompressor:
                     continue
 
                 # Dedup check for other categories
-                result = await self.deduplicator.deduplicate(candidate, ctx)
+                result = await self.deduplicator.deduplicate(
+                    candidate, ctx, batch_memories=batch_memories
+                )
                 actions = result.actions or []
                 decision = result.decision
 
@@ -352,6 +356,10 @@ class SessionCompressor:
                                 action.memory, viking_fs, ctx=ctx
                             ):
                                 stats.deleted += 1
+                                # Remove deleted memory from batch tracking (#687)
+                                batch_memories = [
+                                    (v, m) for v, m in batch_memories if m.uri != action.memory.uri
+                                ]
                             else:
                                 stats.skipped += 1
                         elif action.decision == MemoryActionDecision.MERGE:
@@ -360,6 +368,23 @@ class SessionCompressor:
                                     candidate, action.memory, viking_fs, ctx=ctx
                                 ):
                                     stats.merged += 1
+                                    # Remove stale batch entry and re-add with updated
+                                    # embedding so 3rd+ candidates can still find it (#687).
+                                    batch_memories = [
+                                        (v, m)
+                                        for v, m in batch_memories
+                                        if m.uri != action.memory.uri
+                                    ]
+                                    if self.deduplicator.embedder:
+                                        merged_text = (
+                                            f"{action.memory.abstract} {candidate.content}"
+                                        )
+                                        merged_embed = self.deduplicator.embedder.embed(
+                                            merged_text
+                                        )
+                                        batch_memories.append(
+                                            (merged_embed.dense_vector, action.memory)
+                                        )
                                 else:
                                     stats.skipped += 1
                             else:
@@ -375,6 +400,10 @@ class SessionCompressor:
                                 action.memory, viking_fs, ctx=ctx
                             ):
                                 stats.deleted += 1
+                                # Remove deleted memory from batch tracking (#687)
+                                batch_memories = [
+                                    (v, m) for v, m in batch_memories if m.uri != action.memory.uri
+                                ]
                             else:
                                 stats.skipped += 1
 
@@ -385,6 +414,9 @@ class SessionCompressor:
                         memories.append(memory)
                         stats.created += 1
                         await self._index_memory(memory, ctx)
+                        # Store embedding for batch-internal dedup of subsequent candidates (#687)
+                        if result.query_vector:
+                            batch_memories.append((result.query_vector, memory))
                     else:
                         stats.skipped += 1
 

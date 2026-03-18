@@ -25,7 +25,7 @@ class _DummyConfig:
         self.storage = SimpleNamespace(vectordb=SimpleNamespace(name="context"))
         self.embedding = SimpleNamespace(
             dimension=2,
-            get_document_embedder=lambda: embedder,
+            get_embedder=lambda: embedder,
         )
 
 
