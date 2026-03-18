@@ -74,7 +74,7 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
             document_param: Parameter for document-side embeddings. Supports simple task_type
                            values or key=value format.
             config: Additional configuration dict
-            max_tokens: Maximum token count per embedding request, None to use default (8000)
+            max_tokens: Maximum token count per embedding request, None to use default (8192)
             extra_headers: Extra HTTP headers to include in API requests
 
         Raises:
@@ -86,7 +86,7 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
         self.dimension = dimension
         self.query_param = query_param
         self.document_param = document_param
-        self.max_tokens = max_tokens or 8000
+        self._max_tokens = max_tokens or 8192
         self.extra_headers = extra_headers or {}
 
         if not self.api_key:
@@ -122,15 +122,21 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
         # Split by comma for multiple parameters
         parts = [p.strip() for p in param.split(",")]
 
+        # Map snake_case keys to camelCase as required by Google API
+        key_map = {"task_type": "taskType"}
+
         for part in parts:
             if "=" in part:
                 key, value = part.split("=", 1)
                 key = key.strip()
                 value = value.strip()
+                key = key_map.get(key, key)
 
-                # Convert numeric values
+                # Convert numeric values and uppercase task type
                 if key == "output_dimensionality" and value.isdigit():
                     result[key] = int(value)
+                elif key == "taskType":
+                    result[key] = value.upper()
                 else:
                     result[key] = value
 
@@ -160,8 +166,8 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
                 parsed = self._parse_param_string(active_param)
                 params.update(parsed)
             else:
-                # Simple format (e.g., "RETRIEVAL_QUERY" -> {"task_type": "RETRIEVAL_QUERY"})
-                params["task_type"] = active_param
+                # Simple format (e.g., "retrieval_query" -> {"taskType": "RETRIEVAL_QUERY"})
+                params["taskType"] = active_param.upper()
 
         # Add dimension if specified
         if self.dimension:
@@ -241,8 +247,8 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
         Raises:
             RuntimeError: When API call fails
         """
-        if not text:
-            return self._embed_single(text, is_query=is_query)
+        if not text or not text.strip():
+            return EmbedResult()
 
         if self._estimate_tokens(text) > self.max_tokens:
             return self._chunk_and_embed(text, is_query=is_query)
@@ -301,8 +307,11 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
 
         # Process each text individually
         for text in texts:
-            if not text or self._estimate_tokens(text) <= self.max_tokens:
-                result = self._embed_single(text if text else " ", is_query=is_query)
+            if not text or not text.strip():
+                results.append(EmbedResult())
+                continue
+            if self._estimate_tokens(text) <= self.max_tokens:
+                result = self._embed_single(text, is_query=is_query)
             else:
                 # Handle oversized text with chunking
                 result = self._chunk_and_embed(text, is_query=is_query)
