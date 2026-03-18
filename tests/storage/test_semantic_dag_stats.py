@@ -62,6 +62,22 @@ class _DummyTracker:
         return None
 
 
+def _mock_transaction_layer(monkeypatch):
+    mock_handle = MagicMock()
+    monkeypatch.setattr(
+        "openviking.storage.transaction.lock_context.LockContext.__aenter__",
+        AsyncMock(return_value=mock_handle),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.transaction.lock_context.LockContext.__aexit__",
+        AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.transaction.get_lock_manager",
+        lambda: MagicMock(),
+    )
+
+
 @pytest.mark.asyncio
 async def test_semantic_dag_stats_collects_nodes(monkeypatch):
     root_uri = "viking://resources/root"
@@ -81,21 +97,7 @@ async def test_semantic_dag_stats_collects_nodes(monkeypatch):
         "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
         lambda: _DummyTracker(),
     )
-
-    # Mock lock layer: LockContext as no-op passthrough
-    mock_handle = MagicMock()
-    monkeypatch.setattr(
-        "openviking.storage.transaction.lock_context.LockContext.__aenter__",
-        AsyncMock(return_value=mock_handle),
-    )
-    monkeypatch.setattr(
-        "openviking.storage.transaction.lock_context.LockContext.__aexit__",
-        AsyncMock(return_value=False),
-    )
-    monkeypatch.setattr(
-        "openviking.storage.transaction.get_lock_manager",
-        lambda: MagicMock(),
-    )
+    _mock_transaction_layer(monkeypatch)
 
     processor = _FakeProcessor()
     ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
@@ -110,7 +112,7 @@ async def test_semantic_dag_stats_collects_nodes(monkeypatch):
 
     stats = executor.get_stats()
     assert isinstance(stats, DagStats)
-    assert stats.total_nodes == 5  # 2 dirs + 3 files
+    assert stats.total_nodes == 5
     assert stats.pending_nodes == 0
     assert stats.done_nodes == 5
     assert stats.in_progress_nodes == 0
@@ -118,6 +120,49 @@ async def test_semantic_dag_stats_collects_nodes(monkeypatch):
     assert sorted(processor.vectorized_files) == sorted(
         [f"{root_uri}/a.txt", f"{root_uri}/b.txt", f"{root_uri}/child/c.txt"]
     )
+
+
+@pytest.mark.asyncio
+async def test_incremental_update_vectorizes_with_target_uris(monkeypatch):
+    temp_root_uri = "viking://temp/tmp123/demo"
+    target_root_uri = "viking://resources/demo"
+    tree = {
+        temp_root_uri: [
+            {"name": "doc.md", "isDir": False},
+            {"name": "subdir", "isDir": True},
+        ],
+        f"{temp_root_uri}/subdir": [
+            {"name": "nested.txt", "isDir": False},
+        ],
+    }
+    fake_fs = _FakeVikingFS(tree)
+    monkeypatch.setattr("openviking.storage.queuefs.semantic_dag.get_viking_fs", lambda: fake_fs)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
+        lambda: _DummyTracker(),
+    )
+    _mock_transaction_layer(monkeypatch)
+
+    processor = _FakeProcessor()
+    ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
+    executor = SemanticDagExecutor(
+        processor=processor,
+        context_type="resource",
+        max_concurrent_llm=2,
+        ctx=ctx,
+        incremental_update=True,
+        target_uri=target_root_uri,
+    )
+    await executor.run(temp_root_uri)
+    await asyncio.sleep(0)
+
+    # Directories should be vectorized at target URIs
+    assert processor.vectorized_dirs == [target_root_uri, f"{target_root_uri}/subdir"]
+    # Files should be vectorized at target URIs, not temp
+    assert sorted(processor.vectorized_files) == sorted([
+        f"{target_root_uri}/doc.md",
+        f"{target_root_uri}/subdir/nested.txt",
+    ])
 
 
 if __name__ == "__main__":

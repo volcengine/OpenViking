@@ -432,15 +432,20 @@ class SemanticDagExecutor:
 
         try:
             if need_vectorize:
+                vectorize_parent = parent_uri
+                vectorize_file_path = file_path
+                if self._incremental_update:
+                    vectorize_parent = self._get_target_file_path(parent_uri) or parent_uri
+                    vectorize_file_path = self._get_target_file_path(file_path) or file_path
                 task = VectorizeTask(
                     task_type="file",
-                    uri=file_path,
+                    uri=vectorize_file_path,
                     context_type=self._context_type,
                     ctx=self._ctx,
                     semantic_msg_id=self._semantic_msg_id,
-                    file_path=file_path,
+                    file_path=vectorize_file_path,
                     summary_dict=summary_dict,
-                    parent_uri=parent_uri,
+                    parent_uri=vectorize_parent,
                 )
                 await self._add_vectorize_task(task)
         except Exception as e:
@@ -551,9 +556,12 @@ class SemanticDagExecutor:
 
             try:
                 if need_vectorize:
+                    vectorize_uri = dir_uri
+                    if self._incremental_update:
+                        vectorize_uri = self._get_target_file_path(dir_uri) or dir_uri
                     task = VectorizeTask(
                         task_type="directory",
-                        uri=dir_uri,
+                        uri=vectorize_uri,
                         context_type=self._context_type,
                         ctx=self._ctx,
                         semantic_msg_id=self._semantic_msg_id,
