@@ -61,12 +61,20 @@ async def get_session_stats(
     try:
         result = await aggregator.get_session_extraction_stats(session_id, service, _ctx)
         return Response(status="ok", result=result)
-    except Exception as e:
-        logger.warning("Failed to get session stats for %s: %s", session_id, e)
+    except KeyError:
         return Response(
             status="error",
             error=ErrorInfo(
                 code="NOT_FOUND",
                 message=f"Session not found: {session_id}",
+            ),
+        )
+    except Exception as e:
+        logger.error("Failed to get session stats for %s: %s", session_id, e)
+        return Response(
+            status="error",
+            error=ErrorInfo(
+                code="INTERNAL_ERROR",
+                message=f"Failed to retrieve session stats: {type(e).__name__}",
             ),
         )

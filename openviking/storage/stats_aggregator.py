@@ -70,13 +70,20 @@ class StatsAggregator:
             "not_accessed_30d": 0,
             "oldest_memory_age_days": 0,
         }
-        total_vectors = 0
+
+        # Fetch all memories once and group by category in Python
+        all_records = await self._query_all_memories(ctx)
+        grouped: Dict[str, List[Dict[str, Any]]] = {cat: [] for cat in categories}
+        for record in all_records:
+            uri = record.get("uri", "")
+            for cat in categories:
+                if f"/{cat}/" in uri:
+                    grouped[cat].append(record)
+                    break
 
         for cat in categories:
-            records = await self._query_memories_by_category(ctx, cat)
-            count = len(records)
-            by_category[cat] = count
-            total_vectors += count
+            records = grouped[cat]
+            by_category[cat] = len(records)
 
             for record in records:
                 active_count = record.get("active_count", 0)
@@ -115,7 +122,6 @@ class StatsAggregator:
             "by_category": by_category,
             "hotness_distribution": hotness_dist,
             "staleness": staleness,
-            "total_vectors": total_vectors,
         }
 
     async def get_session_extraction_stats(
@@ -146,19 +152,17 @@ class StatsAggregator:
             "skills_used": stats.skills_used,
         }
 
-    async def _query_memories_by_category(
+    async def _query_all_memories(
         self,
         ctx: RequestContext,
-        category: str,
     ) -> List[Dict[str, Any]]:
-        """Query all memory records for a given category.
+        """Query all memory records in a single DB round-trip.
 
-        Uses the context_type="memory" filter and checks the category
-        in the URI path. Fetches fields needed for hotness and staleness
-        computation.
+        Uses the context_type="memory" filter. Callers group by category
+        in Python to avoid N+1 queries.
         """
         try:
-            records = await self._vikingdb.query(
+            return await self._vikingdb.query(
                 filter=Eq("context_type", "memory"),
                 limit=10000,
                 output_fields=[
@@ -170,12 +174,8 @@ class StatsAggregator:
                 ],
                 ctx=ctx,
             )
-
-            # Filter by category using URI prefix
-            category_prefix = f"/{category}/"
-            return [r for r in records if category_prefix in r.get("uri", "")]
         except Exception as e:
-            logger.error("Error querying memories for category %s: %s", category, e)
+            logger.error("Error querying memories: %s", e)
             return []
 
 
