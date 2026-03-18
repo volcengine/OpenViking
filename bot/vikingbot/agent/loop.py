@@ -205,6 +205,7 @@ class AgentLoop:
                         OutboundMessage(
                             session_key=msg.session_key,
                             content=f"Sorry, I encountered an error: {str(e)}",
+                            metadata=msg.metadata,
                         )
                     )
             except asyncio.TimeoutError:
@@ -425,15 +426,6 @@ class AgentLoop:
             preview = msg.content[:80] + "..." if len(msg.content) > 80 else msg.content
             logger.info(f"Processing message from {msg.session_key}:{msg.sender_id}: {preview}")
 
-            # Debug mode handling
-            if self.config.mode == BotMode.DEBUG:
-                # In debug mode, only record message to session, no processing or reply
-                session = self.sessions.get_or_create(msg.session_key)
-                session.add_message("user", msg.content, sender_id=msg.sender_id)
-                await self.sessions.save(session)
-                return None
-
-            # Get or create session
             session_key = msg.session_key
             # For CLI/direct sessions, skip heartbeat by default
             skip_heartbeat = session_key.type == "cli"
@@ -447,6 +439,8 @@ class AgentLoop:
                 cmd = msg.content.strip().lower()
             if cmd == "/new":
                 # Clone session for async consolidation, then immediately clear original
+                if not self._check_cmd_auth(msg):
+                    return None
                 session_clone = session.clone()
                 session.clear()
                 await self.sessions.save(session)
@@ -456,15 +450,7 @@ class AgentLoop:
                     session_key=msg.session_key, content="🐈 New session started. Memory consolidated.", metadata=msg.metadata
                 )
             if cmd == "/remember":
-                # Check if sender is allowed in current channel
-                channel_config = None
-                for channel in self.config.channels_config.get_all_channels():
-                    if channel.channel_key() == msg.session_key.channel_key():
-                        channel_config = channel
-                        break
-
-                # If channel not found or sender not in allow_from list, ignore message
-                if not channel_config or msg.sender_id not in channel_config.allow_from:
+                if not self._check_cmd_auth(msg):
                     return None
                 session_clone = session.clone()
                 session.clear()
@@ -479,6 +465,14 @@ class AgentLoop:
                     content="🐈 vikingbot commands:\n/new — Start a new conversation\n/remember — Submit current session to memories and start new session\n/help — Show available commands",
                     metadata=msg.metadata
                 )
+
+            # Debug mode handling
+            if self.config.mode == BotMode.DEBUG:
+                # In debug mode, only record message to session, no processing or reply
+                session = self.sessions.get_or_create(msg.session_key)
+                session.add_message("user", msg.content, sender_id=msg.sender_id)
+                await self.sessions.save(session)
+                return None
 
             # Consolidate memory before processing if session is too large
             if len(session.messages) > self.memory_window:
@@ -592,6 +586,17 @@ class AgentLoop:
                 return
 
             # use openviking tools to extract memory
+            config = load_config()
+            if config.mode == BotMode.READONLY:
+                if not config.channels_config and not config.channels_config.get_all_channels():
+                    return
+                allow_from = [config.ov_server.admin_user_id]
+                for channel_config in config.channels_config.get_all_channels():
+                    if channel_config and channel_config.type.value == session.key.type:
+                        if hasattr(channel_config, "allow_from"):
+                            allow_from.extend(channel_config.allow_from)
+                messages = [msg for msg in session.messages if msg.get("sender_id") in allow_from]
+                session.messages = messages
             await self._consolidate_viking_memory(session)
 
             if self.sandbox_manager:
@@ -677,6 +682,7 @@ Respond with ONLY valid JSON, no markdown fences."""
         """Consolidate old messages into MEMORY.md + HISTORY.md. Works on a cloned session."""
         try:
             if not session.messages:
+                logger.info(f"No messages to commit openviking for session {session.key.safe_name()} (allow_from filter applied)")
                 return
 
             # use openviking tools to extract memory
@@ -698,6 +704,28 @@ Respond with ONLY valid JSON, no markdown fences."""
             await self._consolidate_memory(session, archive_all)
         except Exception as e:
             logger.exception(f"Background memory consolidation task failed: {e}")
+
+    def _check_cmd_auth(self, msg: InboundMessage) -> bool:
+        """Check if the session key is authorized for command execution.
+
+        Returns:
+            True if authorized, False otherwise.
+        Args:
+            session_key: Session key to check.
+        """
+        if self.config.mode == BotMode.NORMAL:
+            return True
+        channel_config = None
+        for channel in self.config.channels_config.get_all_channels():
+            if channel.channel_key() == msg.session_key.channel_key():
+                channel_config = channel
+                break
+
+        # If channel not found or sender not in allow_from list, ignore message
+        if not channel_config or msg.sender_id not in channel_config.allow_from:
+            logger.debug(f"Sender {msg.sender_id} not allowed in channel {msg.session_key.channel_key()}")
+            return False
+        return True
 
     async def process_direct(
         self,

@@ -111,7 +111,7 @@ class FeishuChannelConfig(BaseChannelConfig):
 
     type: ChannelType = ChannelType.FEISHU
     app_id: str = ""
-    open_id: str = ""
+    bot_name: str = ""
     app_secret: str = ""
     encrypt_key: str = ""
     verification_token: str = ""
