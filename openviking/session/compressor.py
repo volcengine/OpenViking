@@ -247,6 +247,7 @@ class SessionCompressor:
                 return []
 
             memories: List[Context] = []
+            batch_contexts: List[Context] = []
             stats = ExtractionStats()
             viking_fs = get_viking_fs()
 
@@ -323,7 +324,9 @@ class SessionCompressor:
                     continue
 
                 # Dedup check for other categories
-                result = await self.deduplicator.deduplicate(candidate, ctx)
+                result = await self.deduplicator.deduplicate(
+                    candidate, ctx, batch_contexts=batch_contexts,
+                )
                 actions = result.actions or []
                 decision = result.decision
 
@@ -360,6 +363,8 @@ class SessionCompressor:
                                     candidate, action.memory, viking_fs, ctx=ctx
                                 ):
                                     stats.merged += 1
+                                    self._tag_batch_vector(action.memory, candidate)
+                                    batch_contexts.append(action.memory)
                                 else:
                                     stats.skipped += 1
                             else:
@@ -385,6 +390,8 @@ class SessionCompressor:
                         memories.append(memory)
                         stats.created += 1
                         await self._index_memory(memory, ctx)
+                        self._tag_batch_vector(memory, candidate)
+                        batch_contexts.append(memory)
                     else:
                         stats.skipped += 1
 
@@ -404,6 +411,22 @@ class SessionCompressor:
         except Exception:
             self._pending_semantic_changes.clear()
             raise
+
+    def _tag_batch_vector(self, memory: Context, candidate: CandidateMemory) -> None:
+        """Attach embedding vector to memory for intra-batch dedup.
+
+        Non-critical: failures are silently ignored since dedup still works
+        via vector search for previously indexed memories.
+        """
+        if not self.deduplicator.embedder:
+            return
+        try:
+            query_text = f"{candidate.abstract} {candidate.content}"
+            embed_result = self.deduplicator.embedder.embed(query_text)
+            if embed_result.dense_vector:
+                memory.meta = {**(memory.meta or {}), "_batch_vector": embed_result.dense_vector}
+        except Exception:
+            pass
 
     def _extract_tool_parts(self, messages: List[Message]) -> List:
         """Extract all ToolPart from messages."""

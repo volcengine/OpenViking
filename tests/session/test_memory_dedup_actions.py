@@ -368,6 +368,129 @@ class TestProfileMergeSafety:
 
 
 @pytest.mark.asyncio
+class TestBatchIntraDedup:
+    async def test_batch_context_is_included_in_similar_memories(self):
+        """When vector search returns nothing but batch_contexts has a similar memory,
+        dedup should still find it and NOT default to CREATE with 'No similar'."""
+        vikingdb = MagicMock()
+        vikingdb.get_embedder.return_value = _DummyEmbedder()
+        # Vector search returns empty — simulates async vectorization gap
+        vikingdb.search_similar_memories = AsyncMock(return_value=[])
+
+        dedup = MemoryDeduplicator(vikingdb=vikingdb)
+        candidate = _make_candidate()
+
+        # Simulate a previously processed memory in this batch
+        batch_mem = _make_existing("batch_prev.md")
+        batch_mem.meta = {**(batch_mem.meta or {}), "_batch_vector": [0.1, 0.2, 0.3]}
+
+        result = await dedup.deduplicate(candidate, ctx, batch_contexts=[batch_mem])
+
+        # Should find the batch context as similar, not default to CREATE with "No similar"
+        assert result.similar_memories, "batch context should appear as similar memory"
+        assert any(m.uri == batch_mem.uri for m in result.similar_memories)
+
+    async def test_batch_context_not_duplicated_with_vector_results(self):
+        """If vector search already returns a memory, batch_contexts should not add it again."""
+        existing = _make_existing("already_found.md")
+        vikingdb = MagicMock()
+        vikingdb.get_embedder.return_value = _DummyEmbedder()
+        vikingdb.search_similar_memories = AsyncMock(
+            return_value=[
+                {
+                    "id": "found",
+                    "uri": existing.uri,
+                    "context_type": "memory",
+                    "level": 2,
+                    "account_id": "acc1",
+                    "owner_space": _make_user().user_space_name(),
+                    "abstract": existing.abstract,
+                    "category": "preferences",
+                    "_score": 0.9,
+                }
+            ]
+        )
+
+        dedup = MemoryDeduplicator(vikingdb=vikingdb)
+        candidate = _make_candidate()
+
+        # Same URI in batch_contexts
+        batch_mem = _make_existing("already_found.md")
+        batch_mem.meta = {**(batch_mem.meta or {}), "_batch_vector": [0.1, 0.2, 0.3]}
+
+        result = await dedup.deduplicate(candidate, ctx, batch_contexts=[batch_mem])
+
+        # Should not have duplicates
+        uris = [m.uri for m in result.similar_memories]
+        assert len(uris) == len(set(uris)), "no duplicate URIs in similar_memories"
+
+    async def test_empty_batch_contexts_has_no_effect(self):
+        """Passing empty batch_contexts should behave identically to not passing it."""
+        vikingdb = MagicMock()
+        vikingdb.get_embedder.return_value = _DummyEmbedder()
+        vikingdb.search_similar_memories = AsyncMock(return_value=[])
+
+        dedup = MemoryDeduplicator(vikingdb=vikingdb)
+        candidate = _make_candidate()
+
+        result = await dedup.deduplicate(candidate, ctx, batch_contexts=[])
+
+        assert result.decision == DedupDecision.CREATE
+        assert result.reason == "No similar memories found"
+
+
+@pytest.mark.asyncio
+class TestCompressorBatchDedup:
+    async def test_second_candidate_receives_first_as_batch_context(self):
+        """When two candidates are extracted, the second should receive
+        the first's Context in batch_contexts."""
+        candidate1 = _make_candidate()
+        candidate1.abstract = "Company X org structure"
+        candidate2 = _make_candidate()
+        candidate2.abstract = "Company X business model"
+
+        new_memory1 = _make_existing("created1.md")
+
+        vikingdb = MagicMock()
+        vikingdb.get_embedder.return_value = _DummyEmbedder()
+        vikingdb.delete_uris = AsyncMock(return_value=None)
+        vikingdb.enqueue_embedding_msg = AsyncMock()
+
+        compressor = SessionCompressor(vikingdb=vikingdb)
+        compressor.extractor.extract = AsyncMock(return_value=[candidate1, candidate2])
+        compressor.extractor.create_memory = AsyncMock(return_value=new_memory1)
+
+        dedup_calls = []
+
+        async def _capture_dedup(candidate, ctx, batch_contexts=None):
+            dedup_calls.append({"candidate": candidate, "batch_contexts": batch_contexts or []})
+            return DedupResult(
+                decision=DedupDecision.CREATE,
+                candidate=candidate,
+                similar_memories=[],
+                actions=[],
+            )
+
+        compressor.deduplicator.deduplicate = AsyncMock(side_effect=_capture_dedup)
+        compressor._index_memory = AsyncMock(return_value=True)
+
+        fs = MagicMock()
+        with patch("openviking.session.compressor.get_viking_fs", return_value=fs):
+            await compressor.extract_long_term_memories(
+                [Message.create_user("test message")],
+                user=_make_user(),
+                session_id="session_test",
+                ctx=_make_ctx(),
+            )
+
+        assert len(dedup_calls) == 2
+        # First candidate: no batch contexts
+        assert dedup_calls[0]["batch_contexts"] == []
+        # Second candidate: should have batch contexts from the first
+        assert len(dedup_calls[1]["batch_contexts"]) >= 1
+
+
+@pytest.mark.asyncio
 class TestSessionCompressorDedupActions:
     async def test_create_with_empty_list_only_creates_new_memory(self):
         candidate = _make_candidate()

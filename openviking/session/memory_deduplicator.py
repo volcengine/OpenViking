@@ -92,10 +92,13 @@ class MemoryDeduplicator:
         self,
         candidate: CandidateMemory,
         ctx: RequestContext,
+        batch_contexts: Optional[List[Context]] = None,
     ) -> DedupResult:
         """Decide how to handle a candidate memory."""
         # Step 1: Vector pre-filtering - find similar memories in same category
-        similar_memories = await self._find_similar_memories(candidate, ctx=ctx)
+        similar_memories = await self._find_similar_memories(
+            candidate, ctx=ctx, batch_contexts=batch_contexts,
+        )
 
         if not similar_memories:
             # No similar memories, create directly
@@ -122,6 +125,7 @@ class MemoryDeduplicator:
         self,
         candidate: CandidateMemory,
         ctx: RequestContext,
+        batch_contexts: Optional[List[Context]] = None,
     ) -> List[Context]:
         """Find similar existing memories using vector search."""
         telemetry = get_current_telemetry()
@@ -186,6 +190,26 @@ class MemoryDeduplicator:
                         # Keep retrieval score for later destructive-action guardrails.
                         context.meta = {**(context.meta or {}), "_dedup_score": score}
                         similar.append(context)
+            # Supplement with in-memory batch contexts (covers async vectorization gap)
+            if batch_contexts and query_vector:
+                seen_uris = {c.uri for c in similar}
+                for bc in batch_contexts:
+                    if bc.uri in seen_uris:
+                        continue
+                    bc_vector = (bc.meta or {}).get("_batch_vector")
+                    if bc_vector:
+                        score = self._cosine_similarity(query_vector, bc_vector)
+                        if score >= self.SIMILARITY_THRESHOLD:
+                            bc_copy = Context.from_dict(bc.to_dict())
+                            if bc_copy:
+                                bc_copy.meta = {**(bc_copy.meta or {}), "_dedup_score": score}
+                                similar.append(bc_copy)
+                                logger.debug(
+                                    "Batch intra-dedup hit score=%.4f uri=%s",
+                                    score,
+                                    bc.uri,
+                                )
+
             logger.debug("Dedup similar memories after threshold=%d", len(similar))
             return similar
 
