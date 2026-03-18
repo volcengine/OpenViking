@@ -306,32 +306,38 @@ class AudioParser(BaseParser):
             f"File signature does not match expected format {ext_lower}"
         )
 
+    def _get_whisper_client(self):
+        """Create an AsyncOpenAI client using ProviderConfig settings.
+
+        Reads api_key and api_base from the project config so custom
+        Whisper deployments (Azure, local server) work correctly.
+        """
+        import openai
+        from openviking_cli.utils.config import get_openviking_config
+
+        config = get_openviking_config()
+        kwargs: Dict[str, Any] = {}
+        if hasattr(config, "llm"):
+            if config.llm.api_key:
+                kwargs["api_key"] = config.llm.api_key
+            if hasattr(config.llm, "api_base") and config.llm.api_base:
+                kwargs["base_url"] = config.llm.api_base
+        return openai.AsyncOpenAI(**kwargs)
+
+    @staticmethod
+    def _prepare_audio_file(audio_bytes: bytes, ext: str) -> io.BytesIO:
+        """Wrap raw audio bytes in a named BytesIO for the Whisper API."""
+        audio_file = io.BytesIO(audio_bytes)
+        audio_file.name = f"audio{ext}"
+        return audio_file
+
     async def _asr_transcribe(
         self, audio_bytes: bytes, model: Optional[str], ext: str = ".mp3"
     ) -> str:
-        """
-        Transcribe audio using Whisper API via OpenAI client.
-
-        Args:
-            audio_bytes: Audio binary data
-            model: Whisper model name
-            ext: File extension for mime type hint
-
-        Returns:
-            Transcription text
-        """
+        """Transcribe audio using Whisper API via OpenAI client."""
         try:
-            from openviking_cli.utils.config import get_openviking_config
-
-            config = get_openviking_config()
-            import openai
-
-            client = openai.AsyncOpenAI(
-                api_key=config.llm.api_key if hasattr(config, "llm") else None,
-            )
-
-            audio_file = io.BytesIO(audio_bytes)
-            audio_file.name = f"audio{ext}"
+            client = self._get_whisper_client()
+            audio_file = self._prepare_audio_file(audio_bytes, ext)
 
             response = await client.audio.transcriptions.create(
                 model=model or "whisper-1",
@@ -348,29 +354,10 @@ class AudioParser(BaseParser):
     async def _asr_transcribe_with_timestamps(
         self, audio_bytes: bytes, model: Optional[str], ext: str = ".mp3"
     ) -> List[Dict[str, Any]]:
-        """
-        Transcribe audio with timestamps using Whisper API verbose_json format.
-
-        Args:
-            audio_bytes: Audio binary data
-            model: Whisper model name
-            ext: File extension
-
-        Returns:
-            List of segment dicts with keys: start, end, text
-        """
+        """Transcribe audio with timestamps using Whisper API verbose_json format."""
         try:
-            from openviking_cli.utils.config import get_openviking_config
-
-            config = get_openviking_config()
-            import openai
-
-            client = openai.AsyncOpenAI(
-                api_key=config.llm.api_key if hasattr(config, "llm") else None,
-            )
-
-            audio_file = io.BytesIO(audio_bytes)
-            audio_file.name = f"audio{ext}"
+            client = self._get_whisper_client()
+            audio_file = self._prepare_audio_file(audio_bytes, ext)
 
             response = await client.audio.transcriptions.create(
                 model=model or "whisper-1",

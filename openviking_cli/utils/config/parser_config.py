@@ -309,13 +309,14 @@ class AudioConfig(ParserConfig):
 
     Attributes:
         enable_transcription: Whether to transcribe speech to text
-        transcription_model: Model to use (e.g., "whisper-large-v3")
+        transcription_model: Whisper model name. Use "whisper-1" for
+            OpenAI API, or a custom model name for self-hosted endpoints.
         language: Audio language (None for auto-detection)
         extract_metadata: Whether to extract audio metadata
     """
 
     enable_transcription: bool = True
-    transcription_model: str = "whisper-large-v3"
+    transcription_model: str = "whisper-1"
     language: Optional[str] = None
     extract_metadata: bool = True
 
