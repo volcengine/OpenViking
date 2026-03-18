@@ -301,25 +301,21 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         except RuntimeError as e:
             error_msg = str(e).lower()
             if (
-                "too large" in error_msg
-                or "too long" in error_msg
-                or "maximum context length" in error_msg
+                ("input" in error_msg and "too large" in error_msg)
+                or ("token" in error_msg and ("too long" in error_msg or "too many" in error_msg))
+                or "context length" in error_msg
             ):
                 # Token estimation was wrong (common with non-OpenAI models).
                 # Retry with chunking at half the current max_tokens.
                 reduced = max(self.max_tokens // 2, 128)
                 logger.warning(
-                    f"Embedding failed due to input length. "
-                    f"Retrying with chunk size {reduced} tokens. "
-                    f"Set embedding.dense.max_tokens in ov.conf to match "
-                    f"your model's actual limit."
+                    "Embedding failed due to input length. "
+                    "Retrying with chunk size %d tokens. "
+                    "Set embedding.dense.max_tokens in ov.conf to match "
+                    "your model's actual limit.",
+                    reduced,
                 )
-                saved = self._max_tokens
-                self._max_tokens = reduced
-                try:
-                    return self._chunk_and_embed(text, is_query=is_query)
-                finally:
-                    self._max_tokens = saved
+                return self._chunk_and_embed(text, is_query=is_query, override_max_tokens=reduced)
             raise
 
     def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:

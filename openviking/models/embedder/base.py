@@ -118,18 +118,19 @@ class EmbedderBase(ABC):
             # CJK text (3 bytes per char in UTF-8) is not underestimated.
             return max(len(text) // 3, len(text.encode("utf-8")) // 4)
 
-    def _chunk_text(self, text: str) -> List[str]:
+    def _chunk_text(self, text: str, override_max_tokens: Optional[int] = None) -> List[str]:
         """Split text into chunks, each within max_tokens.
 
         Splitting priority: paragraphs (\\n\\n) > sentences (。.!?\\n) > fixed length.
 
         Args:
             text: Input text
+            override_max_tokens: If set, use this instead of self.max_tokens
 
         Returns:
             List of text chunks
         """
-        max_tok = self.max_tokens
+        max_tok = override_max_tokens if override_max_tokens is not None else self.max_tokens
         if self._estimate_tokens(text) <= max_tok:
             return [text]
 
@@ -188,7 +189,12 @@ class EmbedderBase(ABC):
             start = end
         return chunks
 
-    def _chunk_and_embed(self, text: str, is_query: bool = False) -> EmbedResult:
+    def _chunk_and_embed(
+        self,
+        text: str,
+        is_query: bool = False,
+        override_max_tokens: Optional[int] = None,
+    ) -> EmbedResult:
         """Chunk text if it exceeds max_tokens, embed each chunk, and merge results.
 
         For text within limits, delegates to _embed_single directly.
@@ -198,15 +204,17 @@ class EmbedderBase(ABC):
         Args:
             text: Input text
             is_query: Flag to indicate if this is a query embedding
+            override_max_tokens: If set, use this instead of self.max_tokens
 
         Returns:
             EmbedResult with merged embedding
         """
+        max_tok = override_max_tokens if override_max_tokens is not None else self.max_tokens
         estimated = self._estimate_tokens(text)
-        if estimated <= self.max_tokens:
+        if estimated <= max_tok:
             return self._embed_single(text, is_query=is_query)
 
-        chunks = self._chunk_text(text)
+        chunks = self._chunk_text(text, override_max_tokens=override_max_tokens)
         logger.debug(
             "Chunking text: original ~%d tokens -> %d chunks",
             estimated,
