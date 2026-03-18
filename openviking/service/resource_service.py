@@ -198,6 +198,10 @@ class ResourceService:
                 )
                 get_current_telemetry().set("queue.wait.duration_ms", queue_wait_duration_ms)
             watch_manager = self._get_watch_manager()
+            if watch_manager and not skip_watch_management and watch_interval > 0 and not to:
+                raise InvalidArgumentError(
+                    "watch_interval > 0 requires 'to' to be specified (target URI to watch)"
+                )
             if watch_manager and to and not skip_watch_management:
                 if watch_interval > 0:
                     try:
@@ -312,6 +316,7 @@ class ResourceService:
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
                 agent_id=ctx.user.agent_id,
+                original_role=ctx.role.value,
                 to_uri=to_uri,
                 parent_uri=parent_uri,
                 reason=reason,
@@ -448,45 +453,4 @@ class ResourceService:
                 "errors": [{"message": e.message} for e in s.errors],
             }
             for name, s in status.items()
-        }
-
-    async def get_watch_status(self, to_uri: str, ctx: RequestContext) -> Optional[Dict[str, Any]]:
-        """Get watch status for a resource.
-
-        Args:
-            to_uri: Target URI to query watch status
-            ctx: Request context with user identity
-
-        Returns:
-            Watch status information if the resource is being watched, None otherwise.
-            Returns dict with fields:
-            - is_watched: bool (whether the resource is being watched)
-            - watch_interval: float (watch interval in minutes)
-            - next_execution_time: Optional[str] (next execution time in ISO format)
-            - last_execution_time: Optional[str] (last execution time in ISO format)
-            - task_id: Optional[str] (task ID)
-        """
-        watch_manager = self._get_watch_manager()
-        if not watch_manager:
-            return None
-
-        task = await watch_manager.get_task_by_uri(
-            to_uri=to_uri,
-            account_id=ctx.account_id,
-            user_id=ctx.user.user_id,
-            role=ctx.role.value,
-        )
-        if not task or not task.is_active:
-            return None
-
-        return {
-            "is_watched": task.is_active,
-            "watch_interval": task.watch_interval,
-            "next_execution_time": task.next_execution_time.isoformat()
-            if task.next_execution_time
-            else None,
-            "last_execution_time": task.last_execution_time.isoformat()
-            if task.last_execution_time
-            else None,
-            "task_id": task.task_id,
         }

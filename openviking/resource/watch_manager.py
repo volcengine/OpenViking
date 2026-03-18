@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional
 
 from pydantic import BaseModel, Field
 
+from openviking_cli.exceptions import ConflictError
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -43,6 +44,7 @@ class WatchTask(BaseModel):
     account_id: str = Field(default="default", description="Account ID (tenant)")
     user_id: str = Field(default="default", description="User ID who created this task")
     agent_id: str = Field(default="default", description="Agent ID who created this task")
+    original_role: str = Field(default="user", description="Role used to execute this task")
 
     class Config:
         json_encoders = {datetime: lambda v: v.isoformat() if v else None}
@@ -72,6 +74,7 @@ class WatchTask(BaseModel):
             "account_id": self.account_id,
             "user_id": self.user_id,
             "agent_id": self.agent_id,
+            "original_role": self.original_role,
         }
 
     @classmethod
@@ -285,13 +288,14 @@ class WatchManager:
             - ADMIN can access tasks within the same account.
             - USER can only access tasks they created within the same account.
         """
-        if role == "ROOT":
+        role_value = (role or "").lower()
+        if role_value == "root":
             return True
 
         if task.account_id != account_id:
             return False
 
-        if role == "ADMIN":
+        if role_value == "admin":
             return True
 
         return task.user_id == user_id
@@ -326,6 +330,7 @@ class WatchManager:
         account_id: str = "default",
         user_id: str = "default",
         agent_id: str = "default",
+        original_role: str = "user",
         to_uri: Optional[str] = None,
         parent_uri: Optional[str] = None,
         reason: str = "",
@@ -352,7 +357,8 @@ class WatchManager:
             Created WatchTask
 
         Raises:
-            ValueError: If required fields are missing or URI conflicts
+            ValueError: If required fields are missing
+            ConflictError: If target URI conflicts with existing tasks
         """
         if not path:
             raise ValueError("Path is required")
@@ -361,7 +367,10 @@ class WatchManager:
 
         async with self._lock:
             if self._check_uri_conflict(to_uri):
-                raise ValueError(f"Target URI '{to_uri}' is already used by another task")
+                raise ConflictError(
+                    f"Target URI '{to_uri}' is already used by another task",
+                    resource=to_uri,
+                )
 
             task = WatchTask(
                 path=path,
@@ -376,6 +385,7 @@ class WatchManager:
                 account_id=account_id,
                 user_id=user_id,
                 agent_id=agent_id,
+                original_role=original_role,
             )
 
             task.next_execution_time = task.calculate_next_execution_time()
@@ -427,7 +437,8 @@ class WatchManager:
             Updated WatchTask
 
         Raises:
-            ValueError: If task not found or URI conflicts
+            ValueError: If task not found or invalid arguments
+            ConflictError: If target URI conflicts with existing tasks
             PermissionDeniedError: If user doesn't have permission
         """
         async with self._lock:
@@ -441,7 +452,10 @@ class WatchManager:
                 )
 
             if self._check_uri_conflict(to_uri, exclude_task_id=task_id):
-                raise ValueError(f"Target URI '{to_uri}' is already used by another task")
+                raise ConflictError(
+                    f"Target URI '{to_uri}' is already used by another task",
+                    resource=to_uri,
+                )
 
             old_to_uri = task.to_uri
 
@@ -543,7 +557,7 @@ class WatchManager:
         task_id: str,
         account_id: str = "default",
         user_id: str = "default",
-        role: str = "ROOT",
+        role: str = "root",
     ) -> Optional[WatchTask]:
         """Get a monitoring task by ID.
 

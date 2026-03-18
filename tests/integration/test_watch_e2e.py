@@ -17,6 +17,16 @@ from openviking_cli.exceptions import ConflictError
 from openviking_cli.session.user_id import UserIdentifier
 
 
+async def get_watch_task(client: AsyncOpenViking, to_uri: str):
+    watch_manager = client._service.resources._watch_scheduler.watch_manager
+    return await watch_manager.get_task_by_uri(
+        to_uri=to_uri,
+        account_id=client._service.user.account_id,
+        user_id=client._service.user.user_id,
+        role=Role.USER.value,
+    )
+
+
 @pytest_asyncio.fixture(scope="function")
 async def e2e_client(test_data_dir: Path):
     """End-to-end test client with watch support."""
@@ -76,12 +86,12 @@ class TestWatchE2EBasicFlow:
         assert "root_uri" in result
         assert result["root_uri"] == to_uri
 
-        status = await client.get_watch_status(to_uri)
-        assert status is not None
-        assert status["is_watched"] is True
-        assert status["watch_interval"] == 60.0
-        assert status["task_id"] is not None
-        assert status["next_execution_time"] is not None
+        task = await get_watch_task(client, to_uri)
+        assert task is not None
+        assert task.is_active is True
+        assert task.watch_interval == 60.0
+        assert task.task_id is not None
+        assert task.next_execution_time is not None
 
     @pytest.mark.asyncio
     async def test_query_watch_status(self, e2e_client: AsyncOpenViking, watch_test_file: Path):
@@ -103,13 +113,13 @@ class TestWatchE2EBasicFlow:
             watch_interval=0,
         )
 
-        watched_status = await client.get_watch_status(watched_uri)
-        assert watched_status is not None
-        assert watched_status["is_watched"] is True
-        assert watched_status["watch_interval"] == 30.0
+        watched_task = await get_watch_task(client, watched_uri)
+        assert watched_task is not None
+        assert watched_task.is_active is True
+        assert watched_task.watch_interval == 30.0
 
-        unwatched_status = await client.get_watch_status(unwatched_uri)
-        assert unwatched_status is None
+        unwatched_task = await get_watch_task(client, unwatched_uri)
+        assert unwatched_task is None
 
     @pytest.mark.asyncio
     async def test_update_watch_interval(self, e2e_client: AsyncOpenViking, watch_test_file: Path):
@@ -124,17 +134,15 @@ class TestWatchE2EBasicFlow:
             watch_interval=30.0,
         )
 
-        status = await client.get_watch_status(to_uri)
-        assert status is not None
-        assert status["watch_interval"] == 30.0
-        task_id = status["task_id"]
+        task = await get_watch_task(client, to_uri)
+        assert task is not None
+        assert task.watch_interval == 30.0
+        task_id = task.task_id
 
-        await client._service.resources._watch_scheduler.watch_manager.update_task(
-            task_id=task_id,
-            account_id=client._service.user.account_id,
-            user_id=client._service.user.user_id,
-            role="ROOT",
-            is_active=False,
+        await client.add_resource(
+            path=str(watch_test_file),
+            to=to_uri,
+            watch_interval=0,
         )
 
         await client.add_resource(
@@ -143,10 +151,11 @@ class TestWatchE2EBasicFlow:
             watch_interval=120.0,
         )
 
-        status = await client.get_watch_status(to_uri)
-        assert status is not None
-        assert status["watch_interval"] == 120.0
-        assert status["task_id"] == task_id
+        task = await get_watch_task(client, to_uri)
+        assert task is not None
+        assert task.is_active is True
+        assert task.watch_interval == 120.0
+        assert task.task_id == task_id
 
     @pytest.mark.asyncio
     async def test_cancel_watch(self, e2e_client: AsyncOpenViking, watch_test_file: Path):
@@ -161,9 +170,9 @@ class TestWatchE2EBasicFlow:
             watch_interval=30.0,
         )
 
-        status = await client.get_watch_status(to_uri)
-        assert status is not None
-        assert status["is_watched"] is True
+        task = await get_watch_task(client, to_uri)
+        assert task is not None
+        assert task.is_active is True
 
         await client.add_resource(
             path=str(watch_test_file),
@@ -171,8 +180,9 @@ class TestWatchE2EBasicFlow:
             watch_interval=0,
         )
 
-        status = await client.get_watch_status(to_uri)
-        assert status is None
+        task = await get_watch_task(client, to_uri)
+        assert task is not None
+        assert task.is_active is False
 
 
 class TestWatchE2EConflictDetection:
@@ -219,9 +229,9 @@ class TestWatchE2EConflictDetection:
             watch_interval=30.0,
         )
 
-        status = await client.get_watch_status(to_uri)
-        assert status is not None
-        task_id = status["task_id"]
+        task = await get_watch_task(client, to_uri)
+        assert task is not None
+        task_id = task.task_id
 
         await client.add_resource(
             path=str(watch_test_file),
@@ -229,8 +239,9 @@ class TestWatchE2EConflictDetection:
             watch_interval=0,
         )
 
-        status = await client.get_watch_status(to_uri)
-        assert status is None
+        task = await get_watch_task(client, to_uri)
+        assert task is not None
+        assert task.is_active is False
 
         await client.add_resource(
             path=str(watch_test_file),
@@ -239,11 +250,11 @@ class TestWatchE2EConflictDetection:
             watch_interval=45.0,
         )
 
-        status = await client.get_watch_status(to_uri)
-        assert status is not None
-        assert status["is_watched"] is True
-        assert status["watch_interval"] == 45.0
-        assert status["task_id"] == task_id
+        task = await get_watch_task(client, to_uri)
+        assert task is not None
+        assert task.is_active is True
+        assert task.watch_interval == 45.0
+        assert task.task_id == task_id
 
 
 class TestWatchE2ESchedulerExecution:
@@ -380,10 +391,10 @@ class TestWatchE2EMultipleResources:
             )
 
         for uri, expected_interval in zip(uris, intervals):
-            status = await client.get_watch_status(uri)
-            assert status is not None
-            assert status["is_watched"] is True
-            assert status["watch_interval"] == expected_interval
+            task = await get_watch_task(client, uri)
+            assert task is not None
+            assert task.is_active is True
+            assert task.watch_interval == expected_interval
 
         for uri in uris:
             await client.add_resource(
@@ -393,8 +404,9 @@ class TestWatchE2EMultipleResources:
             )
 
         for uri in uris:
-            status = await client.get_watch_status(uri)
-            assert status is None
+            task = await get_watch_task(client, uri)
+            assert task is not None
+            assert task.is_active is False
 
     @pytest.mark.asyncio
     async def test_independent_watch_tasks(
@@ -418,10 +430,11 @@ class TestWatchE2EMultipleResources:
             watch_interval=60.0,
         )
 
-        status1 = await client.get_watch_status(uri1)
-        status2 = await client.get_watch_status(uri2)
-
-        assert status1["task_id"] != status2["task_id"]
+        task1 = await get_watch_task(client, uri1)
+        task2 = await get_watch_task(client, uri2)
+        assert task1 is not None
+        assert task2 is not None
+        assert task1.task_id != task2.task_id
 
         await client.add_resource(
             path=str(watch_test_file),
@@ -429,12 +442,12 @@ class TestWatchE2EMultipleResources:
             watch_interval=0,
         )
 
-        status1_after = await client.get_watch_status(uri1)
-        status2_after = await client.get_watch_status(uri2)
-
-        assert status1_after is None
-        assert status2_after is not None
-        assert status2_after["is_watched"] is True
+        task1_after = await get_watch_task(client, uri1)
+        task2_after = await get_watch_task(client, uri2)
+        assert task1_after is not None
+        assert task1_after.is_active is False
+        assert task2_after is not None
+        assert task2_after.is_active is True
 
 
 class TestWatchE2EErrorHandling:
@@ -476,10 +489,7 @@ class TestWatchE2EErrorHandling:
         assert "root_uri" in result
 
     @pytest.mark.asyncio
-    async def test_watch_status_nonexistent_resource(self, e2e_client: AsyncOpenViking):
-        """Test getting watch status for nonexistent resource."""
+    async def test_watch_task_nonexistent_resource(self, e2e_client: AsyncOpenViking):
         client = e2e_client
-
-        status = await client.get_watch_status("viking://resources/nonexistent")
-
-        assert status is None
+        task = await get_watch_task(client, "viking://resources/nonexistent")
+        assert task is None

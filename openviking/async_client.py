@@ -223,10 +223,6 @@ class AsyncOpenViking:
             **kwargs,
         )
 
-    async def get_watch_status(self, to_uri: str):
-        await self._ensure_initialized()
-        return await self._client.get_watch_status(to_uri)
-
     @property
     def _service(self):
         return self._client.service

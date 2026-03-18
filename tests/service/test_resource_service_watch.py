@@ -12,6 +12,7 @@ from openviking.resource.watch_manager import WatchManager
 from openviking.server.identity import RequestContext, Role
 from openviking.service.resource_service import ResourceService
 from openviking_cli.exceptions import ConflictError
+from openviking_cli.exceptions import InvalidArgumentError
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -115,6 +116,18 @@ class TestWatchTaskCreation:
         assert task.is_active is True
 
     @pytest.mark.asyncio
+    async def test_watch_interval_requires_to_when_watch_enabled(
+        self, resource_service: ResourceService, request_context: RequestContext
+    ):
+        with pytest.raises(InvalidArgumentError, match="requires 'to'"):
+            await resource_service.add_resource(
+                path="/test/path",
+                ctx=request_context,
+                to=None,
+                watch_interval=30.0,
+            )
+
+    @pytest.mark.asyncio
     async def test_watch_task_aligns_processor_params(
         self, resource_service: ResourceService, request_context: RequestContext
     ):
@@ -216,6 +229,40 @@ class TestWatchTaskConflict:
 
         assert "already being monitored" in str(exc_info.value)
         assert to_uri in str(exc_info.value)
+
+    @pytest.mark.asyncio
+    async def test_conflict_when_task_exists_but_hidden_by_permission(
+        self, resource_service: ResourceService, request_context: RequestContext
+    ):
+        to_uri = "viking://resources/cross_user_conflict"
+        other_user_ctx = RequestContext(
+            user=UserIdentifier("test_account", "other_user", "other_agent"),
+            role=Role.USER,
+        )
+
+        await resource_service.add_resource(
+            path="/test/path1",
+            ctx=request_context,
+            to=to_uri,
+            watch_interval=30.0,
+        )
+
+        hidden_task = await get_task_by_uri(resource_service, to_uri, other_user_ctx)
+        assert hidden_task is None
+
+        with pytest.raises(ConflictError) as exc_info:
+            await resource_service.add_resource(
+                path="/test/path2",
+                ctx=other_user_ctx,
+                to=to_uri,
+                watch_interval=45.0,
+            )
+
+        assert "already used by another task" in str(exc_info.value)
+        assert to_uri in str(exc_info.value)
+
+        task = await get_task_by_uri(resource_service, to_uri, request_context)
+        assert task is not None
 
     @pytest.mark.asyncio
     async def test_reactivate_inactive_task(

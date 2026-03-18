@@ -12,6 +12,7 @@ import pytest
 import pytest_asyncio
 
 from openviking.resource.watch_manager import WatchManager, WatchTask
+from openviking_cli.exceptions import ConflictError
 from tests.utils.mock_agfs import MockLocalAGFS
 
 TEST_ACCOUNT_ID = "default"
@@ -235,7 +236,7 @@ class TestWatchManager:
             to_uri="viking://resources/test",
         )
 
-        with pytest.raises(ValueError, match="already used by another task"):
+        with pytest.raises(ConflictError, match="already used by another task"):
             await watch_manager.create_task(
                 path="/test/path2",
                 to_uri="viking://resources/test",
@@ -288,7 +289,7 @@ class TestWatchManager:
             to_uri="viking://resources/test2",
         )
 
-        with pytest.raises(ValueError, match="already used by another task"):
+        with pytest.raises(ConflictError, match="already used by another task"):
             await watch_manager.update_task(
                 task_id=task2.task_id,
                 account_id=TEST_ACCOUNT_ID,

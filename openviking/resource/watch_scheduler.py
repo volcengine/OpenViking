@@ -232,9 +232,14 @@ class WatchScheduler:
                     user_id=task.user_id,
                     agent_id=task.agent_id,
                 )
+                role_value = getattr(task, "original_role", None) or Role.USER.value
+                try:
+                    role = Role(role_value)
+                except Exception:
+                    role = Role.USER
                 ctx = RequestContext(
                     user=user,
-                    role=Role.ROOT,
+                    role=role,
                 )
 
                 processor_kwargs = dict(getattr(task, "processor_kwargs", {}) or {})
@@ -283,7 +288,7 @@ class WatchScheduler:
                                 task_id=task.task_id,
                                 account_id=task.account_id,
                                 user_id=task.user_id,
-                                role="ROOT",
+                                role=getattr(task, "original_role", None) or Role.USER.value,
                                 is_active=False,
                             )
                         )
