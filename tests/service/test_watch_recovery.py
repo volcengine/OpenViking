@@ -140,6 +140,43 @@ class TestServiceRestartRecovery:
         assert loaded_task2.watch_interval == 60.0
 
     @pytest.mark.asyncio
+    async def test_tasks_recovered_from_backup_when_primary_missing(
+        self, mock_viking_fs: MockVikingFS, temp_storage: Path
+    ):
+        """Test that tasks can be recovered from backup storage when primary is missing."""
+        task_data = {
+            "task_id": "backup-task-id",
+            "path": "/test/backup",
+            "to_uri": "viking://resources/backup",
+            "reason": "Backup task",
+            "instruction": "",
+            "watch_interval": 60.0,
+            "created_at": datetime.now().isoformat(),
+            "last_execution_time": None,
+            "next_execution_time": None,
+            "is_active": True,
+        }
+
+        storage_uri = WatchManager.STORAGE_URI
+        storage_path = mock_viking_fs._uri_to_path(storage_uri)
+        assert mock_viking_fs.agfs.exists(storage_path) is False
+
+        bak_uri = WatchManager.STORAGE_BAK_URI
+        bak_path = mock_viking_fs._uri_to_path(bak_uri)
+        data = {"tasks": [task_data], "updated_at": datetime.now().isoformat()}
+        mock_viking_fs.agfs.write(bak_path, json.dumps(data).encode("utf-8"))
+
+        manager = WatchManager(viking_fs=mock_viking_fs)
+        await manager.initialize()
+
+        loaded_task = await manager.get_task("backup-task-id")
+        assert loaded_task is not None
+        assert loaded_task.path == "/test/backup"
+        assert loaded_task.to_uri == "viking://resources/backup"
+
+        assert mock_viking_fs.agfs.exists(storage_path) is True
+
+    @pytest.mark.asyncio
     async def test_expired_tasks_executed_on_startup(
         self, mock_viking_fs: MockVikingFS, temp_storage: Path, request_context: RequestContext
     ):

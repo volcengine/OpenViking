@@ -154,7 +154,7 @@ class WatchManager:
                 if content and content.strip():
                     data = json.loads(content)
             except FileNotFoundError:
-                raise
+                data = None
             except json.JSONDecodeError as e:
                 logger.warning(f"[WatchManager] Invalid task storage JSON: {e}")
             except Exception as e:
@@ -268,7 +268,6 @@ class WatchManager:
         account_id: str,
         user_id: str,
         role: str,
-        require_owner: bool = False,
     ) -> bool:
         """Check if user has permission to access/modify a task.
 
@@ -277,10 +276,14 @@ class WatchManager:
             account_id: Requester's account ID
             user_id: Requester's user ID
             role: Requester's role (ROOT/ADMIN/USER)
-            require_owner: If True, only owner can access (for delete/update)
 
         Returns:
             True if has permission, False otherwise
+
+        Notes:
+            - ROOT can access all tasks.
+            - ADMIN can access tasks within the same account.
+            - USER can only access tasks they created within the same account.
         """
         if role == "ROOT":
             return True
@@ -290,9 +293,6 @@ class WatchManager:
 
         if role == "ADMIN":
             return True
-
-        if require_owner:
-            return task.user_id == user_id
 
         return task.user_id == user_id
 
@@ -435,7 +435,7 @@ class WatchManager:
             if not task:
                 raise ValueError(f"Task {task_id} not found")
 
-            if not self._check_permission(task, account_id, user_id, role, require_owner=True):
+            if not self._check_permission(task, account_id, user_id, role):
                 raise PermissionDeniedError(
                     f"User {account_id}/{user_id} does not have permission to update task {task_id}"
                 )
@@ -524,7 +524,7 @@ class WatchManager:
             if not task:
                 return False
 
-            if not self._check_permission(task, account_id, user_id, role, require_owner=True):
+            if not self._check_permission(task, account_id, user_id, role):
                 raise PermissionDeniedError(
                     f"User {account_id}/{user_id} does not have permission to delete task {task_id}"
                 )
