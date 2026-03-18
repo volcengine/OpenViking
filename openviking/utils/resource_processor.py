@@ -215,15 +215,12 @@ class ResourceProcessor:
             viking_fs = get_viking_fs()
             target_exists = await viking_fs.exists(root_uri, ctx=ctx)
             if not target_exists:
-                dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
-
                 # 确保父目录存在
                 parent_uri = "/".join(root_uri.rsplit("/", 1)[:-1])
                 if parent_uri:
                     await viking_fs.mkdir(parent_uri, exist_ok=True, ctx=ctx)
 
-                src_path = viking_fs._uri_to_path(temp_uri, ctx=ctx)
-                viking_fs.agfs.mv(src_path, dst_path)
+                await viking_fs.mv(temp_uri, root_uri, ctx=ctx)
 
                 # 清理 temp 根目录
                 try:
