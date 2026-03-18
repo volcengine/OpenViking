@@ -2,8 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """MiniMax Embedder Implementation via HTTP API"""
 
-import time
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional
 
 import requests
 from requests.adapters import HTTPAdapter

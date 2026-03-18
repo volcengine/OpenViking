@@ -2,10 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for MiniMax Embedder (Simple)"""
 
-import unittest
-from unittest.mock import MagicMock, patch
-import sys
 import os
+import unittest
 
 from openviking.models.embedder.minimax_embedders import MinimaxDenseEmbedder
 from openviking_cli.utils.config.embedding_config import EmbeddingModelConfig
@@ -24,7 +22,7 @@ class TestMinimaxRealCall(unittest.TestCase):
 
     def test_real_embedding(self):
         """Test real embedding call to MiniMax API"""
-        print(f"\n[Real API] Testing MiniMax Embedder (embo-01)")
+        print("\n[Real API] Testing MiniMax Embedder (embo-01)")
 
         embedder = MinimaxDenseEmbedder(
             model_name="embo-01",
