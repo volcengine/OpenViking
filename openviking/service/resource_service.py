@@ -163,6 +163,11 @@ class ResourceService:
                     raise InvalidArgumentError(
                         f"add_resource only supports resources scope, use dedicated interface to add {parsed.scope} content"
                     )
+            watch_manager = self._get_watch_manager()
+            if watch_manager and not skip_watch_management and watch_interval > 0 and not to:
+                raise InvalidArgumentError(
+                    "watch_interval > 0 requires 'to' to be specified (target URI to watch)"
+                )
 
             result = await self._resource_processor.process_resource(
                 path=path,
@@ -197,11 +202,6 @@ class ResourceService:
                     root_uri=result.get("root_uri"),
                 )
                 get_current_telemetry().set("queue.wait.duration_ms", queue_wait_duration_ms)
-            watch_manager = self._get_watch_manager()
-            if watch_manager and not skip_watch_management and watch_interval > 0 and not to:
-                raise InvalidArgumentError(
-                    "watch_interval > 0 requires 'to' to be specified (target URI to watch)"
-                )
             if watch_manager and to and not skip_watch_management:
                 if watch_interval > 0:
                     try:
