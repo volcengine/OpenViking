@@ -166,11 +166,13 @@ class VikingFS:
         rerank_config: Optional["RerankConfig"] = None,
         vector_store: Optional["VikingVectorIndexBackend"] = None,
         timeout: int = 10,
+        memory_relation_store: Optional[Any] = None,
     ):
         self.agfs = agfs
         self.query_embedder = query_embedder
         self.rerank_config = rerank_config
         self.vector_store = vector_store
+        self.memory_relation_store = memory_relation_store
         self._bound_ctx: contextvars.ContextVar[Optional[RequestContext]] = contextvars.ContextVar(
             "vikingfs_bound_ctx", default=None
         )
@@ -648,6 +650,7 @@ class VikingFS:
             storage=storage,
             embedder=embedder,
             rerank_config=self.rerank_config,
+            memory_relation_store=self.memory_relation_store,
         )
 
         # Infer context_type (None = search all types)
@@ -793,6 +796,7 @@ class VikingFS:
             storage=storage,
             embedder=embedder,
             rerank_config=self.rerank_config,
+            memory_relation_store=self.memory_relation_store,
         )
 
         async def _execute(tq: TypedQuery):

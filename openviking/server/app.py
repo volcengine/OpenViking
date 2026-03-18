@@ -20,6 +20,7 @@ from openviking.server.routers import (
     content_router,
     debug_router,
     filesystem_router,
+    memory_relations_router,
     observer_router,
     pack_router,
     relations_router,
@@ -177,6 +178,7 @@ def create_app(
     app.include_router(debug_router)
     app.include_router(observer_router)
     app.include_router(tasks_router)
+    app.include_router(memory_relations_router)
     app.include_router(bot_router, prefix="/bot/v1")
 
     return app

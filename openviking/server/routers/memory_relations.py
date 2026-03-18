@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, Query
 
 from openviking.server.auth import get_request_context
 from openviking.server.identity import RequestContext
-from openviking.server.models import MemoryRelationListResponse, MemoryRelationResponse, Response
+from openviking.server.models import ErrorInfo, MemoryRelationListResponse, MemoryRelationResponse, Response
 from openviking.storage.memory_relation_store import MemoryRelationStore, RelationType
 
 router = APIRouter(prefix="/api/v1/memories", tags=["memory-relations"])
@@ -48,7 +48,30 @@ async def get_memory_relations(
     """
     store = _get_store()
 
-    relation_type = RelationType(type) if type else None
+    relation_type = None
+    if type:
+        try:
+            relation_type = RelationType(type)
+        except ValueError:
+            valid = ", ".join(t.value for t in RelationType)
+            return Response(
+                status="error",
+                error=ErrorInfo(
+                    code="INVALID_ARGUMENT",
+                    message=f"Invalid relation type: {type}. Valid types: {valid}",
+                ),
+            )
+
+    valid_directions = ("outgoing", "incoming", "both")
+    if direction not in valid_directions:
+        return Response(
+            status="error",
+            error=ErrorInfo(
+                code="INVALID_ARGUMENT",
+                message=f"Invalid direction: {direction}. Valid: {', '.join(valid_directions)}",
+            ),
+        )
+
     relations = await store.query(uri, relation_type=relation_type, direction=direction)
 
     items = [

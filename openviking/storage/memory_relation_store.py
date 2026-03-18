@@ -39,9 +39,10 @@ class MemoryRelation:
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: Dict[str, Any] = field(default_factory=dict)
     id: str = field(default_factory=lambda: uuid4().hex)
+    account_id: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d = {
             "id": self.id,
             "source_uri": self.source_uri,
             "target_uri": self.target_uri,
@@ -49,6 +50,9 @@ class MemoryRelation:
             "created_at": self.created_at.isoformat(),
             "metadata": self.metadata,
         }
+        if self.account_id is not None:
+            d["account_id"] = self.account_id
+        return d
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "MemoryRelation":
@@ -65,6 +69,7 @@ class MemoryRelation:
             relation_type=RelationType(data["relation_type"]),
             created_at=created_at,
             metadata=data.get("metadata", {}),
+            account_id=data.get("account_id"),
         )
 
 

@@ -148,7 +148,7 @@ class MemoryDeduplicator:
     async def _record_dedup_relations(self, result: DedupResult) -> None:
         """Create memory relations based on dedup actions.
 
-        - MERGE -> supersedes (new candidate supersedes old memory)
+        - MERGE -> supersedes (existing memory absorbs candidate and supersedes it)
         - DELETE -> contradicts (audit trail before deletion)
         """
         if not self.relation_store or not result.actions:
@@ -163,9 +163,11 @@ class MemoryDeduplicator:
 
         for action in result.actions:
             if action.decision == MemoryActionDecision.MERGE:
+                # The existing memory survives with merged content, so it
+                # supersedes the candidate (which is not created).
                 relation = MemoryRelation(
-                    source_uri=candidate_uri,
-                    target_uri=action.memory.uri,
+                    source_uri=action.memory.uri,
+                    target_uri=candidate_uri,
                     relation_type=RelationType.SUPERSEDES,
                     metadata={"reason": action.reason, "dedup_decision": "merge"},
                 )

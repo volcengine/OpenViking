@@ -14,6 +14,7 @@ from openviking.server.routers.resources import router as resources_router
 from openviking.server.routers.search import router as search_router
 from openviking.server.routers.sessions import router as sessions_router
 from openviking.server.routers.system import router as system_router
+from openviking.server.routers.memory_relations import router as memory_relations_router
 from openviking.server.routers.tasks import router as tasks_router
 
 __all__ = [
@@ -25,6 +26,7 @@ __all__ = [
     "content_router",
     "search_router",
     "relations_router",
+    "memory_relations_router",
     "sessions_router",
     "pack_router",
     "debug_router",

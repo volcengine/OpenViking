@@ -63,9 +63,14 @@ class SessionCompressor:
         vikingdb: VikingDBManager,
     ):
         """Initialize session compressor."""
+        from openviking.storage.memory_relation_store import MemoryRelationStore
+
         self.vikingdb = vikingdb
         self.extractor = MemoryExtractor()
-        self.deduplicator = MemoryDeduplicator(vikingdb=vikingdb)
+        self.relation_store = MemoryRelationStore()
+        self.deduplicator = MemoryDeduplicator(
+            vikingdb=vikingdb, relation_store=self.relation_store
+        )
         self._pending_semantic_changes: Dict[str, Dict[str, set]] = {}
 
     def _record_semantic_change(
