@@ -199,6 +199,8 @@ class LiteLLMVLMProvider(VLMBase):
             "messages": messages,
             "temperature": self.temperature,
         }
+        if self.max_tokens is not None:
+            kwargs["max_tokens"] = self.max_tokens
 
         if self.api_key:
             kwargs["api_key"] = self.api_key
