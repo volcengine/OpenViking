@@ -208,9 +208,6 @@ class ResourceProcessor:
                 pass
 
             return result
-        # ============ Phase 3.5: 首次添加立即落盘 ============
-        root_uri = result.get("root_uri")
-        temp_uri = result.get("temp_uri")  # temp_doc_uri
 
         # ============ Phase 3.5: 首次添加立即落盘 + 生命周期锁 ============
         root_uri = result.get("root_uri")
