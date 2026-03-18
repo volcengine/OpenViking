@@ -1712,6 +1712,7 @@ function bindAddResource() {
 
       const formData = new FormData();
       formData.append("file", file);
+      formData.append("telemetry", "true");
 
       setOutput(`Uploading ${file.name} ...`);
       const uploadPayload = await callConsole("/ov/resources/temp_upload", {
@@ -1736,6 +1737,10 @@ function bindAddResource() {
         result: {
           upload: uploadPayload.result,
           add_resource: addPayload.result,
+        },
+        telemetry: {
+          upload: uploadPayload.telemetry,
+          add_resource: addPayload.telemetry,
         },
       });
     } catch (error) {

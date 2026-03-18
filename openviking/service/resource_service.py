@@ -147,7 +147,17 @@ class ResourceService:
         """
         self._ensure_initialized()
         request_start = time.perf_counter()
+        telemetry = get_current_telemetry()
         telemetry_id = register_wait_telemetry(wait)
+        watch_manager = self._get_watch_manager()
+        watch_enabled = bool(
+            watch_manager and to and not skip_watch_management and watch_interval > 0
+        )
+
+        telemetry.set("resource.flags.wait", wait)
+        telemetry.set("resource.flags.build_index", build_index)
+        telemetry.set("resource.flags.summarize", summarize)
+        telemetry.set("resource.flags.watch_enabled", watch_enabled)
 
         try:
             # add_resource only supports resources scope
@@ -163,7 +173,6 @@ class ResourceService:
                     raise InvalidArgumentError(
                         f"add_resource only supports resources scope, use dedicated interface to add {parsed.scope} content"
                     )
-            watch_manager = self._get_watch_manager()
             if watch_manager and not skip_watch_management and watch_interval > 0 and not to:
                 raise InvalidArgumentError(
                     "watch_interval > 0 requires 'to' to be specified (target URI to watch)"
@@ -186,9 +195,10 @@ class ResourceService:
                 qm = get_queue_manager()
                 wait_start = time.perf_counter()
                 try:
-                    status = await qm.wait_complete(timeout=timeout)
+                    with telemetry.measure("resource.wait"):
+                        status = await qm.wait_complete(timeout=timeout)
                 except TimeoutError as exc:
-                    get_current_telemetry().set_error(
+                    telemetry.set_error(
                         "resource_service.wait_complete",
                         "DEADLINE_EXCEEDED",
                         str(exc),
@@ -201,50 +211,50 @@ class ResourceService:
                     queue_status=status,
                     root_uri=result.get("root_uri"),
                 )
-                get_current_telemetry().set("queue.wait.duration_ms", queue_wait_duration_ms)
+                telemetry.set("queue.wait.duration_ms", queue_wait_duration_ms)
             if watch_manager and to and not skip_watch_management:
-                if watch_interval > 0:
-                    try:
-                        processor_kwargs = self._sanitize_watch_processor_kwargs(kwargs)
-                        await self._handle_watch_task_creation(
-                            path=path,
-                            to_uri=to,
-                            parent_uri=parent,
-                            reason=reason,
-                            instruction=instruction,
-                            watch_interval=watch_interval,
-                            build_index=build_index,
-                            summarize=summarize,
-                            processor_kwargs=processor_kwargs,
-                            ctx=ctx,
-                        )
-                    except ConflictError:
-                        raise
-                    except Exception as e:
-                        logger.warning(
-                            f"[ResourceService] Failed to create watch task for {to}: {e}"
-                        )
-                else:
-                    try:
-                        await self._handle_watch_task_cancellation(to_uri=to, ctx=ctx)
-                    except Exception as e:
-                        logger.warning(
-                            f"[ResourceService] Failed to cancel watch task for {to}: {e}"
-                        )
-
-            get_current_telemetry().set(
-                "resource.request.duration_ms",
-                round((time.perf_counter() - request_start) * 1000, 3),
-            )
+                with telemetry.measure("resource.watch"):
+                    if watch_interval > 0:
+                        try:
+                            processor_kwargs = self._sanitize_watch_processor_kwargs(kwargs)
+                            await self._handle_watch_task_creation(
+                                path=path,
+                                to_uri=to,
+                                parent_uri=parent,
+                                reason=reason,
+                                instruction=instruction,
+                                watch_interval=watch_interval,
+                                build_index=build_index,
+                                summarize=summarize,
+                                processor_kwargs=processor_kwargs,
+                                ctx=ctx,
+                            )
+                        except ConflictError:
+                            raise
+                        except Exception as e:
+                            logger.warning(
+                                f"[ResourceService] Failed to create watch task for {to}: {e}"
+                            )
+                    else:
+                        try:
+                            await self._handle_watch_task_cancellation(to_uri=to, ctx=ctx)
+                        except Exception as e:
+                            logger.warning(
+                                f"[ResourceService] Failed to cancel watch task for {to}: {e}"
+                            )
             return result
         except Exception as exc:
-            get_current_telemetry().set_error(
+            telemetry.set_error(
                 "resource_service.add_resource",
                 type(exc).__name__,
                 str(exc),
             )
             raise
         finally:
+            telemetry.set(
+                "resource.request.duration_ms",
+                round((time.perf_counter() - request_start) * 1000, 3),
+            )
             unregister_wait_telemetry(telemetry_id)
 
     async def _handle_watch_task_creation(
