@@ -120,7 +120,7 @@ async def test_add_resource_with_to(client: httpx.AsyncClient, sample_markdown_f
         "/api/v1/resources",
         json={
             "path": str(sample_markdown_file),
-            "to": "viking://resources/custom/",
+            "to": "viking://resources/custom/sample",
             "reason": "test resource",
         },
     )

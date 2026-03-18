@@ -15,8 +15,12 @@ from openviking_cli.session.user_id import UserIdentifier
 async def test_delete_existing_memory_uses_vikingdb_manager():
     compressor = SessionCompressor.__new__(SessionCompressor)
     compressor.vikingdb = AsyncMock()
+    compressor._pending_semantic_changes = {}
     viking_fs = AsyncMock()
-    memory = SimpleNamespace(uri="viking://user/user1/memories/events/e1")
+    memory = SimpleNamespace(
+        uri="viking://user/user1/memories/events/e1",
+        parent_uri="viking://user/user1/memories/events",
+    )
     ctx = RequestContext(user=UserIdentifier("acc1", "user1", "agent1"), role=Role.USER)
 
     ok = await SessionCompressor._delete_existing_memory(compressor, memory, viking_fs, ctx)

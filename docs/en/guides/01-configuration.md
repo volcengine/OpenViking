@@ -515,7 +515,6 @@ Supports S3 storage in VirtualHostStyle mode, such as TOS.
 
 </details>
 
-
 #### vectordb
 
 Vector database storage configuration
@@ -639,6 +638,28 @@ When `root_api_key` is configured, the server enables multi-tenant authenticatio
 
 For startup and deployment details see [Deployment](./03-deployment.md), for authentication see [Authentication](./04-authentication.md).
 
+## storage.transaction Section
+
+Path locks are enabled by default and usually require no configuration. **The default behavior is no-wait**: if the target path is already locked by another operation, the operation fails immediately with `LockAcquisitionError`. Set `lock_timeout` to a positive value to allow polling/retry.
+
+```json
+{
+  "storage": {
+    "transaction": {
+      "lock_timeout": 5.0,
+      "lock_expire": 300.0
+    }
+  }
+}
+```
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `lock_timeout` | float | Path lock acquisition timeout (seconds). `0` = fail immediately if locked (default). `> 0` = wait/retry up to this many seconds, then raise `LockAcquisitionError`. | `0.0` |
+| `lock_expire` | float | Stale lock expiry threshold (seconds). Locks held longer than this by a crashed process are force-released. | `300.0` |
+
+For details on the lock mechanism, see [Path Locks and Crash Recovery](../concepts/09-transaction.md).
+
 ## Full Schema
 
 ```json
@@ -672,6 +693,10 @@ For startup and deployment details see [Deployment](./03-deployment.md), for aut
       "backend": "local|s3|memory",
       "url": "string",
       "timeout": 10
+    },
+    "transaction": {
+      "lock_timeout": 0.0,
+      "lock_expire": 300.0
     },
     "vectordb": {
       "backend": "local|remote",

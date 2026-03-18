@@ -29,3 +29,15 @@ class ConnectionError(StorageException):
 
 class SchemaError(StorageException):
     """Raised when schema validation fails."""
+
+
+class LockError(VikingDBException):
+    """Raised when a lock operation fails."""
+
+
+class LockAcquisitionError(LockError):
+    """Raised when lock acquisition fails."""
+
+
+class ResourceBusyError(LockError):
+    """Raised when a resource is locked by an ongoing operation (e.g. semantic processing)."""

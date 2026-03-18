@@ -59,7 +59,8 @@ def create_app(
     async def lifespan(app: FastAPI):
         """Application lifespan handler."""
         nonlocal service
-        if service is None:
+        owns_service = service is None
+        if owns_service:
             service = OpenVikingService()
             await service.initialize()
             logger.info("OpenVikingService initialized")
@@ -93,7 +94,7 @@ def create_app(
 
         # Cleanup
         task_tracker.stop_cleanup_loop()
-        if service:
+        if owns_service and service:
             await service.close()
             logger.info("OpenVikingService closed")
 

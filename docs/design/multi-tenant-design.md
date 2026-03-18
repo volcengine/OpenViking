@@ -283,7 +283,7 @@ def agent_space_name(self) -> str:
 | `agent/instructions` | `/{account_id}/agent/{agent_space}/instructions/` | account + user + agent | agent 的行为规则，每用户独立 |
 | `resources/` | `/{account_id}/resources/` | account | account 内共享的知识资源 |
 | `session/` | `/{account_id}/session/{user_space}/{session_id}/` | account + user | 用户的对话记录 |
-| `transactions/` | `/{account_id}/transactions/` | account | 账户级事务记录 |
+| `redo/` | `/{account_id}/_system/redo/` | account | 崩溃恢复 redo 标记 |
 | `_system/`（全局） | `/_system/` | 系统级 | 全局工作区列表 |
 | `_system/`（per-account） | `/{account_id}/_system/` | account | 用户注册表 |
 

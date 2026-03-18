@@ -107,16 +107,16 @@ class QueueManager:
 
         logger.info("[QueueManager] Started")
 
-    def setup_standard_queues(self, vector_store: Any) -> None:
+    def setup_standard_queues(self, vector_store: Any, start: bool = True) -> None:
         """
         Setup standard queues (Embedding and Semantic) with their handlers.
 
-        This method initializes the EmbeddingQueue with TextEmbeddingHandler
-        and the SemanticQueue with SemanticProcessor, then ensures the
-        queue manager is started.
-
         Args:
             vector_store: Vector store instance for handlers to write results.
+            start: Whether to start worker threads immediately (default True).
+                   Pass False when the consumer depends on resources that are
+                   not yet initialized (e.g. VikingFS); call start() manually
+                   after those resources are ready.
         """
         # Import handlers here to avoid circular dependencies
         from openviking.storage.collection_schemas import TextEmbeddingHandler
@@ -140,8 +140,8 @@ class QueueManager:
         )
         logger.info("Semantic queue initialized with SemanticProcessor")
 
-        # Start QueueManager processing
-        self.start()
+        if start:
+            self.start()
 
     def _start_queue_worker(self, queue: NamedQueue) -> None:
         """Start a dedicated worker thread for a queue if not already running."""
@@ -207,10 +207,14 @@ class QueueManager:
 
         async def process_one(data: Dict[str, Any]) -> None:
             async with sem:
+                msg_id = data.get("id", "") if isinstance(data, dict) else ""
                 try:
                     await queue.process_dequeued(data)
+                    # Ack after successful processing (delete from persistent storage).
+                    await queue.ack(msg_id)
                 except Exception as e:
                     # Handler did not call report_error; decrement in_progress manually.
+                    # Do NOT ack — let RecoverStale re-queue on next startup.
                     queue._on_process_error(str(e), data)
                     logger.error(f"[QueueManager] Concurrent worker error for {queue.name}: {e}")
 
@@ -241,9 +245,21 @@ class QueueManager:
 
             await asyncio.sleep(self._poll_interval)
 
-        # Drain remaining in-flight tasks on shutdown
+        # Drain remaining in-flight tasks on shutdown (with timeout)
         if active_tasks:
-            await asyncio.gather(*active_tasks, return_exceptions=True)
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*active_tasks, return_exceptions=True),
+                    timeout=5.0,
+                )
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"[QueueManager] Drain timeout for {queue.name}, "
+                    f"cancelling {len(active_tasks)} in-flight task(s)"
+                )
+                for t in active_tasks:
+                    t.cancel()
+                await asyncio.gather(*active_tasks, return_exceptions=True)
 
     def stop(self) -> None:
         """Stop QueueManager and release resources."""
@@ -254,8 +270,10 @@ class QueueManager:
         # Stop queue workers
         for stop_event in self._queue_stop_events.values():
             stop_event.set()
-        for thread in self._queue_threads.values():
-            thread.join()
+        for name, thread in self._queue_threads.items():
+            thread.join(timeout=10.0)
+            if thread.is_alive():
+                logger.warning(f"[QueueManager] Worker thread {name} did not exit in time")
         self._queue_threads.clear()
         self._queue_stop_events.clear()
 
@@ -280,9 +298,6 @@ class QueueManager:
         allow_create: bool = False,
     ) -> NamedQueue:
         """Get or create a named queue object."""
-        if not self._started:
-            self.start()
-
         if name not in self._queues:
             if not allow_create:
                 raise RuntimeError(f"Queue {name} does not exist and allow_create is False")

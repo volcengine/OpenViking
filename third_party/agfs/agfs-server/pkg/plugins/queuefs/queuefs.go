@@ -137,7 +137,9 @@ func (q *QueueFSPlugin) Initialize(cfg map[string]interface{}) error {
 	switch backendType {
 	case "memory":
 		backend = NewMemoryBackend()
-	case "tidb", "mysql", "sqlite", "sqlite3":
+	case "sqlite", "sqlite3":
+		backend = NewSQLiteQueueBackend()
+	case "tidb", "mysql":
 		backend = NewTiDBBackend()
 	default:
 		return fmt.Errorf("unsupported backend: %s", backendType)
@@ -384,6 +386,7 @@ var queueOperations = map[string]bool{
 	"peek":    true,
 	"size":    true,
 	"clear":   true,
+	"ack":     true, // write message_id to confirm processing complete (at-least-once delivery)
 }
 
 // parseQueuePath parses a path like "/queue_name/operation" or "/dir/queue_name/operation"
@@ -529,7 +532,7 @@ func (qfs *queueFS) Read(path string, offset int64, size int64) ([]byte, error) 
 		data, err = qfs.peek(queueName)
 	case "size":
 		data, err = qfs.size(queueName)
-	case "enqueue", "clear":
+	case "enqueue", "clear", "ack":
 		// Write-only files
 		return []byte(""), fmt.Errorf("permission denied: %s is write-only", path)
 	default:
@@ -573,6 +576,12 @@ func (qfs *queueFS) Write(path string, data []byte, offset int64, flags filesyst
 			return 0, err
 		}
 		return 0, nil
+	case "ack":
+		msgID := strings.TrimSpace(string(data))
+		if err := qfs.ackMessage(queueName, msgID); err != nil {
+			return 0, err
+		}
+		return int64(len(data)), nil
 	default:
 		return 0, fmt.Errorf("cannot write to: %s", path)
 	}
@@ -844,7 +853,7 @@ func (qfs *queueFS) Stat(p string) (*filesystem.FileInfo, error) {
 	}
 
 	mode := uint32(0644)
-	if operation == "enqueue" || operation == "clear" {
+	if operation == "enqueue" || operation == "clear" || operation == "ack" {
 		mode = 0222
 	} else {
 		mode = 0444
@@ -990,6 +999,13 @@ func (qfs *queueFS) clear(queueName string) error {
 	defer qfs.plugin.mu.Unlock()
 
 	return qfs.plugin.backend.Clear(queueName)
+}
+
+func (qfs *queueFS) ackMessage(queueName string, msgID string) error {
+	qfs.plugin.mu.Lock()
+	defer qfs.plugin.mu.Unlock()
+
+	return qfs.plugin.backend.Ack(queueName, msgID)
 }
 
 // Ensure QueueFSPlugin implements ServicePlugin

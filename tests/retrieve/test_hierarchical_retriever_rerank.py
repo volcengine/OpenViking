@@ -19,7 +19,7 @@ class DummyEmbedResult:
 
 
 class DummyEmbedder:
-    def embed(self, _query: str) -> DummyEmbedResult:
+    def embed(self, _query: str, is_query: bool = False) -> DummyEmbedResult:
         return DummyEmbedResult()
 
 
@@ -180,8 +180,8 @@ def test_merge_starting_points_prefers_rerank_scores_in_thinking_mode(monkeypatc
         "hello",
         ["viking://resources"],
         [
-            {"uri": "viking://resources/root-a", "abstract": "root A", "_score": 0.2},
-            {"uri": "viking://resources/root-b", "abstract": "root B", "_score": 0.8},
+            {"uri": "viking://resources/root-a", "abstract": "root A", "_score": 0.2, "level": 1},
+            {"uri": "viking://resources/root-b", "abstract": "root B", "_score": 0.8, "level": 1},
         ],
         mode=RetrieverMode.THINKING,
     )

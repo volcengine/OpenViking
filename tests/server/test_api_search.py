@@ -12,7 +12,7 @@ from openviking.models.embedder.base import EmbedResult
 @pytest.fixture(autouse=True)
 def fake_query_embedder(service):
     class FakeEmbedder:
-        def embed(self, text: str) -> EmbedResult:
+        def embed(self, text: str, is_query: bool = False) -> EmbedResult:
             return EmbedResult(dense_vector=[0.1, 0.2, 0.3])
 
     service.viking_fs.query_embedder = FakeEmbedder()

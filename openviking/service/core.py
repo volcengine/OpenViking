@@ -24,7 +24,7 @@ from openviking.session.compressor import SessionCompressor
 from openviking.storage import VikingDBManager
 from openviking.storage.collection_schemas import init_context_collection
 from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_manager
-from openviking.storage.transaction import TransactionManager, init_transaction_manager
+from openviking.storage.transaction import LockManager, init_lock_manager
 from openviking.storage.viking_fs import VikingFS, init_viking_fs
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking.utils.skill_processor import SkillProcessor
@@ -76,7 +76,7 @@ class OpenVikingService:
         self._resource_processor: Optional[ResourceProcessor] = None
         self._skill_processor: Optional[SkillProcessor] = None
         self._session_compressor: Optional[SessionCompressor] = None
-        self._transaction_manager: Optional[TransactionManager] = None
+        self._lock_manager: Optional[LockManager] = None
         self._directory_initializer: Optional[DirectoryInitializer] = None
         self._watch_scheduler: Optional[WatchScheduler] = None
 
@@ -98,7 +98,7 @@ class OpenVikingService:
         )
 
         # Initialize embedder
-        self._embedder = config.embedding.get_query_embedder()
+        self._embedder = config.embedding.get_embedder()
         logger.info(
             f"Initialized embedder (dim {config.embedding.dimension}, sparse {self._embedder.is_sparse})"
         )
@@ -138,14 +138,21 @@ class OpenVikingService:
             vectordb_config=config.vectordb, queue_manager=self._queue_manager
         )
 
-        # Configure queues if QueueManager is available
+        # Configure queues if QueueManager is available.
+        # Workers are NOT started here — start() is called after VikingFS is initialized
+        # in initialize(), so that recovered tasks don't race against VikingFS init.
         if self._queue_manager:
-            self._queue_manager.setup_standard_queues(self._vikingdb_manager)
+            self._queue_manager.setup_standard_queues(self._vikingdb_manager, start=False)
 
-        # Initialize TransactionManager (fail-fast if AGFS missing)
+        # Initialize LockManager (fail-fast if AGFS missing)
         if self._agfs_client is None:
-            raise RuntimeError("AGFS client not initialized for TransactionManager")
-        self._transaction_manager = init_transaction_manager(agfs=self._agfs_client)
+            raise RuntimeError("AGFS client not initialized for LockManager")
+        tx_cfg = config.transaction
+        self._lock_manager = init_lock_manager(
+            agfs=self._agfs_client,
+            lock_timeout=tx_cfg.lock_timeout,
+            lock_expire=tx_cfg.lock_expire,
+        )
 
     @property
     def _agfs(self) -> Any:
@@ -163,9 +170,9 @@ class OpenVikingService:
         return self._vikingdb_manager
 
     @property
-    def transaction_manager(self) -> Optional[TransactionManager]:
-        """Get TransactionManager instance."""
-        return self._transaction_manager
+    def lock_manager(self) -> Optional[LockManager]:
+        """Get LockManager instance."""
+        return self._lock_manager
 
     @property
     def session_compressor(self) -> Optional[SessionCompressor]:
@@ -264,6 +271,14 @@ class OpenVikingService:
         if enable_recorder:
             logger.info("VikingFS IO Recorder enabled")
 
+        # Start queue workers now that VikingFS is ready.
+        # Doing it here (rather than in _init_storage) ensures that any tasks
+        # recovered from a previous crash are not processed before VikingFS is
+        # initialized, which would cause "VikingFS not initialized" errors.
+        if self._queue_manager:
+            self._queue_manager.start()
+            logger.info("QueueManager workers started")
+
         # Initialize directories
         directory_initializer = DirectoryInitializer(vikingdb=self._vikingdb_manager)
         self._directory_initializer = directory_initializer
@@ -283,10 +298,10 @@ class OpenVikingService:
         self._skill_processor = SkillProcessor(vikingdb=self._vikingdb_manager)
         self._session_compressor = SessionCompressor(vikingdb=self._vikingdb_manager)
 
-        # Start TransactionManager if initialized
-        if self._transaction_manager:
-            await self._transaction_manager.start()
-            logger.info("TransactionManager started")
+        # Start LockManager if initialized
+        if self._lock_manager:
+            await self._lock_manager.start()
+            logger.info("LockManager started")
 
         self._watch_scheduler = WatchScheduler(
             resource_service=self._resource_service,
@@ -327,9 +342,9 @@ class OpenVikingService:
             self._watch_scheduler = None
             logger.info("WatchScheduler stopped")
 
-        if self._transaction_manager:
-            self._transaction_manager.stop()
-            self._transaction_manager = None
+        if self._lock_manager:
+            await self._lock_manager.stop()
+            self._lock_manager = None
 
         if self._vikingdb_manager:
             self._vikingdb_manager.mark_closing()

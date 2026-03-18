@@ -75,6 +75,7 @@ class SemanticDagExecutor:
         target_uri: Optional[str] = None,
         semantic_msg_id: Optional[str] = None,
         recursive: bool = True,
+        lifecycle_lock_handle_id: str = "",
     ):
         self._processor = processor
         self._context_type = context_type
@@ -84,6 +85,7 @@ class SemanticDagExecutor:
         self._target_uri = target_uri
         self._semantic_msg_id = semantic_msg_id
         self._recursive = recursive
+        self._lifecycle_lock_handle_id = lifecycle_lock_handle_id
         self._llm_sem = asyncio.Semaphore(max_concurrent_llm)
         self._viking_fs = get_viking_fs()
         self._nodes: Dict[str, DirNode] = {}
@@ -98,6 +100,7 @@ class SemanticDagExecutor:
         self._dir_change_status: Dict[str, bool] = {}
         self._overview_cache: Dict[str, Dict[str, str]] = {}
         self._overview_cache_lock = asyncio.Lock()
+        self._refresh_task: Optional[asyncio.Task] = None
 
     def _create_on_complete_callback(self) -> Callable[[], Awaitable[None]]:
         """Create on_complete callback for incremental update or full update."""
@@ -142,10 +145,27 @@ class SemanticDagExecutor:
         """Run DAG execution starting from root_uri."""
         self._root_uri = root_uri
         self._root_done = asyncio.Event()
-        await self._dispatch_dir(root_uri, parent_uri=None)
-        await self._root_done.wait()
 
-        on_complete = self._create_on_complete_callback()
+        # Start lifecycle lock refresh loop if we hold a lock
+        if self._lifecycle_lock_handle_id:
+            self._refresh_task = asyncio.create_task(self._lock_refresh_loop())
+
+        try:
+            await self._dispatch_dir(root_uri, parent_uri=None)
+            await self._root_done.wait()
+        except Exception:
+            await self._release_lifecycle_lock()
+            raise
+
+        original_on_complete = self._create_on_complete_callback()
+
+        # Wrap on_complete to release lifecycle lock after all processing
+        async def wrapped_on_complete() -> None:
+            try:
+                if original_on_complete:
+                    await original_on_complete()
+            finally:
+                await self._release_lifecycle_lock()
 
         async with self._vectorize_lock:
             task_count = self._vectorize_task_count
@@ -158,7 +178,7 @@ class SemanticDagExecutor:
             await tracker.register(
                 semantic_msg_id=self._semantic_msg_id,
                 total_count=task_count,
-                on_complete=on_complete,
+                on_complete=wrapped_on_complete,
                 metadata={"uri": root_uri},
             )
 
@@ -186,8 +206,9 @@ class SemanticDagExecutor:
                         )
                     )
         else:
+            # No vectorize tasks — release lock immediately (via wrapped callback)
             try:
-                await on_complete()
+                await wrapped_on_complete()
             except Exception as e:
                 logger.error(f"Error in on_complete callback: {e}", exc_info=True)
 
@@ -498,6 +519,7 @@ class SemanticDagExecutor:
             return
         need_vectorize = True
         children_changed = True
+        abstract = ""
         try:
             overview = None
             abstract = None
@@ -520,11 +542,12 @@ class SemanticDagExecutor:
                 abstract = self._processor._extract_abstract_from_overview(overview)
                 overview, abstract = self._processor._enforce_size_limits(overview, abstract)
 
+            # Write directly — protected by the outer lifecycle SUBTREE lock
             try:
                 await self._viking_fs.write_file(f"{dir_uri}/.overview.md", overview, ctx=self._ctx)
                 await self._viking_fs.write_file(f"{dir_uri}/.abstract.md", abstract, ctx=self._ctx)
-            except Exception as e:
-                logger.warning(f"Failed to write overview/abstract for {dir_uri}: {e}")
+            except Exception:
+                logger.info(f"[SemanticDag] {dir_uri} write failed, skipping")
 
             try:
                 if need_vectorize:
@@ -543,7 +566,6 @@ class SemanticDagExecutor:
 
         except Exception as e:
             logger.error(f"Failed to generate overview for {dir_uri}: {e}", exc_info=True)
-            abstract = ""
         finally:
             self._stats.done_nodes += 1
             self._stats.in_progress_nodes = max(0, self._stats.in_progress_nodes - 1)
@@ -566,6 +588,46 @@ class SemanticDagExecutor:
                 self._vectorize_task_count += 1
             else:  # directory
                 self._vectorize_task_count += 2
+
+    async def _lock_refresh_loop(self) -> None:
+        """Periodically refresh lifecycle lock to prevent stale expiry."""
+        from openviking.storage.transaction import get_lock_manager
+
+        try:
+            interval = get_lock_manager()._path_lock._lock_expire / 2
+        except Exception:
+            interval = 150.0
+
+        while True:
+            try:
+                await asyncio.sleep(interval)
+                handle = get_lock_manager().get_handle(self._lifecycle_lock_handle_id)
+                if handle:
+                    await get_lock_manager().refresh_lock(handle)
+                else:
+                    break
+            except asyncio.CancelledError:
+                break
+            except Exception as e:
+                logger.warning(f"[SemanticDag] Lock refresh failed: {e}")
+
+    async def _release_lifecycle_lock(self) -> None:
+        """Stop refresh loop and release lifecycle lock."""
+        if self._refresh_task and not self._refresh_task.done():
+            self._refresh_task.cancel()
+            self._refresh_task = None
+        if not self._lifecycle_lock_handle_id:
+            return
+        handle_id = self._lifecycle_lock_handle_id
+        self._lifecycle_lock_handle_id = ""
+        try:
+            from openviking.storage.transaction import get_lock_manager
+
+            handle = get_lock_manager().get_handle(handle_id)
+            if handle:
+                await get_lock_manager().release(handle)
+        except Exception as e:
+            logger.warning(f"[SemanticDag] Failed to release lifecycle lock {handle_id}: {e}")
 
     def get_stats(self) -> DagStats:
         return DagStats(

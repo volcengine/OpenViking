@@ -42,7 +42,7 @@ class _DummyEmbedResult:
 
 
 class _DummyEmbedder:
-    def embed(self, _text):
+    def embed(self, _text, is_query: bool = False):
         return _DummyEmbedResult([0.1, 0.2, 0.3])
 
 
@@ -78,7 +78,7 @@ def _make_compressor(vikingdb=None, embedder=None) -> SessionCompressor:
     """Create SessionCompressor without config dependency."""
     vikingdb = vikingdb or MagicMock()
     with patch("openviking.session.memory_deduplicator.get_openviking_config") as mock_config:
-        mock_config.return_value.embedding.get_query_embedder.return_value = embedder
+        mock_config.return_value.embedding.get_embedder.return_value = embedder
         compressor = SessionCompressor(vikingdb=vikingdb)
     return compressor
 
@@ -777,7 +777,7 @@ class TestSessionCompressorDedupActions:
 
             class embedding:
                 @staticmethod
-                def get_query_embedder():
+                def get_embedder():
                     return _DummyEmbedder()
 
         fs = MagicMock()
