@@ -505,6 +505,13 @@ class SemanticConfig:
     overview_max_chars: int = 4000
     """Maximum characters for generated overviews."""
 
+    memory_chunk_chars: int = 2000
+    """Maximum characters per chunk when splitting long memories for vectorization.
+    Memories shorter than this are vectorized as a single record."""
+
+    memory_chunk_overlap: int = 200
+    """Character overlap between adjacent memory chunks for context continuity."""
+
 
 # Configuration registry for dynamic loading
 PARSER_CONFIG_REGISTRY = {
