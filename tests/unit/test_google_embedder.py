@@ -138,6 +138,22 @@ class TestGoogleDenseEmbedderEmbed:
         assert body["content"]["parts"][0]["text"] == "Hello world"
 
     @patch("openviking.models.embedder.google_embedders.requests.post")
+    def test_embed_does_not_send_task_type(self, mock_post):
+        """taskType must not be sent — gemini-embedding-2-preview ignores it."""
+        mock_post.return_value = _make_response([0.1] * 3072)
+
+        embedder = GoogleDenseEmbedder(
+            model_name="gemini-embedding-2-preview", api_key="test-key"
+        )
+        embedder.embed("Hello world", is_query=True)
+        embedder.embed("Hello world", is_query=False)
+
+        for call in mock_post.call_args_list:
+            body = call[1]["json"]
+            assert "taskType" not in body
+            assert "task_type" not in body
+
+    @patch("openviking.models.embedder.google_embedders.requests.post")
     def test_embed_empty_text_returns_empty(self, mock_post):
         embedder = GoogleDenseEmbedder(
             model_name="gemini-embedding-2-preview", api_key="test-key"
@@ -178,67 +194,9 @@ class TestGoogleDenseEmbedderEmbed:
             embedder.embed("Hello world")
 
 
-class TestGoogleDenseEmbedderTaskType:
+class TestGoogleDenseEmbedderDimension:
     @patch("openviking.models.embedder.google_embedders.requests.post")
-    def test_embed_with_simple_query_param(self, mock_post):
-        mock_post.return_value = _make_response([0.1] * 3072)
-
-        embedder = GoogleDenseEmbedder(
-            model_name="gemini-embedding-2-preview",
-            api_key="test-key",
-            query_param="RETRIEVAL_QUERY",
-        )
-        embedder.embed("Hello world", is_query=True)
-
-        body = mock_post.call_args[1]["json"]
-        assert body["taskType"] == "RETRIEVAL_QUERY"
-
-    @patch("openviking.models.embedder.google_embedders.requests.post")
-    def test_embed_with_simple_document_param(self, mock_post):
-        mock_post.return_value = _make_response([0.1] * 3072)
-
-        embedder = GoogleDenseEmbedder(
-            model_name="gemini-embedding-2-preview",
-            api_key="test-key",
-            document_param="RETRIEVAL_DOCUMENT",
-        )
-        embedder.embed("Hello world", is_query=False)
-
-        body = mock_post.call_args[1]["json"]
-        assert body["taskType"] == "RETRIEVAL_DOCUMENT"
-
-    @patch("openviking.models.embedder.google_embedders.requests.post")
-    def test_embed_query_param_not_sent_for_document(self, mock_post):
-        """query_param should not be applied when is_query=False."""
-        mock_post.return_value = _make_response([0.1] * 3072)
-
-        embedder = GoogleDenseEmbedder(
-            model_name="gemini-embedding-2-preview",
-            api_key="test-key",
-            query_param="RETRIEVAL_QUERY",
-        )
-        embedder.embed("Hello world", is_query=False)
-
-        body = mock_post.call_args[1]["json"]
-        assert "taskType" not in body
-
-    @patch("openviking.models.embedder.google_embedders.requests.post")
-    def test_embed_with_keyvalue_query_param(self, mock_post):
-        mock_post.return_value = _make_response([0.1] * 1024)
-
-        embedder = GoogleDenseEmbedder(
-            model_name="gemini-embedding-2-preview",
-            api_key="test-key",
-            query_param="task_type=RETRIEVAL_QUERY,output_dimensionality=1024",
-        )
-        embedder.embed("Hello world", is_query=True)
-
-        body = mock_post.call_args[1]["json"]
-        assert body["taskType"] == "RETRIEVAL_QUERY"
-        assert body["output_dimensionality"] == 1024
-
-    @patch("openviking.models.embedder.google_embedders.requests.post")
-    def test_embed_dimension_added_to_request(self, mock_post):
+    def test_dimension_sent_as_output_dimensionality(self, mock_post):
         mock_post.return_value = _make_response([0.1] * 1024)
 
         embedder = GoogleDenseEmbedder(
@@ -252,7 +210,7 @@ class TestGoogleDenseEmbedderTaskType:
         assert body["output_dimensionality"] == 1024
 
     @patch("openviking.models.embedder.google_embedders.requests.post")
-    def test_embed_no_dimension_no_output_dimensionality(self, mock_post):
+    def test_no_dimension_omits_output_dimensionality(self, mock_post):
         mock_post.return_value = _make_response([0.1] * 3072)
 
         embedder = GoogleDenseEmbedder(
@@ -319,19 +277,18 @@ class TestGoogleDenseEmbedderBatch:
         assert mock_post.call_count == 2
 
     @patch("openviking.models.embedder.google_embedders.requests.post")
-    def test_embed_batch_with_query_param(self, mock_post):
+    def test_embed_batch_does_not_send_task_type(self, mock_post):
         mock_post.return_value = _make_response([0.1] * 3072)
 
         embedder = GoogleDenseEmbedder(
-            model_name="gemini-embedding-2-preview",
-            api_key="test-key",
-            query_param="RETRIEVAL_QUERY",
+            model_name="gemini-embedding-2-preview", api_key="test-key"
         )
         embedder.embed_batch(["Hello", "World"], is_query=True)
 
         for call in mock_post.call_args_list:
             body = call[1]["json"]
-            assert body["taskType"] == "RETRIEVAL_QUERY"
+            assert "taskType" not in body
+            assert "task_type" not in body
 
 
 class TestGoogleDenseEmbedderChunking:
@@ -345,7 +302,6 @@ class TestGoogleDenseEmbedderChunking:
             api_key="test-key",
             max_tokens=5,
         )
-        # "word " * 100 will far exceed 5 tokens
         result = embedder.embed("word " * 100)
 
         assert result.dense_vector is not None
@@ -361,34 +317,3 @@ class TestGoogleDenseEmbedderChunking:
         embedder.embed("Hello world")
 
         assert mock_post.call_count == 1
-
-
-class TestGoogleDenseEmbedderParseParam:
-    def _embedder(self):
-        return GoogleDenseEmbedder(
-            model_name="gemini-embedding-2-preview", api_key="test-key"
-        )
-
-    def test_parse_empty_param(self):
-        embedder = self._embedder()
-        assert embedder._parse_param_string(None) == {}
-        assert embedder._parse_param_string("") == {}
-
-    def test_parse_task_type(self):
-        embedder = self._embedder()
-        result = embedder._parse_param_string("task_type=RETRIEVAL_QUERY")
-        assert result["taskType"] == "RETRIEVAL_QUERY"
-
-    def test_parse_output_dimensionality_as_int(self):
-        embedder = self._embedder()
-        result = embedder._parse_param_string("output_dimensionality=1024")
-        assert result["output_dimensionality"] == 1024
-        assert isinstance(result["output_dimensionality"], int)
-
-    def test_parse_multiple_params(self):
-        embedder = self._embedder()
-        result = embedder._parse_param_string(
-            "task_type=RETRIEVAL_QUERY,output_dimensionality=512"
-        )
-        assert result["taskType"] == "RETRIEVAL_QUERY"
-        assert result["output_dimensionality"] == 512

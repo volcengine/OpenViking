@@ -29,41 +29,24 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
     Supports Gemini Embedding 2 (gemini-embedding-2-preview) only.
     Supports Matryoshka dimension reduction via output_dimensionality.
 
-    ## Task Type Behavior (gemini-embedding-2-preview)
+    ## Note: taskType not supported by gemini-embedding-2-preview
 
-    Tested 2026-03-19 against the live API (dim=128):
-
-    The API accepts both snake_case (task_type) and camelCase (taskType) — they
-    are equivalent and both succeed without error.
-
-    However, gemini-embedding-2-preview currently produces **identical vectors
-    regardless of task_type**. The parameter is silently ignored by this model
-    version. All task types below were verified to return bit-for-bit identical
-    embeddings:
-
-    | Task type            | Description                                         |
-    |----------------------|-----------------------------------------------------|
-    | RETRIEVAL_QUERY      | Optimized for search queries                        |
-    | RETRIEVAL_DOCUMENT   | Optimized for indexed documents                     |
-    | SEMANTIC_SIMILARITY  | Optimized for similarity assessment                 |
-    | CLASSIFICATION       | Optimized for text classification                   |
-    | CLUSTERING           | Optimized for clustering by similarity              |
-    | CODE_RETRIEVAL_QUERY | Optimized for NL queries over code blocks           |
-    | QUESTION_ANSWERING   | Optimized for Q&A queries                          |
-    | FACT_VERIFICATION    | Optimized for fact-checking statements              |
-
-    query_param / document_param are accepted and stored, and will be forwarded
-    to the API in case future model versions begin honouring task_type.
+    Tested 2026-03-19 against the live API at full 3072 dimensions:
+    the taskType parameter is accepted without error but produces bit-for-bit
+    identical vectors regardless of which task type is specified. All eight
+    documented task types (RETRIEVAL_QUERY, RETRIEVAL_DOCUMENT,
+    SEMANTIC_SIMILARITY, CLASSIFICATION, CLUSTERING, CODE_RETRIEVAL_QUERY,
+    QUESTION_ANSWERING, FACT_VERIFICATION) return the same embedding as the
+    default (no taskType). The parameter is therefore not sent.
 
     Example:
         >>> embedder = GoogleDenseEmbedder(
         ...     api_key="your-gemini-api-key",
         ...     dimension=1024,
-        ...     query_param="RETRIEVAL_QUERY",
-        ...     document_param="RETRIEVAL_DOCUMENT"
         ... )
-        >>> query_result = embedder.embed("Search query", is_query=True)
-        >>> doc_result = embedder.embed("Document content", is_query=False)
+        >>> result = embedder.embed("Hello world")
+        >>> print(len(result.dense_vector))
+        1024
     """
 
     def __init__(
@@ -72,8 +55,6 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         dimension: Optional[int] = None,
-        query_param: Optional[str] = None,
-        document_param: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
         max_tokens: Optional[int] = None,
         extra_headers: Optional[Dict[str, str]] = None,
@@ -85,13 +66,6 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
             api_key: Google API key, required
             api_base: API base URL, defaults to https://generativelanguage.googleapis.com/v1beta
             dimension: Dimension for Matryoshka reduction, optional (max 3072)
-            query_param: Parameter for query-side embeddings. Supports simple task_type
-                        values (e.g., "RETRIEVAL_QUERY") or key=value format
-                        (e.g., "task_type=RETRIEVAL_QUERY,output_dimensionality=1024").
-                        Valid task_type values: RETRIEVAL_QUERY, RETRIEVAL_DOCUMENT,
-                        SEMANTIC_SIMILARITY, CLASSIFICATION, CLUSTERING
-            document_param: Parameter for document-side embeddings. Supports simple task_type
-                           values or key=value format.
             config: Additional configuration dict
             max_tokens: Maximum token count per embedding request, None to use default (8192)
             extra_headers: Extra HTTP headers to include in API requests
@@ -103,15 +77,12 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
         self.api_key = api_key
         self.api_base = api_base or "https://generativelanguage.googleapis.com/v1beta"
         self.dimension = dimension
-        self.query_param = query_param
-        self.document_param = document_param
         self._max_tokens = max_tokens or 8192
         self.extra_headers = extra_headers or {}
 
         if not self.api_key:
             raise ValueError("api_key is required")
 
-        # Determine dimension - only support gemini-embedding-2-preview
         if model_name not in GOOGLE_MODEL_DIMENSIONS:
             raise ValueError(
                 f"Unsupported model '{model_name}'. Only 'gemini-embedding-2-preview' is supported."
@@ -196,87 +167,15 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
             start = end
         return chunks
 
-    def _parse_param_string(self, param: Optional[str]) -> Dict[str, Any]:
-        """Parse parameter string to dictionary for key=value format
-
-        Args:
-            param: Parameter string (e.g., "task_type=RETRIEVAL_QUERY,output_dimensionality=1024")
-
-        Returns:
-            Dictionary of parsed parameters
-        """
-        if not param:
-            return {}
-
-        result = {}
-        # Split by comma for multiple parameters
-        parts = [p.strip() for p in param.split(",")]
-
-        # Map snake_case keys to camelCase as required by Google API
-        key_map = {"task_type": "taskType"}
-
-        for part in parts:
-            if "=" in part:
-                key, value = part.split("=", 1)
-                key = key.strip()
-                value = value.strip()
-                key = key_map.get(key, key)
-
-                # Convert numeric values and uppercase task type
-                if key == "output_dimensionality" and value.isdigit():
-                    result[key] = int(value)
-                elif key == "taskType":
-                    result[key] = value.upper()
-                else:
-                    result[key] = value
-
-        return result
-
-    def _build_request_params(self, is_query: bool = False) -> Dict[str, Any]:
-        """Build request parameters for Google-specific settings
-
-        Args:
-            is_query: Flag to indicate if this is for query embeddings
-
-        Returns:
-            Dict containing Google-specific parameters
-        """
-        params = {}
-
-        # Determine which parameter to use based on is_query flag
-        active_param = None
-        if is_query and self.query_param is not None:
-            active_param = self.query_param
-        elif not is_query and self.document_param is not None:
-            active_param = self.document_param
-
-        if active_param:
-            if "=" in active_param:
-                # Parse key=value format (e.g., "task_type=RETRIEVAL_QUERY,output_dimensionality=1024")
-                parsed = self._parse_param_string(active_param)
-                params.update(parsed)
-            else:
-                # Simple format (e.g., "retrieval_query" -> {"taskType": "RETRIEVAL_QUERY"})
-                params["taskType"] = active_param.upper()
-
-        # Add dimension if specified
-        if self.dimension:
-            params["output_dimensionality"] = self.dimension
-
-        return params
-
     def _update_telemetry_token_usage(self, response_data: Dict[str, Any]) -> None:
         """Update telemetry with token usage from API response"""
-        # Google API doesn't return token usage in the same format as OpenAI
-        # We'll estimate based on text length for now
         pass
 
-    def _embed_single(self, text: str, is_query: bool = False) -> EmbedResult:
+    def _embed_single(self, text: str) -> EmbedResult:
         """Perform raw embedding without chunking logic.
 
         Args:
             text: Input text
-            is_query: Flag to indicate if this is a query embedding
 
         Returns:
             EmbedResult: Result containing only dense_vector
@@ -285,25 +184,18 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
             RuntimeError: When API call fails
         """
         try:
-            # Build the URL for the embedding endpoint
             url = f"{self.api_base}/models/{self.model_name}:embedContent"
 
-            # Build request headers
             headers = {
                 "Content-Type": "application/json",
                 "x-goog-api-key": self.api_key,
                 **self.extra_headers,
             }
 
-            # Build request body using Parts API
-            request_body = {"content": {"parts": [{"text": text}]}}
+            request_body: Dict[str, Any] = {"content": {"parts": [{"text": text}]}}
+            if self.dimension:
+                request_body["output_dimensionality"] = self.dimension
 
-            # Add task-specific parameters
-            request_params = self._build_request_params(is_query=is_query)
-            if request_params:
-                request_body.update(request_params)
-
-            # Make the API request with retry on transient failures
             def _do_request():
                 resp = requests.post(url, json=request_body, headers=headers, timeout=30)
                 resp.raise_for_status()
@@ -318,7 +210,6 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
 
             response_data = response.json()
 
-            # Extract the embedding vector
             if "embedding" in response_data and "values" in response_data["embedding"]:
                 vector = response_data["embedding"]["values"]
             else:
@@ -338,7 +229,7 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
 
         Args:
             text: Input text
-            is_query: Flag to indicate if this is a query embedding
+            is_query: Ignored. gemini-embedding-2-preview does not support taskType.
 
         Returns:
             EmbedResult: Result containing only dense_vector
@@ -350,28 +241,19 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
             return EmbedResult()
 
         if self._estimate_tokens(text) > self.max_tokens:
-            return self._chunk_and_embed(text, is_query=is_query)
+            return self._chunk_and_embed(text)
 
-        return self._embed_single(text, is_query=is_query)
+        return self._embed_single(text)
 
-    def _chunk_and_embed(self, text: str, is_query: bool = False) -> EmbedResult:
-        """Chunk oversized text and average the embeddings.
-
-        Args:
-            text: Oversized input text
-            is_query: Flag to indicate if this is a query embedding
-
-        Returns:
-            EmbedResult: Result containing only dense_vector (averaged from chunks)
-        """
+    def _chunk_and_embed(self, text: str) -> EmbedResult:
+        """Chunk oversized text and average the embeddings."""
         chunks = self._chunk_text(text)
         chunk_vectors: List[List[float]] = []
 
         for chunk in chunks:
-            result = self._embed_single(chunk, is_query=is_query)
+            result = self._embed_single(chunk)
             chunk_vectors.append(result.dense_vector)
 
-        # Average the chunk vectors
         if not chunk_vectors:
             return EmbedResult(dense_vector=[0.0] * self._dimension)
 
@@ -386,12 +268,11 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
         """Batch embedding with automatic chunking for oversized inputs.
 
         Individual texts are processed sequentially since Google's native API
-        doesn't support batch requests in the same way as OpenAI-compatible.
-        Oversized texts are individually chunked and embedded.
+        does not support batch requests.
 
         Args:
             texts: List of texts
-            is_query: Flag to indicate if these are query embeddings
+            is_query: Ignored. gemini-embedding-2-preview does not support taskType.
 
         Returns:
             List[EmbedResult]: List of embedding results
@@ -404,17 +285,14 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
 
         results: List[EmbedResult] = []
 
-        # Process each text individually
         for text in texts:
             if not text or not text.strip():
                 results.append(EmbedResult())
                 continue
             if self._estimate_tokens(text) <= self.max_tokens:
-                result = self._embed_single(text, is_query=is_query)
+                result = self._embed_single(text)
             else:
-                # Handle oversized text with chunking
-                result = self._chunk_and_embed(text, is_query=is_query)
-
+                result = self._chunk_and_embed(text)
             results.append(result)
 
         return results

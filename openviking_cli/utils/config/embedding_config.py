@@ -351,8 +351,6 @@ class EmbeddingConfig(BaseModel):
                     "api_key": cfg.api_key,
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
-                    **({"query_param": cfg.query_param} if cfg.query_param else {}),
-                    **({"document_param": cfg.document_param} if cfg.document_param else {}),
                     "max_tokens": cfg.max_tokens,
                     **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
                 },
