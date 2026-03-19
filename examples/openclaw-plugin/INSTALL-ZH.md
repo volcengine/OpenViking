@@ -7,6 +7,7 @@
 > 旧版 OpenViking/OpenClaw 集成方案在 OpenClaw `2026.3.12` 附近曾出现过已知兼容性问题，表现为加载插件后对话卡死无响应。
 > 该问题主要影响旧版本插件链路；当前文档介绍的 context-engine 插件 2.0 已不再受此问题影响，新的安装流程无需因此回退 OpenClaw。
 > 同时，插件 2.0 与旧版 `memory-openviking` 插件及其配置不兼容，升级时需要按本文迁移步骤完成替换，不能混装。
+> 插件 2.0 也依赖 OpenClaw 的 context-engine 能力，不支持旧版 OpenClaw；请升级到当前安装助手支持的较新 OpenClaw 版本后再安装。
 > 如需排查旧版本部署，可参考 [#591](https://github.com/volcengine/OpenViking/issues/591) 以及上游修复 PR：openclaw/openclaw#34673、openclaw/openclaw#33547。
 
 > **🚀 插件 2.0（context-engine 架构）**

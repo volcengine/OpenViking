@@ -7,6 +7,7 @@ Use [OpenViking](https://github.com/volcengine/OpenViking) as the long-term memo
 > Legacy OpenViking/OpenClaw integrations had a known issue around OpenClaw `2026.3.12` where conversations could hang after the plugin loaded.
 > That issue affected the legacy plugin path; the current context-engine Plugin 2.0 described in this document is not affected, so new installations do not need to downgrade OpenClaw for this reason.
 > Plugin 2.0 is also not backward-compatible with the legacy `memory-openviking` plugin and its configuration, so upgrades must replace the old setup instead of mixing the two versions.
+> Plugin 2.0 also depends on OpenClaw's context-engine capability and does not support older OpenClaw releases; upgrade OpenClaw first before using this plugin.
 > If you are troubleshooting a legacy deployment, see [#591](https://github.com/volcengine/OpenViking/issues/591) and upstream fix PRs: openclaw/openclaw#34673, openclaw/openclaw#33547.
 
 > **🚀 Plugin 2.0 (Context-Engine Architecture)**
@@ -97,7 +98,7 @@ openclaw --version   # installed
 
 - Python: https://www.python.org/downloads/
 - Node.js: https://nodejs.org/
-- OpenClaw: `npm install -g openclaw@2026.3.11 && openclaw onboard`
+- OpenClaw: `npm install -g openclaw && openclaw onboard`
 
 ---
 
@@ -412,6 +413,7 @@ Open http://127.0.0.1:8020 in your browser.
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | Conversation hangs, no response | Usually a legacy pre-2.0 integration affected by the historical OpenClaw `2026.3.12` issue | If you are on the legacy path, see [#591](https://github.com/volcengine/OpenViking/issues/591) and temporarily downgrade to `2026.3.11`; for current installs, migrate to Plugin 2.0 |
+| `registerContextEngine is unavailable` in logs | OpenClaw version is too old and does not expose the context-engine API required by Plugin 2.0 | Upgrade OpenClaw to a current release, then restart the gateway and verify `openclaw status` shows `openviking` as the ContextEngine |
 | Agent hangs silently, no output | auto-recall missing timeout protection | Disable auto-recall temporarily: `openclaw config set plugins.entries.openviking.config.autoRecall false --json`, or apply the patch in [#673](https://github.com/volcengine/OpenViking/issues/673) |
 | ContextEngine is not `openviking` | Plugin slot not configured | `openclaw config set plugins.slots.contextEngine openviking` |
 | `memory_store failed: fetch failed` | OpenViking not running | Check `ov.conf` and Python path; verify service is up |
