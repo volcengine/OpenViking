@@ -28,6 +28,11 @@ from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecuto
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import bind_telemetry, resolve_telemetry
+from openviking.utils.circuit_breaker import (
+    CircuitBreaker,
+    CircuitBreakerOpen,
+    classify_api_error,
+)
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import VikingURI
 from openviking_cli.utils.config import get_openviking_config
@@ -82,6 +87,7 @@ class SemanticProcessor(DequeueHandlerBase):
         self._dag_executor: Optional[SemanticDagExecutor] = None
         self._current_ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
         self._current_msg: Optional[SemanticMsg] = None
+        self._circuit_breaker = CircuitBreaker()
 
     @classmethod
     def _cache_dag_stats(cls, telemetry_id: str, uri: str, stats: DagStats) -> None:
@@ -204,6 +210,27 @@ class SemanticProcessor(DequeueHandlerBase):
         except Exception:
             return True
 
+    async def _reenqueue_semantic_msg(self, msg: SemanticMsg) -> None:
+        """Re-enqueue a semantic message for later processing.
+
+        Throttles with a sleep when the circuit breaker is open to prevent
+        re-enqueue storms (messages cycling at 5/sec during OPEN window).
+        """
+        import asyncio
+
+        from openviking.storage.queuefs import get_queue_manager
+
+        # Throttle to prevent re-enqueue storm during OPEN window
+        wait = self._circuit_breaker.retry_after
+        if wait > 0:
+            await asyncio.sleep(wait)
+
+        queue_manager = get_queue_manager()
+        if queue_manager is not None:
+            semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC)
+            await semantic_queue.enqueue(msg)
+            logger.info(f"Re-enqueued semantic message: {msg.uri}")
+
     async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """Process dequeued SemanticMsg, recursively process all subdirectories."""
         msg: Optional[SemanticMsg] = None
@@ -219,6 +246,16 @@ class SemanticProcessor(DequeueHandlerBase):
 
             assert data is not None
             msg = SemanticMsg.from_dict(data)
+            # Circuit breaker: if API is known-broken, re-enqueue and wait
+            try:
+                self._circuit_breaker.check()
+            except CircuitBreakerOpen:
+                logger.warning(
+                    f"Circuit breaker is open, re-enqueueing semantic message: {msg.uri}"
+                )
+                await self._reenqueue_semantic_msg(msg)
+                self.report_success()
+                return None
             collector = resolve_telemetry(msg.telemetry_id)
             telemetry_ctx = bind_telemetry(collector) if collector is not None else nullcontext()
             with telemetry_ctx:
@@ -275,13 +312,36 @@ class SemanticProcessor(DequeueHandlerBase):
                 self._merge_request_stats(msg.telemetry_id, processed=1)
                 logger.info(f"Completed semantic generation for: {msg.uri}")
                 self.report_success()
+                self._circuit_breaker.record_success()
                 return None
 
         except Exception as e:
-            logger.error(f"Failed to process semantic message: {e}", exc_info=True)
-            if msg is not None:
-                self._merge_request_stats(msg.telemetry_id, error_count=1)
-            self.report_error(str(e), data)
+            error_class = classify_api_error(e)
+            if error_class == "permanent":
+                logger.critical(
+                    f"Permanent API error processing semantic message, dropping: {e}",
+                    exc_info=True,
+                )
+                self._circuit_breaker.record_failure(e)
+                if msg is not None:
+                    self._merge_request_stats(msg.telemetry_id, error_count=1)
+                self.report_error(str(e), data)
+            else:
+                # Transient or unknown — re-enqueue for retry
+                logger.warning(
+                    f"Transient API error processing semantic message, re-enqueueing: {e}",
+                    exc_info=True,
+                )
+                self._circuit_breaker.record_failure(e)
+                if msg is not None:
+                    try:
+                        await self._reenqueue_semantic_msg(msg)
+                    except Exception as requeue_err:
+                        logger.error(f"Failed to re-enqueue semantic message: {requeue_err}")
+                        self._merge_request_stats(msg.telemetry_id, error_count=1)
+                        self.report_error(str(e), data)
+                        return None
+                self.report_success()
             return None
         finally:
             # Safety net: release lifecycle lock if still held (e.g. on exception
