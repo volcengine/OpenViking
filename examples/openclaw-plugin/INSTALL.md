@@ -42,18 +42,19 @@ openclaw gateway stop
 
 ```bash
 cp ~/.openclaw/openclaw.json ~/.openclaw/openclaw.json.pre-openviking-upgrade.bak
-mkdir -p ~/.openclaw/disabled-extensions && mv ~/.openclaw/extensions/memory-openviking ~/.openclaw/disabled-extensions/memory-openviking-upgrade-backup
+mkdir -p ~/.openclaw/disabled-extensions
+mv ~/.openclaw/extensions/memory-openviking ~/.openclaw/disabled-extensions/memory-openviking-upgrade-backup
 ```
 
 3. Update the OpenClaw configuration and remove legacy settings:
 
-Edit `~/.openclaw/openclaw.json`, remove `"memory-openviking"` from `plugins.allow`, remove `plugins.entries.memory-openviking`, and change `plugins.slots.memory` to `"none"`.
+Edit `~/.openclaw/openclaw.json`, remove `"memory-openviking"` from `plugins.allow`, remove `plugins.entries.memory-openviking`, change `plugins.slots.memory` to `"none"`, and remove the legacy `memory-openviking` plugin path from `plugins.load.paths`.
 
-4. Preserve and migrate legacy runtime settings into the new configuration:
+4. Install the new plugin by following Method A or Method B below.
 
-If the legacy plugin was using `plugins.entries.memory-openviking.config`, migrate `mode`, `configPath`, `port`, `baseUrl`, `apiKey`, and `agentId` into `plugins.entries.openviking.config` as needed.
+5. Preserve and migrate legacy runtime settings into the new configuration if needed (the new version works with defaults; legacy parameters are optional to migrate):
 
-After completing the prerequisite steps above, install the new plugin using either method below.
+If the legacy plugin was using `plugins.entries.memory-openviking.config`, migrate `mode`, `configPath`, `port`, `baseUrl`, `apiKey`, `agentId`, and any other needed parameters from the backup `openclaw.json` file created in Step 2 into `plugins.entries.openviking.config`.
 
 ### Method A: npm Installation (Recommended, Cross-platform)
 
