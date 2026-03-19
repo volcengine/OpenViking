@@ -70,7 +70,7 @@
     },
     "recallScoreThreshold": {
       "label": "Recall Score Threshold",
-      "placeholder": "0.01",
+      "placeholder": "0.15",
       "advanced": true
     },
     "recallMaxContentChars": {
