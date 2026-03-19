@@ -142,7 +142,7 @@ function isEventMemory(item: FindResultItem): boolean {
 }
 
 function isLeafLikeMemory(item: FindResultItem): boolean {
-  return item.level === 2 || item.uri.endsWith(".md");
+  return item.level === 2;
 }
 
 const PREFERENCE_QUERY_RE = /prefer|preference|favorite|favourite|like|偏好|喜欢|爱好|更倾向/i;
