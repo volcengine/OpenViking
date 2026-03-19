@@ -146,10 +146,11 @@ describe("Slice E: tokenBudget enforcement", () => {
     );
 
     // Budget = 100 tokens. Each line ~53 tokens ((200 + 13 prefix chars) / 4).
-    // Should inject ~1-2 memories, not all 10.
-    expect(lines.length).toBeLessThanOrEqual(3);
+    // First line is always included even if it exceeds the budget (spec §6.2),
+    // so we expect at most 2 lines (~106 tokens).
+    expect(lines.length).toBeLessThanOrEqual(2);
     expect(lines.length).toBeGreaterThan(0);
-    expect(estimatedTokens).toBeLessThanOrEqual(120);
+    expect(estimatedTokens).toBeLessThanOrEqual(106);
   });
 
   it("should estimate tokens as ceil(chars/4)", async () => {

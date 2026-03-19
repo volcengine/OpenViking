@@ -698,6 +698,36 @@ export type BuildMemoryLinesOptions = {
   recallMaxContentChars: number;
 };
 
+async function resolveMemoryContent(
+  item: FindResultItem,
+  readFn: (uri: string) => Promise<string>,
+  options: BuildMemoryLinesOptions,
+): Promise<string> {
+  let content: string;
+
+  if (options.recallPreferAbstract && item.abstract?.trim()) {
+    content = item.abstract.trim();
+  } else if (item.level === 2) {
+    try {
+      const fullContent = await readFn(item.uri);
+      content =
+        fullContent && typeof fullContent === "string" && fullContent.trim()
+          ? fullContent.trim()
+          : (item.abstract ?? item.uri);
+    } catch {
+      content = item.abstract ?? item.uri;
+    }
+  } else {
+    content = item.abstract ?? item.uri;
+  }
+
+  if (content.length > options.recallMaxContentChars) {
+    content = content.slice(0, options.recallMaxContentChars) + "...";
+  }
+
+  return content;
+}
+
 export async function buildMemoryLines(
   memories: FindResultItem[],
   readFn: (uri: string) => Promise<string>,
@@ -705,28 +735,7 @@ export async function buildMemoryLines(
 ): Promise<string[]> {
   const lines: string[] = [];
   for (const item of memories) {
-    let content: string;
-
-    if (options.recallPreferAbstract && item.abstract?.trim()) {
-      content = item.abstract.trim();
-    } else if (item.level === 2) {
-      try {
-        const fullContent = await readFn(item.uri);
-        content =
-          fullContent && typeof fullContent === "string" && fullContent.trim()
-            ? fullContent.trim()
-            : (item.abstract ?? item.uri);
-      } catch {
-        content = item.abstract ?? item.uri;
-      }
-    } else {
-      content = item.abstract ?? item.uri;
-    }
-
-    if (content.length > options.recallMaxContentChars) {
-      content = content.slice(0, options.recallMaxContentChars) + "...";
-    }
-
+    const content = await resolveMemoryContent(item, readFn, options);
     lines.push(`- [${item.category ?? "memory"}] ${content}`);
   }
   return lines;
@@ -736,6 +745,15 @@ export type BuildMemoryLinesWithBudgetOptions = BuildMemoryLinesOptions & {
   recallTokenBudget: number;
 };
 
+/**
+ * Build memory lines with a token budget constraint.
+ *
+ * The first memory is always included even if its token count exceeds the
+ * remaining budget. This is intentional (spec Section 6.2): with
+ * `recallMaxContentChars=500`, a single line is at most ~128 tokens — well
+ * within the 2000-token default budget — so overshoot is bounded and
+ * guarantees at least one memory is surfaced.
+ */
 export async function buildMemoryLinesWithBudget(
   memories: FindResultItem[],
   readFn: (uri: string) => Promise<string>,
@@ -750,31 +768,11 @@ export async function buildMemoryLinesWithBudget(
       break;
     }
 
-    let content: string;
-
-    if (options.recallPreferAbstract && item.abstract?.trim()) {
-      content = item.abstract.trim();
-    } else if (item.level === 2) {
-      try {
-        const fullContent = await readFn(item.uri);
-        content =
-          fullContent && typeof fullContent === "string" && fullContent.trim()
-            ? fullContent.trim()
-            : (item.abstract ?? item.uri);
-      } catch {
-        content = item.abstract ?? item.uri;
-      }
-    } else {
-      content = item.abstract ?? item.uri;
-    }
-
-    if (content.length > options.recallMaxContentChars) {
-      content = content.slice(0, options.recallMaxContentChars) + "...";
-    }
-
+    const content = await resolveMemoryContent(item, readFn, options);
     const line = `- [${item.category ?? "memory"}] ${content}`;
     const lineTokens = estimateTokenCount(line);
 
+    // First line is always included even if it exceeds the budget (spec §6.2).
     if (lineTokens > budgetRemaining && lines.length > 0) {
       break;
     }
