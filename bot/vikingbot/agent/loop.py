@@ -452,7 +452,7 @@ class AgentLoop:
                 return OutboundMessage(
                     session_key=msg.session_key, content="🐈 New session started. Memory consolidated.", metadata=msg.metadata
                 )
-            if cmd == "/compact":
+            if cmd == "/remember":
                 if not self._check_cmd_auth(msg):
                     return OutboundMessage(
                         session_key=msg.session_key, content="🐈 Sorry, you are not authorized to use this command.",
