@@ -270,6 +270,7 @@ class WatchManager:
         task: WatchTask,
         account_id: str,
         user_id: str,
+        agent_id: str,
         role: str,
     ) -> bool:
         """Check if user has permission to access/modify a task.
@@ -278,6 +279,7 @@ class WatchManager:
             task: The task to check permission for
             account_id: Requester's account ID
             user_id: Requester's user ID
+            agent_id: Requester's agent ID
             role: Requester's role (ROOT/ADMIN/USER)
 
         Returns:
@@ -286,7 +288,7 @@ class WatchManager:
         Notes:
             - ROOT can access all tasks.
             - ADMIN can access tasks within the same account.
-            - USER can only access tasks they created within the same account.
+            - USER can only access tasks they created within the same account and agent.
         """
         role_value = (role or "").lower()
         if role_value == "root":
@@ -298,7 +300,7 @@ class WatchManager:
         if role_value == "admin":
             return True
 
-        return task.user_id == user_id
+        return task.user_id == user_id and task.agent_id == agent_id
 
     def _check_uri_conflict(
         self, to_uri: Optional[str], exclude_task_id: Optional[str] = None
@@ -417,6 +419,7 @@ class WatchManager:
         summarize: Optional[bool] = None,
         processor_kwargs: Optional[Dict[str, Any]] = None,
         is_active: Optional[bool] = None,
+        agent_id: str = "default",
     ) -> WatchTask:
         """Update an existing monitoring task.
 
@@ -425,6 +428,7 @@ class WatchManager:
             account_id: Requester's account ID
             user_id: Requester's user ID
             role: Requester's role (ROOT/ADMIN/USER)
+            agent_id: Requester's agent ID
             path: New resource path
             to_uri: New target URI
             parent_uri: New parent URI
@@ -446,9 +450,9 @@ class WatchManager:
             if not task:
                 raise ValueError(f"Task {task_id} not found")
 
-            if not self._check_permission(task, account_id, user_id, role):
+            if not self._check_permission(task, account_id, user_id, agent_id, role):
                 raise PermissionDeniedError(
-                    f"User {account_id}/{user_id} does not have permission to update task {task_id}"
+                    f"User {account_id}/{user_id}/{agent_id} does not have permission to update task {task_id}"
                 )
 
             if self._check_uri_conflict(to_uri, exclude_task_id=task_id):
@@ -518,6 +522,7 @@ class WatchManager:
         account_id: str,
         user_id: str,
         role: str,
+        agent_id: str = "default",
     ) -> bool:
         """Delete a monitoring task.
 
@@ -526,6 +531,7 @@ class WatchManager:
             account_id: Requester's account ID
             user_id: Requester's user ID
             role: Requester's role (ROOT/ADMIN/USER)
+            agent_id: Requester's agent ID
 
         Returns:
             True if task was deleted, False if not found
@@ -538,9 +544,9 @@ class WatchManager:
             if not task:
                 return False
 
-            if not self._check_permission(task, account_id, user_id, role):
+            if not self._check_permission(task, account_id, user_id, agent_id, role):
                 raise PermissionDeniedError(
-                    f"User {account_id}/{user_id} does not have permission to delete task {task_id}"
+                    f"User {account_id}/{user_id}/{agent_id} does not have permission to delete task {task_id}"
                 )
 
             self._tasks.pop(task_id, None)
@@ -558,6 +564,7 @@ class WatchManager:
         account_id: str = "default",
         user_id: str = "default",
         role: str = "root",
+        agent_id: str = "default",
     ) -> Optional[WatchTask]:
         """Get a monitoring task by ID.
 
@@ -566,6 +573,7 @@ class WatchManager:
             account_id: Requester's account ID
             user_id: Requester's user ID
             role: Requester's role (ROOT/ADMIN/USER)
+            agent_id: Requester's agent ID
 
         Returns:
             WatchTask if found and accessible, None otherwise
@@ -575,7 +583,7 @@ class WatchManager:
             if not task:
                 return None
 
-            if not self._check_permission(task, account_id, user_id, role):
+            if not self._check_permission(task, account_id, user_id, agent_id, role):
                 return None
 
             return task
@@ -586,6 +594,7 @@ class WatchManager:
         user_id: str,
         role: str,
         active_only: bool = False,
+        agent_id: str = "default",
     ) -> List[WatchTask]:
         """Get all monitoring tasks accessible by the user.
 
@@ -593,6 +602,7 @@ class WatchManager:
             account_id: Requester's account ID
             user_id: Requester's user ID
             role: Requester's role (ROOT/ADMIN/USER)
+            agent_id: Requester's agent ID
             active_only: If True, only return active tasks
 
         Returns:
@@ -601,7 +611,7 @@ class WatchManager:
         async with self._lock:
             tasks = []
             for task in self._tasks.values():
-                if not self._check_permission(task, account_id, user_id, role):
+                if not self._check_permission(task, account_id, user_id, agent_id, role):
                     continue
                 if active_only and not task.is_active:
                     continue
@@ -614,6 +624,7 @@ class WatchManager:
         account_id: str,
         user_id: str,
         role: str,
+        agent_id: str = "default",
     ) -> Optional[WatchTask]:
         """Get a monitoring task by target URI.
 
@@ -622,6 +633,7 @@ class WatchManager:
             account_id: Requester's account ID
             user_id: Requester's user ID
             role: Requester's role (ROOT/ADMIN/USER)
+            agent_id: Requester's agent ID
 
         Returns:
             WatchTask if found and accessible, None otherwise
@@ -635,7 +647,7 @@ class WatchManager:
             if not task:
                 return None
 
-            if not self._check_permission(task, account_id, user_id, role):
+            if not self._check_permission(task, account_id, user_id, agent_id, role):
                 return None
 
             return task

@@ -18,6 +18,7 @@ from openviking.core.context import Context, ContextType, Vectorize
 from openviking.prompts import render_prompt
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import get_viking_fs
+from openviking.telemetry import get_current_telemetry
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
@@ -240,6 +241,7 @@ class MemoryExtractor:
             logger.warning("LLM not available, skipping memory extraction")
             return []
 
+        telemetry = get_current_telemetry()
         messages = context["messages"]
         from openviking.message.part import ToolPart
 
@@ -251,42 +253,50 @@ class MemoryExtractor:
         )
 
         tool_parts = []
-        for msg in messages:
-            for part in getattr(msg, "parts", []):
-                if isinstance(part, ToolPart):
-                    tool_parts.append(part)
+        tool_stats_map = {}
+        skill_stats_map = {}
+        formatted_messages = ""
+        output_language = "en"
+        prompt = ""
 
-        tool_stats_map = collect_tool_stats(tool_parts)
-        skill_stats_map = collect_skill_stats(tool_parts)
+        with telemetry.measure("memory.extract.stage.prepare_inputs"):
+            for msg in messages:
+                for part in getattr(msg, "parts", []):
+                    if isinstance(part, ToolPart):
+                        tool_parts.append(part)
 
-        formatted_lines = []
-        for m in messages:
-            msg_content = self._format_message_with_parts(m)
-            if msg_content:
-                formatted_lines.append(f"[{m.role}]: {msg_content}")
+            formatted_lines = []
+            for m in messages:
+                msg_content = self._format_message_with_parts(m)
+                if msg_content:
+                    formatted_lines.append(f"[{m.role}]: {msg_content}")
 
-        formatted_messages = "\n".join(formatted_lines)
+            formatted_messages = "\n".join(formatted_lines)
 
-        if not formatted_messages:
-            logger.warning("No formatted messages, returning empty list")
-            return []
+            if not formatted_messages:
+                logger.warning("No formatted messages, returning empty list")
+                return []
 
-        config = get_openviking_config()
-        fallback_language = (config.language_fallback or "en").strip() or "en"
-        output_language = self._detect_output_language(
-            messages, fallback_language=fallback_language
-        )
+            config = get_openviking_config()
+            fallback_language = (config.language_fallback or "en").strip() or "en"
+            output_language = self._detect_output_language(
+                messages, fallback_language=fallback_language
+            )
 
-        prompt = render_prompt(
-            "compression.memory_extraction",
-            {
-                "summary": "",
-                "recent_messages": formatted_messages,
-                "user": user._user_id,
-                "feedback": "",
-                "output_language": output_language,
-            },
-        )
+            prompt = render_prompt(
+                "compression.memory_extraction",
+                {
+                    "summary": "",
+                    "recent_messages": formatted_messages,
+                    "user": user._user_id,
+                    "feedback": "",
+                    "output_language": output_language,
+                },
+            )
+
+        with telemetry.measure("memory.extract.stage.tool_skill_stats"):
+            tool_stats_map = collect_tool_stats(tool_parts)
+            skill_stats_map = collect_skill_stats(tool_parts)
 
         try:
             from openviking_cli.utils.llm import parse_json_from_response
@@ -298,19 +308,22 @@ class MemoryExtractor:
                 "recent_messages": formatted_messages,
             }
             logger.debug("Memory extraction LLM request summary: %s", request_summary)
-            response = await vlm.get_completion_async(prompt)
+            with telemetry.measure("memory.extract.stage.llm_extract"):
+                response = await vlm.get_completion_async(prompt)
             logger.debug("Memory extraction LLM raw response: %s", response)
-            data = parse_json_from_response(response) or {}
-            if isinstance(data, list):
-                logger.warning(
-                    "Memory extraction received list instead of dict; wrapping as memories"
-                )
-                data = {"memories": data}
-            elif not isinstance(data, dict):
-                logger.warning(
-                    "Memory extraction received unexpected type %s; skipping", type(data).__name__
-                )
-                data = {}
+            with telemetry.measure("memory.extract.stage.normalize_candidates"):
+                data = parse_json_from_response(response) or {}
+                if isinstance(data, list):
+                    logger.warning(
+                        "Memory extraction received list instead of dict; wrapping as memories"
+                    )
+                    data = {"memories": data}
+                elif not isinstance(data, dict):
+                    logger.warning(
+                        "Memory extraction received unexpected type %s; skipping",
+                        type(data).__name__,
+                    )
+                    data = {}
             logger.debug("Memory extraction LLM parsed payload: %s", data)
 
             candidates = []
@@ -323,80 +336,84 @@ class MemoryExtractor:
 
                 # 只在 tools/skills 时使用 ToolSkillCandidateMemory
                 if category in (MemoryCategory.TOOLS, MemoryCategory.SKILLS):
-                    llm_tool_name = mem.get("tool_name", "") or ""
-                    llm_skill_name = mem.get("skill_name", "") or ""
+                    with telemetry.measure("memory.extract.stage.tool_skill_stats"):
+                        llm_tool_name = mem.get("tool_name", "") or ""
+                        llm_skill_name = mem.get("skill_name", "") or ""
 
-                    tool_name = ""
-                    skill_name = ""
-                    stats = {}
+                        tool_name = ""
+                        skill_name = ""
+                        stats = {}
 
-                    if category == MemoryCategory.TOOLS:
-                        canonical_tool_name, _ = calibrate_tool_name(llm_tool_name, tool_parts)
-                        if not canonical_tool_name:
+                        if category == MemoryCategory.TOOLS:
+                            canonical_tool_name, _ = calibrate_tool_name(llm_tool_name, tool_parts)
+                            if not canonical_tool_name:
+                                continue
+                            tool_name = canonical_tool_name
+                            stats = tool_stats_map.get(tool_name, {})
+
+                        if category == MemoryCategory.SKILLS:
+                            canonical_skill_name, _ = calibrate_skill_name(
+                                llm_skill_name, tool_parts
+                            )
+                            if not canonical_skill_name:
+                                continue
+                            skill_name = canonical_skill_name
+                            stats = skill_stats_map.get(skill_name, {})
+
+                        call_time = stats.get("call_count", 0)
+                        if call_time == 0:
                             continue
-                        tool_name = canonical_tool_name
-                        stats = tool_stats_map.get(tool_name, {})
 
-                    if category == MemoryCategory.SKILLS:
-                        canonical_skill_name, _ = calibrate_skill_name(llm_skill_name, tool_parts)
-                        if not canonical_skill_name:
-                            continue
-                        skill_name = canonical_skill_name
-                        stats = skill_stats_map.get(skill_name, {})
-
-                    call_time = stats.get("call_count", 0)
-                    if call_time == 0:
-                        continue
-
-                    candidates.append(
-                        ToolSkillCandidateMemory(
-                            category=category,
-                            abstract=mem.get("abstract", ""),
-                            overview=mem.get("overview", ""),
-                            content=mem.get("content", ""),
-                            source_session=session_id,
-                            user=user,
-                            language=output_language,
-                            tool_name=tool_name,
-                            skill_name=skill_name,
-                            call_time=call_time,
-                            success_time=stats.get("success_time", 0),
-                            duration_ms=(
-                                stats.get("duration_ms", 0)
-                                if category == MemoryCategory.TOOLS
-                                else 0
-                            ),
-                            prompt_tokens=(
-                                stats.get("prompt_tokens", 0)
-                                if category == MemoryCategory.TOOLS
-                                else 0
-                            ),
-                            completion_tokens=(
-                                stats.get("completion_tokens", 0)
-                                if category == MemoryCategory.TOOLS
-                                else 0
-                            ),
-                            best_for=str(mem.get("best_for", "") or "").strip(),
-                            optimal_params=str(mem.get("optimal_params", "") or "").strip(),
-                            recommended_flow=str(mem.get("recommended_flow", "") or "").strip(),
-                            key_dependencies=str(mem.get("key_dependencies", "") or "").strip(),
-                            common_failures=str(mem.get("common_failures", "") or "").strip(),
-                            recommendation=str(mem.get("recommendation", "") or "").strip(),
+                        candidates.append(
+                            ToolSkillCandidateMemory(
+                                category=category,
+                                abstract=mem.get("abstract", ""),
+                                overview=mem.get("overview", ""),
+                                content=mem.get("content", ""),
+                                source_session=session_id,
+                                user=user,
+                                language=output_language,
+                                tool_name=tool_name,
+                                skill_name=skill_name,
+                                call_time=call_time,
+                                success_time=stats.get("success_time", 0),
+                                duration_ms=(
+                                    stats.get("duration_ms", 0)
+                                    if category == MemoryCategory.TOOLS
+                                    else 0
+                                ),
+                                prompt_tokens=(
+                                    stats.get("prompt_tokens", 0)
+                                    if category == MemoryCategory.TOOLS
+                                    else 0
+                                ),
+                                completion_tokens=(
+                                    stats.get("completion_tokens", 0)
+                                    if category == MemoryCategory.TOOLS
+                                    else 0
+                                ),
+                                best_for=str(mem.get("best_for", "") or "").strip(),
+                                optimal_params=str(mem.get("optimal_params", "") or "").strip(),
+                                recommended_flow=str(mem.get("recommended_flow", "") or "").strip(),
+                                key_dependencies=str(mem.get("key_dependencies", "") or "").strip(),
+                                common_failures=str(mem.get("common_failures", "") or "").strip(),
+                                recommendation=str(mem.get("recommendation", "") or "").strip(),
+                            )
                         )
-                    )
                 else:
                     # 现有逻辑不变，前向兼容
-                    candidates.append(
-                        CandidateMemory(
-                            category=category,
-                            abstract=mem.get("abstract", ""),
-                            overview=mem.get("overview", ""),
-                            content=mem.get("content", ""),
-                            source_session=session_id,
-                            user=user,
-                            language=output_language,
+                    with telemetry.measure("memory.extract.stage.normalize_candidates"):
+                        candidates.append(
+                            CandidateMemory(
+                                category=category,
+                                abstract=mem.get("abstract", ""),
+                                overview=mem.get("overview", ""),
+                                content=mem.get("content", ""),
+                                source_session=session_id,
+                                user=user,
+                                language=output_language,
+                            )
                         )
-                    )
 
             logger.info(
                 f"Extracted {len(candidates)} candidate memories (language={output_language})"

@@ -26,6 +26,34 @@
 
 **前置条件：** Python >= 3.10，Node.js >= 22。安装助手会自动检查并提示安装缺少的组件。
 
+### 从旧版 `memory-openviking` 升级到新版 `openviking` 前置操作步骤
+
+如果当前环境里已经安装过旧版插件 `memory-openviking`，建议先完成以下前置操作，再执行新版安装，避免旧版和新版插件同时存在。
+
+1. 停止 OpenClaw gateway：
+
+```bash
+openclaw gateway stop
+```
+
+2. 备份旧版本配置和插件目录：
+
+```bash
+cp ~/.openclaw/openclaw.json ~/.openclaw/openclaw.json.pre-openviking-upgrade.bak
+mkdir -p ~/.openclaw/disabled-extensions
+mv ~/.openclaw/extensions/memory-openviking ~/.openclaw/disabled-extensions/memory-openviking-upgrade-backup
+```
+
+3. 修改 OpenClaw 配置，移除旧版本配置参数：
+
+编辑 `~/.openclaw/openclaw.json`，删除 `plugins.allow` 中的 `"memory-openviking"`，删除 `plugins.entries.memory-openviking`，并将 `plugins.slots.memory` 改为 `"none"`，删除 `plugins.load.paths`中旧版本 `memory-openviking` 插件路径。
+
+4. 参考下面方式A或者安装方式B的操作步骤，安装新版插件
+
+5. 保留并迁移旧版本运行参数到新版本配置（新版本默认可用，旧版本参数按需迁移）：
+
+如果旧版本原来使用的是 `plugins.entries.memory-openviking.config`，请将第二步备份的openclaw配置文件中的 `mode`、`configPath`、`port`、`baseUrl`、`apiKey`、`agentId` 等参数按需迁移到新版 `plugins.entries.openviking.config`。
+
 ### 方式 A：npm 安装（推荐，全平台）
 
 ```bash

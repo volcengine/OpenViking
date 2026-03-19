@@ -5,7 +5,7 @@
 
 ### OpenViking：AI 智能体的上下文数据库
 
-[English](README.md) / 中文
+[English](README.md) / 中文 / [日本語](README_JA.md)
 
 <a href="https://www.openviking.ai">官网</a> · <a href="https://github.com/volcengine/OpenViking">GitHub</a> · <a href="https://github.com/volcengine/OpenViking/issues">问题反馈</a> · <a href="https://www.openviking.ai/docs">文档</a>
 
@@ -467,7 +467,7 @@ ov chat
 👉 **[查看：服务器部署与 ECS 设置指南](./docs/en/getting-started/03-quickstart-server.md)**
 
 
-## OpenClaw 记忆插件详情
+## OpenClaw 上下文插件详情
 
 * 测试集：基于 LoCoMo10(https://github.com/snap-research/locomo) 的长程对话进行效果测试（去除无真值的 category5 后，共 1540 条 case）
 * 实验组：因用户在使用 OpenViking 时可能不关闭 OpenClaw 原生记忆，所以增加是否开关原生记忆的实验组
@@ -485,7 +485,7 @@ ov chat
 * 实验结论：
 结合 OpenViking 后，若仍开启原生记忆，效果在原 OpenClaw 上提升 43%，输入 token 成本降低 91%；在 LanceDB 上效果提升 15%，输入 token 降低 96%。若关闭原生记忆，效果在原 OpenClaw 上提升 49%，输入 token 成本降低 83%；在 LanceDB 上效果提升 17%，输入 token 降低 92%。
 
-👉 **[查看：OpenClaw 记忆插件](examples/openclaw-memory-plugin/README.md)**
+👉 **[查看：OpenClaw 上下文插件](examples/openclaw-plugin/README.md)**
 
 👉 **[查看：OpenCode 记忆插件示例](examples/opencode-memory-plugin/README.md)**
 

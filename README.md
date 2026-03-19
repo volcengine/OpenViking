@@ -6,7 +6,7 @@
 
 ### OpenViking: The Context Database for AI Agents
 
-English / [中文](README_CN.md)
+English / [中文](README_CN.md) / [日本語](README_JA.md)
 
 <a href="https://www.openviking.ai">Website</a> · <a href="https://github.com/volcengine/OpenViking">GitHub</a> · <a href="https://github.com/volcengine/OpenViking/issues">Issues</a> · <a href="https://www.openviking.ai/docs">Docs</a>
 
@@ -469,7 +469,7 @@ To ensure optimal storage performance and data security, we recommend deploying 
 👉 **[View: Server Deployment & ECS Setup Guide](./docs/en/getting-started/03-quickstart-server.md)**
 
 
-## OpenClaw Memory Plugin Details
+## OpenClaw Context Plugin Details
 
 * Test Dataset: Effect testing based on LoCoMo10 (https://github.com/snap-research/locomo) long-range dialogues (1,540 cases in total after removing category5 without ground truth)
 * Experimental Groups: Since users may not disable OpenClaw's native memory when using OpenViking, we added experimental groups with native memory enabled or disabled
@@ -489,7 +489,7 @@ After integrating OpenViking:
 - With native memory enabled: 43% improvement over original OpenClaw with 91% reduction in input token cost; 15% improvement over LanceDB with 96% reduction in input token cost.
 - With native memory disabled: 49% improvement over original OpenClaw with 83% reduction in input token cost; 17% improvement over LanceDB with 92% reduction in input token cost.
 
-👉 **[View: OpenClaw Memory Plugin](examples/openclaw-memory-plugin/README.md)**
+👉 **[View: OpenClaw Context Plugin](examples/openclaw-plugin/README.md)**
 
 👉 **[View: OpenCode Memory Plugin Example](examples/opencode-memory-plugin/README.md)**
 

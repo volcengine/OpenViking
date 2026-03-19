@@ -40,6 +40,7 @@ class SemanticMsg:
     telemetry_id: str = ""
     target_uri: str = ""
     lifecycle_lock_handle_id: str = ""
+    is_code_repo: bool = False
     changes: Optional[Dict[str, List[str]]] = (
         None  # {"added": [...], "modified": [...], "deleted": [...]}
     )
@@ -57,6 +58,7 @@ class SemanticMsg:
         telemetry_id: str = "",
         target_uri: str = "",
         lifecycle_lock_handle_id: str = "",
+        is_code_repo: bool = False,
         changes: Optional[Dict[str, List[str]]] = None,
     ):
         self.id = str(uuid4())
@@ -71,6 +73,7 @@ class SemanticMsg:
         self.telemetry_id = telemetry_id
         self.target_uri = target_uri
         self.lifecycle_lock_handle_id = lifecycle_lock_handle_id
+        self.is_code_repo = is_code_repo
         self.changes = changes
 
     def to_dict(self) -> Dict[str, Any]:
@@ -110,6 +113,7 @@ class SemanticMsg:
             telemetry_id=data.get("telemetry_id", ""),
             target_uri=data.get("target_uri", ""),
             lifecycle_lock_handle_id=data.get("lifecycle_lock_handle_id", ""),
+            is_code_repo=data.get("is_code_repo", False),
             changes=data.get("changes"),
         )
         if "id" in data and data["id"]:

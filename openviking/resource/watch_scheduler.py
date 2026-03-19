@@ -289,6 +289,7 @@ class WatchScheduler:
                                 account_id=task.account_id,
                                 user_id=task.user_id,
                                 role=getattr(task, "original_role", None) or Role.USER.value,
+                                agent_id=task.agent_id,
                                 is_active=False,
                             )
                         )

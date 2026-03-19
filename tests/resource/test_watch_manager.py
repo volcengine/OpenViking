@@ -11,12 +11,14 @@ from typing import AsyncGenerator
 import pytest
 import pytest_asyncio
 
-from openviking.resource.watch_manager import WatchManager, WatchTask
+from openviking.resource.watch_manager import PermissionDeniedError, WatchManager, WatchTask
 from openviking_cli.exceptions import ConflictError
 from tests.utils.mock_agfs import MockLocalAGFS
 
 TEST_ACCOUNT_ID = "default"
 TEST_USER_ID = "default"
+TEST_AGENT_ID = "default"
+OTHER_AGENT_ID = "other-agent"
 TEST_ROLE = "ROOT"
 
 
@@ -488,6 +490,93 @@ class TestWatchManager:
         await asyncio.sleep(0.05)
         next_time = await watch_manager.get_next_execution_time()
         assert next_time is not None
+
+    @pytest.mark.asyncio
+    async def test_user_cannot_access_other_agent_task(self, watch_manager: WatchManager):
+        task = await watch_manager.create_task(
+            path="/test/path",
+            to_uri="viking://resources/agent-isolation",
+            account_id=TEST_ACCOUNT_ID,
+            user_id=TEST_USER_ID,
+            agent_id=TEST_AGENT_ID,
+        )
+
+        by_task_id = await watch_manager.get_task(
+            task.task_id,
+            account_id=TEST_ACCOUNT_ID,
+            user_id=TEST_USER_ID,
+            role="USER",
+            agent_id=OTHER_AGENT_ID,
+        )
+        by_uri = await watch_manager.get_task_by_uri(
+            to_uri="viking://resources/agent-isolation",
+            account_id=TEST_ACCOUNT_ID,
+            user_id=TEST_USER_ID,
+            role="USER",
+            agent_id=OTHER_AGENT_ID,
+        )
+        tasks = await watch_manager.get_all_tasks(
+            account_id=TEST_ACCOUNT_ID,
+            user_id=TEST_USER_ID,
+            role="USER",
+            agent_id=OTHER_AGENT_ID,
+        )
+
+        assert by_task_id is None
+        assert by_uri is None
+        assert tasks == []
+
+    @pytest.mark.asyncio
+    async def test_user_cannot_update_or_delete_other_agent_task(self, watch_manager: WatchManager):
+        task = await watch_manager.create_task(
+            path="/test/path",
+            to_uri="viking://resources/agent-update-delete",
+            account_id=TEST_ACCOUNT_ID,
+            user_id=TEST_USER_ID,
+            agent_id=TEST_AGENT_ID,
+        )
+
+        with pytest.raises(PermissionDeniedError, match="does not have permission"):
+            await watch_manager.update_task(
+                task_id=task.task_id,
+                account_id=TEST_ACCOUNT_ID,
+                user_id=TEST_USER_ID,
+                role="USER",
+                agent_id=OTHER_AGENT_ID,
+                reason="other agent should not update",
+            )
+
+        with pytest.raises(PermissionDeniedError, match="does not have permission"):
+            await watch_manager.delete_task(
+                task_id=task.task_id,
+                account_id=TEST_ACCOUNT_ID,
+                user_id=TEST_USER_ID,
+                role="USER",
+                agent_id=OTHER_AGENT_ID,
+            )
+
+    @pytest.mark.asyncio
+    async def test_admin_can_manage_other_agent_task_in_same_account(
+        self, watch_manager: WatchManager
+    ):
+        task = await watch_manager.create_task(
+            path="/test/path",
+            to_uri="viking://resources/admin-cross-agent",
+            account_id=TEST_ACCOUNT_ID,
+            user_id=TEST_USER_ID,
+            agent_id=TEST_AGENT_ID,
+        )
+
+        updated = await watch_manager.update_task(
+            task_id=task.task_id,
+            account_id=TEST_ACCOUNT_ID,
+            user_id="admin-user",
+            role="ADMIN",
+            agent_id=OTHER_AGENT_ID,
+            reason="admin update",
+        )
+
+        assert updated.reason == "admin update"
 
 
 class TestWatchManagerPersistence:

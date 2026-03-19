@@ -28,6 +28,34 @@ Provide long-term memory capabilities for [OpenClaw](https://github.com/openclaw
 
 **Prerequisites:** Python >= 3.10, Node.js >= 22. The setup helper will automatically check and prompt you to install any missing components.
 
+### Prerequisite Steps for Upgrading from Legacy `memory-openviking` to New `openviking`
+
+If the current environment already has the legacy `memory-openviking` plugin installed, complete the following prerequisite steps before installing the new version to avoid having both plugins active at the same time.
+
+1. Stop the OpenClaw gateway:
+
+```bash
+openclaw gateway stop
+```
+
+2. Back up the legacy configuration and plugin directory:
+
+```bash
+cp ~/.openclaw/openclaw.json ~/.openclaw/openclaw.json.pre-openviking-upgrade.bak
+mkdir -p ~/.openclaw/disabled-extensions
+mv ~/.openclaw/extensions/memory-openviking ~/.openclaw/disabled-extensions/memory-openviking-upgrade-backup
+```
+
+3. Update the OpenClaw configuration and remove legacy settings:
+
+Edit `~/.openclaw/openclaw.json`, remove `"memory-openviking"` from `plugins.allow`, remove `plugins.entries.memory-openviking`, change `plugins.slots.memory` to `"none"`, and remove the legacy `memory-openviking` plugin path from `plugins.load.paths`.
+
+4. Install the new plugin by following Method A or Method B below.
+
+5. Preserve and migrate legacy runtime settings into the new configuration if needed (the new version works with defaults; legacy parameters are optional to migrate):
+
+If the legacy plugin was using `plugins.entries.memory-openviking.config`, migrate `mode`, `configPath`, `port`, `baseUrl`, `apiKey`, `agentId`, and any other needed parameters from the backup `openclaw.json` file created in Step 2 into `plugins.entries.openviking.config`.
+
 ### Method A: npm Installation (Recommended, Cross-platform)
 
 ```bash
