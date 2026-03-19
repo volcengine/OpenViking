@@ -225,6 +225,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             RuntimeError: When API call fails
         """
         try:
+            text = self._truncate_input(text)
             kwargs: Dict[str, Any] = {"input": text, "model": self.model_name}
 
             extra_body = self._build_extra_body(is_query=is_query)
@@ -258,6 +259,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             return []
 
         try:
+            texts = [self._truncate_input(t) for t in texts]
             kwargs: Dict[str, Any] = {"input": texts, "model": self.model_name}
             if self.dimension:
                 kwargs["dimensions"] = self.dimension

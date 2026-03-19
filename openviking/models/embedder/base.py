@@ -1,12 +1,68 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
+import logging
 import random
+import re
 import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, TypeVar
 
 T = TypeVar("T")
+
+
+_tiktoken_encoder = None
+
+
+def _get_tiktoken_encoder():
+    """Get cached tiktoken encoder (module-level singleton, downloaded once)."""
+    global _tiktoken_encoder
+    if _tiktoken_encoder is None:
+        try:
+            import tiktoken
+
+            _tiktoken_encoder = tiktoken.get_encoding("cl100k_base")
+        except Exception:
+            pass
+    return _tiktoken_encoder
+
+
+def truncate_text_by_tokens(text: str, max_tokens: int) -> str:
+    """Truncate text to at most max_tokens tokens. Returns original text if within limit.
+
+    Guarantees: len(tiktoken.encode(result)) <= max_tokens for cl100k_base.
+    Falls back to UTF-8 byte truncation if tiktoken is unavailable.
+
+    Args:
+        text: Input text to truncate
+        max_tokens: Maximum number of tokens allowed
+
+    Returns:
+        Truncated text (or original text if already within limit)
+    """
+    # Fast path: tiktoken never produces more tokens than UTF-8 bytes,
+    # so byte count <= max_tokens guarantees token count <= max_tokens.
+    if len(text.encode("utf-8")) <= max_tokens:
+        return text
+
+    enc = _get_tiktoken_encoder()
+    if enc is not None:
+        try:
+            # disallowed_special=() avoids ValueError when text contains special token strings
+            tokens = enc.encode(text, disallowed_special=())
+            if len(tokens) <= max_tokens:
+                return text
+            return enc.decode(tokens[:max_tokens])
+        except Exception:
+            pass  # Fall through to byte-based truncation
+
+    # Fallback: UTF-8 byte truncation (tiktoken unavailable).
+    # Guaranteed safe: token_count <= utf8_bytes, truncating to max_tokens bytes
+    # ensures token_count <= max_tokens.
+    encoded = text.encode("utf-8")
+    truncated = encoded[:max_tokens].decode("utf-8", errors="ignore")
+    return truncated
+
 
 
 def truncate_and_normalize(embedding: List[float], dimension: Optional[int]) -> List[float]:
@@ -99,6 +155,20 @@ class EmbedderBase(ABC):
             List[EmbedResult]: List of embedding results
         """
         return [self.embed(text, is_query=is_query) for text in texts]
+
+    @property
+    def max_input_tokens(self) -> int:
+        """Maximum number of tokens allowed as input. Subclasses can override."""
+        return 8000
+
+    def _truncate_input(self, text: str) -> str:
+        """Truncate input text to max_input_tokens. Logs a warning if truncation occurs."""
+        truncated = truncate_text_by_tokens(text, self.max_input_tokens)
+        if truncated != text:
+            logging.getLogger(__name__).warning(
+                f"[{self.__class__.__name__}] Input truncated to {self.max_input_tokens} tokens"
+            )
+        return truncated
 
     def close(self):
         """Release resources, subclasses can override as needed"""

@@ -75,6 +75,10 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
     Supports Volcengine embedding models such as doubao-embedding.
     """
 
+    @property
+    def max_input_tokens(self) -> int:
+        return 8000 if "vision" in self.model_name.lower() else 4000
+
     def __init__(
         self,
         model_name: str,
@@ -159,6 +163,8 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
             RuntimeError: When API call fails
         """
 
+        text = self._truncate_input(text)
+
         def _embed_call():
             if self.input_type == "multimodal":
                 # Use multimodal embeddings API
@@ -206,6 +212,7 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
             return []
 
         try:
+            texts = [self._truncate_input(t) for t in texts]
             if self.input_type == "multimodal":
                 multimodal_inputs = [{"type": "text", "text": text} for text in texts]
                 response = self.client.multimodal_embeddings.create(
@@ -237,6 +244,10 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
 
     Generates sparse embeddings using Volcengine's multimodal embedding API.
     """
+
+    @property
+    def max_input_tokens(self) -> int:
+        return 8000 if "vision" in self.model_name.lower() else 4000
 
     def __init__(
         self,
@@ -282,6 +293,8 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
         Raises:
             RuntimeError: When API call fails
         """
+
+        text = self._truncate_input(text)
 
         def _embed_call():
             # Must use multimodal endpoint for sparse
@@ -331,6 +344,10 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
     Generates both dense and sparse embeddings simultaneously using Volcengine's
     multimodal embedding API.
     """
+
+    @property
+    def max_input_tokens(self) -> int:
+        return 8000 if "vision" in self.model_name.lower() else 4000
 
     def __init__(
         self,
@@ -382,6 +399,8 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
         Raises:
             RuntimeError: When API call fails
         """
+
+        text = self._truncate_input(text)
 
         def _embed_call():
             # Always use multimodal for hybrid to get both

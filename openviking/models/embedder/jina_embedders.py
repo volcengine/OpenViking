@@ -17,6 +17,12 @@ JINA_MODEL_DIMENSIONS = {
     "jina-embeddings-v5-text-nano": 768,  # 239M params, max seq 8192
 }
 
+# Max input tokens for Jina embedding models (with ~200 token buffer for tokenizer differences)
+JINA_MODEL_MAX_TOKENS = {
+    "jina-embeddings-v5-text-small": 32000,
+    "jina-embeddings-v5-text-nano": 8000,
+}
+
 
 class JinaDenseEmbedder(DenseEmbedderBase):
     """Jina AI Dense Embedder Implementation
@@ -106,6 +112,11 @@ class JinaDenseEmbedder(DenseEmbedderBase):
                 f"Jina models support Matryoshka dimension reduction up to {max_dim}."
             )
         self._dimension = dimension if dimension is not None else max_dim
+        self._max_input_tokens = JINA_MODEL_MAX_TOKENS.get(model_name, 8192)
+
+    @property
+    def max_input_tokens(self) -> int:
+        return self._max_input_tokens
 
     def _build_extra_body(self, is_query: bool = False) -> Optional[Dict[str, Any]]:
         """Build extra_body dict for Jina-specific parameters"""
@@ -136,6 +147,7 @@ class JinaDenseEmbedder(DenseEmbedderBase):
             RuntimeError: When API call fails
         """
         try:
+            text = self._truncate_input(text)
             kwargs: Dict[str, Any] = {"input": text, "model": self.model_name}
             if self.dimension:
                 kwargs["dimensions"] = self.dimension
@@ -170,6 +182,7 @@ class JinaDenseEmbedder(DenseEmbedderBase):
             return []
 
         try:
+            texts = [self._truncate_input(t) for t in texts]
             kwargs: Dict[str, Any] = {"input": texts, "model": self.model_name}
             if self.dimension:
                 kwargs["dimensions"] = self.dimension

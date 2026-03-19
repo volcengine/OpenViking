@@ -84,6 +84,7 @@ class VoyageDenseEmbedder(DenseEmbedderBase):
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform dense embedding on text."""
         try:
+            text = self._truncate_input(text)
             kwargs: Dict[str, Any] = {"input": text, "model": self.model_name}
             if self.dimension is not None:
                 kwargs["extra_body"] = {"output_dimension": self.dimension}
@@ -102,6 +103,7 @@ class VoyageDenseEmbedder(DenseEmbedderBase):
             return []
 
         try:
+            texts = [self._truncate_input(t) for t in texts]
             kwargs: Dict[str, Any] = {"input": texts, "model": self.model_name}
             if self.dimension is not None:
                 kwargs["extra_body"] = {"output_dimension": self.dimension}
