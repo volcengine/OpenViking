@@ -264,6 +264,17 @@ enum Commands {
         /// Viking URI
         uri: String,
     },
+    /// Reindex content at URI (regenerates .abstract.md and .overview.md)
+    Reindex {
+        /// Viking URI
+        uri: String,
+        /// Force regenerate summaries even if they exist
+        #[arg(short, long)]
+        regenerate: bool,
+        /// Wait for reindex to complete
+        #[arg(long, default_value = "true")]
+        wait: bool,
+    },
     /// Download file to local path (supports binaries/images)
     Get {
         /// Viking URI
@@ -625,6 +636,9 @@ async fn main() {
         Commands::Read { uri } => handle_read(uri, ctx).await,
         Commands::Abstract { uri } => handle_abstract(uri, ctx).await,
         Commands::Overview { uri } => handle_overview(uri, ctx).await,
+        Commands::Reindex { uri, regenerate, wait } => {
+            handle_reindex(uri, regenerate, wait, ctx).await
+        }
         Commands::Get { uri, local_path } => handle_get(uri, local_path, ctx).await,
         Commands::Find { query, uri, node_limit, threshold } => {
             handle_find(query, uri, node_limit, threshold, ctx).await
@@ -951,6 +965,11 @@ async fn handle_abstract(uri: String, ctx: CliContext) -> Result<()> {
 async fn handle_overview(uri: String, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     commands::content::overview(&client, &uri, ctx.output_format, ctx.compact).await
+}
+
+async fn handle_reindex(uri: String, regenerate: bool, wait: bool, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    commands::content::reindex(&client, &uri, regenerate, wait, ctx.output_format, ctx.compact).await
 }
 
 async fn handle_get(uri: String, local_path: String, ctx: CliContext) -> Result<()> {
