@@ -42,6 +42,12 @@ def _is_pid_alive(pid: int) -> bool:
     except PermissionError:
         # Process exists but we can't signal it.
         return True
+    except OSError:
+        # On Windows, os.kill(pid, 0) raises OSError (WinError 87 "The
+        # parameter is incorrect") for stale or invalid PIDs instead of
+        # ProcessLookupError.  Treat this as "not alive" so stale lock
+        # files are correctly reclaimed.
+        return False
 
 
 def acquire_data_dir_lock(data_dir: str) -> str:
