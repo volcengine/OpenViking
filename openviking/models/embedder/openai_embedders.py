@@ -69,6 +69,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         config: Optional[Dict[str, Any]] = None,
         extra_headers: Optional[Dict[str, str]] = None,
         input_type: Optional[str] = None,
+        max_input_tokens: Optional[int] = None,
     ):
         """Initialize OpenAI-Compatible Dense Embedder
 
@@ -91,6 +92,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             config: Additional configuration dict
             extra_headers: Extra HTTP headers to include in API requests (e.g., for OpenRouter:
                           {'HTTP-Referer': 'https://your-site.com', 'X-Title': 'Your App'})
+            max_input_tokens: When set, truncate input text to roughly this many tokens before the API call.
 
         Raises:
             ValueError: If api_key is not provided and env vars are not set
@@ -101,7 +103,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             supported by OpenAI-compatible third-party models (e.g., BGE-M3, Jina, Cohere) that
             implement the input_type parameter.
         """
-        super().__init__(model_name, config)
+        super().__init__(model_name, config, max_input_tokens=max_input_tokens)
 
         self.api_key = api_key
         self.api_base = api_base
@@ -225,6 +227,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             RuntimeError: When API call fails
         """
         try:
+            text = self._prepare_embedding_text(text)
             kwargs: Dict[str, Any] = {"input": text, "model": self.model_name}
 
             extra_body = self._build_extra_body(is_query=is_query)
@@ -258,6 +261,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             return []
 
         try:
+            texts = [self._prepare_embedding_text(t) for t in texts]
             kwargs: Dict[str, Any] = {"input": texts, "model": self.model_name}
             if self.dimension:
                 kwargs["dimensions"] = self.dimension

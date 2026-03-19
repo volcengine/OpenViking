@@ -40,6 +40,7 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
         document_param: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
         extra_headers: Optional[Dict[str, str]] = None,
+        max_input_tokens: Optional[int] = None,
     ):
         """Initialize MiniMax Dense Embedder
 
@@ -53,7 +54,7 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
             config: Additional configuration dict
             extra_headers: Extra headers, useful for passing GroupId for MiniMax API
         """
-        super().__init__(model_name, config)
+        super().__init__(model_name, config, max_input_tokens=max_input_tokens)
 
         self.api_key = api_key
         self.api_base = api_base or self.DEFAULT_API_BASE
@@ -163,6 +164,7 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
 
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform dense embedding on text"""
+        text = self._prepare_embedding_text(text)
         vectors = self._call_api([text], is_query=is_query)
         return EmbedResult(dense_vector=vectors[0])
 
@@ -173,6 +175,7 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
 
         # MiniMax might have batch size limits, but let's assume the caller handles batching or use safe defaults
         # For now, we pass through. If needed, we can implement internal chunking.
+        texts = [self._prepare_embedding_text(t) for t in texts]
         vectors = self._call_api(texts, is_query=is_query)
         return [EmbedResult(dense_vector=v) for v in vectors]
 

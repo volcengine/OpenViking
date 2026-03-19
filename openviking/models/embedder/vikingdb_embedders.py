@@ -115,8 +115,11 @@ class VikingDBDenseEmbedder(DenseEmbedderBase, VikingDBClientMixin):
         dimension: Optional[int] = None,
         embedding_type: str = "text",
         config: Optional[Dict[str, Any]] = None,
+        max_input_tokens: Optional[int] = None,
     ):
-        DenseEmbedderBase.__init__(self, model_name, config)
+        DenseEmbedderBase.__init__(
+            self, model_name, config, max_input_tokens=max_input_tokens
+        )
         self._init_vikingdb_client(ak, sk, region, host)
         self.model_version = model_version
         self.dimension = dimension
@@ -124,6 +127,7 @@ class VikingDBDenseEmbedder(DenseEmbedderBase, VikingDBClientMixin):
         self.dense_model = {"name": model_name, "version": model_version, "dim": dimension}
 
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
+        text = self._prepare_embedding_text(text)
         results = self._call_api([text], dense_model=self.dense_model)
         if not results:
             return EmbedResult(dense_vector=[])
@@ -138,6 +142,7 @@ class VikingDBDenseEmbedder(DenseEmbedderBase, VikingDBClientMixin):
     def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
         if not texts:
             return []
+        texts = [self._prepare_embedding_text(t) for t in texts]
         raw_results = self._call_api(texts, dense_model=self.dense_model)
         return [
             EmbedResult(
@@ -164,8 +169,11 @@ class VikingDBSparseEmbedder(SparseEmbedderBase, VikingDBClientMixin):
         region: Optional[str] = None,
         host: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
+        max_input_tokens: Optional[int] = None,
     ):
-        SparseEmbedderBase.__init__(self, model_name, config)
+        SparseEmbedderBase.__init__(
+            self, model_name, config, max_input_tokens=max_input_tokens
+        )
         self._init_vikingdb_client(ak, sk, region, host)
         self.model_version = model_version
         self.sparse_model = {
@@ -174,6 +182,7 @@ class VikingDBSparseEmbedder(SparseEmbedderBase, VikingDBClientMixin):
         }
 
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
+        text = self._prepare_embedding_text(text)
         results = self._call_api([text], sparse_model=self.sparse_model)
         if not results:
             return EmbedResult(sparse_vector={})
@@ -188,6 +197,7 @@ class VikingDBSparseEmbedder(SparseEmbedderBase, VikingDBClientMixin):
     def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
         if not texts:
             return []
+        texts = [self._prepare_embedding_text(t) for t in texts]
         raw_results = self._call_api(texts, sparse_model=self.sparse_model)
         return [
             EmbedResult(
@@ -211,8 +221,11 @@ class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
         dimension: Optional[int] = None,
         embedding_type: str = "text",
         config: Optional[Dict[str, Any]] = None,
+        max_input_tokens: Optional[int] = None,
     ):
-        HybridEmbedderBase.__init__(self, model_name, config)
+        HybridEmbedderBase.__init__(
+            self, model_name, config, max_input_tokens=max_input_tokens
+        )
         self._init_vikingdb_client(ak, sk, region, host)
         self.model_version = model_version
         self.dimension = dimension
@@ -224,6 +237,7 @@ class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
         }
 
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
+        text = self._prepare_embedding_text(text)
         results = self._call_api(
             [text], dense_model=self.dense_model, sparse_model=self.sparse_model
         )
@@ -244,6 +258,7 @@ class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
     def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
         if not texts:
             return []
+        texts = [self._prepare_embedding_text(t) for t in texts]
         raw_results = self._call_api(
             texts, dense_model=self.dense_model, sparse_model=self.sparse_model
         )

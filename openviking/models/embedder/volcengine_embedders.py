@@ -83,6 +83,7 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
         dimension: Optional[int] = None,
         input_type: str = "multimodal",
         config: Optional[Dict[str, Any]] = None,
+        max_input_tokens: Optional[int] = None,
     ):
         """Initialize Volcengine Dense Embedder
 
@@ -97,7 +98,7 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
         Raises:
             ValueError: If api_key is not provided
         """
-        super().__init__(model_name, config)
+        super().__init__(model_name, config, max_input_tokens=max_input_tokens)
 
         self.api_key = api_key
         self.api_base = api_base or "https://ark.cn-beijing.volces.com/api/v3"
@@ -158,6 +159,7 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
         Raises:
             RuntimeError: When API call fails
         """
+        text = self._prepare_embedding_text(text)
 
         def _embed_call():
             if self.input_type == "multimodal":
@@ -206,6 +208,7 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
             return []
 
         try:
+            texts = [self._prepare_embedding_text(t) for t in texts]
             if self.input_type == "multimodal":
                 multimodal_inputs = [{"type": "text", "text": text} for text in texts]
                 response = self.client.multimodal_embeddings.create(
@@ -244,6 +247,7 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
+        max_input_tokens: Optional[int] = None,
     ):
         """Initialize Volcengine Sparse Embedder
 
@@ -256,7 +260,7 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
         Raises:
             ValueError: If api_key is not provided
         """
-        super().__init__(model_name, config)
+        super().__init__(model_name, config, max_input_tokens=max_input_tokens)
 
         self.api_key = api_key
         self.api_base = api_base
@@ -282,6 +286,7 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
         Raises:
             RuntimeError: When API call fails
         """
+        text = self._prepare_embedding_text(text)
 
         def _embed_call():
             # Must use multimodal endpoint for sparse
@@ -340,6 +345,7 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
         dimension: Optional[int] = None,
         input_type: str = "multimodal",
         config: Optional[Dict[str, Any]] = None,
+        max_input_tokens: Optional[int] = None,
     ):
         """Initialize Volcengine Hybrid Embedder
 
@@ -354,7 +360,7 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
         Raises:
             ValueError: If api_key is not provided
         """
-        super().__init__(model_name, config)
+        super().__init__(model_name, config, max_input_tokens=max_input_tokens)
         self.api_key = api_key
         self.api_base = api_base
         self.dimension = dimension
@@ -382,6 +388,7 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
         Raises:
             RuntimeError: When API call fails
         """
+        text = self._prepare_embedding_text(text)
 
         def _embed_call():
             # Always use multimodal for hybrid to get both

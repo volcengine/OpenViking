@@ -1,5 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
+import logging
 import random
 import time
 from abc import ABC, abstractmethod
@@ -7,6 +8,33 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, TypeVar
 
 T = TypeVar("T")
+
+_logger = logging.getLogger(__name__)
+
+# Rough heuristic: many embedding APIs document ~4 characters per token for Latin text.
+EMBEDDING_CHARS_PER_TOKEN_HEURISTIC = 4
+
+
+def truncate_embedding_input_text(
+    text: str,
+    max_input_tokens: Optional[int],
+    *,
+    model_name: str,
+) -> str:
+    """Truncate raw text before sending to an embedding API when a token limit is configured."""
+    if max_input_tokens is None or max_input_tokens <= 0:
+        return text
+    max_chars = max_input_tokens * EMBEDDING_CHARS_PER_TOKEN_HEURISTIC
+    if len(text) <= max_chars:
+        return text
+    _logger.warning(
+        "Truncating embedding input from %d to %d characters (~%d token limit, model=%s)",
+        len(text),
+        max_chars,
+        max_input_tokens,
+        model_name,
+    )
+    return text[:max_chars]
 
 
 def truncate_and_normalize(embedding: List[float], dimension: Optional[int]) -> List[float]:
@@ -65,15 +93,29 @@ class EmbedderBase(ABC):
     Provides unified embedding interface supporting dense, sparse, and hybrid modes.
     """
 
-    def __init__(self, model_name: str, config: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        model_name: str,
+        config: Optional[Dict[str, Any]] = None,
+        max_input_tokens: Optional[int] = None,
+    ):
         """Initialize embedder
 
         Args:
             model_name: Model name
             config: Configuration dict containing api_key, api_base, etc.
+            max_input_tokens: When set, input text is truncated to roughly this many tokens
+                before calling the provider (see EMBEDDING_CHARS_PER_TOKEN_HEURISTIC).
         """
         self.model_name = model_name
         self.config = config or {}
+        self.max_input_tokens = max_input_tokens
+
+    def _prepare_embedding_text(self, text: str) -> str:
+        """Apply optional max-input truncation configured for this embedder."""
+        return truncate_embedding_input_text(
+            text, self.max_input_tokens, model_name=self.model_name
+        )
 
     @abstractmethod
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:

@@ -13,6 +13,14 @@ class EmbeddingModelConfig(BaseModel):
     api_base: Optional[str] = Field(default=None, description="API base URL")
     dimension: Optional[int] = Field(default=None, description="Embedding dimension")
     batch_size: int = Field(default=32, description="Batch size for embedding generation")
+    max_input_tokens: Optional[int] = Field(
+        default=None,
+        description=(
+            "Optional maximum input length in tokens for this embedding model. When set, text is "
+            "truncated before API calls using a ~4 characters/token heuristic to avoid provider "
+            "errors (e.g. HTTP 500) on models with small context windows such as 512 tokens."
+        ),
+    )
     input: str = Field(default="multimodal", description="Input type: 'text' or 'multimodal'")
     query_param: Optional[str] = Field(
         default=None,
@@ -234,6 +242,7 @@ class EmbeddingConfig(BaseModel):
                     or "no-key",  # Placeholder for local OpenAI-compatible servers
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
+                    "max_input_tokens": cfg.max_input_tokens,
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                     **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
@@ -247,6 +256,7 @@ class EmbeddingConfig(BaseModel):
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
                     "input_type": cfg.input,
+                    "max_input_tokens": cfg.max_input_tokens,
                 },
             ),
             ("volcengine", "sparse"): (
@@ -255,6 +265,7 @@ class EmbeddingConfig(BaseModel):
                     "model_name": cfg.model,
                     "api_key": cfg.api_key,
                     "api_base": cfg.api_base,
+                    "max_input_tokens": cfg.max_input_tokens,
                 },
             ),
             ("volcengine", "hybrid"): (
@@ -265,6 +276,7 @@ class EmbeddingConfig(BaseModel):
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
                     "input_type": cfg.input,
+                    "max_input_tokens": cfg.max_input_tokens,
                 },
             ),
             ("vikingdb", "dense"): (
@@ -278,6 +290,7 @@ class EmbeddingConfig(BaseModel):
                     "host": cfg.host,
                     "dimension": cfg.dimension,
                     "input_type": cfg.input,
+                    "max_input_tokens": cfg.max_input_tokens,
                 },
             ),
             ("vikingdb", "sparse"): (
@@ -289,6 +302,7 @@ class EmbeddingConfig(BaseModel):
                     "sk": cfg.sk,
                     "region": cfg.region,
                     "host": cfg.host,
+                    "max_input_tokens": cfg.max_input_tokens,
                 },
             ),
             ("vikingdb", "hybrid"): (
@@ -302,6 +316,7 @@ class EmbeddingConfig(BaseModel):
                     "host": cfg.host,
                     "dimension": cfg.dimension,
                     "input_type": cfg.input,
+                    "max_input_tokens": cfg.max_input_tokens,
                 },
             ),
             ("jina", "dense"): (
@@ -311,6 +326,7 @@ class EmbeddingConfig(BaseModel):
                     "api_key": cfg.api_key,
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
+                    "max_input_tokens": cfg.max_input_tokens,
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                 },
@@ -324,6 +340,7 @@ class EmbeddingConfig(BaseModel):
                     or "no-key",  # Ollama ignores the key, but client requires non-empty
                     "api_base": cfg.api_base or "http://localhost:11434/v1",
                     "dimension": cfg.dimension,
+                    "max_input_tokens": cfg.max_input_tokens,
                 },
             ),
             ("voyage", "dense"): (
@@ -333,6 +350,7 @@ class EmbeddingConfig(BaseModel):
                     "api_key": cfg.api_key,
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
+                    "max_input_tokens": cfg.max_input_tokens,
                 },
             ),
             ("minimax", "dense"): (
@@ -342,6 +360,7 @@ class EmbeddingConfig(BaseModel):
                     "api_key": cfg.api_key,
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
+                    "max_input_tokens": cfg.max_input_tokens,
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                     **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),

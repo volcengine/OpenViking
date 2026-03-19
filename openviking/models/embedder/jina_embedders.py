@@ -61,6 +61,7 @@ class JinaDenseEmbedder(DenseEmbedderBase):
         late_chunking: Optional[bool] = None,
         config: Optional[Dict[str, Any]] = None,
         task: Optional[str] = None,
+        max_input_tokens: Optional[int] = None,
     ):
         """Initialize Jina AI Dense Embedder
 
@@ -80,7 +81,7 @@ class JinaDenseEmbedder(DenseEmbedderBase):
         Raises:
             ValueError: If api_key is not provided
         """
-        super().__init__(model_name, config)
+        super().__init__(model_name, config, max_input_tokens=max_input_tokens)
 
         self.api_key = api_key
         self.api_base = api_base or "https://api.jina.ai/v1"
@@ -136,6 +137,7 @@ class JinaDenseEmbedder(DenseEmbedderBase):
             RuntimeError: When API call fails
         """
         try:
+            text = self._prepare_embedding_text(text)
             kwargs: Dict[str, Any] = {"input": text, "model": self.model_name}
             if self.dimension:
                 kwargs["dimensions"] = self.dimension
@@ -170,6 +172,7 @@ class JinaDenseEmbedder(DenseEmbedderBase):
             return []
 
         try:
+            texts = [self._prepare_embedding_text(t) for t in texts]
             kwargs: Dict[str, Any] = {"input": texts, "model": self.model_name}
             if self.dimension:
                 kwargs["dimensions"] = self.dimension
