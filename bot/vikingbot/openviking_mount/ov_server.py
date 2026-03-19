@@ -1,9 +1,9 @@
 import asyncio
 import hashlib
-from typing import List, Dict, Any, Optional
+import time
+from typing import Any, Dict, List, Optional
 
 from loguru import logger
-import time
 
 import openviking as ov
 from vikingbot.config.loader import load_config
@@ -99,9 +99,7 @@ class VikingClient:
             return await self.client.find(query, target_uri=target_uri)
         return await self.client.find(query)
 
-    async def add_resource(
-        self, local_path: str, desc: str
-    ) -> Optional[Dict[str, Any]]:
+    async def add_resource(self, local_path: str, desc: str) -> Optional[Dict[str, Any]]:
         """添加资源到 Viking"""
         result = await self.client.add_resource(path=local_path, reason=desc)
         return result
@@ -327,7 +325,9 @@ class VikingClient:
 
     async def grep(self, uri: str, pattern: str, case_insensitive: bool = False) -> Dict[str, Any]:
         """通过模式（正则表达式）搜索内容"""
-        return await self.client.grep(uri, pattern, case_insensitive=case_insensitive, node_limit=10)
+        return await self.client.grep(
+            uri, pattern, case_insensitive=case_insensitive, node_limit=10
+        )
 
     async def glob(self, pattern: str, uri: Optional[str] = None) -> Dict[str, Any]:
         """通过 glob 模式匹配文件"""
@@ -337,7 +337,8 @@ class VikingClient:
         """提交会话"""
         import re
         import uuid
-        from openviking.message.part import Part, TextPart, ToolPart
+
+        from openviking.message.part import TextPart, ToolPart
 
         user_exists = await self._check_user_exists(user_id)
         if not user_exists:
@@ -423,7 +424,7 @@ class VikingClient:
                 continue
             await session.add_message(role=role, parts=parts)
 
-        result = await session.commit()
+        result = await session.commit_async()
         if client is not self.client:
             await client.close()
         logger.info(f"time spent: {time.time() - start}")

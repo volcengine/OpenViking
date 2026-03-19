@@ -12,6 +12,7 @@ from openviking.models.embedder.base import EmbedResult
 from openviking.server.identity import RequestContext, Role
 from openviking.service.resource_service import ResourceService
 from openviking.storage.collection_schemas import TextEmbeddingHandler
+from openviking.storage.queuefs.semantic_dag import DagStats
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 from openviking.telemetry import (
@@ -134,15 +135,25 @@ async def test_semantic_processor_binds_registered_operation_telemetry(monkeypat
         async def ls(self, uri, ctx=None):
             return []
 
-    async def fake_process_single_directory(**kwargs):
-        assert get_current_telemetry() is telemetry
-        get_current_telemetry().record_token_usage("llm", 11, 7)
+    class _FakeDagExecutor:
+        def __init__(self, **kwargs):
+            pass
+
+        async def run(self, root_uri):
+            assert get_current_telemetry() is telemetry
+            get_current_telemetry().record_token_usage("llm", 11, 7)
+
+        def get_stats(self):
+            return DagStats()
 
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_processor.get_viking_fs",
         lambda: FakeVikingFS(),
     )
-    monkeypatch.setattr(processor, "_process_single_directory", fake_process_single_directory)
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_processor.SemanticDagExecutor",
+        lambda **kwargs: _FakeDagExecutor(**kwargs),
+    )
 
     try:
         await processor.on_dequeue(
@@ -185,7 +196,7 @@ async def test_embedding_handler_binds_registered_operation_telemetry(monkeypatc
     class _DummyVikingDB:
         is_closing = False
 
-        async def upsert(self, _data):
+        async def upsert(self, _data, *, ctx=None):
             return "rec-1"
 
     monkeypatch.setattr(

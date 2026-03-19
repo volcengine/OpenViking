@@ -26,10 +26,23 @@ class VLMConfig(BaseModel):
 
     default_provider: Optional[str] = Field(default=None, description="Default provider name")
 
+    max_tokens: Optional[int] = Field(
+        default=None,
+        description="Maximum tokens for VLM completion output (None = provider default)",
+    )
+
     thinking: bool = Field(default=False, description="Enable thinking mode for VolcEngine models")
 
     max_concurrent: int = Field(
         default=100, description="Maximum number of concurrent LLM calls for semantic processing"
+    )
+
+    extra_headers: Optional[Dict[str, str]] = Field(
+        default=None, description="Extra HTTP headers for OpenAI-compatible providers"
+    )
+
+    stream: bool = Field(
+        default=False, description="Enable streaming mode for OpenAI-compatible providers"
     )
 
     _vlm_instance: Optional[Any] = None
@@ -68,6 +81,10 @@ class VLMConfig(BaseModel):
                 self.providers[self.provider]["api_key"] = self.api_key
             if self.api_base and "api_base" not in self.providers[self.provider]:
                 self.providers[self.provider]["api_base"] = self.api_base
+            if self.extra_headers and "extra_headers" not in self.providers[self.provider]:
+                self.providers[self.provider]["extra_headers"] = self.extra_headers
+            if self.stream and "stream" not in self.providers[self.provider]:
+                self.providers[self.provider]["stream"] = self.stream
 
     def _has_any_config(self) -> bool:
         """Check if any config is provided."""
@@ -128,12 +145,19 @@ class VLMConfig(BaseModel):
         """Build VLM instance config dict."""
         config, name = self.get_provider_config()
 
+        # Get stream from provider config if available, fallback to self.stream
+        stream = (
+            config.get("stream") if config and config.get("stream") is not None else self.stream
+        )
+
         result = {
             "model": self.model,
             "temperature": self.temperature,
             "max_retries": self.max_retries,
             "provider": name,
             "thinking": self.thinking,
+            "max_tokens": self.max_tokens,
+            "stream": stream,
         }
 
         if config:

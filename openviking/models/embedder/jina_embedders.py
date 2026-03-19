@@ -60,6 +60,7 @@ class JinaDenseEmbedder(DenseEmbedderBase):
         document_param: Optional[str] = "retrieval.passage",
         late_chunking: Optional[bool] = None,
         config: Optional[Dict[str, Any]] = None,
+        task: Optional[str] = None,
     ):
         """Initialize Jina AI Dense Embedder
 

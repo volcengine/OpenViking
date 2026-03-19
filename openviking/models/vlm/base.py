@@ -25,6 +25,9 @@ class VLMBase(ABC):
         self.api_base = config.get("api_base")
         self.temperature = config.get("temperature", 0.0)
         self.max_retries = config.get("max_retries", 2)
+        self.max_tokens = config.get("max_tokens")
+        self.extra_headers = config.get("extra_headers")
+        self.stream = config.get("stream", False)
 
         # Token usage tracking
         self._token_tracker = TokenUsageTracker()

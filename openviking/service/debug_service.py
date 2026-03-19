@@ -9,14 +9,14 @@ from typing import Dict, List, Optional
 
 from openviking.storage import VikingDBManager
 from openviking.storage.observers import (
+    LockObserver,
     QueueObserver,
     RetrievalObserver,
-    TransactionObserver,
     VikingDBObserver,
     VLMObserver,
 )
 from openviking.storage.queuefs import get_queue_manager
-from openviking.storage.transaction import get_transaction_manager
+from openviking.storage.transaction import get_lock_manager
 from openviking_cli.utils.config import OpenVikingConfig
 
 
@@ -136,19 +136,20 @@ class ObserverService:
         )
 
     @property
-    def transaction(self) -> ComponentStatus:
-        """Get transaction status."""
-        transaction_manager = get_transaction_manager()
-        if transaction_manager is None:
+    def lock(self) -> ComponentStatus:
+        """Get lock system status."""
+        try:
+            lock_manager = get_lock_manager()
+        except Exception:
             return ComponentStatus(
-                name="transaction",
+                name="lock",
                 is_healthy=False,
                 has_errors=True,
-                status="Transaction manager not initialized.",
+                status="Not initialized",
             )
-        observer = TransactionObserver(transaction_manager)
+        observer = LockObserver(lock_manager)
         return ComponentStatus(
-            name="transaction",
+            name="lock",
             is_healthy=observer.is_healthy(),
             has_errors=observer.has_errors(),
             status=observer.get_status_table(),
@@ -172,7 +173,7 @@ class ObserverService:
             "queue": self.queue,
             "vikingdb": self.vikingdb,
             "vlm": self.vlm,
-            "transaction": self.transaction,
+            "lock": self.lock,
             "retrieval": self.retrieval,
         }
         errors = [f"{c.name} has errors" for c in components.values() if c.has_errors]

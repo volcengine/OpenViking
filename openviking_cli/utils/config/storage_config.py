@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field, model_validator
 from openviking_cli.utils.logger import get_logger
 
 from .agfs_config import AGFSConfig
+from .transaction_config import TransactionConfig
 from .vectordb_config import VectorDBBackendConfig
 
 logger = get_logger(__name__)
@@ -24,6 +25,11 @@ class StorageConfig(BaseModel):
     workspace: str = Field(default="./data", description="Local data storage path (primary)")
 
     agfs: AGFSConfig = Field(default_factory=lambda: AGFSConfig(), description="AGFS configuration")
+
+    transaction: TransactionConfig = Field(
+        default_factory=lambda: TransactionConfig(),
+        description="Transaction mechanism configuration",
+    )
 
     vectordb: VectorDBBackendConfig = Field(
         default_factory=lambda: VectorDBBackendConfig(),
@@ -50,8 +56,8 @@ class StorageConfig(BaseModel):
                 f"Using '{self.workspace}' from workspace instead of '{self.vectordb.path}'"
             )
 
-        # Update paths to use workspace
-        workspace_path = Path(self.workspace).resolve()
+        # Update paths to use workspace (expand ~ first)
+        workspace_path = Path(self.workspace).expanduser().resolve()
         workspace_path.mkdir(parents=True, exist_ok=True)
         self.workspace = str(workspace_path)
         self.agfs.path = self.workspace
@@ -65,7 +71,7 @@ class StorageConfig(BaseModel):
         Returns:
             Path to {workspace}/temp/upload directory
         """
-        workspace_path = Path(self.workspace).resolve()
+        workspace_path = Path(self.workspace).expanduser().resolve()
         upload_temp_dir = workspace_path / "temp" / "upload"
         upload_temp_dir.mkdir(parents=True, exist_ok=True)
         return upload_temp_dir

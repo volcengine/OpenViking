@@ -882,13 +882,21 @@ class VikingVectorIndexBackend:
     async def increment_active_count(self, ctx: RequestContext, uris: List[str]) -> int:
         updated = 0
         for uri in uris:
-            records = await self.get_context_by_uri(uri=uri, limit=1, ctx=ctx)
+            records = await self.get_context_by_uri(uri=uri, limit=100, ctx=ctx)
             if not records:
                 continue
-            record = records[0]
-            current = int(record.get("active_count", 0) or 0)
-            record["active_count"] = current + 1
-            if await self.upsert(record, ctx=ctx):
+            record_ids = [r["id"] for r in records if r.get("id")]
+            if not record_ids:
+                continue
+            # Re-fetch by ID to get full records including vectors
+            full_records = await self.get(record_ids, ctx=ctx)
+            uri_updated = False
+            for record in full_records:
+                current = int(record.get("active_count", 0) or 0)
+                record["active_count"] = current + 1
+                if await self.upsert(record, ctx=ctx):
+                    uri_updated = True
+            if uri_updated:
                 updated += 1
         return updated
 

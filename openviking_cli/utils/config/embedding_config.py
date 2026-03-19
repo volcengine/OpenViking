@@ -51,10 +51,6 @@ class EmbeddingModelConfig(BaseModel):
     sk: Optional[str] = Field(default=None, description="Access Key Secretfor VikingDB API")
     region: Optional[str] = Field(default=None, description="Region for VikingDB API")
     host: Optional[str] = Field(default=None, description="Host for VikingDB API")
-    max_tokens: Optional[int] = Field(
-        default=None,
-        description="Maximum token count per embedding request. If None, uses model default (e.g., 8000 for OpenAI).",
-    )
     extra_headers: Optional[dict[str, str]] = Field(
         default=None,
         description=(
@@ -245,7 +241,6 @@ class EmbeddingConfig(BaseModel):
                     "dimension": cfg.dimension,
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
-                    "max_tokens": cfg.max_tokens,
                     **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
                 },
             ),
@@ -334,7 +329,6 @@ class EmbeddingConfig(BaseModel):
                     or "no-key",  # Ollama ignores the key, but client requires non-empty
                     "api_base": cfg.api_base or "http://localhost:11434/v1",
                     "dimension": cfg.dimension,
-                    "max_tokens": cfg.max_tokens,
                 },
             ),
             ("voyage", "dense"): (

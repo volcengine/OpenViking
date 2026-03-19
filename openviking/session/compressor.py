@@ -148,19 +148,73 @@ class SessionCompressor:
     ) -> bool:
         """Add memory to vectorization queue and record semantic change.
 
+        For long memories, splits content into chunks and enqueues each chunk
+        as a separate vector record for better retrieval precision.
+
         Args:
             memory: The memory context to index
             ctx: Request context
             change_type: One of "added" or "modified"
         """
         from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
+        from openviking_cli.utils.config import get_openviking_config
 
+        semantic = get_openviking_config().semantic
+        vectorize_text = memory.get_vectorization_text()
+
+        if vectorize_text and len(vectorize_text) > semantic.memory_chunk_chars:
+            # Chunk long memory into multiple vector records
+            chunks = self._chunk_text(
+                vectorize_text,
+                semantic.memory_chunk_chars,
+                semantic.memory_chunk_overlap,
+            )
+            logger.info(
+                f"Chunking memory {memory.uri} into {len(chunks)} chunks "
+                f"({len(vectorize_text)} chars)"
+            )
+            import copy
+
+            for i, chunk in enumerate(chunks):
+                chunk_memory = copy.deepcopy(memory)
+                chunk_memory.uri = f"{memory.uri}#chunk_{i:04d}"
+                chunk_memory.parent_uri = memory.uri
+                chunk_memory.set_vectorize(Vectorize(text=chunk))
+                chunk_msg = EmbeddingMsgConverter.from_context(chunk_memory)
+                if chunk_msg:
+                    await self.vikingdb.enqueue_embedding_msg(chunk_msg)
+
+        # Always enqueue the base record (uses abstract as vector text)
         embedding_msg = EmbeddingMsgConverter.from_context(memory)
         await self.vikingdb.enqueue_embedding_msg(embedding_msg)
         logger.info(f"Enqueued memory for vectorization: {memory.uri}")
 
         self._record_semantic_change(memory.uri, change_type, parent_uri=memory.parent_uri)
         return True
+
+    @staticmethod
+    def _chunk_text(text: str, chunk_size: int, overlap: int) -> list:
+        """Split text into overlapping chunks, preferring paragraph boundaries."""
+        if len(text) <= chunk_size:
+            return [text]
+
+        chunks = []
+        start = 0
+        while start < len(text):
+            end = start + chunk_size
+
+            # Try to break at paragraph boundary
+            if end < len(text):
+                boundary = text.rfind("\n\n", start, end)
+                if boundary > start + chunk_size // 2:
+                    end = boundary + 2  # Include the double newline
+
+            chunks.append(text[start:end].strip())
+            start = end - overlap
+            if start >= len(text):
+                break
+
+        return [c for c in chunks if c]
 
     async def _merge_into_existing(
         self,
@@ -379,9 +433,7 @@ class SessionCompressor:
                                         merged_text = (
                                             f"{action.memory.abstract} {candidate.content}"
                                         )
-                                        merged_embed = self.deduplicator.embedder.embed(
-                                            merged_text
-                                        )
+                                        merged_embed = self.deduplicator.embedder.embed(merged_text)
                                         batch_memories.append(
                                             (merged_embed.dense_vector, action.memory)
                                         )

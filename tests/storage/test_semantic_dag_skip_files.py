@@ -1,11 +1,30 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 
+from unittest.mock import AsyncMock, MagicMock
+
 import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.queuefs.semantic_dag import SemanticDagExecutor
 from openviking_cli.session.user_id import UserIdentifier
+
+
+def _mock_transaction_layer(monkeypatch):
+    """Patch lock layer to no-op for DAG tests."""
+    mock_handle = MagicMock()
+    monkeypatch.setattr(
+        "openviking.storage.transaction.lock_context.LockContext.__aenter__",
+        AsyncMock(return_value=mock_handle),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.transaction.lock_context.LockContext.__aexit__",
+        AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.transaction.get_lock_manager",
+        lambda: MagicMock(),
+    )
 
 
 class _FakeVikingFS:
@@ -18,6 +37,9 @@ class _FakeVikingFS:
 
     async def write_file(self, path, content, ctx=None):
         self.writes.append((path, content))
+
+    def _uri_to_path(self, uri, ctx=None):
+        return uri.replace("viking://", "/local/acc1/")
 
 
 class _FakeProcessor:
@@ -34,6 +56,9 @@ class _FakeProcessor:
 
     def _extract_abstract_from_overview(self, overview):
         return "abstract"
+
+    def _enforce_size_limits(self, overview, abstract):
+        return overview, abstract
 
     async def _vectorize_directory(
         self, uri, context_type, abstract, overview, ctx=None, semantic_msg_id=None
@@ -57,6 +82,7 @@ class _DummyTracker:
 @pytest.mark.asyncio
 async def test_messages_jsonl_excluded_from_summary(monkeypatch):
     """messages.jsonl should be skipped by _list_dir and never summarized."""
+    _mock_transaction_layer(monkeypatch)
     root_uri = "viking://session/test-session"
     tree = {
         root_uri: [
@@ -91,6 +117,7 @@ async def test_messages_jsonl_excluded_from_summary(monkeypatch):
 @pytest.mark.asyncio
 async def test_messages_jsonl_excluded_in_subdirectory(monkeypatch):
     """messages.jsonl in a subdirectory should also be skipped."""
+    _mock_transaction_layer(monkeypatch)
     root_uri = "viking://session/test-session"
     tree = {
         root_uri: [

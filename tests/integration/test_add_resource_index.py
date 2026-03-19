@@ -1,10 +1,8 @@
-import pytest
-import asyncio
-import os
 import json
-import shutil
-from pathlib import Path
-from unittest.mock import MagicMock, AsyncMock, patch
+import os
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from openviking.async_client import AsyncOpenViking
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
@@ -88,6 +86,20 @@ async def test_add_resource_indexing_logic(test_config, tmp_path):
 
     mock_agfs = MockLocalAGFS(root_path=tmp_path / "mock_agfs_root")
 
+    # Create mock parse result for Phase 1 (media processor)
+    mock_parse_result = MagicMock()
+    mock_parse_result.source_path = str(resource_file)
+    mock_parse_result.meta = {}
+    mock_parse_result.temp_dir_path = "/tmp/fake_temp_dir"
+    mock_parse_result.warnings = []
+    mock_parse_result.source_format = "markdown"
+
+    # Create mock context tree for Phase 2/3 (tree builder)
+    mock_context_tree = MagicMock()
+    mock_context_tree.root = MagicMock()
+    mock_context_tree.root.uri = "viking://resources/test_doc"
+    mock_context_tree.root.temp_uri = None
+
     # Patch the Summarizer and IndexBuilder to verify calls
     with (
         patch(
@@ -96,6 +108,16 @@ async def test_add_resource_indexing_logic(test_config, tmp_path):
         patch("openviking.utils.agfs_utils.create_agfs_client", return_value=mock_agfs),
         patch("openviking.agfs_manager.AGFSManager.start"),
         patch("openviking.agfs_manager.AGFSManager.stop"),
+        patch(
+            "openviking.utils.media_processor.UnifiedResourceProcessor.process",
+            new_callable=AsyncMock,
+            return_value=mock_parse_result,
+        ),
+        patch(
+            "openviking.parse.tree_builder.TreeBuilder.finalize_from_temp",
+            new_callable=AsyncMock,
+            return_value=mock_context_tree,
+        ),
     ):
         mock_summarize.return_value = {"status": "success"}
 

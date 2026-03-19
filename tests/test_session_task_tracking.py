@@ -181,7 +181,7 @@ async def test_task_failed_when_memory_extraction_raises(api_client):
     async def failing_extract(_context, _user, _session_id):
         raise RuntimeError("memory_extraction_failed: synthetic extractor error")
 
-    service.sessions._session_compressor.extractor.extract_strict = failing_extract
+    service.sessions._session_compressor.extractor.extract = failing_extract
 
     resp = await client.post(f"/api/v1/sessions/{session_id}/commit", params={"wait": False})
     task_id = resp.json()["result"]["task_id"]
