@@ -39,6 +39,13 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
     QUESTION_ANSWERING, FACT_VERIFICATION) return the same embedding as the
     default (no taskType). The parameter is therefore not sent.
 
+    By contrast, gemini-embedding-001 does produce distinct vectors per task
+    type. This is because taskType in Gemini embedding models is implemented as
+    an instruction prefix injected into the embedding input — effectively
+    "task: {task_type}, content: {text}" — rather than a separate model head or
+    fine-tuned adapter. gemini-embedding-2-preview appears to have dropped this
+    instruction-following behaviour.
+
     Example:
         >>> embedder = GoogleDenseEmbedder(
         ...     api_key="your-gemini-api-key",
