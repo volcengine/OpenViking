@@ -30,6 +30,8 @@ class VikingClient:
             self.client = ov.AsyncHTTPClient(
                 url=openviking_config.server_url,
                 api_key=openviking_config.root_api_key,
+                account=openviking_config.account_id,
+                user=openviking_config.admin_user_id,
                 agent_id=agent_id,
             )
             self.agent_id = agent_id
