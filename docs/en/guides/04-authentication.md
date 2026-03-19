@@ -91,6 +91,43 @@ client = ov.SyncHTTPClient(
 }
 ```
 
+### Accessing Tenant Data with Root Key
+
+When using the root key to access tenant-scoped data APIs (e.g. `ls`, `find`, `sessions`), you must specify the target account and user. The server will reject the request otherwise. Admin API and system status endpoints are not affected.
+
+**curl**
+
+```bash
+curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
+  -H "X-API-Key: your-secret-root-key" \
+  -H "X-OpenViking-Account: acme" \
+  -H "X-OpenViking-User: alice"
+```
+
+**Python SDK**
+
+```python
+import openviking as ov
+
+client = ov.SyncHTTPClient(
+    url="http://localhost:1933",
+    api_key="your-secret-root-key",
+    account="acme",
+    user="alice",
+)
+```
+
+**ovcli.conf**
+
+```json
+{
+  "url": "http://localhost:1933",
+  "api_key": "your-secret-root-key",
+  "account": "acme",
+  "user": "alice"
+}
+```
+
 ## Roles and Permissions
 
 | Role | Scope | Capabilities |

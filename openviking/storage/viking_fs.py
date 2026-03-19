@@ -707,8 +707,6 @@ class VikingFS:
             TypedQuery,
         )
 
-        if not self.rerank_config:
-            raise RuntimeError("rerank_config is required for find")
         if target_uri and target_uri not in {"/", "viking://"}:
             self._ensure_access(target_uri, ctx)
 

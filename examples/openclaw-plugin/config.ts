@@ -113,7 +113,7 @@ export const memoryOpenVikingConfigSchema = {
         "ingestReplyAssistMinSpeakerTurns",
         "ingestReplyAssistMinChars",
       ],
-      "memory-openviking config",
+      "openviking config",
     );
 
     const mode = (cfg.mode === "local" || cfg.mode === "remote" ? cfg.mode : "local") as
@@ -139,7 +139,7 @@ export const memoryOpenVikingConfigSchema = {
       captureMode !== "semantic" &&
       captureMode !== "keyword"
     ) {
-      throw new Error(`memory-openviking captureMode must be "semantic" or "keyword"`);
+      throw new Error(`openviking captureMode must be "semantic" or "keyword"`);
     }
 
     return {

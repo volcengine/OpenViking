@@ -1,47 +1,80 @@
 import { spawn } from "node:child_process";
 import { tmpdir } from "node:os";
 
-import type { OpenClawPluginApi } from "openclaw/plugin-sdk";
 import { Type } from "@sinclair/typebox";
 import { memoryOpenVikingConfigSchema } from "./config.js";
 
-import { OpenVikingClient, localClientCache, localClientPendingPromises, isMemoryUri } from "./client.js";
-import type { PendingClientEntry } from "./client.js";
+import { OpenVikingClient, localClientCache, isMemoryUri } from "./client.js";
 import type { FindResultItem } from "./client.js";
 import {
-  getCaptureDecision,
   isTranscriptLikeIngest,
-  extractNewTurnTexts,
   extractLatestUserText,
 } from "./text-utils.js";
 import {
   clampScore,
   postProcessMemories,
   formatMemoryLines,
-  trimForLog,
   toJsonLog,
   summarizeInjectionMemories,
-  summarizeExtractedMemories,
   pickMemoriesForInjection,
 } from "./memory-ranking.js";
 import {
   IS_WIN,
   waitForHealth,
-  withTimeout,
   quickRecallPrecheck,
+  withTimeout,
   resolvePythonCommand,
   prepareLocalPort,
 } from "./process-manager.js";
+import { createMemoryOpenVikingContextEngine } from "./context-engine.js";
+
+type PluginLogger = {
+  debug?: (message: string) => void;
+  info: (message: string) => void;
+  warn: (message: string) => void;
+  error: (message: string) => void;
+};
+
+type HookAgentContext = {
+  agentId?: string;
+  sessionId?: string;
+  sessionKey?: string;
+};
+
+type OpenClawPluginApi = {
+  pluginConfig?: unknown;
+  logger: PluginLogger;
+  registerTool: (
+    tool: {
+      name: string;
+      label: string;
+      description: string;
+      parameters: unknown;
+      execute: (_toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
+    },
+    opts?: { name?: string; names?: string[] },
+  ) => void;
+  registerService: (service: {
+    id: string;
+    start: (ctx?: unknown) => void | Promise<void>;
+    stop?: (ctx?: unknown) => void | Promise<void>;
+  }) => void;
+  registerContextEngine?: (id: string, factory: () => unknown) => void;
+  on: (
+    hookName: string,
+    handler: (event: unknown, ctx?: HookAgentContext) => unknown,
+    opts?: { priority?: number },
+  ) => void;
+};
 
 const MAX_OPENVIKING_STDERR_LINES = 200;
 const MAX_OPENVIKING_STDERR_CHARS = 256_000;
-const AUTO_RECALL_TIMEOUT_MS = 5_000;
 
-const memoryPlugin = {
-  id: "memory-openviking",
-  name: "Memory (OpenViking)",
-  description: "OpenViking-backed long-term memory with auto-recall/capture",
-  kind: "memory" as const,
+const contextEnginePlugin = {
+  id: "openviking",
+  name: "Context Engine (OpenViking)",
+  description: "OpenViking-backed context-engine memory with auto-recall/capture",
+  kind: "context-engine" as const,
   configSchema: memoryOpenVikingConfigSchema,
 
   register(api: OpenClawPluginApi) {
@@ -53,17 +86,16 @@ const memoryPlugin = {
     let resolveLocalClient: ((c: OpenVikingClient) => void) | null = null;
     let rejectLocalClient: ((err: unknown) => void) | null = null;
     let localUnavailableReason: string | null = null;
-
     const markLocalUnavailable = (reason: string, err?: unknown) => {
       if (!localUnavailableReason) {
         localUnavailableReason = reason;
         api.logger.warn(
-          `memory-openviking: local mode marked unavailable (${reason})${err ? `: ${String(err)}` : ""}`,
+          `openviking: local mode marked unavailable (${reason})${err ? `: ${String(err)}` : ""}`,
         );
       }
       if (rejectLocalClient) {
         rejectLocalClient(
-          err instanceof Error ? err : new Error(`memory-openviking unavailable: ${reason}`),
+          err instanceof Error ? err : new Error(`openviking unavailable: ${reason}`),
         );
         rejectLocalClient = null;
       }
@@ -76,18 +108,10 @@ const memoryPlugin = {
         localProcess = cached.process;
         clientPromise = Promise.resolve(cached.client);
       } else {
-        const existingPending = localClientPendingPromises.get(localCacheKey);
-        if (existingPending) {
-          clientPromise = existingPending.promise;
-        } else {
-          const entry = {} as PendingClientEntry;
-          entry.promise = new Promise<OpenVikingClient>((resolve, reject) => {
-            entry.resolve = resolve;
-            entry.reject = reject;
-          });
-          clientPromise = entry.promise;
-          localClientPendingPromises.set(localCacheKey, entry);
-        }
+        clientPromise = new Promise<OpenVikingClient>((resolve, reject) => {
+          resolveLocalClient = resolve;
+          rejectLocalClient = reject;
+        });
       }
     } else {
       clientPromise = Promise.resolve(new OpenVikingClient(cfg.baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs));
@@ -215,7 +239,7 @@ const memoryPlugin = {
           const sessionIdIn = (params as { sessionId?: string }).sessionId;
 
           api.logger.info?.(
-            `memory-openviking: memory_store invoked (textLength=${text?.length ?? 0}, sessionId=${sessionIdIn ?? "temp"})`,
+            `openviking: memory_store invoked (textLength=${text?.length ?? 0}, sessionId=${sessionIdIn ?? "temp"})`,
           );
 
           let sessionId = sessionIdIn;
@@ -230,11 +254,11 @@ const memoryPlugin = {
             const extracted = await c.extractSessionMemories(sessionId);
             if (extracted.length === 0) {
               api.logger.warn(
-                `memory-openviking: memory_store completed but extract returned 0 memories (sessionId=${sessionId}). ` +
+                `openviking: memory_store completed but extract returned 0 memories (sessionId=${sessionId}). ` +
                   "Check OpenViking server logs for embedding/extract errors (e.g. 401 API key, or extraction pipeline).",
               );
             } else {
-              api.logger.info?.(`memory-openviking: memory_store extracted ${extracted.length} memories`);
+              api.logger.info?.(`openviking: memory_store extracted ${extracted.length} memories`);
             }
             return {
               content: [
@@ -246,7 +270,7 @@ const memoryPlugin = {
               details: { action: "stored", sessionId, extractedCount: extracted.length, extracted },
             };
           } catch (err) {
-            api.logger.warn(`memory-openviking: memory_store failed: ${String(err)}`);
+            api.logger.warn(`openviking: memory_store failed: ${String(err)}`);
             throw err;
           } finally {
             if (createdTempSession && sessionId) {
@@ -361,229 +385,198 @@ const memoryPlugin = {
       },
       { name: "memory_forget" },
     );
+    const sessionAgentIds = new Map<string, string>();
+    const rememberSessionAgentId = (ctx: {
+      agentId?: string;
+      sessionId?: string;
+      sessionKey?: string;
+    }) => {
+      if (!ctx?.agentId) {
+        return;
+      }
+      if (ctx.sessionId) {
+        sessionAgentIds.set(ctx.sessionId, ctx.agentId);
+      }
+      if (ctx.sessionKey) {
+        sessionAgentIds.set(ctx.sessionKey, ctx.agentId);
+      }
+    };
+    const resolveAgentId = (sessionId: string): string =>
+      sessionAgentIds.get(sessionId) ?? cfg.agentId;
 
-    if (cfg.autoRecall || cfg.ingestReplyAssist) {
-      api.on("before_agent_start", async (event: { messages?: unknown[]; prompt: string }, ctx?: { agentId?: string }) => {
-        // Dynamically switch agent identity for multi-agent memory isolation.
-        // In multi-agent gateway deployments, the hook context carries the current
-        // agent's ID so we route memory operations to the correct agent_space.
-        const hookAgentId = ctx?.agentId;
-        if (hookAgentId) {
-          const client = await getClient();
-          client.setAgentId(hookAgentId);
-          api.logger.info?.(`memory-openviking: switched to agentId=${hookAgentId} for recall`);
-        }
-        const queryText = extractLatestUserText(event.messages) || event.prompt.trim();
-        if (!queryText) {
-          return;
-        }
-        const prependContextParts: string[] = [];
+    api.on("session_start", async (_event: unknown, ctx?: HookAgentContext) => {
+      rememberSessionAgentId(ctx ?? {});
+    });
+    api.on("session_end", async (_event: unknown, ctx?: HookAgentContext) => {
+      rememberSessionAgentId(ctx ?? {});
+    });
+    api.on("before_prompt_build", async (event: unknown, ctx?: HookAgentContext) => {
+      rememberSessionAgentId(ctx ?? {});
 
-        if (cfg.autoRecall && queryText.length >= 5) {
-          const precheck = await quickRecallPrecheck(cfg.mode, cfg.baseUrl, cfg.port, localProcess);
-          if (!precheck.ok) {
-            api.logger.info?.(
-              `memory-openviking: skipping auto-recall because precheck failed (${precheck.reason})`,
-            );
-          } else {
-            try {
-              await withTimeout(
-                (async () => {
-                  const candidateLimit = Math.max(cfg.recallLimit * 4, 20);
-                  api.logger.info?.(`memory-openviking: autoRecall searching (query="${queryText.slice(0, 80)}", limit=${candidateLimit})`);
-                  // 同时检索 user 和 agent 两个位置的记忆
-                  const [userSettled, agentSettled] = await Promise.allSettled([
-                    getClient().then((client) =>
-                      client.find(queryText, {
-                        targetUri: "viking://user/memories",
-                        limit: candidateLimit,
-                        scoreThreshold: 0,
-                      }),
-                    ),
-                    getClient().then((client) =>
-                      client.find(queryText, {
-                        targetUri: "viking://agent/memories",
-                        limit: candidateLimit,
-                        scoreThreshold: 0,
-                      }),
-                    ),
-                  ]);
-                  const userResult = userSettled.status === "fulfilled" ? userSettled.value : { memories: [] };
-                  const agentResult = agentSettled.status === "fulfilled" ? agentSettled.value : { memories: [] };
-                  api.logger.info?.(`memory-openviking: autoRecall done (user=${userResult.memories?.length ?? 0}, agent=${agentResult.memories?.length ?? 0})`);
+      const hookSessionId = ctx?.sessionId ?? ctx?.sessionKey ?? "";
+      const resolvedAgentId = resolveAgentId(hookSessionId);
+      let client: OpenVikingClient;
+      try {
+        client = await withTimeout(
+          getClient(),
+          5000,
+          "openviking: client initialization timeout (OpenViking service not ready yet)"
+        );
+      } catch (err) {
+        api.logger.warn?.(`openviking: failed to get client: ${String(err)}`);
+        return;
+      }
+      if (resolvedAgentId && client.getAgentId() !== resolvedAgentId) {
+        client.setAgentId(resolvedAgentId);
+        api.logger.info(`openviking: switched to agentId=${resolvedAgentId} for before_prompt_build`);
+      }
 
-                  if (userSettled.status === "rejected") {
-                    api.logger.warn(`memory-openviking: user memories search failed: ${String(userSettled.reason)}`);
-                  }
-                  if (agentSettled.status === "rejected") {
-                    api.logger.warn(`memory-openviking: agent memories search failed: ${String(agentSettled.reason)}`);
-                  }
-                  // 合并两个位置的结果，去重
-                  const allMemories = [...(userResult.memories ?? []), ...(agentResult.memories ?? [])];
-                  const uniqueMemories = allMemories.filter((memory, index, self) =>
-                    index === self.findIndex((m) => m.uri === memory.uri)
-                  );
-                  const leafOnly = uniqueMemories.filter((m) => m.level === 2);
-                  const processed = postProcessMemories(leafOnly, {
-                    limit: candidateLimit,
-                    scoreThreshold: cfg.recallScoreThreshold,
-                  });
-                  const memories = pickMemoriesForInjection(processed, cfg.recallLimit, queryText);
-                  if (memories.length > 0) {
-                    // 对 level 2 节点读取正文，其余用 abstract
-                    const client = await getClient();
-                    const memoryLines = await Promise.all(
-                      memories.map(async (item: FindResultItem) => {
-                        if (item.level === 2) {
-                          try {
-                            const content = await client.read(item.uri);
-                            if (content && typeof content === "string" && content.trim()) {
-                              return `- [${item.category ?? "memory"}] ${content.trim()}`;
-                            }
-                          } catch {
-                            // fallback to abstract
-                          }
-                        }
-                        return `- [${item.category ?? "memory"}] ${item.abstract ?? item.uri}`;
-                      }),
-                    );
-                    const memoryContext = memoryLines.join("\n");
-                    api.logger.info?.(
-                      `memory-openviking: injecting ${memories.length} memories into context`,
-                    );
-                    api.logger.info?.(
-                      `memory-openviking: inject-detail ${toJsonLog({ count: memories.length, memories: summarizeInjectionMemories(memories) })}`,
-                    );
-                    prependContextParts.push(
-                      "<relevant-memories>\nThe following OpenViking memories may be relevant:\n" +
-                        `${memoryContext}\n` +
-                      "</relevant-memories>",
-                    );
-                  }
-                })(),
-                AUTO_RECALL_TIMEOUT_MS,
-                `memory-openviking: auto-recall timed out after ${AUTO_RECALL_TIMEOUT_MS}ms`,
-              );
-            } catch (err) {
-              api.logger.warn(`memory-openviking: auto-recall failed or timed out: ${String(err)}`);
-            }
-          }
-        }
+      const eventObj = (event ?? {}) as { messages?: unknown[]; prompt?: string };
+      const queryText =
+        extractLatestUserText(eventObj.messages) ||
+        (typeof eventObj.prompt === "string" ? eventObj.prompt.trim() : "");
+      if (!queryText) {
+        return;
+      }
 
-        if (cfg.ingestReplyAssist) {
-          const decision = isTranscriptLikeIngest(queryText, {
-            minSpeakerTurns: cfg.ingestReplyAssistMinSpeakerTurns,
-            minChars: cfg.ingestReplyAssistMinChars,
-          });
-          if (decision.shouldAssist) {
-            api.logger.info?.(
-              `memory-openviking: ingest-reply-assist applied (reason=${decision.reason}, speakerTurns=${decision.speakerTurns}, chars=${decision.chars})`,
-            );
-            prependContextParts.push(
-              "<ingest-reply-assist>\n" +
-                "The latest user input looks like a multi-speaker transcript used for memory ingestion.\n" +
-                "Reply with 1-2 concise sentences to acknowledge or summarize key points.\n" +
-                "Do not output NO_REPLY or an empty reply.\n" +
-                "Do not fabricate facts beyond the provided transcript and recalled memories.\n" +
-                "</ingest-reply-assist>",
-            );
-          }
-        }
+      const prependContextParts: string[] = [];
 
-        if (prependContextParts.length > 0) {
-          return {
-            prependContext: prependContextParts.join("\n\n"),
-          };
-        }
-      });
-    }
-
-    if (cfg.autoCapture) {
-      let lastProcessedMsgCount = 0;
-
-      api.on("agent_end", async (event: { success?: boolean; messages?: unknown[] }, ctx?: { agentId?: string }) => {
-        // Dynamically switch agent identity for multi-agent memory isolation
-        const hookAgentId = ctx?.agentId;
-        if (hookAgentId) {
-          const client = await getClient();
-          client.setAgentId(hookAgentId);
-          api.logger.info?.(`memory-openviking: switched to agentId=${hookAgentId} for capture`);
-        }
-        if (!event.success || !event.messages || event.messages.length === 0) {
+      if (cfg.autoRecall && queryText.length >= 5) {
+        const precheck = await quickRecallPrecheck(cfg.mode, cfg.baseUrl, cfg.port, localProcess);
+        if (!precheck.ok) {
           api.logger.info(
-            `memory-openviking: auto-capture skipped (success=${String(event.success)}, messages=${event.messages?.length ?? 0})`,
+            `openviking: skipping auto-recall because precheck failed (${precheck.reason})`,
           );
-          return;
-        }
-        try {
-          const messages = event.messages;
-          const { texts: newTexts, newCount } = extractNewTurnTexts(messages, lastProcessedMsgCount);
-          lastProcessedMsgCount = messages.length;
-
-          if (newTexts.length === 0) {
-            api.logger.info("memory-openviking: auto-capture skipped (no new user/assistant messages)");
-            return;
-          }
-
-          // 合并当前轮的 user+assistant 为一个文本块
-          const turnText = newTexts.join("\n");
-
-          // 对合并文本做 capture decision（主要检查长度和命令过滤）
-          const decision = getCaptureDecision(turnText, cfg.captureMode, cfg.captureMaxLength);
-          const preview = turnText.length > 80 ? `${turnText.slice(0, 80)}...` : turnText;
-          api.logger.info(
-            `memory-openviking: capture-check shouldCapture=${String(decision.shouldCapture)} reason=${decision.reason} newMsgCount=${newCount} text="${preview}"`,
-          );
-          if (!decision.shouldCapture) {
-            api.logger.info("memory-openviking: auto-capture skipped (capture decision rejected)");
-            return;
-          }
-
-          const c = await getClient();
-          const sessionId = await c.createSession();
+        } else {
           try {
-            await c.addSessionMessage(sessionId, "user", decision.normalizedText);
-            // Force server to read session so storage (e.g. AGFS) sees the written messages before extract
-            await c.getSession(sessionId).catch(() => ({}));
-            const extracted = await c.extractSessionMemories(sessionId);
-            api.logger.info(
-              `memory-openviking: auto-captured ${newCount} new messages, extracted ${extracted.length} memories`,
+            const candidateLimit = Math.max(cfg.recallLimit * 4, 20);
+            const [userSettled, agentSettled] = await Promise.allSettled([
+              client.find(queryText, {
+                targetUri: "viking://user/memories",
+                limit: candidateLimit,
+                scoreThreshold: 0,
+              }),
+              client.find(queryText, {
+                targetUri: "viking://agent/memories",
+                limit: candidateLimit,
+                scoreThreshold: 0,
+              }),
+            ]);
+
+            const userResult = userSettled.status === "fulfilled" ? userSettled.value : { memories: [] };
+            const agentResult = agentSettled.status === "fulfilled" ? agentSettled.value : { memories: [] };
+            if (userSettled.status === "rejected") {
+              api.logger.warn(`openviking: user memories search failed: ${String(userSettled.reason)}`);
+            }
+            if (agentSettled.status === "rejected") {
+              api.logger.warn(`openviking: agent memories search failed: ${String(agentSettled.reason)}`);
+            }
+
+            const allMemories = [...(userResult.memories ?? []), ...(agentResult.memories ?? [])];
+            const uniqueMemories = allMemories.filter((memory, index, self) =>
+              index === self.findIndex((m) => m.uri === memory.uri)
             );
-            api.logger.info(
-              `memory-openviking: capture-detail ${toJsonLog({
-                capturedCount: newCount,
-                captured: [trimForLog(turnText, 260)],
-                extractedCount: extracted.length,
-                extracted: summarizeExtractedMemories(extracted),
-              })}`,
-            );
-            if (extracted.length === 0) {
-              api.logger.warn(
-                "memory-openviking: auto-capture completed but extract returned 0 memories. Check OpenViking server logs for embedding/extract errors.",
+            const leafOnly = uniqueMemories.filter((m) => m.level === 2);
+            const processed = postProcessMemories(leafOnly, {
+              limit: candidateLimit,
+              scoreThreshold: cfg.recallScoreThreshold,
+            });
+            const memories = pickMemoriesForInjection(processed, cfg.recallLimit, queryText);
+
+            if (memories.length > 0) {
+              const memoryLines = await Promise.all(
+                memories.map(async (item: FindResultItem) => {
+                  if (item.level === 2) {
+                    try {
+                      const content = await client.read(item.uri);
+                      if (content && typeof content === "string" && content.trim()) {
+                        return `- [${item.category ?? "memory"}] ${content.trim()}`;
+                      }
+                    } catch {
+                      // fallback to abstract
+                    }
+                  }
+                  return `- [${item.category ?? "memory"}] ${item.abstract ?? item.uri}`;
+                }),
+              );
+              const memoryContext = memoryLines.join("\n");
+              api.logger.info(`openviking: injecting ${memories.length} memories into context`);
+              api.logger.info(
+                `openviking: inject-detail ${toJsonLog({ count: memories.length, memories: summarizeInjectionMemories(memories) })}`,
+              );
+              prependContextParts.push(
+                "<relevant-memories>\nThe following OpenViking memories may be relevant:\n" +
+                  `${memoryContext}\n` +
+                "</relevant-memories>",
               );
             }
-          } finally {
-            await c.deleteSession(sessionId).catch(() => {});
+          } catch (err) {
+            api.logger.warn(`openviking: auto-recall failed: ${String(err)}`);
           }
-        } catch (err) {
-          api.logger.warn(`memory-openviking: auto-capture failed: ${String(err)}`);
         }
-      });
+      }
+
+      if (cfg.ingestReplyAssist) {
+        const decision = isTranscriptLikeIngest(queryText, {
+          minSpeakerTurns: cfg.ingestReplyAssistMinSpeakerTurns,
+          minChars: cfg.ingestReplyAssistMinChars,
+        });
+        if (decision.shouldAssist) {
+          api.logger.info(
+            `openviking: ingest-reply-assist applied (reason=${decision.reason}, speakerTurns=${decision.speakerTurns}, chars=${decision.chars})`,
+          );
+          prependContextParts.push(
+            "<ingest-reply-assist>\n" +
+              "The latest user input looks like a multi-speaker transcript used for memory ingestion.\n" +
+              "Reply with 1-2 concise sentences to acknowledge or summarize key points.\n" +
+              "Do not output NO_REPLY or an empty reply.\n" +
+              "Do not fabricate facts beyond the provided transcript and recalled memories.\n" +
+              "</ingest-reply-assist>",
+          );
+        }
+      }
+
+      if (prependContextParts.length > 0) {
+        return {
+          prependContext: prependContextParts.join("\n\n"),
+        };
+      }
+    });
+    api.on("agent_end", async (_event: unknown, ctx?: HookAgentContext) => {
+      rememberSessionAgentId(ctx ?? {});
+    });
+    api.on("before_reset", async (_event: unknown, _ctx?: HookAgentContext) => {
+      // Reserved hook registration for future memory flush/reset handling.
+    });
+    api.on("after_compaction", async (_event: unknown, _ctx?: HookAgentContext) => {
+      // Reserved hook registration for future post-compaction memory integration.
+    });
+
+    if (typeof api.registerContextEngine === "function") {
+      api.registerContextEngine(contextEnginePlugin.id, () =>
+        createMemoryOpenVikingContextEngine({
+          id: contextEnginePlugin.id,
+          name: contextEnginePlugin.name,
+          version: "0.1.0",
+          cfg,
+          logger: api.logger,
+          getClient,
+          resolveAgentId,
+        }),
+      );
+      api.logger.info(
+        "openviking: registered context-engine (before_prompt_build=auto-recall, afterTurn=auto-capture)",
+      );
+    } else {
+      api.logger.warn(
+        "openviking: registerContextEngine is unavailable; context-engine behavior will not run",
+      );
     }
 
     api.registerService({
-      id: "memory-openviking",
+      id: "openviking",
       start: async () => {
-        // Claim the pending entry — only the first start() call to claim it spawns the process.
-        // Subsequent start() calls (from other registrations sharing the same promise) fall through.
-        const pendingEntry = localClientPendingPromises.get(localCacheKey);
-        const isSpawner = cfg.mode === "local" && !!pendingEntry;
-        if (isSpawner) {
-          localClientPendingPromises.delete(localCacheKey);
-          resolveLocalClient = pendingEntry!.resolve;
-          rejectLocalClient = pendingEntry!.reject;
-        }
-        if (isSpawner) {
+        if (cfg.mode === "local" && resolveLocalClient) {
           const timeoutMs = 60_000;
           const intervalMs = 500;
 
@@ -641,7 +634,7 @@ const memoryPlugin = {
                 : "";
             return `\n[openviking stderr]\n${truncated}${stderrChunks.join("\n")}`;
           };
-          child.on("error", (err: Error) => api.logger.warn(`memory-openviking: local server error: ${String(err)}`));
+          child.on("error", (err: Error) => api.logger.warn(`openviking: local server error: ${String(err)}`));
           child.stderr?.on("data", (chunk: Buffer) => {
             const s = String(chunk).trim();
             pushStderrChunk(s);
@@ -654,7 +647,7 @@ const memoryPlugin = {
             }
             if (code != null && code !== 0 || signal) {
               const out = formatStderrOutput();
-              api.logger.warn(`memory-openviking: subprocess exited (code=${code}, signal=${signal})${out}`);
+              api.logger.warn(`openviking: subprocess exited (code=${code}, signal=${signal})${out}`);
             }
           });
           try {
@@ -663,18 +656,16 @@ const memoryPlugin = {
             localClientCache.set(localCacheKey, { client, process: child });
             resolveLocalClient(client);
             rejectLocalClient = null;
-            localClientPendingPromises.delete(localCacheKey);
             api.logger.info(
-              `memory-openviking: local server started (${baseUrl}, config: ${cfg.configPath})`,
+              `openviking: local server started (${baseUrl}, config: ${cfg.configPath})`,
             );
           } catch (err) {
             localProcess = null;
             child.kill("SIGTERM");
-            localClientPendingPromises.delete(localCacheKey);
             markLocalUnavailable("startup failed", err);
             if (stderrChunks.length) {
               api.logger.warn(
-                `memory-openviking: startup failed (health check timeout or error).${formatStderrOutput()}`,
+                `openviking: startup failed (health check timeout or error).${formatStderrOutput()}`,
               );
             }
             throw err;
@@ -682,23 +673,22 @@ const memoryPlugin = {
         } else {
           await (await getClient()).healthCheck().catch(() => {});
           api.logger.info(
-            `memory-openviking: initialized (url: ${cfg.baseUrl}, targetUri: ${cfg.targetUri}, search: hybrid endpoint)`,
+            `openviking: initialized (url: ${cfg.baseUrl}, targetUri: ${cfg.targetUri}, search: hybrid endpoint)`,
           );
         }
       },
       stop: () => {
-        localClientPendingPromises.delete(localCacheKey);
         if (localProcess) {
           localProcess.kill("SIGTERM");
           localClientCache.delete(localCacheKey);
           localProcess = null;
-          api.logger.info("memory-openviking: local server stopped");
+          api.logger.info("openviking: local server stopped");
         } else {
-          api.logger.info("memory-openviking: stopped");
+          api.logger.info("openviking: stopped");
         }
       },
     });
   },
 };
 
-export default memoryPlugin;
+export default contextEnginePlugin;

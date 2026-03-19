@@ -106,7 +106,6 @@ def test_telemetry_summary_uses_simplified_internal_metric_keys():
         "total": 4,
         "done": 3,
         "pending": 1,
-        "running": 0,
     }
     assert result["memory"] == {"extracted": 6}
 
@@ -171,7 +170,7 @@ async def test_semantic_processor_binds_registered_operation_telemetry(monkeypat
     summary = result.summary
     assert summary["tokens"]["total"] == 18
     assert summary["tokens"]["llm"]["total"] == 18
-    assert summary["tokens"]["embedding"]["total"] == 0
+    assert "embedding" not in summary["tokens"]
 
 
 @pytest.mark.asyncio
@@ -281,13 +280,12 @@ async def test_resource_service_add_resource_reports_queue_summary(monkeypatch):
     summary = telemetry_result.summary
     assert summary["queue"] == {
         "semantic": {"processed": 2, "error_count": 1},
-        "embedding": {"processed": 5, "error_count": 0},
+        "embedding": {"processed": 5},
     }
     assert summary["semantic_nodes"] == {
         "total": 3,
         "done": 2,
         "pending": 1,
-        "running": 0,
     }
     assert "memory" not in summary
     assert "errors" not in summary

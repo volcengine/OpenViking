@@ -21,7 +21,7 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/volcengine/OpenViking.git",
-    "directory": "examples/openclaw-memory-plugin/setup-helper"
+    "directory": "examples/openclaw-plugin/setup-helper"
   },
   "files": [
     "install.js"

@@ -48,149 +48,62 @@ class OpenAIVLM(VLMBase):
             self._async_client = openai.AsyncOpenAI(**client_kwargs)
         return self._async_client
 
-    def _is_streaming_response(self, response):
-        """Check if response is a streaming response.
+    def _update_token_usage_from_response(self, response):
+        if hasattr(response, "usage") and response.usage:
+            prompt_tokens = response.usage.prompt_tokens
+            completion_tokens = response.usage.completion_tokens
+            self.update_token_usage(
+                model_name=self.model or "gpt-4o-mini",
+                provider=self.provider,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+            )
+        return
 
-        Streaming responses are iterators that yield chunks, while non-streaming
-        responses have a choices attribute directly.
+    def _extract_from_chunk(self, chunk):
+        """Extract content and usage from a single chunk.
+
+        Returns:
+            tuple: (content, prompt_tokens, completion_tokens)
         """
-        # Check for async streaming first to avoid false positives
-        if hasattr(response, "__aiter__"):
-            return False  # Async responses handled separately
-        # Streaming responses: iterators but not strings/lists/dicts with choices
-        if hasattr(response, "__iter__") and not hasattr(response, "choices"):
-            # Exclude basic iterable types that might slip through
-            if isinstance(response, (str, bytes, list, dict)):
-                return False
-            return True
-        # Some streaming responses might have _iterator attribute
-        if hasattr(response, "_iterator") and not hasattr(response, "choices"):
-            return True
-        return False
+        content = None
+        prompt_tokens = 0
+        completion_tokens = 0
 
-    def _is_async_streaming_response(self, response):
-        """Check if response is an async streaming response."""
-        if hasattr(response, "__aiter__") and not hasattr(response, "choices"):
-            # Exclude basic types that should never be treated as streaming
-            if isinstance(response, (str, bytes, list, dict)):
-                return False
-            return True
-        if hasattr(response, "_iterator") and not hasattr(response, "choices"):
-            return True
-        return False
+        # Extract content from delta
+        if chunk.choices and chunk.choices[0].delta:
+            content = getattr(chunk.choices[0].delta, "content", None)
 
-    def _extract_content_from_chunk(self, chunk):
-        """Extract content string from a single chunk."""
-        try:
-            choices = getattr(chunk, "choices", None)
-            if not choices:
-                return None
-            delta = getattr(choices[0], "delta", None)
-            if not delta:
-                return None
-            return getattr(delta, "content", None)
-        except (AttributeError, IndexError):
-            return None
+        # Extract usage from chunk if available
+        if hasattr(chunk, "usage") and chunk.usage:
+            prompt_tokens = chunk.usage.prompt_tokens or 0
+            completion_tokens = chunk.usage.completion_tokens or 0
 
-    def _extract_usage_from_chunk(self, chunk):
-        """Extract token usage from a chunk. Returns (prompt_tokens, completion_tokens)."""
-        usage = getattr(chunk, "usage", None)
-        if not usage:
-            return 0, 0
-        prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
-        completion_tokens = getattr(usage, "completion_tokens", 0) or 0
-        return prompt_tokens, completion_tokens
+        return content, prompt_tokens, completion_tokens
 
-    def _process_streaming_chunks(self, chunks):
-        """Process streaming chunks and extract content and token usage.
+    def _process_streaming_response(self, response):
+        """Process streaming response and extract content and token usage.
 
-        WARNING: This method consumes the iterator. Do not use the response
-        object after calling this method as it will be exhausted.
+        Args:
+            response: Streaming response iterator from OpenAI client
 
-        Returns (content, prompt_tokens, completion_tokens).
+        Returns:
+            str: Extracted content
         """
         content_parts = []
         prompt_tokens = 0
         completion_tokens = 0
 
-        for chunk in chunks:
-            content = self._extract_content_from_chunk(chunk)
+        for chunk in response:
+            content, pt, ct = self._extract_from_chunk(chunk)
             if content:
                 content_parts.append(content)
-
-            pt, ct = self._extract_usage_from_chunk(chunk)
             if pt > 0:
                 prompt_tokens = pt
             if ct > 0:
                 completion_tokens = ct
 
-        return "".join(content_parts), prompt_tokens, completion_tokens
-
-    def _extract_content_and_usage(self, response):
-        """Extract content from response, handling both streaming and non-streaming.
-
-        Returns (content, prompt_tokens, completion_tokens, is_streaming).
-        """
-        logger.debug(f"[OpenAIVLM] Response type: {type(response)}")
-
-        if self._is_streaming_response(response):
-            content, prompt_tokens, completion_tokens = self._process_streaming_chunks(response)
-            return content, prompt_tokens, completion_tokens, True
-        else:
-            # Non-streaming response
-            content = response.choices[0].message.content or ""
-            usage = getattr(response, "usage", None)
-            prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
-            completion_tokens = getattr(usage, "completion_tokens", 0) or 0
-            return content, prompt_tokens, completion_tokens, False
-
-    async def _extract_content_and_usage_async(self, response):
-        """Extract content from async response, handling both streaming and non-streaming.
-
-        Returns (content, prompt_tokens, completion_tokens, is_streaming).
-        """
-        logger.debug(f"[OpenAIVLM] Async response type: {type(response)}")
-
-        if self._is_async_streaming_response(response):
-            # Note: This logic mirrors _process_streaming_chunks but uses
-            # async for to handle async iterators. Python's async for and
-            # sync for cannot be unified in a single method.
-            content_parts = []
-            prompt_tokens = 0
-            completion_tokens = 0
-
-            async for chunk in response:
-                content = self._extract_content_from_chunk(chunk)
-                if content:
-                    content_parts.append(content)
-
-                pt, ct = self._extract_usage_from_chunk(chunk)
-                if pt > 0:
-                    prompt_tokens = pt
-                if ct > 0:
-                    completion_tokens = ct
-
-            return "".join(content_parts), prompt_tokens, completion_tokens, True
-        else:
-            # Non-streaming response
-            content = response.choices[0].message.content or ""
-            usage = getattr(response, "usage", None)
-            prompt_tokens = getattr(usage, "prompt_tokens", 0) or 0
-            completion_tokens = getattr(usage, "completion_tokens", 0) or 0
-            return content, prompt_tokens, completion_tokens, False
-
-    def _finalize_response(
-        self, content, prompt_tokens, completion_tokens, is_streaming, operation_name="completion"
-    ):
-        """Finalize response: log warnings and update token usage.
-
-        Common post-processing for both sync and async responses.
-        """
-        if not content:
-            logger.warning(
-                f"[OpenAIVLM] Empty {operation_name} response received (streaming={is_streaming})"
-            )
-
+        # Update token usage if we got it from streaming chunks
         if prompt_tokens > 0 or completion_tokens > 0:
             self.update_token_usage(
                 model_name=self.model or "gpt-4o-mini",
@@ -199,28 +112,40 @@ class OpenAIVLM(VLMBase):
                 completion_tokens=completion_tokens,
             )
 
-        return content
+        return "".join(content_parts)
 
-    def _handle_response(self, response, operation_name="completion"):
-        """Handle response extraction and token usage update."""
-        content, prompt_tokens, completion_tokens, is_streaming = self._extract_content_and_usage(
-            response
-        )
-        return self._finalize_response(
-            content, prompt_tokens, completion_tokens, is_streaming, operation_name
-        )
+    async def _process_streaming_response_async(self, response):
+        """Process async streaming response and extract content and token usage.
 
-    async def _handle_response_async(self, response, operation_name="completion"):
-        """Handle async response extraction and token usage update."""
-        (
-            content,
-            prompt_tokens,
-            completion_tokens,
-            is_streaming,
-        ) = await self._extract_content_and_usage_async(response)
-        return self._finalize_response(
-            content, prompt_tokens, completion_tokens, is_streaming, operation_name
-        )
+        Args:
+            response: Async streaming response iterator from OpenAI client
+
+        Returns:
+            str: Extracted content
+        """
+        content_parts = []
+        prompt_tokens = 0
+        completion_tokens = 0
+
+        async for chunk in response:
+            content, pt, ct = self._extract_from_chunk(chunk)
+            if content:
+                content_parts.append(content)
+            if pt > 0:
+                prompt_tokens = pt
+            if ct > 0:
+                completion_tokens = ct
+
+        # Update token usage if we got it from streaming chunks
+        if prompt_tokens > 0 or completion_tokens > 0:
+            self.update_token_usage(
+                model_name=self.model or "gpt-4o-mini",
+                provider=self.provider,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+            )
+
+        return "".join(content_parts)
 
     def get_completion(self, prompt: str, thinking: bool = False) -> str:
         """Get text completion"""
@@ -229,12 +154,19 @@ class OpenAIVLM(VLMBase):
             "model": self.model or "gpt-4o-mini",
             "messages": [{"role": "user", "content": prompt}],
             "temperature": self.temperature,
+            "stream": self.stream,
         }
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
 
         response = client.chat.completions.create(**kwargs)
-        content = self._handle_response(response, operation_name="text completion")
+
+        if self.stream:
+            content = self._process_streaming_response(response)
+        else:
+            self._update_token_usage_from_response(response)
+            content = response.choices[0].message.content or ""
+
         return self._clean_response(content)
 
     async def get_completion_async(
@@ -246,6 +178,7 @@ class OpenAIVLM(VLMBase):
             "model": self.model or "gpt-4o-mini",
             "messages": [{"role": "user", "content": prompt}],
             "temperature": self.temperature,
+            "stream": self.stream,
         }
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
@@ -254,9 +187,13 @@ class OpenAIVLM(VLMBase):
         for attempt in range(max_retries + 1):
             try:
                 response = await client.chat.completions.create(**kwargs)
-                content = await self._handle_response_async(
-                    response, operation_name="text completion"
-                )
+
+                if self.stream:
+                    content = await self._process_streaming_response_async(response)
+                else:
+                    self._update_token_usage_from_response(response)
+                    content = response.choices[0].message.content or ""
+
                 return self._clean_response(content)
             except Exception as e:
                 last_error = e
@@ -338,12 +275,19 @@ class OpenAIVLM(VLMBase):
             "model": self.model or "gpt-4o-mini",
             "messages": [{"role": "user", "content": content}],
             "temperature": self.temperature,
+            "stream": self.stream,
         }
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
 
         response = client.chat.completions.create(**kwargs)
-        content = self._handle_response(response, operation_name="vision completion")
+
+        if self.stream:
+            content = self._process_streaming_response(response)
+        else:
+            self._update_token_usage_from_response(response)
+            content = response.choices[0].message.content or ""
+
         return self._clean_response(content)
 
     async def get_vision_completion_async(
@@ -364,10 +308,17 @@ class OpenAIVLM(VLMBase):
             "model": self.model or "gpt-4o-mini",
             "messages": [{"role": "user", "content": content}],
             "temperature": self.temperature,
+            "stream": self.stream,
         }
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
 
         response = await client.chat.completions.create(**kwargs)
-        content = await self._handle_response_async(response, operation_name="vision completion")
+
+        if self.stream:
+            content = await self._process_streaming_response_async(response)
+        else:
+            self._update_token_usage_from_response(response)
+            content = response.choices[0].message.content or ""
+
         return self._clean_response(content)

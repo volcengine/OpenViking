@@ -16,7 +16,7 @@ ls -d ~/.openclaw* 2>/dev/null
 If multiple directories exist (e.g. `~/.openclaw`, `~/.openclaw-openclaw-second`), ask the user which instance to install to. Pass the chosen directory via `--workdir`:
 
 ```bash
-npx ./examples/openclaw-memory-plugin/setup-helper --workdir ~/.openclaw-openclaw-second
+npx ./examples/openclaw-plugin/setup-helper --workdir ~/.openclaw-openclaw-second
 ```
 
 If only `~/.openclaw` exists, proceed with the default.
@@ -126,11 +126,11 @@ Wait for `Setup complete!`
 source ~/.openclaw/openviking.env && openclaw gateway
 ```
 
-- Pass: Output contains `memory-openviking: local server started`
+- Pass: Output contains `openviking: local server started`
 - Fail with `port occupied`:
   The port is used by another process. Change port:
   ```bash
-  openclaw config set plugins.entries.memory-openviking.config.port 1934
+  openclaw config set plugins.entries.openviking.config.port 1934
   source ~/.openclaw/openviking.env && openclaw gateway
   ```
 - Fail with `subprocess exited`: Check stderr for Python errors — usually wrong API Key or openviking not installed properly
@@ -141,7 +141,7 @@ Verify:
 openclaw status
 ```
 
-Memory line should show `enabled (plugin memory-openviking)`.
+ContextEngine line should show `enabled (plugin openviking)`.
 
 Tell user: "OpenViking memory is active. I'll automatically remember important facts from our conversations and recall them when relevant."
 
@@ -193,12 +193,12 @@ Alternatively, configure manually (substitute user-provided values). If targetin
 
 ```bash
 openclaw config set plugins.enabled true --json
-openclaw config set plugins.slots.memory memory-openviking
-openclaw config set plugins.entries.memory-openviking.config.mode remote
-openclaw config set plugins.entries.memory-openviking.config.baseUrl "<user's server URL>"
-openclaw config set plugins.entries.memory-openviking.config.apiKey "<user's API Key>"
-openclaw config set plugins.entries.memory-openviking.config.autoRecall true --json
-openclaw config set plugins.entries.memory-openviking.config.autoCapture true --json
+openclaw config set plugins.slots.contextEngine openviking
+openclaw config set plugins.entries.openviking.config.mode remote
+openclaw config set plugins.entries.openviking.config.baseUrl "<user's server URL>"
+openclaw config set plugins.entries.openviking.config.apiKey "<user's API Key>"
+openclaw config set plugins.entries.openviking.config.autoRecall true --json
+openclaw config set plugins.entries.openviking.config.autoCapture true --json
 ```
 
 If user has no API Key (server auth not enabled), skip the apiKey line.
@@ -209,14 +209,14 @@ If user has no API Key (server auth not enabled), skip the apiKey line.
 openclaw gateway
 ```
 
-- Pass: Output contains `memory-openviking: initialized`
+- Pass: Output contains `openviking: initialized`
 - Fail with connection error: Verify server is reachable — `curl <baseUrl>/health` should return `{"status":"ok"}`
 
 ```bash
 openclaw status
 ```
 
-Memory line should show `enabled (plugin memory-openviking)`.
+ContextEngine line should show `enabled (plugin openviking)`.
 
 Tell user: "OpenViking memory is connected to the remote server. I'll automatically remember important facts and recall them when relevant."
 
@@ -241,7 +241,7 @@ Tell user: "OpenViking memory is connected to the remote server. I'll automatica
 
 | Error | Cause | Fix |
 |-------|-------|-----|
-| `port occupied` | Port used by another process | Change port in config, e.g. `openclaw config set plugins.entries.memory-openviking.config.port 1934` |
+| `port occupied` | Port used by another process | Change port in config, e.g. `openclaw config set plugins.entries.openviking.config.port 1934` |
 | `extracted 0 memories` | Wrong API Key or model name | Check `api_key` and `model` in `~/.openviking/ov.conf` |
 | `externally-managed-environment` | Python PEP 668 restriction | Install via venv |
 | `ECONNREFUSED` | Remote server unreachable | Verify baseUrl and network connectivity |

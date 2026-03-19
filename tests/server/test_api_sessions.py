@@ -6,6 +6,7 @@
 import httpx
 
 from openviking.server.identity import RequestContext, Role
+from openviking.telemetry import get_current_telemetry
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -167,8 +168,63 @@ async def test_compress_session_with_telemetry(client: httpx.AsyncClient):
     assert summary["operation"] == "session.commit"
     assert {"total", "llm", "embedding"}.issubset(summary["tokens"].keys())
     assert summary["memory"]["extracted"] is not None
+    assert "extract" in summary["memory"]
     assert "semantic_nodes" not in summary
     assert "usage" not in body
+
+
+async def test_compress_session_with_telemetry_includes_memory_extract_breakdown(
+    client: httpx.AsyncClient, service, monkeypatch
+):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    async def fake_commit_async(_session_id: str, _ctx):
+        telemetry = get_current_telemetry()
+        telemetry.set("memory.extracted", 2)
+        telemetry.set("memory.extract.total.duration_ms", 321.5)
+        telemetry.set("memory.extract.candidates.total", 4)
+        telemetry.set("memory.extract.candidates.standard", 3)
+        telemetry.set("memory.extract.candidates.tool_skill", 1)
+        telemetry.set("memory.extract.created", 1)
+        telemetry.set("memory.extract.merged", 1)
+        telemetry.set("memory.extract.deleted", 0)
+        telemetry.set("memory.extract.skipped", 2)
+        telemetry.set("memory.extract.stage.prepare_inputs.duration_ms", 5.0)
+        telemetry.set("memory.extract.stage.llm_extract.duration_ms", 200.0)
+        telemetry.set("memory.extract.stage.normalize_candidates.duration_ms", 10.0)
+        telemetry.set("memory.extract.stage.tool_skill_stats.duration_ms", 4.5)
+        telemetry.set("memory.extract.stage.profile_create.duration_ms", 7.0)
+        telemetry.set("memory.extract.stage.tool_skill_merge.duration_ms", 15.0)
+        telemetry.set("memory.extract.stage.dedup.duration_ms", 55.0)
+        telemetry.set("memory.extract.stage.create_memory.duration_ms", 12.0)
+        telemetry.set("memory.extract.stage.merge_existing.duration_ms", 9.0)
+        telemetry.set("memory.extract.stage.delete_existing.duration_ms", 0.0)
+        telemetry.set("memory.extract.stage.create_relations.duration_ms", 3.0)
+        telemetry.set("memory.extract.stage.flush_semantic.duration_ms", 1.0)
+        return {
+            "session_id": _session_id,
+            "status": "committed",
+            "memories_extracted": 2,
+            "active_count_updated": 0,
+            "archived": True,
+            "stats": None,
+        }
+
+    monkeypatch.setattr(service.sessions, "commit_async", fake_commit_async)
+
+    resp = await client.post(
+        f"/api/v1/sessions/{session_id}/commit",
+        json={"telemetry": True},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    extract = body["telemetry"]["summary"]["memory"]["extract"]
+    assert extract["duration_ms"] == 321.5
+    assert extract["candidates"] == {"total": 4, "standard": 3, "tool_skill": 1}
+    assert extract["actions"] == {"created": 1, "merged": 1, "deleted": 0, "skipped": 2}
+    assert extract["stages"]["llm_extract_ms"] == 200.0
+    assert extract["stages"]["flush_semantic_ms"] == 1.0
 
 
 async def test_compress_session_with_summary_only_telemetry(client: httpx.AsyncClient):

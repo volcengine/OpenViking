@@ -36,7 +36,7 @@ $PipIndexUrl = if ($env:PIP_INDEX_URL) { $env:PIP_INDEX_URL } else { "https://py
 $HomeDir = if ($env:USERPROFILE) { $env:USERPROFILE } else { $HOME }
 $OpenClawDir = if ($Workdir) { $Workdir } else { Join-Path $HomeDir ".openclaw" }
 $OpenVikingDir = Join-Path $HomeDir ".openviking"
-$PluginDest = Join-Path $OpenClawDir "extensions\memory-openviking"
+$PluginDest = Join-Path $OpenClawDir "extensions\openviking"
 $SelectedMode = "local"
 
 $DefaultServerPort = 1933
@@ -218,7 +218,7 @@ function Select-Workdir {
       Warn (T "Invalid selection, using default" "无效选择，使用默认")
       $script:OpenClawDir = $instances[0]
     }
-    $script:PluginDest = Join-Path $script:OpenClawDir "extensions\memory-openviking"
+    $script:PluginDest = Join-Path $script:OpenClawDir "extensions\openviking"
   }
 }
 
@@ -325,21 +325,22 @@ function Configure-OvConf {
 function Download-Plugin {
   $rawBase = "https://raw.githubusercontent.com/$Repo/$Branch"
   $files = @(
-    "examples/openclaw-memory-plugin/index.ts",
-    "examples/openclaw-memory-plugin/config.ts",
-    "examples/openclaw-memory-plugin/client.ts",
-    "examples/openclaw-memory-plugin/process-manager.ts",
-    "examples/openclaw-memory-plugin/memory-ranking.ts",
-    "examples/openclaw-memory-plugin/text-utils.ts",
-    "examples/openclaw-memory-plugin/openclaw.plugin.json",
-    "examples/openclaw-memory-plugin/package.json",
-    "examples/openclaw-memory-plugin/package-lock.json",
-    "examples/openclaw-memory-plugin/tsconfig.json",
-    "examples/openclaw-memory-plugin/.gitignore"
+    "examples/openclaw-plugin/index.ts",
+    "examples/openclaw-plugin/context-engine.ts",
+    "examples/openclaw-plugin/config.ts",
+    "examples/openclaw-plugin/client.ts",
+    "examples/openclaw-plugin/process-manager.ts",
+    "examples/openclaw-plugin/memory-ranking.ts",
+    "examples/openclaw-plugin/text-utils.ts",
+    "examples/openclaw-plugin/openclaw.plugin.json",
+    "examples/openclaw-plugin/package.json",
+    "examples/openclaw-plugin/package-lock.json",
+    "examples/openclaw-plugin/tsconfig.json",
+    "examples/openclaw-plugin/.gitignore"
   )
 
   New-Item -ItemType Directory -Force -Path $PluginDest | Out-Null
-  Info (T "Downloading memory-openviking plugin..." "正在下载 memory-openviking 插件...")
+  Info (T "Downloading openviking plugin..." "正在下载 openviking 插件...")
   Info ("{0} $Repo@$Branch" -f (T "Plugin source:" "插件来源:"))
 
   foreach ($rel in $files) {
@@ -374,8 +375,9 @@ function Configure-OpenClawPlugin {
 
   try {
     # Enable plugin (files already deployed to extensions dir by Deploy-Plugin)
-    openclaw plugins enable memory-openviking
+    openclaw plugins enable openviking
     if ($LASTEXITCODE -ne 0) { throw "openclaw plugins enable failed (exit code $LASTEXITCODE)" }
+    openclaw config set plugins.slots.contextEngine openviking
 
     # Set gateway mode
     openclaw config set gateway.mode local
@@ -383,17 +385,17 @@ function Configure-OpenClawPlugin {
     # Set plugin config for the selected mode
     if ($SelectedMode -eq "local") {
       $ovConfPath = Join-Path $OpenVikingDir "ov.conf"
-      openclaw config set plugins.entries.memory-openviking.config.mode local
-      openclaw config set plugins.entries.memory-openviking.config.configPath $ovConfPath
-      openclaw config set plugins.entries.memory-openviking.config.port $ServerPort
+      openclaw config set plugins.entries.openviking.config.mode local
+      openclaw config set plugins.entries.openviking.config.configPath $ovConfPath
+      openclaw config set plugins.entries.openviking.config.port $ServerPort
     } else {
-      openclaw config set plugins.entries.memory-openviking.config.mode remote
-      openclaw config set plugins.entries.memory-openviking.config.baseUrl $RemoteBaseUrl
+      openclaw config set plugins.entries.openviking.config.mode remote
+      openclaw config set plugins.entries.openviking.config.baseUrl $RemoteBaseUrl
       if ($RemoteApiKey) {
-        openclaw config set plugins.entries.memory-openviking.config.apiKey $RemoteApiKey
+        openclaw config set plugins.entries.openviking.config.apiKey $RemoteApiKey
       }
       if ($RemoteAgentId) {
-        openclaw config set plugins.entries.memory-openviking.config.agentId $RemoteAgentId
+        openclaw config set plugins.entries.openviking.config.agentId $RemoteAgentId
       }
     }
 
