@@ -5,6 +5,7 @@
 Session as Context: Sessions integrated into L0/L1/L2 system.
 """
 
+import asyncio
 import json
 import re
 from dataclasses import dataclass, field
@@ -91,6 +92,7 @@ class Session:
         self._compression: SessionCompression = SessionCompression()
         self._stats: SessionStats = SessionStats()
         self._loaded = False
+        self._commit_lock = asyncio.Lock()
 
         logger.info(f"Session created: {self.session_id} for user {self.user}")
 
@@ -226,7 +228,9 @@ class Session:
     async def commit_async(self) -> Dict[str, Any]:
         """Async commit session: two-phase approach.
 
-        Phase 1 (Archive): Write archive, clear messages.
+        Phase 1 (Archive prep, lock-protected): Copy messages, clear live
+        session, increment compression index. The lock ensures concurrent
+        commits cannot re-commit the same messages.
         Phase 2 (Memory, redo-log protected): Extract memories, write, enqueue.
         """
         import uuid
@@ -241,19 +245,32 @@ class Session:
             "archived": False,
             "stats": None,
         }
-        if not self._messages:
-            get_current_telemetry().set("memory.extracted", 0)
-            return result
 
-        # ===== Preparation =====
-        self._compression.compression_index += 1
-        messages_to_archive = self._messages.copy()
+        # ===== Phase 1: Snapshot + clear (lock-protected) =====
+        async with self._commit_lock:
+            if not self._messages:
+                get_current_telemetry().set("memory.extracted", 0)
+                return result
 
+            self._compression.compression_index += 1
+            messages_to_archive = self._messages.copy()
+            self._messages.clear()
+
+            try:
+                await self._write_to_agfs_async(messages=[])
+            except Exception:
+                # Rollback: restore messages so they aren't lost
+                self._messages.extend(messages_to_archive)
+                self._compression.compression_index -= 1
+                raise
+        # Lock released — live session is now clean.
+        # Any add_message() from here appends to the fresh empty list.
+
+        # ===== Phase 1 continued: Archive write (no lock needed) =====
         summary = await self._generate_archive_summary_async(messages_to_archive)
         archive_abstract = self._extract_abstract_from_summary(summary)
         archive_overview = summary
 
-        # ===== Phase 1: Archive (no lock) =====
         archive_uri = (
             f"{self._session_uri}/history/archive_{self._compression.compression_index:03d}"
         )
@@ -263,8 +280,6 @@ class Session:
             abstract=archive_abstract,
             overview=archive_overview,
         )
-        await self._write_to_agfs_async(messages=[])
-        self._messages.clear()
 
         self._compression.original_count += len(messages_to_archive)
         result["archived"] = True
