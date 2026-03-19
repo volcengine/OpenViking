@@ -479,7 +479,6 @@ You only need to add sandbox configuration when you want to change these default
 | Backend | Description |
 |---------|-------------|
 | `direct` | (Default) Runs code directly on the host |
-| `opensandbox` | Uses OpenSandbox service |
 | `srt` | Uses Anthropic's SRT sandbox runtime |
 
 **Available Modes:**
@@ -498,41 +497,6 @@ You only need to add sandbox configuration when you want to change these default
       "backends": {
         "direct": {
           "restrictToWorkspace": false
-        }
-      }
-    }
-  }
-}
-```
-
-**OpenSandbox Backend:**
-```json
-{
-  "bot": {
-    "sandbox": {
-      "backend": "opensandbox",
-      "backends": {
-        "opensandbox": {
-          "serverUrl": "http://localhost:18792",
-          "apiKey": "",
-          "defaultImage": "opensandbox/code-interpreter:v1.0.1"
-        }
-      }
-    }
-  }
-}
-```
-
-**Docker Backend:**
-```json
-{
-  "bot": {
-    "sandbox": {
-      "backend": "docker",
-      "backends": {
-        "docker": {
-          "image": "python:3.11-slim",
-          "networkMode": "bridge"
         }
       }
     }
@@ -570,21 +534,6 @@ You only need to add sandbox configuration when you want to change these default
 }
 ```
 
-**AIO Sandbox Backend:**
-```json
-{
-  "bot": {
-    "sandbox": {
-      "backend": "aiosandbox",
-      "backends": {
-        "aiosandbox": {
-          "baseUrl": "http://localhost:18794"
-        }
-      }
-    }
-  }
-}
-```
 
 **SRT Backend Setup:**
 
@@ -666,22 +615,6 @@ which nodejs
 | `vikingbot channels login` | Link WhatsApp (scan QR) |
 | `vikingbot channels status` | Show channel status |
 
-## 🖥️ Console Web UI
-
-The Console Web UI is automatically started when you run `vikingbot gateway`, accessible at http://localhost:18791.
-
-**Features:**
-- **Dashboard**: Quick overview of system status and sessions
-- **Config**: Configure providers, agents, channels, and tools in a user-friendly interface
-  - Form-based editor for easy configuration
-  - JSON editor for advanced users
-- **Sessions**: View and manage chat sessions
-- **Workspace**: Browse and edit files in the workspace directory
-
-> [!IMPORTANT]
-> After saving configuration changes in the Console, you need to restart the gateway service for changes to take effect.
-
-Interactive mode exits: `exit`, `quit`, `/exit`, `/quit`, `:q`, or `Ctrl+D`.
 
 <details>
 <summary><b>Scheduled Tasks (Cron)</b></summary>
