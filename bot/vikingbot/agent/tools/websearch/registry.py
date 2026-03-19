@@ -37,7 +37,11 @@ class WebSearchBackendRegistry:
         return list(self._backends.keys())
 
     def create(
-        self, name: str, brave_api_key: Optional[str] = None, exa_api_key: Optional[str] = None
+        self,
+        name: str,
+        brave_api_key: Optional[str] = None,
+        exa_api_key: Optional[str] = None,
+        tavily_api_key: Optional[str] = None,
     ) -> Optional[WebSearchBackend]:
         """
         Create a backend instance.
@@ -46,6 +50,7 @@ class WebSearchBackendRegistry:
             name: Backend name
             brave_api_key: Brave API key (for brave backend)
             exa_api_key: Exa API key (for exa backend)
+            tavily_api_key: Tavily API key (for tavily backend)
 
         Returns:
             Backend instance or None
@@ -59,21 +64,26 @@ class WebSearchBackendRegistry:
             return backend_class(api_key=brave_api_key)
         elif name == "exa":
             return backend_class(api_key=exa_api_key)
+        elif name == "tavily":
+            return backend_class(api_key=tavily_api_key)
         else:
             return backend_class()
 
     def select_auto(
-        self, brave_api_key: Optional[str] = None, exa_api_key: Optional[str] = None
+        self,
+        brave_api_key: Optional[str] = None,
+        exa_api_key: Optional[str] = None,
+        tavily_api_key: Optional[str] = None,
     ) -> WebSearchBackend:
         """
         Auto-select the best available backend.
 
-        Priority: exa → brave → ddgs
+        Priority: tavily → exa → brave → ddgs
         """
-        priority = ["exa", "brave", "ddgs"]
+        priority = ["tavily", "exa", "brave", "ddgs"]
 
         for name in priority:
-            backend = self.create(name, brave_api_key, exa_api_key)
+            backend = self.create(name, brave_api_key, exa_api_key, tavily_api_key)
             if backend and backend.is_available:
                 return backend
 
