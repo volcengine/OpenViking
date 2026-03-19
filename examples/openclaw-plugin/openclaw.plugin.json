@@ -1,6 +1,6 @@
 {
-  "id": "memory-openviking",
-  "kind": "memory",
+  "id": "openviking",
+  "kind": "context-engine",
   "uiHints": {
     "mode": {
       "label": "Mode",

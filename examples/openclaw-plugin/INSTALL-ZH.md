@@ -48,13 +48,13 @@ ov-install --workdir ~/.openclaw-second
 ### 方式 B：curl 一键安装（Linux / macOS）
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-memory-plugin/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash
 ```
 
 非交互模式：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-memory-plugin/install.sh | bash -s -y
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash -s -y
 ```
 
 安装到指定 OpenClaw 实例：
@@ -112,7 +112,7 @@ npm install -g openclaw-openviking-setup-helper
 ov-install
 
 # 方式 B：curl 一键安装（Linux / macOS）
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-memory-plugin/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash
 ```
 
 安装助手会提示输入 Ark API Key 并自动生成配置文件。
@@ -123,13 +123,13 @@ curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples
 source ~/.openclaw/openviking.env && openclaw gateway
 ```
 
-看到 `memory-openviking: local server started` 表示成功。
+看到 `openviking: local server started` 表示成功。
 
 ### Step 4: 验证
 
 ```bash
 openclaw status
-# Memory 行应显示：enabled (plugin memory-openviking)
+# Memory 行应显示：enabled (plugin openviking)
 ```
 
 ---
@@ -160,13 +160,13 @@ openclaw status
 
 ```bash
 openclaw config set plugins.enabled true --json
-openclaw config set plugins.slots.memory memory-openviking
-openclaw config set plugins.entries.memory-openviking.config.mode remote
-openclaw config set plugins.entries.memory-openviking.config.baseUrl "http://your-server:1933"
-openclaw config set plugins.entries.memory-openviking.config.apiKey "your-api-key"
-openclaw config set plugins.entries.memory-openviking.config.agentId "your-agent-id"
-openclaw config set plugins.entries.memory-openviking.config.autoRecall true --json
-openclaw config set plugins.entries.memory-openviking.config.autoCapture true --json
+openclaw config set plugins.slots.contextEngine openviking
+openclaw config set plugins.entries.openviking.config.mode remote
+openclaw config set plugins.entries.openviking.config.baseUrl "http://your-server:1933"
+openclaw config set plugins.entries.openviking.config.apiKey "your-api-key"
+openclaw config set plugins.entries.openviking.config.agentId "your-agent-id"
+openclaw config set plugins.entries.openviking.config.autoRecall true --json
+openclaw config set plugins.entries.openviking.config.autoCapture true --json
 ```
 
 </details>
@@ -208,11 +208,11 @@ python -m openviking.console.bootstrap --host 0.0.0.0 --port 8020 --openviking-u
 
 即可开始体验 web console 🎉
 
-你可以直接在web界面查询文件信息，验证OpenViking memory-plugin记忆写入是否生效；也可以可以在OpenClaw日志中验证memory-openviking是否读取记忆，验证方式：
+你可以直接在web界面查询文件信息，验证OpenViking memory-plugin记忆写入是否生效；也可以可以在OpenClaw日志中验证openviking是否读取记忆，验证方式：
 
 
 ```bash
-grep -i inject /tmp/openclaw/openclaw-2026-03-13.log | awk -F'"' '{for(i=1;i<=NF;i++) if($i ~ /^[0-9]{2}:[0-9]{2}:[0-9]{2}/) {time=$i; break}} /injecting [0-9]+ memories/ {print time, "memory-openviking:", gensub(/.*(injecting [0-9]+ memories).*/, "\\1", "1")}'
+grep -i inject /tmp/openclaw/openclaw-2026-03-13.log | awk -F'"' '{for(i=1;i<=NF;i++) if($i ~ /^[0-9]{2}:[0-9]{2}:[0-9]{2}/) {time=$i; break}} /injecting [0-9]+ memories/ {print time, "openviking:", gensub(/.*(injecting [0-9]+ memories).*/, "\\1", "1")}'
 ```
 
 也可以直接运行grep "inject" /tmp/openclaw/openclaw-2026-03-13.log查看全部信息。
@@ -262,7 +262,7 @@ grep -i inject /tmp/openclaw/openclaw-2026-03-13.log | awk -F'"' '{for(i=1;i<=NF
 
 ```bash
 # 在插件配置中指定
-openclaw config set plugins.entries.memory-openviking.config.agentId "my-agent"
+openclaw config set plugins.entries.openviking.config.agentId "my-agent"
 ```
 
 如果未配置，插件会自动生成一个随机唯一的 ID（格式：`openclaw-<hostname>-<random>`）。
@@ -283,11 +283,15 @@ export OPENVIKING_PYTHON='/usr/local/bin/python3'
 # 启动
 source ~/.openclaw/openviking.env && openclaw gateway
 
+# 检查当前 context-engine
+openclaw status
+openclaw config get plugins.slots.contextEngine
+
 # 关闭记忆
-openclaw config set plugins.slots.memory none
+openclaw config set plugins.slots.contextEngine legacy
 
 # 开启记忆
-openclaw config set plugins.slots.memory memory-openviking
+openclaw config set plugins.slots.contextEngine openviking
 ```
 
 ---
@@ -296,7 +300,7 @@ openclaw config set plugins.slots.memory memory-openviking
 
 | 症状 | 原因 | 修复 |
 |------|------|------|
-| `port occupied` | 端口被其他进程占用 | 换端口：`openclaw config set plugins.entries.memory-openviking.config.port 1934` |
+| `port occupied` | 端口被其他进程占用 | 换端口：`openclaw config set plugins.entries.openviking.config.port 1934` |
 | `extracted 0 memories` | API Key 或模型名配置错误 | 检查 `ov.conf` 中 `api_key` 和 `model` 字段 |
 | 插件未加载 | 未加载环境变量 | 启动前执行 `source ~/.openclaw/openviking.env` |
 | `externally-managed-environment` | Python PEP 668 限制 | 使用 venv 或一键安装脚本 |

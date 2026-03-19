@@ -53,14 +53,14 @@ ov-install --workdir ~/.openclaw-second
 ### Method B: curl One-Click Installation (Linux / macOS)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-memory-plugin/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash
 
 ```
 
 Non-interactive mode:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-memory-plugin/install.sh | bash -s -y
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash -s -y
 
 ```
 
@@ -122,7 +122,7 @@ npm install -g openclaw-openviking-setup-helper
 ov-install
 
 # Method B: curl one-click (Linux / macOS)
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-memory-plugin/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash
 ```
 
 The setup helper will prompt you to enter your Ark API Key and automatically generate a configuration file.
@@ -134,13 +134,13 @@ source ~/.openclaw/openviking.env && openclaw gateway
 
 ```
 
-Seeing `memory-openviking: local server started` indicates success.
+Seeing `openviking: local server started` indicates success.
 
 ### Step 4: Verify
 
 ```bash
 openclaw status
-# The Memory row should display: enabled (plugin memory-openviking)
+# The ContextEngine row should display: enabled (plugin openviking)
 
 ```
 
@@ -171,14 +171,15 @@ openclaw status
 <summary>Manual configuration (without setup helper)</summary>
 
 ```bash
-openclaw config set plugins.enabled true --json
-openclaw config set plugins.slots.memory memory-openviking
-openclaw config set plugins.entries.memory-openviking.config.mode remote
-openclaw config set plugins.entries.memory-openviking.config.baseUrl "http://your-server:1933"
-openclaw config set plugins.entries.memory-openviking.config.apiKey "your-api-key"
-openclaw config set plugins.entries.memory-openviking.config.agentId "your-agent-id"
-openclaw config set plugins.entries.memory-openviking.config.autoRecall true --json
-openclaw config set plugins.entries.memory-openviking.config.autoCapture true --json
+openclaw plugins enable openviking
+openclaw config set gateway.mode local
+openclaw config set plugins.slots.contextEngine openviking
+openclaw config set plugins.entries.openviking.config.mode remote
+openclaw config set plugins.entries.openviking.config.baseUrl "http://your-server:1933"
+openclaw config set plugins.entries.openviking.config.apiKey "your-api-key"
+openclaw config set plugins.entries.openviking.config.agentId "your-agent-id"
+openclaw config set plugins.entries.openviking.config.autoRecall true --json
+openclaw config set plugins.entries.openviking.config.autoCapture true --json
 ```
 
 </details>
@@ -193,7 +194,7 @@ Please note that to protect the system Python from being corrupted, the ECS inst
 
 ### Step 1: npm Installation
 
-```python
+```bash
 npm install -g openclaw-openviking-setup-helper
 ov-install
 
@@ -212,14 +213,14 @@ source /root/.openclaw/openviking.env
 
 First, start the OpenViking Server:
 
-```python
+```bash
 python -m openviking.server.bootstrap
 
 ```
 
 Next, start the web console. Before starting, you need to confirm whether the instance's security group has opened TCP port 8020 in the inbound rules. If not, please configure the instance security group first:
 
-```python
+```bash
 python -m openviking.console.bootstrap --host 0.0.0.0 --port 8020 --openviking-url http://127.0.0.1:1933
 
 ```
@@ -228,10 +229,10 @@ In the instance, find your server's public IP, and use it to access: `http://<yo
 
 You can now start experiencing the web console 🎉
 
-You can directly query file information on the web interface to verify whether the OpenViking `memory-plugin` memory write is effective; you can also verify if `memory-openviking` is reading memories in the OpenClaw logs. The verification method is as follows:
+You can directly query file information on the web interface to verify whether the openclaw-plugin memory write is effective; you can also verify if openclaw-plugin is reading memories in the OpenClaw logs. The verification method is as follows:
 
 ```bash
-grep -i inject /tmp/openclaw/openclaw-2026-03-13.log | awk -F'"' '{for(i=1;i<=NF;i++) if($i ~ /^[0-9]{2}:[0-9]{2}:[0-9]{2}/) {time=$i; break}} /injecting [0-9]+ memories/ {print time, "memory-openviking:", gensub(/.*(injecting [0-9]+ memories).*/, "\\1", "1")}'
+grep -i inject /tmp/openclaw/openclaw-2026-03-13.log | awk -F'"' '{for(i=1;i<=NF;i++) if($i ~ /^[0-9]{2}:[0-9]{2}:[0-9]{2}/) {time=$i; break}} /injecting [0-9]+ memories/ {print time, "openviking:", gensub(/.*(injecting [0-9]+ memories).*/, "\\1", "1")}'
 
 ```
 
@@ -282,11 +283,11 @@ Customization method:
 
 ```bash
 # Specify in the plugin configuration
-openclaw config set plugins.entries.memory-openviking.config.agentId "my-agent"
+openclaw config set plugins.entries.openviking.config.agentId "my-agent"
 
 ```
 
-If not configured, the plugin will automatically generate a random, unique ID (format: `openclaw-<hostname>-<random>`).
+If not configured, the plugin falls back to `default`. When OpenClaw provides a per-session `agentId` at runtime, the context engine will switch to that session-specific value automatically.
 
 ### `~/.openclaw/openviking.env`
 
@@ -305,11 +306,11 @@ export OPENVIKING_PYTHON='/usr/local/bin/python3'
 # Start
 source ~/.openclaw/openviking.env && openclaw gateway
 
-# Disable memory
-openclaw config set plugins.slots.memory none
+# Disable the context engine
+openclaw config set plugins.slots.contextEngine none
 
-# Enable memory
-openclaw config set plugins.slots.memory memory-openviking
+# Enable OpenViking as the context engine
+openclaw config set plugins.slots.contextEngine openviking
 
 ```
 
@@ -319,7 +320,7 @@ openclaw config set plugins.slots.memory memory-openviking
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `port occupied` | Port occupied by another process | Change port: `openclaw config set plugins.entries.memory-openviking.config.port 1934` |
+| `port occupied` | Port occupied by another process | Change port: `openclaw config set plugins.entries.openviking.config.port 1934` |
 | `extracted 0 memories` | API Key or model name configured incorrectly | Check the `api_key` and `model` fields in `ov.conf` |
 | Plugin not loaded | Environment variables not loaded | Execute `source ~/.openclaw/openviking.env` before starting |
 | `externally-managed-environment` | Python PEP 668 restriction | Use venv or the one-click installation script |
@@ -338,6 +339,6 @@ python3 -m pip uninstall openviking -y && rm -rf ~/.openviking
 
 ---
 
-**See also:** [INSTALL-ZH.md](https://github.com/volcengine/OpenViking/blob/main/examples/openclaw-memory-plugin/INSTALL-ZH.md) (Chinese) · [INSTALL-AGENT.md](https://www.google.com/search?q=./INSTALL-AGENT.md) (Agent Install Guide)
+**See also:** [INSTALL-ZH.md](https://github.com/volcengine/OpenViking/blob/main/examples/openclaw-plugin/INSTALL-ZH.md) (Chinese) · [INSTALL-AGENT.md](https://www.google.com/search?q=./INSTALL-AGENT.md) (Agent Install Guide)
 
 ---

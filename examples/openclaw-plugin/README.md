@@ -1,6 +1,6 @@
-# OpenClaw + OpenViking Memory Plugin
+# OpenClaw + OpenViking Context-Engine Plugin
 
-Use [OpenViking](https://github.com/volcengine/OpenViking) as the long-term memory backend for [OpenClaw](https://github.com/openclaw/openclaw). Once installed, OpenClaw will automatically **remember** important information from conversations and **recall** relevant context before responding.
+Use [OpenViking](https://github.com/volcengine/OpenViking) as the long-term memory backend for [OpenClaw](https://github.com/openclaw/openclaw). In OpenClaw, this plugin is registered as the `openviking` context engine. Once installed, OpenClaw will automatically **remember** important information from conversations and **recall** relevant context before responding.
 
 > **⚠️ OpenClaw >= 2026.3.12 Compatibility Issue**
 >
@@ -55,7 +55,7 @@ ov-install
 ### Method B: curl One-Click (Linux / macOS)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-memory-plugin/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash
 ```
 
 The setup helper will walk you through:
@@ -133,7 +133,7 @@ npm install -g openclaw-openviking-setup-helper
 ov-install
 
 # Method B: curl one-click (Linux / macOS)
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-memory-plugin/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash
 ```
 
 Select **local** mode, keep defaults, and enter your Ark API Key.
@@ -154,7 +154,7 @@ source ~/.openclaw/openviking.env && openclaw gateway restart
 
 ```bash
 openclaw status
-# Memory row should show: enabled (plugin memory-openviking)
+# ContextEngine row should show: enabled (plugin openviking)
 ```
 
 ---
@@ -238,14 +238,15 @@ curl -X POST http://localhost:1933/api/v1/admin/accounts/my-team/users \
 #### Step 3: Configure the OpenClaw Plugin
 
 ```bash
-openclaw config set plugins.enabled true --json
-openclaw config set plugins.slots.memory memory-openviking
-openclaw config set plugins.entries.memory-openviking.config.mode remote
-openclaw config set plugins.entries.memory-openviking.config.baseUrl "http://your-server:1933"
-openclaw config set plugins.entries.memory-openviking.config.apiKey "<user-api-key>"
-openclaw config set plugins.entries.memory-openviking.config.agentId "<agent-id>"
-openclaw config set plugins.entries.memory-openviking.config.autoRecall true --json
-openclaw config set plugins.entries.memory-openviking.config.autoCapture true --json
+openclaw plugins enable openviking
+openclaw config set gateway.mode local
+openclaw config set plugins.slots.contextEngine openviking
+openclaw config set plugins.entries.openviking.config.mode remote
+openclaw config set plugins.entries.openviking.config.baseUrl "http://your-server:1933"
+openclaw config set plugins.entries.openviking.config.apiKey "<user-api-key>"
+openclaw config set plugins.entries.openviking.config.agentId "<agent-id>"
+openclaw config set plugins.entries.openviking.config.autoRecall true --json
+openclaw config set plugins.entries.openviking.config.autoCapture true --json
 ```
 
 #### Step 4: Start & Verify
@@ -301,13 +302,13 @@ openclaw gateway restart
 
 ```bash
 openclaw status
-# Memory row should show: enabled (plugin memory-openviking)
+# ContextEngine row should show: enabled (plugin openviking)
 ```
 
 ### View Plugin Config
 
 ```bash
-openclaw config get plugins.entries.memory-openviking.config
+openclaw config get plugins.entries.openviking.config
 ```
 
 ---
@@ -384,14 +385,14 @@ source ~/.openclaw/openviking.env && openclaw gateway
 # Start (Remote mode — no env needed)
 openclaw gateway
 
-# Disable memory
-openclaw config set plugins.slots.memory none
+# Disable the context engine
+openclaw config set plugins.slots.contextEngine legacy
 
-# Re-enable memory
-openclaw config set plugins.slots.memory memory-openviking
+# Re-enable OpenViking as the context engine
+openclaw config set plugins.slots.contextEngine openviking
 ```
 
-> Restart the gateway after changing the memory slot.
+> Restart the gateway after changing the context-engine slot.
 
 ---
 
@@ -418,12 +419,12 @@ Open http://127.0.0.1:8020 in your browser.
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | Conversation hangs, no response | OpenClaw >= 2026.3.12 compatibility issue | Downgrade to `2026.3.11`: `npm install -g openclaw@2026.3.11`. See [#591](https://github.com/volcengine/OpenViking/issues/591) |
-| Agent hangs silently, no output | auto-recall missing timeout protection | Disable auto-recall temporarily: `openclaw config set plugins.entries.memory-openviking.config.autoRecall false --json`, or apply the patch in [#673](https://github.com/volcengine/OpenViking/issues/673) |
-| Memory shows `disabled` / `memory-core` | Plugin slot not configured | `openclaw config set plugins.slots.memory memory-openviking` |
+| Agent hangs silently, no output | auto-recall missing timeout protection | Disable auto-recall temporarily: `openclaw config set plugins.entries.openviking.config.autoRecall false --json`, or apply the patch in [#673](https://github.com/volcengine/OpenViking/issues/673) |
+| ContextEngine is not `openviking` | Plugin slot not configured | `openclaw config set plugins.slots.contextEngine openviking` |
 | `memory_store failed: fetch failed` | OpenViking not running | Check `ov.conf` and Python path; verify service is up |
 | `health check timeout` | Port held by stale process | `lsof -ti tcp:1933 \| xargs kill -9`, then restart |
 | `extracted 0 memories` | Wrong API Key or model name | Check `api_key` and `model` in `ov.conf` |
-| `port occupied` | Port used by another process | Change port: `openclaw config set plugins.entries.memory-openviking.config.port 1934` |
+| `port occupied` | Port used by another process | Change port: `openclaw config set plugins.entries.openviking.config.port 1934` |
 | Plugin not loaded | Env file not sourced | Run `source ~/.openclaw/openviking.env` before starting |
 | `externally-managed-environment` | Python PEP 668 restriction | Use venv or the one-click installer |
 | `TypeError: unsupported operand type(s) for \|` | Python < 3.10 | Upgrade Python to 3.10+ |

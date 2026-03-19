@@ -1,7 +1,7 @@
 #!/bin/bash
 #
 # OpenClaw + OpenViking one-click installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-memory-plugin/install.sh | bash
+# Usage: curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash
 #
 # Environment variables:
 #   REPO=owner/repo               - GitHub repository (default: volcengine/OpenViking)
@@ -36,7 +36,7 @@ PIP_INDEX_URL="${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
 HOME_DIR="${HOME:-$USERPROFILE}"
 OPENCLAW_DIR="${HOME_DIR}/.openclaw"
 OPENVIKING_DIR="${HOME_DIR}/.openviking"
-PLUGIN_DEST="${OPENCLAW_DIR}/extensions/memory-openviking"
+PLUGIN_DEST="${OPENCLAW_DIR}/extensions/openviking"
 DEFAULT_SERVER_PORT=1933
 DEFAULT_AGFS_PORT=1833
 DEFAULT_VLM_MODEL="doubao-seed-2-0-pro-260215"
@@ -50,7 +50,7 @@ _expect_workdir=""
 for arg in "$@"; do
   if [[ -n "$_expect_workdir" ]]; then
     OPENCLAW_DIR="$arg"
-    PLUGIN_DEST="${OPENCLAW_DIR}/extensions/memory-openviking"
+    PLUGIN_DEST="${OPENCLAW_DIR}/extensions/openviking"
     _expect_workdir=""
     continue
   fi
@@ -181,7 +181,7 @@ select_workdir() {
     else
       OPENCLAW_DIR="${instances[0]}"
     fi
-    PLUGIN_DEST="${OPENCLAW_DIR}/extensions/memory-openviking"
+    PLUGIN_DEST="${OPENCLAW_DIR}/extensions/openviking"
   fi
 }
 
@@ -291,7 +291,7 @@ print_install_hints() {
   fi
 
   bold "$(tr "After installation, rerun this script." "安装完成后，请重新运行本脚本。")"
-  bold "$(tr "See details: https://github.com/${REPO}/blob/${BRANCH}/examples/openclaw-memory-plugin/INSTALL.md" "详细说明见: https://github.com/${REPO}/blob/${BRANCH}/examples/openclaw-memory-plugin/INSTALL-ZH.md")"
+  bold "$(tr "See details: https://github.com/${REPO}/blob/${BRANCH}/examples/openclaw-plugin/INSTALL.md" "详细说明见: https://github.com/${REPO}/blob/${BRANCH}/examples/openclaw-plugin/INSTALL-ZH.md")"
   echo ""
   exit 1
 }
@@ -560,23 +560,24 @@ EOF
 download_plugin() {
   local gh_raw="https://raw.githubusercontent.com/${REPO}/${BRANCH}"
   local files=(
-    "examples/openclaw-memory-plugin/index.ts"
-    "examples/openclaw-memory-plugin/config.ts"
-    "examples/openclaw-memory-plugin/client.ts"
-    "examples/openclaw-memory-plugin/process-manager.ts"
-    "examples/openclaw-memory-plugin/memory-ranking.ts"
-    "examples/openclaw-memory-plugin/text-utils.ts"
-    "examples/openclaw-memory-plugin/openclaw.plugin.json"
-    "examples/openclaw-memory-plugin/package.json"
-    "examples/openclaw-memory-plugin/package-lock.json"
-    "examples/openclaw-memory-plugin/tsconfig.json"
-    "examples/openclaw-memory-plugin/.gitignore"
+    "examples/openclaw-plugin/index.ts"
+    "examples/openclaw-plugin/context-engine.ts"
+    "examples/openclaw-plugin/config.ts"
+    "examples/openclaw-plugin/client.ts"
+    "examples/openclaw-plugin/process-manager.ts"
+    "examples/openclaw-plugin/memory-ranking.ts"
+    "examples/openclaw-plugin/text-utils.ts"
+    "examples/openclaw-plugin/openclaw.plugin.json"
+    "examples/openclaw-plugin/package.json"
+    "examples/openclaw-plugin/package-lock.json"
+    "examples/openclaw-plugin/tsconfig.json"
+    "examples/openclaw-plugin/.gitignore"
   )
   local total=${#files[@]}
   local i=0
 
   mkdir -p "${PLUGIN_DEST}"
-  info "$(tr "Downloading memory-openviking plugin from ${REPO}@${BRANCH} (${total} files)..." "正在从 ${REPO}@${BRANCH} 下载 memory-openviking 插件（共 ${total} 个文件）...")"
+  info "$(tr "Downloading openviking plugin from ${REPO}@${BRANCH} (${total} files)..." "正在从 ${REPO}@${BRANCH} 下载 openviking 插件（共 ${total} 个文件）...")"
   local max_retries=3
   for rel in "${files[@]}"; do
     i=$((i + 1))
@@ -621,7 +622,8 @@ configure_openclaw_plugin() {
   fi
 
   # Enable plugin (files already deployed to extensions dir by deploy_plugin)
-  "${oc_env[@]}" openclaw plugins enable memory-openviking || { err "$(tr "openclaw plugins enable failed" "openclaw 插件启用失败")"; exit 1; }
+  "${oc_env[@]}" openclaw plugins enable openviking || { err "$(tr "openclaw plugins enable failed" "openclaw 插件启用失败")"; exit 1; }
+  "${oc_env[@]}" openclaw config set plugins.slots.contextEngine openviking
 
   # Set gateway mode
   "${oc_env[@]}" openclaw config set gateway.mode local
@@ -629,17 +631,17 @@ configure_openclaw_plugin() {
   # Set plugin config for the selected mode
   if [[ "$SELECTED_MODE" == "local" ]]; then
     local ov_conf_path="${OPENVIKING_DIR}/ov.conf"
-    "${oc_env[@]}" openclaw config set plugins.entries.memory-openviking.config.mode local
-    "${oc_env[@]}" openclaw config set plugins.entries.memory-openviking.config.configPath "${ov_conf_path}"
-    "${oc_env[@]}" openclaw config set plugins.entries.memory-openviking.config.port "${SELECTED_SERVER_PORT}"
+    "${oc_env[@]}" openclaw config set plugins.entries.openviking.config.mode local
+    "${oc_env[@]}" openclaw config set plugins.entries.openviking.config.configPath "${ov_conf_path}"
+    "${oc_env[@]}" openclaw config set plugins.entries.openviking.config.port "${SELECTED_SERVER_PORT}"
   else
-    "${oc_env[@]}" openclaw config set plugins.entries.memory-openviking.config.mode remote
-    "${oc_env[@]}" openclaw config set plugins.entries.memory-openviking.config.baseUrl "${remote_base_url}"
+    "${oc_env[@]}" openclaw config set plugins.entries.openviking.config.mode remote
+    "${oc_env[@]}" openclaw config set plugins.entries.openviking.config.baseUrl "${remote_base_url}"
     if [[ -n "${remote_api_key}" ]]; then
-      "${oc_env[@]}" openclaw config set plugins.entries.memory-openviking.config.apiKey "${remote_api_key}"
+      "${oc_env[@]}" openclaw config set plugins.entries.openviking.config.apiKey "${remote_api_key}"
     fi
     if [[ -n "${remote_agent_id}" ]]; then
-      "${oc_env[@]}" openclaw config set plugins.entries.memory-openviking.config.agentId "${remote_agent_id}"
+      "${oc_env[@]}" openclaw config set plugins.entries.openviking.config.agentId "${remote_agent_id}"
     fi
   fi
 

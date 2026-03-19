@@ -7,10 +7,10 @@ description: OpenViking long-term memory plugin guide. Once installed, the plugi
 
 ## How It Works
 
-- **Auto-Capture**: At the end of a conversation, automatically extracts memories from user messages
+- **Auto-Capture**: At `afterTurn` (end of one user turn run), automatically extracts memories from user/assistant messages
   - `semantic` mode: captures all qualifying user text, relying on OpenViking's extraction pipeline to filter
   - `keyword` mode: only captures text matching trigger words (e.g. "remember", "preference", etc.)
-- **Auto-Recall**: Before a conversation starts, automatically searches for relevant memories and injects them into context
+- **Auto-Recall**: At `before_prompt_build`, automatically searches for relevant memories and injects them into context
 
 ## Available Tools
 
@@ -83,12 +83,13 @@ openclaw gateway
 
 # Check status
 openclaw status
+openclaw config get plugins.slots.contextEngine
 
 # Disable memory
-openclaw config set plugins.slots.memory none
+openclaw config set plugins.slots.contextEngine legacy
 
 # Enable memory
-openclaw config set plugins.slots.memory memory-openviking
+openclaw config set plugins.slots.contextEngine openviking
 ```
 
 Restart the gateway after changing the slot.
@@ -102,7 +103,7 @@ If you have multiple OpenClaw instances, use `--workdir` to target a specific on
 curl -fsSL ... | bash -s -- --workdir ~/.openclaw-openclaw-second
 
 # Setup helper
-npx ./examples/openclaw-memory-plugin/setup-helper --workdir ~/.openclaw-openclaw-second
+npx ./examples/openclaw-plugin/setup-helper --workdir ~/.openclaw-openclaw-second
 
 # Manual config (prefix openclaw commands)
 OPENCLAW_STATE_DIR=~/.openclaw-openclaw-second openclaw config set ...
@@ -113,6 +114,6 @@ OPENCLAW_STATE_DIR=~/.openclaw-openclaw-second openclaw config set ...
 | Symptom | Cause | Fix |
 |---------|-------|-----|
 | `extracted 0 memories` | Wrong API Key or model name | Check `api_key` and `model` in `ov.conf` |
-| `port occupied` | Port used by another process | Change port: `openclaw config set plugins.entries.memory-openviking.config.port 1934` |
+| `port occupied` | Port used by another process | Change port: `openclaw config set plugins.entries.openviking.config.port 1934` |
 | Plugin not loaded | Env file not sourced or slot not configured | Check `openclaw status` output |
 | Inaccurate recall | recallScoreThreshold too low | Increase threshold or adjust recallLimit |

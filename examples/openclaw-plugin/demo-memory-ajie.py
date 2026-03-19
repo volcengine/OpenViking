@@ -1,32 +1,31 @@
 #!/usr/bin/env python3
 """
-OpenClaw Memory Plugin 演示脚本 — 用户: 小美（日常生活记录）
+OpenClaw Plugin 演示脚本 — 用户: 阿杰（后端开发）
 
 通过 OpenClaw Gateway 的 Responses API (/v1/responses) 进行多轮对话，
 验证 OpenViking 记忆插件的端到端能力。消息经过完整 agent 流水线，
-插件的 before_agent_start（记忆注入）和 agent_end（记忆抽取）自动触发。
+插件的 before_prompt_build（记忆注入）和 afterTurn（记忆抽取）自动触发。
 
 前提: OpenClaw 配置中需开启 Responses API。在 openclaw.config.json 的 gateways 中添加:
 
     {
       "type": "openresponses-http",
-      "port": 18790
+      "port": 18789
     }
 
 然后启动 OpenClaw 即可在该端口使用 /v1/responses 端点。
 
 用法:
-    python demo-memory-xiaomei.py
-    python demo-memory-xiaomei.py --gateway http://127.0.0.1:2026
-    python demo-memory-xiaomei.py --phase chat     # 只跑对话
-    python demo-memory-xiaomei.py --phase verify   # 只跑验证（需先跑 chat）
+    python demo-memory-ajie.py
+    python demo-memory-ajie.py --gateway http://127.0.0.1:18789
+    python demo-memory-ajie.py --phase chat     # 只跑对话
+    python demo-memory-ajie.py --phase verify   # 只跑验证（需先跑 chat）
 
 依赖:
     pip install requests rich
 """
 
 import argparse
-import sys
 import time
 
 import requests
@@ -37,9 +36,9 @@ from rich.table import Table
 
 # ── 常量 ───────────────────────────────────────────────────────────────────
 
-USER_ID = "xiaomei"
-DISPLAY_NAME = "小美"
-DEFAULT_GATEWAY = "http://127.0.0.1:18790"
+USER_ID = "ajie"
+DISPLAY_NAME = "阿杰"
+DEFAULT_GATEWAY = "http://127.0.0.1:18789"
 
 console = Console()
 
@@ -47,35 +46,47 @@ console = Console()
 
 CHAT_MESSAGES = [
     # 第1轮 — 开场介绍
-    "嗨！我是小美，刚毕业不久，现在在一家互联网公司做运营。我想找个能帮我记录日常生活的小助手，比如记一下每天发生的事情、我的想法、还有想做的事情。你能帮帮我吗？",
-    # 第2轮 — 今天的心情和工作
-    "今天心情还不错！早上在地铁上看到了一个超级可爱的小猫咪，它主人带着它坐车，只露出个小脑袋，太萌了！对了，今天部门开会说下个月要做 618 大促，我负责写活动文案，有点紧张，这是我第一次独立负责这么重要的项目。",
-    # 第3轮 — 饮食习惯
-    "说到吃，中午我跟同事小丽一起去吃了楼下那家麻辣烫，超级好吃！我喜欢多放醋和麻酱，不太能吃辣。不过最近在减肥，不敢吃太多主食。你有没有什么好吃又不胖的推荐呀？",
-    # 第4轮 — 运动计划
-    "对了，我办了一张健身卡，就在我家小区旁边。上周去了一次，跑了 30 分钟步，还练了会儿瑜伽。结果第二天腿酸得不行，下楼都费劲。教练说让我每周去三次，我怕坚持不下来...",
-    # 第5轮 — 周末的计划
-    "这个周末你有什么建议吗？我想跟我男朋友一起出去。我们之前想过去看樱花，但好像花期快过了。要不看电影？最近有什么好看的电影吗？或者去探店？我知道有一家咖啡馆好像很不错。",
-    # 第6轮 — 我的爱好
-    "说起来，我平时喜欢追剧，尤其是那种甜宠剧，最近在看《归路》，太甜了！我还喜欢画画，虽然画得不太好，但挺解压的。偶尔也会看看书，最近在看《被讨厌的勇气》，挺有启发的。",
-    # 第7轮 — 过敏和小习惯
-    "哎呀，我差点忘了提醒你！我对芒果过敏，吃了会起疹子。上次在公司同事给了我一个芒果蛋糕，我不知道，吃了一口就进医院了，还好不严重。还有，我每天晚上睡觉前都要喝一杯热牛奶，不然会失眠。",
-    # 第8轮 — 想买的东西
-    "最近我种草了一个拍立得，就是富士的 mini12，粉色那款，颜值超级高！但有点贵，要 700 多块钱，还在犹豫要不要买。对了，我还想买一个投影仪，这样周末可以在家看电影。",
-    # 第9轮 — 同事和朋友
-    "说到同事，小丽人超好，她说会帮我一起想 618 的文案点子。还有，我闺蜜下周要结婚了！她是我们宿舍第一个结婚的，真为她开心。我还在想送什么礼物好呢，红包肯定要包，但想再加点特别的。",
-    # 第10轮 — 对话风格偏好
-    "好的，谢谢你听我说了这么多！以后跟我聊天的时候，轻松一点就好，像朋友一样。如果我不开心了，多安慰安慰我；如果我开心，就跟我一起开心。对了，多给我推荐好吃的好玩的，谢谢啦！",
+    "嗨，我是阿杰，是个后端开发工程师，最近在优化我们系统的性能。想找个助手帮我记录一下平时遇到的技术问题和解决方案，你能帮帮我吗？",
+    # 第2轮 — Redis 缓存问题
+    "说到问题，前几天刚遇到一个 Redis 缓存击穿的情况。热门商品的缓存过期了，瞬间大量请求打到数据库，差点把 DB 搞挂了。后来我加了互斥锁，只有一个请求去查 DB 并刷新缓存，才解决了问题。",
+    # 第3轮 — MySQL 慢查询
+    "还有个 MySQL 的问题，之前有个订单列表查询特别慢，看了一下慢查询日志，发现是没加索引。给 create_time 和 user_id 加了联合索引之后，查询时间从 2 秒降到了 50 毫秒，效果特别明显。",
+    # 第4轮 — Kafka 削峰填谷
+    "对了，我们还用 Kafka 做了削峰填谷。订单创建成功后先写入 Kafka，然后消费者慢慢处理，这样即使是秒杀活动也不怕了。我们还在 Kafka 里做了订单超时检查，30 分钟未支付的订单自动取消。",
+    # 第5轮 — 技术栈介绍
+    "说一下我们的技术栈吧：后端用的是 Spring Boot，缓存用 Redis，数据库是 MySQL，消息队列是 Kafka。部署在 Kubernetes 上，用 Prometheus + Grafana 做监控。你对这套技术栈熟悉吗？",
+    # 第6轮 — 工作习惯
+    "我一般早上 9 点到公司，先花 15 分钟看一下监控面板和告警信息，确保系统正常运行。然后上午写代码，下午开会或者帮同事 review code。对了，我用 IntelliJ IDEA 写代码，快捷键超好用！",
+    # 第7轮 — 踩过的坑
+    "说起踩过的坑，那可多了！比如有一次把 Redis 的过期时间设成了 10 秒而不是 10 分钟，结果缓存频繁失效；还有一次 MySQL 连接池满了，是因为有个地方连接没释放。每次踩坑我都会记下来，避免再犯。",
+    # 第8轮 — 最近在学习
+    "最近在看《Redis 设计与实现》这本书，讲得真好，终于理解 Redis 的数据结构底层是怎么实现的了。之前还看过《高性能 MySQL》，收获也很大。你有什么技术书推荐吗？",
+    # 第9轮 — 今天的任务
+    "今天的任务：晚上要优化一下 Kafka 消费者的配置，现在消费速度有点慢，想把批量消费参数调大一点。还有，要帮新来的同事小林搭建一下开发环境，他对 Kafka 不太熟。",
+    # 第10轮 — 对话偏好
+    "好的，以后跟我聊技术问题的时候，先讲一下原理，再给具体的代码示例，这样我理解得更透彻。另外，多提一些最佳实践，我想写出更健壮的代码。谢谢啦！",
 ]
 
 # ── 验证数据 (5 轮) ──────────────────────────────────────────────────────
 
 VERIFY_QUESTIONS = [
-    {"question": "帮我回忆一下我最近的生活和工作情况，请简洁回答", "expected": "618 活动文案、同事小丽、健身计划、减肥中"},
-    {"question": "周末想跟男朋友出去，有什么建议吗？请简洁回答", "expected": "樱花花期快过了，看电影或探店，喜欢咖啡馆"},
-    {"question": "想吃点东西，有什么要注意的吗？请简洁回答", "expected": "对芒果过敏，喜欢麻辣烫多放醋和麻酱，减肥中少吃主食"},
-    {"question": "我平时有什么爱好？请简洁回答", "expected": "追甜宠剧、画画、看书（被讨厌的勇气）"},
-    {"question": "我最近想买什么东西？请简洁回答", "expected": "富士 mini12 粉色拍立得、投影仪"},
+    {
+        "question": "帮我回忆一下最近遇到的技术问题和解决方案，请简洁回答",
+        "expected": "Redis 缓存击穿加互斥锁、MySQL 加索引、Kafka 削峰填谷",
+    },
+    {
+        "question": "我们的技术栈是什么？请简洁回答",
+        "expected": "Spring Boot、Redis、MySQL、Kafka、K8s、Prometheus + Grafana",
+    },
+    {
+        "question": "我踩过哪些技术坑？请简洁回答",
+        "expected": "Redis 过期时间设错、MySQL 连接池满了",
+    },
+    {
+        "question": "我的工作习惯是怎样的？请简洁回答",
+        "expected": "早上看监控、上午写代码、下午开会/review，用 IDEA",
+    },
+    {"question": "最近在看什么技术书？请简洁回答", "expected": "Redis 设计与实现、高性能 MySQL"},
 ]
 
 
@@ -129,7 +140,9 @@ def run_chat(gateway_url, delay):
 
     for i, msg in enumerate(CHAT_MESSAGES, 1):
         console.rule(f"[dim]{i}/{total}[/dim]", style="dim")
-        console.print(Panel(msg, title=f"[bold cyan]用户 [{i}/{total}][/bold cyan]", border_style="cyan"))
+        console.print(
+            Panel(msg, title=f"[bold cyan]用户 [{i}/{total}][/bold cyan]", border_style="cyan")
+        )
         try:
             data = send_message(gateway_url, msg, USER_ID, messages if messages else None)
             reply = extract_reply_text(data)
@@ -153,7 +166,9 @@ def run_chat(gateway_url, delay):
 
 def run_verify(gateway_url, delay):
     console.print()
-    console.rule(f"[bold]Phase 2: 验证记忆召回 — {DISPLAY_NAME} 新 Session ({len(VERIFY_QUESTIONS)} 轮)[/bold]")
+    console.rule(
+        f"[bold]Phase 2: 验证记忆召回 — {DISPLAY_NAME} 新 Session ({len(VERIFY_QUESTIONS)} 轮)[/bold]"
+    )
 
     # 用不同的 user 后缀确保 Gateway 派生出新 session
     verify_user = f"{USER_ID}-verify"
@@ -165,11 +180,13 @@ def run_verify(gateway_url, delay):
     for i, item in enumerate(VERIFY_QUESTIONS, 1):
         q, expected = item["question"], item["expected"]
         console.rule(f"[dim]{i}/{total}[/dim]", style="dim")
-        console.print(Panel(
-            f"{q}\n[dim]期望召回: {expected}[/dim]",
-            title=f"[bold cyan]验证 [{i}/{total}][/bold cyan]",
-            border_style="cyan",
-        ))
+        console.print(
+            Panel(
+                f"{q}\n[dim]期望召回: {expected}[/dim]",
+                title=f"[bold cyan]验证 [{i}/{total}][/bold cyan]",
+                border_style="cyan",
+            )
+        )
 
         try:
             # 每题独立发送，不带历史 → 回答正确 = 记忆召回生效
@@ -201,7 +218,9 @@ def run_verify(gateway_url, delay):
 
     ok = sum(1 for r in results if r.get("success"))
     console.print(f"\n[yellow]成功: {ok}/{total}[/yellow]")
-    console.print("[yellow]验证方式: 每个问题在新 session 中独立发送（无对话历史），回答正确说明 before_agent_start hook 成功召回了记忆。[/yellow]")
+    console.print(
+        "[yellow]验证方式: 每个问题在新 session 中独立发送（无对话历史），回答正确说明 before_prompt_build 阶段成功召回了记忆。[/yellow]"
+    )
 
 
 # ── 入口 ───────────────────────────────────────────────────────────────────
@@ -209,16 +228,22 @@ def run_verify(gateway_url, delay):
 
 def main():
     parser = argparse.ArgumentParser(description=f"Memory 演示 — {DISPLAY_NAME}")
-    parser.add_argument("--gateway", default=DEFAULT_GATEWAY,
-                        help=f"OpenClaw Gateway 地址 (默认: {DEFAULT_GATEWAY})")
-    parser.add_argument("--phase", choices=["all", "chat", "verify"], default="all",
-                        help="all=全部, chat=仅对话, verify=仅验证 (默认: all)")
-    parser.add_argument("--delay", type=float, default=3.0,
-                        help="轮次间等待秒数 (默认: 3)")
+    parser.add_argument(
+        "--gateway",
+        default=DEFAULT_GATEWAY,
+        help=f"OpenClaw Gateway 地址 (默认: {DEFAULT_GATEWAY})",
+    )
+    parser.add_argument(
+        "--phase",
+        choices=["all", "chat", "verify"],
+        default="all",
+        help="all=全部, chat=仅对话, verify=仅验证 (默认: all)",
+    )
+    parser.add_argument("--delay", type=float, default=3.0, help="轮次间等待秒数 (默认: 3)")
     args = parser.parse_args()
 
     gateway_url = args.gateway.rstrip("/")
-    console.print(f"[bold]OpenClaw Memory Plugin 演示 — {DISPLAY_NAME}[/bold]")
+    console.print(f"[bold]OpenClaw Plugin 演示 — {DISPLAY_NAME}[/bold]")
     console.print(f"[yellow]Gateway:[/yellow] {gateway_url}")
 
     if args.phase in ("all", "chat"):

@@ -1,5 +1,5 @@
 {
-  "name": "@openclaw/memory-openviking",
+  "name": "@openclaw/openviking",
   "version": "2026.2.6-3",
   "description": "OpenClaw OpenViking-backed long-term memory plugin (install to ~/.openclaw/extensions)",
   "type": "module",

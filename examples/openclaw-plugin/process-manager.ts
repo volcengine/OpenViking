@@ -151,7 +151,7 @@ export async function prepareLocalPort(
 ): Promise<number> {
   const isOpenViking = await quickHealthCheck(`http://127.0.0.1:${port}`, 2000);
   if (isOpenViking) {
-    logger.info?.(`memory-openviking: killing stale OpenViking on port ${port}`);
+    logger.info?.(`openviking: killing stale OpenViking on port ${port}`);
     await killProcessOnPort(port, logger);
     return port;
   }
@@ -162,17 +162,17 @@ export async function prepareLocalPort(
   }
 
   // Port occupied by non-OpenViking process — find next free port
-  logger.warn?.(`memory-openviking: port ${port} is occupied by another process, searching for a free port...`);
+  logger.warn?.(`openviking: port ${port} is occupied by another process, searching for a free port...`);
   for (let candidate = port + 1; candidate <= port + maxRetries; candidate++) {
     if (candidate > 65535) break;
     const taken = await quickTcpProbe("127.0.0.1", candidate, 300);
     if (!taken) {
-      logger.info?.(`memory-openviking: using free port ${candidate} instead of ${port}`);
+      logger.info?.(`openviking: using free port ${candidate} instead of ${port}`);
       return candidate;
     }
   }
   throw new Error(
-    `memory-openviking: port ${port} is occupied and no free port found in range ${port + 1}-${port + maxRetries}`,
+    `openviking: port ${port} is occupied and no free port found in range ${port + 1}-${port + maxRetries}`,
   );
 }
 
@@ -194,7 +194,7 @@ async function killProcessOnPortWin(port: number, logger: ProcessLogger): Promis
     }
     for (const pid of pids) {
       if (pid > 0) {
-        logger.info?.(`memory-openviking: killing pid ${pid} on port ${port}`);
+        logger.info?.(`openviking: killing pid ${pid} on port ${port}`);
         try { execSync(`taskkill /PID ${pid} /F`, { shell: "cmd.exe" }); } catch { /* already gone */ }
       }
     }
@@ -225,7 +225,7 @@ async function killProcessOnPortUnix(port: number, logger: ProcessLogger): Promi
       } catch { /* ss not available */ }
     }
     for (const pid of pids) {
-      logger.info?.(`memory-openviking: killing pid ${pid} on port ${port}`);
+      logger.info?.(`openviking: killing pid ${pid} on port ${port}`);
       try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
     }
     if (pids.length) await new Promise((r) => setTimeout(r, 500));
@@ -286,7 +286,7 @@ export function resolvePythonCommand(logger: ProcessLogger): string {
 
   if (pythonCmd === defaultPy) {
     logger.info?.(
-      `memory-openviking: 未解析到 ${defaultPy} 路径，将用 "${defaultPy}"。若 openviking 在自定义 Python 下，请设置 OPENVIKING_PYTHON` +
+      `openviking: 未解析到 ${defaultPy} 路径，将用 "${defaultPy}"。若 openviking 在自定义 Python 下，请设置 OPENVIKING_PYTHON` +
       (IS_WIN ? ' 或 call "%USERPROFILE%\\.openclaw\\openviking.env.bat"' : " 或 source ~/.openclaw/openviking.env"),
     );
   }
