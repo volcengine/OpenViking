@@ -651,6 +651,9 @@ class SemanticProcessor(DequeueHandlerBase):
                 verbose = code_mode == "ast_llm"
                 skeleton_text = extract_skeleton(file_name, content, verbose=verbose)
                 if skeleton_text:
+                    max_skeleton_chars = get_openviking_config().semantic.max_skeleton_chars
+                    if len(skeleton_text) > max_skeleton_chars:
+                        skeleton_text = skeleton_text[:max_skeleton_chars]
                     if code_mode == "ast":
                         return {"name": file_name, "summary": skeleton_text}
                     else:  # ast_llm
@@ -1069,6 +1072,7 @@ class SemanticProcessor(DequeueHandlerBase):
         summary_dict: Dict[str, str],
         ctx: Optional[RequestContext] = None,
         semantic_msg_id: Optional[str] = None,
+        use_summary: bool = False,
     ) -> None:
         """Vectorize a single file using its content or summary."""
         from openviking.utils.embedding_utils import vectorize_file
@@ -1081,4 +1085,5 @@ class SemanticProcessor(DequeueHandlerBase):
             context_type=context_type,
             ctx=active_ctx,
             semantic_msg_id=semantic_msg_id,
+            use_summary=use_summary,
         )

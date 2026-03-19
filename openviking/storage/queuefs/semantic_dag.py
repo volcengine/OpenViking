@@ -57,6 +57,7 @@ class VectorizeTask:
     file_path: Optional[str] = None
     summary_dict: Optional[Dict[str, str]] = None
     parent_uri: Optional[str] = None
+    use_summary: bool = False
     # For directory tasks
     abstract: Optional[str] = None
     overview: Optional[str] = None
@@ -192,6 +193,7 @@ class SemanticDagExecutor:
                             summary_dict=task.summary_dict,
                             ctx=task.ctx,
                             semantic_msg_id=task.semantic_msg_id,
+                            use_summary=task.use_summary,
                         )
                     )
                 else:
@@ -432,6 +434,7 @@ class SemanticDagExecutor:
 
         try:
             if need_vectorize:
+                use_summary = bool(summary_dict.get("summary"))
                 task = VectorizeTask(
                     task_type="file",
                     uri=file_path,
@@ -441,6 +444,7 @@ class SemanticDagExecutor:
                     file_path=file_path,
                     summary_dict=summary_dict,
                     parent_uri=parent_uri,
+                    use_summary=use_summary,
                 )
                 await self._add_vectorize_task(task)
         except Exception as e:
