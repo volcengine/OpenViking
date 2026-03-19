@@ -73,6 +73,17 @@
       "placeholder": "0.01",
       "advanced": true
     },
+    "recallMaxContentChars": {
+      "label": "Recall Max Content Chars",
+      "placeholder": "500",
+      "advanced": true,
+      "help": "Maximum characters per memory content in auto-recall injection"
+    },
+    "recallPreferAbstract": {
+      "label": "Recall Prefer Abstract",
+      "advanced": true,
+      "help": "Use memory abstract instead of fetching full content when available"
+    },
     "ingestReplyAssist": {
       "label": "Ingest Reply Assist",
       "help": "When transcript-like memory ingestion is detected, add a lightweight reply instruction to reduce NO_REPLY.",
@@ -136,6 +147,12 @@
       },
       "recallScoreThreshold": {
         "type": "number"
+      },
+      "recallMaxContentChars": {
+        "type": "number"
+      },
+      "recallPreferAbstract": {
+        "type": "boolean"
       },
       "ingestReplyAssist": {
         "type": "boolean"

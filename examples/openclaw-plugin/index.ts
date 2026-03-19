@@ -488,8 +488,8 @@ const contextEnginePlugin = {
                 memories,
                 (uri) => client.read(uri),
                 {
-                  recallPreferAbstract: true,
-                  recallMaxContentChars: 500,
+                  recallPreferAbstract: cfg.recallPreferAbstract,
+                  recallMaxContentChars: cfg.recallMaxContentChars,
                 },
               );
               const memoryContext = memoryLines.join("\n");

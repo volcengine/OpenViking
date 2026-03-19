@@ -20,6 +20,8 @@ export type MemoryOpenVikingConfig = {
   autoRecall?: boolean;
   recallLimit?: number;
   recallScoreThreshold?: number;
+  recallMaxContentChars?: number;
+  recallPreferAbstract?: boolean;
   ingestReplyAssist?: boolean;
   ingestReplyAssistMinSpeakerTurns?: number;
   ingestReplyAssistMinChars?: number;
@@ -33,6 +35,8 @@ const DEFAULT_CAPTURE_MODE = "semantic";
 const DEFAULT_CAPTURE_MAX_LENGTH = 24000;
 const DEFAULT_RECALL_LIMIT = 6;
 const DEFAULT_RECALL_SCORE_THRESHOLD = 0.15;
+const DEFAULT_RECALL_MAX_CONTENT_CHARS = 500;
+const DEFAULT_RECALL_PREFER_ABSTRACT = true;
 const DEFAULT_INGEST_REPLY_ASSIST = true;
 const DEFAULT_INGEST_REPLY_ASSIST_MIN_SPEAKER_TURNS = 2;
 const DEFAULT_INGEST_REPLY_ASSIST_MIN_CHARS = 120;
@@ -109,6 +113,8 @@ export const memoryOpenVikingConfigSchema = {
         "autoRecall",
         "recallLimit",
         "recallScoreThreshold",
+        "recallMaxContentChars",
+        "recallPreferAbstract",
         "ingestReplyAssist",
         "ingestReplyAssistMinSpeakerTurns",
         "ingestReplyAssistMinChars",
@@ -163,6 +169,11 @@ export const memoryOpenVikingConfigSchema = {
         1,
         Math.max(0, toNumber(cfg.recallScoreThreshold, DEFAULT_RECALL_SCORE_THRESHOLD)),
       ),
+      recallMaxContentChars: Math.max(
+        50,
+        Math.min(10000, Math.floor(toNumber(cfg.recallMaxContentChars, DEFAULT_RECALL_MAX_CONTENT_CHARS))),
+      ),
+      recallPreferAbstract: cfg.recallPreferAbstract !== false,
       ingestReplyAssist: cfg.ingestReplyAssist !== false,
       ingestReplyAssistMinSpeakerTurns: Math.max(
         1,
@@ -256,6 +267,17 @@ export const memoryOpenVikingConfigSchema = {
       label: "Recall Score Threshold",
       placeholder: String(DEFAULT_RECALL_SCORE_THRESHOLD),
       advanced: true,
+    },
+    recallMaxContentChars: {
+      label: "Recall Max Content Chars",
+      placeholder: String(DEFAULT_RECALL_MAX_CONTENT_CHARS),
+      advanced: true,
+      help: "Maximum characters per memory content in auto-recall injection. Content exceeding this is truncated.",
+    },
+    recallPreferAbstract: {
+      label: "Recall Prefer Abstract",
+      advanced: true,
+      help: "Use memory abstract instead of fetching full content when abstract is available. Reduces token usage.",
     },
     ingestReplyAssist: {
       label: "Ingest Reply Assist",

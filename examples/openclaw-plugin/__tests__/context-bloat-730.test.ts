@@ -85,6 +85,40 @@ describe("Slice B: prefer abstract over full content fetch", () => {
   });
 });
 
+describe("Slice D: recallMaxContentChars truncation", () => {
+  it("should truncate content exceeding recallMaxContentChars", async () => {
+    const { buildMemoryLines } = await import("../index.js");
+
+    const longContent = "A".repeat(2000);
+    const mockRead = vi.fn().mockResolvedValue(longContent);
+
+    const memories: FindResultItem[] = [
+      mockMemory({
+        uri: "viking://user/memories/1",
+        abstract: "",
+        level: 2,
+        score: 0.8,
+      }),
+    ];
+
+    const lines = await buildMemoryLines(memories, mockRead, {
+      recallPreferAbstract: false,
+      recallMaxContentChars: 500,
+    });
+
+    // Content should be truncated to 500 chars + "..."
+    const contentPart = lines[0]!.replace("- [memory] ", "");
+    expect(contentPart.length).toBeLessThanOrEqual(503); // 500 + "..."
+    expect(contentPart.endsWith("...")).toBe(true);
+  });
+
+  it("should have recallMaxContentChars and recallPreferAbstract in parsed config", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({});
+    expect(cfg.recallMaxContentChars).toBe(500);
+    expect(cfg.recallPreferAbstract).toBe(true);
+  });
+});
+
 describe("Slice C: isLeafLikeMemory narrowing", () => {
   it("should NOT boost .md URI items that are not level 2", () => {
     const mdButNotLeaf = mockMemory({
