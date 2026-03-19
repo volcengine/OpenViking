@@ -63,6 +63,7 @@ class _DummyTracker:
 
 
 def _mock_transaction_layer(monkeypatch):
+    """Mock lock layer: LockContext as no-op passthrough."""
     mock_handle = MagicMock()
     monkeypatch.setattr(
         "openviking.storage.transaction.lock_context.LockContext.__aenter__",
