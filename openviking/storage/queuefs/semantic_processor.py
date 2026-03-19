@@ -365,16 +365,13 @@ class SemanticProcessor(DequeueHandlerBase):
         file_summaries: List[Dict[str, str]] = []
         existing_summaries: Dict[str, str] = {}
 
-        if msg.changes:
-            try:
-                old_overview = await viking_fs.read_file(f"{dir_uri}/.overview.md", ctx=ctx)
-                if old_overview:
-                    existing_summaries = self._parse_overview_md(old_overview)
-                    logger.info(
-                        f"Parsed {len(existing_summaries)} existing summaries from overview.md"
-                    )
-            except Exception as e:
-                logger.debug(f"No existing overview.md found for {dir_uri}: {e}")
+        try:
+            old_overview = await viking_fs.read_file(f"{dir_uri}/.overview.md", ctx=ctx)
+            if old_overview:
+                existing_summaries = self._parse_overview_md(old_overview)
+                logger.info(f"Parsed {len(existing_summaries)} existing summaries from overview.md")
+        except Exception as e:
+            logger.debug(f"No existing overview.md found for {dir_uri}: {e}")
 
         changed_files: Set[str] = set()
         if msg.changes:
