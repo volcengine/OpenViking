@@ -19,6 +19,26 @@ from openviking_cli.utils import VikingURI, get_logger
 
 logger = get_logger(__name__)
 
+_PREFER_SUMMARY_FILENAMES = {
+    "cargo.lock",
+    "uv.lock",
+    "poetry.lock",
+    "pdm.lock",
+    "yarn.lock",
+    "package-lock.json",
+    "composer.lock",
+    "gemfile.lock",
+    "go.sum",
+    "pnpm-lock.yaml",
+    "pnpm-lock.yml",
+    "bun.lockb",
+}
+_PREFER_SUMMARY_EXTENSIONS = {
+    ".lock",
+    ".sum",
+}
+_DIRECT_TEXT_VECTORIZE_CHAR_BUDGET = 12000
+
 
 def _owner_space_for_uri(uri: str, ctx: RequestContext) -> str:
     """Derive owner_space from a URI."""
@@ -35,13 +55,30 @@ def get_resource_content_type(file_name: str) -> Optional[ResourceContentType]:
     Returns None if the file type is not recognized.
     """
     file_name = file_name.lower()
+    text_filenames = {
+        "makefile",
+        "dockerfile",
+        "containerfile",
+        "gemfile",
+        "procfile",
+        "license",
+        "copying",
+        "notice",
+        "authors",
+        "changelog",
+        "readme",
+    }
 
     text_extensions = {
         ".txt",
         ".md",
+        ".markdown",
         ".csv",
+        ".tsv",
         ".json",
         ".xml",
+        ".html",
+        ".htm",
         ".py",
         ".js",
         ".ts",
@@ -65,12 +102,19 @@ def get_resource_content_type(file_name: str) -> Optional[ResourceContentType]:
         ".r",
         ".m",
         ".pl",
+        ".as",
         ".toml",
         ".yaml",
         ".yml",
         ".ini",
         ".cfg",
         ".conf",
+        ".css",
+        ".scss",
+        ".sass",
+        ".less",
+        ".example",
+        ".in",
         ".tsx",
         ".jsx",
         ".cs",
@@ -80,6 +124,12 @@ def get_resource_content_type(file_name: str) -> Optional[ResourceContentType]:
         ".tf",
         ".proto",
         ".gradle",
+        ".cmake",
+        ".mk",
+        ".make",
+        ".mod",
+        ".sum",
+        ".lock",
         ".cc",
         ".cxx",
         ".hpp",
@@ -98,7 +148,9 @@ def get_resource_content_type(file_name: str) -> Optional[ResourceContentType]:
     video_extensions = {".mp4", ".avi", ".mov", ".wmv", ".flv"}
     audio_extensions = {".mp3", ".wav", ".aac", ".flac"}
 
-    if any(file_name.endswith(ext) for ext in text_extensions):
+    if file_name in text_filenames or any(file_name.endswith(ext) for ext in text_extensions):
+        return ResourceContentType.TEXT
+    if file_name.endswith(".conf.example") or file_name.endswith(".ovcli.conf.example"):
         return ResourceContentType.TEXT
     elif any(file_name.endswith(ext) for ext in image_extensions):
         return ResourceContentType.IMAGE
@@ -108,6 +160,19 @@ def get_resource_content_type(file_name: str) -> Optional[ResourceContentType]:
         return ResourceContentType.AUDIO
 
     return None
+
+
+def _should_prefer_summary_for_vectorization(file_name: str) -> bool:
+    file_name = file_name.lower()
+    if file_name in _PREFER_SUMMARY_FILENAMES:
+        return True
+    return any(file_name.endswith(ext) for ext in _PREFER_SUMMARY_EXTENSIONS)
+
+
+def _truncate_text_for_embedding(text: str, max_chars: int = _DIRECT_TEXT_VECTORIZE_CHAR_BUDGET) -> str:
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "\n...(truncated)"
 
 
 async def vectorize_directory_meta(
@@ -220,12 +285,26 @@ async def vectorize_file(
                 )
                 return
         elif content_type == ResourceContentType.TEXT:
+            prefer_summary = _should_prefer_summary_for_vectorization(file_name)
+            if prefer_summary and summary:
+                context.set_vectorize(Vectorize(text=summary))
+                logger.debug(
+                    "Using semantic summary instead of raw content for vectorization: %s",
+                    file_path,
+                )
+                embedding_msg = EmbeddingMsgConverter.from_context(context)
+                if not embedding_msg:
+                    return
+                await embedding_queue.enqueue(embedding_msg)
+                logger.debug(f"Enqueued file for vectorization: {file_path}")
+                return
+
             # For text files, try to read content
             try:
                 content = await viking_fs.read_file(file_path, ctx=ctx)
                 if isinstance(content, bytes):
                     content = content.decode("utf-8", errors="replace")
-                context.set_vectorize(Vectorize(text=content))
+                context.set_vectorize(Vectorize(text=_truncate_text_for_embedding(content)))
             except Exception as e:
                 logger.warning(
                     f"Failed to read file content for {file_path}, falling back to summary: {e}"

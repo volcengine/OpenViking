@@ -3,6 +3,7 @@
 """SemanticProcessor: Processes messages from SemanticQueue, generates .abstract.md and .overview.md."""
 
 import asyncio
+from functools import lru_cache
 from typing import Any, Dict, List, Optional, Tuple
 
 from openviking.parse.parsers.constants import (
@@ -30,6 +31,52 @@ from openviking_cli.utils.config import get_openviking_config
 from openviking_cli.utils.logger import get_logger
 
 logger = get_logger(__name__)
+
+_SEMANTIC_CONTENT_TOKEN_BUDGET = 6000
+
+
+@lru_cache(maxsize=16)
+def _get_token_encoder(model_name: str):
+    """Best-effort tokenizer lookup for LLM prompt budgeting."""
+    try:
+        import tiktoken
+    except ImportError:
+        return None
+
+    if model_name:
+        try:
+            return tiktoken.encoding_for_model(model_name)
+        except KeyError:
+            pass
+
+    try:
+        return tiktoken.get_encoding("cl100k_base")
+    except Exception:
+        return None
+
+
+def _truncate_text_by_token_budget(text: str, model_name: str, max_tokens: int) -> str:
+    """Trim file content before rendering it into a summary prompt."""
+    if max_tokens <= 0 or not text:
+        return text
+
+    encoder = _get_token_encoder(model_name)
+    suffix = "\n...(truncated)"
+    if encoder is not None:
+        token_ids = encoder.encode(text)
+        if len(token_ids) <= max_tokens:
+            return text
+        suffix_tokens = encoder.encode(suffix)
+        budget = max(1, max_tokens - len(suffix_tokens))
+        return encoder.decode(token_ids[:budget]) + suffix
+
+    estimated_tokens = max(1, len(text.encode("utf-8")) // 2)
+    if estimated_tokens <= max_tokens:
+        return text
+
+    shrink_ratio = max_tokens / estimated_tokens
+    target_chars = max(1, int(len(text) * shrink_ratio * 0.9))
+    return text[:target_chars] + suffix
 
 
 class SemanticProcessor(DequeueHandlerBase):
@@ -321,10 +368,6 @@ class SemanticProcessor(DequeueHandlerBase):
 
         # Read file content (limit length)
         content = await viking_fs.read_file(file_path, ctx=active_ctx)
-
-        # Limit content length (about 10000 tokens)
-        max_chars = 30000
-        content = await viking_fs.read_file(file_path, ctx=active_ctx)
         if isinstance(content, bytes):
             # Try to decode with error handling for text files
             try:
@@ -333,10 +376,15 @@ class SemanticProcessor(DequeueHandlerBase):
                 logger.warning(f"Failed to decode file as UTF-8, skipping: {file_path}")
                 return {"name": file_name, "summary": ""}
 
-        # Limit content length (about 10000 tokens)
-        max_chars = 30000
-        if len(content) > max_chars:
-            content = content[:max_chars] + "\n...(truncated)"
+        model_name = getattr(vlm.get_vlm_instance(), "model_name", "") if vlm.is_available() else ""
+        truncated_content = _truncate_text_by_token_budget(
+            content, model_name, _SEMANTIC_CONTENT_TOKEN_BUDGET
+        )
+        if truncated_content != content:
+            logger.debug(
+                "Truncated file content for summary generation: %s", file_path
+            )
+            content = truncated_content
 
         # Generate summary
         if not vlm.is_available():
