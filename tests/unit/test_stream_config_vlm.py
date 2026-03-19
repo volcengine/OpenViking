@@ -131,7 +131,10 @@ class TestVLMStreamConfig:
             for chunk in chunks:
                 yield chunk
 
-        mock_client.chat.completions.create.return_value = async_generator()
+        async def mock_create(*args, **kwargs):
+            return async_generator()
+
+        mock_client.chat.completions.create = mock_create
         mock_async_openai_class.return_value = mock_client
 
         vlm = OpenAIVLM(
@@ -217,7 +220,10 @@ class TestVLMStreamConfig:
             for chunk in chunks:
                 yield chunk
 
-        mock_client.chat.completions.create.return_value = async_generator()
+        async def mock_create(*args, **kwargs):
+            return async_generator()
+
+        mock_client.chat.completions.create = mock_create
         mock_async_openai_class.return_value = mock_client
 
         vlm = OpenAIVLM(
