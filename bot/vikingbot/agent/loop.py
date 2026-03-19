@@ -452,15 +452,13 @@ class AgentLoop:
                 return OutboundMessage(
                     session_key=msg.session_key, content="🐈 New session started. Memory consolidated.", metadata=msg.metadata
                 )
-            if cmd == "/remember":
+            if cmd == "/compact":
                 if not self._check_cmd_auth(msg):
                     return OutboundMessage(
                         session_key=msg.session_key, content="🐈 Sorry, you are not authorized to use this command.",
                         metadata=msg.metadata
                     )
                 session_clone = session.clone()
-                session.clear()
-                await self.sessions.save(session)
                 await self._consolidate_viking_memory(session_clone)
                 return OutboundMessage(
                     session_key=msg.session_key, content="This conversation has been submitted to memory storage.", metadata=msg.metadata
@@ -475,7 +473,6 @@ class AgentLoop:
             # Debug mode handling
             if self.config.mode == BotMode.DEBUG:
                 # In debug mode, only record message to session, no processing or reply
-                session = self.sessions.get_or_create(msg.session_key)
                 session.add_message("user", msg.content, sender_id=msg.sender_id)
                 await self.sessions.save(session)
                 return None
@@ -593,9 +590,9 @@ class AgentLoop:
                 return
 
             # use openviking tools to extract memory
-            config = load_config()
+            config = self.config
             if config.mode == BotMode.READONLY:
-                if not config.channels_config and not config.channels_config.get_all_channels():
+                if not config.channels_config or not config.channels_config.get_all_channels():
                     return
                 allow_from = [config.ov_server.admin_user_id]
                 for channel_config in config.channels_config.get_all_channels():
@@ -722,14 +719,17 @@ Respond with ONLY valid JSON, no markdown fences."""
         """
         if self.config.mode == BotMode.NORMAL:
             return True
-        channel_config = None
+        allow_from = []
+        if self.config.ov_server and self.config.ov_server.admin_user_id:
+            allow_from.append(self.config.ov_server.admin_user_id)
         for channel in self.config.channels_config.get_all_channels():
             if channel.channel_key() == msg.session_key.channel_key():
-                channel_config = channel
+                if channel.allow_from:
+                    allow_from.extend(channel.allow_from)
                 break
 
         # If channel not found or sender not in allow_from list, ignore message
-        if not channel_config or msg.sender_id not in channel_config.allow_from:
+        if msg.sender_id not in allow_from:
             logger.debug(f"Sender {msg.sender_id} not allowed in channel {msg.session_key.channel_key()}")
             return False
         return True
