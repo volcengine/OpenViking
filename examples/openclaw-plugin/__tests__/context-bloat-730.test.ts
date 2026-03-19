@@ -119,6 +119,53 @@ describe("Slice D: recallMaxContentChars truncation", () => {
   });
 });
 
+describe("Slice E: tokenBudget enforcement", () => {
+  it("should stop injecting when token budget is exhausted", async () => {
+    const { buildMemoryLinesWithBudget } = await import("../index.js");
+
+    // Each memory ~200 chars -> ~50 tokens per line (200 chars + "- [memory] " prefix)
+    const memories: FindResultItem[] = Array.from({ length: 10 }, (_, i) =>
+      mockMemory({
+        uri: `viking://user/memories/${i}`,
+        abstract: "A".repeat(200),
+        level: 2,
+        score: 0.8 - i * 0.01,
+      }),
+    );
+
+    const mockRead = vi.fn().mockResolvedValue("should not be called");
+
+    const { lines, estimatedTokens } = await buildMemoryLinesWithBudget(
+      memories,
+      mockRead,
+      {
+        recallPreferAbstract: true,
+        recallMaxContentChars: 500,
+        recallTokenBudget: 100,
+      },
+    );
+
+    // Budget = 100 tokens. Each line ~53 tokens ((200 + 13 prefix chars) / 4).
+    // Should inject ~1-2 memories, not all 10.
+    expect(lines.length).toBeLessThanOrEqual(3);
+    expect(lines.length).toBeGreaterThan(0);
+    expect(estimatedTokens).toBeLessThanOrEqual(120);
+  });
+
+  it("should estimate tokens as ceil(chars/4)", async () => {
+    const { estimateTokenCount } = await import("../index.js");
+    expect(estimateTokenCount("")).toBe(0);
+    expect(estimateTokenCount("abcd")).toBe(1);
+    expect(estimateTokenCount("abcde")).toBe(2);
+    expect(estimateTokenCount("A".repeat(100))).toBe(25);
+  });
+
+  it("should have recallTokenBudget in parsed config with default 2000", () => {
+    const cfg = memoryOpenVikingConfigSchema.parse({});
+    expect(cfg.recallTokenBudget).toBe(2000);
+  });
+});
+
 describe("Slice C: isLeafLikeMemory narrowing", () => {
   it("should NOT boost .md URI items that are not level 2", () => {
     const mdButNotLeaf = mockMemory({

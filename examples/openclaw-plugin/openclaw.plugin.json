@@ -84,6 +84,12 @@
       "advanced": true,
       "help": "Use memory abstract instead of fetching full content when available"
     },
+    "recallTokenBudget": {
+      "label": "Recall Token Budget",
+      "placeholder": "2000",
+      "advanced": true,
+      "help": "Maximum estimated tokens for auto-recall memory injection"
+    },
     "ingestReplyAssist": {
       "label": "Ingest Reply Assist",
       "help": "When transcript-like memory ingestion is detected, add a lightweight reply instruction to reduce NO_REPLY.",
@@ -153,6 +159,9 @@
       },
       "recallPreferAbstract": {
         "type": "boolean"
+      },
+      "recallTokenBudget": {
+        "type": "number"
       },
       "ingestReplyAssist": {
         "type": "boolean"

@@ -484,16 +484,19 @@ const contextEnginePlugin = {
             const memories = pickMemoriesForInjection(processed, cfg.recallLimit, queryText);
 
             if (memories.length > 0) {
-              const memoryLines = await buildMemoryLines(
+              const { lines: memoryLines, estimatedTokens } = await buildMemoryLinesWithBudget(
                 memories,
                 (uri) => client.read(uri),
                 {
                   recallPreferAbstract: cfg.recallPreferAbstract,
                   recallMaxContentChars: cfg.recallMaxContentChars,
+                  recallTokenBudget: cfg.recallTokenBudget,
                 },
               );
               const memoryContext = memoryLines.join("\n");
-              api.logger.info(`openviking: injecting ${memories.length} memories into context`);
+              api.logger.info(
+                `openviking: injecting ${memoryLines.length} memories (~${estimatedTokens} tokens, budget=${cfg.recallTokenBudget})`,
+              );
               api.logger.info(
                 `openviking: inject-detail ${toJsonLog({ count: memories.length, memories: summarizeInjectionMemories(memories) })}`,
               );
@@ -684,6 +687,12 @@ const contextEnginePlugin = {
   },
 };
 
+/** Estimate token count using chars/4 heuristic (adequate for budget enforcement). */
+export function estimateTokenCount(text: string): number {
+  if (!text) return 0;
+  return Math.ceil(text.length / 4);
+}
+
 export type BuildMemoryLinesOptions = {
   recallPreferAbstract: boolean;
   recallMaxContentChars: number;
@@ -721,6 +730,61 @@ export async function buildMemoryLines(
     lines.push(`- [${item.category ?? "memory"}] ${content}`);
   }
   return lines;
+}
+
+export type BuildMemoryLinesWithBudgetOptions = BuildMemoryLinesOptions & {
+  recallTokenBudget: number;
+};
+
+export async function buildMemoryLinesWithBudget(
+  memories: FindResultItem[],
+  readFn: (uri: string) => Promise<string>,
+  options: BuildMemoryLinesWithBudgetOptions,
+): Promise<{ lines: string[]; estimatedTokens: number }> {
+  let budgetRemaining = options.recallTokenBudget;
+  const lines: string[] = [];
+  let totalTokens = 0;
+
+  for (const item of memories) {
+    if (budgetRemaining <= 0) {
+      break;
+    }
+
+    let content: string;
+
+    if (options.recallPreferAbstract && item.abstract?.trim()) {
+      content = item.abstract.trim();
+    } else if (item.level === 2) {
+      try {
+        const fullContent = await readFn(item.uri);
+        content =
+          fullContent && typeof fullContent === "string" && fullContent.trim()
+            ? fullContent.trim()
+            : (item.abstract ?? item.uri);
+      } catch {
+        content = item.abstract ?? item.uri;
+      }
+    } else {
+      content = item.abstract ?? item.uri;
+    }
+
+    if (content.length > options.recallMaxContentChars) {
+      content = content.slice(0, options.recallMaxContentChars) + "...";
+    }
+
+    const line = `- [${item.category ?? "memory"}] ${content}`;
+    const lineTokens = estimateTokenCount(line);
+
+    if (lineTokens > budgetRemaining && lines.length > 0) {
+      break;
+    }
+
+    lines.push(line);
+    totalTokens += lineTokens;
+    budgetRemaining -= lineTokens;
+  }
+
+  return { lines, estimatedTokens: totalTokens };
 }
 
 export default contextEnginePlugin;
