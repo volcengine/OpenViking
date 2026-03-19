@@ -15,21 +15,24 @@ class TavilyBackend(WebSearchBackend):
 
     def __init__(self, api_key: str | None = None):
         self.api_key = api_key or os.environ.get("TAVILY_API_KEY", "")
+        if self.api_key:
+            from tavily import AsyncTavilyClient
+
+            self._client = AsyncTavilyClient(api_key=self.api_key)
+        else:
+            self._client = None
 
     @property
     def is_available(self) -> bool:
         return bool(self.api_key)
 
     async def search(self, query: str, count: int, **kwargs: Any) -> str:
-        if not self.api_key:
+        if not self._client:
             return "Error: TAVILY_API_KEY not configured"
 
         try:
-            from tavily import TavilyClient
-
             n = min(max(count, 1), 20)
-            client = TavilyClient(api_key=self.api_key)
-            response = client.search(
+            response = await self._client.search(
                 query=query,
                 max_results=n,
                 search_depth="basic",
@@ -43,7 +46,9 @@ class TavilyBackend(WebSearchBackend):
             for i, item in enumerate(results[:n], 1):
                 lines.append(f"{i}. {item.get('title', '')}\n   {item.get('url', '')}")
                 if content := item.get("content"):
-                    lines.append(f"   {content[:500]}...")
+                    snippet = content[:500]
+                    suffix = "..." if len(content) > 500 else ""
+                    lines.append(f"   {snippet}{suffix}")
             return "\n".join(lines)
         except Exception as e:
             return f"Error: {e}"
