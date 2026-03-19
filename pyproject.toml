@@ -145,6 +145,12 @@ bot-opencode = ["opencode-ai>=0.1.0a0"]
 bot-full = [
     "openviking[bot,bot-langfuse,bot-telegram,bot-feishu,bot-dingtalk,bot-slack,bot-qq,bot-sandbox,bot-fuse,bot-opencode]",
 ]
+benchmark = [
+    "langchain>=1.0.0",
+    "langchain-core>=1.0.0",
+    "langchain-openai>=1.0.0",
+    "tiktoken>=0.5.0",
+]
 
 [project.urls]
 Homepage = "https://github.com/volcengine/openviking"
