@@ -179,6 +179,22 @@ await client.add_resource(
 await client.wait_processed()
 ```
 
+### How should I integrate OpenViking with the OpenAI Agents SDK or a multi-agent pipeline?
+
+Use OpenViking as the durable context layer and keep each agent runtime session narrow.
+
+Recommended pattern:
+- keep shared knowledge in `viking://resources/`
+- keep user preferences in `viking://user/`
+- keep agent-local heuristics in `viking://agent/`
+- use `ls()` and `abstract()` to browse before loading full content
+- prefer scoped `find()` during execution
+- write back distilled outputs as structured resources after each major step
+
+This keeps token usage predictable, improves cross-agent knowledge sharing, and avoids tool leakage from giant shared transcripts.
+
+See the full guide: [OpenAI Agents SDK and Multi-Agent Integration Guide](../guides/08-openai-agents-integration.md).
+
 ### What's the difference between `find()` and `search()`? Which should I use?
 
 | Feature | `find()` | `search()` |
