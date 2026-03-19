@@ -9,6 +9,39 @@ from .command_decorators import command
 from .exit_codes import EXIT_CODE_BREAK, EXIT_CODE_CONTINUE, EXIT_CODE_RETURN
 
 
+
+def _validate_local_path(local_path: str, base_dir: str = None) -> str:
+    """Validate that a local path does not traverse outside expected boundaries.
+
+    If base_dir is provided, ensures the resolved path stays within base_dir.
+
+    Returns the resolved (absolute) path, or raises ValueError if unsafe.
+    """
+    resolved = os.path.realpath(local_path)
+    if base_dir is not None:
+        resolved_base = os.path.realpath(base_dir)
+        if not (resolved == resolved_base or resolved.startswith(resolved_base + os.sep)):
+            raise ValueError(f"Path traversal detected: '{local_path}' resolves outside '{base_dir}'")
+    return resolved
+
+
+def _validate_entry_name(name: str) -> str:
+    """Validate that a directory entry name from an AGFS listing is safe.
+
+    Rejects names containing path separators or '..' to prevent zip-slip
+    style path traversal attacks.
+
+    Returns the name if valid, or raises ValueError if unsafe.
+    """
+    if not name or name == '.' or name == '..':
+        raise ValueError(f"Unsafe directory entry name: '{name}'")
+    if '/' in name or '\\' in name or os.sep in name:
+        raise ValueError(f"Directory entry name contains path separator: '{name}'")
+    if '..' in name.split(os.sep):
+        raise ValueError(f"Directory entry name contains '..': '{name}'")
+    return name
+
+
 def _mode_to_rwx(mode: int) -> str:
     """Convert octal file mode to rwx string format"""
     # Handle both full mode (e.g., 0o100644) and just permissions (e.g., 0o644 or 420 decimal)
@@ -87,14 +120,9 @@ def cmd_cat(process: Process) -> int:
                         process.stderr.write(b"\ncat: interrupted\n")
                         return 130
                 else:
-                    # Fallback to local filesystem
-                    with open(filename, 'rb') as f:
-                        while True:
-                            chunk = f.read(8192)
-                            if not chunk:
-                                break
-                            process.stdout.write(chunk)
-                            process.stdout.flush()
+                    # No filesystem configured - cannot read files
+                    process.stderr.write(f"cat: {filename}: filesystem not available\n")
+                    return 1
             except Exception as e:
                 # Extract meaningful error message
                 error_msg = str(e)
@@ -1429,6 +1457,13 @@ def cmd_upload(process: Process) -> int:
 def _upload_file(process: Process, local_path: str, agfs_path: str, show_progress: bool = True) -> int:
     """Helper: Upload a single file to AGFS"""
     try:
+        # Validate local path to prevent path traversal
+        try:
+            local_path = _validate_local_path(local_path)
+        except ValueError as e:
+            process.stderr.write(f"upload: {e}\n")
+            return 1
+
         with open(local_path, 'rb') as f:
             data = f.read()
             process.filesystem.write_file(agfs_path, data, append=False)
@@ -1566,6 +1601,13 @@ def cmd_download(process: Process) -> int:
 def _download_file(process: Process, agfs_path: str, local_path: str, show_progress: bool = True) -> int:
     """Helper: Download a single file from AGFS"""
     try:
+        # Validate local path to prevent path traversal
+        try:
+            local_path = _validate_local_path(local_path)
+        except ValueError as e:
+            process.stderr.write(f"download: {e}\n")
+            return 1
+
         stream = process.filesystem.read_file(agfs_path, stream=True)
         bytes_written = 0
 
@@ -1588,6 +1630,13 @@ def _download_file(process: Process, agfs_path: str, local_path: str, show_progr
 def _download_dir(process: Process, agfs_path: str, local_path: str) -> int:
     """Helper: Download a directory recursively from AGFS"""
     try:
+        # Validate local path to prevent path traversal
+        try:
+            local_path = _validate_local_path(local_path)
+        except ValueError as e:
+            process.stderr.write(f"download: {e}\n")
+            return 1
+
         # Create local directory if it doesn't exist
         os.makedirs(local_path, exist_ok=True)
 
@@ -1598,9 +1647,23 @@ def _download_dir(process: Process, agfs_path: str, local_path: str) -> int:
             name = entry['name']
             is_dir = entry.get('isDir', False)
 
+            # Validate entry name to prevent zip-slip style attacks
+            try:
+                _validate_entry_name(name)
+            except ValueError as e:
+                process.stderr.write(f"download: skipping unsafe entry: {e}\n")
+                continue
+
             agfs_item = os.path.join(agfs_path, name)
             agfs_item = os.path.normpath(agfs_item)
             local_item = os.path.join(local_path, name)
+
+            # Verify the resolved local item is still within local_path
+            resolved_item = os.path.realpath(local_item)
+            resolved_base = os.path.realpath(local_path)
+            if not (resolved_item == resolved_base or resolved_item.startswith(resolved_base + os.sep)):
+                process.stderr.write(f"download: skipping entry that escapes target directory: \'{name}\'\n")
+                continue
 
             if is_dir:
                 # Recursively download subdirectory
@@ -1717,6 +1780,13 @@ def _cp_upload(process: Process, local_path: str, agfs_path: str, recursive: boo
             # Destination doesn't exist, use as-is
             pass
 
+        # Validate local path to prevent path traversal
+        try:
+            local_path = _validate_local_path(local_path)
+        except ValueError as e:
+            process.stderr.write(f"cp: {e}\n")
+            return 1
+
         if os.path.isfile(local_path):
             # Show progress
             process.stdout.write(f"local:{local_path} -> {agfs_path}\n")
@@ -1769,7 +1839,13 @@ def _cp_download(process: Process, agfs_path: str, local_path: str, recursive: b
             process.stdout.write(f"{agfs_path} -> local:{local_path}\n")
             process.stdout.flush()
 
-            # Download single file
+            # Download single file - validate local path first
+            try:
+                local_path = _validate_local_path(local_path)
+            except ValueError as e:
+                process.stderr.write(f"cp: {e}\n")
+                return 1
+
             stream = process.filesystem.read_file(agfs_path, stream=True)
             with open(local_path, 'wb') as f:
                 for chunk in stream:
@@ -2816,12 +2892,25 @@ def _mv_single(process, source_path, dest_path, source_is_local, dest_is_local,
     # Perform the move operation based on source and dest types
     try:
         if source_is_local and dest_is_local:
+            # Validate local paths to prevent path traversal
+            try:
+                source_path = _validate_local_path(source_path)
+                final_dest = _validate_local_path(final_dest)
+            except ValueError as e:
+                process.stderr.write(f"mv: {e}\n")
+                return 1
             # Local to local - use os.rename or shutil.move
             import shutil
             shutil.move(source_path, final_dest)
             return 0
 
         elif source_is_local and not dest_is_local:
+            # Validate local source path to prevent path traversal
+            try:
+                source_path = _validate_local_path(source_path)
+            except ValueError as e:
+                process.stderr.write(f"mv: {e}\n")
+                return 1
             # Local to AGFS - upload then delete local
             if os.path.isdir(source_path):
                 # Move directory
@@ -2841,6 +2930,12 @@ def _mv_single(process, source_path, dest_path, source_is_local, dest_is_local,
                 return 0
 
         elif not source_is_local and dest_is_local:
+            # Validate local destination path to prevent path traversal
+            try:
+                final_dest = _validate_local_path(final_dest)
+            except ValueError as e:
+                process.stderr.write(f"mv: {e}\n")
+                return 1
             # AGFS to local - download then delete AGFS
             source_info = process.filesystem.get_file_info(source_path)
             is_dir = source_info.get('isDir', False) or source_info.get('type') == 'directory'
