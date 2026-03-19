@@ -51,6 +51,40 @@ describe("Slice A: recallScoreThreshold default", () => {
   });
 });
 
+describe("Slice B: prefer abstract over full content fetch", () => {
+  it("should use abstract when available instead of calling read()", async () => {
+    const { buildMemoryLines } = await import("../index.js");
+
+    const mockRead = vi.fn().mockResolvedValue("Full long content from read()");
+
+    const memories: FindResultItem[] = [
+      mockMemory({
+        uri: "viking://user/memories/1",
+        abstract: "Short abstract text",
+        level: 2,
+        score: 0.8,
+      }),
+      mockMemory({
+        uri: "viking://user/memories/2",
+        abstract: "",
+        level: 2,
+        score: 0.7,
+      }),
+    ];
+
+    const lines = await buildMemoryLines(memories, mockRead, {
+      recallPreferAbstract: true,
+      recallMaxContentChars: 500,
+    });
+
+    // Item 1 has abstract — read() should NOT be called for it
+    // Item 2 has empty abstract — read() SHOULD be called
+    expect(mockRead).toHaveBeenCalledTimes(1);
+    expect(mockRead).toHaveBeenCalledWith("viking://user/memories/2");
+    expect(lines[0]).toContain("Short abstract text");
+  });
+});
+
 describe("Slice C: isLeafLikeMemory narrowing", () => {
   it("should NOT boost .md URI items that are not level 2", () => {
     const mdButNotLeaf = mockMemory({

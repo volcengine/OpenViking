@@ -484,20 +484,13 @@ const contextEnginePlugin = {
             const memories = pickMemoriesForInjection(processed, cfg.recallLimit, queryText);
 
             if (memories.length > 0) {
-              const memoryLines = await Promise.all(
-                memories.map(async (item: FindResultItem) => {
-                  if (item.level === 2) {
-                    try {
-                      const content = await client.read(item.uri);
-                      if (content && typeof content === "string" && content.trim()) {
-                        return `- [${item.category ?? "memory"}] ${content.trim()}`;
-                      }
-                    } catch {
-                      // fallback to abstract
-                    }
-                  }
-                  return `- [${item.category ?? "memory"}] ${item.abstract ?? item.uri}`;
-                }),
+              const memoryLines = await buildMemoryLines(
+                memories,
+                (uri) => client.read(uri),
+                {
+                  recallPreferAbstract: true,
+                  recallMaxContentChars: 500,
+                },
               );
               const memoryContext = memoryLines.join("\n");
               api.logger.info(`openviking: injecting ${memories.length} memories into context`);
@@ -690,5 +683,44 @@ const contextEnginePlugin = {
     });
   },
 };
+
+export type BuildMemoryLinesOptions = {
+  recallPreferAbstract: boolean;
+  recallMaxContentChars: number;
+};
+
+export async function buildMemoryLines(
+  memories: FindResultItem[],
+  readFn: (uri: string) => Promise<string>,
+  options: BuildMemoryLinesOptions,
+): Promise<string[]> {
+  const lines: string[] = [];
+  for (const item of memories) {
+    let content: string;
+
+    if (options.recallPreferAbstract && item.abstract?.trim()) {
+      content = item.abstract.trim();
+    } else if (item.level === 2) {
+      try {
+        const fullContent = await readFn(item.uri);
+        content =
+          fullContent && typeof fullContent === "string" && fullContent.trim()
+            ? fullContent.trim()
+            : (item.abstract ?? item.uri);
+      } catch {
+        content = item.abstract ?? item.uri;
+      }
+    } else {
+      content = item.abstract ?? item.uri;
+    }
+
+    if (content.length > options.recallMaxContentChars) {
+      content = content.slice(0, options.recallMaxContentChars) + "...";
+    }
+
+    lines.push(`- [${item.category ?? "memory"}] ${content}`);
+  }
+  return lines;
+}
 
 export default contextEnginePlugin;
