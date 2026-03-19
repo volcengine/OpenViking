@@ -124,7 +124,7 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
         parts = [p.strip() for p in param.split(",")]
 
         # Map snake_case keys to camelCase as required by Google API
-        key_map = {"task_type": "taskType", "output_dimensionality": "outputDimensionality"}
+        key_map = {"task_type": "taskType"}
 
         for part in parts:
             if "=" in part:
@@ -134,7 +134,7 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
                 key = key_map.get(key, key)
 
                 # Convert numeric values and uppercase task type
-                if key == "outputDimensionality" and value.isdigit():
+                if key == "output_dimensionality" and value.isdigit():
                     result[key] = int(value)
                 elif key == "taskType":
                     result[key] = value.upper()
@@ -172,7 +172,7 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
 
         # Add dimension if specified
         if self.dimension:
-            params["outputDimensionality"] = self.dimension
+            params["output_dimensionality"] = self.dimension
 
         return params
 
