@@ -72,13 +72,13 @@ async def observer_vlm(
     return Response(status="ok", result=_component_to_dict(component))
 
 
-@router.get("/transaction")
-async def observer_transaction(
+@router.get("/lock")
+async def observer_lock(
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Get transaction system status."""
+    """Get lock system status."""
     service = get_service()
-    component = service.debug.observer.transaction
+    component = service.debug.observer.lock
     return Response(status="ok", result=_component_to_dict(component))
 
 

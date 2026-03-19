@@ -272,13 +272,13 @@ Always be helpful, accurate, and concise. When using tools, think step by step: 
         if not self._eval:
             messages.extend(history)
 
+        # User
+        user_info = await self._build_user_memory(session_key, current_message, history)
+        messages.append({"role": "user", "content": user_info})
+
         # Current message (with optional image attachments)
         user_content = self._build_user_content(current_message, media)
         messages.append({"role": "user", "content": user_content})
-
-        # User
-        user_info = await self._build_user_memory(session_key, current_message, history)
-        messages.append({"role": "system", "content": user_info})
 
         return messages
 

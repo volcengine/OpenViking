@@ -96,6 +96,9 @@ enum Commands {
         /// Do not directly upload media files
         #[arg(long = "no-directly-upload-media", default_value_t = false)]
         no_directly_upload_media: bool,
+        /// Watch interval in minutes for automatic resource monitoring (0 = no monitoring)
+        #[arg(long, default_value = "0")]
+        watch_interval: f64,
     },
     /// Add a skill into OpenViking
     AddSkill {
@@ -525,6 +528,7 @@ async fn main() {
             include,
             exclude,
             no_directly_upload_media,
+            watch_interval,
         } => {
             handle_add_resource(
                 path,
@@ -539,6 +543,7 @@ async fn main() {
                 include,
                 exclude,
                 no_directly_upload_media,
+                watch_interval,
                 ctx,
             )
             .await
@@ -655,6 +660,7 @@ async fn handle_add_resource(
     include: Option<String>,
     exclude: Option<String>,
     no_directly_upload_media: bool,
+    watch_interval: f64,
     ctx: CliContext,
 ) -> Result<()> {
     let is_url = path.starts_with("http://") 
@@ -722,6 +728,7 @@ async fn handle_add_resource(
         include,
         exclude,
         directly_upload_media,
+        watch_interval,
         ctx.output_format,
         ctx.compact,
     ).await

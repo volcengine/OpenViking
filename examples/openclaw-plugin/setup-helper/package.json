@@ -1,0 +1,32 @@
+{
+  "name": "openclaw-openviking-setup-helper",
+  "version": "0.2.8",
+  "description": "Setup helper for installing OpenViking memory plugin into OpenClaw",
+  "type": "module",
+  "bin": {
+    "openclaw-openviking-setup-helper": "install.js",
+    "openclaw-openviking-install": "install.js",
+    "ov-install": "install.js"
+  },
+  "keywords": [
+    "openviking",
+    "openclaw",
+    "setup",
+    "memory",
+    "agent",
+    "installer"
+  ],
+  "author": "OpenViking",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/volcengine/OpenViking.git",
+    "directory": "examples/openclaw-plugin/setup-helper"
+  },
+  "files": [
+    "install.js"
+  ],
+  "engines": {
+    "node": ">=22.0.0"
+  }
+}

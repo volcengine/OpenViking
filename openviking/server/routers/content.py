@@ -102,7 +102,7 @@ async def reindex(
     database. If regenerate=True, also regenerates L0/L1 summaries via LLM
     before re-embedding.
 
-    Uses transaction locking to prevent concurrent reindexes on the same URI.
+    Uses path locking to prevent concurrent reindexes on the same URI.
     Set wait=False to run in the background and track progress via task API.
     """
     from openviking.service.task_tracker import get_task_tracker
@@ -164,27 +164,17 @@ async def _do_reindex(
     regenerate: bool,
     ctx: RequestContext,
 ) -> dict:
-    """Execute reindex within a transaction."""
-    from openviking.storage.transaction import get_transaction_manager
+    """Execute reindex within a lock scope."""
+    from openviking.storage.transaction import LockContext, get_lock_manager
 
-    tm = get_transaction_manager()
-    tx = tm.create_transaction(init_info={"uri": uri, "regenerate": regenerate})
-    await tm.begin(tx.id)
+    viking_fs = service.viking_fs
+    path = viking_fs._uri_to_path(uri, ctx=ctx)
 
-    try:
-        await tm.acquire_lock_normal(tx.id, uri)
+    async with LockContext(get_lock_manager(), [path], lock_mode="point"):
         if regenerate:
-            result = await service.resources.summarize([uri], ctx=ctx)
+            return await service.resources.summarize([uri], ctx=ctx)
         else:
-            result = await service.resources.build_index([uri], ctx=ctx)
-        await tm.commit(tx.id)
-        return result
-    except Exception:
-        try:
-            await tm.rollback(tx.id)
-        except Exception:
-            pass
-        raise
+            return await service.resources.build_index([uri], ctx=ctx)
 
 
 async def _background_reindex_tracked(

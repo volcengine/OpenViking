@@ -63,16 +63,22 @@ func (b *SQLiteDBBackend) GetInitSQL() []string {
 			last_updated INTEGER DEFAULT (strftime('%s', 'now'))
 		)`,
 		// Queue messages table
+		// status: 'pending' (waiting) | 'processing' (dequeued, not yet acked)
+		// processing_started_at: Unix timestamp when dequeued; NULL if pending
 		`CREATE TABLE IF NOT EXISTS queue_messages (
 			id INTEGER PRIMARY KEY AUTOINCREMENT,
 			queue_name TEXT NOT NULL,
 			message_id TEXT NOT NULL,
 			data TEXT NOT NULL,
 			timestamp INTEGER NOT NULL,
+			status TEXT NOT NULL DEFAULT 'pending',
+			processing_started_at INTEGER,
 			created_at INTEGER DEFAULT (strftime('%s', 'now'))
 		)`,
 		`CREATE INDEX IF NOT EXISTS idx_queue_name ON queue_messages(queue_name)`,
 		`CREATE INDEX IF NOT EXISTS idx_queue_order ON queue_messages(queue_name, id)`,
+		`CREATE INDEX IF NOT EXISTS idx_queue_status ON queue_messages(queue_name, status, id)`,
+		`CREATE INDEX IF NOT EXISTS idx_queue_message_id ON queue_messages(queue_name, message_id)`,
 	}
 }
 

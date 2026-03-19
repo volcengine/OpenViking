@@ -233,3 +233,67 @@ class TestOpenAIDenseEmbedder:
         )
         result = embedder.embed("Hello world")
         assert result.dense_vector is not None
+
+    @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
+    def test_telemetry_skipped_when_module_missing(self, mock_openai_class):
+        """_update_telemetry_token_usage should silently no-op when telemetry module is not available"""
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
+
+        mock_embedding = MagicMock()
+        mock_embedding.embedding = [0.1] * 1536
+
+        mock_usage = MagicMock()
+        mock_usage.prompt_tokens = 10
+        mock_usage.total_tokens = 10
+
+        mock_response = MagicMock()
+        mock_response.data = [mock_embedding]
+        mock_response.usage = mock_usage
+        mock_client.embeddings.create.return_value = mock_response
+
+        embedder = OpenAIDenseEmbedder(
+            model_name="text-embedding-3-small",
+            api_key="test-api-key",
+            dimension=1536,
+        )
+
+        with patch("importlib.import_module", side_effect=ImportError("no telemetry")):
+            result = embedder.embed("Hello world")
+
+        assert result.dense_vector is not None
+
+    @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
+    def test_telemetry_called_when_module_available(self, mock_openai_class):
+        """_update_telemetry_token_usage should call telemetry when module is available"""
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
+
+        mock_embedding = MagicMock()
+        mock_embedding.embedding = [0.1] * 1536
+
+        mock_usage = MagicMock()
+        mock_usage.prompt_tokens = 8
+        mock_usage.total_tokens = 8
+
+        mock_response = MagicMock()
+        mock_response.data = [mock_embedding]
+        mock_response.usage = mock_usage
+        mock_client.embeddings.create.return_value = mock_response
+
+        embedder = OpenAIDenseEmbedder(
+            model_name="text-embedding-3-small",
+            api_key="test-api-key",
+            dimension=1536,
+        )
+
+        mock_telemetry = MagicMock()
+
+        with patch(
+            "openviking.models.embedder.openai_embedders.get_current_telemetry",
+            return_value=mock_telemetry,
+        ):
+            result = embedder.embed("Hello world")
+
+        assert result.dense_vector is not None
+        mock_telemetry.add_token_usage_by_source.assert_called_once_with("embedding", 8, 0)

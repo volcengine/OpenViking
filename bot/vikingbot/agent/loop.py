@@ -129,11 +129,6 @@ class AgentLoop:
 
         self._running = False
         self._register_default_tools()
-        self._token_usage = {
-            "prompt_tokens": 0,
-            "completion_tokens": 0,
-            "total_tokens": 0,
-        }
 
     async def _publish_thinking_event(
         self, session_key: SessionKey, event_type: OutboundEventType, content: str
@@ -221,7 +216,7 @@ class AgentLoop:
         session_key: SessionKey,
         publish_events: bool = True,
         sender_id: str | None = None,
-    ) -> tuple[str | None, list[dict]]:
+    ) -> tuple[str | None, list[dict], dict[str, int]]:
         """
         Run the core agent loop: call LLM, execute tools, repeat until done.
 
@@ -236,6 +231,11 @@ class AgentLoop:
         iteration = 0
         final_content = None
         tools_used: list[dict] = []
+        token_usage = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+        }
 
         while iteration < self.max_iterations:
             iteration += 1
@@ -257,9 +257,9 @@ class AgentLoop:
             )
             if response.usage:
                 cur_token = response.usage
-                self._token_usage["prompt_tokens"] += cur_token["prompt_tokens"]
-                self._token_usage["completion_tokens"] += cur_token["completion_tokens"]
-                self._token_usage["total_tokens"] += cur_token["total_tokens"]
+                token_usage["prompt_tokens"] += cur_token["prompt_tokens"]
+                token_usage["completion_tokens"] += cur_token["completion_tokens"]
+                token_usage["total_tokens"] += cur_token["total_tokens"]
 
             if publish_events and response.reasoning_content:
                 await self.bus.publish_outbound(
@@ -362,7 +362,7 @@ class AgentLoop:
             else:
                 final_content = "I've completed processing but have no response to give."
 
-        return final_content, tools_used
+        return final_content, tools_used, token_usage
 
     @trace(
         name="process_message",
@@ -489,7 +489,7 @@ class AgentLoop:
             # logger.info(f"New messages: {messages}")
 
             # Run agent loop
-            final_content, tools_used = await self._run_agent_loop(
+            final_content, tools_used, token_usage = await self._run_agent_loop(
                 messages=messages,
                 session_key=session_key,
                 publish_events=True,
@@ -503,7 +503,8 @@ class AgentLoop:
             # Save to session (include tool names so consolidation sees what happened)
             session.add_message("user", msg.content, sender_id=msg.sender_id)
             session.add_message(
-                "assistant", final_content, tools_used=tools_used if tools_used else None
+                "assistant", final_content, tools_used=tools_used if tools_used else None, token_usage=token_usage,
+                sender_id=msg.sender_id,
             )
             await self.sessions.save(session)
 
@@ -512,7 +513,7 @@ class AgentLoop:
                 session_key=msg.session_key,
                 content=final_content,
                 metadata=msg.metadata,
-                token_usage=self._token_usage,
+                token_usage=token_usage,
                 time_cost=time_cost
                 or {},  # Pass through for channel-specific needs (e.g. Slack thread_ts)
             )
@@ -541,7 +542,7 @@ class AgentLoop:
         )
 
         # Run agent loop (no events published)
-        final_content, tools_used = await self._run_agent_loop(
+        final_content, tools_used, token_usage = await self._run_agent_loop(
             messages=messages,
             session_key=msg.session_key,
             publish_events=False,

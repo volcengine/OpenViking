@@ -303,6 +303,8 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 | `api_base` | str | API endpoint (optional) |
 | `thinking` | bool | Enable thinking mode for VolcEngine models (default: `false`) |
 | `max_concurrent` | int | Maximum concurrent semantic LLM calls (default: `100`) |
+| `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible providers, optional) |
+| `stream` | bool | Enable streaming mode (for OpenAI-compatible providers, default: `false`) |
 
 **Available Models**
 
@@ -317,6 +319,48 @@ When resources are added, VLM generates:
 2. **L1 (Overview)**: ~2k token overview with navigation
 
 If VLM is not configured, L0/L1 will be generated from content directly (less semantic), and multimodal resources may have limited descriptions.
+
+**Custom HTTP Headers**
+
+For OpenAI-compatible providers (e.g., OpenRouter), you can add custom HTTP headers via `extra_headers`:
+
+```json
+{
+  "vlm": {
+    "provider": "openai",
+    "api_key": "your-api-key",
+    "model": "gpt-4o",
+    "api_base": "https://openrouter.ai/api/v1",
+    "extra_headers": {
+      "HTTP-Referer": "https://your-site.com",
+      "X-Title": "Your App Name"
+    }
+  }
+}
+```
+
+Common use cases:
+- **OpenRouter**: Requires `HTTP-Referer` and `X-Title` to identify your application
+- **Custom proxies**: Add authentication or tracing headers
+- **API gateways**: Add version or routing identifiers
+
+**Streaming Mode**
+
+For OpenAI-compatible providers that return SSE (Server-Sent Events) format responses, enable `stream` mode:
+
+```json
+{
+  "vlm": {
+    "provider": "openai",
+    "api_key": "your-api-key",
+    "model": "gpt-4o",
+    "api_base": "https://api.example.com/v1",
+    "stream": true
+  }
+}
+```
+
+> **Note**: The OpenAI SDK requires `stream=true` to properly parse SSE responses. When using providers that force SSE format, you must set this option to `true`.
 
 ### code
 
@@ -515,7 +559,6 @@ Supports S3 storage in VirtualHostStyle mode, such as TOS.
 
 </details>
 
-
 #### vectordb
 
 Vector database storage configuration
@@ -639,6 +682,28 @@ When `root_api_key` is configured, the server enables multi-tenant authenticatio
 
 For startup and deployment details see [Deployment](./03-deployment.md), for authentication see [Authentication](./04-authentication.md).
 
+## storage.transaction Section
+
+Path locks are enabled by default and usually require no configuration. **The default behavior is no-wait**: if the target path is already locked by another operation, the operation fails immediately with `LockAcquisitionError`. Set `lock_timeout` to a positive value to allow polling/retry.
+
+```json
+{
+  "storage": {
+    "transaction": {
+      "lock_timeout": 5.0,
+      "lock_expire": 300.0
+    }
+  }
+}
+```
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `lock_timeout` | float | Path lock acquisition timeout (seconds). `0` = fail immediately if locked (default). `> 0` = wait/retry up to this many seconds, then raise `LockAcquisitionError`. | `0.0` |
+| `lock_expire` | float | Stale lock expiry threshold (seconds). Locks held longer than this by a crashed process are force-released. | `300.0` |
+
+For details on the lock mechanism, see [Path Locks and Crash Recovery](../concepts/09-transaction.md).
+
 ## Full Schema
 
 ```json
@@ -659,7 +724,9 @@ For startup and deployment details see [Deployment](./03-deployment.md), for aut
     "model": "string",
     "api_base": "string",
     "thinking": false,
-    "max_concurrent": 100
+    "max_concurrent": 100,
+    "extra_headers": {},
+    "stream": false
   },
   "rerank": {
     "provider": "volcengine",
@@ -672,6 +739,10 @@ For startup and deployment details see [Deployment](./03-deployment.md), for aut
       "backend": "local|s3|memory",
       "url": "string",
       "timeout": 10
+    },
+    "transaction": {
+      "lock_timeout": 0.0,
+      "lock_expire": 300.0
     },
     "vectordb": {
       "backend": "local|remote",

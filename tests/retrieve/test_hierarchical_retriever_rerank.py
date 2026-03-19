@@ -19,7 +19,7 @@ class DummyEmbedResult:
 
 
 class DummyEmbedder:
-    def embed(self, _query: str) -> DummyEmbedResult:
+    def embed(self, _query: str, is_query: bool = False) -> DummyEmbedResult:
         return DummyEmbedResult()
 
 
@@ -115,6 +115,73 @@ class DummyStorage:
         return []
 
 
+class LevelTwoGlobalStorage(DummyStorage):
+    async def search_global_roots_in_tenant(
+        self,
+        ctx,
+        query_vector=None,
+        sparse_query_vector=None,
+        context_type=None,
+        target_directories=None,
+        extra_filter=None,
+        limit: int = 10,
+    ):
+        self.global_search_calls.append(
+            {
+                "ctx": ctx,
+                "query_vector": query_vector,
+                "sparse_query_vector": sparse_query_vector,
+                "context_type": context_type,
+                "target_directories": target_directories,
+                "extra_filter": extra_filter,
+                "limit": limit,
+            }
+        )
+        return [
+            {
+                "uri": "viking://resources/file-a",
+                "abstract": "child A",
+                "_score": 0.2,
+                "level": 2,
+                "context_type": "resource",
+                "category": "doc",
+            },
+            {
+                "uri": "viking://resources/file-b",
+                "abstract": "child B",
+                "_score": 0.8,
+                "level": 2,
+                "context_type": "resource",
+                "category": "doc",
+            },
+        ]
+
+    async def search_children_in_tenant(
+        self,
+        ctx,
+        parent_uri: str,
+        query_vector=None,
+        sparse_query_vector=None,
+        context_type=None,
+        target_directories=None,
+        extra_filter=None,
+        limit: int = 10,
+    ):
+        self.child_search_calls.append(
+            {
+                "ctx": ctx,
+                "parent_uri": parent_uri,
+                "query_vector": query_vector,
+                "sparse_query_vector": sparse_query_vector,
+                "context_type": context_type,
+                "target_directories": target_directories,
+                "extra_filter": extra_filter,
+                "limit": limit,
+            }
+        )
+        return []
+
+
 class FakeRerankClient:
     def __init__(self, scores):
         self.scores = list(scores)
@@ -180,8 +247,18 @@ def test_merge_starting_points_prefers_rerank_scores_in_thinking_mode(monkeypatc
         "hello",
         ["viking://resources"],
         [
-            {"uri": "viking://resources/root-a", "abstract": "root A", "_score": 0.2},
-            {"uri": "viking://resources/root-b", "abstract": "root B", "_score": 0.8},
+            {
+                "uri": "viking://resources/root-a",
+                "abstract": "root A",
+                "_score": 0.2,
+                "level": 1,
+            },
+            {
+                "uri": "viking://resources/root-b",
+                "abstract": "root B",
+                "_score": 0.8,
+                "level": 1,
+            },
         ],
         mode=RetrieverMode.THINKING,
     )
@@ -215,6 +292,29 @@ async def test_retrieve_uses_rerank_scores_in_thinking_mode(monkeypatch):
     ]
     assert fake_client.calls[0] == ("hello", ["root A", "root B"])
     assert fake_client.calls[1] == ("hello", ["child A", "child B"])
+
+
+@pytest.mark.asyncio
+async def test_retrieve_reranks_level_two_initial_candidates_in_thinking_mode(monkeypatch):
+    fake_client = FakeRerankClient([0.05, 0.95])
+    monkeypatch.setattr(
+        "openviking.retrieve.hierarchical_retriever.RerankClient.from_config",
+        lambda config: fake_client,
+    )
+
+    retriever = HierarchicalRetriever(
+        storage=LevelTwoGlobalStorage(),
+        embedder=DummyEmbedder(),
+        rerank_config=_config(),
+    )
+
+    result = await retriever.retrieve(_query(), ctx=_ctx(), limit=2, mode=RetrieverMode.THINKING)
+
+    assert [ctx.uri for ctx in result.matched_contexts] == [
+        "viking://resources/file-b",
+        "viking://resources/file-a",
+    ]
+    assert fake_client.calls == [("hello", ["child A", "child B"])]
 
 
 @pytest.mark.asyncio
