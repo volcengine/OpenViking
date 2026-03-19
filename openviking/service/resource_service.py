@@ -293,6 +293,7 @@ class ResourceService:
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
             role=ctx.role.value,
+            agent_id=ctx.user.agent_id,
         )
         if existing_task:
             if existing_task.is_active:
@@ -306,6 +307,7 @@ class ResourceService:
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
                 role=ctx.role.value,
+                agent_id=ctx.user.agent_id,
                 path=path,
                 to_uri=to_uri,
                 parent_uri=parent_uri,
@@ -354,6 +356,7 @@ class ResourceService:
             account_id=ctx.account_id,
             user_id=ctx.user.user_id,
             role=ctx.role.value,
+            agent_id=ctx.user.agent_id,
         )
         if existing_task:
             await watch_manager.update_task(
@@ -361,6 +364,7 @@ class ResourceService:
                 account_id=ctx.account_id,
                 user_id=ctx.user.user_id,
                 role=ctx.role.value,
+                agent_id=ctx.user.agent_id,
                 is_active=False,
             )
             logger.info(

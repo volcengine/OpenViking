@@ -443,11 +443,11 @@ async def main_test():
     # res = client.list_resources()
     # res = await client.search("头有点疼", target_uri="viking://user/memories/")
     # res = await client.get_viking_memory_context("123", current_message="头疼", history=[])
-    # res = await client.search_memory("你好", "user_1")
+    res = await client.search_memory("你好", "user_1")
     # res = await client.list_resources("viking://resources/")
     # res = await client.read_content("viking://user/memories/profile.md", level="read")
     # res = await client.add_resource("https://github.com/volcengine/OpenViking", "ov代码")
-    res = await client.grep("viking://resources/", "viking", True)
+    # res = await client.grep("viking://resources/", "viking", True)
     # res = await client.commit(
     #     session_id="99999",
     #     messages=[{"role": "user", "content": "你好"}],
@@ -469,7 +469,8 @@ async def account_test():
     # res = await client.admin_remove_user("default", "")
     # res = await client.admin_remove_user("default", "admin")
     # res = await client.admin_list_accounts()
-    res = await client.admin_create_account("eval", "default")
+    # res = await client.admin_create_account("eval", "default")
+    res = await client.admin_register_user("default", "test_root", "root")
     print(res)
 
 

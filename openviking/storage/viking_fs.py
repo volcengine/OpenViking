@@ -1210,6 +1210,7 @@ class VikingFS:
         old_base: str,
         new_base: str,
         ctx: Optional[RequestContext] = None,
+        levels: Optional[List[int]] = None,
     ) -> None:
         """Update URIs in vector store (when moving files).
 
@@ -1232,10 +1233,70 @@ class VikingFS:
                     uri=uri,
                     new_uri=new_uri,
                     new_parent_uri=new_parent_uri,
+                    levels=levels,
                 )
                 logger.debug(f"[VikingFS] Updated URI: {uri} -> {new_uri}")
             except Exception as e:
                 logger.warning(f"[VikingFS] Failed to update {uri} in vector store: {e}")
+
+    async def _mv_vector_store_l0_l1(
+        self,
+        old_uri: str,
+        new_uri: str,
+        ctx: Optional[RequestContext] = None,
+    ) -> None:
+        from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+        from openviking.storage.transaction import LockContext, get_lock_manager
+
+        self._ensure_access(old_uri, ctx)
+        self._ensure_access(new_uri, ctx)
+
+        real_ctx = self._ctx_or_default(ctx)
+        old_dir = VikingURI.normalize(old_uri).rstrip("/")
+        new_dir = VikingURI.normalize(new_uri).rstrip("/")
+        if old_dir == new_dir:
+            return
+
+        for uri in (old_dir, new_dir):
+            if uri.endswith(("/.abstract.md", "/.overview.md")):
+                raise ValueError(f"mv_vector_store expects directory URIs, got: {uri}")
+
+        try:
+            old_stat = await self.stat(old_dir, ctx=real_ctx)
+        except Exception as e:
+            raise FileNotFoundError(f"mv_vector_store old_uri not found: {old_dir}") from e
+        try:
+            new_stat = await self.stat(new_dir, ctx=real_ctx)
+        except Exception as e:
+            raise FileNotFoundError(f"mv_vector_store new_uri not found: {new_dir}") from e
+
+        if not (isinstance(old_stat, dict) and old_stat.get("isDir", False)):
+            raise ValueError(f"mv_vector_store expects old_uri to be a directory: {old_dir}")
+        if not (isinstance(new_stat, dict) and new_stat.get("isDir", False)):
+            raise ValueError(f"mv_vector_store expects new_uri to be a directory: {new_dir}")
+
+        old_path = self._uri_to_path(old_dir, ctx=real_ctx)
+        new_path = self._uri_to_path(new_dir, ctx=real_ctx)
+        dst_parent = new_path.rsplit("/", 1)[0] if "/" in new_path else new_path
+
+        try:
+            async with LockContext(
+                get_lock_manager(),
+                [old_path],
+                lock_mode="mv",
+                mv_dst_parent_path=dst_parent,
+                src_is_dir=True,
+            ):
+                await self._update_vector_store_uris(
+                    uris=[old_dir],
+                    old_base=old_dir,
+                    new_base=new_dir,
+                    ctx=real_ctx,
+                    levels=[0, 1],
+                )
+
+        except LockAcquisitionError:
+            raise ResourceBusyError(f"Resource is being processed: {old_dir}")
 
     def _get_vector_store(self) -> Optional["VikingVectorIndexBackend"]:
         """Get vector store instance."""

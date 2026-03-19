@@ -47,6 +47,13 @@ class AgentMemoryMode(str, Enum):
     PER_CHANNEL = "per-channel"
 
 
+class BotMode(str, Enum):
+    """Bot running mode enumeration."""
+    NORMAL = "normal"
+    READONLY = "readonly"
+    DEBUG = "debug"
+
+
 class BaseChannelConfig(BaseModel):
     """Base channel configuration."""
 
@@ -104,7 +111,7 @@ class FeishuChannelConfig(BaseChannelConfig):
 
     type: ChannelType = ChannelType.FEISHU
     app_id: str = ""
-    open_id: str = ""
+    bot_name: str = ""
     app_secret: str = ""
     encrypt_key: str = ""
     verification_token: str = ""
@@ -615,7 +622,12 @@ class Config(BaseSettings):
     )
     storage_workspace: Optional[str] = None  # From ov.conf root level storage.workspace
     use_local_memory: bool = False
-    read_only: bool = False
+    mode: BotMode = BotMode.NORMAL
+
+    @property
+    def read_only(self) -> bool:
+        """Backward compatibility for read_only property."""
+        return self.mode == BotMode.READONLY
 
     @property
     def channels_config(self) -> ChannelsConfig:

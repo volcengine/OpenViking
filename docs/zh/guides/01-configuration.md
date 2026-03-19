@@ -142,6 +142,28 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 - `volcengine`: 火山引擎 Embedding API
 - `vikingdb`: VikingDB Embedding API
 - `jina`: Jina AI Embedding API
+- `voyage`: Voyage AI Embedding API
+- `minimax`: MiniMax Embedding API
+
+**minimax provider 配置示例:**
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "minimax",
+      "api_key": "your-minimax-api-key",
+      "model": "embo-01",
+      "dimension": 1536,
+      "query_param": "query",
+      "document_param": "db",
+      "extra_headers": {
+        "GroupId": "your-group-id"
+      }
+    }
+  }
+}
+```
 
 **vikingdb provider 配置示例:**
 

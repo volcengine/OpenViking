@@ -2,24 +2,18 @@
 
 Provide long-term memory capabilities for [OpenClaw](https://github.com/openclaw/openclaw) via [OpenViking](https://github.com/volcengine/OpenViking). After installing, OpenClaw will automatically **remember** important information from conversations and **recall** relevant content before replying. The latest version of OpenViking includes a [WebConsole](https://github.com/volcengine/OpenViking/tree/main/openviking/console) for debugging and operations. Method 3 in this document also provides instructions on how to verify that memories are written via the WebConsole interface. We welcome you to try it out and provide feedback.
 
-> **⚠️ OpenClaw >= 2026.3.12 Compatibility Issue**
+> **ℹ️ Historical Compatibility Note**
 >
-> OpenClaw `2026.3.12` and later have a known issue that causes conversations to hang after loading the plugin.
-> This is not a bug in our plugin — the root cause is OpenClaw 3.12's slug generator (automatic conversation naming),
-> which has a hardcoded 15s timeout that cascades when the LLM provider responds slowly, blocking the entire
-> session initialization pipeline. Additionally, 3.12's new plugin trust mechanism may affect loading order for
-> locally installed plugins. A separate issue: the `before_agent_start` auto-recall hook lacks timeout protection,
-> which can cause the agent to hang silently ([#673](https://github.com/volcengine/OpenViking/issues/673)).
->
-> **Workaround:** Downgrade to `2026.3.11`: `npm install -g openclaw@2026.3.11`
->
-> Upstream fix PRs: openclaw/openclaw#34673, openclaw/openclaw#33547.
-> See [#591](https://github.com/volcengine/OpenViking/issues/591) for details.
+> Legacy OpenViking/OpenClaw integrations had a known issue around OpenClaw `2026.3.12` where conversations could hang after the plugin loaded.
+> That issue affected the legacy plugin path; the current context-engine Plugin 2.0 described in this document is not affected, so new installations do not need to downgrade OpenClaw for this reason.
+> Plugin 2.0 is also not backward-compatible with the legacy `memory-openviking` plugin and its configuration, so upgrades must replace the old setup instead of mixing the two versions.
+> Plugin 2.0 also depends on OpenClaw's context-engine capability and does not support older OpenClaw releases; upgrade OpenClaw first before following this guide.
+> If you are troubleshooting a legacy deployment, see [#591](https://github.com/volcengine/OpenViking/issues/591) and upstream fix PRs: openclaw/openclaw#34673, openclaw/openclaw#33547.
 
-> **🚀 Plugin 2.0 In Design**
+> **🚀 Plugin 2.0 (Context-Engine Architecture)**
 >
-> We are designing Plugin 2.0, rebuilt on the context-engine architecture — the best practice for integrating
-> OpenViking with AI coding assistants. Join the discussion:
+> This document covers the current OpenViking Plugin 2.0 built on the context-engine architecture, which is the recommended integration path for AI coding assistants.
+> For design background and earlier discussion, see:
 > https://github.com/volcengine/OpenViking/discussions/525
 
 ---
@@ -30,7 +24,7 @@ Provide long-term memory capabilities for [OpenClaw](https://github.com/openclaw
 
 ### Prerequisite Steps for Upgrading from Legacy `memory-openviking` to New `openviking`
 
-If the current environment already has the legacy `memory-openviking` plugin installed, complete the following prerequisite steps before installing the new version to avoid having both plugins active at the same time.
+If the current environment already has the legacy `memory-openviking` plugin installed, complete the following prerequisite steps before installing the new version. Plugin 2.0 is not backward-compatible with the legacy plugin/configuration, so do not keep both versions active at the same time.
 
 1. Stop the OpenClaw gateway:
 

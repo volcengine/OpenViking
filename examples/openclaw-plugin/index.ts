@@ -4,8 +4,8 @@ import { tmpdir } from "node:os";
 import { Type } from "@sinclair/typebox";
 import { memoryOpenVikingConfigSchema } from "./config.js";
 
-import { OpenVikingClient, localClientCache, isMemoryUri } from "./client.js";
-import type { FindResultItem } from "./client.js";
+import { OpenVikingClient, localClientCache, localClientPendingPromises, isMemoryUri } from "./client.js";
+import type { FindResultItem, PendingClientEntry } from "./client.js";
 import {
   isTranscriptLikeIngest,
   extractLatestUserText,
@@ -69,6 +69,7 @@ type OpenClawPluginApi = {
 
 const MAX_OPENVIKING_STDERR_LINES = 200;
 const MAX_OPENVIKING_STDERR_CHARS = 256_000;
+const AUTO_RECALL_TIMEOUT_MS = 5_000;
 
 const contextEnginePlugin = {
   id: "openviking",
@@ -108,10 +109,18 @@ const contextEnginePlugin = {
         localProcess = cached.process;
         clientPromise = Promise.resolve(cached.client);
       } else {
-        clientPromise = new Promise<OpenVikingClient>((resolve, reject) => {
-          resolveLocalClient = resolve;
-          rejectLocalClient = reject;
-        });
+        const existingPending = localClientPendingPromises.get(localCacheKey);
+        if (existingPending) {
+          clientPromise = existingPending.promise;
+        } else {
+          const entry = {} as PendingClientEntry;
+          entry.promise = new Promise<OpenVikingClient>((resolve, reject) => {
+            entry.resolve = resolve;
+            entry.reject = reject;
+          });
+          clientPromise = entry.promise;
+          localClientPendingPromises.set(localCacheKey, entry);
+        }
       }
     } else {
       clientPromise = Promise.resolve(new OpenVikingClient(cfg.baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs));
@@ -449,63 +458,69 @@ const contextEnginePlugin = {
           );
         } else {
           try {
-            const candidateLimit = Math.max(cfg.recallLimit * 4, 20);
-            const [userSettled, agentSettled] = await Promise.allSettled([
-              client.find(queryText, {
-                targetUri: "viking://user/memories",
-                limit: candidateLimit,
-                scoreThreshold: 0,
-              }),
-              client.find(queryText, {
-                targetUri: "viking://agent/memories",
-                limit: candidateLimit,
-                scoreThreshold: 0,
-              }),
-            ]);
+            await withTimeout(
+              (async () => {
+                const candidateLimit = Math.max(cfg.recallLimit * 4, 20);
+                const [userSettled, agentSettled] = await Promise.allSettled([
+                  client.find(queryText, {
+                    targetUri: "viking://user/memories",
+                    limit: candidateLimit,
+                    scoreThreshold: 0,
+                  }),
+                  client.find(queryText, {
+                    targetUri: "viking://agent/memories",
+                    limit: candidateLimit,
+                    scoreThreshold: 0,
+                  }),
+                ]);
 
-            const userResult = userSettled.status === "fulfilled" ? userSettled.value : { memories: [] };
-            const agentResult = agentSettled.status === "fulfilled" ? agentSettled.value : { memories: [] };
-            if (userSettled.status === "rejected") {
-              api.logger.warn(`openviking: user memories search failed: ${String(userSettled.reason)}`);
-            }
-            if (agentSettled.status === "rejected") {
-              api.logger.warn(`openviking: agent memories search failed: ${String(agentSettled.reason)}`);
-            }
+                const userResult = userSettled.status === "fulfilled" ? userSettled.value : { memories: [] };
+                const agentResult = agentSettled.status === "fulfilled" ? agentSettled.value : { memories: [] };
+                if (userSettled.status === "rejected") {
+                  api.logger.warn(`openviking: user memories search failed: ${String(userSettled.reason)}`);
+                }
+                if (agentSettled.status === "rejected") {
+                  api.logger.warn(`openviking: agent memories search failed: ${String(agentSettled.reason)}`);
+                }
 
-            const allMemories = [...(userResult.memories ?? []), ...(agentResult.memories ?? [])];
-            const uniqueMemories = allMemories.filter((memory, index, self) =>
-              index === self.findIndex((m) => m.uri === memory.uri)
+                const allMemories = [...(userResult.memories ?? []), ...(agentResult.memories ?? [])];
+                const uniqueMemories = allMemories.filter((memory, index, self) =>
+                  index === self.findIndex((m) => m.uri === memory.uri)
+                );
+                const leafOnly = uniqueMemories.filter((m) => m.level === 2);
+                const processed = postProcessMemories(leafOnly, {
+                  limit: candidateLimit,
+                  scoreThreshold: cfg.recallScoreThreshold,
+                });
+                const memories = pickMemoriesForInjection(processed, cfg.recallLimit, queryText);
+
+                if (memories.length > 0) {
+                  const { lines: memoryLines, estimatedTokens } = await buildMemoryLinesWithBudget(
+                    memories,
+                    (uri) => client.read(uri),
+                    {
+                      recallPreferAbstract: cfg.recallPreferAbstract,
+                      recallMaxContentChars: cfg.recallMaxContentChars,
+                      recallTokenBudget: cfg.recallTokenBudget,
+                    },
+                  );
+                  const memoryContext = memoryLines.join("\n");
+                  api.logger.info(
+                    `openviking: injecting ${memoryLines.length} memories (~${estimatedTokens} tokens, budget=${cfg.recallTokenBudget})`,
+                  );
+                  api.logger.info(
+                    `openviking: inject-detail ${toJsonLog({ count: memories.length, memories: summarizeInjectionMemories(memories) })}`,
+                  );
+                  prependContextParts.push(
+                    "<relevant-memories>\nThe following OpenViking memories may be relevant:\n" +
+                      `${memoryContext}\n` +
+                    "</relevant-memories>",
+                  );
+                }
+              })(),
+              AUTO_RECALL_TIMEOUT_MS,
+              "openviking: auto-recall search timeout",
             );
-            const leafOnly = uniqueMemories.filter((m) => m.level === 2);
-            const processed = postProcessMemories(leafOnly, {
-              limit: candidateLimit,
-              scoreThreshold: cfg.recallScoreThreshold,
-            });
-            const memories = pickMemoriesForInjection(processed, cfg.recallLimit, queryText);
-
-            if (memories.length > 0) {
-              const { lines: memoryLines, estimatedTokens } = await buildMemoryLinesWithBudget(
-                memories,
-                (uri) => client.read(uri),
-                {
-                  recallPreferAbstract: cfg.recallPreferAbstract,
-                  recallMaxContentChars: cfg.recallMaxContentChars,
-                  recallTokenBudget: cfg.recallTokenBudget,
-                },
-              );
-              const memoryContext = memoryLines.join("\n");
-              api.logger.info(
-                `openviking: injecting ${memoryLines.length} memories (~${estimatedTokens} tokens, budget=${cfg.recallTokenBudget})`,
-              );
-              api.logger.info(
-                `openviking: inject-detail ${toJsonLog({ count: memories.length, memories: summarizeInjectionMemories(memories) })}`,
-              );
-              prependContextParts.push(
-                "<relevant-memories>\nThe following OpenViking memories may be relevant:\n" +
-                  `${memoryContext}\n` +
-                "</relevant-memories>",
-              );
-            }
           } catch (err) {
             api.logger.warn(`openviking: auto-recall failed: ${String(err)}`);
           }
@@ -572,7 +587,16 @@ const contextEnginePlugin = {
     api.registerService({
       id: "openviking",
       start: async () => {
-        if (cfg.mode === "local" && resolveLocalClient) {
+        // Claim the pending entry — only the first start() call to claim it spawns the process.
+        // Subsequent start() calls (from other registrations sharing the same promise) fall through.
+        const pendingEntry = localClientPendingPromises.get(localCacheKey);
+        const isSpawner = cfg.mode === "local" && !!pendingEntry;
+        if (isSpawner) {
+          localClientPendingPromises.delete(localCacheKey);
+          resolveLocalClient = pendingEntry!.resolve;
+          rejectLocalClient = pendingEntry!.reject;
+        }
+        if (isSpawner) {
           const timeoutMs = 60_000;
           const intervalMs = 500;
 
@@ -650,7 +674,7 @@ const contextEnginePlugin = {
             await waitForHealth(baseUrl, timeoutMs, intervalMs);
             const client = new OpenVikingClient(baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs);
             localClientCache.set(localCacheKey, { client, process: child });
-            resolveLocalClient(client);
+            resolveLocalClient!(client);
             rejectLocalClient = null;
             api.logger.info(
               `openviking: local server started (${baseUrl}, config: ${cfg.configPath})`,
@@ -677,6 +701,7 @@ const contextEnginePlugin = {
         if (localProcess) {
           localProcess.kill("SIGTERM");
           localClientCache.delete(localCacheKey);
+          localClientPendingPromises.delete(localCacheKey);
           localProcess = null;
           api.logger.info("openviking: local server stopped");
         } else {

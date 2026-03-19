@@ -265,6 +265,7 @@ class ResourceProcessor:
             should_summarize = summarize or build_index
             if should_summarize:
                 skip_vec = not build_index
+                is_code_repo = parse_result.source_format == "repository"
                 try:
                     with telemetry.measure("resource.summarize"):
                         await self._get_summarizer().summarize(
@@ -273,6 +274,7 @@ class ResourceProcessor:
                             skip_vectorization=skip_vec,
                             lifecycle_lock_handle_id=lifecycle_lock_handle_id,
                             temp_uris=[temp_uri_for_summarize],
+                            is_code_repo=is_code_repo,
                             **kwargs,
                         )
                 except Exception as e:

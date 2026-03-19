@@ -2,23 +2,18 @@
 
 通过 [OpenViking](https://github.com/volcengine/OpenViking) 为 [OpenClaw](https://github.com/openclaw/openclaw) 提供长效记忆能力。安装完成后，OpenClaw 将自动**记住**对话中的重要信息，并在回复前**回忆**相关内容。OpenViking 最新版本发布了 [WebConsole](https://github.com/volcengine/OpenViking/tree/main/openviking/console)，方便调试和运维。文档方式三也提供了如何在 WebConsole 界面验证记忆写入的说明，欢迎试用和反馈。
 
-> **⚠️ OpenClaw >= 2026.3.12 兼容性问题**
+> **ℹ️ 历史兼容性说明**
 >
-> OpenClaw `2026.3.12` 及更高版本存在已知兼容性问题，会导致加载插件后对话卡死无响应。
-> 这不是本插件的 bug——根因是 OpenClaw 3.12 的 slug generator（会话自动命名）有硬编码 15s 超时，
-> 当 LLM provider 响应较慢时会逐个 profile 超时重试，阻塞整个会话初始化管线。
-> 此外 3.12 新增的插件信任机制也可能影响本地插件的加载时序。
-> 另一个已知问题：`before_agent_start` 中的 auto-recall 缺少超时保护，可能导致 agent 静默挂起（[#673](https://github.com/volcengine/OpenViking/issues/673)）。
->
-> **临时方案：** 回退到 `2026.3.11`：`npm install -g openclaw@2026.3.11`
->
-> 上游修复 PR：openclaw/openclaw#34673、openclaw/openclaw#33547。
-> 详见 [#591](https://github.com/volcengine/OpenViking/issues/591)。
+> 旧版 OpenViking/OpenClaw 集成方案在 OpenClaw `2026.3.12` 附近曾出现过已知兼容性问题，表现为加载插件后对话卡死无响应。
+> 该问题主要影响旧版本插件链路；当前文档介绍的 context-engine 插件 2.0 已不再受此问题影响，新的安装流程无需因此回退 OpenClaw。
+> 同时，插件 2.0 与旧版 `memory-openviking` 插件及其配置不兼容，升级时需要按本文迁移步骤完成替换，不能混装。
+> 插件 2.0 也依赖 OpenClaw 的 context-engine 能力，不支持旧版 OpenClaw；请升级到当前安装助手支持的较新 OpenClaw 版本后再安装。
+> 如需排查旧版本部署，可参考 [#591](https://github.com/volcengine/OpenViking/issues/591) 以及上游修复 PR：openclaw/openclaw#34673、openclaw/openclaw#33547。
 
-> **🚀 插件 2.0 设计中**
+> **🚀 插件 2.0（context-engine 架构）**
 >
-> 我们正在设计基于 context-engine 架构重构的插件 2.0 版本，将作为 OpenViking 接入 AI 编程助手的最佳实践。
-> 欢迎参与讨论：https://github.com/volcengine/OpenViking/discussions/525
+> 当前文档介绍的是基于 context-engine 架构的 OpenViking 插件 2.0 方案，也是 OpenViking 接入 AI 编程助手的推荐实践。
+> 更多背景和演进讨论可见：https://github.com/volcengine/OpenViking/discussions/525
 
 ---
 
@@ -28,7 +23,7 @@
 
 ### 从旧版 `memory-openviking` 升级到新版 `openviking` 前置操作步骤
 
-如果当前环境里已经安装过旧版插件 `memory-openviking`，建议先完成以下前置操作，再执行新版安装，避免旧版和新版插件同时存在。
+如果当前环境里已经安装过旧版插件 `memory-openviking`，建议先完成以下前置操作，再执行新版安装。插件 2.0 与旧版插件/旧版配置不兼容，避免旧版和新版插件同时存在。
 
 1. 停止 OpenClaw gateway：
 

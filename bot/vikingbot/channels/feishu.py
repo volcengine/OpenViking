@@ -12,6 +12,7 @@ from typing import Any
 import httpx
 from loguru import logger
 
+from vikingbot.config import load_config
 from vikingbot.utils import get_data_path
 
 # Optional HTML processing libraries
@@ -30,7 +31,7 @@ except ImportError:
 from vikingbot.bus.events import OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.base import BaseChannel
-from vikingbot.config.schema import FeishuChannelConfig
+from vikingbot.config.schema import FeishuChannelConfig, BotMode
 
 try:
     import lark_oapi as lark
@@ -747,25 +748,19 @@ class FeishuChannel(BaseChannel):
             # 检查是否@了机器人
             is_mentioned = False
             mention_pattern = re.compile(r"@_user_\d+")
-            bot_open_id = self.config.open_id
-            bot_app_id = self.config.app_id
+            bot_name = self.config.bot_name
 
             # 优先从message的mentions字段提取@信息（text和post类型都适用）
-            if hasattr(message, 'mentions') and message.mentions and bot_open_id:
+            if hasattr(message, 'mentions') and message.mentions and bot_name:
                 for mention in message.mentions:
-                    if hasattr(mention, 'id') and hasattr(mention.id, 'open_id'):
-                        at_id = mention.id.open_id
-                        if at_id == bot_open_id:
+                    if hasattr(mention, 'name'):
+                        at_name = mention.name
+                        if at_name == self.config.bot_name:
                             is_mentioned = True
                             break
                         continue
-                    # 兼容其他可能的ID格式
-                    at_id = getattr(mention, 'id', '') or getattr(mention, 'user_id', '')
-                    if at_id == f"app_{bot_app_id}" or at_id == bot_app_id:
-                        is_mentioned = True
-                        break
-
             # 话题群@检查逻辑
+            config = load_config()
             should_process = True
             if chat_type == "group":
                 chat_mode = await self._get_chat_mode(chat_id)
@@ -780,7 +775,7 @@ class FeishuChannel(BaseChannel):
                             should_process = False
                     else:
                         # 模式2：False，仅话题首条消息不需要@，后续回复需要@
-                        if not is_topic_starter and not is_mentioned:
+                        if not is_topic_starter and not is_mentioned and config.mode != BotMode.DEBUG:
                             logger.info(f"Skipping thread message: not topic starter and not mentioned")
                             should_process = False
 
@@ -789,7 +784,8 @@ class FeishuChannel(BaseChannel):
                 return
 
             # 确认需要处理后再添加"已读"表情
-            await self._add_reaction(message_id, "MeMeMe")
+            if config and config.mode != BotMode.DEBUG:
+                await self._add_reaction(message_id, "MeMeMe")
 
             # 替换所有@占位符
             content = mention_pattern.sub(f"@{sender_id}", content)
