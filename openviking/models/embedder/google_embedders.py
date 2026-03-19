@@ -10,6 +10,7 @@ import requests
 from openviking.models.embedder.base import (
     DenseEmbedderBase,
     EmbedResult,
+    exponential_backoff_retry,
 )
 
 logger = logging.getLogger(__name__)
@@ -123,7 +124,7 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
         parts = [p.strip() for p in param.split(",")]
 
         # Map snake_case keys to camelCase as required by Google API
-        key_map = {"task_type": "taskType"}
+        key_map = {"task_type": "taskType", "output_dimensionality": "outputDimensionality"}
 
         for part in parts:
             if "=" in part:
@@ -133,7 +134,7 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
                 key = key_map.get(key, key)
 
                 # Convert numeric values and uppercase task type
-                if key == "output_dimensionality" and value.isdigit():
+                if key == "outputDimensionality" and value.isdigit():
                     result[key] = int(value)
                 elif key == "taskType":
                     result[key] = value.upper()
@@ -171,7 +172,7 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
 
         # Add dimension if specified
         if self.dimension:
-            params["output_dimensionality"] = self.dimension
+            params["outputDimensionality"] = self.dimension
 
         return params
 
@@ -213,9 +214,18 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
             if request_params:
                 request_body.update(request_params)
 
-            # Make the API request
-            response = requests.post(url, json=request_body, headers=headers, timeout=30)
-            response.raise_for_status()
+            # Make the API request with retry on transient failures
+            def _do_request():
+                resp = requests.post(url, json=request_body, headers=headers, timeout=30)
+                resp.raise_for_status()
+                return resp
+
+            response = exponential_backoff_retry(
+                _do_request,
+                is_retryable=lambda e: isinstance(e, requests.exceptions.ConnectionError)
+                or isinstance(e, requests.exceptions.Timeout),
+                logger=logger,
+            )
 
             response_data = response.json()
 
@@ -265,7 +275,7 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
         Returns:
             EmbedResult: Result containing only dense_vector (averaged from chunks)
         """
-        chunks = self._chunk_text(text, self.max_tokens)
+        chunks = self._chunk_text(text)
         chunk_vectors: List[List[float]] = []
 
         for chunk in chunks:

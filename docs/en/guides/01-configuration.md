@@ -124,11 +124,11 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 
 **Available Models**
 
-| Model | Dimension | Input Type | Notes |
-|-------|-----------|------------|-------|
-| `doubao-embedding-vision-250615` | 1024 | multimodal | Recommended |
-| `doubao-embedding-250615` | 1024 | text | Text only |
-| `gemini-embedding-2-preview` | 3072 | text | Google Gemini Embedding 2 with MRL |
+| Provider | Model | Dimension | Input Type | Notes |
+|----------|-------|-----------|------------|-------|
+| `volcengine` | `doubao-embedding-vision-250615` | 1024 | multimodal | Recommended |
+| `volcengine` | `doubao-embedding-250615` | 1024 | text | Text only |
+| `google` | `gemini-embedding-2-preview` | 3072 | text | Google Gemini Embedding 2 with MRL |
 
 With `input: "multimodal"`, OpenViking can embed text, images (PNG, JPG, etc.), and mixed content.
 
