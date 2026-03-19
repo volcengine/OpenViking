@@ -27,10 +27,35 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
 
     Uses native Google Gemini embedding API with Parts format.
     Supports Gemini Embedding 2 (gemini-embedding-2-preview) only.
-    Supports task-specific embeddings and Matryoshka dimension reduction.
+    Supports Matryoshka dimension reduction via output_dimensionality.
+
+    ## Task Type Behavior (gemini-embedding-2-preview)
+
+    Tested 2026-03-19 against the live API (dim=128):
+
+    The API accepts both snake_case (task_type) and camelCase (taskType) — they
+    are equivalent and both succeed without error.
+
+    However, gemini-embedding-2-preview currently produces **identical vectors
+    regardless of task_type**. The parameter is silently ignored by this model
+    version. All task types below were verified to return bit-for-bit identical
+    embeddings:
+
+    | Task type            | Description                                         |
+    |----------------------|-----------------------------------------------------|
+    | RETRIEVAL_QUERY      | Optimized for search queries                        |
+    | RETRIEVAL_DOCUMENT   | Optimized for indexed documents                     |
+    | SEMANTIC_SIMILARITY  | Optimized for similarity assessment                 |
+    | CLASSIFICATION       | Optimized for text classification                   |
+    | CLUSTERING           | Optimized for clustering by similarity              |
+    | CODE_RETRIEVAL_QUERY | Optimized for NL queries over code blocks           |
+    | QUESTION_ANSWERING   | Optimized for Q&A queries                          |
+    | FACT_VERIFICATION    | Optimized for fact-checking statements              |
+
+    query_param / document_param are accepted and stored, and will be forwarded
+    to the API in case future model versions begin honouring task_type.
 
     Example:
-        >>> # Simple usage with query/document task types
         >>> embedder = GoogleDenseEmbedder(
         ...     api_key="your-gemini-api-key",
         ...     dimension=1024,
@@ -39,14 +64,6 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
         ... )
         >>> query_result = embedder.embed("Search query", is_query=True)
         >>> doc_result = embedder.embed("Document content", is_query=False)
-
-        >>> # Enhanced usage with key=value format
-        >>> advanced_embedder = GoogleDenseEmbedder(
-        ...     api_key="your-gemini-api-key",
-        ...     dimension=1024,
-        ...     query_param="task_type=RETRIEVAL_QUERY,output_dimensionality=1024",
-        ...     document_param="task_type=RETRIEVAL_DOCUMENT,output_dimensionality=1024"
-        ... )
     """
 
     def __init__(
