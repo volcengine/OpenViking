@@ -207,9 +207,9 @@ xychart-beta
 ```
 
 **Legend:**
-- Bar "Recall": Retrieval recall rate
-- Bar "F1 Score": Answer F1 score
-- Line "Normalized Accuracy": LLM judge score normalized to 0-1 scale
+- Blue Bar "Recall": Retrieval recall rate
+- Green Bar "F1 Score": Answer F1 score
+- Red Line "Normalized Accuracy": LLM judge score normalized to 0-1 scale
 
 #### Benchmark Results Table
 
