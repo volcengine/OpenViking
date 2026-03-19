@@ -51,6 +51,10 @@ class EmbeddingModelConfig(BaseModel):
     sk: Optional[str] = Field(default=None, description="Access Key Secretfor VikingDB API")
     region: Optional[str] = Field(default=None, description="Region for VikingDB API")
     host: Optional[str] = Field(default=None, description="Host for VikingDB API")
+    max_tokens: Optional[int] = Field(
+        default=None,
+        description="Maximum token count per embedding request. If None, uses model default (e.g., 8192 for Google).",
+    )
     extra_headers: Optional[dict[str, str]] = Field(
         default=None,
         description=(

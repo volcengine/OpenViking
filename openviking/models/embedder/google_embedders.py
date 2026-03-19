@@ -3,6 +3,7 @@
 """Google/Gemini AI Embedder Implementation"""
 
 import logging
+import re
 from typing import Any, Dict, List, Optional
 
 import requests
@@ -106,6 +107,77 @@ class GoogleDenseEmbedder(DenseEmbedderBase):
                 f"Gemini Embedding 2 supports Matryoshka dimension reduction up to {max_dim}."
             )
         self._dimension = dimension if dimension is not None else max_dim
+
+    @property
+    def max_tokens(self) -> int:
+        """Maximum token count per embedding request."""
+        return self._max_tokens
+
+    def _estimate_tokens(self, text: str) -> int:
+        """Estimate token count. Falls back to character-based heuristic if tiktoken unavailable."""
+        try:
+            import tiktoken
+
+            enc = tiktoken.encoding_for_model(self.model_name)
+            return len(enc.encode(text))
+        except Exception:
+            return max(len(text) // 3, len(text.encode("utf-8")) // 4)
+
+    def _chunk_text(self, text: str) -> List[str]:
+        """Split text into chunks each within max_tokens.
+
+        Splitting priority: paragraphs (\\n\\n) > sentences (。.!?\\n) > fixed length.
+        """
+        max_tok = self.max_tokens
+        if self._estimate_tokens(text) <= max_tok:
+            return [text]
+
+        paragraphs = text.split("\n\n")
+        if len(paragraphs) > 1:
+            chunks = self._merge_segments(paragraphs, max_tok, "\n\n")
+            if all(self._estimate_tokens(c) <= max_tok for c in chunks):
+                return chunks
+
+        sentences = re.split(r"(?<=[。.!?\n])", text)
+        sentences = [s for s in sentences if s]
+        if len(sentences) > 1:
+            chunks = self._merge_segments(sentences, max_tok, "")
+            if all(self._estimate_tokens(c) <= max_tok for c in chunks):
+                return chunks
+
+        return self._fixed_length_split(text, max_tok)
+
+    def _merge_segments(self, segments: List[str], max_tok: int, separator: str) -> List[str]:
+        chunks: List[str] = []
+        current = ""
+        for seg in segments:
+            candidate = (current + separator + seg) if current else seg
+            if self._estimate_tokens(candidate) <= max_tok:
+                current = candidate
+            else:
+                if current:
+                    chunks.append(current)
+                current = seg
+        if current:
+            chunks.append(current)
+        return chunks
+
+    def _fixed_length_split(self, text: str, max_tok: int) -> List[str]:
+        total_tokens = self._estimate_tokens(text)
+        chars_per_token = len(text) / max(total_tokens, 1)
+        chunk_size = max(int(max_tok * chars_per_token * 0.9), 100)
+
+        chunks: List[str] = []
+        start = 0
+        while start < len(text):
+            end = start + chunk_size
+            if end < len(text):
+                boundary = text.rfind(" ", start, end)
+                if boundary > start:
+                    end = boundary
+            chunks.append(text[start:end])
+            start = end
+        return chunks
 
     def _parse_param_string(self, param: Optional[str]) -> Dict[str, Any]:
         """Parse parameter string to dictionary for key=value format
