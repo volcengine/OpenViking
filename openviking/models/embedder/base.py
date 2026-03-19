@@ -41,7 +41,17 @@ def _get_tiktoken_encoder():
 def truncate_text_by_tokens(text: str, max_tokens: int) -> str:
     """Truncate text to at most max_tokens tokens. Returns original text if within limit.
 
-    Guarantees: len(tiktoken.encode(result)) <= max_tokens for cl100k_base.
+    Uses cl100k_base (OpenAI BPE) as a universal tokenizer approximation.
+    This is exact for OpenAI embedding models, but only approximate for others:
+
+    - BGE / bge-m3: based on XLM-RoBERTa + SentencePiece; CJK text produces
+      ~1.76 tokens/character, whereas cl100k_base merges CJK characters into
+      larger tokens and may undercount by up to ~3-7x for Chinese-heavy input.
+    - Jina / Voyage: also use their own tokenizers; token counts may differ.
+
+    For non-OpenAI models, callers should set a conservative max_tokens limit
+    (e.g. well below the model's hard limit) to absorb the tokenizer gap.
+
     Falls back to UTF-8 byte truncation if tiktoken is unavailable.
 
     Args:
@@ -51,8 +61,17 @@ def truncate_text_by_tokens(text: str, max_tokens: int) -> str:
     Returns:
         Truncated text (or original text if already within limit)
     """
-    # Fast path: tiktoken never produces more tokens than UTF-8 bytes,
-    # so byte count <= max_tokens guarantees token count <= max_tokens.
+    # Fast path: for any tokenizer, token count <= UTF-8 byte count
+    # (each token covers at least 1 byte), so byte count <= max_tokens
+    # guarantees token count <= max_tokens for ALL models including BGE.
+    # When this check fails and we fall through to cl100k_base, the token
+    # count estimate may be too low for non-OpenAI models (e.g. BGE
+    # SentencePiece produces ~1.76 tokens/CJK char while cl100k_base merges
+    # several chars into one token). In practice this is mitigated because:
+    #   - bge-large-zh has a 500-token limit (~170 CJK chars), so nearly all
+    #     inputs that reach this function will be caught by the fast path.
+    #   - bge-m3 has an 8000-token limit with a wide enough margin.
+    # Callers should set conservative max_tokens limits for non-OpenAI models.
     if len(text.encode("utf-8")) <= max_tokens:
         return text
 
