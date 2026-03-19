@@ -93,7 +93,15 @@ class EmbeddingModelConfig(BaseModel):
         if not self.provider:
             raise ValueError("Embedding provider is required")
 
-        if self.provider not in ["openai", "volcengine", "vikingdb", "jina", "ollama", "voyage", "google"]:
+        if self.provider not in [
+            "openai",
+            "volcengine",
+            "vikingdb",
+            "jina",
+            "ollama",
+            "voyage",
+            "google",
+        ]:
             raise ValueError(
                 f"Invalid embedding provider: '{self.provider}'. Must be one of: "
                 "'openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'voyage', 'google'"
