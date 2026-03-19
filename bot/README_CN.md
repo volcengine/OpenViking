@@ -84,10 +84,10 @@ uv pip install -e ".[bot,bot-langfuse,bot-telegram]"
 ## 🚀 快速开始
 
 > [!TIP]
-> 配置 vikingbot 最简单的方式是通过控制台 Web UI！
+> 通过配置文件 `~/.openviking/ov.conf` 配置 vikingbot！
 > 获取 API 密钥：[OpenRouter](https://openrouter.ai/keys)（全球）· [Brave Search](https://brave.com/search/api/)（可选，用于网页搜索）
 
-**1. 启动网关**
+**1. 初始化配置**
 
 ```bash
 vikingbot gateway
@@ -96,14 +96,10 @@ vikingbot gateway
 这将自动：
 - 在 `~/.openviking/ov.conf` 创建默认配置
 - 在 openviking的工作空间下创建bot启动文件。默认路径为 `~/.openviking/data/bot/`
-- 在 http://localhost:18791 启动控制台 Web UI
 
-**2. 通过控制台配置**
+**2. 通过 ov.conf 配置**
 
-在浏览器中打开 http://localhost:18791 并：
-- 进入 **Config** 标签页
-- 添加您的提供商 API 密钥（OpenRouter、OpenAI 等）
-- 保存配置
+编辑 `~/.openviking/ov.conf` 添加您的提供商 API 密钥（OpenRouter、OpenAI 等）并保存配置。
 
 **3. 聊天**
 
@@ -122,62 +118,6 @@ vikingbot chat --logs
 ```
 
 就这么简单！您只需 2 分钟就能拥有一个可用的 AI 助手。
-
-## 🐳 Docker 部署
-
-您也可以使用 Docker 部署 vikingbot，以便更轻松地设置和隔离。
-
-### 前置要求
-
-首先安装 Docker：
-- **macOS**：下载 [Docker Desktop](https://www.docker.com/products/docker-desktop)
-- **Windows**：下载 [Docker Desktop](https://www.docker.com/products/docker-desktop)
-- **Linux**：参考 [Docker 官方文档](https://docs.docker.com/engine/install/)
-
-验证 Docker 安装：
-```bash
-docker --version
-```
-
-### 快速火山引擎镜像仓库部署（推荐）
-### 快速 Docker 部署
-
-```bash
-# 1. 创建必要目录
-mkdir -p ~/.openviking/
-
-# 2. 启动容器
-docker run -d \
-    --name vikingbot \
-    --restart unless-stopped \
-    --platform linux/amd64 \
-    -v ~/.openviking:/root/.openviking \
-    -p 18791:18791 \
-    vikingbot-cn-beijing.cr.volces.com/vikingbot/vikingbot:latest \
-    gateway
-
-# 3. 查看日志
-docker logs --tail 50 -f vikingbot
-```
-
-按 `Ctrl+C` 退出日志视图，容器将继续在后台运行。
-
-### 本地构建和部署
-
-如果您想在本地构建 Docker 镜像：
-
-```bash
-# 构建镜像
-./deploy/docker/build-image.sh
-
-# 部署
-./deploy/docker/deploy.sh
-
-# 停止
-./deploy/docker/stop.sh
-```
-
-更多 Docker 部署选项，请查看 [deploy/docker/README.md](deploy/docker/README.md)。
 
 
 通过 Telegram、Discord、WhatsApp、飞书、Mochat、钉钉、Slack、邮件或 QQ 与您的 vikingbot 对话 —— 随时随地。
@@ -203,7 +143,7 @@ docker logs --tail 50 -f vikingbot
 > Vikingbot 与 OpenViking 共享同一配置文件，配置项位于文件的 `bot` 字段下，同时会自动合并 `vlm`、`storage`、`server` 等全局配置，无需单独维护配置文件。
 
 > [!IMPORTANT]
-> 修改配置后（无论是通过控制台 UI 还是直接编辑文件），
+> 修改配置后（直接编辑文件），
 > 您需要重启网关服务以使更改生效。
 
 ### Openviking Server配置
@@ -301,7 +241,7 @@ Vikingbot 默认启用 OpenViking 钩子：
 
 ### 手动配置（高级）
 
-如果您更喜欢直接编辑配置文件而不是使用控制台 UI：
+直接编辑配置文件：
 
 ```json
 {
@@ -471,7 +411,7 @@ vikingbot 支持沙箱执行以增强安全性。
 {
   "bot": {
     "sandbox": {
-      "backend": "opensandbox",
+      "backend": "srt",
       "mode": "per-session"
     }
   }
@@ -482,7 +422,6 @@ vikingbot 支持沙箱执行以增强安全性。
 | 后端 | 描述 |
 |---------|-------------|
 | `direct` | （默认）直接在主机上运行代码 |
-| `opensandbox` | 使用 OpenSandbox 服务 |
 | `srt` | 使用 Anthropic 的 SRT 沙箱运行时 |
 
 **可用模式：**
@@ -501,24 +440,6 @@ vikingbot 支持沙箱执行以增强安全性。
       "backends": {
         "direct": {
           "restrictToWorkspace": false
-        }
-      }
-    }
-  }
-}
-```
-
-**OpenSandbox 后端：**
-```json
-{
-  "bot": {
-    "sandbox": {
-      "backend": "opensandbox",
-      "backends": {
-        "opensandbox": {
-          "serverUrl": "http://localhost:18792",
-          "apiKey": "",
-          "defaultImage": "opensandbox/code-interpreter:v1.0.1"
         }
       }
     }
@@ -564,7 +485,7 @@ SRT 后端使用 `@anthropic-ai/sandbox-runtime`。
 
 SRT 后端还需要安装这些系统包：
 - `ripgrep` (rg) - 用于文本搜索
-- `bubblewrap` (bwrap) - 用于沙箱隔离  
+- `bubblewrap` (bwrap) - 用于沙箱隔离
 - `socat` - 用于网络代理
 
 **在 macOS 上安装：**
@@ -600,10 +521,12 @@ npm install -g @anthropic-ai/sandbox-runtime
 
 ```json
 {
-  "sandbox": {
-    "backends": {
-      "srt": {
-        "nodePath": "/usr/local/bin/node"
+  "bot": {
+    "sandbox": {
+      "backends": {
+        "srt": {
+          "nodePath": "/usr/local/bin/node"
+        }
       }
     }
   }
@@ -629,25 +552,10 @@ which nodejs
 | `vikingbot chat` | 交互式聊天模式 |
 | `vikingbot chat --no-markdown` | 显示纯文本回复 |
 | `vikingbot chat --logs` | 聊天期间显示运行时日志 |
-| `vikingbot gateway` | 启动网关和控制台 Web UI |
+| `vikingbot gateway` | 启动网关 |
 | `vikingbot status` | 显示状态 |
 | `vikingbot channels login` | 链接 WhatsApp（扫描二维码） |
 | `vikingbot channels status` | 显示渠道状态 |
-
-## 🖥️ 控制台 Web UI
-
-当您运行 `vikingbot gateway` 时，控制台 Web UI 会自动启动，可通过 http://localhost:18791 访问。
-
-**功能：**
-- **仪表板**：系统状态和会话的快速概览
-- **配置**：在用户友好的界面中配置提供商、代理、渠道和工具
-  - 基于表单的编辑器，便于配置
-  - 为高级用户提供的 JSON 编辑器
-- **会话**：查看和管理聊天会话
-- **工作区**：浏览和编辑工作区目录中的文件
-
-> [!IMPORTANT]
-> 在控制台中保存配置更改后，您需要重启网关服务以使更改生效。
 
 交互模式退出：`exit`、`quit`、`/exit`、`/quit`、`:q` 或 `Ctrl+D`。
 
