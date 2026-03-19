@@ -7,6 +7,7 @@ Provides centralized schema definitions and factory functions for creating colle
 similar to how init_viking_fs encapsulates VikingFS initialization.
 """
 
+import asyncio
 import hashlib
 import json
 import threading
@@ -248,15 +249,15 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                         f"Circuit breaker is open, re-enqueueing embedding: {embedding_msg.id}"
                     )
                     if self._vikingdb.has_queue_manager:
-                        import asyncio
-
                         wait = self._circuit_breaker.retry_after
                         if wait > 0:
                             await asyncio.sleep(wait)
                         await self._vikingdb.enqueue_embedding_msg(embedding_msg)
                         self.report_success()
                         return None
-                    # No queue manager — fall through and fail normally
+                    # No queue manager — cannot re-enqueue, drop with error
+                    self.report_error("Circuit breaker open and no queue manager", data)
+                    return None
 
                 # Initialize embedder if not already initialized
                 if not self._embedder:

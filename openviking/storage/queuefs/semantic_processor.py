@@ -230,6 +230,8 @@ class SemanticProcessor(DequeueHandlerBase):
             semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC)
             await semantic_queue.enqueue(msg)
             logger.info(f"Re-enqueued semantic message: {msg.uri}")
+        else:
+            logger.warning(f"No queue manager available, cannot re-enqueue: {msg.uri}")
 
     async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """Process dequeued SemanticMsg, recursively process all subdirectories."""
@@ -341,7 +343,9 @@ class SemanticProcessor(DequeueHandlerBase):
                         self._merge_request_stats(msg.telemetry_id, error_count=1)
                         self.report_error(str(e), data)
                         return None
-                self.report_success()
+                    self.report_success()
+                else:
+                    self.report_error(str(e), data)
             return None
         finally:
             # Safety net: release lifecycle lock if still held (e.g. on exception
