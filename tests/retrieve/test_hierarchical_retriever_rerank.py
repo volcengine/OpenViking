@@ -19,7 +19,7 @@ class DummyEmbedResult:
 
 
 class DummyEmbedder:
-    def embed(self, _query: str) -> DummyEmbedResult:
+    def embed(self, _query: str, is_query: bool = False) -> DummyEmbedResult:
         return DummyEmbedResult()
 
 

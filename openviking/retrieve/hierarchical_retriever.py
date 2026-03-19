@@ -127,7 +127,7 @@ class HierarchicalRetriever:
         query_vector = None
         sparse_query_vector = None
         if self.embedder:
-            result: EmbedResult = self.embedder.embed(query.query)
+            result: EmbedResult = self.embedder.embed(query.query, is_query=True)
             query_vector = result.dense_vector
             sparse_query_vector = result.sparse_vector
 

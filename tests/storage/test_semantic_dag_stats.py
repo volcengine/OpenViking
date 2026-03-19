@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import asyncio
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -21,6 +22,9 @@ class _FakeVikingFS:
     async def write_file(self, path, content, ctx=None):
         self.writes.append((path, content))
 
+    def _uri_to_path(self, uri, ctx=None):
+        return uri.replace("viking://", "/local/acc1/")
+
 
 class _FakeProcessor:
     def __init__(self):
@@ -35,6 +39,9 @@ class _FakeProcessor:
 
     def _extract_abstract_from_overview(self, overview):
         return "abstract"
+
+    def _enforce_size_limits(self, overview, abstract):
+        return overview, abstract
 
     async def _vectorize_directory(
         self, uri, context_type, abstract, overview, ctx=None, semantic_msg_id=None
@@ -73,6 +80,21 @@ async def test_semantic_dag_stats_collects_nodes(monkeypatch):
     monkeypatch.setattr(
         "openviking.storage.queuefs.embedding_tracker.EmbeddingTaskTracker.get_instance",
         lambda: _DummyTracker(),
+    )
+
+    # Mock lock layer: LockContext as no-op passthrough
+    mock_handle = MagicMock()
+    monkeypatch.setattr(
+        "openviking.storage.transaction.lock_context.LockContext.__aenter__",
+        AsyncMock(return_value=mock_handle),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.transaction.lock_context.LockContext.__aexit__",
+        AsyncMock(return_value=False),
+    )
+    monkeypatch.setattr(
+        "openviking.storage.transaction.get_lock_manager",
+        lambda: MagicMock(),
     )
 
     processor = _FakeProcessor()

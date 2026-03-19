@@ -31,6 +31,7 @@ class Summarizer:
         resource_uris: List[str],
         ctx: "RequestContext",
         skip_vectorization: bool = False,
+        lifecycle_lock_handle_id: str = "",
         **kwargs,
     ) -> Dict[str, Any]:
         """
@@ -71,7 +72,8 @@ class Summarizer:
                 role=ctx.role.value,
                 skip_vectorization=skip_vectorization,
                 telemetry_id=telemetry.telemetry_id if telemetry.enabled else "",
-                target_uri=uri,
+                target_uri=uri if uri != temp_uri else None,
+                lifecycle_lock_handle_id=lifecycle_lock_handle_id,
             )
             await semantic_queue.enqueue(msg)
             enqueued_count += 1

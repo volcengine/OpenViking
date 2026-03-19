@@ -21,7 +21,7 @@ IMPORTANT (v5.0 Architecture):
 """
 
 import logging
-from typing import TYPE_CHECKING, Optional
+from typing import Optional
 
 from openviking.core.building_tree import BuildingTree
 from openviking.core.context import Context
@@ -30,9 +30,6 @@ from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.utils import parse_code_hosting_url
 from openviking_cli.utils.uri import VikingURI
-
-if TYPE_CHECKING:
-    pass
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +74,31 @@ class TreeBuilder:
             return "viking://user"
         # Agent scope
         return "viking://agent"
+
+    async def _resolve_unique_uri(self, uri: str, max_attempts: int = 100) -> str:
+        """Return a URI that does not collide with an existing resource.
+
+        If *uri* is free, return it unchanged.  Otherwise append ``_1``,
+        ``_2``, ... until a free name is found.
+        """
+        viking_fs = get_viking_fs()
+
+        async def _exists(u: str) -> bool:
+            try:
+                await viking_fs.stat(u)
+                return True
+            except Exception:
+                return False
+
+        if not await _exists(uri):
+            return uri
+
+        for i in range(1, max_attempts + 1):
+            candidate = f"{uri}_{i}"
+            if not await _exists(candidate):
+                return candidate
+
+        raise FileExistsError(f"Cannot resolve unique name for {uri} after {max_attempts} attempts")
 
     # ============================================================================
     # v5.0 Methods (temporary directory + SemanticQueue architecture)
@@ -145,13 +167,18 @@ class TreeBuilder:
                     raise ValueError(f"Parent URI is not a directory: {parent_uri}")
             candidate_uri = VikingURI(base_uri).join(final_doc_name).uri
 
-        final_uri = candidate_uri
+        if to_uri:
+            final_uri = candidate_uri
+        else:
+            final_uri = await self._resolve_unique_uri(candidate_uri)
 
         tree = BuildingTree(
             source_path=source_path,
             source_format=source_format,
         )
         tree._root_uri = final_uri
+        if not to_uri:
+            tree._candidate_uri = candidate_uri
 
         # Create a minimal Context object for the root so that tree.root is not None
         root_context = Context(uri=final_uri, temp_uri=temp_doc_uri)

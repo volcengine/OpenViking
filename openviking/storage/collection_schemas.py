@@ -165,7 +165,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
 
     def _initialize_embedder(self, config: "OpenVikingConfig"):
         """Initialize the embedder instance from config."""
-        self._embedder = config.embedding.get_document_embedder()
+        self._embedder = config.embedding.get_embedder()
 
     @classmethod
     def _merge_request_stats(

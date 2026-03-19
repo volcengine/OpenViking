@@ -88,7 +88,7 @@ class MemoryDeduplicator:
         """Initialize deduplicator."""
         self.vikingdb = vikingdb
         config = get_openviking_config()
-        self.embedder = config.embedding.get_query_embedder()
+        self.embedder = config.embedding.get_embedder()
 
     async def deduplicate(
         self,
@@ -146,7 +146,7 @@ class MemoryDeduplicator:
 
         # Generate embedding for candidate
         query_text = f"{candidate.abstract} {candidate.content}"
-        embed_result: EmbedResult = self.embedder.embed(query_text)
+        embed_result: EmbedResult = self.embedder.embed(query_text, is_query=True)
         query_vector = embed_result.dense_vector
 
         category_uri_prefix = self._category_uri_prefix(candidate.category.value, candidate.user)
