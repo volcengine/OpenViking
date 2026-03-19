@@ -134,6 +134,34 @@
       "label": "Log find requests",
       "help": "Log tenant routing: /search/find + session messages/commit (X-OpenViking-*; not apiKey). Or set env OPENVIKING_LOG_ROUTING=1 or OPENVIKING_DEBUG=1. Local mode: subprocess stderr at info when enabled.",
       "advanced": true
+    },
+    "sccsEnabled": {
+      "label": "Enable SCCS Compression",
+      "help": "Enable SCCS tool-output compression in the context engine"
+    },
+    "sccsCompressThreshold": {
+      "label": "SCCS Compress Threshold",
+      "help": "Compress tool outputs longer than this many characters"
+    },
+    "sccsSummaryMaxChars": {
+      "label": "SCCS Summary Max Chars",
+      "help": "Maximum characters for SCCS REF_ID summaries"
+    },
+    "sccsEnableSmartSummary": {
+      "label": "SCCS Smart Summary",
+      "help": "Enable structured summary extraction for SCCS"
+    },
+    "sccsStorageTtlSeconds": {
+      "label": "SCCS Storage TTL (seconds)",
+      "help": "How long REF_ID content is retained"
+    },
+    "sccsStorageDir": {
+      "label": "SCCS Storage Directory",
+      "help": "Directory for persisted REF_ID content (default: ~/.openclaw/sccs)"
+    },
+    "sccsMaxEntries": {
+      "label": "SCCS Max Entries",
+      "help": "Max in-memory REF_ID entries before eviction"
     }
   },
   "configSchema": {
@@ -220,6 +248,27 @@
       },
       "logFindRequests": {
         "type": "boolean"
+      },
+      "sccsEnabled": {
+        "type": "boolean"
+      },
+      "sccsCompressThreshold": {
+        "type": "number"
+      },
+      "sccsSummaryMaxChars": {
+        "type": "number"
+      },
+      "sccsEnableSmartSummary": {
+        "type": "boolean"
+      },
+      "sccsStorageTtlSeconds": {
+        "type": "number"
+      },
+      "sccsStorageDir": {
+        "type": "string"
+      },
+      "sccsMaxEntries": {
+        "type": "number"
       }
     }
   }
