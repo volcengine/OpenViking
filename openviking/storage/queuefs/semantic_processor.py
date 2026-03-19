@@ -462,6 +462,13 @@ class SemanticProcessor(DequeueHandlerBase):
             root_files, root_dirs = await list_children(root_dir)
             target_files, target_dirs = await list_children(target_dir)
 
+            try:
+                await viking_fs._mv_vector_store_l0_l1(root_dir, target_dir, ctx=ctx)
+            except Exception as e:
+                logger.error(
+                    f"[SyncDiff] Failed to move L0/L1 index: {root_dir} -> {target_dir}, error={e}"
+                )
+
             file_names = set(root_files.keys()) | set(target_files.keys())
             for name in sorted(file_names):
                 root_file = root_files.get(name)

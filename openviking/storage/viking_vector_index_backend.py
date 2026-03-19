@@ -829,14 +829,22 @@ class VikingVectorIndexBackend:
         uri: str,
         new_uri: str,
         new_parent_uri: str,
+        levels: Optional[List[int]] = None,
     ) -> bool:
         import hashlib
 
-        records = await self.filter(
-            filter=And([Eq("uri", uri), Eq("account_id", ctx.account_id)]),
-            limit=100,
-            ctx=ctx,
-        )
+        conds: List[FilterExpr] = [Eq("uri", uri), Eq("account_id", ctx.account_id)]
+        if levels:
+            conds.append(In("level", levels))
+        if ctx.role == Role.USER and uri.startswith(("viking://user/", "viking://agent/")):
+            owner_space = (
+                ctx.user.user_space_name()
+                if uri.startswith("viking://user/")
+                else ctx.user.agent_space_name()
+            )
+            conds.append(Eq("owner_space", owner_space))
+
+        records = await self.filter(filter=And(conds), limit=100, ctx=ctx)
         if not records:
             return False
 
