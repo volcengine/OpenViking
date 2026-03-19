@@ -738,12 +738,12 @@ async function resolveMemoryContent(
       content =
         fullContent && typeof fullContent === "string" && fullContent.trim()
           ? fullContent.trim()
-          : (item.abstract ?? item.uri);
+          : (item.abstract?.trim() || item.uri);
     } catch {
-      content = item.abstract ?? item.uri;
+      content = item.abstract?.trim() || item.uri;
     }
   } else {
-    content = item.abstract ?? item.uri;
+    content = item.abstract?.trim() || item.uri;
   }
 
   if (content.length > options.recallMaxContentChars) {
