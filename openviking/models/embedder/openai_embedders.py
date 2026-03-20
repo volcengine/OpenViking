@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 
 import openai
 
+from openviking.models.vlm.registry import DEFAULT_AZURE_API_VERSION
 from openviking.models.embedder.base import (
     DenseEmbedderBase,
     EmbedResult,
@@ -122,7 +123,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             if not self.api_base:
                 raise ValueError("api_base (Azure endpoint) is required for Azure provider")
             client_kwargs["azure_endpoint"] = self.api_base
-            client_kwargs["api_version"] = self.api_version or "2025-01-01-preview"
+            client_kwargs["api_version"] = self.api_version or DEFAULT_AZURE_API_VERSION
             if extra_headers:
                 client_kwargs["default_headers"] = extra_headers
             self.client = openai.AzureOpenAI(**client_kwargs)

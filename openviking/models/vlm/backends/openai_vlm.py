@@ -9,12 +9,36 @@ from pathlib import Path
 from typing import Any, Dict, List, Union
 
 from ..base import VLMBase
+from ..registry import DEFAULT_AZURE_API_VERSION
 
 logger = logging.getLogger(__name__)
 
 
+def _build_openai_client_kwargs(
+    provider: str,
+    api_key: str,
+    api_base: str,
+    api_version: str | None,
+    extra_headers: Dict[str, str] | None,
+) -> Dict[str, Any]:
+    """Build kwargs dict shared by sync and async OpenAI/Azure client constructors."""
+    if provider == "azure":
+        if not api_base:
+            raise ValueError("api_base (Azure endpoint) is required for Azure provider")
+        kwargs: Dict[str, Any] = {
+            "api_key": api_key,
+            "azure_endpoint": api_base,
+            "api_version": api_version or DEFAULT_AZURE_API_VERSION,
+        }
+    else:
+        kwargs = {"api_key": api_key, "base_url": api_base}
+    if extra_headers:
+        kwargs["default_headers"] = extra_headers
+    return kwargs
+
+
 class OpenAIVLM(VLMBase):
-    """OpenAI VLM backend"""
+    """OpenAI / Azure OpenAI VLM backend"""
 
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
@@ -29,20 +53,14 @@ class OpenAIVLM(VLMBase):
                 import openai
             except ImportError:
                 raise ImportError("Please install openai: pip install openai")
+            kwargs = _build_openai_client_kwargs(
+                self.provider, self.api_key, self.api_base,
+                self.api_version, self.extra_headers,
+            )
             if self.provider == "azure":
-                client_kwargs: Dict[str, Any] = {
-                    "api_key": self.api_key,
-                    "azure_endpoint": self.api_base,
-                    "api_version": self.api_version or "2025-01-01-preview",
-                }
-                if self.extra_headers:
-                    client_kwargs["default_headers"] = self.extra_headers
-                self._sync_client = openai.AzureOpenAI(**client_kwargs)
+                self._sync_client = openai.AzureOpenAI(**kwargs)
             else:
-                client_kwargs = {"api_key": self.api_key, "base_url": self.api_base}
-                if self.extra_headers:
-                    client_kwargs["default_headers"] = self.extra_headers
-                self._sync_client = openai.OpenAI(**client_kwargs)
+                self._sync_client = openai.OpenAI(**kwargs)
         return self._sync_client
 
     def get_async_client(self):
@@ -52,20 +70,14 @@ class OpenAIVLM(VLMBase):
                 import openai
             except ImportError:
                 raise ImportError("Please install openai: pip install openai")
+            kwargs = _build_openai_client_kwargs(
+                self.provider, self.api_key, self.api_base,
+                self.api_version, self.extra_headers,
+            )
             if self.provider == "azure":
-                client_kwargs: Dict[str, Any] = {
-                    "api_key": self.api_key,
-                    "azure_endpoint": self.api_base,
-                    "api_version": self.api_version or "2025-01-01-preview",
-                }
-                if self.extra_headers:
-                    client_kwargs["default_headers"] = self.extra_headers
-                self._async_client = openai.AsyncAzureOpenAI(**client_kwargs)
+                self._async_client = openai.AsyncAzureOpenAI(**kwargs)
             else:
-                client_kwargs = {"api_key": self.api_key, "base_url": self.api_base}
-                if self.extra_headers:
-                    client_kwargs["default_headers"] = self.extra_headers
-                self._async_client = openai.AsyncOpenAI(**client_kwargs)
+                self._async_client = openai.AsyncOpenAI(**kwargs)
         return self._async_client
 
     def _update_token_usage_from_response(self, response):
