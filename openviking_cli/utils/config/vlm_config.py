@@ -37,6 +37,11 @@ class VLMConfig(BaseModel):
         default=100, description="Maximum number of concurrent LLM calls for semantic processing"
     )
 
+    api_version: Optional[str] = Field(
+        default=None,
+        description="API version for Azure OpenAI (e.g., '2025-01-01-preview').",
+    )
+
     extra_headers: Optional[Dict[str, str]] = Field(
         default=None, description="Extra HTTP headers for OpenAI-compatible providers"
     )
@@ -158,6 +163,7 @@ class VLMConfig(BaseModel):
             "thinking": self.thinking,
             "max_tokens": self.max_tokens,
             "stream": stream,
+            "api_version": self.api_version,
         }
 
         if config:

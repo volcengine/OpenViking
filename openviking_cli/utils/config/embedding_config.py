@@ -59,6 +59,10 @@ class EmbeddingModelConfig(BaseModel):
             "or other OpenAI-compatible providers that require custom headers."
         ),
     )
+    api_version: Optional[str] = Field(
+        default=None,
+        description="API version for Azure OpenAI (e.g., '2025-01-01-preview').",
+    )
 
     model_config = {"extra": "forbid"}
 
@@ -91,6 +95,7 @@ class EmbeddingModelConfig(BaseModel):
 
         if self.provider not in [
             "openai",
+            "azure",
             "volcengine",
             "vikingdb",
             "jina",
@@ -100,7 +105,7 @@ class EmbeddingModelConfig(BaseModel):
         ]:
             raise ValueError(
                 f"Invalid embedding provider: '{self.provider}'. Must be one of: "
-                "'openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'voyage', 'minimax'"
+                "'openai', 'azure', 'volcengine', 'vikingdb', 'jina', 'ollama', 'voyage', 'minimax'"
             )
 
         # Provider-specific validation
@@ -108,6 +113,12 @@ class EmbeddingModelConfig(BaseModel):
             # Allow missing api_key when api_base is set (e.g. local OpenAI-compatible servers)
             if not self.api_key and not self.api_base:
                 raise ValueError("OpenAI provider requires 'api_key' to be set")
+
+        elif self.provider == "azure":
+            if not self.api_key:
+                raise ValueError("Azure provider requires 'api_key' to be set")
+            if not self.api_base:
+                raise ValueError("Azure provider requires 'api_base' (Azure endpoint) to be set")
 
         elif self.provider == "ollama":
             # Ollama runs locally, no API key required
@@ -233,7 +244,23 @@ class EmbeddingConfig(BaseModel):
                     "api_key": cfg.api_key
                     or "no-key",  # Placeholder for local OpenAI-compatible servers
                     "api_base": cfg.api_base,
+                    "api_version": cfg.api_version,
                     "dimension": cfg.dimension,
+                    "provider": "openai",
+                    **({"query_param": cfg.query_param} if cfg.query_param else {}),
+                    **({"document_param": cfg.document_param} if cfg.document_param else {}),
+                    **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
+                },
+            ),
+            ("azure", "dense"): (
+                OpenAIDenseEmbedder,
+                lambda cfg: {
+                    "model_name": cfg.model,
+                    "api_key": cfg.api_key,
+                    "api_base": cfg.api_base,
+                    "api_version": cfg.api_version,
+                    "dimension": cfg.dimension,
+                    "provider": "azure",
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                     **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),

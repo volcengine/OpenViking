@@ -150,7 +150,7 @@ class VLMFactory:
 
             return VolcEngineVLM(config)
 
-        elif provider == "openai":
+        elif provider in ("openai", "azure"):
             from .backends.openai_vlm import OpenAIVLM
 
             return OpenAIVLM(config)
