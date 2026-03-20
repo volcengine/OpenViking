@@ -475,9 +475,31 @@ async def test_root_system_restart_keeps_200_via_http(auth_client: httpx.AsyncCl
         headers={"X-API-Key": ROOT_KEY},
     )
 
+    body = response.json()
     assert response.status_code == 200
-    assert response.json()["status"] == "ok"
+    assert body["status"] == "ok"
+    assert body["result"]["action"] == "terminate"
+    assert body["result"]["restart_requires_supervisor"] is True
+    assert "supervisor" in body["result"]
     assert scheduled
+
+
+async def test_root_system_restart_without_supervisor_can_be_rejected(
+    auth_client: httpx.AsyncClient, monkeypatch
+):
+    """Restart should fail with force=false when no supervisor is detected."""
+    monkeypatch.setattr(system_router, "_detect_supervisor", lambda: {"detected": False})
+
+    response = await auth_client.post(
+        "/api/v1/system/restart",
+        json={"force": False},
+        headers={"X-API-Key": ROOT_KEY},
+    )
+
+    body = response.json()
+    assert response.status_code == 412
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "FAILED_PRECONDITION"
 
 
 async def test_user_key_cannot_restart_system(auth_client: httpx.AsyncClient, user_key: str):

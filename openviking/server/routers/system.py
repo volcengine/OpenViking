@@ -7,14 +7,14 @@ import os
 import signal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Body, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from openviking.server.auth import get_request_context, require_role, resolve_identity
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext, Role
-from openviking.server.models import Response
+from openviking.server.models import ErrorInfo, Response
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.utils import get_logger
 
@@ -145,6 +145,26 @@ class WaitRequest(BaseModel):
     timeout: Optional[float] = None
 
 
+class RestartRequest(BaseModel):
+    """Request model for restart."""
+
+    force: bool = True
+    delay_seconds: float = _RESTART_DELAY_SECONDS
+
+
+def _detect_supervisor() -> dict:
+    """Best-effort supervisor detection based on environment hints."""
+    details = {
+        "kubernetes": bool(os.getenv("KUBERNETES_SERVICE_HOST")),
+        "systemd": bool(os.getenv("INVOCATION_ID") or os.getenv("JOURNAL_STREAM")),
+        "supervisord": bool(
+            os.getenv("SUPERVISOR_ENABLED") or os.getenv("SUPERVISOR_PROCESS_NAME")
+        ),
+    }
+    details["detected"] = any(details.values())
+    return details
+
+
 @router.post("/api/v1/system/wait", tags=["system"])
 async def wait_processed(
     request: WaitRequest,
@@ -158,12 +178,44 @@ async def wait_processed(
 
 @router.post("/api/v1/system/restart", tags=["system"])
 async def restart_server(
+    request: Optional[RestartRequest] = Body(default=None),
     _ctx: RequestContext = require_role(Role.ROOT),
 ):
-    _schedule_restart()
+    payload = request or RestartRequest()
+    supervisor = _detect_supervisor()
+
+    if not supervisor["detected"] and not payload.force:
+        return JSONResponse(
+            status_code=412,
+            content=Response(
+                status="error",
+                error=ErrorInfo(
+                    code="FAILED_PRECONDITION",
+                    message=(
+                        "No external supervisor detected. Restart may stop the service. "
+                        "Set force=true to terminate anyway."
+                    ),
+                    details={"supervisor": supervisor},
+                ),
+            ).model_dump(),
+        )
+
+    _schedule_restart(payload.delay_seconds)
+
+    message = "Restart scheduled. Service may be briefly unavailable."
+    if not supervisor["detected"]:
+        message = (
+            "Termination scheduled, but no external supervisor detected. "
+            "Service may not come back automatically."
+        )
+
     return Response(
         status="ok",
         result={
-            "message": "Restart scheduled. Service may be briefly unavailable.",
+            "message": message,
+            "action": "terminate",
+            "restart_requires_supervisor": True,
+            "supervisor": supervisor,
+            "delay_seconds": payload.delay_seconds,
         },
     )
