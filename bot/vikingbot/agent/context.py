@@ -135,16 +135,16 @@ Skills with available="false" need dependencies installed first - you can try in
 {skills_summary}""")
 
         # Viking user profile
-        # start = _time.time()
-        # profile = await self.memory.get_viking_user_profile(
-        #     workspace_id=workspace_id, user_id=self._sender_id
-        # )
-        # cost = round(_time.time() - start, 2)
-        # logger.info(
-        #     f"[READ_USER_PROFILE]: cost {cost}s, profile={profile[:50] if profile else 'None'}"
-        # )
-        # if profile:
-        #     parts.append(f"## Current user's information\n{profile}")
+        start = _time.time()
+        profile = await self.memory.get_viking_user_profile(
+            workspace_id=workspace_id, user_id=self._sender_id
+        )
+        cost = round(_time.time() - start, 2)
+        logger.info(
+            f"[READ_USER_PROFILE]: cost {cost}s, profile={profile[:50] if profile else 'None'}"
+        )
+        if profile:
+            parts.append(f"## Current user's information\n{profile}")
 
         return "\n\n---\n\n".join(parts)
 
@@ -203,7 +203,10 @@ Skills with available="false" need dependencies installed first - you can try in
 You are VikingBot, an AI assistant built based on the OpenViking context database.
 When acquiring information, data, and knowledge, you **prioritize using openviking tools to read and search OpenViking (a context database) above all other sources**.
 You have access to tools that allow you to:
-- Read OpenViking files
+- Read, search, and grep OpenViking files
+- Read, write, and edit local files
+- Execute shell commands
+- Search the web and fetch web pages
 - Send messages to users on chat channels
 - Spawn subagents for complex background tasks
 
