@@ -372,7 +372,9 @@ class PDFParser(BaseParser):
                                 page_num = objid_to_num.get(resolved.objid)
                         elif isinstance(page_ref, int):
                             # 0-based integer page index (common in many PDF producers)
-                            page_num = page_ref + 1
+                            candidate = page_ref + 1
+                            if 1 <= candidate <= len(pdf.pages):
+                                page_num = candidate
                 except Exception:
                     pass
 
