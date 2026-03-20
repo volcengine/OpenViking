@@ -110,7 +110,7 @@ class TestOpenAIVLMResponseFormats(VLMResponseFormatsTestBase):
 
 
 class TestLiteLLMVLMResponseFormats(VLMResponseFormatsTestBase):
-    """Test LiteLLMVLM handles various response formats correctly."""
+    """Test LiteLLMVLMProvider handles various response formats correctly."""
 
     @pytest.fixture()
     def vlm(self):
