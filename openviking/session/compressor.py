@@ -7,8 +7,10 @@ Handles extraction of long-term memories from session conversations.
 Uses MemoryExtractor for 6-category extraction and MemoryDeduplicator for LLM-based dedup.
 """
 
+from __future__ import annotations
+
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import TYPE_CHECKING, Dict, List, Optional
 
 from openviking.core.context import Context, Vectorize
 from openviking.message import Message
@@ -17,6 +19,9 @@ from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
+
+if TYPE_CHECKING:
+    from openviking.storage.memory_relation_store import MemoryRelationStore
 
 from .memory_deduplicator import DedupDecision, MemoryActionDecision, MemoryDeduplicator
 from .memory_extractor import (
@@ -61,13 +66,19 @@ class SessionCompressor:
     def __init__(
         self,
         vikingdb: VikingDBManager,
+        relation_store: Optional["MemoryRelationStore"] = None,
     ):
-        """Initialize session compressor."""
-        from openviking.storage.memory_relation_store import MemoryRelationStore
+        """Initialize session compressor.
 
+        Args:
+            vikingdb: VikingDB manager for vector search.
+            relation_store: Shared MemoryRelationStore instance. When provided,
+                dedup decisions create supersedes/contradicts relations visible
+                to the retriever and the REST API.
+        """
         self.vikingdb = vikingdb
         self.extractor = MemoryExtractor()
-        self.relation_store = MemoryRelationStore()
+        self.relation_store = relation_store
         self.deduplicator = MemoryDeduplicator(
             vikingdb=vikingdb, relation_store=self.relation_store
         )

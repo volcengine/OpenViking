@@ -13,7 +13,12 @@ from fastapi import APIRouter, Depends, Query
 
 from openviking.server.auth import get_request_context
 from openviking.server.identity import RequestContext
-from openviking.server.models import ErrorInfo, MemoryRelationListResponse, MemoryRelationResponse, Response
+from openviking.server.models import (
+    ErrorInfo,
+    MemoryRelationListResponse,
+    MemoryRelationResponse,
+    Response,
+)
 from openviking.storage.memory_relation_store import MemoryRelationStore, RelationType
 
 router = APIRouter(prefix="/api/v1/memories", tags=["memory-relations"])

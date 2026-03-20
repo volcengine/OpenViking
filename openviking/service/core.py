@@ -247,15 +247,27 @@ class OpenVikingService:
         if self._embedder is None:
             raise RuntimeError("Embedder not initialized")
 
+        # Create shared MemoryRelationStore so dedup relations are visible
+        # to the retriever (for filtering superseded memories) and the REST API.
+        from openviking.storage.memory_relation_store import MemoryRelationStore
+
+        self._memory_relation_store = MemoryRelationStore()
+
         self._viking_fs = init_viking_fs(
             agfs=self._agfs_client,
             query_embedder=self._embedder,
             rerank_config=config.rerank,
             vector_store=self._vikingdb_manager,
             enable_recorder=enable_recorder,
+            memory_relation_store=self._memory_relation_store,
         )
         if enable_recorder:
             logger.info("VikingFS IO Recorder enabled")
+
+        # Wire the relation store into the memory_relations router
+        from openviking.server.routers.memory_relations import set_memory_relation_store
+
+        set_memory_relation_store(self._memory_relation_store)
 
         # Initialize directories
         directory_initializer = DirectoryInitializer(vikingdb=self._vikingdb_manager)
@@ -274,7 +286,10 @@ class OpenVikingService:
             vikingdb=self._vikingdb_manager,
         )
         self._skill_processor = SkillProcessor(vikingdb=self._vikingdb_manager)
-        self._session_compressor = SessionCompressor(vikingdb=self._vikingdb_manager)
+        self._session_compressor = SessionCompressor(
+            vikingdb=self._vikingdb_manager,
+            relation_store=self._memory_relation_store,
+        )
 
         # Start TransactionManager if initialized
         if self._transaction_manager:

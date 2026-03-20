@@ -75,6 +75,7 @@ def init_viking_fs(
     vector_store: Optional["VikingVectorIndexBackend"] = None,
     timeout: int = 10,
     enable_recorder: bool = False,
+    memory_relation_store: Optional[Any] = None,
 ) -> "VikingFS":
     """Initialize VikingFS singleton.
 
@@ -85,6 +86,7 @@ def init_viking_fs(
         rerank_config: Rerank configuration
         vector_store: Vector store instance
         enable_recorder: Whether to enable IO recording
+        memory_relation_store: Optional MemoryRelationStore for conflict detection
     """
     global _instance
 
@@ -93,6 +95,7 @@ def init_viking_fs(
         query_embedder=query_embedder,
         rerank_config=rerank_config,
         vector_store=vector_store,
+        memory_relation_store=memory_relation_store,
     )
 
     if enable_recorder:
