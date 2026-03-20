@@ -140,6 +140,48 @@ class LiteLLMVLMProvider(VLMBase):
 
         return model
 
+    def _extract_content_from_response(self, response):
+        """Extract text content from common provider response formats."""
+        if response is None:
+            return ""
+
+        if isinstance(response, str):
+            return response
+
+        def normalize(content):
+            if content is None:
+                return ""
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                return "".join(
+                    item.get("text", "")
+                    for item in content
+                    if isinstance(item, dict) and item.get("type") == "text"
+                )
+            return str(content)
+
+        choices = getattr(response, "choices", None)
+        if choices:
+            message = getattr(choices[0], "message", None)
+            if message is not None:
+                return normalize(getattr(message, "content", None))
+            return normalize(getattr(choices[0], "text", None))
+
+        if isinstance(response, dict):
+            if "choices" in response and response["choices"]:
+                choice = response["choices"][0]
+                message = choice.get("message") if isinstance(choice, dict) else None
+                if isinstance(message, dict):
+                    return normalize(message.get("content"))
+                if isinstance(choice, dict):
+                    return normalize(choice.get("text"))
+            return normalize(response.get("content") or response.get("text"))
+
+        return normalize(
+            getattr(response, "content", None) or getattr(response, "text", None)
+        )
+
     def _detect_image_format(self, data: bytes) -> str:
         """Detect image format from magic bytes.
 
@@ -226,7 +268,7 @@ class LiteLLMVLMProvider(VLMBase):
 
         response = completion(**kwargs)
         self._update_token_usage_from_response(response)
-        return self._clean_response(response.choices[0].message.content or "")
+        return self._clean_response(self._extract_content_from_response(response))
 
     async def get_completion_async(
         self, prompt: str, thinking: bool = False, max_retries: int = 0
@@ -241,7 +283,7 @@ class LiteLLMVLMProvider(VLMBase):
             try:
                 response = await acompletion(**kwargs)
                 self._update_token_usage_from_response(response)
-                return self._clean_response(response.choices[0].message.content or "")
+                return self._clean_response(self._extract_content_from_response(response))
             except Exception as e:
                 last_error = e
                 if attempt < max_retries:
@@ -270,7 +312,7 @@ class LiteLLMVLMProvider(VLMBase):
 
         response = completion(**kwargs)
         self._update_token_usage_from_response(response)
-        return self._clean_response(response.choices[0].message.content or "")
+        return self._clean_response(self._extract_content_from_response(response))
 
     async def get_vision_completion_async(
         self,
