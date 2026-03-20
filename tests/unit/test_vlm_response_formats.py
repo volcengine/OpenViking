@@ -12,7 +12,7 @@ from openviking.models.vlm.backends.litellm_vlm import LiteLLMVLMProvider
 from openviking.models.vlm.backends.volcengine_vlm import VolcEngineVLM
 
 
-class TestVLMResponseFormatsBase:
+class VLMResponseFormatsTestBase:
     """Base test class for VLM response format handling."""
 
     @pytest.mark.parametrize(
@@ -48,7 +48,7 @@ class TestVLMResponseFormatsBase:
         assert vlm._extract_content_from_response(response) == "choice text content"
 
 
-class TestOpenAIVLMResponseFormats(TestVLMResponseFormatsBase):
+class TestOpenAIVLMResponseFormats(VLMResponseFormatsTestBase):
     """Test OpenAIVLM handles various response formats correctly."""
 
     @pytest.fixture()
@@ -69,23 +69,6 @@ class TestOpenAIVLMResponseFormats(TestVLMResponseFormatsBase):
 
         assert vlm.get_completion("Hello") == "plain string completion"
 
-    @patch.object(OpenAIVLM, "get_client")
-    def test_get_completion_with_standard_response(self, mock_get_client, vlm):
-        mock_client = MagicMock()
-        mock_get_client.return_value = mock_client
-        
-        mock_response = SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(content="standard completion content")
-                )
-            ],
-            usage=None,
-        )
-        mock_client.chat.completions.create.return_value = mock_response
-
-        assert vlm.get_completion("Hello") == "standard completion content"
-
     @patch.object(OpenAIVLM, "get_async_client")
     @pytest.mark.asyncio
     async def test_get_completion_async_with_str_response(self, mock_get_async_client, vlm):
@@ -126,7 +109,7 @@ class TestOpenAIVLMResponseFormats(TestVLMResponseFormatsBase):
         )
 
 
-class TestLiteLLMVLMResponseFormats(TestVLMResponseFormatsBase):
+class TestLiteLLMVLMResponseFormats(VLMResponseFormatsTestBase):
     """Test LiteLLMVLM handles various response formats correctly."""
 
     @pytest.fixture()
@@ -144,41 +127,12 @@ class TestLiteLLMVLMResponseFormats(TestVLMResponseFormatsBase):
 
         assert vlm.get_completion("Hello") == "plain string completion"
 
-    @patch("openviking.models.vlm.backends.litellm_vlm.completion")
-    def test_get_completion_with_standard_response(self, mock_completion, vlm):
-        mock_response = SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(content="standard completion content")
-                )
-            ],
-            usage=None,
-        )
-        mock_completion.return_value = mock_response
-
-        assert vlm.get_completion("Hello") == "standard completion content"
-
     @patch("openviking.models.vlm.backends.litellm_vlm.acompletion")
     @pytest.mark.asyncio
     async def test_get_completion_async_with_str_response(self, mock_acompletion, vlm):
         mock_acompletion.return_value = "async plain string completion"
 
         assert await vlm.get_completion_async("Hello") == "async plain string completion"
-
-    @patch("openviking.models.vlm.backends.litellm_vlm.acompletion")
-    @pytest.mark.asyncio
-    async def test_get_completion_async_with_standard_response(self, mock_acompletion, vlm):
-        mock_response = SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(content="async standard completion content")
-                )
-            ],
-            usage=None,
-        )
-        mock_acompletion.return_value = mock_response
-
-        assert await vlm.get_completion_async("Hello") == "async standard completion content"
 
     @patch("openviking.models.vlm.backends.litellm_vlm.completion")
     def test_get_vision_completion_with_str_response(self, mock_completion, vlm):
@@ -187,23 +141,6 @@ class TestLiteLLMVLMResponseFormats(TestVLMResponseFormatsBase):
         assert (
             vlm.get_vision_completion("Describe this image", ["https://example.com/image.jpg"])
             == "plain string vision response"
-        )
-
-    @patch("openviking.models.vlm.backends.litellm_vlm.completion")
-    def test_get_vision_completion_with_standard_response(self, mock_completion, vlm):
-        mock_response = SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(content="standard vision response content")
-                )
-            ],
-            usage=None,
-        )
-        mock_completion.return_value = mock_response
-
-        assert (
-            vlm.get_vision_completion("Describe this image", ["https://example.com/image.jpg"])
-            == "standard vision response content"
         )
 
     @patch("openviking.models.vlm.backends.litellm_vlm.acompletion")
@@ -216,26 +153,8 @@ class TestLiteLLMVLMResponseFormats(TestVLMResponseFormatsBase):
             == "async plain string vision response"
         )
 
-    @patch("openviking.models.vlm.backends.litellm_vlm.acompletion")
-    @pytest.mark.asyncio
-    async def test_get_vision_completion_async_with_standard_response(self, mock_acompletion, vlm):
-        mock_response = SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(content="async standard vision response content")
-                )
-            ],
-            usage=None,
-        )
-        mock_acompletion.return_value = mock_response
 
-        assert (
-            await vlm.get_vision_completion_async("Describe this image", ["https://example.com/image.jpg"])
-            == "async standard vision response content"
-        )
-
-
-class TestVolcEngineVLMResponseFormats(TestVLMResponseFormatsBase):
+class TestVolcEngineVLMResponseFormats(VLMResponseFormatsTestBase):
     """Test VolcEngineVLM handles various response formats correctly."""
 
     @pytest.fixture()
@@ -255,23 +174,6 @@ class TestVolcEngineVLMResponseFormats(TestVLMResponseFormatsBase):
 
         assert vlm.get_completion("Hello") == "plain string completion"
 
-    @patch.object(VolcEngineVLM, "get_client")
-    def test_get_completion_with_standard_response(self, mock_get_client, vlm):
-        mock_client = MagicMock()
-        mock_get_client.return_value = mock_client
-        
-        mock_response = SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(content="standard completion content")
-                )
-            ],
-            usage=None,
-        )
-        mock_client.chat.completions.create.return_value = mock_response
-
-        assert vlm.get_completion("Hello") == "standard completion content"
-
     @patch.object(VolcEngineVLM, "get_async_client")
     @pytest.mark.asyncio
     async def test_get_completion_async_with_str_response(self, mock_get_async_client, vlm):
@@ -286,29 +188,6 @@ class TestVolcEngineVLMResponseFormats(TestVLMResponseFormatsBase):
             == "async plain string completion"
         )
 
-    @patch.object(VolcEngineVLM, "get_async_client")
-    @pytest.mark.asyncio
-    async def test_get_completion_async_with_standard_response(self, mock_get_async_client, vlm):
-        mock_client = MagicMock()
-        mock_get_async_client.return_value = mock_client
-        
-        mock_response = SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(content="async standard completion content")
-                )
-            ],
-            usage=None,
-        )
-        mock_client.chat.completions.create = AsyncMock(
-            return_value=mock_response
-        )
-
-        assert (
-            await vlm.get_completion_async("Hello")
-            == "async standard completion content"
-        )
-
     @patch.object(VolcEngineVLM, "get_client")
     def test_get_vision_completion_with_str_response(self, mock_get_client, vlm):
         mock_client = MagicMock()
@@ -318,26 +197,6 @@ class TestVolcEngineVLMResponseFormats(TestVLMResponseFormatsBase):
         assert (
             vlm.get_vision_completion("Describe this image", ["https://example.com/image.jpg"])
             == "plain string vision response"
-        )
-
-    @patch.object(VolcEngineVLM, "get_client")
-    def test_get_vision_completion_with_standard_response(self, mock_get_client, vlm):
-        mock_client = MagicMock()
-        mock_get_client.return_value = mock_client
-        
-        mock_response = SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(content="standard vision response content")
-                )
-            ],
-            usage=None,
-        )
-        mock_client.chat.completions.create.return_value = mock_response
-
-        assert (
-            vlm.get_vision_completion("Describe this image", ["https://example.com/image.jpg"])
-            == "standard vision response content"
         )
 
     @patch.object(VolcEngineVLM, "get_async_client")
@@ -352,27 +211,4 @@ class TestVolcEngineVLMResponseFormats(TestVLMResponseFormatsBase):
         assert (
             await vlm.get_vision_completion_async("Describe this image", ["https://example.com/image.jpg"])
             == "async plain string vision response"
-        )
-
-    @patch.object(VolcEngineVLM, "get_async_client")
-    @pytest.mark.asyncio
-    async def test_get_vision_completion_async_with_standard_response(self, mock_get_async_client, vlm):
-        mock_client = MagicMock()
-        mock_get_async_client.return_value = mock_client
-        
-        mock_response = SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(content="async standard vision response content")
-                )
-            ],
-            usage=None,
-        )
-        mock_client.chat.completions.create = AsyncMock(
-            return_value=mock_response
-        )
-
-        assert (
-            await vlm.get_vision_completion_async("Describe this image", ["https://example.com/image.jpg"])
-            == "async standard vision response content"
         )
