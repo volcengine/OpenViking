@@ -34,10 +34,19 @@ class EmbeddingModelConfig(BaseModel):
             "Leave both unset for symmetric models."
         ),
     )
+    task_type: Optional[str] = Field(
+        default=None,
+        description=(
+            "Gemini task type. Valid: RETRIEVAL_QUERY, RETRIEVAL_DOCUMENT, "
+            "SEMANTIC_SIMILARITY, CLASSIFICATION, CLUSTERING, "
+            "QUESTION_ANSWERING, FACT_VERIFICATION, CODE_RETRIEVAL_QUERY. "
+            "For non-symmetric mode set query_param/document_param instead."
+        ),
+    )
     provider: Optional[str] = Field(
         default="volcengine",
         description=(
-            "Provider type: 'openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'voyage'. "
+            "Provider type: 'openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage'. "
             "For OpenRouter or other OpenAI-compatible providers, use 'openai' with "
             "api_base and extra_headers."
         ),
@@ -79,6 +88,11 @@ class EmbeddingModelConfig(BaseModel):
                 value = data.get(key)
                 if isinstance(value, str):
                     data[key] = value.lower()
+            # Gemini task_type values are uppercase enums
+            for key in ("task_type",):
+                value = data.get(key)
+                if isinstance(value, str):
+                    data[key] = value.upper()
         return data
 
     @model_validator(mode="after")
@@ -100,12 +114,13 @@ class EmbeddingModelConfig(BaseModel):
             "vikingdb",
             "jina",
             "ollama",
+            "gemini",
             "voyage",
             "minimax",
         ]:
             raise ValueError(
                 f"Invalid embedding provider: '{self.provider}'. Must be one of: "
-                "'openai', 'azure', 'volcengine', 'vikingdb', 'jina', 'ollama', 'voyage', 'minimax'"
+                "'openai', 'azure', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'minimax'"
             )
 
         # Provider-specific validation
@@ -146,6 +161,30 @@ class EmbeddingModelConfig(BaseModel):
             if not self.api_key:
                 raise ValueError("Jina provider requires 'api_key' to be set")
 
+        elif self.provider == "gemini":
+            if not self.api_key:
+                raise ValueError("Gemini provider requires 'api_key' to be set")
+            _GEMINI_TASK_TYPES = {
+                "RETRIEVAL_QUERY",
+                "RETRIEVAL_DOCUMENT",
+                "SEMANTIC_SIMILARITY",
+                "CLASSIFICATION",
+                "CLUSTERING",
+                "QUESTION_ANSWERING",
+                "FACT_VERIFICATION",
+                "CODE_RETRIEVAL_QUERY",
+            }
+            for field_name, value in [
+                ("query_param", self.query_param),
+                ("document_param", self.document_param),
+                ("task_type", self.task_type),
+            ]:
+                if value and value.upper() not in _GEMINI_TASK_TYPES:
+                    raise ValueError(
+                        f"Invalid {field_name} '{value}' for Gemini. "
+                        f"Valid task_types: {', '.join(sorted(_GEMINI_TASK_TYPES))}"
+                    )
+
         elif self.provider == "voyage":
             if not self.api_key:
                 raise ValueError("Voyage provider requires 'api_key' to be set")
@@ -169,12 +208,17 @@ class EmbeddingModelConfig(BaseModel):
 
             return get_voyage_model_default_dimension(self.model)
 
+        if provider == "gemini":
+            from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+            return GeminiDenseEmbedder._default_dimension(self.model)
+
         return 2048
 
 
 class EmbeddingConfig(BaseModel):
     """
-    Embedding configuration, supports OpenAI or VolcEngine compatible APIs.
+    Embedding configuration, supports OpenAI, VolcEngine, VikingDB, Jina, Gemini, or Voyage APIs.
 
     Structure:
     - dense: Configuration for dense embedder
@@ -212,7 +256,7 @@ class EmbeddingConfig(BaseModel):
         """Factory method to create embedder instance based on provider and type.
 
         Args:
-            provider: Provider type ('openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'voyage')
+            provider: Provider type ('openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage')
             embedder_type: Embedder type ('dense', 'sparse', 'hybrid')
             config: EmbeddingModelConfig instance
 
@@ -234,6 +278,7 @@ class EmbeddingConfig(BaseModel):
             VolcengineSparseEmbedder,
             VoyageDenseEmbedder,
         )
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
 
         # Factory registry: (provider, type) -> (embedder_class, param_builder)
         factory_registry = {
@@ -338,6 +383,17 @@ class EmbeddingConfig(BaseModel):
                     "api_key": cfg.api_key,
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
+                    **({"query_param": cfg.query_param} if cfg.query_param else {}),
+                    **({"document_param": cfg.document_param} if cfg.document_param else {}),
+                },
+            ),
+            ("gemini", "dense"): (
+                GeminiDenseEmbedder,
+                lambda cfg: {
+                    "model_name": cfg.model,
+                    "api_key": cfg.api_key,
+                    "dimension": cfg.dimension,
+                    "task_type": cfg.task_type,
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                 },

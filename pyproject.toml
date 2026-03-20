@@ -99,6 +99,13 @@ eval = [
     "datasets>=2.0.0",
     "pandas>=2.0.0",
 ]
+gemini = [
+    "google-genai>=1.0.0",
+]
+gemini-async = [
+    "google-genai>=1.0.0",
+    "anyio>=4.0.0",
+]
 build = [
     "setuptools>=61.0",
     "setuptools-scm>=8.0",

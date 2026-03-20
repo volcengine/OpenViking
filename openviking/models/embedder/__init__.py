@@ -13,6 +13,7 @@ Supported providers:
 - Volcengine: Dense, Sparse, Hybrid
 - Jina AI: Dense only
 - Voyage AI: Dense only
+- Google Gemini: Dense only
 """
 
 from openviking.models.embedder.base import (
@@ -23,6 +24,7 @@ from openviking.models.embedder.base import (
     HybridEmbedderBase,
     SparseEmbedderBase,
 )
+from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
 from openviking.models.embedder.jina_embedders import JinaDenseEmbedder
 from openviking.models.embedder.minimax_embedders import MinimaxDenseEmbedder
 from openviking.models.embedder.openai_embedders import OpenAIDenseEmbedder
@@ -46,6 +48,8 @@ __all__ = [
     "SparseEmbedderBase",
     "HybridEmbedderBase",
     "CompositeHybridEmbedder",
+    # Google Gemini implementations
+    "GeminiDenseEmbedder",
     # Jina AI implementations
     "JinaDenseEmbedder",
     # MiniMax implementations
