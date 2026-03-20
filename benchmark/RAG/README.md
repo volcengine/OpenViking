@@ -1,13 +1,13 @@
-# RAGbenchmark
+# RAG
 
 ## English Version
 
-RAGbenchmark is an independent RAG (Retrieval-Augmented Generation) system evaluation framework, fully compatible with the latest version of OpenViking.
+RAG is an independent RAG (Retrieval-Augmented Generation) system evaluation framework, fully compatible with the latest version of OpenViking.
 
 ### Project Structure
 
 ```
-RAGbenchmark/
+benchmark/RAG/
 ├── src/
 │   ├── __init__.py
 │   ├── pipeline.py              # Evaluation core pipeline
@@ -63,14 +63,14 @@ Edit LLM configuration in `config/*.yaml`. This configuration is used for both:
 
 #### 4. Configure OpenViking
 
-If you need to use custom OpenViking configuration (for data ingestion and retrieval), create an `ov.conf` file in the RAGbenchmark directory. This will override the default OpenViking settings.
+If you need to use custom OpenViking configuration (for data ingestion and retrieval), create an `ov.conf` file in the benchmark/RAG directory. This will override the default OpenViking settings.
 
 You can refer to `examples/ov.conf.example` in the OpenViking root directory for the configuration format.
 
 #### 5. Run Evaluation
 
 ```bash
-cd RAGbenchmark
+cd benchmark/RAG
 
 # Run complete evaluation (data ingestion, answer generation, evaluation, and data deletion)
 python run.py --config config/locomo_config.yaml
@@ -82,7 +82,7 @@ python run.py --config config/locomo_config.yaml --step gen
 python run.py --config config/locomo_config.yaml --step eval
 
 # Only run data deletion stage
-python run.py --config config/locomo_config.yaml --step delete
+python run.py --config config/locomo_config.yaml --step del
 ```
 
 ### Supported Datasets
@@ -127,7 +127,7 @@ Each dataset has its own configuration file in the `config/` directory. To use a
 
 ### Configuration Guide
 
-RAGbenchmark uses YAML configuration files to control the evaluation process. Each dataset has its own configuration file in the `config/` directory.
+RAG uses YAML configuration files to control the evaluation process. Each dataset has its own configuration file in the `config/` directory.
 
 **Key Configuration Sections:**
 
@@ -409,7 +409,7 @@ When `retrieval_instruction` is empty, the system will use the raw question for 
 
 #### Customizing Prompts
 
-RAGbenchmark uses dataset-specific and question-type-specific prompts to guide LLM answer generation. You can customize these prompts in the adapter files under `src/adapters/` to improve evaluation results.
+RAG uses dataset-specific and question-type-specific prompts to guide LLM answer generation. You can customize these prompts in the adapter files under `src/adapters/` to improve evaluation results.
 
 ##### Locomo Dataset Prompts (src/adapters/locomo\_adapter.py)
 
@@ -532,12 +532,12 @@ Same license as OpenViking.
 
 ## 中文版本
 
-RAGbenchmark 是一个独立的 RAG (Retrieval-Augmented Generation) 系统评测框架，完全兼容最新版本的 OpenViking。
+RAG 是一个独立的 RAG (Retrieval-Augmented Generation) 系统评测框架，完全兼容最新版本的 OpenViking。
 
 ### 项目结构
 
 ```
-RAGbenchmark/
+benchmark/RAG/
 ├── src/
 │   ├── __init__.py
 │   ├── pipeline.py              # 评测核心管道
@@ -593,14 +593,14 @@ source .venv/bin/activate
 
 #### 4. 配置 OpenViking
 
-如果需要使用自定义的 OpenViking 配置（用于数据入库和检索），请在 RAGbenchmark 目录下创建 `ov.conf` 文件。这将覆盖默认的 OpenViking 设置。
+如果需要使用自定义的 OpenViking 配置（用于数据入库和检索），请在 benchmark/RAG 目录下创建 `ov.conf` 文件。这将覆盖默认的 OpenViking 设置。
 
 你可以参考 OpenViking 根目录下的 `examples/ov.conf.example` 了解配置格式。
 
 #### 5. 运行评测
 
 ```bash
-cd RAGbenchmark
+cd benchmark/RAG
 
 # 运行完整评测流程（数据导入、答案生成、评测和数据删除）
 python run.py --config config/locomo_config.yaml
@@ -612,7 +612,7 @@ python run.py --config config/locomo_config.yaml --step gen
 python run.py --config config/locomo_config.yaml --step eval
 
 # 仅运行数据删除阶段
-python run.py --config config/locomo_config.yaml --step delete
+python run.py --config config/locomo_config.yaml --step del
 ```
 
 ### 支持的数据集
@@ -657,7 +657,7 @@ python run.py --config config/locomo_config.yaml --step delete
 
 ### 配置指南
 
-RAGbenchmark 使用 YAML 配置文件来控制评测过程。每个数据集在 `config/` 目录下都有自己的配置文件。
+RAG 使用 YAML 配置文件来控制评测过程。每个数据集在 `config/` 目录下都有自己的配置文件。
 
 **关键配置部分：**
 
@@ -932,7 +932,7 @@ retrieval_instruction: "Target_modality: text.\nInstruction:Locate the part of t
 
 #### 自定义 Prompt
 
-RAGbenchmark 使用数据集特定和问题类型特定的 prompt 来指导 LLM 生成答案。你可以在 `src/adapters/` 下的适配器文件中自定义这些 prompt，以改进评测结果。
+RAG 使用数据集特定和问题类型特定的 prompt 来指导 LLM 生成答案。你可以在 `src/adapters/` 下的适配器文件中自定义这些 prompt，以改进评测结果。
 
 ##### Locomo 数据集 Prompt (src/adapters/locomo\_adapter.py)
 
