@@ -630,8 +630,7 @@ async fn main() {
         }
         Commands::Config { action } => handle_config(action, ctx).await,
         Commands::Version => {
-            println!("{}", env!("CARGO_PKG_VERSION"));
-            Ok(())
+            handle_version(ctx).await
         }
         Commands::Read { uri } => handle_read(uri, ctx).await,
         Commands::Abstract { uri } => handle_abstract(uri, ctx).await,
@@ -1102,4 +1101,42 @@ async fn handle_health(ctx: CliContext) -> Result<()> {
 async fn handle_tui(uri: String, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     tui::run_tui(client, &uri).await
+}
+
+async fn handle_version(ctx: CliContext) -> Result<()> {
+    // Print CLI version
+    let cli_version = env!("CARGO_PKG_VERSION");
+    println!("CLI version: {}", cli_version);
+
+    // Try to get server version
+    let client = ctx.get_client();
+    let health_result: Result<serde_json::Value> = client.get("/health", &[]).await;
+    match health_result {
+        Ok(response) => {
+            // Extract server version from health response
+            if let Some(version) = response.get("version").and_then(|v| v.as_str()) {
+                println!("Server version: {}", version);
+            } else {
+                println!("Server version: unknown");
+            }
+        }
+        Err(_) => {
+            // Server is not accessible, show config path hint
+            println!("Server: not found");
+            
+            // Determine config file path
+            let config_path = if let Ok(env_path) = std::env::var("OPENVIKING_CLI_CONFIG_FILE") {
+                env_path
+            } else {
+                match config::default_config_path() {
+                    Ok(path) => path.to_string_lossy().to_string(),
+                    Err(_) => "~/.openviking/ovcli.conf".to_string(),
+                }
+            };
+            
+            println!("Check ovcli.conf: {}", config_path);
+        }
+    }
+    
+    Ok(())
 }
