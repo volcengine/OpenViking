@@ -22,6 +22,20 @@ logger = get_logger(__name__)
 
 
 @dataclass
+class PrometheusConfig:
+    """Prometheus exporter configuration."""
+
+    enabled: bool = False
+
+
+@dataclass
+class TelemetryConfig:
+    """Telemetry configuration."""
+
+    prometheus: PrometheusConfig = field(default_factory=PrometheusConfig)
+
+
+@dataclass
 class ServerConfig:
     """Server configuration (from the ``server`` section of ov.conf)."""
 
@@ -32,6 +46,7 @@ class ServerConfig:
     cors_origins: List[str] = field(default_factory=lambda: ["*"])
     with_bot: bool = False  # Enable Bot API proxy to Vikingbot
     bot_api_url: str = "http://localhost:18790"  # Vikingbot OpenAPIChannel URL (default port)
+    telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
 
 
 def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
@@ -67,6 +82,8 @@ def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
 
     data = load_json_config(path)
     server_data = data.get("server", {})
+    telemetry_data = server_data.get("telemetry", {}) or {}
+    prometheus_data = telemetry_data.get("prometheus", {}) or {}
 
     config = ServerConfig(
         host=server_data.get("host", "127.0.0.1"),
@@ -74,6 +91,13 @@ def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
         workers=server_data.get("workers", 1),
         root_api_key=server_data.get("root_api_key"),
         cors_origins=server_data.get("cors_origins", ["*"]),
+        with_bot=server_data.get("with_bot", False),
+        bot_api_url=server_data.get("bot_api_url", "http://localhost:18790"),
+        telemetry=TelemetryConfig(
+            prometheus=PrometheusConfig(
+                enabled=prometheus_data.get("enabled", False),
+            )
+        ),
     )
 
     return config
