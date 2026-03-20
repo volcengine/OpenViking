@@ -20,6 +20,7 @@ from openviking.server.routers import (
     content_router,
     debug_router,
     filesystem_router,
+    metrics_router,
     observer_router,
     pack_router,
     relations_router,
@@ -84,6 +85,16 @@ def create_app(
                 "server.root_api_key in ov.conf.",
                 config.host,
             )
+
+        # Initialize Prometheus metrics exporter if enabled
+        if config.telemetry.prometheus.enabled:
+            from openviking.storage.observers import PrometheusObserver
+
+            prometheus_observer = PrometheusObserver()
+            app.state.prometheus_observer = prometheus_observer
+            logger.info("Prometheus metrics exporter enabled at /metrics")
+        else:
+            app.state.prometheus_observer = None
 
         # Start TaskTracker cleanup loop
         task_tracker = get_task_tracker()
@@ -177,6 +188,7 @@ def create_app(
     app.include_router(debug_router)
     app.include_router(observer_router)
     app.include_router(tasks_router)
+    app.include_router(metrics_router)
     app.include_router(bot_router, prefix="/bot/v1")
 
     return app
