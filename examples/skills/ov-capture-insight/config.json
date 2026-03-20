@@ -1,0 +1,22 @@
+{
+  "name": "ov-capture-insight",
+  "description": "Automatically capture important insights from conversations",
+  "version": "1.0.0",
+  "category": "memory",
+  "tags": ["insight", "learning", "memory", "knowledge"],
+  "triggers": [
+    "remember this",
+    "save this",
+    "important finding",
+    "note this",
+    "for future reference"
+  ],
+  "categories": [
+    "debugging",
+    "configuration", 
+    "performance",
+    "security",
+    "workflow",
+    "best-practice"
+  ]
+}
