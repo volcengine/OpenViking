@@ -38,6 +38,19 @@ pub async fn overview(
     Ok(())
 }
 
+pub async fn reindex(
+    client: &HttpClient,
+    uri: &str,
+    regenerate: bool,
+    wait: bool,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let result = client.reindex(uri, regenerate, wait).await?;
+    crate::output::output_success(result, output_format, compact);
+    Ok(())
+}
+
 pub async fn get(
     client: &HttpClient,
     uri: &str,

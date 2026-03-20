@@ -7,6 +7,7 @@ Debug Service - provides system status query and health check.
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
+from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager
 from openviking.storage.observers import (
     LockObserver,
@@ -99,8 +100,7 @@ class ObserverService:
             status=observer.get_status_table(),
         )
 
-    @property
-    def vikingdb(self) -> ComponentStatus:
+    def vikingdb(self, ctx: Optional[RequestContext] = None) -> ComponentStatus:
         """Get VikingDB status."""
         if self._vikingdb is None:
             return ComponentStatus(
@@ -114,7 +114,7 @@ class ObserverService:
             name="vikingdb",
             is_healthy=observer.is_healthy(),
             has_errors=observer.has_errors(),
-            status=observer.get_status_table(),
+            status=observer.get_status_table(ctx=ctx),
         )
 
     @property
@@ -166,12 +166,11 @@ class ObserverService:
             status=observer.get_status_table(),
         )
 
-    @property
-    def system(self) -> SystemStatus:
+    def system(self, ctx: Optional[RequestContext] = None) -> SystemStatus:
         """Get system overall status."""
         components = {
             "queue": self.queue,
-            "vikingdb": self.vikingdb,
+            "vikingdb": self.vikingdb(ctx=ctx),
             "vlm": self.vlm,
             "lock": self.lock,
             "retrieval": self.retrieval,
@@ -187,7 +186,7 @@ class ObserverService:
         """Quick health check."""
         if not self._dependencies_ready:
             return False
-        return self.system.is_healthy
+        return self.system().is_healthy
 
 
 class DebugService:

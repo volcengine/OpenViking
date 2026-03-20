@@ -166,7 +166,7 @@ class TestObserverService:
         mock_observer_cls.return_value = mock_observer
 
         service = ObserverService(vikingdb=mock_vikingdb)
-        status = service.vikingdb
+        status = service.vikingdb()
 
         assert isinstance(status, ComponentStatus)
         assert status.name == "vikingdb"
@@ -216,7 +216,7 @@ class TestObserverService:
 
         mock_config = MagicMock()
         service = ObserverService(vikingdb=MagicMock(), config=mock_config)
-        status = service.system
+        status = service.system()
 
         assert isinstance(status, SystemStatus)
         for name in ("queue", "vikingdb", "vlm"):
@@ -255,7 +255,7 @@ class TestObserverService:
 
         mock_config = MagicMock()
         service = ObserverService(vikingdb=MagicMock(), config=mock_config)
-        status = service.system
+        status = service.system()
 
         assert isinstance(status, SystemStatus)
         assert status.is_healthy is False
@@ -281,7 +281,7 @@ class TestObserverService:
 
         mock_config = MagicMock()
         service = ObserverService(vikingdb=MagicMock(), config=mock_config)
-        status = service.system
+        status = service.system()
         assert all(c.is_healthy for name, c in status.components.items() if name != "transaction")
 
     def test_is_healthy_without_dependencies(self):
@@ -292,7 +292,7 @@ class TestObserverService:
     def test_vikingdb_property_without_dependency(self):
         """Test vikingdb property returns unhealthy ComponentStatus when vikingdb is None."""
         service = ObserverService()
-        status = service.vikingdb
+        status = service.vikingdb()
         assert isinstance(status, ComponentStatus)
         assert status.name == "vikingdb"
         assert status.is_healthy is False
@@ -312,7 +312,7 @@ class TestObserverService:
     def test_system_property_without_dependencies(self):
         """Test system property returns unhealthy SystemStatus when dependencies not set."""
         service = ObserverService()
-        status = service.system
+        status = service.system()
         assert isinstance(status, SystemStatus)
         assert status.is_healthy is False
 

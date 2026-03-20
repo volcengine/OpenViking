@@ -137,6 +137,27 @@ With `input: "multimodal"`, OpenViking can embed text, images (PNG, JPG, etc.), 
 - `vikingdb`: VikingDB Embedding API
 - `jina`: Jina AI Embedding API
 - `voyage`: Voyage AI Embedding API
+- `minimax`: MiniMax Embedding API
+
+**minimax provider example:**
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "minimax",
+      "api_key": "your-minimax-api-key",
+      "model": "embo-01",
+      "dimension": 1536,
+      "query_param": "query",
+      "document_param": "db",
+      "extra_headers": {
+        "GroupId": "your-group-id"
+      }
+    }
+  }
+}
+```
 
 **vikingdb provider example:**
 
@@ -410,11 +431,27 @@ Reranking model for search result refinement.
 }
 ```
 
+**OpenAI-compatible provider (e.g. DashScope qwen3-rerank):**
+
+```json
+{
+  "rerank": {
+    "provider": "openai",
+    "api_key": "your-api-key",
+    "api_base": "https://dashscope.aliyuncs.com/compatible-api/v1/reranks",
+    "model": "qwen3-rerank",
+    "threshold": 0.1
+  }
+}
+```
+
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `provider` | str | `"volcengine"` |
+| `provider` | str | `"volcengine"` or `"openai"` |
 | `api_key` | str | API key |
 | `model` | str | Model name |
+| `api_base` | str | Endpoint URL (openai provider only) |
+| `threshold` | float | Score threshold; results below this are filtered out. Default: `0.1` |
 
 If rerank is not configured, search uses vector similarity only.
 
@@ -729,9 +766,11 @@ For details on the lock mechanism, see [Path Locks and Crash Recovery](../concep
     "stream": false
   },
   "rerank": {
-    "provider": "volcengine",
+    "provider": "volcengine|openai",
     "api_key": "string",
-    "model": "string"
+    "model": "string",
+    "api_base": "string",
+    "threshold": 0.1
   },
   "storage": {
     "workspace": "string",
