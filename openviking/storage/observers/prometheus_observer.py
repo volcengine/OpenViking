@@ -42,8 +42,8 @@ class PrometheusObserver(BaseObserver):
         self._embedding_requests_total = 0
         self._vlm_calls_total = 0
 
-        self._cache_hits_total: Dict[str, int] = {level: 0 for level in self.CACHE_LEVELS}
-        self._cache_misses_total: Dict[str, int] = {level: 0 for level in self.CACHE_LEVELS}
+        self._cache_hits_total: Dict[str, int] = dict.fromkeys(self.CACHE_LEVELS, 0)
+        self._cache_misses_total: Dict[str, int] = dict.fromkeys(self.CACHE_LEVELS, 0)
 
         self._retrieval_latency_seconds = _Histogram(self.DEFAULT_LATENCY_BUCKETS)
         self._embedding_latency_seconds = _Histogram(self.DEFAULT_LATENCY_BUCKETS)
