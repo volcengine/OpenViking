@@ -132,7 +132,8 @@ class LiteLLMVLMProvider(VLMBase):
         if provider and provider in PROVIDER_CONFIGS:
             prefix = PROVIDER_CONFIGS[provider]["litellm_prefix"]
             # LiteLLM uses the `zai/` prefix for Zhipu GLM; do not prepend `zhipu/` (see #784).
-            if prefix and not model.startswith(f"{prefix}/") and not model.startswith("zai/"):
+            is_zhipu_zai_model = provider == "zhipu" and model.startswith("zai/")
+            if prefix and not model.startswith(f"{prefix}/") and not is_zhipu_zai_model:
                 return f"{prefix}/{model}"
             return model
 
