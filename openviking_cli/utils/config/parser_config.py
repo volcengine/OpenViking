@@ -25,8 +25,9 @@ class ParserConfig:
         enabled: Whether the parser is enabled
         max_content_length: Maximum content length to process (characters)
         encoding: Default file encoding
-        max_section_size: Maximum characters per section before splitting
+        max_section_size: Maximum tokens per section before splitting
         section_size_flexibility: Allow overflow to maintain coherence (0.0-1.0)
+        max_section_chars: Hard character limit per section (guards against token estimation errors)
     """
 
     enabled: bool = True
@@ -36,6 +37,9 @@ class ParserConfig:
     # Smart splitting configuration
     max_section_size: int = 1000  # Maximum tokens per section before splitting
     section_size_flexibility: float = 0.3  # Allow 30% overflow to maintain coherence
+    max_section_chars: int = (
+        6000  # Hard character limit per section (guards against token estimation errors)
+    )
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ParserConfig":
@@ -103,6 +107,9 @@ class ParserConfig:
 
         if not 0.0 <= self.section_size_flexibility <= 1.0:
             raise ValueError("section_size_flexibility must be between 0.0 and 1.0")
+
+        if self.max_section_chars <= 0:
+            raise ValueError("max_section_chars must be positive")
 
     def to_dict(self) -> Dict[str, Any]:
         """
