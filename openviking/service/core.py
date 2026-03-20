@@ -238,15 +238,6 @@ class OpenVikingService:
 
         acquire_data_dir_lock(self._config.storage.workspace)
 
-        # Clean up stale RocksDB LOCK files left by crashed processes.
-        # On Windows, these persist after process death and block PersistStore
-        # from opening (see https://github.com/volcengine/OpenViking/issues/650).
-        from openviking.storage.vectordb.utils.stale_lock import (
-            clean_stale_rocksdb_locks,
-        )
-
-        clean_stale_rocksdb_locks(self._config.storage.workspace)
-
         if self._vikingdb_manager is None:
             self._init_storage(
                 self._config.storage,
