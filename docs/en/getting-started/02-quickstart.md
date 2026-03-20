@@ -10,11 +10,64 @@ Before using OpenViking, ensure your environment meets the following requirement
 - **Operating System**: Linux, macOS, Windows
 - **Network Connection**: Stable network connection required (for downloading dependencies and accessing model services)
 
-## Installation
+## Installation & Startup
+
+OpenViking can be installed via a Python Package to be used as a local library, or you can quickly launch it as an independent service using Docker.
+
+### Option 1: Install via pip (As a local library)
 
 ```bash
 pip install openviking --upgrade --force-reinstall
 ```
+
+### Option 2: Start via Docker (As an independent service)
+
+If you prefer to run OpenViking as a standalone service, Docker is recommended.
+
+1. **Prepare Configuration and Data Directories**
+   Create a data directory on your host machine and prepare the `ov.conf` configuration file (see the "Configuration" section below for details):
+   ```bash
+   mkdir -p ~/.openviking/data
+   touch ~/.openviking/ov.conf
+   ```
+
+2. **Start with Docker Compose**
+   Create a `docker-compose.yml` file:
+   ```yaml
+   services:
+     openviking:
+       image: ghcr.io/volcengine/openviking:main
+       container_name: openviking
+       ports:
+         - "1933:1933"
+       volumes:
+         - ~/.openviking/ov.conf:/app/ov.conf
+         - ~/.openviking/data:/app/data
+       restart: unless-stopped
+   ```
+   Then run the following command in the same directory:
+   ```bash
+   docker-compose up -d
+   ```
+
+> **💡 Mac Local Network Access Tip (Connection reset error):**
+>
+> By default, OpenViking only listens to `127.0.0.1` for security reasons. If you are using Docker on a Mac, your host machine may not be able to access it directly via `localhost:1933`.
+> 
+> **Recommended Solution: Use socat for port forwarding (No config changes needed):**
+> Override the default startup command in your `docker-compose.yml` to use `socat` for internal port forwarding:
+> ```yaml
+> services:
+>   openviking:
+>     image: ghcr.io/volcengine/openviking:main
+>     ports:
+>       - "1933:1934" # Map host 1933 to container 1934
+>     volumes:
+>       - ~/.openviking/ov.conf:/app/ov.conf
+>       - ~/.openviking/data:/app/data
+>     command: /bin/sh -c "apt-get update && apt-get install -y socat && socat TCP-LISTEN:1934,fork,reuseaddr TCP:127.0.0.1:1933 & openviking-server"
+> ```
+> This perfectly solves the access issue for Mac host machines.
 
 ## Model Preparation
 

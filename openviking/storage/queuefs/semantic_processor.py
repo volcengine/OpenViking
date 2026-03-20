@@ -192,6 +192,12 @@ class SemanticProcessor(DequeueHandlerBase):
         """Check if file content has changed compared to target file."""
         viking_fs = get_viking_fs()
         try:
+            current_stat = await viking_fs.stat(file_path, ctx=ctx)
+            target_stat = await viking_fs.stat(target_file, ctx=ctx)
+            current_size = current_stat.get("size") if isinstance(current_stat, dict) else None
+            target_size = target_stat.get("size") if isinstance(target_stat, dict) else None
+            if current_size is not None and target_size is not None and current_size != target_size:
+                return True
             current_content = await viking_fs.read_file(file_path, ctx=ctx)
             target_content = await viking_fs.read_file(target_file, ctx=ctx)
             return current_content != target_content
@@ -233,11 +239,20 @@ class SemanticProcessor(DequeueHandlerBase):
                         target_exists = await viking_fs.exists(
                             msg.target_uri, ctx=self._current_ctx
                         )
-                        if target_exists:
+                        # Check if target URI exists and is not the same as the source URI（避免重复处理）
+                        if target_exists and msg.uri != msg.target_uri:
                             is_incremental = True
                             logger.info(
                                 f"Target URI exists, using incremental update: {msg.target_uri}"
                             )
+
+                    # Re-acquire lifecycle lock if handle was lost (e.g. server restart)
+                    if msg.lifecycle_lock_handle_id:
+                        lock_uri = msg.target_uri or msg.uri
+                        msg.lifecycle_lock_handle_id = await self._ensure_lifecycle_lock(
+                            msg.lifecycle_lock_handle_id,
+                            viking_fs._uri_to_path(lock_uri, ctx=self._current_ctx),
+                        )
 
                     executor = SemanticDagExecutor(
                         processor=self,
@@ -248,6 +263,8 @@ class SemanticProcessor(DequeueHandlerBase):
                         target_uri=msg.target_uri,
                         semantic_msg_id=msg.id,
                         recursive=msg.recursive,
+                        lifecycle_lock_handle_id=msg.lifecycle_lock_handle_id,
+                        is_code_repo=msg.is_code_repo,
                     )
                     self._dag_executor = executor
                     await executor.run(msg.uri)
@@ -268,6 +285,22 @@ class SemanticProcessor(DequeueHandlerBase):
             self.report_error(str(e), data)
             return None
         finally:
+            # Safety net: release lifecycle lock if still held (e.g. on exception
+            # before the DAG executor took ownership)
+            if msg and msg.lifecycle_lock_handle_id:
+                try:
+                    from openviking.storage.transaction import get_lock_manager
+
+                    lm = get_lock_manager()
+                    handle = lm.get_handle(msg.lifecycle_lock_handle_id)
+                    if handle:
+                        await lm.release(handle)
+                        logger.info(
+                            f"[SemanticProcessor] Safety-net released lifecycle lock "
+                            f"{msg.lifecycle_lock_handle_id}"
+                        )
+                except Exception:
+                    pass
             self._current_msg = None
             self._current_ctx = None
 
@@ -275,6 +308,25 @@ class SemanticProcessor(DequeueHandlerBase):
         if not self._dag_executor:
             return None
         return self._dag_executor.get_stats()
+
+    @staticmethod
+    async def _ensure_lifecycle_lock(handle_id: str, lock_path: str) -> str:
+        """If the handle is missing (server restart), re-acquire a SUBTREE lock.
+
+        Returns the (possibly new) handle ID, or "" on failure.
+        """
+        from openviking.storage.transaction import get_lock_manager
+
+        lm = get_lock_manager()
+        if lm.get_handle(handle_id):
+            return handle_id
+        new_handle = lm.create_handle()
+        if await lm.acquire_subtree(new_handle, lock_path):
+            logger.info(f"Re-acquired lifecycle lock on {lock_path} (handle {new_handle.id})")
+            return new_handle.id
+        logger.warning(f"Failed to re-acquire lifecycle lock on {lock_path}")
+        await lm.release(new_handle)
+        return ""
 
     async def _process_memory_directory(self, msg: SemanticMsg) -> None:
         """Process a memory directory with special handling.
@@ -411,6 +463,13 @@ class SemanticProcessor(DequeueHandlerBase):
             root_files, root_dirs = await list_children(root_dir)
             target_files, target_dirs = await list_children(target_dir)
 
+            try:
+                await viking_fs._mv_vector_store_l0_l1(root_dir, target_dir, ctx=ctx)
+            except Exception as e:
+                logger.error(
+                    f"[SyncDiff] Failed to move L0/L1 index: {root_dir} -> {target_dir}, error={e}"
+                )
+
             file_names = set(root_files.keys()) | set(target_files.keys())
             for name in sorted(file_names):
                 root_file = root_files.get(name)
@@ -539,7 +598,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
         await sync_dir(root_uri, target_uri)
         try:
-            await viking_fs.rm(root_uri, recursive=True, ctx=ctx)
+            await viking_fs.delete_temp(root_uri, ctx=ctx)
         except Exception as e:
             logger.error(f"[SyncDiff] Failed to delete root directory {root_uri}: {e}")
         return diff
@@ -600,6 +659,9 @@ class SemanticProcessor(DequeueHandlerBase):
                 verbose = code_mode == "ast_llm"
                 skeleton_text = extract_skeleton(file_name, content, verbose=verbose)
                 if skeleton_text:
+                    max_skeleton_chars = get_openviking_config().semantic.max_skeleton_chars
+                    if len(skeleton_text) > max_skeleton_chars:
+                        skeleton_text = skeleton_text[:max_skeleton_chars]
                     if code_mode == "ast":
                         return {"name": file_name, "summary": skeleton_text}
                     else:  # ast_llm
@@ -1018,6 +1080,7 @@ class SemanticProcessor(DequeueHandlerBase):
         summary_dict: Dict[str, str],
         ctx: Optional[RequestContext] = None,
         semantic_msg_id: Optional[str] = None,
+        use_summary: bool = False,
     ) -> None:
         """Vectorize a single file using its content or summary."""
         from openviking.utils.embedding_utils import vectorize_file
@@ -1030,4 +1093,5 @@ class SemanticProcessor(DequeueHandlerBase):
             context_type=context_type,
             ctx=active_ctx,
             semantic_msg_id=semantic_msg_id,
+            use_summary=use_summary,
         )

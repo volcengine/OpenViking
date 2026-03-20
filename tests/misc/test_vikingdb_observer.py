@@ -8,13 +8,16 @@ Test VikingDBObserver functionality
 import asyncio
 
 import openviking as ov
+from openviking.async_client import AsyncOpenViking
 
 
 async def test_vikingdb_observer():
     """Test VikingDBObserver functionality"""
     print("=== Test VikingDBObserver ===")
 
-    # Create client
+    # Reset singleton to ensure clean state from previous tests
+    await AsyncOpenViking.reset()
+
     client = ov.AsyncOpenViking(path="./test_data/test_vikingdb_observer")
 
     try:
@@ -39,7 +42,7 @@ async def test_vikingdb_observer():
 
         # Test VikingDBObserver
         print("\n4. Test VikingDBObserver:")
-        vikingdb_status = client.observer.vikingdb
+        vikingdb_status = client.observer.vikingdb()
         print(f"Type: {type(vikingdb_status)}")
         print(f"Is healthy: {vikingdb_status.is_healthy}")
         print(f"Has errors: {vikingdb_status.has_errors}")
@@ -55,7 +58,7 @@ async def test_vikingdb_observer():
 
         # Test system status
         print("\n7. Test system status:")
-        system_status = client.observer.system
+        system_status = client.observer.system()
         print(f"System is_healthy: {system_status.is_healthy}")
         for name, component in system_status.components.items():
             print(f"\n{name}:")
@@ -72,14 +75,16 @@ async def test_vikingdb_observer():
         traceback.print_exc()
 
     finally:
-        # Close client
-        await client.close()
+        await AsyncOpenViking.reset()
         print("Client closed")
 
 
-def test_sync_client():
+async def test_sync_client():
     """Test sync client"""
     print("\n=== Test sync client ===")
+
+    # Reset singleton to ensure clean state from previous tests
+    await AsyncOpenViking.reset()
 
     client = ov.OpenViking(path="./test_data/test_vikingdb_observer")
 
@@ -97,7 +102,7 @@ def test_sync_client():
 
         # Test VikingDBObserver
         print("\nVikingDBObserver status:")
-        print(client.observer.vikingdb)
+        print(client.observer.vikingdb())
 
         print("\n=== Sync client test completed ===")
 
@@ -109,6 +114,7 @@ def test_sync_client():
 
     finally:
         client.close()
+        await AsyncOpenViking.reset()
         print("Sync client closed")
 
 
@@ -117,4 +123,4 @@ if __name__ == "__main__":
     asyncio.run(test_vikingdb_observer())
 
     # Run sync test
-    test_sync_client()
+    asyncio.run(test_sync_client())

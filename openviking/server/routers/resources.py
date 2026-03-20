@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, Form, UploadFile
 from pydantic import BaseModel, model_validator
 
 from openviking.server.auth import get_request_context
@@ -23,7 +23,39 @@ router = APIRouter(prefix="/api/v1", tags=["resources"])
 
 
 class AddResourceRequest(BaseModel):
-    """Request model for add_resource."""
+    """Request model for add_resource.
+
+    Attributes:
+        path: Resource path (local file path or URL). Either path or temp_path must be provided.
+        temp_path: Temporary file path for uploaded files. Either path or temp_path must be provided.
+        to: Target URI for the resource (e.g., "viking://resources/my_resource").
+            If not specified, an auto-generated URI will be used.
+        parent: Parent URI under which the resource will be stored.
+            Cannot be used together with 'to'.
+        reason: Reason for adding the resource. Used for documentation and monitoring.
+        instruction: Processing instruction for semantic extraction.
+            Provides hints for how the resource should be processed.
+        wait: Whether to wait for semantic extraction and vectorization to complete.
+            Default is False (async processing).
+        timeout: Timeout in seconds when wait=True. None means no timeout.
+        strict: Whether to use strict mode for processing. Default is True.
+        ignore_dirs: Comma-separated list of directory names to ignore during parsing.
+        include: Glob pattern for files to include during parsing.
+        exclude: Glob pattern for files to exclude during parsing.
+        directly_upload_media: Whether to directly upload media files. Default is True.
+        preserve_structure: Whether to preserve directory structure when adding directories.
+        watch_interval: Watch interval in minutes for automatic resource monitoring.
+            - watch_interval > 0: Creates or updates a watch task. The resource will be
+              automatically re-processed at the specified interval.
+            - watch_interval = 0: No watch task is created. If a watch task exists for
+              this resource, it will be cancelled (deactivated).
+            - watch_interval < 0: Same as watch_interval = 0, cancels any existing watch task.
+            Default is 0 (no monitoring).
+
+            Note: If the target URI already has an active watch task, a ConflictError will be
+            raised. You must first cancel the existing watch (set watch_interval <= 0) before
+            creating a new one.
+    """
 
     path: Optional[str] = None
     temp_path: Optional[str] = None
@@ -40,6 +72,7 @@ class AddResourceRequest(BaseModel):
     directly_upload_media: bool = True
     preserve_structure: Optional[bool] = None
     telemetry: TelemetryRequest = False
+    watch_interval: float = 0
 
     @model_validator(mode="after")
     def check_path_or_temp_path(self):
@@ -76,24 +109,38 @@ def _cleanup_temp_files(temp_dir: Path, max_age_hours: int = 1):
 @router.post("/resources/temp_upload")
 async def temp_upload(
     file: UploadFile = File(...),
+    telemetry: bool = Form(False),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Upload a temporary file for add_resource or import_ovpack."""
-    config = get_openviking_config()
-    temp_dir = config.storage.get_upload_temp_dir()
 
-    # Clean up old temporary files
-    _cleanup_temp_files(temp_dir)
+    async def _upload() -> dict[str, str]:
+        config = get_openviking_config()
+        temp_dir = config.storage.get_upload_temp_dir()
 
-    # Save the uploaded file
-    file_ext = Path(file.filename).suffix if file.filename else ".tmp"
-    temp_filename = f"upload_{uuid.uuid4().hex}{file_ext}"
-    temp_file_path = temp_dir / temp_filename
+        # Clean up old temporary files
+        _cleanup_temp_files(temp_dir)
 
-    with open(temp_file_path, "wb") as f:
-        f.write(await file.read())
+        # Save the uploaded file
+        file_ext = Path(file.filename).suffix if file.filename else ".tmp"
+        temp_filename = f"upload_{uuid.uuid4().hex}{file_ext}"
+        temp_file_path = temp_dir / temp_filename
 
-    return Response(status="ok", result={"temp_path": str(temp_file_path)})
+        with open(temp_file_path, "wb") as f:
+            f.write(await file.read())
+
+        return {"temp_path": str(temp_file_path)}
+
+    execution = await run_operation(
+        operation="resources.temp_upload",
+        telemetry=telemetry,
+        fn=_upload,
+    )
+    return Response(
+        status="ok",
+        result=execution.result,
+        telemetry=execution.telemetry,
+    ).model_dump(exclude_none=True)
 
 
 @router.post("/resources")
@@ -118,6 +165,7 @@ async def add_resource(
         "include": request.include,
         "exclude": request.exclude,
         "directly_upload_media": request.directly_upload_media,
+        "watch_interval": request.watch_interval,
     }
     if request.preserve_structure is not None:
         kwargs["preserve_structure"] = request.preserve_structure

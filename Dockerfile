@@ -18,6 +18,7 @@ ENV CARGO_HOME=/usr/local/cargo
 ENV RUSTUP_HOME=/usr/local/rustup
 ENV PATH="/usr/local/cargo/bin:/usr/local/go/bin:${PATH}"
 ARG OPENVIKING_VERSION=0.0.0
+ARG TARGETPLATFORM
 ENV SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING=${OPENVIKING_VERSION}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -34,6 +35,7 @@ WORKDIR /app
 # Copy source required for setup.py artifact builds and native extension build.
 COPY Cargo.toml Cargo.lock ./
 COPY pyproject.toml uv.lock setup.py README.md ./
+COPY build_support/ build_support/
 COPY crates/ crates/
 COPY openviking/ openviking/
 COPY openviking_cli/ openviking_cli/
@@ -41,7 +43,7 @@ COPY src/ src/
 COPY third_party/ third_party/
 
 # Install project and dependencies (triggers setup.py artifact builds + build_extension).
-RUN --mount=type=cache,target=/root/.cache/uv \
+RUN --mount=type=cache,target=/root/.cache/uv,id=uv-${TARGETPLATFORM} \
     uv sync --no-editable
 
 # Stage 4: runtime

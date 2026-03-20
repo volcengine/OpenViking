@@ -198,6 +198,21 @@ class NamedQueue:
         msg_id = self._agfs.write(enqueue_file, data.encode("utf-8"))
         return msg_id if isinstance(msg_id, str) else str(msg_id)
 
+    async def ack(self, msg_id: str) -> None:
+        """Acknowledge successful processing of a message (deletes it from persistent storage).
+
+        Must be called after the dequeue handler finishes processing a message.
+        If not called (e.g. process crashes), the message will be automatically
+        re-queued on the next startup via RecoverStale.
+        """
+        if not msg_id:
+            return
+        ack_file = f"{self.path}/ack"
+        try:
+            self._agfs.write(ack_file, msg_id.encode("utf-8"))
+        except Exception as e:
+            logger.warning(f"[NamedQueue] Ack failed for {self.name} msg_id={msg_id}: {e}")
+
     def _read_queue_message(self) -> Optional[Dict[str, Any]]:
         """Read and remove one message from the AGFS queue; return parsed dict or None.
 
@@ -217,15 +232,30 @@ class NamedQueue:
         return json.loads(raw.decode("utf-8"))
 
     async def dequeue(self) -> Optional[Dict[str, Any]]:
-        """Get and remove message from queue, then invoke the dequeue handler."""
+        """Dequeue a message, process it, then ack to confirm deletion.
+
+        Flow (at-least-once delivery):
+          1. Read from /dequeue  → backend marks message as 'processing' (not deleted yet)
+          2. Call on_dequeue()   → actual processing
+          3. Call ack()          → backend deletes the message permanently
+
+        If the process crashes between steps 1 and 3, the backend's RecoverStale
+        on the next startup resets the message back to 'pending' for retry.
+        """
         await self._ensure_initialized()
         try:
             data = self._read_queue_message()
             if data is None:
                 return None
+            # Capture message ID before passing data to handler (handler may modify it)
+            msg_id = data.get("id", "") if isinstance(data, dict) else ""
             if self._dequeue_handler:
                 self._on_dequeue_start()
                 data = await self._dequeue_handler.on_dequeue(data)
+            # Ack unconditionally after handler returns (success or handled error).
+            # If on_dequeue raises, the exception propagates and ack is skipped —
+            # the message will be recovered on next startup.
+            await self.ack(msg_id)
             return data
         except Exception as e:
             logger.debug(f"[NamedQueue] Dequeue failed for {self.name}: {e}")

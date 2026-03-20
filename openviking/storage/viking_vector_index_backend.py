@@ -21,16 +21,26 @@ logger = get_logger(__name__)
 class _SingleAccountBackend:
     """绑定单个 account 的后端实现（内部类）"""
 
-    def __init__(self, config: VectorDBBackendConfig, bound_account_id: Optional[str]):
+    def __init__(
+        self,
+        config: VectorDBBackendConfig,
+        bound_account_id: Optional[str],
+        shared_adapter=None,
+    ):
         """
         初始化单 account 后端。
 
         Args:
             config: VectorDB 配置
             bound_account_id: 绑定的 account_id，None 表示 root 特权模式
+            shared_adapter: Optional pre-created adapter to share across backends.
+                If provided, reuses the existing adapter (and its underlying
+                PersistStore) instead of creating a new one. This avoids
+                RocksDB LOCK contention when multiple account backends point
+                to the same storage path.
         """
         self._bound_account_id = bound_account_id
-        self._adapter = create_collection_adapter(config)
+        self._adapter = shared_adapter or create_collection_adapter(config)
         self._collection_config: Dict[str, Any] = {}
         self._meta_data_cache: Dict[str, Any] = {}
         self._mode = self._adapter.mode
@@ -429,6 +439,9 @@ class VikingVectorIndexBackend:
 
         self._account_backends: Dict[str, _SingleAccountBackend] = {}
         self._root_backend: Optional[_SingleAccountBackend] = None
+        # Share a single adapter (and its underlying PersistStore/RocksDB instance)
+        # across all account backends to avoid LOCK contention.
+        self._shared_adapter = create_collection_adapter(config)
 
         logger.info(
             "VikingVectorIndexBackend facade initialized",
@@ -453,7 +466,7 @@ class VikingVectorIndexBackend:
     def _get_backend_for_account(self, account_id: str) -> _SingleAccountBackend:
         """获取指定 account 的 backend，懒创建"""
         if account_id not in self._account_backends:
-            backend = _SingleAccountBackend(self._config, bound_account_id=account_id)
+            backend = _SingleAccountBackend(self._config, bound_account_id=account_id, shared_adapter=self._shared_adapter)
             backend._distance_metric = self.distance_metric
             backend._sparse_weight = self.sparse_weight
             backend._collection_name = self._collection_name
@@ -467,7 +480,7 @@ class VikingVectorIndexBackend:
     def _get_root_backend(self) -> _SingleAccountBackend:
         """获取 root 特权 backend"""
         if not self._root_backend:
-            self._root_backend = _SingleAccountBackend(self._config, bound_account_id=None)
+            self._root_backend = _SingleAccountBackend(self._config, bound_account_id=None, shared_adapter=self._shared_adapter)
             self._root_backend._distance_metric = self.distance_metric
             self._root_backend._sparse_weight = self.sparse_weight
             self._root_backend._collection_name = self._collection_name
@@ -829,14 +842,22 @@ class VikingVectorIndexBackend:
         uri: str,
         new_uri: str,
         new_parent_uri: str,
+        levels: Optional[List[int]] = None,
     ) -> bool:
         import hashlib
 
-        records = await self.filter(
-            filter=And([Eq("uri", uri), Eq("account_id", ctx.account_id)]),
-            limit=100,
-            ctx=ctx,
-        )
+        conds: List[FilterExpr] = [Eq("uri", uri), Eq("account_id", ctx.account_id)]
+        if levels:
+            conds.append(In("level", levels))
+        if ctx.role == Role.USER and uri.startswith(("viking://user/", "viking://agent/")):
+            owner_space = (
+                ctx.user.user_space_name()
+                if uri.startswith("viking://user/")
+                else ctx.user.agent_space_name()
+            )
+            conds.append(Eq("owner_space", owner_space))
+
+        records = await self.filter(filter=And(conds), limit=100, ctx=ctx)
         if not records:
             return False
 
@@ -882,13 +903,21 @@ class VikingVectorIndexBackend:
     async def increment_active_count(self, ctx: RequestContext, uris: List[str]) -> int:
         updated = 0
         for uri in uris:
-            records = await self.get_context_by_uri(uri=uri, limit=1, ctx=ctx)
+            records = await self.get_context_by_uri(uri=uri, limit=100, ctx=ctx)
             if not records:
                 continue
-            record = records[0]
-            current = int(record.get("active_count", 0) or 0)
-            record["active_count"] = current + 1
-            if await self.upsert(record, ctx=ctx):
+            record_ids = [r["id"] for r in records if r.get("id")]
+            if not record_ids:
+                continue
+            # Re-fetch by ID to get full records including vectors
+            full_records = await self.get(record_ids, ctx=ctx)
+            uri_updated = False
+            for record in full_records:
+                current = int(record.get("active_count", 0) or 0)
+                record["active_count"] = current + 1
+                if await self.upsert(record, ctx=ctx):
+                    uri_updated = True
+            if uri_updated:
                 updated += 1
         return updated
 

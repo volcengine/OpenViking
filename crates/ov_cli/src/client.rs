@@ -307,6 +307,15 @@ impl HttpClient {
         self.get("/api/v1/content/overview", &params).await
     }
 
+    pub async fn reindex(&self, uri: &str, regenerate: bool, wait: bool) -> Result<serde_json::Value> {
+        let body = serde_json::json!({
+            "uri": uri,
+            "regenerate": regenerate,
+            "wait": wait,
+        });
+        self.post("/api/v1/content/reindex", &body).await
+    }
+
     /// Download file as raw bytes
     pub async fn get_bytes(&self, uri: &str) -> Result<Vec<u8>> {
         let url = format!("{}/api/v1/content/download", self.base_url);
@@ -480,6 +489,7 @@ impl HttpClient {
         include: Option<String>,
         exclude: Option<String>,
         directly_upload_media: bool,
+        watch_interval: f64,
     ) -> Result<serde_json::Value> {
         let path_obj = Path::new(path);
 
@@ -501,6 +511,7 @@ impl HttpClient {
                     "include": include,
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
+                    "watch_interval": watch_interval,
                 });
 
                 self.post("/api/v1/resources", &body).await
@@ -520,6 +531,7 @@ impl HttpClient {
                     "include": include,
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
+                    "watch_interval": watch_interval,
                 });
 
                 self.post("/api/v1/resources", &body).await
@@ -537,6 +549,7 @@ impl HttpClient {
                     "include": include,
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
+                    "watch_interval": watch_interval,
                 });
 
                 self.post("/api/v1/resources", &body).await
@@ -555,6 +568,7 @@ impl HttpClient {
                 "include": include,
                 "exclude": exclude,
                 "directly_upload_media": directly_upload_media,
+                "watch_interval": watch_interval,
             });
 
             self.post("/api/v1/resources", &body).await

@@ -96,6 +96,9 @@ enum Commands {
         /// Do not directly upload media files
         #[arg(long = "no-directly-upload-media", default_value_t = false)]
         no_directly_upload_media: bool,
+        /// Watch interval in minutes for automatic resource monitoring (0 = no monitoring)
+        #[arg(long, default_value = "0")]
+        watch_interval: f64,
     },
     /// Add a skill into OpenViking
     AddSkill {
@@ -260,6 +263,17 @@ enum Commands {
     Overview {
         /// Viking URI
         uri: String,
+    },
+    /// Reindex content at URI (regenerates .abstract.md and .overview.md)
+    Reindex {
+        /// Viking URI
+        uri: String,
+        /// Force regenerate summaries even if they exist
+        #[arg(short, long)]
+        regenerate: bool,
+        /// Wait for reindex to complete
+        #[arg(long, default_value = "true")]
+        wait: bool,
     },
     /// Download file to local path (supports binaries/images)
     Get {
@@ -525,6 +539,7 @@ async fn main() {
             include,
             exclude,
             no_directly_upload_media,
+            watch_interval,
         } => {
             handle_add_resource(
                 path,
@@ -539,6 +554,7 @@ async fn main() {
                 include,
                 exclude,
                 no_directly_upload_media,
+                watch_interval,
                 ctx,
             )
             .await
@@ -620,6 +636,9 @@ async fn main() {
         Commands::Read { uri } => handle_read(uri, ctx).await,
         Commands::Abstract { uri } => handle_abstract(uri, ctx).await,
         Commands::Overview { uri } => handle_overview(uri, ctx).await,
+        Commands::Reindex { uri, regenerate, wait } => {
+            handle_reindex(uri, regenerate, wait, ctx).await
+        }
         Commands::Get { uri, local_path } => handle_get(uri, local_path, ctx).await,
         Commands::Find { query, uri, node_limit, threshold } => {
             handle_find(query, uri, node_limit, threshold, ctx).await
@@ -655,6 +674,7 @@ async fn handle_add_resource(
     include: Option<String>,
     exclude: Option<String>,
     no_directly_upload_media: bool,
+    watch_interval: f64,
     ctx: CliContext,
 ) -> Result<()> {
     let is_url = path.starts_with("http://") 
@@ -722,6 +742,7 @@ async fn handle_add_resource(
         include,
         exclude,
         directly_upload_media,
+        watch_interval,
         ctx.output_format,
         ctx.compact,
     ).await
@@ -944,6 +965,11 @@ async fn handle_abstract(uri: String, ctx: CliContext) -> Result<()> {
 async fn handle_overview(uri: String, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     commands::content::overview(&client, &uri, ctx.output_format, ctx.compact).await
+}
+
+async fn handle_reindex(uri: String, regenerate: bool, wait: bool, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    commands::content::reindex(&client, &uri, regenerate, wait, ctx.output_format, ctx.compact).await
 }
 
 async fn handle_get(uri: String, local_path: String, ctx: CliContext) -> Result<()> {

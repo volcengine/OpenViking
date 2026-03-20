@@ -22,7 +22,6 @@ from datetime import datetime
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
-from openviking.pyagfs.exceptions import AGFSHTTPError
 from openviking.server.identity import RequestContext, Role
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.time_utils import format_simplified, get_current_timestamp, parse_iso_datetime
@@ -289,15 +288,47 @@ class VikingFS:
 
         This method is idempotent: deleting a non-existent file succeeds
         after cleaning up any orphan index records.
+
+        Acquires a path lock, deletes VectorDB records, then FS files.
+        Raises ResourceBusyError when the target is locked by an ongoing
+        operation (e.g. semantic processing).
         """
+        from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+        from openviking.storage.transaction import LockContext, get_lock_manager
+
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
         target_uri = self._path_to_uri(path, ctx=ctx)
-        uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx)
-        uris_to_delete.append(target_uri)
-        result = self.agfs.rm(path, recursive=recursive)
-        await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
-        return result
+
+        # Check existence and determine lock strategy
+        try:
+            stat = self.agfs.stat(path)
+            is_dir = stat.get("isDir", False) if isinstance(stat, dict) else False
+        except Exception:
+            # Path does not exist: clean up any orphan index records and return
+            uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx)
+            uris_to_delete.append(target_uri)
+            await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
+            logger.info(f"[VikingFS] rm target not found, cleaned orphan index: {uri}")
+            return {}
+
+        if is_dir:
+            lock_paths = [path]
+            lock_mode = "subtree"
+        else:
+            parent = path.rsplit("/", 1)[0] if "/" in path else path
+            lock_paths = [parent]
+            lock_mode = "point"
+
+        try:
+            async with LockContext(get_lock_manager(), lock_paths, lock_mode=lock_mode):
+                uris_to_delete = await self._collect_uris(path, recursive, ctx=ctx)
+                uris_to_delete.append(target_uri)
+                await self._delete_from_vector_store(uris_to_delete, ctx=ctx)
+                result = self.agfs.rm(path, recursive=recursive)
+                return result
+        except LockAcquisitionError:
+            raise ResourceBusyError(f"Resource is being processed: {uri}")
 
     async def mv(
         self,
@@ -305,24 +336,69 @@ class VikingFS:
         new_uri: str,
         ctx: Optional[RequestContext] = None,
     ) -> Dict[str, Any]:
-        """Move file/directory + recursively update vector index."""
+        """Move file/directory + recursively update vector index.
+
+        Implemented as cp + rm to avoid lock files being carried by FS mv.
+        On VectorDB update failure the copy is cleaned up so the source stays intact.
+        """
+        from openviking.pyagfs.helpers import cp as agfs_cp
+        from openviking.storage.transaction import LockContext, get_lock_manager
+
         self._ensure_access(old_uri, ctx)
         self._ensure_access(new_uri, ctx)
         old_path = self._uri_to_path(old_uri, ctx=ctx)
         new_path = self._uri_to_path(new_uri, ctx=ctx)
         target_uri = self._path_to_uri(old_path, ctx=ctx)
-        uris_to_move = await self._collect_uris(old_path, recursive=True, ctx=ctx)
-        uris_to_move.append(target_uri)
 
+        # Verify source exists and determine type before locking
         try:
-            result = self.agfs.mv(old_path, new_path)
-            await self._update_vector_store_uris(uris_to_move, old_uri, new_uri, ctx=ctx)
-            return result
-        except AGFSHTTPError as e:
-            if e.status_code == 404:
-                await self._delete_from_vector_store(uris_to_move, ctx=ctx)
-                logger.info(f"[VikingFS] mv source not found, cleaned orphan index: {old_uri}")
-            raise
+            stat = self.agfs.stat(old_path)
+            is_dir = stat.get("isDir", False) if isinstance(stat, dict) else False
+        except Exception:
+            raise FileNotFoundError(f"mv source not found: {old_uri}")
+
+        dst_parent = new_path.rsplit("/", 1)[0] if "/" in new_path else new_path
+
+        async with LockContext(
+            get_lock_manager(),
+            [old_path],
+            lock_mode="mv",
+            mv_dst_parent_path=dst_parent,
+            src_is_dir=is_dir,
+        ):
+            uris_to_move = await self._collect_uris(old_path, recursive=True, ctx=ctx)
+            uris_to_move.append(target_uri)
+
+            # Copy source to destination (source still intact)
+            try:
+                agfs_cp(self.agfs, old_path, new_path, recursive=is_dir)
+            except Exception as e:
+                if "not found" in str(e).lower():
+                    await self._delete_from_vector_store(uris_to_move, ctx=ctx)
+                    logger.info(f"[VikingFS] mv source not found, cleaned orphan index: {old_uri}")
+                raise
+
+            # Remove carried lock file from the copy (directory only)
+            if is_dir:
+                carried_lock = new_path.rstrip("/") + "/.path.ovlock"
+                try:
+                    self.agfs.rm(carried_lock)
+                except Exception:
+                    pass
+
+            # Update VectorDB URIs (on failure, clean up the copy)
+            try:
+                await self._update_vector_store_uris(uris_to_move, old_uri, new_uri, ctx=ctx)
+            except Exception:
+                try:
+                    self.agfs.rm(new_path, recursive=is_dir)
+                except Exception:
+                    pass
+                raise
+
+            # Delete source
+            self.agfs.rm(old_path, recursive=is_dir)
+            return {}
 
     async def grep(
         self,
@@ -631,8 +707,6 @@ class VikingFS:
             TypedQuery,
         )
 
-        if not self.rerank_config:
-            raise RuntimeError("rerank_config is required for find")
         if target_uri and target_uri not in {"/", "viking://"}:
             self._ensure_access(target_uri, ctx)
 
@@ -940,20 +1014,20 @@ class VikingFS:
         safe_parts = [self._shorten_component(p, self._MAX_FILENAME_BYTES) for p in parts]
         return f"/local/{account_id}/{'/'.join(safe_parts)}"
 
-    _INTERNAL_DIRS = {"_system"}
+    _INTERNAL_NAMES = {"_system", ".path.ovlock"}
     _ROOT_PATH = "/local"
 
     def _ls_entries(self, path: str) -> List[Dict[str, Any]]:
         """List directory entries, filtering out internal directories.
 
         At account root (/local/{account}), uses VALID_SCOPES whitelist.
-        At other levels, uses _INTERNAL_DIRS blacklist.
+        At other levels, uses _INTERNAL_NAMES blacklist.
         """
         entries = self.agfs.ls(path)
         parts = [p for p in path.strip("/").split("/") if p]
         if len(parts) == 2 and parts[0] == "local":
             return [e for e in entries if e.get("name") in VikingURI.VALID_SCOPES]
-        return [e for e in entries if e.get("name") not in self._INTERNAL_DIRS]
+        return [e for e in entries if e.get("name") not in self._INTERNAL_NAMES]
 
     def _path_to_uri(self, path: str, ctx: Optional[RequestContext] = None) -> str:
         """/local/{account}/... -> viking://...
@@ -1011,7 +1085,7 @@ class VikingFS:
             return True
 
         scope = parts[0]
-        if scope in {"resources", "temp", "transactions"}:
+        if scope in {"resources", "temp"}:
             return True
         if scope == "_system":
             return False
@@ -1063,19 +1137,6 @@ class VikingFS:
             return self._decode_bytes(result)
         elif hasattr(result, "content") and result.content is not None:
             return self._decode_bytes(result.content)
-        elif result is None:
-            return ""
-        else:
-            # Try to convert to string
-            try:
-                return str(result)
-            except Exception:
-                return ""
-        """Handle AGFSClient content return types consistently."""
-        if isinstance(result, bytes):
-            return result.decode("utf-8")
-        elif hasattr(result, "content"):
-            return result.content.decode("utf-8")
         elif result is None:
             return ""
         else:
@@ -1149,6 +1210,7 @@ class VikingFS:
         old_base: str,
         new_base: str,
         ctx: Optional[RequestContext] = None,
+        levels: Optional[List[int]] = None,
     ) -> None:
         """Update URIs in vector store (when moving files).
 
@@ -1171,10 +1233,70 @@ class VikingFS:
                     uri=uri,
                     new_uri=new_uri,
                     new_parent_uri=new_parent_uri,
+                    levels=levels,
                 )
                 logger.debug(f"[VikingFS] Updated URI: {uri} -> {new_uri}")
             except Exception as e:
                 logger.warning(f"[VikingFS] Failed to update {uri} in vector store: {e}")
+
+    async def _mv_vector_store_l0_l1(
+        self,
+        old_uri: str,
+        new_uri: str,
+        ctx: Optional[RequestContext] = None,
+    ) -> None:
+        from openviking.storage.errors import LockAcquisitionError, ResourceBusyError
+        from openviking.storage.transaction import LockContext, get_lock_manager
+
+        self._ensure_access(old_uri, ctx)
+        self._ensure_access(new_uri, ctx)
+
+        real_ctx = self._ctx_or_default(ctx)
+        old_dir = VikingURI.normalize(old_uri).rstrip("/")
+        new_dir = VikingURI.normalize(new_uri).rstrip("/")
+        if old_dir == new_dir:
+            return
+
+        for uri in (old_dir, new_dir):
+            if uri.endswith(("/.abstract.md", "/.overview.md")):
+                raise ValueError(f"mv_vector_store expects directory URIs, got: {uri}")
+
+        try:
+            old_stat = await self.stat(old_dir, ctx=real_ctx)
+        except Exception as e:
+            raise FileNotFoundError(f"mv_vector_store old_uri not found: {old_dir}") from e
+        try:
+            new_stat = await self.stat(new_dir, ctx=real_ctx)
+        except Exception as e:
+            raise FileNotFoundError(f"mv_vector_store new_uri not found: {new_dir}") from e
+
+        if not (isinstance(old_stat, dict) and old_stat.get("isDir", False)):
+            raise ValueError(f"mv_vector_store expects old_uri to be a directory: {old_dir}")
+        if not (isinstance(new_stat, dict) and new_stat.get("isDir", False)):
+            raise ValueError(f"mv_vector_store expects new_uri to be a directory: {new_dir}")
+
+        old_path = self._uri_to_path(old_dir, ctx=real_ctx)
+        new_path = self._uri_to_path(new_dir, ctx=real_ctx)
+        dst_parent = new_path.rsplit("/", 1)[0] if "/" in new_path else new_path
+
+        try:
+            async with LockContext(
+                get_lock_manager(),
+                [old_path],
+                lock_mode="mv",
+                mv_dst_parent_path=dst_parent,
+                src_is_dir=True,
+            ):
+                await self._update_vector_store_uris(
+                    uris=[old_dir],
+                    old_base=old_dir,
+                    new_base=new_dir,
+                    ctx=real_ctx,
+                    levels=[0, 1],
+                )
+
+        except LockAcquisitionError:
+            raise ResourceBusyError(f"Resource is being processed: {old_dir}")
 
     def _get_vector_store(self) -> Optional["VikingVectorIndexBackend"]:
         """Get vector store instance."""
@@ -1296,6 +1418,12 @@ class VikingFS:
         """
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
+        # Verify the file exists before reading, because AGFS read returns
+        # empty bytes for non-existent files instead of raising an error.
+        try:
+            self.agfs.stat(path)
+        except Exception:
+            raise NotFoundError(uri, "file")
         try:
             content = self.agfs.read(path)
         except Exception:

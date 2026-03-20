@@ -220,85 +220,19 @@ class Session:
         self._update_message_in_jsonl()
 
     def commit(self) -> Dict[str, Any]:
-        """Commit session: create archive, extract memories, persist."""
-        result = {
-            "session_id": self.session_id,
-            "status": "committed",
-            "memories_extracted": 0,
-            "active_count_updated": 0,
-            "archived": False,
-            "stats": None,
-        }
-        if not self._messages:
-            get_current_telemetry().set("memory.extracted", 0)
-            return result
-
-        # 1. Archive current messages
-        self._compression.compression_index += 1
-        messages_to_archive = self._messages.copy()
-
-        summary = self._generate_archive_summary(messages_to_archive)
-        archive_abstract = self._extract_abstract_from_summary(summary)
-        archive_overview = summary
-
-        self._write_archive(
-            index=self._compression.compression_index,
-            messages=messages_to_archive,
-            abstract=archive_abstract,
-            overview=archive_overview,
-        )
-
-        self._compression.original_count += len(messages_to_archive)
-        result["archived"] = True
-
-        self._messages.clear()
-        logger.info(
-            f"Archived: {len(messages_to_archive)} messages → history/archive_{self._compression.compression_index:03d}/"
-        )
-
-        # 2. Extract long-term memories
-        if self._session_compressor:
-            logger.info(
-                f"Starting memory extraction from {len(messages_to_archive)} archived messages"
-            )
-            memories = run_async(
-                self._session_compressor.extract_long_term_memories(
-                    messages=messages_to_archive,
-                    user=self.user,
-                    session_id=self.session_id,
-                    ctx=self.ctx,
-                )
-            )
-            logger.info(f"Extracted {len(memories)} memories")
-            result["memories_extracted"] = len(memories)
-            self._stats.memories_extracted += len(memories)
-            get_current_telemetry().set("memory.extracted", len(memories))
-
-        # 3. Write current messages to AGFS
-        self._write_to_agfs(self._messages)
-
-        # 4. Create relations
-        self._write_relations()
-
-        # 5. Update active_count
-        active_count_updated = self._update_active_counts()
-        result["active_count_updated"] = active_count_updated
-
-        # 6. Update statistics
-        self._stats.compression_count = self._compression.compression_index
-        result["stats"] = {
-            "total_turns": self._stats.total_turns,
-            "contexts_used": self._stats.contexts_used,
-            "skills_used": self._stats.skills_used,
-            "memories_extracted": self._stats.memories_extracted,
-        }
-
-        self._stats.total_tokens = 0
-        logger.info(f"Session {self.session_id} committed")
-        return result
+        """Sync wrapper for commit_async()."""
+        return run_async(self.commit_async())
 
     async def commit_async(self) -> Dict[str, Any]:
-        """Async commit session: create archive, extract memories, persist."""
+        """Async commit session: two-phase approach.
+
+        Phase 1 (Archive): Write archive, clear messages.
+        Phase 2 (Memory, redo-log protected): Extract memories, write, enqueue.
+        """
+        import uuid
+
+        from openviking.storage.transaction import get_lock_manager
+
         result = {
             "session_id": self.session_id,
             "status": "committed",
@@ -311,7 +245,7 @@ class Session:
             get_current_telemetry().set("memory.extracted", 0)
             return result
 
-        # 1. Archive current messages
+        # ===== Preparation =====
         self._compression.compression_index += 1
         messages_to_archive = self._messages.copy()
 
@@ -319,22 +253,41 @@ class Session:
         archive_abstract = self._extract_abstract_from_summary(summary)
         archive_overview = summary
 
+        # ===== Phase 1: Archive (no lock) =====
+        archive_uri = (
+            f"{self._session_uri}/history/archive_{self._compression.compression_index:03d}"
+        )
         await self._write_archive_async(
             index=self._compression.compression_index,
             messages=messages_to_archive,
             abstract=archive_abstract,
             overview=archive_overview,
         )
+        await self._write_to_agfs_async(messages=[])
+        self._messages.clear()
 
         self._compression.original_count += len(messages_to_archive)
         result["archived"] = True
-
-        self._messages.clear()
         logger.info(
-            f"Archived: {len(messages_to_archive)} messages → history/archive_{self._compression.compression_index:03d}/"
+            f"Archived: {len(messages_to_archive)} messages → "
+            f"history/archive_{self._compression.compression_index:03d}/"
         )
 
-        # 2. Extract long-term memories
+        # ===== Phase 2: Memory extraction + write (redo-log protected) =====
+        redo_log = get_lock_manager().redo_log
+        task_id = str(uuid.uuid4())
+        redo_log.write_pending(
+            task_id,
+            {
+                "archive_uri": archive_uri,
+                "session_uri": self._session_uri,
+                "account_id": self.ctx.account_id,
+                "user_id": self.ctx.user.user_id,
+                "agent_id": self.ctx.user.agent_id,
+                "role": self.ctx.role.value,
+            },
+        )
+
         if self._session_compressor:
             logger.info(
                 f"Starting memory extraction from {len(messages_to_archive)} archived messages"
@@ -350,17 +303,33 @@ class Session:
             self._stats.memories_extracted += len(memories)
             get_current_telemetry().set("memory.extracted", len(memories))
 
-        # 3. Write current messages to AGFS
         await self._write_to_agfs_async(self._messages)
-
-        # 4. Create relations
         await self._write_relations_async()
 
-        # 5. Update active_count
+        # Enqueue semantic processing directly
+        from openviking.storage.queuefs import get_queue_manager
+        from openviking.storage.queuefs.semantic_msg import SemanticMsg
+
+        queue_manager = get_queue_manager()
+        if queue_manager:
+            msg = SemanticMsg(
+                uri=self._session_uri,
+                context_type="memory",
+                account_id=self.ctx.account_id,
+                user_id=self.ctx.user.user_id,
+                agent_id=self.ctx.user.agent_id,
+                role=self.ctx.role.value,
+            )
+            semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC)
+            await semantic_queue.enqueue(msg)
+
+        redo_log.mark_done(task_id)
+
+        # Update active_count
         active_count_updated = await self._update_active_counts_async()
         result["active_count_updated"] = active_count_updated
 
-        # 6. Update statistics
+        # Update statistics
         self._stats.compression_count = self._compression.compression_index
         result["stats"] = {
             "total_turns": self._stats.total_turns,

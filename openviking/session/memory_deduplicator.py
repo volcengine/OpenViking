@@ -7,6 +7,7 @@ LLM-assisted deduplication with candidate-level skip/create/none decisions and
 per-existing merge/delete actions.
 """
 
+import copy
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -59,6 +60,7 @@ class DedupResult:
     similar_memories: List[Context]  # Similar existing memories
     actions: Optional[List[ExistingMemoryAction]] = None
     reason: str = ""
+    query_vector: list[float] | None = None  # For batch-internal dedup tracking
 
 
 class MemoryDeduplicator:
@@ -86,16 +88,20 @@ class MemoryDeduplicator:
         """Initialize deduplicator."""
         self.vikingdb = vikingdb
         config = get_openviking_config()
-        self.embedder = config.embedding.get_query_embedder()
+        self.embedder = config.embedding.get_embedder()
 
     async def deduplicate(
         self,
         candidate: CandidateMemory,
         ctx: RequestContext,
+        *,
+        batch_memories: list[tuple[list[float], Context]] | None = None,
     ) -> DedupResult:
         """Decide how to handle a candidate memory."""
         # Step 1: Vector pre-filtering - find similar memories in same category
-        similar_memories = await self._find_similar_memories(candidate, ctx=ctx)
+        similar_memories, query_vector = await self._find_similar_memories(
+            candidate, ctx=ctx, batch_memories=batch_memories
+        )
 
         if not similar_memories:
             # No similar memories, create directly
@@ -105,6 +111,7 @@ class MemoryDeduplicator:
                 similar_memories=[],
                 actions=[],
                 reason="No similar memories found",
+                query_vector=query_vector,
             )
 
         # Step 2: LLM decision
@@ -116,21 +123,30 @@ class MemoryDeduplicator:
             similar_memories=similar_memories,
             actions=None if decision == DedupDecision.SKIP else actions,
             reason=reason,
+            query_vector=query_vector,
         )
 
     async def _find_similar_memories(
         self,
         candidate: CandidateMemory,
         ctx: RequestContext,
-    ) -> List[Context]:
-        """Find similar existing memories using vector search."""
+        *,
+        batch_memories: list[tuple[list[float], Context]] | None = None,
+    ) -> tuple[list[Context], list[float]]:
+        """Find similar existing memories using vector search.
+
+        Returns (similar_memories, query_vector). query_vector is the candidate's
+        embedding, returned so the caller can store it for batch-internal tracking.
+        """
         telemetry = get_current_telemetry()
+        query_vector: list[float] = []  # Initialize early for safe returns
+
         if not self.embedder:
-            return []
+            return [], query_vector
 
         # Generate embedding for candidate
         query_text = f"{candidate.abstract} {candidate.content}"
-        embed_result: EmbedResult = self.embedder.embed(query_text)
+        embed_result: EmbedResult = self.embedder.embed(query_text, is_query=True)
         query_vector = embed_result.dense_vector
 
         category_uri_prefix = self._category_uri_prefix(candidate.category.value, candidate.user)
@@ -187,11 +203,27 @@ class MemoryDeduplicator:
                         context.meta = {**(context.meta or {}), "_dedup_score": score}
                         similar.append(context)
             logger.debug("Dedup similar memories after threshold=%d", len(similar))
-            return similar
+
+            # Include batch-internal memories that are similar (#687).
+            # Shallow-copy to avoid mutating the original's meta while
+            # preserving all fields (account_id, owner_space, etc.) needed
+            # downstream if the LLM decides to MERGE into this memory.
+            if batch_memories:
+                seen_uris = {c.uri for c in similar}
+                for batch_vec, batch_ctx in batch_memories:
+                    if batch_ctx.uri in seen_uris:
+                        continue
+                    score = self._cosine_similarity(query_vector, batch_vec)
+                    if score >= self.SIMILARITY_THRESHOLD:
+                        ctx_copy = copy.copy(batch_ctx)
+                        ctx_copy.meta = {**(batch_ctx.meta or {}), "_dedup_score": score}
+                        similar.append(ctx_copy)
+
+            return similar, query_vector
 
         except Exception as e:
             logger.warning(f"Vector search failed: {e}")
-            return []
+            return [], query_vector
 
     async def _llm_decision(
         self,

@@ -10,11 +10,64 @@
 - **操作系统**：Linux、macOS、Windows
 - **网络连接**：需要稳定的网络连接（用于下载依赖包和访问模型服务）
 
-## 安装
+## 安装与启动
+
+OpenViking 支持通过 Python Package 安装作为本地库使用，也支持通过 Docker 快速启动独立服务。
+
+### 方式一：通过 pip 安装 (作为本地库)
 
 ```bash
 pip install openviking --upgrade --force-reinstall
 ```
+
+### 方式二：通过 Docker 启动 (作为独立服务)
+
+如果你希望将 OpenViking 作为独立的服务运行，推荐使用 Docker。
+
+1. **准备配置文件与数据目录**
+   在宿主机上创建数据目录，并准备好 `ov.conf` 配置文件（配置项参考下方“配置环境”章节）：
+   ```bash
+   mkdir -p ~/.openviking/data
+   touch ~/.openviking/ov.conf
+   ```
+
+2. **使用 Docker Compose 启动**
+   创建 `docker-compose.yml` 文件：
+   ```yaml
+   services:
+     openviking:
+       image: ghcr.io/volcengine/openviking:main
+       container_name: openviking
+       ports:
+         - "1933:1933"
+       volumes:
+         - ~/.openviking/ov.conf:/app/ov.conf
+         - ~/.openviking/data:/app/data
+       restart: unless-stopped
+   ```
+   然后在同目录下执行启动命令：
+   ```bash
+   docker-compose up -d
+   ```
+
+> **💡 Mac 本地网络访问提示 (Connection reset 报错)：**
+>
+> 默认情况下，OpenViking 为了安全仅监听 `127.0.0.1`。如果你在 Mac 上使用 Docker，宿主机可能无法直接通过 `localhost:1933` 访问。
+> 
+> **推荐解决方案：使用 socat 端口转发（无需修改配置）：**
+> 在你的 `docker-compose.yml` 中覆盖默认启动命令，利用 `socat` 在容器内部进行端口转发：
+> ```yaml
+> services:
+>   openviking:
+>     image: ghcr.io/volcengine/openviking:main
+>     ports:
+>       - "1933:1934" # 将宿主机 1933 映射到容器 1934
+>     volumes:
+>       - ~/.openviking/ov.conf:/app/ov.conf
+>       - ~/.openviking/data:/app/data
+>     command: /bin/sh -c "apt-get update && apt-get install -y socat && socat TCP-LISTEN:1934,fork,reuseaddr TCP:127.0.0.1:1933 & openviking-server"
+> ```
+> 这样即可完美解决 Mac 宿主机的访问问题。
 
 ## 模型准备
 

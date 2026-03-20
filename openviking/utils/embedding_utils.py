@@ -213,12 +213,14 @@ async def vectorize_file(
     context_type: str = "resource",
     ctx: Optional[RequestContext] = None,
     semantic_msg_id: Optional[str] = None,
+    use_summary: bool = False,
 ) -> None:
     """
     Vectorize a single file.
 
     Creates Context object for the file and enqueues it.
-    Reads content for TEXT files, otherwise uses summary.
+    If use_summary=True and summary is available, uses summary for TEXT files (e.g. code scenario).
+    Otherwise reads raw file content for TEXT files, falls back to summary on failure.
     """
     enqueued = False
 
@@ -260,21 +262,27 @@ async def vectorize_file(
                 )
                 return
         elif content_type == ResourceContentType.TEXT:
-            # For text files, try to read content
-            try:
-                content = await viking_fs.read_file(file_path, ctx=ctx)
-                if isinstance(content, bytes):
-                    content = content.decode("utf-8", errors="replace")
-                context.set_vectorize(Vectorize(text=content))
-            except Exception as e:
-                logger.warning(
-                    f"Failed to read file content for {file_path}, falling back to summary: {e}"
-                )
-                if summary:
-                    context.set_vectorize(Vectorize(text=summary))
-                else:
-                    logger.warning(f"No summary available for {file_path}, skipping vectorization")
-                    return
+            if use_summary and summary:
+                # Code scenario: use pre-generated summary (e.g. AST skeleton) for embedding
+                context.set_vectorize(Vectorize(text=summary))
+            else:
+                # Default: read raw file content
+                try:
+                    content = await viking_fs.read_file(file_path, ctx=ctx)
+                    if isinstance(content, bytes):
+                        content = content.decode("utf-8", errors="replace")
+                    context.set_vectorize(Vectorize(text=content))
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to read file content for {file_path}, falling back to summary: {e}"
+                    )
+                    if summary:
+                        context.set_vectorize(Vectorize(text=summary))
+                    else:
+                        logger.warning(
+                            f"No summary available for {file_path}, skipping vectorization"
+                        )
+                        return
         elif summary:
             # For non-text files, use summary
             context.set_vectorize(Vectorize(text=summary))

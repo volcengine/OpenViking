@@ -4,8 +4,6 @@
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from openviking.models.embedder import OpenAIDenseEmbedder
 
 
@@ -87,7 +85,7 @@ class TestOpenAIDenseEmbedder:
 
     @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
     def test_embed_with_context_query(self, mock_openai_class):
-        """OpenAI embed should include extra_body with input_type='query' when context='query'"""
+        """OpenAI embed should include extra_body with input_type='query' when is_query=True"""
         mock_client = MagicMock()
         mock_openai_class.return_value = mock_client
 
@@ -101,11 +99,10 @@ class TestOpenAIDenseEmbedder:
         embedder = OpenAIDenseEmbedder(
             model_name="text-embedding-3-small",
             api_key="test-api-key",
-            context="query",
             query_param="query",
         )
 
-        embedder.embed("Hello world")
+        embedder.embed("Hello world", is_query=True)
 
         call_kwargs = mock_client.embeddings.create.call_args[1]
         assert "extra_body" in call_kwargs
@@ -113,7 +110,7 @@ class TestOpenAIDenseEmbedder:
 
     @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
     def test_embed_with_context_document(self, mock_openai_class):
-        """OpenAI embed should include extra_body with input_type='passage' when context='document'"""
+        """OpenAI embed should include extra_body with input_type='passage' when is_query=False"""
         mock_client = MagicMock()
         mock_openai_class.return_value = mock_client
 
@@ -127,11 +124,10 @@ class TestOpenAIDenseEmbedder:
         embedder = OpenAIDenseEmbedder(
             model_name="text-embedding-3-small",
             api_key="test-api-key",
-            context="document",
             document_param="passage",
         )
 
-        embedder.embed("Hello world")
+        embedder.embed("Hello world", is_query=False)
 
         call_kwargs = mock_client.embeddings.create.call_args[1]
         assert "extra_body" in call_kwargs
@@ -164,7 +160,7 @@ class TestOpenAIDenseEmbedder:
 
     @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
     def test_embed_batch_with_context_query(self, mock_openai_class):
-        """OpenAI embed_batch should include extra_body with input_type='query' when context='query'"""
+        """OpenAI embed_batch should include extra_body with input_type='query' when is_query=True"""
         mock_client = MagicMock()
         mock_openai_class.return_value = mock_client
 
@@ -180,11 +176,10 @@ class TestOpenAIDenseEmbedder:
         embedder = OpenAIDenseEmbedder(
             model_name="text-embedding-3-small",
             api_key="test-api-key",
-            context="query",
             query_param="query",
         )
 
-        embedder.embed_batch(["Hello", "World"])
+        embedder.embed_batch(["Hello", "World"], is_query=True)
 
         call_kwargs = mock_client.embeddings.create.call_args[1]
         assert "extra_body" in call_kwargs
@@ -192,7 +187,7 @@ class TestOpenAIDenseEmbedder:
 
     @patch("openviking.models.embedder.openai_embedders.openai.OpenAI")
     def test_embed_batch_with_context_document(self, mock_openai_class):
-        """OpenAI embed_batch should include extra_body with input_type='passage' when context='document'"""
+        """OpenAI embed_batch should include extra_body with input_type='passage' when is_query=False"""
         mock_client = MagicMock()
         mock_openai_class.return_value = mock_client
 
@@ -208,11 +203,10 @@ class TestOpenAIDenseEmbedder:
         embedder = OpenAIDenseEmbedder(
             model_name="text-embedding-3-small",
             api_key="test-api-key",
-            context="document",
             document_param="passage",
         )
 
-        embedder.embed_batch(["Hello", "World"])
+        embedder.embed_batch(["Hello", "World"], is_query=False)
 
         call_kwargs = mock_client.embeddings.create.call_args[1]
         assert "extra_body" in call_kwargs
@@ -294,10 +288,11 @@ class TestOpenAIDenseEmbedder:
         )
 
         mock_telemetry = MagicMock()
-        mock_telemetry_module = MagicMock()
-        mock_telemetry_module.get_current_telemetry.return_value = mock_telemetry
 
-        with patch("importlib.import_module", return_value=mock_telemetry_module):
+        with patch(
+            "openviking.models.embedder.openai_embedders.get_current_telemetry",
+            return_value=mock_telemetry,
+        ):
             result = embedder.embed("Hello world")
 
         assert result.dense_vector is not None

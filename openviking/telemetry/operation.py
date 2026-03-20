@@ -6,9 +6,10 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict
+from contextlib import contextmanager
 from dataclasses import dataclass
 from threading import Lock
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterator, Optional
 from uuid import uuid4
 
 
@@ -39,6 +40,29 @@ class TelemetrySnapshot:
 class TelemetrySummaryBuilder:
     """Build normalized summary metrics from collector data."""
 
+    _PRUNED = object()
+
+    _MEMORY_EXTRACT_STAGE_KEYS = {
+        "prepare_inputs_ms": "memory.extract.stage.prepare_inputs.duration_ms",
+        "llm_extract_ms": "memory.extract.stage.llm_extract.duration_ms",
+        "normalize_candidates_ms": "memory.extract.stage.normalize_candidates.duration_ms",
+        "tool_skill_stats_ms": "memory.extract.stage.tool_skill_stats.duration_ms",
+        "profile_create_ms": "memory.extract.stage.profile_create.duration_ms",
+        "tool_skill_merge_ms": "memory.extract.stage.tool_skill_merge.duration_ms",
+        "dedup_ms": "memory.extract.stage.dedup.duration_ms",
+        "create_memory_ms": "memory.extract.stage.create_memory.duration_ms",
+        "merge_existing_ms": "memory.extract.stage.merge_existing.duration_ms",
+        "delete_existing_ms": "memory.extract.stage.delete_existing.duration_ms",
+        "create_relations_ms": "memory.extract.stage.create_relations.duration_ms",
+        "flush_semantic_ms": "memory.extract.stage.flush_semantic.duration_ms",
+    }
+    _RESOURCE_FLAG_KEYS = {
+        "wait": "resource.flags.wait",
+        "build_index": "resource.flags.build_index",
+        "summarize": "resource.flags.summarize",
+        "watch_enabled": "resource.flags.watch_enabled",
+    }
+
     @staticmethod
     def _i(value: Any, default: int = 0) -> int:
         if value is None:
@@ -47,6 +71,50 @@ class TelemetrySummaryBuilder:
             return int(value)
         except (TypeError, ValueError):
             return default
+
+    @staticmethod
+    def _f(value: Any, default: float = 0.0) -> float:
+        if value is None:
+            return default
+        try:
+            return round(float(value), 3)
+        except (TypeError, ValueError):
+            return default
+
+    @staticmethod
+    def _bool(value: Any, default: bool = False) -> bool:
+        if value is None:
+            return default
+        if isinstance(value, bool):
+            return value
+        if isinstance(value, (int, float)):
+            return bool(value)
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {"true", "1", "yes", "on"}:
+                return True
+            if normalized in {"false", "0", "no", "off", ""}:
+                return False
+        return default
+
+    @classmethod
+    def _prune_zero_metrics(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            pruned: Dict[str, Any] = {}
+            for key, child in value.items():
+                pruned_child = cls._prune_zero_metrics(child)
+                if pruned_child is cls._PRUNED:
+                    continue
+                pruned[key] = pruned_child
+            return pruned if pruned else cls._PRUNED
+
+        if isinstance(value, bool):
+            return value
+
+        if isinstance(value, (int, float)) and value == 0:
+            return cls._PRUNED
+
+        return value
 
     @classmethod
     def _has_metric_prefix(
@@ -130,8 +198,58 @@ class TelemetrySummaryBuilder:
             }
 
         if cls._has_metric_prefix("memory", counters, gauges):
-            summary["memory"] = {
+            memory_summary = {
                 "extracted": memories_extracted,
+            }
+            if cls._has_metric_prefix("memory.extract", counters, gauges):
+                memory_summary["extract"] = {
+                    "duration_ms": cls._f(gauges.get("memory.extract.total.duration_ms"), 0.0),
+                    "candidates": {
+                        "total": cls._i(gauges.get("memory.extract.candidates.total"), 0),
+                        "standard": cls._i(gauges.get("memory.extract.candidates.standard"), 0),
+                        "tool_skill": cls._i(gauges.get("memory.extract.candidates.tool_skill"), 0),
+                    },
+                    "actions": {
+                        "created": cls._i(gauges.get("memory.extract.created"), 0),
+                        "merged": cls._i(gauges.get("memory.extract.merged"), 0),
+                        "deleted": cls._i(gauges.get("memory.extract.deleted"), 0),
+                        "skipped": cls._i(gauges.get("memory.extract.skipped"), 0),
+                    },
+                    "stages": {
+                        public_key: cls._f(gauges.get(metric_key), 0.0)
+                        for public_key, metric_key in cls._MEMORY_EXTRACT_STAGE_KEYS.items()
+                    },
+                }
+            summary["memory"] = memory_summary
+
+        if cls._has_metric_prefix("resource", counters, gauges):
+            summary["resource"] = {
+                "request": {
+                    "duration_ms": cls._f(gauges.get("resource.request.duration_ms"), 0.0),
+                },
+                "process": {
+                    "duration_ms": cls._f(gauges.get("resource.process.duration_ms"), 0.0),
+                    "parse": {
+                        "duration_ms": cls._f(gauges.get("resource.parse.duration_ms"), 0.0),
+                        "warnings_count": cls._i(gauges.get("resource.parse.warnings_count"), 0),
+                    },
+                    "finalize": {
+                        "duration_ms": cls._f(gauges.get("resource.finalize.duration_ms"), 0.0),
+                    },
+                    "summarize": {
+                        "duration_ms": cls._f(gauges.get("resource.summarize.duration_ms"), 0.0),
+                    },
+                },
+                "wait": {
+                    "duration_ms": cls._f(gauges.get("resource.wait.duration_ms"), 0.0),
+                },
+                "watch": {
+                    "duration_ms": cls._f(gauges.get("resource.watch.duration_ms"), 0.0),
+                },
+                "flags": {
+                    public_key: cls._bool(gauges.get(metric_key), False)
+                    for public_key, metric_key in cls._RESOURCE_FLAG_KEYS.items()
+                },
             }
 
         if error_stage or error_code or error_message:
@@ -140,6 +258,15 @@ class TelemetrySummaryBuilder:
                 "error_code": error_code,
                 "message": error_message,
             }
+
+        for key in ("tokens", "queue", "vector", "semantic_nodes", "memory", "resource", "errors"):
+            if key not in summary:
+                continue
+            pruned_value = cls._prune_zero_metrics(summary[key])
+            if pruned_value is cls._PRUNED:
+                summary.pop(key, None)
+            else:
+                summary[key] = pruned_value
 
         return summary
 
@@ -180,6 +307,34 @@ class OperationTelemetry:
 
     def set_value(self, key: str, value: Any) -> None:
         self.set(key, value)
+
+    def add_duration(self, key: str, duration_ms: float) -> None:
+        if not self.enabled:
+            return
+        gauge_key = key if key.endswith(".duration_ms") else f"{key}.duration_ms"
+        try:
+            normalized_duration = max(float(duration_ms), 0.0)
+        except (TypeError, ValueError):
+            normalized_duration = 0.0
+        with self._lock:
+            existing = self._gauges.get(gauge_key, 0.0)
+            try:
+                existing_value = float(existing)
+            except (TypeError, ValueError):
+                existing_value = 0.0
+            self._gauges[gauge_key] = existing_value + normalized_duration
+
+    @contextmanager
+    def measure(self, key: str) -> Iterator[None]:
+        if not self.enabled:
+            yield
+            return
+
+        start = time.perf_counter()
+        try:
+            yield
+        finally:
+            self.add_duration(key, (time.perf_counter() - start) * 1000)
 
     def add_token_usage(self, input_tokens: int, output_tokens: int) -> None:
         self.add_token_usage_by_source("llm", input_tokens, output_tokens)

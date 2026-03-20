@@ -9,8 +9,6 @@ Tests EmbeddingConfig's ability to create context-specific embedders:
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
 
 
@@ -28,16 +26,6 @@ class TestEmbeddingModelConfigContextFields:
         )
         assert config.query_param == "search_query"
         assert config.document_param == "search_document"
-
-    def test_openai_legacy_input_type_field_accept_value(self):
-        """OpenAI config should accept legacy input_type field."""
-        config = EmbeddingModelConfig(
-            model="text-embedding-3-small",
-            provider="openai",
-            api_key="sk-test",
-            input_type="search_query",
-        )
-        assert config.input_type == "search_query"
 
     def test_jina_query_document_param_fields_accept_values(self):
         """Jina config should accept query_param and document_param."""
@@ -58,9 +46,6 @@ class TestEmbeddingModelConfigContextFields:
             provider="openai",
             api_key="sk-test",
         )
-        assert config.input_type is None
-        assert config.query_param is None
-        assert config.document_param is None
         assert config.query_param is None
         assert config.document_param is None
 
@@ -76,17 +61,7 @@ class TestEmbeddingModelConfigContextFields:
         assert config.query_param == "search_query"
         assert config.document_param == "search_document"
 
-    def test_legacy_input_type_lowercase_normalization(self):
-        """Legacy input_type should be normalized to lowercase."""
-        config = EmbeddingModelConfig(
-            model="text-embedding-3-small",
-            provider="openai",
-            api_key="sk-test",
-            input_type="SEARCH_QUERY",
-        )
-        assert config.input_type == "search_query"
-
-    def test_query_document_param_lowercase_normalization(self):
+    def test_jina_query_document_param_lowercase_normalization(self):
         """Query/document task values should be normalized to lowercase."""
         config = EmbeddingModelConfig(
             model="jina-embeddings-v5-text-small",
@@ -100,11 +75,11 @@ class TestEmbeddingModelConfigContextFields:
 
 
 class TestEmbeddingConfigContextualEmbedders:
-    """Test EmbeddingConfig get_query_embedder and get_document_embedder."""
+    """Test EmbeddingConfig passes query_param and document_param correctly."""
 
     @patch("openviking.models.embedder.OpenAIDenseEmbedder")
-    def test_get_query_embedder_openai_passes_context_query(self, mock_embedder_class):
-        """get_query_embedder should pass context='query' when query_param is set."""
+    def test_get_embedder_openai_passes_params(self, mock_embedder_class):
+        """get_embedder should pass query_param and document_param to OpenAIDenseEmbedder."""
         mock_embedder_class.return_value = MagicMock()
         config = EmbeddingConfig(
             dense=EmbeddingModelConfig(
@@ -116,37 +91,16 @@ class TestEmbeddingConfigContextualEmbedders:
             )
         )
 
-        config.get_query_embedder()
+        config.get_embedder()
 
         mock_embedder_class.assert_called_once()
         call_kwargs = mock_embedder_class.call_args[1]
-        assert call_kwargs.get("context") == "query"
         assert call_kwargs.get("query_param") == "search_query"
-
-    @patch("openviking.models.embedder.OpenAIDenseEmbedder")
-    def test_get_document_embedder_openai_passes_context_document(self, mock_embedder_class):
-        """get_document_embedder should pass context='document' when document_param is set."""
-        mock_embedder_class.return_value = MagicMock()
-        config = EmbeddingConfig(
-            dense=EmbeddingModelConfig(
-                model="text-embedding-3-small",
-                provider="openai",
-                api_key="sk-test",
-                query_param="search_query",
-                document_param="search_document",
-            )
-        )
-
-        config.get_document_embedder()
-
-        mock_embedder_class.assert_called_once()
-        call_kwargs = mock_embedder_class.call_args[1]
-        assert call_kwargs.get("context") == "document"
         assert call_kwargs.get("document_param") == "search_document"
 
     @patch("openviking.models.embedder.JinaDenseEmbedder")
-    def test_get_query_embedder_jina_passes_context_query(self, mock_embedder_class):
-        """get_query_embedder should pass context='query' when query_param is set."""
+    def test_get_embedder_jina_passes_params(self, mock_embedder_class):
+        """get_embedder should pass query_param and document_param to JinaDenseEmbedder."""
         mock_embedder_class.return_value = MagicMock()
         config = EmbeddingConfig(
             dense=EmbeddingModelConfig(
@@ -158,37 +112,16 @@ class TestEmbeddingConfigContextualEmbedders:
             )
         )
 
-        config.get_query_embedder()
+        config.get_embedder()
 
         mock_embedder_class.assert_called_once()
         call_kwargs = mock_embedder_class.call_args[1]
-        assert call_kwargs.get("context") == "query"
         assert call_kwargs.get("query_param") == "retrieval.query"
-
-    @patch("openviking.models.embedder.JinaDenseEmbedder")
-    def test_get_document_embedder_jina_passes_context_document(self, mock_embedder_class):
-        """get_document_embedder should pass context='document' when document_param is set."""
-        mock_embedder_class.return_value = MagicMock()
-        config = EmbeddingConfig(
-            dense=EmbeddingModelConfig(
-                model="jina-embeddings-v5-text-small",
-                provider="jina",
-                api_key="jina-test",
-                query_param="retrieval.query",
-                document_param="retrieval.passage",
-            )
-        )
-
-        config.get_document_embedder()
-
-        mock_embedder_class.assert_called_once()
-        call_kwargs = mock_embedder_class.call_args[1]
-        assert call_kwargs.get("context") == "document"
         assert call_kwargs.get("document_param") == "retrieval.passage"
 
     @patch("openviking.models.embedder.OpenAIDenseEmbedder")
-    def test_get_query_embedder_openai_no_context_when_not_set(self, mock_embedder_class):
-        """get_query_embedder should pass None context when query_param is not set."""
+    def test_get_embedder_openai_no_params_when_not_set(self, mock_embedder_class):
+        """get_embedder should not pass query_param and document_param when not set."""
         mock_embedder_class.return_value = MagicMock()
         config = EmbeddingConfig(
             dense=EmbeddingModelConfig(
@@ -198,33 +131,16 @@ class TestEmbeddingConfigContextualEmbedders:
             )
         )
 
-        config.get_query_embedder()
+        config.get_embedder()
 
         mock_embedder_class.assert_called_once()
         call_kwargs = mock_embedder_class.call_args[1]
-        assert call_kwargs.get("context") is None
-
-    @patch("openviking.models.embedder.OpenAIDenseEmbedder")
-    def test_get_document_embedder_openai_no_context_when_not_set(self, mock_embedder_class):
-        """get_document_embedder should pass None context when document_param is not set."""
-        mock_embedder_class.return_value = MagicMock()
-        config = EmbeddingConfig(
-            dense=EmbeddingModelConfig(
-                model="text-embedding-3-small",
-                provider="openai",
-                api_key="sk-test",
-            )
-        )
-
-        config.get_document_embedder()
-
-        mock_embedder_class.assert_called_once()
-        call_kwargs = mock_embedder_class.call_args[1]
-        assert call_kwargs.get("context") is None
+        assert "query_param" not in call_kwargs
+        assert "document_param" not in call_kwargs
 
     @patch("openviking.models.embedder.JinaDenseEmbedder")
-    def test_get_query_embedder_jina_no_context_when_not_set(self, mock_embedder_class):
-        """get_query_embedder should pass None context when query_param is not set."""
+    def test_get_embedder_jina_no_params_when_not_set(self, mock_embedder_class):
+        """get_embedder should not pass query_param and document_param when not set."""
         mock_embedder_class.return_value = MagicMock()
         config = EmbeddingConfig(
             dense=EmbeddingModelConfig(
@@ -234,29 +150,12 @@ class TestEmbeddingConfigContextualEmbedders:
             )
         )
 
-        config.get_query_embedder()
+        config.get_embedder()
 
         mock_embedder_class.assert_called_once()
         call_kwargs = mock_embedder_class.call_args[1]
-        assert call_kwargs.get("context") is None
-
-    @patch("openviking.models.embedder.JinaDenseEmbedder")
-    def test_get_document_embedder_jina_no_context_when_not_set(self, mock_embedder_class):
-        """get_document_embedder should pass None context when document_param is not set."""
-        mock_embedder_class.return_value = MagicMock()
-        config = EmbeddingConfig(
-            dense=EmbeddingModelConfig(
-                model="jina-embeddings-v5-text-small",
-                provider="jina",
-                api_key="jina-test",
-            )
-        )
-
-        config.get_document_embedder()
-
-        mock_embedder_class.assert_called_once()
-        call_kwargs = mock_embedder_class.call_args[1]
-        assert call_kwargs.get("task") is None
+        assert "query_param" not in call_kwargs
+        assert "document_param" not in call_kwargs
 
 
 class TestOpenAIDenseEmbedderInputType:
@@ -277,10 +176,10 @@ class TestOpenAIDenseEmbedderInputType:
             model_name="text-embedding-3-small",
             api_key="sk-test",
             dimension=1536,
-            input_type="search_query",
+            query_param="search_query",
         )
 
-        embedder.embed("test query")
+        embedder.embed("test query", is_query=True)
 
         mock_client.embeddings.create.assert_called_once()
         call_kwargs = mock_client.embeddings.create.call_args[1]
@@ -301,10 +200,10 @@ class TestOpenAIDenseEmbedderInputType:
             model_name="text-embedding-3-small",
             api_key="sk-test",
             dimension=1536,
-            input_type="search_document",
+            document_param="search_document",
         )
 
-        embedder.embed_batch(["doc 1", "doc 2"])
+        embedder.embed_batch(["doc 1", "doc 2"], is_query=False)
 
         mock_client.embeddings.create.assert_called_once()
         call_kwargs = mock_client.embeddings.create.call_args[1]
@@ -351,10 +250,10 @@ class TestJinaDenseEmbedderTask:
         embedder = JinaDenseEmbedder(
             model_name="jina-embeddings-v5-text-small",
             api_key="jina-test",
-            task="retrieval.query",
+            query_param="retrieval.query",
         )
 
-        embedder.embed("test query")
+        embedder.embed("test query", is_query=True)
 
         mock_client.embeddings.create.assert_called_once()
         call_kwargs = mock_client.embeddings.create.call_args[1]
@@ -374,10 +273,10 @@ class TestJinaDenseEmbedderTask:
         embedder = JinaDenseEmbedder(
             model_name="jina-embeddings-v5-text-small",
             api_key="jina-test",
-            task="retrieval.passage",
+            document_param="retrieval.passage",
         )
 
-        embedder.embed_batch(["doc 1", "doc 2"])
+        embedder.embed_batch(["doc 1", "doc 2"], is_query=False)
 
         mock_client.embeddings.create.assert_called_once()
         call_kwargs = mock_client.embeddings.create.call_args[1]

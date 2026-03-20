@@ -135,6 +135,8 @@ class AsyncHTTPClient(BaseClient):
         url: Optional[str] = None,
         api_key: Optional[str] = None,
         agent_id: Optional[str] = None,
+        account: Optional[str] = None,
+        user: Optional[str] = None,
         timeout: float = 60.0,
     ):
         """Initialize AsyncHTTPClient.
@@ -143,6 +145,10 @@ class AsyncHTTPClient(BaseClient):
             url: OpenViking Server URL. If not provided, reads from ovcli.conf.
             api_key: API key for authentication. If not provided, reads from ovcli.conf.
             agent_id: Agent identifier. If not provided, reads from ovcli.conf.
+            account: Account identifier for multi-tenant auth. Required when using root key
+                     to access tenant-scoped APIs. If not provided, reads from ovcli.conf.
+            user: User identifier for multi-tenant auth. Required when using root key
+                  to access tenant-scoped APIs. If not provided, reads from ovcli.conf.
             timeout: HTTP request timeout in seconds. Default 60.0.
         """
         if url is None:
@@ -155,6 +161,8 @@ class AsyncHTTPClient(BaseClient):
                 url = cfg.get("url")
                 api_key = api_key or cfg.get("api_key")
                 agent_id = agent_id or cfg.get("agent_id")
+                account = account or cfg.get("account")
+                user = user or cfg.get("user")
                 if timeout == 60.0:  # only override default with config value
                     timeout = cfg.get("timeout", 60.0)
         if not url:
@@ -165,6 +173,8 @@ class AsyncHTTPClient(BaseClient):
         self._url = url.rstrip("/")
         self._api_key = api_key
         self._agent_id = agent_id
+        self._account = account
+        self._user_id = user
         self._user = UserIdentifier.the_default_user()
         self._timeout = timeout
         self._http: Optional[httpx.AsyncClient] = None
@@ -179,6 +189,10 @@ class AsyncHTTPClient(BaseClient):
             headers["X-API-Key"] = self._api_key
         if self._agent_id:
             headers["X-OpenViking-Agent"] = self._agent_id
+        if self._account:
+            headers["X-OpenViking-Account"] = self._account
+        if self._user_id:
+            headers["X-OpenViking-User"] = self._user_id
         self._http = httpx.AsyncClient(
             base_url=self._url,
             headers=headers,

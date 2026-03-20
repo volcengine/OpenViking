@@ -127,7 +127,7 @@ class HierarchicalRetriever:
         query_vector = None
         sparse_query_vector = None
         if self.embedder:
-            result: EmbedResult = self.embedder.embed(query.query)
+            result: EmbedResult = self.embedder.embed(query.query, is_query=True)
             query_vector = result.dense_vector
             sparse_query_vector = result.sparse_vector
 
@@ -175,6 +175,12 @@ class HierarchicalRetriever:
 
         # 从 global_results 中提取 level 2 的文件作为初始候选者
         initial_candidates = [r for r in global_results if r.get("level", 2) == 2]
+
+        initial_candidates = self._prepare_initial_candidates(
+            query.query,
+            initial_candidates,
+            mode=mode,
+        )
 
         # Step 4: Recursive search
         candidates = await self._recursive_search(
@@ -285,6 +291,8 @@ class HierarchicalRetriever:
         points = []
         seen = set()
 
+        global_results = [r for r in global_results if r.get("level", 2) != 2]
+
         # Results from global search
         default_scores = [r.get("_score", 0.0) for r in global_results]
         if self._rerank_client and mode == RetrieverMode.THINKING:
@@ -309,6 +317,29 @@ class HierarchicalRetriever:
                 seen.add(uri)
 
         return points
+
+    def _prepare_initial_candidates(
+        self,
+        query: str,
+        global_results: List[Dict[str, Any]],
+        mode: str = RetrieverMode.THINKING,
+    ) -> List[Dict[str, Any]]:
+        """Extract level-2 global hits and preserve rerank scores for them."""
+        initial_candidates = [dict(r) for r in global_results if r.get("level", 2) == 2]
+        if not initial_candidates:
+            return []
+
+        default_scores = [r.get("_score", 0.0) for r in initial_candidates]
+        if self._rerank_client and mode == RetrieverMode.THINKING:
+            docs = [str(r.get("abstract", "")) for r in initial_candidates]
+            query_scores = self._rerank_scores(query, docs, default_scores)
+        else:
+            query_scores = default_scores
+
+        for candidate, score in zip(initial_candidates, query_scores):
+            candidate["_score"] = score
+
+        return initial_candidates
 
     async def _recursive_search(
         self,

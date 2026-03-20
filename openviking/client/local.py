@@ -70,6 +70,7 @@ class LocalClient(BaseClient):
         build_index: bool = True,
         summarize: bool = False,
         telemetry: TelemetryRequest = False,
+        watch_interval: float = 0,
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
@@ -90,6 +91,7 @@ class LocalClient(BaseClient):
                 timeout=timeout,
                 build_index=build_index,
                 summarize=summarize,
+                watch_interval=watch_interval,
                 **kwargs,
             ),
         )
@@ -447,7 +449,7 @@ class LocalClient(BaseClient):
         Returns:
             SystemStatus containing health status of all components.
         """
-        return self._service.debug.observer.system
+        return self._service.debug.observer.system()
 
     def is_healthy(self) -> bool:
         """Quick health check (synchronous).
