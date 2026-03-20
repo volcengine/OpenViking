@@ -121,7 +121,7 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 | 参数 | 类型 | 说明 |
 |------|------|------|
 | `max_concurrent` | int | 最大并发 Embedding 请求数（`embedding.max_concurrent`，默认：`10`） |
-| `provider` | str | `"volcengine"`、`"openai"`、`"vikingdb"` 或 `"jina"` |
+| `provider` | str | `"volcengine"`、`"openai"`、`"vikingdb"`、`"jina"`、`"voyage"`、`"minimax"` 或 `"gemini"` |
 | `api_key` | str | API Key |
 | `model` | str | 模型名称 |
 | `dimension` | int | 向量维度 |
@@ -144,6 +144,7 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 - `jina`: Jina AI Embedding API
 - `voyage`: Voyage AI Embedding API
 - `minimax`: MiniMax Embedding API
+- `gemini`: Google Gemini Embedding API（仅文本；需安装 `google-genai>=1.0.0`）
 
 **minimax provider 配置示例:**
 
@@ -218,6 +219,51 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 ```
 
 获取 API Key: https://jina.ai
+
+**gemini provider 配置示例:**
+
+> **注意：** 需安装 `pip install "google-genai>=1.0.0"`。异步批量嵌入：`pip install "openviking[gemini-async]"`。
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "gemini",
+      "api_key": "your-google-api-key",
+      "model": "gemini-embedding-2-preview",
+      "dimension": 3072
+    }
+  }
+}
+```
+
+可用 Gemini 嵌入模型:
+- `gemini-embedding-2-preview`: 8192 token 输入限制, 1–3072 输出维度 (MRL)
+- `gemini-embedding-001`: 2048 token 输入限制, 1–3072 输出维度 (MRL)
+- `text-embedding-004`: 2048 token 输入限制, 768 输出维度（固定）
+
+推荐维度: `768`、`1536` 或 `3072`（默认: `3072`）。
+
+获取 API Key: https://aistudio.google.com/apikey
+
+**非对称检索**（索引和查询使用不同的 task type）:
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "gemini",
+      "api_key": "your-google-api-key",
+      "model": "gemini-embedding-2-preview",
+      "dimension": 3072,
+      "query_param": "RETRIEVAL_QUERY",
+      "document_param": "RETRIEVAL_DOCUMENT"
+    }
+  }
+}
+```
+
+支持的 task type: `RETRIEVAL_QUERY`、`RETRIEVAL_DOCUMENT`、`SEMANTIC_SIMILARITY`、`CLASSIFICATION`、`CLUSTERING`、`CODE_RETRIEVAL_QUERY`、`QUESTION_ANSWERING`、`FACT_VERIFICATION`。
 
 #### Sparse Embedding
 
