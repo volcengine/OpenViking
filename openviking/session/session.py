@@ -306,22 +306,35 @@ class Session:
         await self._write_to_agfs_async(self._messages)
         await self._write_relations_async()
 
-        # Enqueue semantic processing directly
-        from openviking.storage.queuefs import get_queue_manager
-        from openviking.storage.queuefs.semantic_msg import SemanticMsg
+        # Enqueue semantic processing only when compressor did NOT flush
+        # its own incremental SemanticMsg(s) — i.e. when no compressor is
+        # configured or when extraction produced zero memories.
+        # When the compressor runs successfully it already enqueues
+        # SemanticMsg(s) with per-file change sets via
+        # _flush_semantic_operations(), so a second (full-directory)
+        # SemanticMsg here would trigger an O(n²) re-summarisation of every
+        # file in the memory directory.  See:
+        # https://github.com/volcengine/OpenViking/issues/505
+        compressor_flushed = (
+            self._session_compressor is not None
+            and result.get("memories_extracted", 0) > 0
+        )
+        if not compressor_flushed:
+            from openviking.storage.queuefs import get_queue_manager
+            from openviking.storage.queuefs.semantic_msg import SemanticMsg
 
-        queue_manager = get_queue_manager()
-        if queue_manager:
-            msg = SemanticMsg(
-                uri=self._session_uri,
-                context_type="memory",
-                account_id=self.ctx.account_id,
-                user_id=self.ctx.user.user_id,
-                agent_id=self.ctx.user.agent_id,
-                role=self.ctx.role.value,
-            )
-            semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC)
-            await semantic_queue.enqueue(msg)
+            queue_manager = get_queue_manager()
+            if queue_manager:
+                msg = SemanticMsg(
+                    uri=self._session_uri,
+                    context_type="memory",
+                    account_id=self.ctx.account_id,
+                    user_id=self.ctx.user.user_id,
+                    agent_id=self.ctx.user.agent_id,
+                    role=self.ctx.role.value,
+                )
+                semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC)
+                await semantic_queue.enqueue(msg)
 
         redo_log.mark_done(task_id)
 
