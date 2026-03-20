@@ -1,3 +1,6 @@
+{{- if gt (int .Values.replicaCount) 1 }}
+{{- fail "replicaCount must be 1. OpenViking uses RocksDB which does not support concurrent access from multiple pods sharing the same PVC." }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:
