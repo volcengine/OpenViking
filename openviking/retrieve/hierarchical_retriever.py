@@ -8,6 +8,7 @@ and rerank-based relevance scoring.
 """
 
 import heapq
+import math
 import logging
 import time
 from datetime import datetime
@@ -516,6 +517,9 @@ class HierarchicalRetriever:
                             relations.append(RelatedContext(uri=uri, abstract=abstract))
 
             semantic_score = c.get("_final_score", c.get("_score", 0.0))
+            # Fix: clamp inf/nan scores from vector search (#inf-score)
+            if not math.isfinite(semantic_score):
+                semantic_score = 0.0
 
             # --- hotness boost ---
             updated_at_raw = c.get("updated_at")
@@ -536,6 +540,8 @@ class HierarchicalRetriever:
 
             alpha = self.HOTNESS_ALPHA
             final_score = (1 - alpha) * semantic_score + alpha * h_score
+            if not math.isfinite(final_score):
+                final_score = 0.0
             level = c.get("level", 2)
             display_uri = self._append_level_suffix(c.get("uri", ""), level)
 

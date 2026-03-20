@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Search endpoints for OpenViking HTTP Server."""
 
+import math
 from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends
@@ -13,6 +14,20 @@ from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
+
+
+
+def _sanitize_floats(obj: Any) -> Any:
+    """Recursively replace inf/nan with 0.0 to ensure JSON compliance."""
+    if isinstance(obj, float):
+        if math.isinf(obj) or math.isnan(obj):
+            return 0.0
+        return obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_floats(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_floats(v) for v in obj]
+    return obj
 
 router = APIRouter(prefix="/api/v1/search", tags=["search"])
 
@@ -82,6 +97,7 @@ async def find(
     result = execution.result
     if hasattr(result, "to_dict"):
         result = result.to_dict()
+    result = _sanitize_floats(result)
     return Response(
         status="ok",
         result=result,
@@ -121,6 +137,7 @@ async def search(
     result = execution.result
     if hasattr(result, "to_dict"):
         result = result.to_dict()
+    result = _sanitize_floats(result)
     return Response(
         status="ok",
         result=result,
