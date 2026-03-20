@@ -115,7 +115,7 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `max_concurrent` | int | Maximum concurrent embedding requests (`embedding.max_concurrent`, default: `10`) |
-| `provider` | str | `"volcengine"`, `"openai"`, `"vikingdb"`, `"jina"`, `"voyage"`, or `"google"` |
+| `provider` | str | `"volcengine"`, `"openai"`, `"vikingdb"`, `"jina"`, `"voyage"`, or `"gemini"` |
 | `api_key` | str | API key |
 | `model` | str | Model name |
 | `dimension` | int | Vector dimension. For Voyage, this maps to `output_dimension` |
@@ -128,7 +128,7 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 |----------|-------|-----------|------------|-------|
 | `volcengine` | `doubao-embedding-vision-250615` | 1024 | multimodal | Recommended |
 | `volcengine` | `doubao-embedding-250615` | 1024 | text | Text only |
-| `google` | `gemini-embedding-2-preview` | 3072 | text | Google Gemini Embedding 2 with MRL |
+| `gemini` | `gemini-embedding-2-preview` | 3072 | text | Google Gemini Embedding 2 with MRL |
 
 With `input: "multimodal"`, OpenViking can embed text, images (PNG, JPG, etc.), and mixed content.
 
@@ -138,7 +138,7 @@ With `input: "multimodal"`, OpenViking can embed text, images (PNG, JPG, etc.), 
 - `vikingdb`: VikingDB Embedding API
 - `jina`: Jina AI Embedding API
 - `voyage`: Voyage AI Embedding API
-- `google`: Google/Gemini AI Embedding API
+- `gemini`: Google/Gemini AI Embedding API
 
 **vikingdb provider example:**
 
@@ -194,13 +194,13 @@ Get your API key at https://jina.ai
 }
 ```
 
-**google provider example:**
+**gemini provider example:**
 
 ```json
 {
   "embedding": {
     "dense": {
-      "provider": "google",
+      "provider": "gemini",
       "api_key": "your-google-api-key",
       "model": "gemini-embedding-2-preview",
       "dimension": 1024,

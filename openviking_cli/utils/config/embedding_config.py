@@ -37,7 +37,7 @@ class EmbeddingModelConfig(BaseModel):
     provider: Optional[str] = Field(
         default="volcengine",
         description=(
-            "Provider type: 'openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'voyage', 'google'. "
+            "Provider type: 'openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'voyage', 'gemini'. "
             "For OpenRouter or other OpenAI-compatible providers, use 'openai' with "
             "api_base and extra_headers."
         ),
@@ -100,11 +100,11 @@ class EmbeddingModelConfig(BaseModel):
             "jina",
             "ollama",
             "voyage",
-            "google",
+            "gemini",
         ]:
             raise ValueError(
                 f"Invalid embedding provider: '{self.provider}'. Must be one of: "
-                "'openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'voyage', 'google'"
+                "'openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'voyage', 'gemini'"
             )
 
         # Provider-specific validation
@@ -143,9 +143,9 @@ class EmbeddingModelConfig(BaseModel):
             if not self.api_key:
                 raise ValueError("Voyage provider requires 'api_key' to be set")
 
-        elif self.provider == "google":
+        elif self.provider == "gemini":
             if not self.api_key:
-                raise ValueError("Google provider requires 'api_key' to be set")
+                raise ValueError("Gemini provider requires 'api_key' to be set")
 
         return self
 
@@ -162,7 +162,7 @@ class EmbeddingModelConfig(BaseModel):
 
             return get_voyage_model_default_dimension(self.model)
 
-        if provider == "google":
+        if provider == "gemini":
             from openviking.models.embedder.google_embedders import GOOGLE_MODEL_DIMENSIONS
 
             return GOOGLE_MODEL_DIMENSIONS.get(self.model, 3072)
@@ -210,7 +210,7 @@ class EmbeddingConfig(BaseModel):
         """Factory method to create embedder instance based on provider and type.
 
         Args:
-            provider: Provider type ('openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'voyage', 'google')
+            provider: Provider type ('openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'voyage', 'gemini')
             embedder_type: Embedder type ('dense', 'sparse', 'hybrid')
             config: EmbeddingModelConfig instance
 
@@ -243,6 +243,7 @@ class EmbeddingConfig(BaseModel):
                     or "no-key",  # Placeholder for local OpenAI-compatible servers
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
+                    **({"max_tokens": cfg.max_tokens} if cfg.max_tokens is not None else {}),
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                     **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
@@ -333,6 +334,7 @@ class EmbeddingConfig(BaseModel):
                     or "no-key",  # Ollama ignores the key, but client requires non-empty
                     "api_base": cfg.api_base or "http://localhost:11434/v1",
                     "dimension": cfg.dimension,
+                    **({"max_tokens": cfg.max_tokens} if cfg.max_tokens is not None else {}),
                 },
             ),
             ("voyage", "dense"): (
@@ -344,7 +346,7 @@ class EmbeddingConfig(BaseModel):
                     "dimension": cfg.dimension,
                 },
             ),
-            ("google", "dense"): (
+            ("gemini", "dense"): (
                 GoogleDenseEmbedder,
                 lambda cfg: {
                     "model_name": cfg.model,

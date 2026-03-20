@@ -69,6 +69,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         config: Optional[Dict[str, Any]] = None,
         extra_headers: Optional[Dict[str, str]] = None,
         input_type: Optional[str] = None,
+        max_tokens: Optional[int] = None,
     ):
         """Initialize OpenAI-Compatible Dense Embedder
 
@@ -108,6 +109,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         self.dimension = dimension
         self.query_param = query_param
         self.document_param = document_param
+        self._max_tokens = max_tokens if max_tokens is not None else 8000
 
         # Allow missing api_key when api_base is set (e.g. local OpenAI-compatible servers)
         if not self.api_key and not self.api_base:
@@ -127,6 +129,11 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         self._dimension = dimension
         if self._dimension is None:
             self._dimension = self._detect_dimension()
+
+    @property
+    def max_tokens(self) -> int:
+        """Maximum token count per embedding request."""
+        return self._max_tokens
 
     def _detect_dimension(self) -> int:
         """Detect dimension by making an actual API call"""
