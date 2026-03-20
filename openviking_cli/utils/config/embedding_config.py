@@ -89,10 +89,18 @@ class EmbeddingModelConfig(BaseModel):
         if not self.provider:
             raise ValueError("Embedding provider is required")
 
-        if self.provider not in ["openai", "volcengine", "vikingdb", "jina", "ollama", "voyage"]:
+        if self.provider not in [
+            "openai",
+            "volcengine",
+            "vikingdb",
+            "jina",
+            "ollama",
+            "voyage",
+            "minimax",
+        ]:
             raise ValueError(
                 f"Invalid embedding provider: '{self.provider}'. Must be one of: "
-                "'openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'voyage'"
+                "'openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'voyage', 'minimax'"
             )
 
         # Provider-specific validation
@@ -130,6 +138,10 @@ class EmbeddingModelConfig(BaseModel):
         elif self.provider == "voyage":
             if not self.api_key:
                 raise ValueError("Voyage provider requires 'api_key' to be set")
+
+        elif self.provider == "minimax":
+            if not self.api_key:
+                raise ValueError("MiniMax provider requires 'api_key' to be set")
 
         return self
 
@@ -201,6 +213,7 @@ class EmbeddingConfig(BaseModel):
         """
         from openviking.models.embedder import (
             JinaDenseEmbedder,
+            MinimaxDenseEmbedder,
             OpenAIDenseEmbedder,
             VikingDBDenseEmbedder,
             VikingDBHybridEmbedder,
@@ -320,6 +333,18 @@ class EmbeddingConfig(BaseModel):
                     "api_key": cfg.api_key,
                     "api_base": cfg.api_base,
                     "dimension": cfg.dimension,
+                },
+            ),
+            ("minimax", "dense"): (
+                MinimaxDenseEmbedder,
+                lambda cfg: {
+                    "model_name": cfg.model,
+                    "api_key": cfg.api_key,
+                    "api_base": cfg.api_base,
+                    "dimension": cfg.dimension,
+                    **({"query_param": cfg.query_param} if cfg.query_param else {}),
+                    **({"document_param": cfg.document_param} if cfg.document_param else {}),
+                    **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
                 },
             ),
         }

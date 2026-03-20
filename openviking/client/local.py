@@ -449,7 +449,7 @@ class LocalClient(BaseClient):
         Returns:
             SystemStatus containing health status of all components.
         """
-        return self._service.debug.observer.system
+        return self._service.debug.observer.system()
 
     def is_healthy(self) -> bool:
         """Quick health check (synchronous).
