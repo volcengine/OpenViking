@@ -2,15 +2,18 @@
 # SPDX-License-Identifier: Apache-2.0
 """System endpoints for OpenViking HTTP Server."""
 
+import asyncio
+import os
+import signal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
-from openviking.server.auth import get_request_context, resolve_identity
+from openviking.server.auth import get_request_context, require_role, resolve_identity
 from openviking.server.dependencies import get_service
-from openviking.server.identity import RequestContext
+from openviking.server.identity import RequestContext, Role
 from openviking.server.models import Response
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.utils import get_logger
@@ -18,6 +21,20 @@ from openviking_cli.utils import get_logger
 logger = get_logger(__name__)
 
 router = APIRouter()
+_RESTART_DELAY_SECONDS = 0.2
+
+
+def _terminate_process(pid: int, sig: signal.Signals = signal.SIGTERM) -> None:
+    os.kill(pid, sig)
+
+
+async def _delayed_terminate(delay_seconds: float = _RESTART_DELAY_SECONDS) -> None:
+    await asyncio.sleep(delay_seconds)
+    _terminate_process(os.getpid(), signal.SIGTERM)
+
+
+def _schedule_restart(delay_seconds: float = _RESTART_DELAY_SECONDS) -> None:
+    asyncio.create_task(_delayed_terminate(delay_seconds))
 
 
 @router.get("/health", tags=["system"])
@@ -137,3 +154,16 @@ async def wait_processed(
     service = get_service()
     result = await service.resources.wait_processed(timeout=request.timeout)
     return Response(status="ok", result=result)
+
+
+@router.post("/api/v1/system/restart", tags=["system"])
+async def restart_server(
+    _ctx: RequestContext = require_role(Role.ROOT),
+):
+    _schedule_restart()
+    return Response(
+        status="ok",
+        result={
+            "message": "Restart scheduled. Service may be briefly unavailable.",
+        },
+    )

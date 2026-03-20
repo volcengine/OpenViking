@@ -17,6 +17,7 @@ from openviking_cli.session.user_id import UserIdentifier
 _ROOT_IMPLICIT_TENANT_ALLOWED_PATHS = {
     "/api/v1/system/status",
     "/api/v1/system/wait",
+    "/api/v1/system/restart",
     "/api/v1/debug/health",
 }
 _ROOT_IMPLICIT_TENANT_ALLOWED_PREFIXES = (

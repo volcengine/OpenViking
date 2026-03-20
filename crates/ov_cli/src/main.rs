@@ -382,6 +382,7 @@ enum SystemCommands {
     Status,
     /// Quick health check
     Health,
+    Restart,
 }
 
 #[derive(Subcommand)]
@@ -807,6 +808,9 @@ async fn handle_system(cmd: SystemCommands, ctx: CliContext) -> Result<()> {
             let _ =
             commands::system::health(&client, ctx.output_format, ctx.compact).await?;
             Ok(())
+        }
+        SystemCommands::Restart => {
+            commands::system::restart(&client, ctx.output_format, ctx.compact).await
         }
     }
 }

@@ -60,3 +60,13 @@ pub async fn health(
     
     Ok(healthy)
 }
+
+pub async fn restart(
+    client: &HttpClient,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let response: serde_json::Value = client.post("/api/v1/system/restart", &json!({})).await?;
+    output_success(&response, output_format, compact);
+    Ok(())
+}

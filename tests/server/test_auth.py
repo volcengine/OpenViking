@@ -17,6 +17,7 @@ from openviking.server.app import create_app
 from openviking.server.auth import get_request_context, resolve_identity
 from openviking.server.config import ServerConfig, _is_localhost, validate_server_config
 from openviking.server.dependencies import set_service
+from openviking.server.routers import system as system_router
 from openviking.server.identity import ResolvedIdentity, Role
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
 from openviking.service.core import OpenVikingService
@@ -384,6 +385,16 @@ async def test_root_system_wait_allows_implicit_default_identity():
     assert ctx.role == Role.ROOT
 
 
+async def test_root_system_restart_allows_implicit_default_identity():
+    """ROOT may call system restart without explicit tenant headers."""
+    request = _make_request("/api/v1/system/restart", auth_enabled=True)
+    identity = ResolvedIdentity(role=Role.ROOT, account_id="default", user_id="default")
+
+    ctx = await get_request_context(request, identity)
+
+    assert ctx.role == Role.ROOT
+
+
 async def test_root_debug_vector_requests_require_explicit_identity():
     """Tenant-scoped debug routes must not bypass explicit tenant checks."""
     request = _make_request("/api/v1/debug/vector/scroll", auth_enabled=True)
@@ -448,6 +459,42 @@ async def test_root_system_wait_keeps_200_via_http():
 
     assert response.status_code == 200
     assert response.json()["status"] == "ok"
+
+
+async def test_root_system_restart_keeps_200_via_http(auth_client: httpx.AsyncClient, monkeypatch):
+    """System restart should work with root key and schedule restart."""
+    scheduled: list[float] = []
+
+    def _fake_schedule_restart(delay_seconds: float = 0.2) -> None:
+        scheduled.append(delay_seconds)
+
+    monkeypatch.setattr(system_router, "_schedule_restart", _fake_schedule_restart)
+
+    response = await auth_client.post(
+        "/api/v1/system/restart",
+        headers={"X-API-Key": ROOT_KEY},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "ok"
+    assert scheduled
+
+
+async def test_user_key_cannot_restart_system(auth_client: httpx.AsyncClient, user_key: str):
+    """Non-root key must be rejected by restart endpoint."""
+    response = await auth_client.post(
+        "/api/v1/system/restart",
+        headers={"X-API-Key": user_key},
+    )
+
+    assert response.status_code == 403
+
+
+async def test_missing_key_cannot_restart_system(auth_client: httpx.AsyncClient):
+    """Restart endpoint should require authentication."""
+    response = await auth_client.post("/api/v1/system/restart")
+
+    assert response.status_code == 401
 
 
 async def test_root_debug_vector_requests_return_structured_400_via_http():

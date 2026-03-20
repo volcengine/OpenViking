@@ -84,6 +84,7 @@ ov read viking://resources/...
 - `system wait` - Wait for async processing
 - `system status` - Component status
 - `system health` - Health check
+- `system restart` - Restart server process
 - `observer queue` - Queue status
 - `observer vikingdb` - VikingDB status
 - `observer vlm` - VLM status
