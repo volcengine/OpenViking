@@ -125,6 +125,10 @@ class VLMBase(ABC):
         """Reset token usage"""
         self._token_tracker.reset()
 
+    def _extract_content_from_response(self, response) -> str:
+        if isinstance(response, str):
+            return response
+        return response.choices[0].message.content or ""
 
 class VLMFactory:
     """VLM factory class, creates corresponding VLM instance based on config"""
@@ -150,7 +154,7 @@ class VLMFactory:
 
             return VolcEngineVLM(config)
 
-        elif provider == "openai":
+        elif provider in ("openai", "azure"):
             from .backends.openai_vlm import OpenAIVLM
 
             return OpenAIVLM(config)

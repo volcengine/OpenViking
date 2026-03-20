@@ -101,6 +101,7 @@ OpenViking 支持三种 VLM 提供商：
 |----------|-------------|-------------|
 | `volcengine` | 火山引擎豆包模型 | [Volcengine 控制台](https://console.volcengine.com/ark/region:ark+cn-beijing/overview?briefPage=0&briefType=introduce&type=new&utm_content=OpenViking&utm_medium=devrel&utm_source=OWO&utm_term=OpenViking) |
 | `openai` | OpenAI 官方 API | [OpenAI 平台](https://platform.openai.com) |
+| `azure` | Azure OpenAI 服务 | [Azure OpenAI 服务](https://portal.azure.com) |
 | `litellm` | 统一调用多种第三方模型 (Anthropic, DeepSeek, Gemini, vLLM, Ollama 等) | 参见 [LiteLLM 提供商](https://docs.litellm.ai/docs/providers) |
 
 > 💡 **提示**：
@@ -168,6 +169,30 @@ Volcengine 支持模型名称和端点 ID。为简单起见，建议使用模型
   }
 }
 ```
+
+</details>
+
+<details>
+<summary><b>Azure OpenAI</b></summary>
+
+使用 Azure OpenAI 服务。`model` 字段需要填写 Azure 上的**部署名称（deployment name）**，而非模型官方名字：
+
+```json
+{
+  "vlm": {
+    "provider": "azure",
+    "model": "your-deployment-name",
+    "api_key": "your-azure-api-key",
+    "api_base": "https://your-resource-name.openai.azure.com",
+    "api_version": "2025-01-01-preview"
+  }
+}
+```
+
+> 💡 **提示**：
+> - `api_base` 填写你的 Azure OpenAI 资源端点，支持 `*.openai.azure.com` 和 `*.cognitiveservices.azure.com` 两种格式
+> - `api_version` 可选，默认值为 `2025-01-01-preview`
+> - `model` 必须与 Azure Portal 中创建的部署名称一致
 
 </details>
 
@@ -259,23 +284,25 @@ ollama serve
     "dense": {
       "api_base" : "<api-endpoint>",   // API 端点地址
       "api_key"  : "<your-api-key>",   // 模型服务 API Key
-      "provider" : "<provider-type>",  // 提供商类型："volcengine" 或 "openai"（当前支持）
+      "provider" : "<provider-type>",  // 提供商类型："volcengine"、"openai"、"azure" 等
+      "api_version": "2025-01-01-preview", // （仅 azure）API 版本，可选，默认 "2025-01-01-preview"
       "dimension": 1024,               // 向量维度
-      "model"    : "<model-name>"      // Embedding 模型名称（如 doubao-embedding-vision-250615 或 text-embedding-3-large）
+      "model"    : "<model-name>"      // Embedding 模型名称或 Azure 部署名（如 doubao-embedding-vision-250615 或 text-embedding-3-large）
     },
     "max_concurrent": 10               // 最大并发 embedding 请求（默认：10）
   },
   "vlm": {
     "api_base" : "<api-endpoint>",     // API 端点地址
     "api_key"  : "<your-api-key>",     // 模型服务 API Key
-    "provider" : "<provider-type>",    // 提供商类型 (volcengine, openai, deepseek, anthropic 等)
-    "model"    : "<model-name>",       // VLM 模型名称（如 doubao-seed-2-0-pro-260215 或 gpt-4-vision-preview）
+    "provider" : "<provider-type>",    // 提供商类型 (volcengine, openai, azure, litellm 等)
+    "api_version": "2025-01-01-preview", // （仅 azure）API 版本，可选，默认 "2025-01-01-preview"
+    "model"    : "<model-name>",       // VLM 模型名称或 Azure 部署名（如 doubao-seed-2-0-pro-260215 或 gpt-4-vision-preview）
     "max_concurrent": 100              // 语义处理的最大并发 LLM 调用（默认：100）
   }
 }
 ```
 
-> **注意**：对于 embedding 模型，目前支持 `volcengine`（豆包）、`openai` 和 `jina` 提供商。对于 VLM 模型，我们支持三种提供商：`volcengine`、`openai` 和 `litellm`。``litellm` 提供商支持各种模型，包括 Anthropic (Claude)、DeepSeek、Gemini、Moonshot、Zhipu、DashScope、MiniMax、vLLM、Ollama 等。
+> **注意**：对于 embedding 模型，目前支持 `volcengine`（豆包）、`openai`、`azure`、`jina` 等提供商。对于 VLM 模型，我们支持 `volcengine`、`openai`、`azure` 和 `litellm` 提供商。`litellm` 提供商支持各种模型，包括 Anthropic (Claude)、DeepSeek、Gemini、Moonshot、Zhipu、DashScope、MiniMax、vLLM、Ollama 等。
 
 #### 服务器配置示例
 
@@ -346,6 +373,47 @@ ollama serve
   }
 }
 ```
+
+</details>
+
+<details>
+<summary><b>示例 3：使用 Azure OpenAI 模型</b></summary>
+
+```json
+{
+  "storage": {
+    "workspace": "/home/your-name/openviking_workspace"
+  },
+  "log": {
+    "level": "INFO",
+    "output": "stdout"
+  },
+  "embedding": {
+    "dense": {
+      "api_base" : "https://your-resource-name.openai.azure.com",
+      "api_key"  : "your-azure-api-key",
+      "provider" : "azure",
+      "api_version": "2025-01-01-preview",
+      "dimension": 1024,
+      "model"    : "text-embedding-3-large"
+    },
+    "max_concurrent": 10
+  },
+  "vlm": {
+    "api_base" : "https://your-resource-name.openai.azure.com",
+    "api_key"  : "your-azure-api-key",
+    "provider" : "azure",
+    "api_version": "2025-01-01-preview",
+    "model"    : "gpt-4o",
+    "max_concurrent": 100
+  }
+}
+```
+
+> 💡 **提示**：
+> - `model` 必须填写 Azure Portal 中创建的**部署名称**，而非模型官方名字
+> - `api_base` 支持 `*.openai.azure.com` 和 `*.cognitiveservices.azure.com` 两种端点格式
+> - Embedding 和 VLM 可以使用不同的 Azure 资源和 API Key
 
 </details>
 

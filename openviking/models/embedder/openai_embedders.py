@@ -6,6 +6,7 @@ from typing import Any, Dict, List, Optional
 
 import openai
 
+from openviking.models.vlm.registry import DEFAULT_AZURE_API_VERSION
 from openviking.models.embedder.base import (
     DenseEmbedderBase,
     EmbedResult,
@@ -63,12 +64,14 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         model_name: str = "text-embedding-3-small",
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
+        api_version: Optional[str] = None,
         dimension: Optional[int] = None,
         query_param: Optional[str] = None,
         document_param: Optional[str] = None,
         config: Optional[Dict[str, Any]] = None,
         extra_headers: Optional[Dict[str, str]] = None,
         input_type: Optional[str] = None,
+        provider: str = "openai",
     ):
         """Initialize OpenAI-Compatible Dense Embedder
 
@@ -105,23 +108,31 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
 
         self.api_key = api_key
         self.api_base = api_base
+        self.api_version = api_version
         self.dimension = dimension
         self.query_param = query_param
         self.document_param = document_param
+        self._provider = provider.lower()
 
         # Allow missing api_key when api_base is set (e.g. local OpenAI-compatible servers)
         if not self.api_key and not self.api_base:
             raise ValueError("api_key is required")
 
-        # Initialize OpenAI client
-        # Use a placeholder api_key when not provided (for local OpenAI-compatible servers)
-        client_kwargs = {"api_key": self.api_key or "no-key"}
-        if self.api_base:
-            client_kwargs["base_url"] = self.api_base
-        # 透传自定义请求头（如 OpenRouter 要求的 HTTP-Referer / X-Title）
-        if extra_headers:
-            client_kwargs["default_headers"] = extra_headers
-        self.client = openai.OpenAI(**client_kwargs)
+        client_kwargs: Dict[str, Any] = {"api_key": self.api_key or "no-key"}
+        if self._provider == "azure":
+            if not self.api_base:
+                raise ValueError("api_base (Azure endpoint) is required for Azure provider")
+            client_kwargs["azure_endpoint"] = self.api_base
+            client_kwargs["api_version"] = self.api_version or DEFAULT_AZURE_API_VERSION
+            if extra_headers:
+                client_kwargs["default_headers"] = extra_headers
+            self.client = openai.AzureOpenAI(**client_kwargs)
+        else:
+            if self.api_base:
+                client_kwargs["base_url"] = self.api_base
+            if extra_headers:
+                client_kwargs["default_headers"] = extra_headers
+            self.client = openai.OpenAI(**client_kwargs)
 
         # Auto-detect dimension
         self._dimension = dimension
