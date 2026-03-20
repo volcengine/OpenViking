@@ -145,7 +145,7 @@ class HierarchicalRetriever:
             context_type=query.context_type.value if query.context_type else None,
             target_dirs=target_dirs,
             scope_dsl=scope_dsl,
-            limit=min(limit, self.GLOBAL_SEARCH_TOPK),
+            limit=max(limit, self.GLOBAL_SEARCH_TOPK),
         )
 
         # Debug: Print all URIs in global_results

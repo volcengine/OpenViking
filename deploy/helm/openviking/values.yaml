@@ -75,6 +75,16 @@ persistence:
 config:
   storage:
     workspace: /app/data/openviking_workspace
+    vectordb:
+      name: context
+      backend: local
+      project: default
+    agfs:
+      port: 1833
+      log_level: warn
+      backend: local
+      timeout: 10
+      retry_times: 3
   log:
     level: INFO
     output: stdout
@@ -82,21 +92,26 @@ config:
     host: "0.0.0.0"
     port: 1933
     workers: 1
+    root_api_key: ""
     cors_origins:
       - "*"
   embedding:
     dense:
-      api_base: ""
+      api_base: "https://ark.cn-beijing.volces.com/api/v3"
       api_key: ""
-      provider: "openai"
-      dimension: 3072
-      model: "text-embedding-3-large"
+      provider: "volcengine"
+      dimension: 1024
+      model: "doubao-embedding-vision-250615"
+      input: "multimodal"
     max_concurrent: 10
   vlm:
-    api_base: ""
+    api_base: "https://ark.cn-beijing.volces.com/api/v3"
     api_key: ""
-    provider: "openai"
-    model: "gpt-4o"
+    provider: "volcengine"
+    model: "doubao-seed-2-0-pro-260215"
+    temperature: 0.0
+    max_retries: 2
+    thinking: false
     max_concurrent: 100
 
 # Extra environment variables to set on the container.

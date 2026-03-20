@@ -14,8 +14,9 @@ Deploy OpenViking on Kubernetes using Helm.
 
 ```bash
 helm install openviking ./deploy/helm/openviking \
-  --set config.embedding.dense.api_key="YOUR_EMBEDDING_API_KEY" \
-  --set config.vlm.api_key="YOUR_VLM_API_KEY"
+  --set config.server.root_api_key="YOUR_ROOT_API_KEY" \
+  --set config.embedding.dense.api_key="YOUR_VOLCENGINE_API_KEY" \
+  --set config.vlm.api_key="YOUR_VOLCENGINE_API_KEY"
 ```
 
 ### Install with Custom Values
@@ -47,19 +48,24 @@ config:
     host: "0.0.0.0"
     port: 1933
     workers: 1
+    root_api_key: "your-secret-key"
   embedding:
     dense:
-      api_base: "https://api.openai.com/v1"
-      api_key: "your-key"
-      provider: "openai"
-      dimension: 3072
-      model: "text-embedding-3-large"
+      api_base: "https://ark.cn-beijing.volces.com/api/v3"
+      api_key: "your-volcengine-api-key"
+      provider: "volcengine"
+      dimension: 1024
+      model: "doubao-embedding-vision-250615"
+      input: "multimodal"
     max_concurrent: 10
   vlm:
-    api_base: "https://api.openai.com/v1"
-    api_key: "your-key"
-    provider: "openai"
-    model: "gpt-4o"
+    api_base: "https://ark.cn-beijing.volces.com/api/v3"
+    api_key: "your-volcengine-api-key"
+    provider: "volcengine"
+    model: "doubao-seed-2-0-pro-260215"
+    temperature: 0.0
+    max_retries: 2
+    thinking: false
     max_concurrent: 100
 ```
 
@@ -116,6 +122,7 @@ extraEnv:
 | `resources.requests.cpu` | CPU request | `500m` |
 | `resources.requests.memory` | Memory request | `1Gi` |
 | `ingress.enabled` | Enable ingress | `false` |
+| `config.server.root_api_key` | API key required when server binds to 0.0.0.0 | `""` |
 | `config` | Full ov.conf configuration object | See `values.yaml` |
 | `extraEnv` | Additional environment variables | `[]` |
 

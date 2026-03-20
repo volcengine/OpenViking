@@ -58,6 +58,16 @@ ov-install
 
 ```
 
+If the installation fails because the system is missing tools to create a virtual environment, operate these commands below and re-run `ov-install`:
+
+```bash
+apt update
+apt install -y software-properties-common
+add-apt-repository universe
+apt update
+apt install -y python3-venv
+```
+
 Non-interactive mode (uses default configuration):
 
 ```bash
@@ -94,6 +104,62 @@ curl -fsSL ... | bash -s -- --workdir ~/.openclaw-openclaw-second
 ```
 
 The script will automatically detect multiple OpenClaw instances and let you choose. It will also prompt you to select local/remote mode—remote mode connects to a remote OpenViking service and does not require installing Python.
+
+### Start OpenClaw + OpenViking
+
+```bash
+source ~/.openclaw/openviking.env && openclaw gateway restart
+```
+
+Seeing `openviking: registered context-engine` indicates the plugin was loaded.
+
+Then verify:
+
+```bash
+openclaw config get plugins.slots.contextEngine
+```
+
+If it shows `openviking`, the startup is successful.
+
+### Verify Read and Write
+
+Use OpenClaw logs to verify memory capture and recall:
+
+```bash
+openclaw logs --follow
+```
+
+Look for:
+
+```
+openviking: auto-captured 2 new messages, extracted 1 memories
+```
+
+You can also check a specific log file:
+
+```bash
+cat <your-log-file> | grep auto-capture
+cat <your-log-file> | grep inject
+```
+
+Example:
+
+```bash
+cat /tmp/openclaw/openclaw-2026-03-20.log | grep auto-capture
+cat /tmp/openclaw/openclaw-2026-03-20.log | grep inject
+```
+
+### View Memories with `ov tui`
+
+In your OpenViking directory, activate the virtual environment and open the TUI:
+
+```bash
+source venv/bin/activate
+ov --help
+ov tui
+```
+
+Press `.` to expand folders, use arrow keys to navigate, and press `q` to quit.
 
 ---
 
@@ -309,7 +375,7 @@ openclaw config set plugins.entries.openviking.config.agentId "my-agent"
 
 ```
 
-If not configured, the plugin falls back to `default`. When OpenClaw provides a per-session `agentId` at runtime, the context engine will switch to that session-specific value automatically.
+If not configured, the plugin auto-generates a unique ID in the format `openclaw-<hostname>-<random>`.
 
 ### `~/.openclaw/openviking.env`
 
@@ -329,7 +395,7 @@ export OPENVIKING_PYTHON='/usr/local/bin/python3'
 source ~/.openclaw/openviking.env && openclaw gateway
 
 # Disable the context engine
-openclaw config set plugins.slots.contextEngine none
+openclaw config set plugins.slots.contextEngine legacy
 
 # Enable OpenViking as the context engine
 openclaw config set plugins.slots.contextEngine openviking
@@ -361,6 +427,6 @@ python3 -m pip uninstall openviking -y && rm -rf ~/.openviking
 
 ---
 
-**See also:** [INSTALL-ZH.md](https://github.com/volcengine/OpenViking/blob/main/examples/openclaw-plugin/INSTALL-ZH.md) (Chinese) · [INSTALL-AGENT.md](https://www.google.com/search?q=./INSTALL-AGENT.md) (Agent Install Guide)
+**See also:** [INSTALL-ZH.md](https://github.com/volcengine/OpenViking/blob/main/examples/openclaw-plugin/INSTALL-ZH.md) (Chinese) · [INSTALL-AGENT.md](https://github.com/volcengine/OpenViking/blob/main/examples/openclaw-plugin/INSTALL-AGENT.md) (Agent Install Guide)
 
 ---

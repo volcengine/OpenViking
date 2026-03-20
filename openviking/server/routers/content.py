@@ -112,7 +112,7 @@ async def reindex(
     viking_fs = get_viking_fs()
 
     # Validate URI exists
-    if not await viking_fs.exists(uri):
+    if not await viking_fs.exists(uri, ctx=_ctx):
         return Response(
             status="error",
             error=ErrorInfo(code="NOT_FOUND", message=f"URI not found: {uri}"),

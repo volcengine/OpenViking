@@ -27,3 +27,15 @@ To access the OpenViking API:
 IMPORTANT: Make sure to configure your embedding and VLM API keys in values.yaml
 or via extraEnv before using OpenViking. The server will not function correctly
 without valid model provider credentials.
+
+{{- if not .Values.config.server.root_api_key }}
+
+WARNING: config.server.root_api_key is not set. When the server binds to 0.0.0.0
+(the default), a root_api_key is REQUIRED for security. The server will refuse to
+start without it.
+
+Set it via:
+
+  helm upgrade {{ .Release.Name }} <chart> --set config.server.root_api_key="YOUR_SECRET_KEY"
+
+{{- end }}
