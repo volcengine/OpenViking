@@ -130,7 +130,7 @@ class _SingleAccountBackend:
         return {
             "name": self._collection_name,
             "vector_dim": config.get("vector_dim"),
-            "count": await self.count(),
+            "count": await self.count(include_all_accounts=True),
             "status": "active",
         }
 
@@ -635,8 +635,11 @@ class VikingVectorIndexBackend:
         filter: Optional[Dict[str, Any] | FilterExpr] = None,
         *,
         ctx: Optional[RequestContext] = None,
+        include_all_accounts: bool = False,
     ) -> int:
-        if ctx:
+        if include_all_accounts:
+            backend = self._get_root_backend()
+        elif ctx:
             backend = self._get_backend_for_context(ctx)
         else:
             backend = self._get_default_backend()
