@@ -5,7 +5,6 @@
 Session as Context: Sessions integrated into L0/L1/L2 system.
 """
 
-import asyncio
 import json
 import re
 from dataclasses import dataclass, field
@@ -92,7 +91,6 @@ class Session:
         self._compression: SessionCompression = SessionCompression()
         self._stats: SessionStats = SessionStats()
         self._loaded = False
-        self._commit_lock = asyncio.Lock()
 
         logger.info(f"Session created: {self.session_id} for user {self.user}")
 
@@ -228,14 +226,14 @@ class Session:
     async def commit_async(self) -> Dict[str, Any]:
         """Async commit session: two-phase approach.
 
-        Phase 1 (Archive prep, lock-protected): Copy messages, clear live
-        session, increment compression index. The lock ensures concurrent
-        commits cannot re-commit the same messages.
+        Phase 1 (Archive prep, PathLock-protected): Copy messages, clear live
+        session, increment compression index. Uses a distributed filesystem lock
+        (PathLock) so this works across workers and processes.
         Phase 2 (Memory, redo-log protected): Extract memories, write, enqueue.
         """
         import uuid
 
-        from openviking.storage.transaction import get_lock_manager
+        from openviking.storage.transaction import LockContext, get_lock_manager
 
         result = {
             "session_id": self.session_id,
@@ -246,8 +244,10 @@ class Session:
             "stats": None,
         }
 
-        # ===== Phase 1: Snapshot + clear (lock-protected) =====
-        async with self._commit_lock:
+        # ===== Phase 1: Snapshot + clear (PathLock-protected) =====
+        # Use filesystem-based distributed lock so this works across workers/processes.
+        session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
+        async with LockContext(get_lock_manager(), [session_path], lock_mode="point"):
             if not self._messages:
                 get_current_telemetry().set("memory.extracted", 0)
                 return result
