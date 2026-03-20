@@ -46,7 +46,7 @@ RAGbenchmark/
 
 ```bash
 cd OpenViking
-uv sync --group benchmark
+uv pip install -e ".[benchmark]"
 source .venv/bin/activate
 ```
 
@@ -576,7 +576,7 @@ RAGbenchmark/
 
 ```bash
 cd OpenViking
-uv sync --group benchmark
+uv pip install -e ".[benchmark]"
 source .venv/bin/activate
 ```
 
