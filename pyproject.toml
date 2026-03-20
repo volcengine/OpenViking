@@ -13,11 +13,11 @@ name = "openviking"
 dynamic = ["version"]
 description = "An Agent-native context database"
 readme = "README.md"
+requires-python = ">=3.10"
 authors = [
     {name = "ByteDance", email = "noreply@bytedance.com"}
 ]
 license = { text = "Apache-2.0" }
-requires-python = ">=3.10"
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -27,6 +27,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
     "pydantic>=2.0.0",
@@ -39,6 +40,8 @@ dependencies = [
     "openai>=1.0.0",
     "requests>=2.31.0",
     "python-docx>=1.0.0",
+    "olefile>=0.47",
+    "xlrd>=2.0.1",
     "python-pptx>=1.0.0",
     "openpyxl>=3.0.0",
     "ebooklib>=0.18.0",
@@ -95,6 +98,14 @@ eval = [
     "ragas>=0.1.0",
     "datasets>=2.0.0",
     "pandas>=2.0.0",
+]
+build = [
+    "setuptools>=61.0",
+    "setuptools-scm>=8.0",
+    "pybind11>=2.13.0",
+    "cmake>=3.15",
+    "wheel",
+    "build",
 ]
 # vikingbot core dependencies
 bot = [
@@ -166,7 +177,9 @@ openviking = [
     "lib/libagfsbinding.dylib",
     "lib/libagfsbinding.dll",
     "bin/ov",
-    "bin/ov.exe"
+    "bin/ov.exe",
+    "storage/vectordb/engine/*.so",
+    "storage/vectordb/engine/*.pyd",
 ]
 vikingbot = [
     "**/*.mjs",
@@ -229,3 +242,8 @@ quote-style = "double"
 indent-style = "space"
 skip-magic-trailing-comma = false
 line-ending = "auto"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]

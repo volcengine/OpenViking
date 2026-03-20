@@ -307,6 +307,15 @@ impl HttpClient {
         self.get("/api/v1/content/overview", &params).await
     }
 
+    pub async fn reindex(&self, uri: &str, regenerate: bool, wait: bool) -> Result<serde_json::Value> {
+        let body = serde_json::json!({
+            "uri": uri,
+            "regenerate": regenerate,
+            "wait": wait,
+        });
+        self.post("/api/v1/content/reindex", &body).await
+    }
+
     /// Download file as raw bytes
     pub async fn get_bytes(&self, uri: &str) -> Result<Vec<u8>> {
         let url = format!("{}/api/v1/content/download", self.base_url);
@@ -480,6 +489,7 @@ impl HttpClient {
         include: Option<String>,
         exclude: Option<String>,
         directly_upload_media: bool,
+        watch_interval: f64,
     ) -> Result<serde_json::Value> {
         let path_obj = Path::new(path);
 
@@ -501,6 +511,7 @@ impl HttpClient {
                     "include": include,
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
+                    "watch_interval": watch_interval,
                 });
 
                 self.post("/api/v1/resources", &body).await
@@ -520,6 +531,7 @@ impl HttpClient {
                     "include": include,
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
+                    "watch_interval": watch_interval,
                 });
 
                 self.post("/api/v1/resources", &body).await
@@ -537,6 +549,7 @@ impl HttpClient {
                     "include": include,
                     "exclude": exclude,
                     "directly_upload_media": directly_upload_media,
+                    "watch_interval": watch_interval,
                 });
 
                 self.post("/api/v1/resources", &body).await
@@ -555,6 +568,7 @@ impl HttpClient {
                 "include": include,
                 "exclude": exclude,
                 "directly_upload_media": directly_upload_media,
+                "watch_interval": watch_interval,
             });
 
             self.post("/api/v1/resources", &body).await
@@ -733,5 +747,57 @@ impl HttpClient {
             account_id, user_id
         );
         self.post(&path, &serde_json::json!({})).await
+    }
+
+    // ============ Debug Vector Methods ============
+
+    /// Get paginated vector records
+    pub async fn debug_vector_scroll(
+        &self,
+        limit: Option<u32>,
+        cursor: Option<String>,
+        uri_prefix: Option<String>,
+    ) -> Result<(Vec<serde_json::Value>, Option<String>)> {
+        let mut params = Vec::new();
+        if let Some(l) = limit {
+            params.push(("limit".to_string(), l.to_string()));
+        }
+        if let Some(c) = cursor {
+            params.push(("cursor".to_string(), c));
+        }
+        if let Some(u) = uri_prefix {
+            params.push(("uri".to_string(), u));
+        }
+
+        let result: serde_json::Value = self.get("/api/v1/debug/vector/scroll", &params).await?;
+        let records = result["records"]
+            .as_array()
+            .ok_or_else(|| Error::Parse("Missing records in response".to_string()))?
+            .clone();
+        let next_cursor = result["next_cursor"].as_str().map(|s| s.to_string());
+
+        Ok((records, next_cursor))
+    }
+
+    /// Get count of vector records
+    pub async fn debug_vector_count(
+        &self,
+        filter: Option<&serde_json::Value>,
+        uri_prefix: Option<String>,
+    ) -> Result<u64> {
+        let mut params = Vec::new();
+        if let Some(f) = filter {
+            params.push(("filter".to_string(), serde_json::to_string(f)?));
+        }
+        if let Some(u) = uri_prefix {
+            params.push(("uri".to_string(), u));
+        }
+
+        let result: serde_json::Value = self.get("/api/v1/debug/vector/count", &params).await?;
+        let count = result["count"]
+            .as_u64()
+            .ok_or_else(|| Error::Parse("Missing count in response".to_string()))?;
+
+        Ok(count)
     }
 }

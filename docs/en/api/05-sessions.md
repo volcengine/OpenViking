@@ -328,6 +328,71 @@ openviking session add-message a1b2c3d4 --role user --content "How do I authenti
 
 ---
 
+### used()
+
+Record actually used contexts and skills in the session. When `commit()` is called, `active_count` is updated based on this usage data.
+
+**Parameters**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| contexts | List[str] | No | None | List of context URIs that were actually used |
+| skill | Dict[str, Any] | No | None | Skill usage record with keys: `uri`, `input`, `output`, `success` |
+
+**Python SDK (Embedded / HTTP)**
+
+```python
+session = client.session(session_id="a1b2c3d4")
+session.load()
+
+# Record used contexts
+session.used(contexts=["viking://resources/docs/auth/"])
+
+# Record used skill
+session.used(skill={
+    "uri": "viking://skills/search-web/",
+    "input": {"query": "OAuth"},
+    "output": "Results...",
+    "success": True
+})
+```
+
+**HTTP API**
+
+```
+POST /api/v1/sessions/{session_id}/used
+```
+
+```bash
+# Record used contexts
+curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{"contexts": ["viking://resources/docs/auth/"]}'
+
+# Record used skill
+curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{"skill": {"uri": "viking://skills/search-web/", "input": {"query": "OAuth"}, "output": "Results...", "success": true}}'
+```
+
+**Response**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "session_id": "a1b2c3d4",
+    "contexts_used": 1,
+    "skills_used": 0
+  },
+  "time": 0.1
+}
+```
+
+---
+
 ### commit()
 
 Commit a session by archiving messages and extracting memories.
@@ -501,7 +566,13 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/messages \
   -H "X-API-Key: your-key" \
   -d '{"role": "assistant", "content": "Based on the documentation, you can configure embedding..."}'
 
-# Step 5: Commit session
+# Step 5: Record used contexts
+curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{"contexts": ["viking://resources/docs/embedding/"]}'
+
+# Step 6: Commit session
 curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/commit \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key"

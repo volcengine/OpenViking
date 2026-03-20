@@ -7,14 +7,14 @@ Session as Context: Sessions integrated into L0/L1/L2 system.
 
 import json
 import re
-import time
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from uuid import uuid4
 
 from openviking.message import Message, Part
 from openviking.server.identity import RequestContext, Role
+from openviking.telemetry import get_current_telemetry
 from openviking.utils.time_utils import get_current_timestamp
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger, run_async
@@ -91,13 +91,6 @@ class Session:
         self._compression: SessionCompression = SessionCompression()
         self._stats: SessionStats = SessionStats()
         self._loaded = False
-
-        # Temp URI management for COW pattern
-        self._temp_base_uri: Optional[str] = None
-        self._session_temp_uri: Optional[str] = None
-        self._user_temp_uri: Optional[str] = None
-        self._agent_temp_uri: Optional[str] = None
-        self._temp_created_at: Optional[float] = None
 
         logger.info(f"Session created: {self.session_id} for user {self.user}")
 
@@ -227,7 +220,19 @@ class Session:
         self._update_message_in_jsonl()
 
     def commit(self) -> Dict[str, Any]:
-        """Commit session: create archive, extract memories, persist."""
+        """Sync wrapper for commit_async()."""
+        return run_async(self.commit_async())
+
+    async def commit_async(self) -> Dict[str, Any]:
+        """Async commit session: two-phase approach.
+
+        Phase 1 (Archive): Write archive, clear messages.
+        Phase 2 (Memory, redo-log protected): Extract memories, write, enqueue.
+        """
+        import uuid
+
+        from openviking.storage.transaction import get_lock_manager
+
         result = {
             "session_id": self.session_id,
             "status": "committed",
@@ -237,279 +242,94 @@ class Session:
             "stats": None,
         }
         if not self._messages:
+            get_current_telemetry().set("memory.extracted", 0)
             return result
 
-        # 1. Archive current messages
+        # ===== Preparation =====
         self._compression.compression_index += 1
         messages_to_archive = self._messages.copy()
 
-        summary = self._generate_archive_summary(messages_to_archive)
+        summary = await self._generate_archive_summary_async(messages_to_archive)
         archive_abstract = self._extract_abstract_from_summary(summary)
         archive_overview = summary
 
-        self._write_archive(
+        # ===== Phase 1: Archive (no lock) =====
+        archive_uri = (
+            f"{self._session_uri}/history/archive_{self._compression.compression_index:03d}"
+        )
+        await self._write_archive_async(
             index=self._compression.compression_index,
             messages=messages_to_archive,
             abstract=archive_abstract,
             overview=archive_overview,
         )
+        await self._write_to_agfs_async(messages=[])
+        self._messages.clear()
 
         self._compression.original_count += len(messages_to_archive)
         result["archived"] = True
-
-        self._messages.clear()
         logger.info(
-            f"Archived: {len(messages_to_archive)} messages → history/archive_{self._compression.compression_index:03d}/"
+            f"Archived: {len(messages_to_archive)} messages → "
+            f"history/archive_{self._compression.compression_index:03d}/"
         )
 
-        # 2. Extract long-term memories
+        # ===== Phase 2: Memory extraction + write (redo-log protected) =====
+        redo_log = get_lock_manager().redo_log
+        task_id = str(uuid.uuid4())
+        redo_log.write_pending(
+            task_id,
+            {
+                "archive_uri": archive_uri,
+                "session_uri": self._session_uri,
+                "account_id": self.ctx.account_id,
+                "user_id": self.ctx.user.user_id,
+                "agent_id": self.ctx.user.agent_id,
+                "role": self.ctx.role.value,
+            },
+        )
+
         if self._session_compressor:
             logger.info(
                 f"Starting memory extraction from {len(messages_to_archive)} archived messages"
             )
-            memories = run_async(
-                self._session_compressor.extract_long_term_memories(
-                    messages=messages_to_archive,
-                    user=self.user,
-                    session_id=self.session_id,
-                    ctx=self.ctx,
-                )
-            )
-            logger.info(f"Extracted {len(memories)} memories")
-            result["memories_extracted"] = len(memories)
-            self._stats.memories_extracted += len(memories)
-
-        # 3. Write current messages to AGFS
-        self._write_to_agfs(self._messages)
-
-        # 4. Create relations
-        self._write_relations()
-
-        # 5. Update active_count
-        active_count_updated = self._update_active_counts()
-        result["active_count_updated"] = active_count_updated
-
-        # 6. Update statistics
-        self._stats.compression_count = self._compression.compression_index
-        result["stats"] = {
-            "total_turns": self._stats.total_turns,
-            "contexts_used": self._stats.contexts_used,
-            "skills_used": self._stats.skills_used,
-            "memories_extracted": self._stats.memories_extracted,
-        }
-
-        self._stats.total_tokens = 0
-        logger.info(f"Session {self.session_id} committed")
-        return result
-
-    def _create_temp_uris(self) -> Tuple[str, str, str, str]:
-        """Create temp URIs for session, user and agent directories.
-
-        Temp URI structure matches target URI structure for Semantic DAG recursive processing:
-        - Session: viking://temp/session/{user_space}/{session_id}/commit_{uuid}/session/{user_space}/{session_id}/
-        - User: viking://temp/session/{user_space}/{session_id}/commit_{uuid}/user/{user_space}/
-        - Agent: viking://temp/session/{user_space}/{session_id}/commit_{uuid}/agent/{agent_space}/
-
-        Returns:
-            (temp_base_uri, session_temp_uri, user_temp_uri, agent_temp_uri)
-        """
-        temp_base_uri = (
-            f"viking://temp/session/"
-            f"{self.user.user_space_name()}/"
-            f"{self.session_id}/"
-            f"commit_{uuid4().hex[:8]}"
-        )
-
-        # Match target URI structure for Semantic DAG recursive processing
-        session_temp_uri = (
-            f"{temp_base_uri}/session/{self.user.user_space_name()}/{self.session_id}"
-        )
-        user_temp_uri = f"{temp_base_uri}/user/{self.user.user_space_name()}"
-        agent_temp_uri = f"{temp_base_uri}/agent/{self.user.agent_space_name()}"
-
-        self._temp_base_uri = temp_base_uri
-        self._session_temp_uri = session_temp_uri
-        self._user_temp_uri = user_temp_uri
-        self._agent_temp_uri = agent_temp_uri
-        self._temp_created_at = time.time()
-
-        return temp_base_uri, session_temp_uri, user_temp_uri, agent_temp_uri
-
-    async def _cleanup_temp_uris(self) -> None:
-        """Clean up all temp directories after commit."""
-        if self._temp_base_uri:
-            try:
-                await self._viking_fs.delete_temp(self._temp_base_uri, ctx=self.ctx)
-                logger.info(f"Cleaned up temp base: {self._temp_base_uri}")
-            except Exception as e:
-                logger.warning(f"Failed to cleanup temp {self._temp_base_uri}: {e}")
-            finally:
-                self._temp_base_uri = None
-                self._session_temp_uri = None
-                self._user_temp_uri = None
-                self._agent_temp_uri = None
-                self._temp_created_at = None
-
-    async def commit_async(self) -> Dict[str, Any]:
-        """Async commit session with Copy-on-Write pattern.
-
-        Process:
-        1. Copy: Copy existing session, user and agent directories to temp
-        2. Write: Make all changes in temp
-        3. Semantic: Trigger semantic processing
-        4. Switch: Atomically switch from temp to target (handled by SemanticProcessor)
-        """
-        result = {
-            "session_id": self.session_id,
-            "status": "committed",
-            "memories_extracted": 0,
-            "active_count_updated": 0,
-            "archived": False,
-            "temp_base_uri": None,
-            "session_temp_uri": None,
-            "user_temp_uri": None,
-            "agent_temp_uri": None,
-            "semantic_msg_id": None,
-            "stats": None,
-        }
-
-        if not self._messages:
-            return result
-
-        # ========== Phase 1: Copy ==========
-        temp_base_uri, session_temp_uri, user_temp_uri, agent_temp_uri = self._create_temp_uris()
-        result["temp_base_uri"] = temp_base_uri
-        result["session_temp_uri"] = session_temp_uri
-        result["user_temp_uri"] = user_temp_uri
-        result["agent_temp_uri"] = agent_temp_uri
-
-        try:
-            # 1.1 Copy existing session to temp
-            logger.info(f"Copying session {self.session_id} to temp: {session_temp_uri}")
-            try:
-                await self._viking_fs.copy_directory(
-                    from_uri=self._session_uri,
-                    to_uri=session_temp_uri,
-                    ctx=self.ctx,
-                )
-                logger.info(f"Session copied to temp: {session_temp_uri}")
-            except Exception as e:
-                if "not found" in str(e).lower():
-                    logger.info(f"Session {self.session_id} not found, creating new temp")
-                    await self._viking_fs.mkdir(session_temp_uri, exist_ok=True, ctx=self.ctx)
-                else:
-                    raise
-
-            # 1.2 Copy existing user directory to temp
-            user_uri = f"viking://user/{self.user.user_space_name()}"
-            logger.info(f"Copying user directory to temp: {user_temp_uri}")
-            try:
-                await self._viking_fs.copy_directory(
-                    from_uri=user_uri,
-                    to_uri=user_temp_uri,
-                    ctx=self.ctx,
-                )
-                logger.info(f"User directory copied to temp: {user_temp_uri}")
-            except Exception as e:
-                if "not found" in str(e).lower():
-                    logger.info("User directory not found, creating new temp")
-                    await self._viking_fs.mkdir(user_temp_uri, exist_ok=True, ctx=self.ctx)
-                else:
-                    raise
-
-            # 1.3 Copy existing agent directory to temp
-            agent_uri = f"viking://agent/{self.user.agent_space_name()}"
-            logger.info(f"Copying agent directory to temp: {agent_temp_uri}")
-            try:
-                await self._viking_fs.copy_directory(
-                    from_uri=agent_uri,
-                    to_uri=agent_temp_uri,
-                    ctx=self.ctx,
-                )
-                logger.info(f"Agent directory copied to temp: {agent_temp_uri}")
-            except Exception as e:
-                if "not found" in str(e).lower():
-                    logger.info("Agent directory not found, creating new temp")
-                    await self._viking_fs.mkdir(agent_temp_uri, exist_ok=True, ctx=self.ctx)
-                else:
-                    raise
-
-        except Exception as e:
-            logger.error(f"Failed to copy directories to temp: {e}")
-            await self._cleanup_temp_uris()
-            raise
-
-        # ========== Phase 2: Write (all changes in temp) ==========
-        try:
-            # 2.1 Archive current messages to temp
-            self._compression.compression_index += 1
-            messages_to_archive = self._messages.copy()
-
-            await self._write_archive_to_temp(
-                temp_uri=session_temp_uri,
-                index=self._compression.compression_index,
+            memories = await self._session_compressor.extract_long_term_memories(
                 messages=messages_to_archive,
                 user=self.user,
                 session_id=self.session_id,
                 ctx=self.ctx,
-                strict_extract_errors=True,
             )
+            logger.info(f"Extracted {len(memories)} memories")
+            result["memories_extracted"] = len(memories)
+            self._stats.memories_extracted += len(memories)
+            get_current_telemetry().set("memory.extracted", len(memories))
 
-            self._compression.original_count += len(messages_to_archive)
-            result["archived"] = True
+        await self._write_to_agfs_async(self._messages)
+        await self._write_relations_async()
 
-            self._messages.clear()
-            logger.info(
-                f"Archived: {len(messages_to_archive)} messages → "
-                f"{session_temp_uri}/history/archive_{self._compression.compression_index:03d}/"
+        # Enqueue semantic processing directly
+        from openviking.storage.queuefs import get_queue_manager
+        from openviking.storage.queuefs.semantic_msg import SemanticMsg
+
+        queue_manager = get_queue_manager()
+        if queue_manager:
+            msg = SemanticMsg(
+                uri=self._session_uri,
+                context_type="memory",
+                account_id=self.ctx.account_id,
+                user_id=self.ctx.user.user_id,
+                agent_id=self.ctx.user.agent_id,
+                role=self.ctx.role.value,
             )
+            semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC)
+            await semantic_queue.enqueue(msg)
 
-            # 2.2 Extract long-term memories (to temp user and agent directories)
-            if self._session_compressor:
-                logger.info(
-                    f"Starting memory extraction from {len(messages_to_archive)} archived messages"
-                )
-                memories = await self._session_compressor.extract_long_term_memories(
-                    messages=messages_to_archive,
-                    user=self.user,
-                    session_id=self.session_id,
-                    ctx=self.ctx,
-                    user_temp_uri=user_temp_uri,
-                    agent_temp_uri=agent_temp_uri,
-                )
-                logger.info(f"Extracted {len(memories)} memories to temp directories")
-                result["memories_extracted"] = len(memories)
-                self._stats.memories_extracted += len(memories)
+        redo_log.mark_done(task_id)
 
-            # 2.3 Write current messages to temp
-            await self._write_messages_to_temp(session_temp_uri, self._messages)
+        # Update active_count
+        active_count_updated = await self._update_active_counts_async()
+        result["active_count_updated"] = active_count_updated
 
-            logger.info(f"Session changes written to temp: {session_temp_uri}")
-            # 2.5 Update active_count
-            active_count_updated = await self._update_active_counts_async()
-            result["active_count_updated"] = active_count_updated
-        except Exception as e:
-            logger.error(f"Failed to write changes to temp: {e}")
-            await self._cleanup_temp_uris()
-            raise
-
-        # ========== Phase 3: Semantic = Switch ===========
-        try:
-            semantic_msg_ids = await self._enqueue_to_semantic_queue(
-                session_temp_uri=session_temp_uri,
-                user_temp_uri=user_temp_uri,
-                agent_temp_uri=agent_temp_uri,
-            )
-
-            logger.info(f"Session, user, agent enqueued to SemanticQueue: {semantic_msg_ids}")
-            result["semantic_msg_ids"] = semantic_msg_ids
-
-        except Exception as e:
-            logger.error(f"Failed to enqueue to SemanticQueue: {e}")
-            await self._cleanup_temp_uris()
-            raise
-
-        # ========== Update statistics ==========
+        # Update statistics
         self._stats.compression_count = self._compression.compression_index
         result["stats"] = {
             "total_turns": self._stats.total_turns,
@@ -519,7 +339,7 @@ class Session:
         }
 
         self._stats.total_tokens = 0
-        logger.info(f"Session {self.session_id} committed (async with COW pattern)")
+        logger.info(f"Session {self.session_id} committed (async)")
         return result
 
     def _update_active_counts(self) -> int:
@@ -702,105 +522,6 @@ class Session:
         )
 
         logger.debug(f"Written archive: {archive_uri}")
-
-    async def _write_archive_to_temp(
-        self,
-        temp_uri: str,
-        index: int,
-        messages: List[Message],
-    ) -> None:
-        """Write archive to temp directory.
-
-        Note: .abstract.md and .overview.md will be generated by Semantic DAG.
-        """
-        archive_uri = f"{temp_uri}/history/archive_{index:03d}"
-
-        lines = [m.to_jsonl() for m in messages]
-        await self._viking_fs.write_file(
-            uri=f"{archive_uri}/messages.jsonl",
-            content="\n".join(lines) + "\n",
-            ctx=self.ctx,
-        )
-
-        # Note: .abstract.md and .overview.md will be generated by Semantic DAG
-        # No need to manually create them here
-
-        logger.debug(f"Written archive to temp: {archive_uri}")
-
-    async def _write_messages_to_temp(self, temp_uri: str, messages: List[Message]) -> None:
-        """Write current messages to temp directory."""
-        lines = [m.to_jsonl() for m in messages]
-        content = "\n".join(lines) + "\n" if lines else ""
-
-        await self._viking_fs.write_file(
-            uri=f"{temp_uri}/messages.jsonl",
-            content=content,
-            ctx=self.ctx,
-        )
-
-    async def _enqueue_to_semantic_queue(
-        self,
-        session_temp_uri: str,
-        user_temp_uri: str,
-        agent_temp_uri: str,
-    ) -> List[str]:
-        """Enqueue session, user, and agent to SemanticQueue for L0/L1 generation.
-
-        The SemanticProcessor will handle:
-        1. Generate L0/L1 for session, user and agent directories
-        2. Atomically switch temp URIs to target URIs
-        3. Create usage relations
-        4. Clean up temp URIs
-
-        Returns:
-            List of message IDs [session_msg_id, user_msg_id, agent_msg_id]
-        """
-        from openviking.storage.queuefs import SemanticMsg, get_queue_manager
-
-        queue_manager = get_queue_manager()
-        semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
-
-        user_target_uri = f"viking://user/{self.user.user_space_name()}"
-        agent_target_uri = f"viking://agent/{self.user.agent_space_name()}"
-
-        session_msg = SemanticMsg(
-            uri=session_temp_uri,
-            context_type="memory",
-            target_uri=self._session_uri,
-            account_id=self.ctx.account_id,
-            user_id=self.ctx.user.user_id,
-            agent_id=self.ctx.user.agent_id,
-            role=self.ctx.role.value,
-            recursive=True,
-        )
-
-        user_msg = SemanticMsg(
-            uri=user_temp_uri,
-            context_type="memory",
-            target_uri=user_target_uri,
-            account_id=self.ctx.account_id,
-            user_id=self.ctx.user.user_id,
-            agent_id=self.ctx.user.agent_id,
-            role=self.ctx.role.value,
-            recursive=True,
-        )
-
-        agent_msg = SemanticMsg(
-            uri=agent_temp_uri,
-            context_type="memory",
-            target_uri=agent_target_uri,
-            account_id=self.ctx.account_id,
-            user_id=self.ctx.user.user_id,
-            agent_id=self.ctx.user.agent_id,
-            role=self.ctx.role.value,
-            recursive=True,
-        )
-
-        await semantic_queue.enqueue(session_msg)
-        await semantic_queue.enqueue(user_msg)
-        await semantic_queue.enqueue(agent_msg)
-
-        return [session_msg.id, user_msg.id, agent_msg.id]
 
     async def _write_archive_async(
         self,

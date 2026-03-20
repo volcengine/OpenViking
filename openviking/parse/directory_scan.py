@@ -242,7 +242,9 @@ def scan_directory(
             sub = dir_path / d
             skip, reason = _should_skip_directory(sub, root, ignore_dirs_set)
             if skip:
-                result.skipped.append(f"{sub.relative_to(root)} ({reason})")
+                skipped_path = str(sub.relative_to(root))
+                skipped_path = _normalize_rel_path(skipped_path)
+                result.skipped.append(f"{skipped_path} ({reason})")
             else:
                 kept.append(d)
         dir_names[:] = kept
@@ -269,7 +271,7 @@ def scan_directory(
 
             classification = _classify_file(file_path, effective_registry)
             classified = ClassifiedFile(
-                path=file_path, rel_path=rel_path, classification=classification
+                path=file_path, rel_path=rel_path_norm, classification=classification
             )
             if classification == CLASS_PROCESSABLE:
                 result.processable.append(classified)

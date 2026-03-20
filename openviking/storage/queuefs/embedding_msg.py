@@ -10,17 +10,20 @@ from uuid import uuid4
 class EmbeddingMsg:
     message: Union[str, List[Dict[str, Any]]]
     context_data: Dict[str, Any]
+    telemetry_id: str = ""
     semantic_msg_id: Optional[str] = None
 
     def __init__(
         self,
         message: Union[str, List[Dict[str, Any]]],
         context_data: Dict[str, Any],
+        telemetry_id: str = "",
         semantic_msg_id: Optional[str] = None,
     ):
         self.id = str(uuid4())
         self.message = message
         self.context_data = context_data
+        self.telemetry_id = telemetry_id
         self.semantic_msg_id = semantic_msg_id
 
     def to_dict(self) -> Dict[str, Any]:
@@ -37,6 +40,7 @@ class EmbeddingMsg:
         obj = EmbeddingMsg(
             message=data["message"],
             context_data=data["context_data"],
+            telemetry_id=data.get("telemetry_id", ""),
             semantic_msg_id=data.get("semantic_msg_id"),
         )
         obj.id = data.get("id", obj.id)

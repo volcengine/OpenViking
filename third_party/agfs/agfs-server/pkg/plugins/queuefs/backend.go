@@ -24,8 +24,17 @@ type QueueBackend interface {
 	// Enqueue adds a message to a queue
 	Enqueue(queueName string, msg QueueMessage) error
 
-	// Dequeue removes and returns the first message from a queue
+	// Dequeue marks the first pending message as 'processing' and returns it.
+	// Call Ack after successful processing to permanently delete the message.
 	Dequeue(queueName string) (QueueMessage, bool, error)
+
+	// Ack permanently deletes a message that has been successfully processed.
+	Ack(queueName string, messageID string) error
+
+	// RecoverStale resets messages stuck in 'processing' state back to 'pending'.
+	// staleSec: minimum age in seconds; pass 0 to reset all processing messages.
+	// Returns the number of messages recovered.
+	RecoverStale(staleSec int64) (int, error)
 
 	// Peek returns the first message without removing it
 	Peek(queueName string) (QueueMessage, bool, error)
@@ -122,6 +131,16 @@ func (b *MemoryBackend) Dequeue(queueName string) (QueueMessage, bool, error) {
 	msg := queue.messages[0]
 	queue.messages = queue.messages[1:]
 	return msg, true, nil
+}
+
+// Ack is a no-op for the memory backend (messages are already removed on Dequeue).
+func (b *MemoryBackend) Ack(queueName string, messageID string) error {
+	return nil
+}
+
+// RecoverStale is a no-op for the memory backend (no persistence across restarts).
+func (b *MemoryBackend) RecoverStale(staleSec int64) (int, error) {
+	return 0, nil
 }
 
 func (b *MemoryBackend) Peek(queueName string) (QueueMessage, bool, error) {
@@ -343,6 +362,16 @@ func (b *TiDBBackend) Enqueue(queueName string, msg QueueMessage) error {
 	}
 
 	return nil
+}
+
+// Ack is not yet implemented for TiDB backend (messages are already soft-deleted on Dequeue).
+func (b *TiDBBackend) Ack(queueName string, messageID string) error {
+	return nil
+}
+
+// RecoverStale is not yet implemented for TiDB backend.
+func (b *TiDBBackend) RecoverStale(staleSec int64) (int, error) {
+	return 0, nil
 }
 
 func (b *TiDBBackend) Dequeue(queueName string) (QueueMessage, bool, error) {

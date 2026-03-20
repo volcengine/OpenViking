@@ -4,6 +4,18 @@
 """Tests for search endpoints: find, search, grep, glob."""
 
 import httpx
+import pytest
+
+from openviking.models.embedder.base import EmbedResult
+
+
+@pytest.fixture(autouse=True)
+def fake_query_embedder(service):
+    class FakeEmbedder:
+        def embed(self, text: str, is_query: bool = False) -> EmbedResult:
+            return EmbedResult(dense_vector=[0.1, 0.2, 0.3])
+
+    service.viking_fs.query_embedder = FakeEmbedder()
 
 
 async def test_find_basic(client_with_resource):
@@ -16,6 +28,8 @@ async def test_find_basic(client_with_resource):
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"] is not None
+    assert "usage" not in body
+    assert "telemetry" not in body
 
 
 async def test_find_with_target_uri(client_with_resource):
@@ -79,6 +93,80 @@ async def test_search_with_session(client_with_resource):
     )
     assert resp.status_code == 200
     assert resp.json()["status"] == "ok"
+
+
+async def test_find_telemetry_metrics(client_with_resource):
+    client, _ = client_with_resource
+    resp = await client.post(
+        "/api/v1/search/find",
+        json={"query": "sample document", "limit": 5, "telemetry": True},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    summary = body["telemetry"]["summary"]
+    assert summary["operation"] == "search.find"
+    assert "duration_ms" in summary
+    assert {"total", "llm", "embedding"}.issubset(summary["tokens"].keys())
+    assert "vector" in summary
+    assert summary["vector"]["searches"] >= 0
+    assert "queue" not in summary
+    assert "semantic_nodes" not in summary
+    assert "memory" not in summary
+    assert "usage" not in body
+    assert body["telemetry"]["id"]
+    assert body["telemetry"]["id"].startswith("tm_")
+
+
+async def test_search_telemetry_metrics(client_with_resource):
+    client, _ = client_with_resource
+    resp = await client.post(
+        "/api/v1/search/search",
+        json={"query": "sample document", "limit": 5, "telemetry": True},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    summary = body["telemetry"]["summary"]
+    assert summary["operation"] == "search.search"
+    assert summary["vector"]["returned"] >= 0
+    assert "queue" not in summary
+    assert "semantic_nodes" not in summary
+    assert "memory" not in summary
+
+
+async def test_find_summary_only_telemetry(client_with_resource):
+    client, _ = client_with_resource
+    resp = await client.post(
+        "/api/v1/search/find",
+        json={
+            "query": "sample document",
+            "limit": 5,
+            "telemetry": {"summary": True},
+        },
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["telemetry"]["summary"]["operation"] == "search.find"
+    assert "usage" not in body
+    assert "events" not in body["telemetry"]
+    assert "truncated" not in body["telemetry"]
+    assert "dropped" not in body["telemetry"]
+
+
+async def test_find_rejects_events_telemetry_request(client_with_resource):
+    client, _ = client_with_resource
+    resp = await client.post(
+        "/api/v1/search/find",
+        json={
+            "query": "sample document",
+            "limit": 5,
+            "telemetry": {"summary": False, "events": True},
+        },
+    )
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "INVALID_ARGUMENT"
+    assert "events" in body["error"]["message"]
 
 
 async def test_grep(client_with_resource):

@@ -1,9 +1,9 @@
 import asyncio
 import hashlib
-from typing import List, Dict, Any, Optional
+import time
+from typing import Any, Dict, List, Optional
 
 from loguru import logger
-import time
 
 import openviking as ov
 from vikingbot.config.loader import load_config
@@ -30,6 +30,8 @@ class VikingClient:
             self.client = ov.AsyncHTTPClient(
                 url=openviking_config.server_url,
                 api_key=openviking_config.root_api_key,
+                account=openviking_config.account_id,
+                user=openviking_config.admin_user_id,
                 agent_id=agent_id,
             )
             self.agent_id = agent_id
@@ -91,7 +93,7 @@ class VikingClient:
         }
 
     def get_agent_space_name(self, user_id: str) -> str:
-        return hashlib.md5((user_id + self.agent_id).encode()).hexdigest()[:12]
+        return hashlib.md5(f"{user_id}:{self.agent_id}".encode()).hexdigest()[:12]
 
     async def find(self, query: str, target_uri: Optional[str] = None):
         """搜索资源"""
@@ -99,9 +101,7 @@ class VikingClient:
             return await self.client.find(query, target_uri=target_uri)
         return await self.client.find(query)
 
-    async def add_resource(
-        self, local_path: str, desc: str
-    ) -> Optional[Dict[str, Any]]:
+    async def add_resource(self, local_path: str, desc: str) -> Optional[Dict[str, Any]]:
         """添加资源到 Viking"""
         result = await self.client.add_resource(path=local_path, reason=desc)
         return result
@@ -327,7 +327,9 @@ class VikingClient:
 
     async def grep(self, uri: str, pattern: str, case_insensitive: bool = False) -> Dict[str, Any]:
         """通过模式（正则表达式）搜索内容"""
-        return await self.client.grep(uri, pattern, case_insensitive=case_insensitive, node_limit=10)
+        return await self.client.grep(
+            uri, pattern, case_insensitive=case_insensitive, node_limit=10
+        )
 
     async def glob(self, pattern: str, uri: Optional[str] = None) -> Dict[str, Any]:
         """通过 glob 模式匹配文件"""
@@ -337,7 +339,8 @@ class VikingClient:
         """提交会话"""
         import re
         import uuid
-        from openviking.message.part import Part, TextPart, ToolPart
+
+        from openviking.message.part import TextPart, ToolPart
 
         user_exists = await self._check_user_exists(user_id)
         if not user_exists:
@@ -423,7 +426,7 @@ class VikingClient:
                 continue
             await session.add_message(role=role, parts=parts)
 
-        result = await session.commit()
+        result = await session.commit_async()
         if client is not self.client:
             await client.close()
         logger.info(f"time spent: {time.time() - start}")
@@ -440,9 +443,9 @@ async def main_test():
     # res = client.list_resources()
     # res = await client.search("头有点疼", target_uri="viking://user/memories/")
     # res = await client.get_viking_memory_context("123", current_message="头疼", history=[])
-    res = await client.search_memory("你好", "default", "default")
+    res = await client.search_memory("你好", "user_1")
     # res = await client.list_resources("viking://resources/")
-    # res = await client.read_content("viking://user/default/memories/events", level="abstract")
+    # res = await client.read_content("viking://user/memories/profile.md", level="read")
     # res = await client.add_resource("https://github.com/volcengine/OpenViking", "ov代码")
     # res = await client.grep("viking://resources/", "viking", True)
     # res = await client.commit(

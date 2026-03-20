@@ -480,6 +480,42 @@ class DirectoryConfig(ParserConfig):
     preserve_structure: bool = True
 
 
+@dataclass
+class SemanticConfig:
+    """
+    Configuration for semantic processing (overview/abstract generation).
+
+    Controls prompt budget limits and output size constraints for the
+    SemanticProcessor pipeline.
+    """
+
+    max_file_content_chars: int = 30000
+    """Maximum characters of file content sent to LLM for summary generation."""
+
+    max_skeleton_chars: int = 12000
+    """Maximum characters of AST skeleton used for embedding (~3000 tokens)."""
+
+    max_overview_prompt_chars: int = 60000
+    """Maximum characters allowed in the overview generation prompt.
+    If exceeded, file summaries are batched and merged."""
+
+    overview_batch_size: int = 50
+    """Maximum number of file summaries per batch when splitting oversized prompts."""
+
+    abstract_max_chars: int = 256
+    """Maximum characters for generated abstracts."""
+
+    overview_max_chars: int = 4000
+    """Maximum characters for generated overviews."""
+
+    memory_chunk_chars: int = 2000
+    """Maximum characters per chunk when splitting long memories for vectorization.
+    Memories shorter than this are vectorized as a single record."""
+
+    memory_chunk_overlap: int = 200
+    """Character overlap between adjacent memory chunks for context continuity."""
+
+
 # Configuration registry for dynamic loading
 PARSER_CONFIG_REGISTRY = {
     "pdf": PDFConfig,

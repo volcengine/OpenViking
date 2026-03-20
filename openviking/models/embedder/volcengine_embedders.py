@@ -11,9 +11,27 @@ from openviking.models.embedder.base import (
     EmbedResult,
     HybridEmbedderBase,
     SparseEmbedderBase,
+    exponential_backoff_retry,
     truncate_and_normalize,
 )
+from openviking.telemetry import get_current_telemetry
 from openviking_cli.utils.logger import default_logger as logger
+
+
+def is_429_error(exception: Exception) -> bool:
+    """
+    判断异常是否为 429 限流错误
+
+    Args:
+        exception: 要检查的异常
+
+    Returns:
+        如果是 429 错误则返回 True，否则返回 False
+    """
+    exception_str = str(exception)
+    return (
+        "429" in exception_str or "TooManyRequests" in exception_str or "RateLimit" in exception_str
+    )
 
 
 def process_sparse_embedding(sparse_data: Any) -> Dict[str, float]:
@@ -108,11 +126,31 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
         except Exception:
             return 2048  # Default dimension
 
-    def embed(self, text: str) -> EmbedResult:
+    def _update_telemetry_token_usage(self, response) -> None:
+        usage = getattr(response, "usage", None)
+        if not usage:
+            return
+
+        def _usage_value(key: str, default: int = 0) -> int:
+            if isinstance(usage, dict):
+                return int(usage.get(key, default) or default)
+            return int(getattr(usage, key, default) or default)
+
+        prompt_tokens = _usage_value("prompt_tokens", 0)
+        total_tokens = _usage_value("total_tokens", prompt_tokens)
+        output_tokens = max(total_tokens - prompt_tokens, 0)
+        get_current_telemetry().add_token_usage_by_source(
+            "embedding",
+            prompt_tokens,
+            output_tokens,
+        )
+
+    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform dense embedding on text
 
         Args:
             text: Input text
+            is_query: Flag to indicate if this is a query embedding
 
         Returns:
             EmbedResult: Result containing dense_vector
@@ -120,28 +158,43 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
         Raises:
             RuntimeError: When API call fails
         """
-        try:
+
+        def _embed_call():
             if self.input_type == "multimodal":
                 # Use multimodal embeddings API
                 response = self.client.multimodal_embeddings.create(
                     input=[{"type": "text", "text": text}], model=self.model_name
                 )
+                self._update_telemetry_token_usage(response)
                 vector = response.data.embedding
             else:
                 # Use text embeddings API
                 response = self.client.embeddings.create(input=text, model=self.model_name)
+                self._update_telemetry_token_usage(response)
                 vector = response.data[0].embedding
 
             vector = truncate_and_normalize(vector, self.dimension)
             return EmbedResult(dense_vector=vector)
+
+        try:
+            return exponential_backoff_retry(
+                _embed_call,
+                max_wait=10.0,
+                base_delay=0.5,
+                max_delay=2.0,
+                jitter=True,
+                is_retryable=is_429_error,
+                logger=logger,
+            )
         except Exception as e:
             raise RuntimeError(f"Volcengine embedding failed: {str(e)}") from e
 
-    def embed_batch(self, texts: List[str]) -> List[EmbedResult]:
+    def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
         """Batch embedding
 
         Args:
             texts: List of texts
+            is_query: Flag to indicate if these are query embeddings
 
         Returns:
             List[EmbedResult]: List of embedding results
@@ -158,9 +211,11 @@ class VolcengineDenseEmbedder(DenseEmbedderBase):
                 response = self.client.multimodal_embeddings.create(
                     input=multimodal_inputs, model=self.model_name
                 )
+                self._update_telemetry_token_usage(response)
                 data = response.data
             else:
                 response = self.client.embeddings.create(input=texts, model=self.model_name)
+                self._update_telemetry_token_usage(response)
                 data = response.data
 
             return [
@@ -214,11 +269,12 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
             ark_kwargs["base_url"] = self.api_base
         self.client = volcenginesdkarkruntime.Ark(**ark_kwargs)
 
-    def embed(self, text: str) -> EmbedResult:
+    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform sparse embedding on text
 
         Args:
             text: Input text
+            is_query: Flag to indicate if this is a query embedding
 
         Returns:
             EmbedResult: Result containing sparse_vector
@@ -226,7 +282,8 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
         Raises:
             RuntimeError: When API call fails
         """
-        try:
+
+        def _embed_call():
             # Must use multimodal endpoint for sparse
             response = self.client.multimodal_embeddings.create(
                 input=[{"type": "text", "text": text}],
@@ -236,14 +293,26 @@ class VolcengineSparseEmbedder(SparseEmbedderBase):
             item = response.data
             sparse_vector = getattr(item, "sparse_embedding", None)
             return EmbedResult(sparse_vector=process_sparse_embedding(sparse_vector))
+
+        try:
+            return exponential_backoff_retry(
+                _embed_call,
+                max_wait=10.0,
+                base_delay=0.5,
+                max_delay=2.0,
+                jitter=True,
+                is_retryable=is_429_error,
+                logger=logger,
+            )
         except Exception as e:
             raise RuntimeError(f"Volcengine sparse embedding failed: {str(e)}") from e
 
-    def embed_batch(self, texts: List[str]) -> List[EmbedResult]:
+    def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
         """Batch sparse embedding
 
         Args:
             texts: List of texts
+            is_query: Flag to indicate if these are query embeddings
 
         Returns:
             List[EmbedResult]: List of embedding results
@@ -300,11 +369,12 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
         self.client = volcenginesdkarkruntime.Ark(**ark_kwargs)
         self._dimension = dimension or 2048
 
-    def embed(self, text: str) -> EmbedResult:
+    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform hybrid embedding on text
 
         Args:
             text: Input text
+            is_query: Flag to indicate if this is a query embedding
 
         Returns:
             EmbedResult: Result containing both dense_vector and sparse_vector
@@ -312,7 +382,8 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
         Raises:
             RuntimeError: When API call fails
         """
-        try:
+
+        def _embed_call():
             # Always use multimodal for hybrid to get both
 
             response = self.client.multimodal_embeddings.create(
@@ -327,14 +398,26 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
             return EmbedResult(
                 dense_vector=dense_vector, sparse_vector=process_sparse_embedding(sparse_vector)
             )
+
+        try:
+            return exponential_backoff_retry(
+                _embed_call,
+                max_wait=10.0,
+                base_delay=0.5,
+                max_delay=2.0,
+                jitter=True,
+                is_retryable=is_429_error,
+                logger=logger,
+            )
         except Exception as e:
             raise RuntimeError(f"Volcengine hybrid embedding failed: {str(e)}") from e
 
-    def embed_batch(self, texts: List[str]) -> List[EmbedResult]:
+    def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
         """Batch hybrid embedding
 
         Args:
             texts: List of texts
+            is_query: Flag to indicate if these are query embeddings
 
         Returns:
             List[EmbedResult]: List of embedding results
@@ -344,7 +427,7 @@ class VolcengineHybridEmbedder(HybridEmbedderBase):
         """
         if not texts:
             return []
-        return [self.embed(text) for text in texts]
+        return [self.embed(text, is_query=is_query) for text in texts]
 
     def get_dimension(self) -> int:
         return self._dimension

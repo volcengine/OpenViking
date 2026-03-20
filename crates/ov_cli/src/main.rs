@@ -96,6 +96,9 @@ enum Commands {
         /// Do not directly upload media files
         #[arg(long = "no-directly-upload-media", default_value_t = false)]
         no_directly_upload_media: bool,
+        /// Watch interval in minutes for automatic resource monitoring (0 = no monitoring)
+        #[arg(long, default_value = "0")]
+        watch_interval: f64,
     },
     /// Add a skill into OpenViking
     AddSkill {
@@ -261,6 +264,17 @@ enum Commands {
         /// Viking URI
         uri: String,
     },
+    /// Reindex content at URI (regenerates .abstract.md and .overview.md)
+    Reindex {
+        /// Viking URI
+        uri: String,
+        /// Force regenerate summaries even if they exist
+        #[arg(short, long)]
+        regenerate: bool,
+        /// Wait for reindex to complete
+        #[arg(long, default_value = "true")]
+        wait: bool,
+    },
     /// Download file to local path (supports binaries/images)
     Get {
         /// Viking URI
@@ -333,8 +347,8 @@ enum Commands {
     },
     /// Interactive TUI file explorer
     Tui {
-        /// Viking URI to start browsing (default: viking://)
-        #[arg(default_value = "viking://")]
+        /// Viking URI to start browsing (default: /)
+        #[arg(default_value = "/")]
         uri: String,
     },
     /// Chat with vikingbot agent
@@ -345,6 +359,9 @@ enum Commands {
         /// Session ID (defaults to machine unique ID)
         #[arg(short, long)]
         session: Option<String>,
+        /// Sender ID
+        #[arg(short, long, default_value = "user")]
+        sender: String,
         /// Stream the response (default: true)
         #[arg(long, default_value_t = true)]
         stream: bool,
@@ -386,6 +403,10 @@ enum ObserverCommands {
     Vikingdb,
     /// Get VLM status
     Vlm,
+    /// Get transaction system status
+    Transaction,
+    /// Get retrieval quality metrics
+    Retrieval,
     /// Get overall system status
     System,
 }
@@ -518,6 +539,7 @@ async fn main() {
             include,
             exclude,
             no_directly_upload_media,
+            watch_interval,
         } => {
             handle_add_resource(
                 path,
@@ -532,6 +554,7 @@ async fn main() {
                 include,
                 exclude,
                 no_directly_upload_media,
+                watch_interval,
                 ctx,
             )
             .await
@@ -591,13 +614,13 @@ async fn main() {
         Commands::Tui { uri } => {
             handle_tui(uri, ctx).await
         }
-        Commands::Chat { message, session, stream, no_format, no_history } => {
+        Commands::Chat { message, session, sender, stream, no_format, no_history } => {
             let session_id = session.or_else(|| config::get_or_create_machine_id().ok());
             let cmd = commands::chat::ChatCommand {
                 endpoint: std::env::var("VIKINGBOT_ENDPOINT").unwrap_or_else(|_| "http://localhost:1933/bot/v1".to_string()),
                 api_key: std::env::var("VIKINGBOT_API_KEY").ok(),
                 session: session_id,
-                user: "cli_user".to_string(),
+                sender,
                 message,
                 stream,
                 no_format,
@@ -613,6 +636,9 @@ async fn main() {
         Commands::Read { uri } => handle_read(uri, ctx).await,
         Commands::Abstract { uri } => handle_abstract(uri, ctx).await,
         Commands::Overview { uri } => handle_overview(uri, ctx).await,
+        Commands::Reindex { uri, regenerate, wait } => {
+            handle_reindex(uri, regenerate, wait, ctx).await
+        }
         Commands::Get { uri, local_path } => handle_get(uri, local_path, ctx).await,
         Commands::Find { query, uri, node_limit, threshold } => {
             handle_find(query, uri, node_limit, threshold, ctx).await
@@ -648,6 +674,7 @@ async fn handle_add_resource(
     include: Option<String>,
     exclude: Option<String>,
     no_directly_upload_media: bool,
+    watch_interval: f64,
     ctx: CliContext,
 ) -> Result<()> {
     let is_url = path.starts_with("http://") 
@@ -690,7 +717,17 @@ async fn handle_add_resource(
     let strict = !no_strict;
     let directly_upload_media = !no_directly_upload_media;
 
-    let client = ctx.get_client();
+    let effective_timeout = if wait {
+        timeout.unwrap_or(60.0).max(ctx.config.timeout)
+    } else {
+        ctx.config.timeout
+    };
+    let client = client::HttpClient::new(
+        &ctx.config.url,
+        ctx.config.api_key.clone(),
+        ctx.config.agent_id.clone(),
+        effective_timeout,
+    );
     commands::resources::add_resource(
         &client,
         &path,
@@ -705,6 +742,7 @@ async fn handle_add_resource(
         include,
         exclude,
         directly_upload_media,
+        watch_interval,
         ctx.output_format,
         ctx.compact,
     ).await
@@ -798,6 +836,12 @@ async fn handle_observer(cmd: ObserverCommands, ctx: CliContext) -> Result<()> {
         }
         ObserverCommands::Vlm => {
             commands::observer::vlm(&client, ctx.output_format, ctx.compact).await
+        }
+        ObserverCommands::Transaction => {
+            commands::observer::transaction(&client, ctx.output_format, ctx.compact).await
+        }
+        ObserverCommands::Retrieval => {
+            commands::observer::retrieval(&client, ctx.output_format, ctx.compact).await
         }
         ObserverCommands::System => {
             commands::observer::system(&client, ctx.output_format, ctx.compact).await
@@ -921,6 +965,11 @@ async fn handle_abstract(uri: String, ctx: CliContext) -> Result<()> {
 async fn handle_overview(uri: String, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     commands::content::overview(&client, &uri, ctx.output_format, ctx.compact).await
+}
+
+async fn handle_reindex(uri: String, regenerate: bool, wait: bool, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    commands::content::reindex(&client, &uri, regenerate, wait, ctx.output_format, ctx.compact).await
 }
 
 async fn handle_get(uri: String, local_path: String, ctx: CliContext) -> Result<()> {

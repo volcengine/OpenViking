@@ -25,6 +25,10 @@ add_executable(test_index_engine
     test_index_engine.cpp
 )
 
+if(NOT TARGET engine_impl)
+    message(FATAL_ERROR "engine_impl compatibility target was not created")
+endif()
+
 target_link_libraries(test_index_engine PRIVATE
     engine_impl
     Threads::Threads

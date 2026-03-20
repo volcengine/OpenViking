@@ -3,7 +3,6 @@
 """Embedding Task Tracker for tracking embedding task completion status."""
 
 import asyncio
-from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Optional
 
 from openviking_cli.utils.logger import get_logger
@@ -11,7 +10,6 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-@dataclass
 class EmbeddingTaskTracker:
     """Track embedding task completion status for each SemanticMsg.
 
@@ -21,8 +19,19 @@ class EmbeddingTaskTracker:
     """
 
     _instance: Optional["EmbeddingTaskTracker"] = None
-    _lock: asyncio.Lock = field(default_factory=asyncio.Lock)
-    _tasks: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    _initialized: bool = False
+
+    def __new__(cls) -> "EmbeddingTaskTracker":
+        if cls._instance is None:
+            cls._instance = super().__new__(cls)
+        return cls._instance
+
+    def __init__(self):
+        if self._initialized:
+            return
+        self._lock: asyncio.Lock = asyncio.Lock()
+        self._tasks: Dict[str, Dict[str, Any]] = {}
+        self._initialized = True
 
     @classmethod
     def get_instance(cls) -> "EmbeddingTaskTracker":
@@ -76,29 +85,6 @@ class EmbeddingTaskTracker:
                     exc_info=True,
                 )
 
-    async def increment(self, semantic_msg_id: str) -> Optional[int]:
-        """Increment the remaining task count for a SemanticMsg.
-
-        This method should be called when a new embedding task is added
-        for an already registered SemanticMsg.
-
-        Args:
-            semantic_msg_id: The ID of the SemanticMsg
-
-        Returns:
-            The remaining count after increment, or None if not found
-        """
-        async with self._lock:
-            if semantic_msg_id not in self._tasks:
-                return None
-
-            task_info = self._tasks[semantic_msg_id]
-            task_info["remaining"] += 1
-            task_info["total"] += 1
-            remaining = task_info["remaining"]
-
-        return remaining
-
     async def decrement(self, semantic_msg_id: str) -> Optional[int]:
         """Decrement the remaining task count for a SemanticMsg.
 
@@ -141,53 +127,3 @@ class EmbeddingTaskTracker:
                     exc_info=True,
                 )
         return remaining
-
-    async def get_status(self, semantic_msg_id: str) -> Optional[Dict[str, Any]]:
-        """Get the current status of a SemanticMsg's embedding tasks.
-
-        Args:
-            semantic_msg_id: The ID of the SemanticMsg
-
-        Returns:
-            Dict with 'remaining', 'total', 'metadata' or None if not found
-        """
-        async with self._lock:
-            if semantic_msg_id not in self._tasks:
-                return None
-            task_info = self._tasks[semantic_msg_id]
-            return {
-                "remaining": task_info["remaining"],
-                "total": task_info["total"],
-                "metadata": task_info.get("metadata", {}),
-            }
-
-    async def remove(self, semantic_msg_id: str) -> bool:
-        """Remove a SemanticMsg from the tracker.
-
-        Args:
-            semantic_msg_id: The ID of the SemanticMsg
-
-        Returns:
-            True if removed, False if not found
-        """
-        async with self._lock:
-            if semantic_msg_id in self._tasks:
-                del self._tasks[semantic_msg_id]
-                return True
-            return False
-
-    async def get_all_tracked(self) -> Dict[str, Dict[str, Any]]:
-        """Get all currently tracked SemanticMsgs.
-
-        Returns:
-            Dict of semantic_msg_id -> task info
-        """
-        async with self._lock:
-            return {
-                msg_id: {
-                    "remaining": info["remaining"],
-                    "total": info["total"],
-                    "metadata": info.get("metadata", {}),
-                }
-                for msg_id, info in self._tasks.items()
-            }

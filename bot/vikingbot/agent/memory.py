@@ -51,25 +51,22 @@ class MemoryStore:
 
     async def get_viking_memory_context(self, current_message: str, workspace_id: str, sender_id: str) -> str:
         try:
-            client = await VikingClient.create(agent_id=workspace_id)
             config = load_config().ov_server
             admin_user_id = config.admin_user_id
             user_id = sender_id if config.mode == "remote" else admin_user_id
-            start = time.time()
+            client = await VikingClient.create(agent_id=workspace_id)
+            admin_user_id = load_config().ov_server.admin_user_id
             result = await client.search_memory(current_message, user_id=user_id, agent_user_id=admin_user_id, limit=5)
-            cost = round(time.time() - start, 2)
             if not result:
-                logger.info(f"[USER_MEMORY]: search failed. cost {cost}")
                 return ""
             user_memory = self._parse_viking_memory(result["user_memory"])
-            # agent_memory = self._parse_viking_memory(result["agent_memory"])
-            logger.info(f"[USER_MEMORY]: search success. res: {user_memory[:100]}. cost {cost}")
+            agent_memory = self._parse_viking_memory(result["agent_memory"])
             return (
                 f"### user memories:\n{user_memory}\n"
-                # f"### agent memories:\n{agent_memory}"
+                f"### agent memories:\n{agent_memory}"
             )
         except Exception as e:
-            logger.warning(f"[USER_MEMORY]: search error, exception: {e}")
+            logger.error(f"[READ_USER_MEMORY]: search error. {e}")
             return ""
 
     async def get_viking_user_profile(self, workspace_id: str, user_id: str) -> str:

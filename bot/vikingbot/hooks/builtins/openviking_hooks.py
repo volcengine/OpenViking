@@ -38,42 +38,14 @@ class OpenVikingCompactHook(Hook):
         # Use global singleton client
         return await get_global_client()
 
-    def _filter_messages_by_sender(self, messages: list[dict], allow_from: list[str]) -> list[dict]:
-        """筛选出 sender_id 在 allow_from 列表中的消息"""
-        if not allow_from:
-            return []
-        return [msg for msg in messages if msg.get("sender_id") in allow_from]
-
-    def _get_channel_allow_from(self, session_key: SessionKey):
-        """根据 session_id 获取对应频道的 allow_from 配置"""
-        config = load_config()
-        if not config.read_only:
-            return True, []
-        allow_from = [config.ov_server.admin_user_id]
-        if not session_key or not config.channels:
-            return False, allow_from
-        # 查找对应类型的 channel config
-        for channel_config in config.channels_config.get_all_channels():
-            if channel_config and channel_config.type.value == session_key.type:
-                if hasattr(channel_config, "allow_from"):
-                    allow_from.extend(channel_config.allow_from)
-        return False, allow_from
 
     async def execute(self, context: HookContext, **kwargs) -> Any:
         vikingbot_session: Session = kwargs.get("session", {})
         session_id = context.session_key.safe_name()
 
         try:
-            is_shared, allow_from = self._get_channel_allow_from(context.session_key)
-            filtered_messages = vikingbot_session.messages
-            if not is_shared:
-                filtered_messages = self._filter_messages_by_sender(vikingbot_session.messages, allow_from)
-                if not filtered_messages:
-                    logger.info(f"No messages to commit openviking for session {session_id} (allow_from filter applied)")
-                    return {"success": True, "message": "No messages matched allow_from filter"}
-
             client = await self._get_client(context.workspace_id)
-            result = await client.commit(session_id, filtered_messages, load_config().ov_server.admin_user_id)
+            result = await client.commit(session_id, vikingbot_session.messages, load_config().ov_server.admin_user_id)
             return result
         except Exception as e:
             logger.exception(f"Failed to add message to OpenViking: {e}")

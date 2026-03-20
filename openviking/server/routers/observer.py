@@ -54,11 +54,11 @@ async def observer_queue(
 
 @router.get("/vikingdb")
 async def observer_vikingdb(
-    _ctx: RequestContext = Depends(get_request_context),
+    ctx: RequestContext = Depends(get_request_context),
 ):
     """Get VikingDB status."""
     service = get_service()
-    component = service.debug.observer.vikingdb
+    component = service.debug.observer.vikingdb(ctx=ctx)
     return Response(status="ok", result=_component_to_dict(component))
 
 
@@ -72,21 +72,31 @@ async def observer_vlm(
     return Response(status="ok", result=_component_to_dict(component))
 
 
-@router.get("/transaction")
-async def observer_transaction(
+@router.get("/lock")
+async def observer_lock(
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Get transaction system status."""
+    """Get lock system status."""
     service = get_service()
-    component = service.debug.observer.transaction
+    component = service.debug.observer.lock
+    return Response(status="ok", result=_component_to_dict(component))
+
+
+@router.get("/retrieval")
+async def observer_retrieval(
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Get retrieval quality metrics."""
+    service = get_service()
+    component = service.debug.observer.retrieval
     return Response(status="ok", result=_component_to_dict(component))
 
 
 @router.get("/system")
 async def observer_system(
-    _ctx: RequestContext = Depends(get_request_context),
+    ctx: RequestContext = Depends(get_request_context),
 ):
     """Get system overall status (includes all components)."""
     service = get_service()
-    status = service.debug.observer.system
+    status = service.debug.observer.system(ctx=ctx)
     return Response(status="ok", result=_system_to_dict(status))

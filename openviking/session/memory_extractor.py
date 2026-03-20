@@ -18,6 +18,7 @@ from openviking.core.context import Context, ContextType, Vectorize
 from openviking.prompts import render_prompt
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import get_viking_fs
+from openviking.telemetry import get_current_telemetry
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
@@ -161,7 +162,13 @@ class MemoryExtractor:
         if not user_text:
             return fallback
 
-        # Detect scripts that are largely language-unique first.
+        # Detect scripts that are largely language-unique.
+        # Require threshold to avoid misclassifying mixed-language texts
+        # (e.g., Chinese with a single Cyrillic letter).
+        total_chars = len(re.findall(r"\S", user_text))
+        if total_chars == 0:
+            return fallback
+
         counts = {
             "ko": len(re.findall(r"[\uac00-\ud7af]", user_text)),
             "ru": len(re.findall(r"[\u0400-\u04ff]", user_text)),
@@ -169,7 +176,8 @@ class MemoryExtractor:
         }
 
         detected, score = max(counts.items(), key=lambda item: item[1])
-        if score > 0:
+        # Threshold: at least 2 chars AND at least 10% of non-whitespace chars
+        if score >= 2 and score / total_chars >= 0.10:
             return detected
 
         # CJK disambiguation:
@@ -219,6 +227,7 @@ class MemoryExtractor:
         context: dict,
         user: UserIdentifier,
         session_id: str,
+        *,
         strict: bool = False,
     ) -> List[CandidateMemory]:
         """Extract memory candidates from messages.
@@ -232,6 +241,7 @@ class MemoryExtractor:
             logger.warning("LLM not available, skipping memory extraction")
             return []
 
+        telemetry = get_current_telemetry()
         messages = context["messages"]
         from openviking.message.part import ToolPart
 
@@ -243,42 +253,50 @@ class MemoryExtractor:
         )
 
         tool_parts = []
-        for msg in messages:
-            for part in getattr(msg, "parts", []):
-                if isinstance(part, ToolPart):
-                    tool_parts.append(part)
+        tool_stats_map = {}
+        skill_stats_map = {}
+        formatted_messages = ""
+        output_language = "en"
+        prompt = ""
 
-        tool_stats_map = collect_tool_stats(tool_parts)
-        skill_stats_map = collect_skill_stats(tool_parts)
+        with telemetry.measure("memory.extract.stage.prepare_inputs"):
+            for msg in messages:
+                for part in getattr(msg, "parts", []):
+                    if isinstance(part, ToolPart):
+                        tool_parts.append(part)
 
-        formatted_lines = []
-        for m in messages:
-            msg_content = self._format_message_with_parts(m)
-            if msg_content:
-                formatted_lines.append(f"[{m.role}]: {msg_content}")
+            formatted_lines = []
+            for m in messages:
+                msg_content = self._format_message_with_parts(m)
+                if msg_content:
+                    formatted_lines.append(f"[{m.role}]: {msg_content}")
 
-        formatted_messages = "\n".join(formatted_lines)
+            formatted_messages = "\n".join(formatted_lines)
 
-        if not formatted_messages:
-            logger.warning("No formatted messages, returning empty list")
-            return []
+            if not formatted_messages:
+                logger.warning("No formatted messages, returning empty list")
+                return []
 
-        config = get_openviking_config()
-        fallback_language = (config.language_fallback or "en").strip() or "en"
-        output_language = self._detect_output_language(
-            messages, fallback_language=fallback_language
-        )
+            config = get_openviking_config()
+            fallback_language = (config.language_fallback or "en").strip() or "en"
+            output_language = self._detect_output_language(
+                messages, fallback_language=fallback_language
+            )
 
-        prompt = render_prompt(
-            "compression.memory_extraction",
-            {
-                "summary": "",
-                "recent_messages": formatted_messages,
-                "user": user._user_id,
-                "feedback": "",
-                "output_language": output_language,
-            },
-        )
+            prompt = render_prompt(
+                "compression.memory_extraction",
+                {
+                    "summary": "",
+                    "recent_messages": formatted_messages,
+                    "user": user._user_id,
+                    "feedback": "",
+                    "output_language": output_language,
+                },
+            )
+
+        with telemetry.measure("memory.extract.stage.tool_skill_stats"):
+            tool_stats_map = collect_tool_stats(tool_parts)
+            skill_stats_map = collect_skill_stats(tool_parts)
 
         try:
             from openviking_cli.utils.llm import parse_json_from_response
@@ -290,13 +308,25 @@ class MemoryExtractor:
                 "recent_messages": formatted_messages,
             }
             logger.debug("Memory extraction LLM request summary: %s", request_summary)
-            response = await vlm.get_completion_async(prompt)
+            with telemetry.measure("memory.extract.stage.llm_extract"):
+                response = await vlm.get_completion_async(prompt)
             logger.debug("Memory extraction LLM raw response: %s", response)
-            data = parse_json_from_response(response) or {}
+            with telemetry.measure("memory.extract.stage.normalize_candidates"):
+                data = parse_json_from_response(response) or {}
+                if isinstance(data, list):
+                    logger.warning(
+                        "Memory extraction received list instead of dict; wrapping as memories"
+                    )
+                    data = {"memories": data}
+                elif not isinstance(data, dict):
+                    logger.warning(
+                        "Memory extraction received unexpected type %s; skipping",
+                        type(data).__name__,
+                    )
+                    data = {}
             logger.debug("Memory extraction LLM parsed payload: %s", data)
 
             candidates = []
-            # print(f"memories = {data.get('memories', [])}")
             for mem in data.get("memories", []):
                 category_str = mem.get("category", "patterns")
                 try:
@@ -306,80 +336,84 @@ class MemoryExtractor:
 
                 # 只在 tools/skills 时使用 ToolSkillCandidateMemory
                 if category in (MemoryCategory.TOOLS, MemoryCategory.SKILLS):
-                    llm_tool_name = mem.get("tool_name", "") or ""
-                    llm_skill_name = mem.get("skill_name", "") or ""
+                    with telemetry.measure("memory.extract.stage.tool_skill_stats"):
+                        llm_tool_name = mem.get("tool_name", "") or ""
+                        llm_skill_name = mem.get("skill_name", "") or ""
 
-                    tool_name = ""
-                    skill_name = ""
-                    stats = {}
+                        tool_name = ""
+                        skill_name = ""
+                        stats = {}
 
-                    if category == MemoryCategory.TOOLS:
-                        canonical_tool_name, _ = calibrate_tool_name(llm_tool_name, tool_parts)
-                        if not canonical_tool_name:
+                        if category == MemoryCategory.TOOLS:
+                            canonical_tool_name, _ = calibrate_tool_name(llm_tool_name, tool_parts)
+                            if not canonical_tool_name:
+                                continue
+                            tool_name = canonical_tool_name
+                            stats = tool_stats_map.get(tool_name, {})
+
+                        if category == MemoryCategory.SKILLS:
+                            canonical_skill_name, _ = calibrate_skill_name(
+                                llm_skill_name, tool_parts
+                            )
+                            if not canonical_skill_name:
+                                continue
+                            skill_name = canonical_skill_name
+                            stats = skill_stats_map.get(skill_name, {})
+
+                        call_time = stats.get("call_count", 0)
+                        if call_time == 0:
                             continue
-                        tool_name = canonical_tool_name
-                        stats = tool_stats_map.get(tool_name, {})
 
-                    if category == MemoryCategory.SKILLS:
-                        canonical_skill_name, _ = calibrate_skill_name(llm_skill_name, tool_parts)
-                        if not canonical_skill_name:
-                            continue
-                        skill_name = canonical_skill_name
-                        stats = skill_stats_map.get(skill_name, {})
-
-                    call_time = stats.get("call_count", 0)
-                    if call_time == 0:
-                        continue
-
-                    candidates.append(
-                        ToolSkillCandidateMemory(
-                            category=category,
-                            abstract=mem.get("abstract", ""),
-                            overview=mem.get("overview", ""),
-                            content=mem.get("content", ""),
-                            source_session=session_id,
-                            user=user,
-                            language=output_language,
-                            tool_name=tool_name,
-                            skill_name=skill_name,
-                            call_time=call_time,
-                            success_time=stats.get("success_time", 0),
-                            duration_ms=(
-                                stats.get("duration_ms", 0)
-                                if category == MemoryCategory.TOOLS
-                                else 0
-                            ),
-                            prompt_tokens=(
-                                stats.get("prompt_tokens", 0)
-                                if category == MemoryCategory.TOOLS
-                                else 0
-                            ),
-                            completion_tokens=(
-                                stats.get("completion_tokens", 0)
-                                if category == MemoryCategory.TOOLS
-                                else 0
-                            ),
-                            best_for=str(mem.get("best_for", "") or "").strip(),
-                            optimal_params=str(mem.get("optimal_params", "") or "").strip(),
-                            recommended_flow=str(mem.get("recommended_flow", "") or "").strip(),
-                            key_dependencies=str(mem.get("key_dependencies", "") or "").strip(),
-                            common_failures=str(mem.get("common_failures", "") or "").strip(),
-                            recommendation=str(mem.get("recommendation", "") or "").strip(),
+                        candidates.append(
+                            ToolSkillCandidateMemory(
+                                category=category,
+                                abstract=mem.get("abstract", ""),
+                                overview=mem.get("overview", ""),
+                                content=mem.get("content", ""),
+                                source_session=session_id,
+                                user=user,
+                                language=output_language,
+                                tool_name=tool_name,
+                                skill_name=skill_name,
+                                call_time=call_time,
+                                success_time=stats.get("success_time", 0),
+                                duration_ms=(
+                                    stats.get("duration_ms", 0)
+                                    if category == MemoryCategory.TOOLS
+                                    else 0
+                                ),
+                                prompt_tokens=(
+                                    stats.get("prompt_tokens", 0)
+                                    if category == MemoryCategory.TOOLS
+                                    else 0
+                                ),
+                                completion_tokens=(
+                                    stats.get("completion_tokens", 0)
+                                    if category == MemoryCategory.TOOLS
+                                    else 0
+                                ),
+                                best_for=str(mem.get("best_for", "") or "").strip(),
+                                optimal_params=str(mem.get("optimal_params", "") or "").strip(),
+                                recommended_flow=str(mem.get("recommended_flow", "") or "").strip(),
+                                key_dependencies=str(mem.get("key_dependencies", "") or "").strip(),
+                                common_failures=str(mem.get("common_failures", "") or "").strip(),
+                                recommendation=str(mem.get("recommendation", "") or "").strip(),
+                            )
                         )
-                    )
                 else:
                     # 现有逻辑不变，前向兼容
-                    candidates.append(
-                        CandidateMemory(
-                            category=category,
-                            abstract=mem.get("abstract", ""),
-                            overview=mem.get("overview", ""),
-                            content=mem.get("content", ""),
-                            source_session=session_id,
-                            user=user,
-                            language=output_language,
+                    with telemetry.measure("memory.extract.stage.normalize_candidates"):
+                        candidates.append(
+                            CandidateMemory(
+                                category=category,
+                                abstract=mem.get("abstract", ""),
+                                overview=mem.get("overview", ""),
+                                content=mem.get("content", ""),
+                                source_session=session_id,
+                                user=user,
+                                language=output_language,
+                            )
                         )
-                    )
 
             logger.info(
                 f"Extracted {len(candidates)} candidate memories (language={output_language})"
@@ -407,21 +441,8 @@ class MemoryExtractor:
         user: str,
         session_id: str,
         ctx: RequestContext,
-        user_temp_uri: Optional[str] = None,
-        agent_temp_uri: Optional[str] = None,
     ) -> Optional[Context]:
-        """Create Context object from candidate and persist to AGFS as .md file.
-
-        Args:
-            candidate: Candidate memory to create
-            user: User identifier
-            session_id: Session ID
-            ctx: Request context
-            user_temp_uri: Temp user URI (for COW pattern). If provided, user memories
-                          will be written to this temp location.
-            agent_temp_uri: Temp agent URI (for COW pattern). If provided, agent memories
-                           will be written to this temp location.
-        """
+        """Create Context object from candidate and persist to AGFS as .md file."""
         viking_fs = get_viking_fs()
         if not viking_fs:
             logger.warning("VikingFS not available, skipping memory creation")
@@ -431,22 +452,14 @@ class MemoryExtractor:
 
         # Special handling for profile: append to profile.md
         if candidate.category == MemoryCategory.PROFILE:
-            payload = await self._append_to_profile(
-                candidate, viking_fs, ctx=ctx, user_temp_uri=user_temp_uri
-            )
+            payload = await self._append_to_profile(candidate, viking_fs, ctx=ctx)
             if not payload:
                 return None
             user_space = ctx.user.user_space_name()
-            # Use temp user URI if provided (for COW pattern)
-            if user_temp_uri:
-                memory_uri = f"{user_temp_uri}/memories/profile.md"
-                parent_uri = f"{user_temp_uri}/memories"
-            else:
-                memory_uri = f"viking://user/{user_space}/memories/profile.md"
-                parent_uri = f"viking://user/{user_space}/memories"
+            memory_uri = f"viking://user/{user_space}/memories/profile.md"
             memory = Context(
                 uri=memory_uri,
-                parent_uri=parent_uri,
+                parent_uri=f"viking://user/{user_space}/memories",
                 is_leaf=True,
                 abstract=payload.abstract,
                 context_type=ContextType.MEMORY.value,
@@ -467,17 +480,9 @@ class MemoryExtractor:
             MemoryCategory.ENTITIES,
             MemoryCategory.EVENTS,
         ]:
-            # Use temp user URI if provided (for COW pattern)
-            if user_temp_uri:
-                parent_uri = f"{user_temp_uri}/{cat_dir}"
-            else:
-                parent_uri = f"viking://user/{ctx.user.user_space_name()}/{cat_dir}"
+            parent_uri = f"viking://user/{ctx.user.user_space_name()}/{cat_dir}"
         else:  # CASES, PATTERNS
-            # Use temp agent URI if provided (for COW pattern)
-            if agent_temp_uri:
-                parent_uri = f"{agent_temp_uri}/{cat_dir}"
-            else:
-                parent_uri = f"viking://agent/{ctx.user.agent_space_name()}/{cat_dir}"
+            parent_uri = f"viking://agent/{ctx.user.agent_space_name()}/{cat_dir}"
 
         # Generate file URI (store directly as .md file, no directory creation)
         memory_id = f"mem_{str(uuid4())}"
@@ -513,14 +518,9 @@ class MemoryExtractor:
         candidate: CandidateMemory,
         viking_fs,
         ctx: RequestContext,
-        user_temp_uri: Optional[str] = None,
     ) -> Optional[MergedMemoryPayload]:
         """Update user profile - always merge with existing content."""
-        # Use temp user URI if provided (for COW pattern)
-        if user_temp_uri:
-            uri = f"{user_temp_uri}/memories/profile.md"
-        else:
-            uri = f"viking://user/{ctx.user.user_space_name()}/memories/profile.md"
+        uri = f"viking://user/{ctx.user.user_space_name()}/memories/profile.md"
         existing = ""
         try:
             existing = await viking_fs.read_file(uri, ctx=ctx) or ""
@@ -620,11 +620,7 @@ class MemoryExtractor:
             return None
 
     async def _merge_tool_memory(
-        self,
-        tool_name: str,
-        candidate: CandidateMemory,
-        ctx: "RequestContext",
-        agent_temp_uri: Optional[str] = None,
+        self, tool_name: str, candidate: CandidateMemory, ctx: "RequestContext"
     ) -> Optional[Context]:
         """合并 Tool Memory，统计数据用 Python 累加"""
         if not tool_name or not tool_name.strip():
@@ -632,11 +628,7 @@ class MemoryExtractor:
             return None
 
         agent_space = ctx.user.agent_space_name()
-        # Use temp agent URI if provided (for COW pattern)
-        if agent_temp_uri:
-            uri = f"{agent_temp_uri}/memories/tools/{tool_name}.md"
-        else:
-            uri = f"viking://agent/{agent_space}/memories/tools/{tool_name}.md"
+        uri = f"viking://agent/{agent_space}/memories/tools/{tool_name}.md"
         viking_fs = get_viking_fs()
 
         if not viking_fs:
@@ -692,7 +684,7 @@ class MemoryExtractor:
                 tool_name, merged_stats, new_guidelines, fields=new_fields
             )
             await viking_fs.write_file(uri=uri, content=merged_content, ctx=ctx)
-            return self._create_tool_context(uri, candidate, ctx, agent_temp_uri=agent_temp_uri)
+            return self._create_tool_context(uri, candidate, ctx)
 
         existing_stats = self._parse_tool_statistics(existing)
         merged_stats = self._merge_tool_statistics(existing_stats, new_stats)
@@ -750,31 +742,7 @@ class MemoryExtractor:
             tool_name, merged_stats, merged_guidelines, fields=merged_fields
         )
         await viking_fs.write_file(uri=uri, content=merged_content, ctx=ctx)
-        return self._create_tool_context(
-            uri, candidate, ctx, abstract_override=abstract_override, agent_temp_uri=agent_temp_uri
-        )
-
-    async def _enqueue_semantic_for_parent(self, file_uri: str, ctx: "RequestContext") -> None:
-        """Enqueue semantic generation for parent directory."""
-        try:
-            from openviking.storage.queuefs import get_queue_manager
-            from openviking.storage.queuefs.semantic_msg import SemanticMsg
-
-            parent_uri = "/".join(file_uri.rsplit("/", 1)[:-1])
-            queue_manager = get_queue_manager()
-            semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
-            msg = SemanticMsg(
-                uri=parent_uri,
-                context_type="memory",
-                account_id=ctx.account_id,
-                user_id=ctx.user.user_id,
-                agent_id=ctx.user.agent_id,
-                role=ctx.role.value,
-            )
-            await semantic_queue.enqueue(msg)
-            logger.debug(f"Enqueued semantic generation for: {parent_uri}")
-        except Exception as e:
-            logger.warning(f"Failed to enqueue semantic generation for {file_uri}: {e}")
+        return self._create_tool_context(uri, candidate, ctx, abstract_override=abstract_override)
 
     def _compute_statistics_derived(self, stats: dict) -> dict:
         """计算派生统计数据（平均值、成功率）"""
@@ -1168,18 +1136,12 @@ class MemoryExtractor:
         candidate: CandidateMemory,
         ctx: "RequestContext",
         abstract_override: Optional[str] = None,
-        agent_temp_uri: Optional[str] = None,
     ) -> Context:
         """创建 Tool Memory 的 Context 对象"""
         agent_space = ctx.user.agent_space_name()
-        # Use temp agent URI if provided (for COW pattern)
-        if agent_temp_uri:
-            parent_uri = f"{agent_temp_uri}/memories/tools"
-        else:
-            parent_uri = f"viking://agent/{agent_space}/memories/tools"
         return Context(
             uri=uri,
-            parent_uri=parent_uri,
+            parent_uri=f"viking://agent/{agent_space}/memories/tools",
             is_leaf=True,
             abstract=abstract_override or candidate.abstract,
             context_type=ContextType.MEMORY.value,
@@ -1211,11 +1173,7 @@ class MemoryExtractor:
         return content.strip()
 
     async def _merge_skill_memory(
-        self,
-        skill_name: str,
-        candidate: CandidateMemory,
-        ctx: "RequestContext",
-        agent_temp_uri: Optional[str] = None,
+        self, skill_name: str, candidate: CandidateMemory, ctx: "RequestContext"
     ) -> Optional[Context]:
         """合并 Skill Memory，统计数据用 Python 累加"""
         if not skill_name or not skill_name.strip():
@@ -1223,11 +1181,7 @@ class MemoryExtractor:
             return None
 
         agent_space = ctx.user.agent_space_name()
-        # Use temp agent URI if provided (for COW pattern)
-        if agent_temp_uri:
-            uri = f"{agent_temp_uri}/memories/skills/{skill_name}.md"
-        else:
-            uri = f"viking://agent/{agent_space}/memories/skills/{skill_name}.md"
+        uri = f"viking://agent/{agent_space}/memories/skills/{skill_name}.md"
         viking_fs = get_viking_fs()
 
         if not viking_fs:
@@ -1296,7 +1250,7 @@ class MemoryExtractor:
                 skill_name, merged_stats, new_guidelines, fields=new_fields
             )
             await viking_fs.write_file(uri=uri, content=merged_content, ctx=ctx)
-            return self._create_skill_context(uri, candidate, ctx, agent_temp_uri=agent_temp_uri)
+            return self._create_skill_context(uri, candidate, ctx)
 
         existing_stats = self._parse_skill_statistics(existing)
         merged_stats = self._merge_skill_statistics(existing_stats, new_stats)
@@ -1358,9 +1312,7 @@ class MemoryExtractor:
             skill_name, merged_stats, merged_guidelines, fields=merged_fields
         )
         await viking_fs.write_file(uri=uri, content=merged_content, ctx=ctx)
-        return self._create_skill_context(
-            uri, candidate, ctx, abstract_override=abstract_override, agent_temp_uri=agent_temp_uri
-        )
+        return self._create_skill_context(uri, candidate, ctx, abstract_override=abstract_override)
 
     def _compute_skill_statistics_derived(self, stats: dict) -> dict:
         """计算 Skill 派生统计数据（成功率）"""
@@ -1512,18 +1464,12 @@ class MemoryExtractor:
         candidate: CandidateMemory,
         ctx: "RequestContext",
         abstract_override: Optional[str] = None,
-        agent_temp_uri: Optional[str] = None,
     ) -> Context:
         """创建 Skill Memory 的 Context 对象"""
         agent_space = ctx.user.agent_space_name()
-        # Use temp agent URI if provided (for COW pattern)
-        if agent_temp_uri:
-            parent_uri = f"{agent_temp_uri}/memories/skills"
-        else:
-            parent_uri = f"viking://agent/{agent_space}/memories/skills"
         return Context(
             uri=uri,
-            parent_uri=parent_uri,
+            parent_uri=f"viking://agent/{agent_space}/memories/skills",
             is_leaf=True,
             abstract=abstract_override or candidate.abstract,
             context_type=ContextType.MEMORY.value,

@@ -72,6 +72,40 @@ async def test_commit_wait_false_returns_task_id(api_client):
     await asyncio.wait_for(done.wait(), timeout=2.0)
 
 
+async def test_commit_wait_false_rejects_full_telemetry(api_client):
+    """wait=false should reject telemetry payload requests."""
+    client, _ = api_client
+    session_id = await _new_session_with_message(client)
+
+    resp = await client.post(
+        f"/api/v1/sessions/{session_id}/commit",
+        params={"wait": False},
+        json={"telemetry": True},
+    )
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "INVALID_ARGUMENT"
+    assert "wait=false" in body["error"]["message"]
+
+
+async def test_commit_wait_false_rejects_summary_only_telemetry(api_client):
+    """wait=false should also reject summary-only telemetry requests."""
+    client, _ = api_client
+    session_id = await _new_session_with_message(client)
+
+    resp = await client.post(
+        f"/api/v1/sessions/{session_id}/commit",
+        params={"wait": False},
+        json={"telemetry": {"summary": True}},
+    )
+    assert resp.status_code == 400
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "INVALID_ARGUMENT"
+    assert "wait=false" in body["error"]["message"]
+
+
 # ── Task lifecycle: pending → running → completed ──
 
 
@@ -147,7 +181,7 @@ async def test_task_failed_when_memory_extraction_raises(api_client):
     async def failing_extract(_context, _user, _session_id):
         raise RuntimeError("memory_extraction_failed: synthetic extractor error")
 
-    service.sessions._session_compressor.extractor.extract_strict = failing_extract
+    service.sessions._session_compressor.extractor.extract = failing_extract
 
     resp = await client.post(f"/api/v1/sessions/{session_id}/commit", params={"wait": False})
     task_id = resp.json()["result"]["task_id"]
@@ -189,6 +223,35 @@ async def test_duplicate_commit_rejected(api_client):
 
     # Second commit should be rejected
     resp2 = await client.post(f"/api/v1/sessions/{session_id}/commit", params={"wait": False})
+    assert resp2.json()["status"] == "error"
+    assert "already has a commit in progress" in resp2.json()["error"]["message"]
+
+    gate.set()
+    await asyncio.sleep(0.1)
+
+
+async def test_wait_true_rejected_while_background_commit_running(api_client):
+    """wait=true must also reject duplicate commits for the same session."""
+    client, service = api_client
+    session_id = await _new_session_with_message(client)
+
+    gate = asyncio.Event()
+
+    async def slow_commit(_sid, _ctx):
+        await gate.wait()
+        return {"session_id": _sid, "status": "committed", "memories_extracted": 0}
+
+    service.sessions.commit_async = slow_commit
+
+    resp1 = await client.post(f"/api/v1/sessions/{session_id}/commit", params={"wait": False})
+    assert resp1.json()["result"]["status"] == "accepted"
+
+    resp2 = await client.post(
+        f"/api/v1/sessions/{session_id}/commit",
+        params={"wait": True},
+        json={"telemetry": True},
+    )
+    assert resp2.status_code == 200
     assert resp2.json()["status"] == "error"
     assert "already has a commit in progress" in resp2.json()["error"]["message"]
 

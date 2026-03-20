@@ -219,7 +219,6 @@ async def test_merge_tool_memory_old_format_upgrades_to_reme(monkeypatch):
     assert "Tool Memory Context:" in written
     assert "Based on 12 historical calls:" in written
     assert "- Best for: docs" in written
-    assert "Guidelines:" in written
     assert "old guide" in written
 
 
@@ -241,7 +240,6 @@ async def test_merge_tool_memory_content_format_parses_and_merges(monkeypatch):
         "- Optimal params: N/A\n"
         "- Common failures: N/A\n"
         "- Recommendation: N/A\n\n"
-        "Guidelines:\n"
         "old guide\n"
     )
     fs = SimpleNamespace(
@@ -258,7 +256,6 @@ async def test_merge_tool_memory_content_format_parses_and_merges(monkeypatch):
     written = fs.write_file.call_args.kwargs["content"]
     assert "Based on 4 historical calls:" in written
     assert "Success rate:" in written
-    assert "Guidelines:" in written
 
 
 @pytest.mark.asyncio
@@ -291,4 +288,3 @@ async def test_merge_skill_memory_old_format_upgrades_to_aligned(monkeypatch):
     assert "Skill Memory Context:" in written
     assert "Based on 11 historical executions:" in written
     assert "- Recommended flow: a->b" in written
-    assert "Guidelines:" in written

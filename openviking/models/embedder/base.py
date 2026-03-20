@@ -1,8 +1,12 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
+import random
+import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, TypeVar
+
+T = TypeVar("T")
 
 
 def truncate_and_normalize(embedding: List[float], dimension: Optional[int]) -> List[float]:
@@ -72,27 +76,29 @@ class EmbedderBase(ABC):
         self.config = config or {}
 
     @abstractmethod
-    def embed(self, text: str) -> EmbedResult:
+    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Embed single text
 
         Args:
             text: Input text
+            is_query: Flag to indicate if this is a query embedding
 
         Returns:
             EmbedResult: Embedding result containing dense_vector, sparse_vector, or both
         """
         pass
 
-    def embed_batch(self, texts: List[str]) -> List[EmbedResult]:
+    def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
         """Batch embedding (default implementation loops, subclasses can override for optimization)
 
         Args:
             texts: List of texts
+            is_query: Flag to indicate if these are query embeddings
 
         Returns:
             List[EmbedResult]: List of embedding results
         """
-        return [self.embed(text) for text in texts]
+        return [self.embed(text, is_query=is_query) for text in texts]
 
     def close(self):
         """Release resources, subclasses can override as needed"""
@@ -123,11 +129,12 @@ class DenseEmbedderBase(EmbedderBase):
     """
 
     @abstractmethod
-    def embed(self, text: str) -> EmbedResult:
+    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform dense embedding on text
 
         Args:
             text: Input text
+            is_query: Flag to indicate if this is a query embedding
 
         Returns:
             EmbedResult: Result containing only dense_vector
@@ -155,11 +162,12 @@ class SparseEmbedderBase(EmbedderBase):
     """
 
     @abstractmethod
-    def embed(self, text: str) -> EmbedResult:
+    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform sparse embedding on text
 
         Args:
             text: Input text
+            is_query: Flag to indicate if this is a query embedding
 
         Returns:
             EmbedResult: Result containing only sparse_vector
@@ -183,11 +191,12 @@ class HybridEmbedderBase(EmbedderBase):
     """
 
     @abstractmethod
-    def embed(self, text: str) -> EmbedResult:
+    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform hybrid embedding on text
 
         Args:
             text: Input text
+            is_query: Flag to indicate if this is a query embedding
 
         Returns:
             EmbedResult: Result containing both dense_vector and sparse_vector
@@ -230,19 +239,19 @@ class CompositeHybridEmbedder(HybridEmbedderBase):
         self.dense_embedder = dense_embedder
         self.sparse_embedder = sparse_embedder
 
-    def embed(self, text: str) -> EmbedResult:
+    def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Combine results from both embedders"""
-        dense_res = self.dense_embedder.embed(text)
-        sparse_res = self.sparse_embedder.embed(text)
+        dense_res = self.dense_embedder.embed(text, is_query=is_query)
+        sparse_res = self.sparse_embedder.embed(text, is_query=is_query)
 
         return EmbedResult(
             dense_vector=dense_res.dense_vector, sparse_vector=sparse_res.sparse_vector
         )
 
-    def embed_batch(self, texts: List[str]) -> List[EmbedResult]:
+    def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
         """Combine batch results"""
-        dense_results = self.dense_embedder.embed_batch(texts)
-        sparse_results = self.sparse_embedder.embed_batch(texts)
+        dense_results = self.dense_embedder.embed_batch(texts, is_query=is_query)
+        sparse_results = self.sparse_embedder.embed_batch(texts, is_query=is_query)
 
         return [
             EmbedResult(dense_vector=d.dense_vector, sparse_vector=s.sparse_vector)
@@ -255,3 +264,68 @@ class CompositeHybridEmbedder(HybridEmbedderBase):
     def close(self):
         self.dense_embedder.close()
         self.sparse_embedder.close()
+
+
+def exponential_backoff_retry(
+    func: Callable[[], T],
+    max_wait: float = 10.0,
+    base_delay: float = 0.5,
+    max_delay: float = 2.0,
+    jitter: bool = True,
+    is_retryable: Optional[Callable[[Exception], bool]] = None,
+    logger=None,
+) -> T:
+    """
+    指数退避重试函数
+
+    Args:
+        func: 要执行的函数
+        max_wait: 最大总等待时间（秒）
+        base_delay: 基础延迟时间（秒）
+        max_delay: 单次最大延迟时间（秒）
+        jitter: 是否添加随机抖动
+        is_retryable: 判断异常是否可重试的函数
+        logger: 日志记录器
+
+    Returns:
+        函数执行结果
+
+    Raises:
+        最后一次尝试的异常
+    """
+    start_time = time.time()
+    attempt = 0
+
+    while True:
+        try:
+            return func()
+        except Exception as e:
+            attempt += 1
+            elapsed = time.time() - start_time
+
+            if elapsed >= max_wait:
+                if logger:
+                    logger.error(
+                        f"Exceeded max wait time ({max_wait}s) after {attempt} attempts, giving up"
+                    )
+                raise
+
+            if is_retryable and not is_retryable(e):
+                if logger:
+                    logger.error(f"Non-retryable error after {attempt} attempts: {e}")
+                raise
+
+            delay = min(base_delay * (2 ** (attempt - 1)), max_delay)
+
+            if jitter:
+                delay = delay * (0.5 + random.random())
+
+            remaining_time = max_wait - elapsed
+            delay = min(delay, remaining_time)
+
+            if logger:
+                logger.info(
+                    f"Retry attempt {attempt}, waiting {delay:.2f}s before next try (elapsed: {elapsed:.2f}s)"
+                )
+
+            time.sleep(delay)

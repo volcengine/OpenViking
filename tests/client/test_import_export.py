@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from openviking import AsyncOpenViking
+from openviking.storage.transaction import release_all_locks
 
 
 class TestExportOvpack:
@@ -99,6 +100,7 @@ class TestImportOvpack:
         await client.export_ovpack(original_uri, str(export_path))
 
         # Delete original resource
+        await release_all_locks()
         await client.rm(original_uri, recursive=True)
 
         # Import

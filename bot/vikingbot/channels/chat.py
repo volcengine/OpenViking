@@ -48,11 +48,13 @@ class ChatChannel(BaseChannel):
         session_id: str = "default",
         markdown: bool = True,
         logs: bool = False,
+        sender: str | None = None,
     ):
         super().__init__(config, bus, workspace_path)
         self.session_id = session_id
         self.markdown = markdown
         self.logs = logs
+        self.sender = sender
         self._response_received = asyncio.Event()
         self._last_response: str | None = None
 
@@ -149,13 +151,14 @@ class ChatChannel(BaseChannel):
                 self._response_received.clear()
                 self._last_response = None
 
+                sender_id = self.sender or "user"
                 msg = InboundMessage(
                     session_key=SessionKey(
                         type="cli",
                         channel_id=self.config.channel_id(),
                         chat_id=self.session_id,
                     ),
-                    sender_id="user",
+                    sender_id=sender_id,
                     content=user_input,
                 )
                 await self.bus.publish_inbound(msg)

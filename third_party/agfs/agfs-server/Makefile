@@ -8,6 +8,19 @@ GO=go
 GOFLAGS=-v
 ADDR?=:8080
 
+# OS detection
+ifeq ($(OS),Windows_NT)
+    PLATFORM := windows
+else
+    UNAME_S := $(shell uname -s)
+    ifeq ($(UNAME_S),Linux)
+        PLATFORM := linux
+    endif
+    ifeq ($(UNAME_S),Darwin)
+        PLATFORM := darwin
+    endif
+endif
+
 # Build information
 VERSION?=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 BUILD_TIME=$(shell date -u '+%Y-%m-%d_%H:%M:%S')
@@ -25,26 +38,18 @@ build: ## Build the server binary
 	@echo "Build complete: $(BUILD_DIR)/$(BINARY_NAME)"
 
 build-lib: ## Build AGFS binding library
-	@echo "Detecting OS for building binding library..."
-	@OS=$$(uname -s | tr '[:upper:]' '[:lower:]'); \
-	LIB_NAME=libagfsbinding; \
-	CMD_PYBINDING_DIR=cmd/pybinding; \
-	case "$$OS" in \
-		darwin*) \
-			echo "Building for macOS..."; \
-			CGO_ENABLED=1 $(GO) build -buildmode=c-shared -o $(BUILD_DIR)/$$LIB_NAME.dylib $$CMD_PYBINDING_DIR/main.go; \
-			;; \
-		linux*) \
-			echo "Building for Linux..."; \
-			CGO_ENABLED=1 $(GO) build -buildmode=c-shared -o $(BUILD_DIR)/$$LIB_NAME.so $$CMD_PYBINDING_DIR/main.go; \
-			;; \
-		msys*|cygwin*|mingw*) \
-			echo "Building for Windows..."; \
-			CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++ AR=x86_64-w64-mingw32-ar GOOS=windows GOARCH=amd64 CGO_ENABLED=1 $(GO) build -buildmode=c-shared -o $(BUILD_DIR)/$$LIB_NAME.dll $$CMD_PYBINDING_DIR/main.go; \
-			;; \
-		*) echo "Unsupported OS: $$OS"; exit 1 ;; \
-	esac; \
-	echo "Build complete in $(BUILD_DIR)"
+	@echo "Building binding library for $(PLATFORM)..."
+	@mkdir -p $(BUILD_DIR)
+ifeq ($(PLATFORM),darwin)
+	CGO_ENABLED=1 $(GO) build -buildmode=c-shared -o $(BUILD_DIR)/libagfsbinding.dylib cmd/pybinding/main.go
+else ifeq ($(PLATFORM),linux)
+	CGO_ENABLED=1 $(GO) build -buildmode=c-shared -o $(BUILD_DIR)/libagfsbinding.so cmd/pybinding/main.go
+else ifeq ($(PLATFORM),windows)
+	CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++ AR=x86_64-w64-mingw32-ar GOOS=windows GOARCH=amd64 CGO_ENABLED=1 $(GO) build -buildmode=c-shared -o $(BUILD_DIR)/libagfsbinding.dll cmd/pybinding/main.go
+else
+	@echo "Unsupported OS: $(PLATFORM)" && exit 1
+endif
+	@echo "Build complete in $(BUILD_DIR)"
 
 run: build
 	@echo "Starting $(BINARY_NAME) on $(ADDR)..."
@@ -104,3 +109,6 @@ release: clean test build ## Run tests and build release binary
 	GOOS=darwin GOARCH=arm64 $(GO) build $(LDFLAGS) -o $(BUILD_DIR)/release/$(BINARY_NAME)-darwin-arm64 $(CMD_DIR)/main.go
 	GOOS=windows GOARCH=amd64 $(GO) build $(LDFLAGS) -o $(BUILD_DIR)/release/$(BINARY_NAME)-windows-amd64.exe $(CMD_DIR)/main.go
 	@echo "Release builds complete in $(BUILD_DIR)/release/"
+
+help: ## Display this help screen
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'

@@ -27,7 +27,6 @@ openviking.egg-info/
 data/
 
 # Rust
-Cargo.lock
 target/
 **/*.rs.bk
 *.pdb
@@ -142,6 +141,7 @@ celerybeat-schedule
 
 # mkdocs documentation
 /site
+docs/superpowers/
 
 # mypy
 .mypy_cache/
