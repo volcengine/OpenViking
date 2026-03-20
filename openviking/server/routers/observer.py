@@ -54,11 +54,11 @@ async def observer_queue(
 
 @router.get("/vikingdb")
 async def observer_vikingdb(
-    _ctx: RequestContext = Depends(get_request_context),
+    ctx: RequestContext = Depends(get_request_context),
 ):
     """Get VikingDB status."""
     service = get_service()
-    component = service.debug.observer.vikingdb
+    component = service.debug.observer.vikingdb(ctx=ctx)
     return Response(status="ok", result=_component_to_dict(component))
 
 
@@ -94,9 +94,9 @@ async def observer_retrieval(
 
 @router.get("/system")
 async def observer_system(
-    _ctx: RequestContext = Depends(get_request_context),
+    ctx: RequestContext = Depends(get_request_context),
 ):
     """Get system overall status (includes all components)."""
     service = get_service()
-    status = service.debug.observer.system
+    status = service.debug.observer.system(ctx=ctx)
     return Response(status="ok", result=_system_to_dict(status))
