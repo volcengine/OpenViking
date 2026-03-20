@@ -24,7 +24,11 @@ from openviking.models.embedder.base import (
     HybridEmbedderBase,
     SparseEmbedderBase,
 )
-from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+
+try:
+    from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+except ImportError:
+    GeminiDenseEmbedder = None  # google-genai not installed
 from openviking.models.embedder.jina_embedders import JinaDenseEmbedder
 from openviking.models.embedder.minimax_embedders import MinimaxDenseEmbedder
 from openviking.models.embedder.openai_embedders import OpenAIDenseEmbedder

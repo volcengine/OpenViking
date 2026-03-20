@@ -34,15 +34,6 @@ class EmbeddingModelConfig(BaseModel):
             "Leave both unset for symmetric models."
         ),
     )
-    task_type: Optional[str] = Field(
-        default=None,
-        description=(
-            "Gemini task type. Valid: RETRIEVAL_QUERY, RETRIEVAL_DOCUMENT, "
-            "SEMANTIC_SIMILARITY, CLASSIFICATION, CLUSTERING, "
-            "QUESTION_ANSWERING, FACT_VERIFICATION, CODE_RETRIEVAL_QUERY. "
-            "For non-symmetric mode set query_param/document_param instead."
-        ),
-    )
     provider: Optional[str] = Field(
         default="volcengine",
         description=(
@@ -88,11 +79,6 @@ class EmbeddingModelConfig(BaseModel):
                 value = data.get(key)
                 if isinstance(value, str):
                     data[key] = value.lower()
-            # Gemini task_type values are uppercase enums
-            for key in ("task_type",):
-                value = data.get(key)
-                if isinstance(value, str):
-                    data[key] = value.upper()
         return data
 
     @model_validator(mode="after")
@@ -177,7 +163,6 @@ class EmbeddingModelConfig(BaseModel):
             for field_name, value in [
                 ("query_param", self.query_param),
                 ("document_param", self.document_param),
-                ("task_type", self.task_type),
             ]:
                 if value and value.upper() not in _GEMINI_TASK_TYPES:
                     raise ValueError(
@@ -393,7 +378,6 @@ class EmbeddingConfig(BaseModel):
                     "model_name": cfg.model,
                     "api_key": cfg.api_key,
                     "dimension": cfg.dimension,
-                    "task_type": cfg.task_type,
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                 },

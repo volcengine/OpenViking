@@ -59,16 +59,6 @@ class TestGeminiContextRouting:
         assert embedder.document_param == "retrieval_document"
 
     @patch("openviking.models.embedder.gemini_embedders.genai.Client")
-    def test_symmetric_uses_task_type_field(self, _mock):
-        cfg = EmbeddingConfig(dense=_gcfg(task_type="SEMANTIC_SIMILARITY"))
-        assert cfg.get_embedder().task_type == "SEMANTIC_SIMILARITY"
-
-    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
-    def test_symmetric_no_task_type_is_none(self, _mock):
-        cfg = EmbeddingConfig(dense=_gcfg())
-        assert cfg.get_embedder().task_type is None
-
-    @patch("openviking.models.embedder.gemini_embedders.genai.Client")
     def test_only_query_param_set(self, _mock):
         """When only query_param is set, document_param is None."""
         cfg = EmbeddingConfig(dense=_gcfg(query_param="RETRIEVAL_QUERY"))
@@ -90,29 +80,8 @@ class TestGeminiConfigValidation:
         with pytest.raises(ValueError, match="Invalid document_param"):
             _gcfg(document_param="ALSO_INVALID")
 
-    def test_invalid_task_type_raises(self):
-        with pytest.raises(ValueError, match="Invalid task_type"):
-            _gcfg(task_type="BAD_TYPE")
-
-    def test_valid_task_types_accepted(self):
-        for t in [
-            "RETRIEVAL_QUERY",
-            "RETRIEVAL_DOCUMENT",
-            "SEMANTIC_SIMILARITY",
-            "CLASSIFICATION",
-            "CLUSTERING",
-            "QUESTION_ANSWERING",
-            "FACT_VERIFICATION",
-            "CODE_RETRIEVAL_QUERY",
-        ]:
-            _gcfg(task_type=t)  # must not raise
-
-    def test_gemini_task_type_case_insensitive(self):
-        """Lowercase task_type should be auto-uppercased; query_param/document_param are lowercased."""
-        cfg = _gcfg(task_type="retrieval_document")
-        assert cfg.task_type == "RETRIEVAL_DOCUMENT"
-
-        cfg2 = _gcfg(query_param="RETRIEVAL_QUERY", document_param="RETRIEVAL_DOCUMENT")
-        # query_param/document_param are lowercased by the generic normalizer
-        assert cfg2.query_param == "retrieval_query"
-        assert cfg2.document_param == "retrieval_document"
+    def test_query_document_param_case_normalized(self):
+        """query_param/document_param are lowercased by the generic normalizer."""
+        cfg = _gcfg(query_param="RETRIEVAL_QUERY", document_param="RETRIEVAL_DOCUMENT")
+        assert cfg.query_param == "retrieval_query"
+        assert cfg.document_param == "retrieval_document"
