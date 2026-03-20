@@ -333,7 +333,7 @@ class LiteLLMVLMProvider(VLMBase):
 
         response = await acompletion(**kwargs)
         self._update_token_usage_from_response(response)
-        return self._clean_response(response.choices[0].message.content or "")
+        return self._clean_response(self._extract_content_from_response(response))
 
     def _update_token_usage_from_response(self, response) -> None:
         """Update token usage from response."""
