@@ -84,7 +84,7 @@ class TestGetMemoryStats:
         assert "by_category" in data
         assert "hotness_distribution" in data
         assert "staleness" in data
-        assert "total_vectors" in data
+        assert "total_vectors" not in data
 
 
 class TestGetSessionStats:
@@ -101,9 +101,18 @@ class TestGetSessionStats:
 
     def test_session_not_found(self, client, mock_service):
         """Missing session returns NOT_FOUND error."""
-        mock_service.sessions.session.side_effect = Exception("not found")
+        mock_service.sessions.session.side_effect = KeyError("nonexistent")
         response = client.get("/api/v1/stats/sessions/nonexistent")
         assert response.status_code == 200
         data = response.json()
         assert data["status"] == "error"
         assert data["error"]["code"] == "NOT_FOUND"
+
+    def test_session_internal_error(self, client, mock_service):
+        """Unexpected exception returns INTERNAL_ERROR, not NOT_FOUND."""
+        mock_service.sessions.session.side_effect = RuntimeError("db timeout")
+        response = client.get("/api/v1/stats/sessions/some-session")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "error"
+        assert data["error"]["code"] == "INTERNAL_ERROR"

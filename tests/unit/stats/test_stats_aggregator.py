@@ -53,7 +53,7 @@ class TestStatsAggregator:
         result = await aggregator.get_memory_stats(mock_ctx)
 
         assert result["total_memories"] == 0
-        assert result["total_vectors"] == 0
+        assert "total_vectors" not in result
         assert result["hotness_distribution"] == {"cold": 0, "warm": 0, "hot": 0}
 
     @pytest.mark.asyncio
