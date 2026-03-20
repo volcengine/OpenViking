@@ -1,5 +1,10 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
+import glob
+import logging
+import os
+import sys
+from pathlib import Path
 from typing import List, Tuple, Union
 
 import openviking.storage.vectordb.engine as engine
@@ -7,6 +12,58 @@ from openviking.storage.vectordb.store.store import BatchOp, IMutiTableStore, Op
 
 # Constant for the maximum Unicode character, used for range queries to cover all possible keys
 MAX_UNICODE_CHAR = "\U0010ffff"
+
+_log = logging.getLogger("openviking.storage.vectordb.store")
+
+
+def _clear_stale_rocksdb_locks(data_path: str) -> None:
+    """Remove stale RocksDB LOCK files left behind by crashed or exited processes.
+
+    RocksDB creates a LOCK file when opening a database.  On Windows, the
+    OS file handle may persist even after ``client.close()`` until the Python
+    process fully exits, and a crash or kill leaves the LOCK forever.
+    Subsequent processes then fail with:
+
+        IO error: .../LOCK: The process cannot access the file because it
+        is being used by another process
+
+    This is especially common with hook-based architectures (Claude Code hooks,
+    MCP stdio servers) where many short-lived Python processes repeatedly open
+    and close the same database.
+
+    Safety: RocksDB LOCK files are purely advisory (0-byte, no data).  All
+    actual data lives in SST files, WAL logs, and MANIFEST.  On Windows,
+    ``os.remove()`` on a file held by a live process raises ``PermissionError``,
+    giving us an atomic staleness check:
+
+    - ``os.remove()`` succeeds → no process holds the file → stale, safe to remove
+    - ``os.remove()`` raises ``PermissionError`` → live process → leave it alone
+
+    On Unix, ``os.remove()`` succeeds even when a process holds the file
+    (inode stays alive), so we only run this on Windows where the issue
+    actually manifests.
+
+    See: https://github.com/volcengine/OpenViking/issues/650
+    """
+    if sys.platform != "win32":
+        return
+
+    base = Path(data_path)
+    # Search for LOCK files in the vectordb subdirectory tree
+    lock_patterns = [
+        str(base / "**" / "LOCK"),
+    ]
+
+    for pattern in lock_patterns:
+        for lock_path in glob.glob(pattern, recursive=True):
+            try:
+                os.remove(lock_path)
+                _log.info("Removed stale RocksDB LOCK: %s", lock_path)
+            except PermissionError:
+                # Active process holds this lock — leave it alone.
+                _log.debug("LOCK held by live process, skipping: %s", lock_path)
+            except OSError as exc:
+                _log.debug("Could not remove LOCK %s: %s", lock_path, exc)
 
 
 def create_store_engine_proxy(path: str = "") -> "StoreEngineProxy":
@@ -19,6 +76,8 @@ def create_store_engine_proxy(path: str = "") -> "StoreEngineProxy":
     Returns:
         StoreEngineProxy: Proxy instance wrapping the underlying storage engine.
     """
+    if path:
+        _clear_stale_rocksdb_locks(path)
     date_engine = engine.PersistStore(path) if path else engine.VolatileStore()
     return StoreEngineProxy(date_engine)
 
