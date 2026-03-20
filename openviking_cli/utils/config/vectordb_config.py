@@ -88,6 +88,14 @@ class VectorDBBackendConfig(BaseModel):
         ),
     )
 
+    enable_shared_collection_handle: bool = Field(
+        default=False,
+        description=(
+            "仅对 local backend 生效。开启后，同一路径的本地嵌入式 VectorDB 句柄会在进程内复用，"
+            "用于规避并发重复打开同一路径时的 LOCK 冲突。默认关闭以保持历史多路打开行为。"
+        ),
+    )
+
     volcengine: Optional[VolcengineConfig] = Field(
         default_factory=lambda: VolcengineConfig(),
         description="Volcengine VikingDB configuration for 'volcengine' type",

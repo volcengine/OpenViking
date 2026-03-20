@@ -312,9 +312,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     ctx = RequestContext(user=user, role=Role.ROOT)
                     record_id = await self._vikingdb.upsert(inserted_data, ctx=ctx)
                     if record_id:
-                        logger.debug(
-                            f"Successfully wrote embedding to database: {record_id} abstract {inserted_data['abstract']} vector {inserted_data['vector'][:5]}"
-                        )
+                        logger.debug(f"Successfully wrote embedding to database: {record_id}")
                 except CollectionNotFoundError as db_err:
                     # During shutdown, queue workers may finish one dequeued item.
                     if self._vikingdb.is_closing:
