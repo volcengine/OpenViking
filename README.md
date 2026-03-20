@@ -1,8 +1,10 @@
 <div align="center">
 
-<picture>
-  <img alt="OpenViking" src="docs/images/banner.jpg" width="100%" height="auto">
-</picture>
+<a href="https://openviking.ai/" target="_blank">
+  <picture>
+    <img alt="OpenViking" src="docs/images/ov-logo.png" width="200px" height="auto">
+  </picture>
+</a>
 
 ### OpenViking: The Context Database for AI Agents
 
