@@ -300,9 +300,7 @@ class AudioParser(BaseParser):
                 if start is None or end is None or not text:
                     continue
 
-                lines.append(
-                    f"**[{_format_timestamp(start)} - {_format_timestamp(end)}]** {text}"
-                )
+                lines.append(f"**[{_format_timestamp(start)} - {_format_timestamp(end)}]** {text}")
 
             return "\n\n".join(lines) if lines else None
 
