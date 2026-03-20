@@ -25,48 +25,6 @@ class OVFileTool(Tool, ABC):
             self._client = await VikingClient.create(tool_context.workspace_id)
         return self._client
 
-
-class VikingReadTool(OVFileTool):
-    """Tool to read content from Viking resources."""
-
-    @property
-    def name(self) -> str:
-        return "openviking_read"
-
-    @property
-    def description(self) -> str:
-        return "Read content from OpenViking resources at different levels (abstract, overview, or full content)."
-
-    @property
-    def parameters(self) -> dict[str, Any]:
-        return {
-            "type": "object",
-            "properties": {
-                "uri": {
-                    "type": "string",
-                    "description": "The Viking file's URI to read from (e.g., viking://resources/path/123.md)",
-                },
-                "level": {
-                    "type": "string",
-                    "description": "Reading level: 'abstract' (L0 summary), 'overview' (L1 overview), or 'read' (L2 full content)",
-                    "enum": ["abstract", "overview", "read"],
-                    "default": "abstract",
-                },
-            },
-            "required": ["uri"],
-        }
-
-    async def execute(
-        self, tool_context: ToolContext, uri: str, level: str = "abstract", **kwargs: Any
-    ) -> str:
-        try:
-            client = await self._get_client(tool_context)
-            content = await client.read_content(uri, level=level)
-            return content
-        except Exception as e:
-            return f"Error reading from Viking: {str(e)}"
-
-
 class VikingListTool(OVFileTool):
     """Tool to list Viking resources."""
 
