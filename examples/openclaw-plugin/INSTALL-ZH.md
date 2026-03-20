@@ -19,11 +19,17 @@
 
 ## 一键安装
 
+该安装方式支持您从 安装 - 验证 - 读取 - 写入 - 查看 一站式了解OpenViking。 
+
 **前置条件：** Python >= 3.10，Node.js >= 22。安装助手会自动检查并提示安装缺少的组件。
 
 ### 从旧版 `memory-openviking` 升级到新版 `openviking` 前置操作步骤
 
-如果当前环境里已经安装过旧版插件 `memory-openviking`，建议先完成以下前置操作，再执行新版安装。插件 2.0 与旧版插件/旧版配置不兼容，避免旧版和新版插件同时存在。
+- 如果当前环境里已经安装过旧版插件 `memory-openviking`，建议先完成以下前置操作，再执行新版安装。
+
+- 如果您之前没有安装过，可以跳过此步骤，直接查看 **“正式安装”** 环节。
+
+- 插件 2.0 与旧版插件/旧版配置不兼容，需避免旧版和新版插件同时存在。
 
 1. 停止 OpenClaw gateway：
 
@@ -41,7 +47,7 @@ mv ~/.openclaw/extensions/memory-openviking ~/.openclaw/disabled-extensions/memo
 
 3. 修改 OpenClaw 配置，移除旧版本配置参数：
 
-编辑 `~/.openclaw/openclaw.json`，删除 `plugins.allow` 中的 `"memory-openviking"`，删除 `plugins.entries.memory-openviking`，并将 `plugins.slots.memory` 改为 `"none"`，删除 `plugins.load.paths`中旧版本 `memory-openviking` 插件路径。
+编辑 `~/.openclaw/openclaw.json`，删除 `plugins.allow` 中的 `"memory-openviking"`，删除 `plugins.entries.memory-openviking`，并将 `plugins.slots.memory` 改为 `"none"`，将 `plugins.load.paths`中旧版本 `memory-openviking` 插件路径修改为`openviking`。
 
 4. 参考下面方式A或者安装方式B的操作步骤，安装新版插件
 
@@ -49,7 +55,11 @@ mv ~/.openclaw/extensions/memory-openviking ~/.openclaw/disabled-extensions/memo
 
 如果旧版本原来使用的是 `plugins.entries.memory-openviking.config`，请将第二步备份的openclaw配置文件中的 `mode`、`configPath`、`port`、`baseUrl`、`apiKey`、`agentId` 等参数按需迁移到新版 `plugins.entries.openviking.config`。
 
-### 方式 A：npm 安装（推荐，全平台）
+前置步骤根据您的个人情况按需执行，完成以后，即可进入2.0的安装环节，在此我们暂时不建议直接自然语言安装，推荐使用 npm 一键安装。
+
+### 正式安装
+
+#### 方式 A：npm 安装（推荐，全平台）
 
 ```bash
 npm install -g openclaw-openviking-setup-helper
@@ -67,8 +77,26 @@ ov-install -y
 ```bash
 ov-install --workdir ~/.openclaw-second
 ```
+备注：在运行 `npm install -g openclaw-openviking-setup-helper` 命令时，可能会出现没有安装创建虚拟环境的工具的报错提示，可以直接复制报错提示中的解决方案执行：
 
-### 方式 B：curl 一键安装（Linux / macOS）
+```bash
+apt update
+apt install -y software-properties-common
+add-apt-repository universe
+apt update
+apt install -y python3-venv
+```
+运行完上面这几行命令后，再次执行你的安装命令：
+
+```bash
+ov-install
+```
+
+这次脚本就能成功创建一个隔离的虚拟环境，并顺利把 OpenViking 安装进去了，而且不会破坏你的系统环境。
+
+出现`installation completed`即代表安装成功。
+
+#### 方式 B（可选）：curl 一键安装（Linux / macOS）
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash
@@ -87,6 +115,41 @@ curl -fsSL ... | bash -s -- --workdir ~/.openclaw-openclaw-second
 ```
 
 脚本会自动检测多个 OpenClaw 实例并让你选择。还会提示选择 local/remote 模式——remote 模式连接远端 OpenViking 服务，不需要安装 Python。
+
+出现`installation completed`即代表安装成功。
+
+### 启动OpenClaw + OpenViking
+
+安装成功以后，运行以下命令启动 OpenClaw + OpenViking
+
+```bash
+source ~/.openclaw/openviking.env && openclaw gateway restart
+```
+出现 `openviking: registered context-engine` 代表拉取成功。
+
+接着，执行
+
+```bash
+openclaw config get plugins.slots.contextEngine
+```
+
+出现 `openviking`，则验证启动成功。
+
+### 验证读取和写入
+
+现在可以自由和 OpenClaw 进行交互和对话，过程中，你可以通过以下命令查看 OpenViking 运行状态，验证读取和写入：
+
+验证读取：`cat 填入您的日志文件路径（如：/tmp/openclaw/openclaw-2026-03-20.log） |grep auto-capture`
+
+验证写入：`cat 填入您的日志文件路径（如：/tmp/openclaw/openclaw-2026-03-20.log） |grep inject`
+
+OpenClaw日志查看：`openclaw logs --follow`，出现 `openviking: auto-captured 2 new messages, extracted 1 memories` 说明状态正常
+
+### 通过 ov tui 查看您的记忆文件
+
+我们提供了命令行查看 OpenViking 中虚拟文件的方式，首先 `cd` 到您的 OpenViking 目录，`source venv/bin/activate`激活虚拟环境
+
+输入 `ov --help`了解 OpenViking 具体命令，输入 `ov tui`即可进入文件界面，按`.`可打开文件夹，支持方向键上下查看文件，按`q`退出。
 
 ---
 
