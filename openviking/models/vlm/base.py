@@ -74,7 +74,8 @@ class VLMBase(ABC):
 
     # Token usage tracking methods
     def update_token_usage(
-        self, model_name: str, provider: str, prompt_tokens: int, completion_tokens: int
+        self, model_name: str, provider: str, prompt_tokens: int, completion_tokens: int,
+        duration_seconds: float = 0.0,
     ) -> None:
         """Update token usage
 
@@ -83,6 +84,7 @@ class VLMBase(ABC):
             provider: Provider name (openai, volcengine)
             prompt_tokens: Number of prompt tokens
             completion_tokens: Number of completion tokens
+            duration_seconds: Wall-clock duration of the VLM call in seconds
         """
         self._token_tracker.update(
             model_name=model_name,
@@ -97,6 +99,16 @@ class VLMBase(ABC):
             get_current_telemetry().add_token_usage(prompt_tokens, completion_tokens)
         except Exception:
             # Telemetry must never break model inference.
+            pass
+
+        # Record the VLM call in Prometheus metrics (if enabled).
+        try:
+            from openviking.storage.observers.prometheus_observer import get_prometheus_observer
+
+            prom = get_prometheus_observer()
+            if prom is not None:
+                prom.record_vlm_call(duration_seconds)
+        except Exception:
             pass
 
     def get_token_usage(self) -> Dict[str, Any]:

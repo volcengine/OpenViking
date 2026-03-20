@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """PrometheusObserver: Prometheus metrics exporter for OpenViking."""
 
+import threading
 from threading import Lock
-from typing import Dict, Iterable, List, Tuple
+from typing import Dict, Iterable, List, Optional, Tuple
 
 from openviking.storage.observers.base_observer import BaseObserver
 
@@ -174,3 +175,21 @@ class PrometheusObserver(BaseObserver):
         lines.append(f'{name}_bucket{{le="+Inf"}} {total_count}')
         lines.append(f"{name}_sum {total_sum}")
         lines.append(f"{name}_count {total_count}")
+
+
+# Module-level singleton so that data-collection hooks can record metrics
+# without requiring access to the FastAPI app state.
+_observer: Optional[PrometheusObserver] = None
+_observer_lock = threading.Lock()
+
+
+def set_prometheus_observer(observer: Optional[PrometheusObserver]) -> None:
+    """Set the global PrometheusObserver instance (called during app startup)."""
+    global _observer
+    with _observer_lock:
+        _observer = observer
+
+
+def get_prometheus_observer() -> Optional[PrometheusObserver]:
+    """Return the global PrometheusObserver, or None when metrics are disabled."""
+    return _observer

@@ -33,6 +33,7 @@ from openviking.server.routers import (
 from openviking.service.core import OpenVikingService
 from openviking.service.task_tracker import get_task_tracker
 from openviking.storage.observers import PrometheusObserver
+from openviking.storage.observers.prometheus_observer import set_prometheus_observer
 from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.utils import get_logger
 
@@ -90,10 +91,9 @@ def create_app(
 
         app.state.prometheus_observer = None
         if config.telemetry.prometheus.enabled:
-            app.state.prometheus_observer = PrometheusObserver()
-            if not getattr(app.state, "metrics_router_registered", False):
-                app.include_router(metrics_router)
-                app.state.metrics_router_registered = True
+            observer = PrometheusObserver()
+            app.state.prometheus_observer = observer
+            set_prometheus_observer(observer)
             logger.info("Prometheus metrics enabled at /metrics")
 
         # Start TaskTracker cleanup loop
@@ -103,6 +103,7 @@ def create_app(
         yield
 
         # Cleanup
+        set_prometheus_observer(None)
         task_tracker.stop_cleanup_loop()
         if owns_service and service:
             await service.close()
@@ -187,6 +188,7 @@ def create_app(
     app.include_router(pack_router)
     app.include_router(debug_router)
     app.include_router(observer_router)
+    app.include_router(metrics_router)
     app.include_router(tasks_router)
     app.include_router(bot_router, prefix="/bot/v1")
 

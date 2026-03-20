@@ -2,7 +2,11 @@
 # SPDX-License-Identifier: Apache-2.0
 from .base_observer import BaseObserver
 from .lock_observer import LockObserver
-from .prometheus_observer import PrometheusObserver
+from .prometheus_observer import (
+    PrometheusObserver,
+    get_prometheus_observer,
+    set_prometheus_observer,
+)
 from .queue_observer import QueueObserver
 from .retrieval_observer import RetrievalObserver
 from .vikingdb_observer import VikingDBObserver
@@ -12,6 +16,8 @@ __all__ = [
     "BaseObserver",
     "LockObserver",
     "PrometheusObserver",
+    "get_prometheus_observer",
+    "set_prometheus_observer",
     "QueueObserver",
     "RetrievalObserver",
     "VikingDBObserver",
