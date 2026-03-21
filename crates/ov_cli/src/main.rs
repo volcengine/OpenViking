@@ -393,6 +393,11 @@ enum SystemCommands {
     Status,
     /// Quick health check
     Health,
+    /// Cryptographic key management commands
+    Crypto {
+        #[command(subcommand)]
+        action: commands::crypto::CryptoCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -822,6 +827,7 @@ async fn handle_system(cmd: SystemCommands, ctx: CliContext) -> Result<()> {
             commands::system::health(&client, ctx.output_format, ctx.compact).await?;
             Ok(())
         }
+        SystemCommands::Crypto { action } => commands::crypto::handle_crypto(action).await,
     }
 }
 

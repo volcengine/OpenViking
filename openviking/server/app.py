@@ -70,15 +70,18 @@ def create_app(
 
         set_service(service)
 
-        # Initialize APIKeyManager after service (needs AGFS)
+        # Initialize APIKeyManager after service (needs VikingFS)
         if config.root_api_key:
             api_key_manager = APIKeyManager(
                 root_key=config.root_api_key,
-                agfs_client=service._agfs,
+                viking_fs=service.viking_fs,
+                encryption_enabled=config.encryption_enabled,
             )
             await api_key_manager.load()
             app.state.api_key_manager = api_key_manager
-            logger.info("APIKeyManager initialized")
+            logger.info(
+                "APIKeyManager initialized with encryption_enabled=%s", config.encryption_enabled
+            )
         else:
             app.state.api_key_manager = None
             logger.warning(

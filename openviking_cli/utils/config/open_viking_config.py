@@ -17,6 +17,7 @@ from .consts import (
     SYSTEM_CONFIG_DIR,
 )
 from .embedding_config import EmbeddingConfig
+from .encryption_config import EncryptionConfig
 from .log_config import LogConfig
 from .parser_config import (
     AudioConfig,
@@ -56,6 +57,11 @@ class OpenVikingConfig(BaseModel):
 
     rerank: RerankConfig = Field(
         default_factory=lambda: RerankConfig(), description="Rerank configuration"
+    )
+
+    # Encryption configuration
+    encryption: EncryptionConfig = Field(
+        default_factory=lambda: EncryptionConfig(), description="Encryption configuration"
     )
 
     # Parser configurations

@@ -296,6 +296,9 @@ class MarkdownParser(BaseParser):
         """
         Split oversized content by paragraphs, force split single oversized paragraphs.
 
+        Enforces both a token estimate limit (max_size) and a hard character limit
+        (self.config.max_section_chars) to guard against token estimation errors.
+
         Args:
             content: Content to split
             max_size: Maximum size per part (in tokens)
@@ -303,6 +306,10 @@ class MarkdownParser(BaseParser):
         Returns:
             List of content parts
         """
+        max_chars = self.config.max_section_chars
+        if max_chars <= 0:
+            # Char limit disabled (misconfigured); fall back to token-only splitting
+            max_chars = len(content) + 1
         paragraphs = content.split("\n\n")
         parts = []
         current = ""
@@ -310,18 +317,19 @@ class MarkdownParser(BaseParser):
 
         for para in paragraphs:
             para_tokens = self._estimate_token_count(para)
+            para_len = len(para)
 
-            # Single paragraph too long, force split by characters
-            if para_tokens > max_size:
+            # Single paragraph too long (by tokens or chars): force split by characters
+            if para_tokens > max_size or para_len > max_chars:
                 if current:
                     parts.append(current.strip())
                     current = ""
                     current_tokens = 0
-                # Split by character count (rough approximation: 1 token ~ 3 chars)
-                char_split_size = int(max_size * 3)
-                for i in range(0, len(para), char_split_size):
-                    parts.append(para[i : i + char_split_size].strip())
-            elif current_tokens + para_tokens > max_size and current:
+                for i in range(0, len(para), max_chars):
+                    parts.append(para[i : i + max_chars].strip())
+            elif (
+                current_tokens + para_tokens > max_size or len(current) + len(para) + 2 > max_chars
+            ) and current:
                 parts.append(current.strip())
                 current = para
                 current_tokens = para_tokens
@@ -376,6 +384,7 @@ class MarkdownParser(BaseParser):
         """
         viking_fs = self._get_viking_fs()
         max_size = self.config.max_section_size or self.DEFAULT_MAX_SECTION_SIZE
+        max_chars = self.config.max_section_chars
         min_size = self.DEFAULT_MIN_SECTION_TOKENS
 
         # Estimate document size
@@ -388,8 +397,8 @@ class MarkdownParser(BaseParser):
         # Get document name
         doc_name = self._sanitize_for_path(Path(source_path).stem if source_path else "content")
 
-        # Small document: save as single file
-        if estimated_tokens <= max_size:
+        # Small document: save as single file (check both token and char limits)
+        if estimated_tokens <= max_size and len(content) <= max_chars:
             file_path = f"{root_dir}/{doc_name}.md"
             await viking_fs.write_file(file_path, content)
             logger.debug(f"[MarkdownParser] Small document saved as: {file_path}")
@@ -520,8 +529,8 @@ class MarkdownParser(BaseParser):
         name, tokens, content_text = section["name"], section["tokens"], section["content"]
         has_children = section["has_children"]
 
-        # Fits in one file
-        if tokens <= max_size:
+        # Fits in one file (check both token and char limits)
+        if tokens <= max_size and len(content_text) <= self.config.max_section_chars:
             await viking_fs.write_file(f"{parent_dir}/{name}.md", content_text)
             logger.debug(f"[MarkdownParser] Saved: {name}.md")
             return
@@ -611,11 +620,26 @@ class MarkdownParser(BaseParser):
     async def _save_merged(
         self, viking_fs, parent_dir: str, sections: List[Tuple[str, str, int]]
     ) -> None:
-        """Save merged sections as single file with smart naming."""
+        """Save merged sections as single file with smart naming.
+
+        If the joined content exceeds max_section_chars it is split further
+        by _smart_split_content before writing, so no single file ever exceeds
+        the hard character limit.
+        """
         name = self._generate_merged_filename(sections)
         content = "\n\n".join(c for _, c, _ in sections)
-        await viking_fs.write_file(f"{parent_dir}/{name}.md", content)
-        logger.debug(f"[MarkdownParser] Merged: {name}.md ({len(sections)} sections)")
+        max_chars = self.config.max_section_chars
+        if len(content) > max_chars:
+            max_size = self.config.max_section_size or self.DEFAULT_MAX_SECTION_SIZE
+            parts = self._smart_split_content(content, max_size)
+            for i, part in enumerate(parts, 1):
+                await viking_fs.write_file(f"{parent_dir}/{name}_{i}.md", part)
+            logger.debug(
+                f"[MarkdownParser] Merged then split: {name} ({len(sections)} sections → {len(parts)} parts)"
+            )
+        else:
+            await viking_fs.write_file(f"{parent_dir}/{name}.md", content)
+            logger.debug(f"[MarkdownParser] Merged: {name}.md ({len(sections)} sections)")
 
     def _get_section_info(
         self,
