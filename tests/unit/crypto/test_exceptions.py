@@ -4,7 +4,6 @@
 Unit tests for crypto exception classes.
 """
 
-
 from openviking.crypto.exceptions import (
     AuthenticationFailedError,
     ConfigError,
