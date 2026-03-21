@@ -8,7 +8,6 @@ use clap::Subcommand;
 use dirs::home_dir;
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 /// Crypto subcommands.
@@ -73,14 +72,24 @@ async fn handle_init_key(output_file: Option<PathBuf>) -> Result<()> {
     file.write_all(hex_key.as_bytes())
         .map_err(|e| Error::Client(format!("Failed to write to key file: {}", e)))?;
 
-    // Set permissions to 0600 (owner read/write only)
-    let mut perms = file
-        .metadata()
-        .map_err(|e| Error::Client(format!("Failed to get file metadata: {}", e)))?
-        .permissions();
-    perms.set_mode(0o600);
-    file.set_permissions(perms)
-        .map_err(|e| Error::Client(format!("Failed to set file permissions: {}", e)))?;
+    // Set permissions to 0600 (owner read/write only) on Unix platforms
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = file
+            .metadata()
+            .map_err(|e| Error::Client(format!("Failed to get file metadata: {}", e)))?
+            .permissions();
+        perms.set_mode(0o600);
+        file.set_permissions(perms)
+            .map_err(|e| Error::Client(format!("Failed to set file permissions: {}", e)))?;
+    }
+
+    // On Windows, permissions are handled differently
+    #[cfg(windows)]
+    {
+        // Windows doesn't support Unix-style permissions, skip setting mode
+    }
 
     println!("Successfully generated root key at: {}", key_path.display());
     println!("Key permissions set to 0600 (owner read/write only)");
