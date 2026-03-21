@@ -238,6 +238,13 @@ const contextEnginePlugin = {
           text: Type.String({ description: "Information to store as memory source text" }),
           role: Type.Optional(Type.String({ description: "Session role, default user" })),
           sessionId: Type.Optional(Type.String({ description: "Existing OpenViking session ID" })),
+          attachments: Type.Optional(
+            Type.Array(Type.String(), {
+              description:
+                "Local file paths to associate with this memory (images, JSON, documents, etc.). " +
+                "Files are uploaded to the memory backend and get VLM descriptions automatically.",
+            }),
+          ),
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
           const { text } = params as { text: string };
@@ -246,10 +253,36 @@ const contextEnginePlugin = {
               ? (params as { role: string }).role
               : "user";
           const sessionIdIn = (params as { sessionId?: string }).sessionId;
+          const attachmentPaths = Array.isArray((params as { attachments?: string[] }).attachments)
+            ? (params as { attachments: string[] }).attachments
+            : [];
 
           api.logger.info?.(
-            `openviking: memory_store invoked (textLength=${text?.length ?? 0}, sessionId=${sessionIdIn ?? "temp"})`,
+            `openviking: memory_store invoked (textLength=${text?.length ?? 0}, attachments=${attachmentPaths.length}, sessionId=${sessionIdIn ?? "temp"})`,
           );
+
+          // Upload attachments first (before session, so URIs can be referenced).
+          // storeAttachments returns null for individual failures (never throws).
+          let uploadedAttachments: Array<{ uri: string; mime_type: string; abstract: string }> = [];
+          let failedAttachmentCount = 0;
+          if (attachmentPaths.length > 0) {
+            try {
+              const c = await getClient();
+              uploadedAttachments = await c.storeAttachments(attachmentPaths);
+              failedAttachmentCount = attachmentPaths.length - uploadedAttachments.length;
+              api.logger.info?.(
+                `openviking: uploaded ${uploadedAttachments.length}/${attachmentPaths.length} attachments` +
+                  (failedAttachmentCount > 0 ? ` (${failedAttachmentCount} failed)` : ""),
+              );
+            } catch (err) {
+              failedAttachmentCount = attachmentPaths.length;
+              api.logger.warn(`openviking: attachment upload failed: ${String(err)}`);
+            }
+          }
+
+          // V0.5: memory text is pure semantic content only — no URIs, no attachment blocks.
+          // Attachments are stored in Viking Resources and returned to the caller via details.attachments.
+          // Linking attachments as a first-class field inside Memory requires Viking schema changes (V1).
 
           let sessionId = sessionIdIn;
           let createdTempSession = false;
@@ -269,14 +302,28 @@ const contextEnginePlugin = {
             } else {
               api.logger.info?.(`openviking: memory_store extracted ${extracted.length} memories`);
             }
+
+            let statusText = `Stored in OpenViking session ${sessionId} and extracted ${extracted.length} memories.`;
+            if (attachmentPaths.length > 0) {
+              if (failedAttachmentCount === 0) {
+                statusText += ` Attached ${uploadedAttachments.length} file(s) successfully.`;
+              } else if (uploadedAttachments.length === 0) {
+                statusText += ` WARNING: All ${failedAttachmentCount} attachment(s) failed to upload. Files were NOT stored.`;
+              } else {
+                statusText += ` Attached ${uploadedAttachments.length} file(s); ${failedAttachmentCount} failed to upload.`;
+              }
+            }
+
             return {
-              content: [
-                {
-                  type: "text",
-                  text: `Stored in OpenViking session ${sessionId} and extracted ${extracted.length} memories.`,
-                },
-              ],
-              details: { action: "stored", sessionId, extractedCount: extracted.length, extracted },
+              content: [{ type: "text", text: statusText }],
+              details: {
+                action: "stored",
+                sessionId,
+                extractedCount: extracted.length,
+                extracted,
+                attachments: uploadedAttachments,
+                attachmentsFailed: failedAttachmentCount,
+              },
             };
           } catch (err) {
             api.logger.warn(`openviking: memory_store failed: ${String(err)}`);

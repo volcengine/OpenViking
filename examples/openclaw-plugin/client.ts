@@ -1,5 +1,14 @@
 import { createHash } from "node:crypto";
+import { createReadStream } from "node:fs";
+import { stat } from "node:fs/promises";
+import { basename, extname } from "node:path";
 import type { spawn } from "node:child_process";
+
+export type AttachmentItem = {
+  uri: string;
+  mime_type: string;
+  abstract: string;
+};
 
 export type FindResultItem = {
   uri: string;
@@ -290,4 +299,149 @@ export class OpenVikingClient {
       method: "DELETE",
     });
   }
+
+  /**
+   * Upload local files to viking://resources/attachments/ and return structured metadata.
+   * Uses content-addressed storage (SHA-256 hash in URI) for deduplication.
+   * Concurrency is limited to 3 to avoid VLM avalanche on large batches.
+   * Each upload gets an independent 60s timeout; individual failures return null (not thrown).
+   */
+  async storeAttachments(filePaths: string[]): Promise<AttachmentItem[]> {
+    const CONCURRENCY_LIMIT = 3;
+    const results: AttachmentItem[] = [];
+
+    for (let i = 0; i < filePaths.length; i += CONCURRENCY_LIMIT) {
+      const chunk = filePaths.slice(i, i + CONCURRENCY_LIMIT);
+
+      const settled = await Promise.allSettled(
+        chunk.map(async (filePath): Promise<AttachmentItem | null> => {
+          const perFileController = new AbortController();
+          const perFileTimer = setTimeout(() => perFileController.abort(), 60_000);
+
+          try {
+            // Validate file exists and is not empty
+            const fileStat = await stat(filePath);
+            if (!fileStat.isFile() || fileStat.size === 0) {
+              console.warn(`[memory-openviking] storeAttachments skipping non-file or empty: ${filePath}`);
+              return null;
+            }
+
+            // Compute SHA-256 hash for content-addressed dedup
+            const fileHash = await hashFile(filePath);
+            const safeFileName = basename(filePath).replace(/[^a-zA-Z0-9._-]/g, "_");
+            const destUri = `viking://resources/attachments/${fileHash}_${safeFileName}`;
+
+            // Step 1: temp_upload (multipart form)
+            const formData = new FormData();
+            const fileBuffer = await new Promise<Buffer>((resolve, reject) => {
+              const chunks: Buffer[] = [];
+              const stream = createReadStream(filePath);
+              stream.on("data", (chunk: Buffer) => chunks.push(chunk));
+              stream.on("end", () => resolve(Buffer.concat(chunks)));
+              stream.on("error", reject);
+            });
+            const blob = new Blob([fileBuffer]);
+            formData.append("file", blob, safeFileName);
+
+            const uploadResp = await fetch(`${this.baseUrl}/api/v1/resources/temp_upload`, {
+              method: "POST",
+              headers: this.apiKey ? { "X-API-Key": this.apiKey } : {},
+              body: formData,
+              signal: perFileController.signal,
+            });
+
+            if (!uploadResp.ok) {
+              const errText = await uploadResp.text().catch(() => "");
+              console.warn(`[memory-openviking] temp_upload failed for ${filePath}: HTTP ${uploadResp.status} ${errText}`);
+              return null;
+            }
+
+            const uploadResult = (await uploadResp.json()) as { result?: { path?: string } };
+            const tempPath = uploadResult?.result?.path;
+            if (!tempPath) {
+              console.warn(`[memory-openviking] temp_upload returned no path for ${filePath}`);
+              return null;
+            }
+
+            // Step 2: addResource (triggers VLM description + multimodal embedding)
+            const addResp = await fetch(`${this.baseUrl}/api/v1/resources`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                ...(this.apiKey ? { "X-API-Key": this.apiKey } : {}),
+              },
+              body: JSON.stringify({
+                path: tempPath,
+                to: destUri,
+                wait: true,
+              }),
+              signal: perFileController.signal,
+            });
+
+            if (!addResp.ok) {
+              const errText = await addResp.text().catch(() => "");
+              console.warn(`[memory-openviking] addResource failed for ${filePath}: HTTP ${addResp.status} ${errText}`);
+              return null;
+            }
+
+            const addResult = (await addResp.json()) as {
+              result?: { root_uri?: string; abstract?: string };
+            };
+
+            return {
+              uri: addResult?.result?.root_uri ?? destUri,
+              mime_type: getMimeType(filePath),
+              abstract: addResult?.result?.abstract ?? "",
+            };
+          } catch (err) {
+            console.warn(`[memory-openviking] storeAttachments failed for ${filePath}:`, err);
+            return null;
+          } finally {
+            clearTimeout(perFileTimer);
+          }
+        }),
+      );
+
+      for (const s of settled) {
+        if (s.status === "fulfilled" && s.value !== null) {
+          results.push(s.value);
+        }
+      }
+    }
+
+    return results;
+  }
+}
+
+/** Stream SHA-256 hash of a file (no full-file buffer in memory). */
+async function hashFile(filePath: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const hash = createHash("sha256");
+    const stream = createReadStream(filePath);
+    stream.on("data", (chunk: Buffer) => hash.update(chunk));
+    stream.on("end", () => resolve(hash.digest("hex").slice(0, 16)));
+    stream.on("error", reject);
+  });
+}
+
+const MIME_MAP: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+  ".mp4": "video/mp4",
+  ".webm": "video/webm",
+  ".mp3": "audio/mpeg",
+  ".wav": "audio/wav",
+  ".pdf": "application/pdf",
+  ".json": "application/json",
+  ".txt": "text/plain",
+  ".md": "text/markdown",
+  ".csv": "text/csv",
+};
+
+function getMimeType(filePath: string): string {
+  return MIME_MAP[extname(filePath).toLowerCase()] ?? "application/octet-stream";
 }
