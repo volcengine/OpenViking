@@ -9,6 +9,7 @@ os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
 import asyncio
 import base64
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Union
 
@@ -226,8 +227,10 @@ class LiteLLMVLMProvider(VLMBase):
         messages = [{"role": "user", "content": prompt}]
         kwargs = self._build_kwargs(model, messages)
 
+        t0 = time.perf_counter()
         response = completion(**kwargs)
-        self._update_token_usage_from_response(response)
+        elapsed = time.perf_counter() - t0
+        self._update_token_usage_from_response(response, duration_seconds=elapsed)
         return self._clean_response(self._extract_content_from_response(response))
 
     async def get_completion_async(
@@ -241,8 +244,12 @@ class LiteLLMVLMProvider(VLMBase):
         last_error = None
         for attempt in range(max_retries + 1):
             try:
+                t0 = time.perf_counter()
                 response = await acompletion(**kwargs)
-                self._update_token_usage_from_response(response)
+                elapsed = time.perf_counter() - t0
+                self._update_token_usage_from_response(
+                    response, duration_seconds=elapsed,
+                )
                 return self._clean_response(self._extract_content_from_response(response))
             except Exception as e:
                 last_error = e
@@ -270,8 +277,10 @@ class LiteLLMVLMProvider(VLMBase):
         messages = [{"role": "user", "content": content}]
         kwargs = self._build_kwargs(model, messages)
 
+        t0 = time.perf_counter()
         response = completion(**kwargs)
-        self._update_token_usage_from_response(response)
+        elapsed = time.perf_counter() - t0
+        self._update_token_usage_from_response(response, duration_seconds=elapsed)
         return self._clean_response(self._extract_content_from_response(response))
 
     async def get_vision_completion_async(
@@ -291,11 +300,15 @@ class LiteLLMVLMProvider(VLMBase):
         messages = [{"role": "user", "content": content}]
         kwargs = self._build_kwargs(model, messages)
 
+        t0 = time.perf_counter()
         response = await acompletion(**kwargs)
-        self._update_token_usage_from_response(response)
+        elapsed = time.perf_counter() - t0
+        self._update_token_usage_from_response(response, duration_seconds=elapsed)
         return self._clean_response(self._extract_content_from_response(response))
 
-    def _update_token_usage_from_response(self, response) -> None:
+    def _update_token_usage_from_response(
+        self, response, duration_seconds: float = 0.0,
+    ) -> None:
         """Update token usage from response."""
         if hasattr(response, "usage") and response.usage:
             prompt_tokens = response.usage.prompt_tokens
@@ -305,4 +318,5 @@ class LiteLLMVLMProvider(VLMBase):
                 provider=self.provider,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
+                duration_seconds=duration_seconds,
             )

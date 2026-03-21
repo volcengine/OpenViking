@@ -5,6 +5,7 @@
 import asyncio
 import base64
 import logging
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Union
 
@@ -80,7 +81,9 @@ class OpenAIVLM(VLMBase):
                 self._async_client = openai.AsyncOpenAI(**kwargs)
         return self._async_client
 
-    def _update_token_usage_from_response(self, response):
+    def _update_token_usage_from_response(
+        self, response, duration_seconds: float = 0.0,
+    ):
         if hasattr(response, "usage") and response.usage:
             prompt_tokens = response.usage.prompt_tokens
             completion_tokens = response.usage.completion_tokens
@@ -89,6 +92,7 @@ class OpenAIVLM(VLMBase):
                 provider=self.provider,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
+                duration_seconds=duration_seconds,
             )
         return
 
@@ -191,12 +195,14 @@ class OpenAIVLM(VLMBase):
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
 
+        t0 = time.perf_counter()
         response = client.chat.completions.create(**kwargs)
+        elapsed = time.perf_counter() - t0
 
         if self.stream:
             content = self._process_streaming_response(response)
         else:
-            self._update_token_usage_from_response(response)
+            self._update_token_usage_from_response(response, duration_seconds=elapsed)
             content = self._extract_content_from_response(response)
 
         return self._clean_response(content)
@@ -218,12 +224,16 @@ class OpenAIVLM(VLMBase):
         last_error = None
         for attempt in range(max_retries + 1):
             try:
+                t0 = time.perf_counter()
                 response = await client.chat.completions.create(**kwargs)
+                elapsed = time.perf_counter() - t0
 
                 if self.stream:
                     content = await self._process_streaming_response_async(response)
                 else:
-                    self._update_token_usage_from_response(response)
+                    self._update_token_usage_from_response(
+                        response, duration_seconds=elapsed,
+                    )
                     content = self._extract_content_from_response(response)
 
                 return self._clean_response(content)
@@ -312,12 +322,14 @@ class OpenAIVLM(VLMBase):
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
 
+        t0 = time.perf_counter()
         response = client.chat.completions.create(**kwargs)
+        elapsed = time.perf_counter() - t0
 
         if self.stream:
             content = self._process_streaming_response(response)
         else:
-            self._update_token_usage_from_response(response)
+            self._update_token_usage_from_response(response, duration_seconds=elapsed)
             content = self._extract_content_from_response(response)
 
         return self._clean_response(content)
@@ -345,12 +357,14 @@ class OpenAIVLM(VLMBase):
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
 
+        t0 = time.perf_counter()
         response = await client.chat.completions.create(**kwargs)
+        elapsed = time.perf_counter() - t0
 
         if self.stream:
             content = await self._process_streaming_response_async(response)
         else:
-            self._update_token_usage_from_response(response)
+            self._update_token_usage_from_response(response, duration_seconds=elapsed)
             content = self._extract_content_from_response(response)
 
         return self._clean_response(content)
