@@ -252,6 +252,7 @@ class EmbeddingConfig(BaseModel):
             ValueError: If provider/type combination is not supported
         """
         from openviking.models.embedder import (
+            GeminiDenseEmbedder,
             JinaDenseEmbedder,
             MinimaxDenseEmbedder,
             OpenAIDenseEmbedder,
@@ -263,7 +264,6 @@ class EmbeddingConfig(BaseModel):
             VolcengineSparseEmbedder,
             VoyageDenseEmbedder,
         )
-        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
 
         # Factory registry: (provider, type) -> (embedder_class, param_builder)
         factory_registry = {
