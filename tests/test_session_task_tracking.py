@@ -351,3 +351,24 @@ async def test_error_sanitized_in_task(api_client):
     error = task_resp.json()["result"]["error"]
     assert "superSecretKey" not in error
     assert "[REDACTED]" in error
+
+
+async def test_cancelled_background_commit_is_marked_failed(api_client):
+    """Cancelled background commits should not surface as unhandled task crashes."""
+    client, service = api_client
+    session_id = await _new_session_with_message(client)
+
+    async def cancelled_commit(_sid, _ctx):
+        raise asyncio.CancelledError()
+
+    service.sessions.commit_async = cancelled_commit
+
+    resp = await client.post(f"/api/v1/sessions/{session_id}/commit", params={"wait": False})
+    task_id = resp.json()["result"]["task_id"]
+
+    await asyncio.sleep(0.2)
+
+    task_resp = await client.get(f"/api/v1/tasks/{task_id}")
+    result = task_resp.json()["result"]
+    assert result["status"] == "failed"
+    assert "cancelled" in result["error"].lower()

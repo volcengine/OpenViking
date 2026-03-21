@@ -250,6 +250,9 @@ async def _background_commit_tracked(
             task_id,
             result.get("memories_extracted", 0),
         )
+    except asyncio.CancelledError:
+        tracker.fail(task_id, "Background commit cancelled during shutdown")
+        logger.warning("Background commit cancelled: session=%s task=%s", session_id, task_id)
     except Exception as exc:
         tracker.fail(task_id, str(exc))
         logger.exception("Background commit failed: session=%s task=%s", session_id, task_id)

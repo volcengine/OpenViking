@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for LockManager."""
 
+import asyncio
 import uuid
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -86,3 +88,14 @@ class TestLockManagerBasic:
         handle = lm.create_handle()
         ok = await lm.acquire_point(handle, "/local/nonexistent-xyz")
         assert ok is False
+
+    async def test_recover_pending_redo_preserves_cancelled_error(self, lm):
+        lm._redo_log = MagicMock()
+        lm._redo_log.list_pending.return_value = ["redo-task"]
+        lm._redo_log.read.return_value = {"archive_uri": "a", "session_uri": "b"}
+        lm._redo_session_memory = AsyncMock(side_effect=asyncio.CancelledError("shutdown"))
+
+        with pytest.raises(asyncio.CancelledError):
+            await lm._recover_pending_redo()
+
+        lm._redo_log.mark_done.assert_not_called()
