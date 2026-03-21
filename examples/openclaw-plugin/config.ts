@@ -206,7 +206,7 @@ export const memoryOpenVikingConfigSchema = {
     agentId: {
       label: "Agent ID",
       placeholder: "default",
-      help: "Leave empty for per-agent memory isolation (recommended). The host-provided agent ID is used to namespace memories; \"main\" maps to \"default\" for backward compatibility. Set a fixed value (e.g. \"default\") to share one namespace across all agents.",
+      help: "Leave empty for per-agent memory isolation (recommended). The host-provided agent ID is used to namespace memories. Set a fixed value (e.g. \"default\") to share one namespace across all agents. Note: explicit tool calls (memory_store, memory_recall, memory_forget) use this value (or \"default\") and do not automatically inherit the calling agent's identity.",
     },
     apiKey: {
       label: "OpenViking API Key",

@@ -299,6 +299,10 @@ describe("PR #597 – Multi-agent memory isolation", () => {
 
   // ---------------------------------------------------------------------------
   // Test 3 – lastProcessedMsgCount is tracked per-agent, not shared
+  // NOTE: Design contract test. This test verifies the isolation semantics of
+  // extractNewTurnTexts (a pure text utility) with independent per-agent offsets.
+  // It does not test whether context-engine.ts actually tracks per-agent offsets
+  // in practice — that would require invoking the context engine's afterTurn path.
   // ---------------------------------------------------------------------------
 
   test("context engine afterTurn uses per-agent prePromptMessageCount, not a shared counter", async () => {
@@ -450,6 +454,10 @@ describe("PR #597 – Multi-agent memory isolation", () => {
 
   // ---------------------------------------------------------------------------
   // Test 6 – Agent space derivation is deterministic and agent-specific
+  // NOTE: Design contract test. This test reimplements md5Short locally rather than
+  // importing it from client.ts. It verifies the composite key derivation contract
+  // (md5(userId:agentId) produces distinct spaces per agent), but will not catch
+  // regressions if the production md5Short implementation changes (e.g. hash length).
   // ---------------------------------------------------------------------------
 
   test("agent space key is derived from md5(userId:agentId) – two agents produce distinct spaces", () => {
@@ -501,6 +509,10 @@ describe("PR #597 – Multi-agent memory isolation", () => {
 
   // ---------------------------------------------------------------------------
   // Test 8 – sessionAgentIds map correctly routes sessions to agent identities
+  // NOTE: Design contract test. This test reimplements rememberSessionAgentId and
+  // resolveAgentId locally rather than importing from index.ts. It verifies the
+  // session-to-agent routing contract, but changes to the production implementations
+  // in index.ts would not cause this test to fail.
   // ---------------------------------------------------------------------------
 
   test("sessionAgentIds map isolates session-to-agent routing (simulates index.ts hook logic)", () => {

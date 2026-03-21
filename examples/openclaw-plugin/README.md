@@ -418,7 +418,9 @@ Previously, all agents on the same OpenClaw instance shared a single memory name
 | **Not set** (default, recommended) | Each agent gets its own isolated memory namespace. The plugin reads the agent ID from the OpenClaw host automatically. |
 | **Set to a fixed value** (e.g. `"default"`) | All agents using this value share the same memory namespace (the old behavior). |
 
-> **Backward compatibility:** OpenClaw's default primary agent ID is `main`. For compatibility with previous versions (where all memories were stored under `default`), the plugin maps `main` to the `default` namespace — so existing memories remain accessible after upgrading. Other agents get their own isolated namespace based on their agent ID.
+> **Note on `"main"` agent ID:** OpenClaw's default primary agent ID is `"main"`. With per-agent isolation enabled (the default), memories are stored under the `"main"` namespace — not the legacy `"default"` namespace. If you previously used a fixed `agentId: "default"` config, those memories remain under `"default"` and will not be visible to the `"main"` agent. To continue accessing them, explicitly set `agentId: "default"` in your config.
+
+> **Tool isolation limitation:** Auto-recall and auto-capture (the background memory pipeline) are fully per-agent isolated — the plugin receives agent context from OpenClaw via hook events and routes each agent's memories correctly. However, explicit tool calls (`memory_store`, `memory_recall`, `memory_forget`) do not currently inherit the calling agent's identity. They use the configured `agentId` value, or `"default"` if none is set. This is a platform-level constraint: the OpenClaw tool execution API does not pass agent context into tool `execute` callbacks. Full tool-level isolation would require a change to the OpenClaw platform.
 
 ### Reverting to Shared Memory
 
