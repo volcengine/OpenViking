@@ -1,0 +1,32 @@
+memory_type: entities
+description: |
+  Entity memory - captures "what this named thing is, what properties it has".
+  Extract information about specific entities mentioned in conversation.
+  Entity types include: projects, people, organizations, systems, technologies, concepts, products, etc.
+  Each entity is a named thing that has attributes worth remembering for future conversations.
+  Store each entity as a separate memory file, keyed by entity name.
+directory: "viking://user/{user_space}/memories/entities"
+filename_template: "{entity_name}.md"
+enabled: false
+
+fields:
+  - name: entity_name
+    type: string
+    description: |
+      Entity name used to uniquely identify this entity memory.
+      Should be the specific name of the entity such as "OpenViking project", "Alice (colleague)", "Redis", etc.
+    merge_op: immutable
+
+  - name: entity_type
+    type: string
+    description: |
+      Entity type describing what type of entity this is.
+      Possible values: project, person, organization, system, technology, concept, etc.
+
+  - name: content
+    type: string
+    description: |
+      Detailed entity content describing "what this named thing is, what properties it has".
+      Includes: basic information, core attributes, status, etc.
+      Example: "OpenViking is an AI Agent long-term memory management system the user is developing. The project uses Python and AGFS tech stack, core features include memory extraction, deduplication, and retrieval. Currently in active development, goal is to build Claude-like long-term memory capabilities."
+    merge_op: patch

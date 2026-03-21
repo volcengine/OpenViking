@@ -1,0 +1,45 @@
+memory_type: cards
+description: |
+  # 任务
+  - 通过Zettelkasten 卡片盒笔记法来做知识管理，每个知识卡片表示一个实体
+  - 知识之间通过相对路径的格式来互相连接，请把文档中的连接替换为正确的连接
+  - 相对路径格式为：../a/b.md
+      - 好例子：症状如果是[皮肤痒](../card/skin_itching.md)需要去皮肤科
+  - 让卡片尽可能丰富，分散，不要把所有信息都写在一个卡片里。
+directory: "viking://agent/{agent_space}/memories/cards"
+filename_template: "{name}.md"
+
+fields:
+  - name: name
+    type: string
+    description: |
+      # 内容
+      - 卡片的英文名，使用小写字母，下划线分隔，最多不超过3个单词
+    
+      # 内容格式要求
+      ## 实体卡片
+      - 比如在导诊场景每个卡片表示了一个科室或症状
+      - 注意：实体应该拆分的尽可能细，比如有多个症状的联合症状，那要为每个症状拆分一个实体
+    
+      ### 好例子
+      emergency_department
+      cough_symptom
+      daily_20260110
+      
+      ### 坏例子
+      急症室 // 不要用中文
+      progressive_memory_loss_with_personality_change  // 太长了不能超过3个单词
+    merge_op: immutable
+
+  - name: content
+    type: string
+    description: |
+      # 内容
+      - Zettelkasten卡片的详细内容，用md格式输出，不要把内容挤在一行，用md的层次结构表达
+      - 卡片之间请使用md的标准链接来建立联系，比如：
+          [急症科](../card/{name})
+          [发烧](../card/{name})
+      
+      - 一个卡片只介绍一个事情，并做好和其他卡片的关联，如果卡片内容太多了，请把内容放到新建卡片里。
+      - 对于检索到的内容，如果和当前卡片有关系，可以更新当前卡片的内容，来建立连接。
+    merge_op: patch
