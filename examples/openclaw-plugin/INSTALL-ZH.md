@@ -31,6 +31,13 @@
 
 - 插件 2.0 与旧版插件/旧版配置不兼容，需避免旧版和新版插件同时存在。
 
+#### 方式 A：下载并执行旧版插件清理脚本 (推荐)
+```bash
+curl -O https://github.com/volcengine/OpenViking/blob/main/examples/openclaw-plugin/upgrade_scripts/cleanup-memory-openviking.sh
+bash cleanup-memory-openviking.sh
+```
+
+#### 方式 B：手动执行命令清理旧版本插件配置
 1. 停止 OpenClaw gateway：
 
 ```bash
@@ -49,9 +56,9 @@ mv ~/.openclaw/extensions/memory-openviking ~/.openclaw/disabled-extensions/memo
 
 编辑 `~/.openclaw/openclaw.json`，删除 `plugins.allow` 中的 `"memory-openviking"`，删除 `plugins.entries.memory-openviking`，并将 `plugins.slots.memory` 改为 `"none"`，将 `plugins.load.paths`中旧版本 `memory-openviking` 插件路径修改为`openviking`。
 
-4. 参考下面方式A或者安装方式B的操作步骤，安装新版插件
+按照上述方式清理完成旧版插件配置后，参考下面安装方式A或者安装方式B的操作步骤，安装新版插件;
 
-5. 保留并迁移旧版本运行参数到新版本配置（新版本默认可用，旧版本参数按需迁移）：
+保留并迁移旧版本运行参数到新版本配置（新版本默认可用，旧版本参数按需迁移）：
 
 如果旧版本原来使用的是 `plugins.entries.memory-openviking.config`，请将第二步备份的openclaw配置文件中的 `mode`、`configPath`、`port`、`baseUrl`、`apiKey`、`agentId` 等参数按需迁移到新版 `plugins.entries.openviking.config`。
 

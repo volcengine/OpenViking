@@ -24,8 +24,20 @@ Provide long-term memory capabilities for [OpenClaw](https://github.com/openclaw
 
 ### Prerequisite Steps for Upgrading from Legacy `memory-openviking` to New `openviking`
 
-If the current environment already has the legacy `memory-openviking` plugin installed, complete the following prerequisite steps before installing the new version. Plugin 2.0 is not backward-compatible with the legacy plugin/configuration, so do not keep both versions active at the same time.
+- If the current environment already has the legacy `memory-openviking` plugin installed, complete the following prerequisite steps before installing the new version. Plugin 2.0 is not backward-compatible with the legacy plugin/configuration, so do not keep both versions active at the same time.
 
+- If you have never installed the legacy plugin before, you can skip this section and go straight to installation.
+
+- Plugin 2.0 is not backward-compatible with the legacy plugin/configuration, so do not keep both versions active at the same time.
+
+#### Method A: Download and Run the Legacy Plugin Cleanup Script (Recommended)
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/upgrade_scripts/cleanup-memory-openviking.sh
+bash cleanup-memory-openviking.sh
+```
+
+#### Method B: Manually Clean Up the Legacy Plugin Configuration
 1. Stop the OpenClaw gateway:
 
 ```bash
@@ -44,11 +56,13 @@ mv ~/.openclaw/extensions/memory-openviking ~/.openclaw/disabled-extensions/memo
 
 Edit `~/.openclaw/openclaw.json`, remove `"memory-openviking"` from `plugins.allow`, remove `plugins.entries.memory-openviking`, change `plugins.slots.memory` to `"none"`, and remove the legacy `memory-openviking` plugin path from `plugins.load.paths`.
 
-4. Install the new plugin by following Method A or Method B below.
+After cleaning up the legacy plugin configuration using either approach above, install the new plugin by following Method A or Method B below.
 
-5. Preserve and migrate legacy runtime settings into the new configuration if needed (the new version works with defaults; legacy parameters are optional to migrate):
+Preserve and migrate legacy runtime settings into the new configuration if needed (the new version works with defaults; legacy parameters are optional to migrate):
 
 If the legacy plugin was using `plugins.entries.memory-openviking.config`, migrate `mode`, `configPath`, `port`, `baseUrl`, `apiKey`, `agentId`, and any other needed parameters from the backup `openclaw.json` file created in Step 2 into `plugins.entries.openviking.config`.
+
+Run the prerequisite steps above only if they apply to your environment. Once finished, continue with the Plugin 2.0 installation flow. For now, we do not recommend direct natural-language installation; the npm one-click installer is the preferred path.
 
 ### Method A: npm Installation (Recommended, Cross-platform)
 
