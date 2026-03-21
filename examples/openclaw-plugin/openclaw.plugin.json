@@ -24,8 +24,8 @@
     },
     "agentId": {
       "label": "Agent ID",
-      "placeholder": "random unique ID",
-      "help": "Identifies this agent to OpenViking. A random unique ID is generated if not set."
+      "placeholder": "default",
+      "help": "Leave empty for per-agent memory isolation (recommended). The host-provided agent ID is used to namespace memories; \"main\" maps to \"default\" for backward compatibility. Set a fixed value (e.g. \"default\") to share one namespace across all agents."
     },
     "apiKey": {
       "label": "OpenViking API Key",

@@ -123,7 +123,7 @@ const contextEnginePlugin = {
         }
       }
     } else {
-      clientPromise = Promise.resolve(new OpenVikingClient(cfg.baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs));
+      clientPromise = Promise.resolve(new OpenVikingClient(cfg.baseUrl, cfg.apiKey, cfg.timeoutMs));
     }
 
     const getClient = (): Promise<OpenVikingClient> => clientPromise;
@@ -162,6 +162,7 @@ const contextEnginePlugin = {
               : undefined;
           const requestLimit = Math.max(limit * 4, 20);
 
+          const agentId = getToolAgentId();
           let result;
           if (targetUri) {
             // 如果指定了目标 URI，只检索该位置
@@ -169,6 +170,7 @@ const contextEnginePlugin = {
               targetUri,
               limit: requestLimit,
               scoreThreshold: 0,
+              agentId,
             });
           } else {
             // 默认同时检索 user 和 agent 两个位置的记忆
@@ -177,11 +179,13 @@ const contextEnginePlugin = {
                 targetUri: "viking://user/memories",
                 limit: requestLimit,
                 scoreThreshold: 0,
+                agentId,
               }),
               (await getClient()).find(query, {
                 targetUri: "viking://agent/memories",
                 limit: requestLimit,
                 scoreThreshold: 0,
+                agentId,
               }),
             ]);
             const userResult = userSettled.status === "fulfilled" ? userSettled.value : { memories: [] };
@@ -240,6 +244,7 @@ const contextEnginePlugin = {
           sessionId: Type.Optional(Type.String({ description: "Existing OpenViking session ID" })),
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
+          const agentId = getToolAgentId();
           const { text } = params as { text: string };
           const role =
             typeof (params as { role?: string }).role === "string"
@@ -256,11 +261,11 @@ const contextEnginePlugin = {
           try {
             const c = await getClient();
             if (!sessionId) {
-              sessionId = await c.createSession();
+              sessionId = await c.createSession(agentId);
               createdTempSession = true;
             }
-            await c.addSessionMessage(sessionId, role, text);
-            const extracted = await c.extractSessionMemories(sessionId);
+            await c.addSessionMessage(sessionId, role, text, agentId);
+            const extracted = await c.extractSessionMemories(sessionId, agentId);
             if (extracted.length === 0) {
               api.logger.warn(
                 `openviking: memory_store completed but extract returned 0 memories (sessionId=${sessionId}). ` +
@@ -284,7 +289,7 @@ const contextEnginePlugin = {
           } finally {
             if (createdTempSession && sessionId) {
               const c = await getClient().catch(() => null);
-              if (c) await c.deleteSession(sessionId!).catch(() => {});
+              if (c) await c.deleteSession(sessionId!, agentId).catch(() => {});
             }
           }
         },
@@ -310,6 +315,7 @@ const contextEnginePlugin = {
           ),
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
+          const agentId = getToolAgentId();
           const uri = (params as { uri?: string }).uri;
           if (uri) {
             if (!isMemoryUri(uri)) {
@@ -318,7 +324,7 @@ const contextEnginePlugin = {
                 details: { action: "rejected", uri },
               };
             }
-            await (await getClient()).deleteUri(uri);
+            await (await getClient()).deleteUri(uri, agentId);
             return {
               content: [{ type: "text", text: `Forgotten: ${uri}` }],
               details: { action: "deleted", uri },
@@ -351,6 +357,7 @@ const contextEnginePlugin = {
             targetUri,
             limit: requestLimit,
             scoreThreshold: 0,
+            agentId,
           });
           const candidates = postProcessMemories(result.memories ?? [], {
             limit: requestLimit,
@@ -370,7 +377,7 @@ const contextEnginePlugin = {
           }
           const top = candidates[0];
           if (candidates.length === 1 && clampScore(top.score) >= 0.85) {
-            await (await getClient()).deleteUri(top.uri);
+            await (await getClient()).deleteUri(top.uri, agentId);
             return {
               content: [{ type: "text", text: `Forgotten: ${top.uri}` }],
               details: { action: "deleted", uri: top.uri, score: top.score ?? 0 },
@@ -411,7 +418,9 @@ const contextEnginePlugin = {
       }
     };
     const resolveAgentId = (sessionId: string): string =>
-      sessionAgentIds.get(sessionId) ?? cfg.agentId;
+      sessionAgentIds.get(sessionId) ?? cfg.agentId ?? "default";
+
+    const getToolAgentId = (): string => cfg.agentId ?? "default";
 
     api.on("session_start", async (_event: unknown, ctx?: HookAgentContext) => {
       rememberSessionAgentId(ctx ?? {});
@@ -435,11 +444,6 @@ const contextEnginePlugin = {
         api.logger.warn?.(`openviking: failed to get client: ${String(err)}`);
         return;
       }
-      if (resolvedAgentId && client.getAgentId() !== resolvedAgentId) {
-        client.setAgentId(resolvedAgentId);
-        api.logger.info(`openviking: switched to agentId=${resolvedAgentId} for before_prompt_build`);
-      }
-
       const eventObj = (event ?? {}) as { messages?: unknown[]; prompt?: string };
       const queryText =
         extractLatestUserText(eventObj.messages) ||
@@ -466,11 +470,13 @@ const contextEnginePlugin = {
                     targetUri: "viking://user/memories",
                     limit: candidateLimit,
                     scoreThreshold: 0,
+                    agentId: resolvedAgentId,
                   }),
                   client.find(queryText, {
                     targetUri: "viking://agent/memories",
                     limit: candidateLimit,
                     scoreThreshold: 0,
+                    agentId: resolvedAgentId,
                   }),
                 ]);
 
@@ -499,7 +505,7 @@ const contextEnginePlugin = {
                     memories.map(async (item: FindResultItem) => {
                       if (item.level === 2) {
                         try {
-                          const content = await client.read(item.uri);
+                          const content = await client.read(item.uri, resolvedAgentId);
                           if (content && typeof content === "string" && content.trim()) {
                             return `- [${item.category ?? "memory"}] ${content.trim()}`;
                           }
@@ -676,7 +682,7 @@ const contextEnginePlugin = {
           });
           try {
             await waitForHealth(baseUrl, timeoutMs, intervalMs);
-            const client = new OpenVikingClient(baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs);
+            const client = new OpenVikingClient(baseUrl, cfg.apiKey, cfg.timeoutMs);
             localClientCache.set(localCacheKey, { client, process: child });
             resolveLocalClient!(client);
             rejectLocalClient = null;

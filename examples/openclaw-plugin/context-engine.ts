@@ -145,16 +145,6 @@ export function createMemoryOpenVikingContextEngine(params: {
     resolveAgentId,
   } = params;
 
-  const switchClientAgent = async (sessionId: string, phase: "assemble" | "afterTurn") => {
-    const client = await getClient();
-    const resolvedAgentId = resolveAgentId(sessionId);
-    const before = client.getAgentId();
-    if (resolvedAgentId && resolvedAgentId !== before) {
-      client.setAgentId(resolvedAgentId);
-      logger.info(`openviking: switched to agentId=${resolvedAgentId} for ${phase}`);
-    }
-    return client;
-  };
 
   return {
     info: {
@@ -186,7 +176,7 @@ export function createMemoryOpenVikingContextEngine(params: {
       }
 
       try {
-        await switchClientAgent(afterTurnParams.sessionId, "afterTurn");
+        const agentId = resolveAgentId(afterTurnParams.sessionId);
 
         const messages = afterTurnParams.messages ?? [];
         if (messages.length === 0) {
@@ -222,11 +212,11 @@ export function createMemoryOpenVikingContextEngine(params: {
         }
 
         const client = await getClient();
-        const sessionId = await client.createSession();
+        const sessionId = await client.createSession(agentId);
         try {
-          await client.addSessionMessage(sessionId, "user", decision.normalizedText);
-          await client.getSession(sessionId).catch(() => ({}));
-          const extracted = await client.extractSessionMemories(sessionId);
+          await client.addSessionMessage(sessionId, "user", decision.normalizedText, agentId);
+          await client.getSession(sessionId, agentId).catch(() => ({}));
+          const extracted = await client.extractSessionMemories(sessionId, agentId);
 
           logger.info(
             `openviking: auto-captured ${newCount} new messages, extracted ${extracted.length} memories`,
@@ -247,7 +237,7 @@ export function createMemoryOpenVikingContextEngine(params: {
             );
           }
         } finally {
-          await client.deleteSession(sessionId).catch(() => {});
+          await client.deleteSession(sessionId, agentId).catch(() => {});
         }
       } catch (err) {
         warnOrInfo(logger, `openviking: auto-capture failed: ${String(err)}`);
