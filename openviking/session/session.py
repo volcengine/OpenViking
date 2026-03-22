@@ -245,9 +245,17 @@ class Session:
         }
 
         # ===== Phase 1: Snapshot + clear (PathLock-protected) =====
+        # Fast pre-check: skip lock entirely if no messages (common case avoids
+        # unnecessary filesystem lock acquisition).
+        if not self._messages:
+            get_current_telemetry().set("memory.extracted", 0)
+            return result
+
         # Use filesystem-based distributed lock so this works across workers/processes.
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
         async with LockContext(get_lock_manager(), [session_path], lock_mode="point"):
+            # Authoritative check under lock: handles the race where two concurrent
+            # callers both passed the pre-check but only the first should archive.
             if not self._messages:
                 get_current_telemetry().set("memory.extracted", 0)
                 return result
