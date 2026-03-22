@@ -220,6 +220,15 @@ class EmbeddingConfig(BaseModel):
     max_concurrent: int = Field(
         default=10, description="Maximum number of concurrent embedding requests"
     )
+    text_source: str = Field(
+        default="summary_first",
+        description="Text source for file vectorization: summary_first|summary_only|content_only",
+    )
+    max_text_chars: int = Field(
+        default=1000,
+        ge=100,
+        description="Maximum characters sent to embeddings when raw text fallback is used",
+    )
 
     model_config = {"extra": "forbid"}
 
@@ -229,6 +238,10 @@ class EmbeddingConfig(BaseModel):
         if not self.dense and not self.sparse and not self.hybrid:
             raise ValueError(
                 "At least one embedding configuration (dense, sparse, or hybrid) is required"
+            )
+        if self.text_source not in {"summary_first", "summary_only", "content_only"}:
+            raise ValueError(
+                "embedding.text_source must be one of: summary_first, summary_only, content_only"
             )
         return self
 
