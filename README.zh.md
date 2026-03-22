@@ -555,15 +555,15 @@ ov chat
 * 实验结论：
 结合 OpenViking 后，若仍开启原生记忆，效果在原 OpenClaw 上提升 43%，输入 token 成本降低 91%；在 LanceDB 上效果提升 15%，输入 token 降低 96%。若关闭原生记忆，效果在原 OpenClaw 上提升 49%，输入 token 成本降低 83%；在 LanceDB 上效果提升 17%，输入 token 降低 92%。
 
-👉 **[查看：OpenClaw 上下文插件](examples/openclaw-plugin/README_CN.md)**
+👉 **[查看：OpenClaw 上下文插件](examples/openclaw-plugin/README.zh.md)**
 
-👉 **[查看：OpenCode 记忆插件示例](examples/opencode-memory-plugin/README_CN.md)**
+👉 **[查看：OpenCode 记忆插件示例](examples/opencode-memory-plugin/README.zh.md)**
 
 ## VikingBot 部署详情
 
 OpenViking 有一个类似 nanobot 的机器人用于交互工作，现已可用。
 
-👉 **[查看：使用 VikingBot 部署服务器](bot/README_CN.md)**
+👉 **[查看：使用 VikingBot 部署服务器](bot/README.zh.md)**
 
 --
 

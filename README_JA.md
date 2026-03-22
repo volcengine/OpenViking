@@ -8,7 +8,7 @@
 
 ### OpenViking: AIエージェントのためのコンテキストデータベース
 
-[English](README.md) / [中文](README_CN.md) / 日本語
+[English](README.md) / [中文](README.zh.md) / 日本語
 
 <a href="https://www.openviking.ai">Webサイト</a> · <a href="https://github.com/volcengine/OpenViking">GitHub</a> · <a href="https://github.com/volcengine/OpenViking/issues">Issues</a> · <a href="https://www.openviking.ai/docs">ドキュメント</a>
 
