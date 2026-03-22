@@ -52,11 +52,37 @@ class ParserConfig:
         Returns:
             ParserConfig instance
 
+        Raises:
+            ValueError: If the dictionary contains unknown fields (with suggestions)
+
         Examples:
             >>> config = ParserConfig.from_dict({"max_content_length": 50000})
         """
+        import logging
+        import difflib
+
+        logger = logging.getLogger(__name__)
+
         # Filter only fields that belong to this class
         valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
+        unknown_fields = {k: v for k, v in data.items() if k not in valid_fields}
+
+        if unknown_fields:
+            warnings = []
+            for field_name in unknown_fields:
+                close_matches = difflib.get_close_matches(field_name, valid_fields, n=1, cutoff=0.6)
+                if close_matches:
+                    warnings.append(
+                        f"Unknown config field '{field_name}' in {cls.__name__} — "
+                        f"did you mean '{close_matches[0]}'?"
+                    )
+                else:
+                    warnings.append(
+                        f"Unknown config field '{field_name}' in {cls.__name__} — ignoring"
+                    )
+            for w in warnings:
+                logger.warning(w)
+
         filtered_data = {k: v for k, v in data.items() if k in valid_fields}
         return cls(**filtered_data)
 

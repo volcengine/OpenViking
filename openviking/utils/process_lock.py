@@ -45,13 +45,13 @@ def _is_pid_alive(pid: int) -> bool:
         return True
     except OSError:
         if sys.platform == "win32":
-            # On Windows, os.kill(pid, 0) raises OSError with various
-            # WinError codes for stale or invalid PIDs instead of
-            # ProcessLookupError.  Known codes include:
-            #   - WinError 11  (ERROR_BAD_FORMAT)
-            #   - WinError 87  (ERROR_INVALID_PARAMETER)
-            # Treat any such OSError as "not alive" so stale lock files
-            # are correctly reclaimed.
+            # On Windows, os.kill(pid, 0) raises OSError for stale or invalid
+            # PIDs instead of ProcessLookupError. Common errors include:
+            # - WinError 87 "The parameter is incorrect"
+            # - WinError 11 "An attempt was made to load a program with an
+            #   incorrect format"
+            # Treat any OSError as "not alive" so stale lock files are
+            # correctly reclaimed on Windows.
             return False
         raise
 
