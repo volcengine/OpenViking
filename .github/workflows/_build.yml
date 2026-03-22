@@ -224,11 +224,7 @@ jobs:
       shell: bash
       run: |
         OPENVIKING_VERSION=$(
-          uv run --frozen python - <<'PY'
-          from build_support.versioning import resolve_openviking_version
-
-          print(resolve_openviking_version())
-          PY
+          uv run --frozen python -c "from build_support.versioning import resolve_openviking_version; print(resolve_openviking_version())"
         )
         echo "OPENVIKING_VERSION=$OPENVIKING_VERSION" >> "$GITHUB_ENV"
         echo "Resolved OpenViking version: $OPENVIKING_VERSION"
@@ -385,11 +381,7 @@ jobs:
       shell: bash
       run: |
         OPENVIKING_VERSION=$(
-          uv run --frozen python - <<'PY'
-          from build_support.versioning import resolve_openviking_version
-
-          print(resolve_openviking_version())
-          PY
+          uv run --frozen python -c "from build_support.versioning import resolve_openviking_version; print(resolve_openviking_version())"
         )
         echo "OPENVIKING_VERSION=$OPENVIKING_VERSION" >> "$GITHUB_ENV"
         echo "Resolved OpenViking version: $OPENVIKING_VERSION"
