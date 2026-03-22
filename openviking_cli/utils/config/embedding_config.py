@@ -181,7 +181,11 @@ class EmbeddingModelConfig(BaseModel):
 
         elif self.provider == "litellm":
             # litellm handles auth via env vars or explicit api_key; no strict requirement
-            pass
+            if not self.dimension:
+                raise ValueError(
+                    "LiteLLM provider requires 'dimension' to be set explicitly. "
+                    "Check your embedding model's documentation for the correct dimension."
+                )
 
         return self
 
@@ -270,6 +274,11 @@ class EmbeddingConfig(BaseModel):
             VolcengineSparseEmbedder,
             VoyageDenseEmbedder,
         )
+
+        if provider == "litellm" and LiteLLMDenseEmbedder is None:
+            raise ValueError(
+                "LiteLLM is not installed. Install it with: pip install litellm"
+            )
 
         # Factory registry: (provider, type) -> (embedder_class, param_builder)
         factory_registry = {

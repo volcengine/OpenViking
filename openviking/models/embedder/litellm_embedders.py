@@ -8,9 +8,6 @@ Uses litellm to provide a unified embedding interface across many providers
 
 import logging
 import os
-
-os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
-
 from typing import Any, Dict, List, Optional
 
 import litellm
@@ -42,6 +39,7 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
         >>> embedder = LiteLLMDenseEmbedder(
         ...     model_name="ollama/nomic-embed-text",
         ...     api_base="http://localhost:11434",
+        ...     dimension=768,
         ... )
         >>> result = embedder.embed("Hello world")
     """
@@ -63,13 +61,15 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
             model_name: Model name in litellm format (e.g., "openai/text-embedding-3-small").
             api_key: API key for the provider. Falls back to provider-specific env vars.
             api_base: Custom API base URL (e.g., "https://openrouter.ai/api/v1").
-            dimension: Embedding vector dimension. If None, auto-detected via a probe call.
+            dimension: Embedding vector dimension (required).
             query_param: Parameter value for query-side embeddings (non-symmetric mode).
             document_param: Parameter value for document-side embeddings (non-symmetric mode).
             extra_headers: Extra HTTP headers for API requests.
             config: Additional configuration dict.
         """
         super().__init__(model_name, config)
+
+        os.environ.setdefault("LITELLM_LOCAL_MODEL_COST_MAP", "True")
 
         self.api_key = api_key
         self.api_base = api_base
@@ -78,17 +78,12 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
         self.document_param = document_param
         self.extra_headers = extra_headers
 
+        if dimension is None:
+            raise ValueError(
+                "LiteLLM embedding provider requires 'dimension' to be set explicitly. "
+                "Check your embedding model's documentation for the correct dimension."
+            )
         self._dimension = dimension
-        if self._dimension is None:
-            self._dimension = self._detect_dimension()
-
-    def _detect_dimension(self) -> int:
-        """Detect dimension by making a probe embedding call."""
-        try:
-            result = self.embed("test")
-            return len(result.dense_vector) if result.dense_vector else 1536
-        except Exception:
-            return 1536
 
     def _build_kwargs(self, is_query: bool = False) -> Dict[str, Any]:
         """Build kwargs dict for litellm.embedding() call."""

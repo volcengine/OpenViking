@@ -274,3 +274,33 @@ class TestLiteLLMEmbeddingFactory:
             dimension=768,
         )
         assert cfg.api_key is None
+
+    def test_config_validation_litellm_requires_dimension(self):
+        """litellm provider should require dimension to be set."""
+        with pytest.raises(ValueError, match="dimension"):
+            EmbeddingModelConfig(
+                provider="litellm",
+                model="openai/text-embedding-3-small",
+            )
+
+    @patch("openviking.models.embedder.litellm_embedders.litellm")
+    def test_dimension_required_in_embedder(self, mock_litellm):
+        """LiteLLMDenseEmbedder should raise ValueError when dimension is None."""
+        from openviking.models.embedder.litellm_embedders import LiteLLMDenseEmbedder
+
+        with pytest.raises(ValueError, match="dimension"):
+            LiteLLMDenseEmbedder(
+                model_name="openai/text-embedding-3-small",
+                api_key="test-key",
+            )
+
+    def test_factory_raises_when_litellm_not_installed(self):
+        """Factory should raise clear error when litellm is not installed."""
+        cfg = EmbeddingModelConfig(
+            provider="litellm",
+            model="openai/text-embedding-3-small",
+            dimension=1536,
+        )
+        with patch("openviking.models.embedder.LiteLLMDenseEmbedder", None):
+            with pytest.raises(ValueError, match="not installed"):
+                EmbeddingConfig(dense=cfg)._create_embedder("litellm", "dense", cfg)
