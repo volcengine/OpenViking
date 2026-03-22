@@ -132,7 +132,7 @@ export function createMemoryOpenVikingContextEngine(params: {
   version?: string;
   cfg: Required<MemoryOpenVikingConfig>;
   logger: Logger;
-  getClient: () => Promise<OpenVikingClient>;
+  getClient: (agentId?: string) => Promise<OpenVikingClient>;
   resolveAgentId: (sessionId: string) => string;
 }): ContextEngine {
   const {
@@ -145,15 +145,9 @@ export function createMemoryOpenVikingContextEngine(params: {
     resolveAgentId,
   } = params;
 
-  const switchClientAgent = async (sessionId: string, phase: "assemble" | "afterTurn") => {
-    const client = await getClient();
+  const getAgentScopedClient = async (sessionId: string, _phase: "assemble" | "afterTurn") => {
     const resolvedAgentId = resolveAgentId(sessionId);
-    const before = client.getAgentId();
-    if (resolvedAgentId && resolvedAgentId !== before) {
-      client.setAgentId(resolvedAgentId);
-      logger.info(`openviking: switched to agentId=${resolvedAgentId} for ${phase}`);
-    }
-    return client;
+    return getClient(resolvedAgentId);
   };
 
   return {
@@ -186,7 +180,7 @@ export function createMemoryOpenVikingContextEngine(params: {
       }
 
       try {
-        await switchClientAgent(afterTurnParams.sessionId, "afterTurn");
+        await getAgentScopedClient(afterTurnParams.sessionId, "afterTurn");
 
         const messages = afterTurnParams.messages ?? [];
         if (messages.length === 0) {
@@ -221,7 +215,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           return;
         }
 
-        const client = await getClient();
+        const client = await getAgentScopedClient(afterTurnParams.sessionId, "afterTurn");
         const sessionId = await client.createSession();
         try {
           await client.addSessionMessage(sessionId, "user", decision.normalizedText);

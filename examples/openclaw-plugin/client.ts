@@ -25,13 +25,13 @@ export type RuntimeIdentity = {
   agentId: string;
 };
 export type LocalClientCacheEntry = {
-  client: OpenVikingClient;
+  clientsByAgentId: Map<string, OpenVikingClient>;
   process: ReturnType<typeof spawn> | null;
 };
 
 export type PendingClientEntry = {
-  promise: Promise<OpenVikingClient>;
-  resolve: (c: OpenVikingClient) => void;
+  promise: Promise<LocalClientCacheEntry>;
+  resolve: (entry: LocalClientCacheEntry) => void;
   reject: (err: unknown) => void;
 };
 
@@ -69,11 +69,7 @@ export class OpenVikingClient {
   ) {}
 
   /**
-   * Dynamically switch the agent identity for multi-agent memory isolation.
-   * When a shared client serves multiple agents (e.g. in OpenClaw multi-agent
-   * gateway), call this before each agent's recall/capture to route memories
-   * to the correct agent_space = md5(user_id + agent_id)[:12].
-   * Clears cached space resolution so the next request re-derives agent_space.
+   * @deprecated Prefer creating/requesting an agent-scoped client instance.
    */
   setAgentId(newAgentId: string): void {
     if (newAgentId && newAgentId !== this.agentId) {

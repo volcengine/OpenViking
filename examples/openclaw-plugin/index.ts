@@ -83,8 +83,9 @@ const contextEnginePlugin = {
     const localCacheKey = `${cfg.mode}:${cfg.baseUrl}:${cfg.configPath}:${cfg.apiKey}`;
 
     let clientPromise: Promise<OpenVikingClient>;
+    let localEntryPromise: Promise<import("./client.js").LocalClientCacheEntry> | null = null;
     let localProcess: ReturnType<typeof spawn> | null = null;
-    let resolveLocalClient: ((c: OpenVikingClient) => void) | null = null;
+    let resolveLocalClient: ((entry: import("./client.js").LocalClientCacheEntry) => void) | null = null;
     let rejectLocalClient: ((err: unknown) => void) | null = null;
     let localUnavailableReason: string | null = null;
     const markLocalUnavailable = (reason: string, err?: unknown) => {
@@ -107,18 +108,21 @@ const contextEnginePlugin = {
       const cached = localClientCache.get(localCacheKey);
       if (cached) {
         localProcess = cached.process;
-        clientPromise = Promise.resolve(cached.client);
+        localEntryPromise = Promise.resolve(cached);
+        clientPromise = Promise.resolve(cached.clientsByAgentId.get(cfg.agentId) ?? new OpenVikingClient(cfg.baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs));
       } else {
         const existingPending = localClientPendingPromises.get(localCacheKey);
         if (existingPending) {
-          clientPromise = existingPending.promise;
+          localEntryPromise = existingPending.promise;
+          clientPromise = localEntryPromise.then((entry) => entry.clientsByAgentId.get(cfg.agentId) ?? new OpenVikingClient(cfg.baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs));
         } else {
           const entry = {} as PendingClientEntry;
-          entry.promise = new Promise<OpenVikingClient>((resolve, reject) => {
+          entry.promise = new Promise((resolve, reject) => {
             entry.resolve = resolve;
             entry.reject = reject;
           });
-          clientPromise = entry.promise;
+          localEntryPromise = entry.promise;
+          clientPromise = localEntryPromise.then((entry) => entry.clientsByAgentId.get(cfg.agentId) ?? new OpenVikingClient(cfg.baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs));
           localClientPendingPromises.set(localCacheKey, entry);
         }
       }
@@ -126,7 +130,22 @@ const contextEnginePlugin = {
       clientPromise = Promise.resolve(new OpenVikingClient(cfg.baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs));
     }
 
-    const getClient = (): Promise<OpenVikingClient> => clientPromise;
+    const getClient = async (agentId?: string): Promise<OpenVikingClient> => {
+      const effectiveAgentId = agentId ?? cfg.agentId;
+      if (cfg.mode !== "local") {
+        if (effectiveAgentId === cfg.agentId) {
+          return clientPromise;
+        }
+        return new OpenVikingClient(cfg.baseUrl, cfg.apiKey, effectiveAgentId, cfg.timeoutMs);
+      }
+      const entry = localEntryPromise ? await localEntryPromise : await Promise.resolve(localClientCache.get(localCacheKey)!);
+      let client = entry.clientsByAgentId.get(effectiveAgentId);
+      if (!client) {
+        client = new OpenVikingClient(cfg.baseUrl, cfg.apiKey, effectiveAgentId, cfg.timeoutMs);
+        entry.clientsByAgentId.set(effectiveAgentId, client);
+      }
+      return client;
+    };
 
     api.registerTool(
       {
@@ -254,7 +273,7 @@ const contextEnginePlugin = {
           let sessionId = sessionIdIn;
           let createdTempSession = false;
           try {
-            const c = await getClient();
+            const c = await getClient(cfg.agentId);
             if (!sessionId) {
               sessionId = await c.createSession();
               createdTempSession = true;
@@ -283,7 +302,7 @@ const contextEnginePlugin = {
             throw err;
           } finally {
             if (createdTempSession && sessionId) {
-              const c = await getClient().catch(() => null);
+              const c = await getClient(cfg.agentId).catch(() => null);
               if (c) await c.deleteSession(sessionId!).catch(() => {});
             }
           }
@@ -427,17 +446,13 @@ const contextEnginePlugin = {
       let client: OpenVikingClient;
       try {
         client = await withTimeout(
-          getClient(),
+          getClient(resolvedAgentId),
           5000,
           "openviking: client initialization timeout (OpenViking service not ready yet)"
         );
       } catch (err) {
         api.logger.warn?.(`openviking: failed to get client: ${String(err)}`);
         return;
-      }
-      if (resolvedAgentId && client.getAgentId() !== resolvedAgentId) {
-        client.setAgentId(resolvedAgentId);
-        api.logger.info(`openviking: switched to agentId=${resolvedAgentId} for before_prompt_build`);
       }
 
       const eventObj = (event ?? {}) as { messages?: unknown[]; prompt?: string };
@@ -677,8 +692,9 @@ const contextEnginePlugin = {
           try {
             await waitForHealth(baseUrl, timeoutMs, intervalMs);
             const client = new OpenVikingClient(baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs);
-            localClientCache.set(localCacheKey, { client, process: child });
-            resolveLocalClient!(client);
+            const entry = { clientsByAgentId: new Map([[cfg.agentId, client]]), process: child };
+            localClientCache.set(localCacheKey, entry);
+            resolveLocalClient!(entry);
             rejectLocalClient = null;
             api.logger.info(
               `openviking: local server started (${baseUrl}, config: ${cfg.configPath})`,
