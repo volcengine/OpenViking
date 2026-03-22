@@ -93,35 +93,23 @@ OpenViking 统一注册为 context engine，但继续保留原有 hook 链路。
 
 ### 当前实现
 
-当前 `afterTurn` 会提取本轮 user/assistant 文本，创建临时 OpenViking session，并调用 `/extract`。
+当前 `afterTurn` 会提取本轮增量 user/assistant 文本，创建临时 OpenViking session，并调用 `/extract`。
 
-### 职责
+重构逻辑：
+1. 入口检查：autoCapture 未启用 → 直接返回(复用原逻辑)
+2. 解析身份：调用 resolveAgentId(sessionId) 获取当前 agentId，生成复合 bufferKey = sessionId:agentId
+3. 切片新消息：用 prePromptMessageCount 从完整 messages 中切出本轮新增部分(复用原逻辑)
+4. 提取文本：extractNewTurnTexts 提取 user/assistant 角色的纯文本，无新文本 → 返回(复用原逻辑)
+5. 捕获判断：getCaptureDecision 判断文本是否值得捕获（长度、模式匹配等），不值得 → 返回(复用原逻辑)
+6. 累积到 buffer：按 bufferKey 查找或创建 SessionBuffer，更新 totalChars 和 messageCount
 
-把当前 `afterTurn` 中“抽取新文本 -> 建临时 session -> extract”的逻辑，改为“构造 `TurnEnvelope` -> 写入长期 session”。
+阈值判断：(TODO: 文贵更新)
+达到任一阈值（字符数 >= 2000 或 消息条数 >= 6） → 立即执行 commitAndReset
+未达阈值 → 重置闲置定时器（30s），30s 内无新 afterTurn 调用则自动触发 commitAndReset
+commitAndReset 执行
 
-### 实施清单
+兜底 flush：进程退出时（service.stop() / SIGTERM / SIGINT），遍历所有 buffer 执行 commitAndReset，确保未提交的累积内容不丢失
 
-1. 根据 OpenClaw 本轮 messages、工具结果、注入上下文构造 `TurnEnvelope`。
-2. 将当前 sessionId 映射到 OpenViking session。
-3. 依次写入 `system`、`user`、`assistant`、`tool` 相关 envelope。
-4. 更新本地 checkpoint，记录已落盘的 sequence 与 prePrompt 边界。
-5. 保存本轮真实使用到的 context URI、tool 调用、tool 结果和必要元信息。
-6. 保持该 hook 非阻塞，失败时优先做到“可告警、可重试、不中断主对话”。
-
-### 必须保存的内容
-
-- user 文本
-- assistant 输出
-- 本轮 system prompt 增量摘要或组装后的上下文摘要
-- 工具调用参数与结果
-- 被注入的 memory/profile/context URI 列表
-
-### 不在此 hook 做的事情
-
-- 不直接调用 `/extract`
-- 不进行 recall
-- 不重建 compact context
-- 不把长期记忆抽取作为默认职责
 
 ## 3.3 `assemble`: 自动召回与上下文组装主链路
 
