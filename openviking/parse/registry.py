@@ -77,6 +77,14 @@ class ParserRegistry:
         self.register("audio", AudioParser())
         self.register("video", VideoParser())
 
+        # Optional: Feishu/Lark document parser (requires lark-oapi)
+        try:
+            from openviking.parse.parsers.feishu import FeishuParser
+
+            self.register("feishu", FeishuParser())
+        except ImportError:
+            pass
+
     def register(self, name: str, parser: BaseParser) -> None:
         """
         Register a parser.

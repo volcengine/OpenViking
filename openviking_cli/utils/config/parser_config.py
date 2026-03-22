@@ -499,6 +499,30 @@ class TextConfig(ParserConfig):
 
 
 @dataclass
+class FeishuConfig(ParserConfig):
+    """
+    Configuration for Feishu/Lark document parsing.
+
+    Attributes:
+        app_id: Feishu app ID (can also be set via FEISHU_APP_ID env var)
+        app_secret: Feishu app secret (can also be set via FEISHU_APP_SECRET env var)
+        domain: Feishu API domain
+        max_rows_per_sheet: Maximum rows per sheet for spreadsheets
+        max_records_per_table: Maximum records per table for bitable
+        download_images: Whether to download images from documents
+        request_timeout: HTTP request timeout in seconds
+    """
+
+    app_id: str = ""
+    app_secret: str = ""
+    domain: str = "https://open.feishu.cn"
+    max_rows_per_sheet: int = 1000
+    max_records_per_table: int = 1000
+    download_images: bool = True  # TODO: not yet implemented, reserved for future image download support
+    request_timeout: float = 30.0  # TODO: not yet passed to lark-oapi client, reserved for future use
+
+
+@dataclass
 class DirectoryConfig(ParserConfig):
     """
     Configuration for directory parsing.
@@ -560,6 +584,7 @@ PARSER_CONFIG_REGISTRY = {
     "html": HTMLConfig,
     "text": TextConfig,
     "directory": DirectoryConfig,
+    "feishu": FeishuConfig,
 }
 
 
