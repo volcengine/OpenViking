@@ -423,7 +423,7 @@ class SemanticProcessor(DequeueHandlerBase):
 
         file_summaries = [s for s in file_summaries if s is not None]
 
-        overview = await self._generate_overview(dir_uri, file_summaries, [])
+        overview = await self._generate_overview(dir_uri, file_summaries, [], llm_sem=llm_sem)
         abstract = self._extract_abstract_from_overview(overview)
         overview, abstract = self._enforce_size_limits(overview, abstract)
 
@@ -834,6 +834,7 @@ class SemanticProcessor(DequeueHandlerBase):
         dir_uri: str,
         file_summaries: List[Dict[str, str]],
         children_abstracts: List[Dict[str, str]],
+        llm_sem: Optional[asyncio.Semaphore] = None,
     ) -> str:
         """Generate directory's .overview.md (L1).
 
@@ -887,7 +888,11 @@ class SemanticProcessor(DequeueHandlerBase):
                 f"Splitting into batches of {semantic.overview_batch_size}."
             )
             overview = await self._batched_generate_overview(
-                dir_uri, file_summaries, children_abstracts, file_index_map
+                dir_uri,
+                file_summaries,
+                children_abstracts,
+                file_index_map,
+                llm_sem=llm_sem,
             )
         elif over_budget:
             # Few files but long summaries → truncate summaries to fit budget
@@ -966,6 +971,7 @@ class SemanticProcessor(DequeueHandlerBase):
         file_summaries: List[Dict[str, str]],
         children_abstracts: List[Dict[str, str]],
         file_index_map: Dict[int, str],
+        llm_sem: Optional[asyncio.Semaphore] = None,
     ) -> str:
         """Generate overview by batching file summaries and merging.
 
@@ -993,7 +999,8 @@ class SemanticProcessor(DequeueHandlerBase):
         )
 
         # Generate partial overview per batch concurrently using global file indices
-        llm_sem = asyncio.Semaphore(self.max_concurrent_llm)
+        if llm_sem is None:
+            llm_sem = asyncio.Semaphore(self.max_concurrent_llm)
         partial_overviews = [None] * len(batches)
         global_offset = 0
         batch_prompts: List[Tuple[int, str, Dict[int, str]]] = []
@@ -1026,6 +1033,7 @@ class SemanticProcessor(DequeueHandlerBase):
             def replacer(match):
                 idx = int(match.group(1))
                 return idx_map.get(idx, match.group(0))
+
             return replacer
 
         async def _run_batch(batch_idx: int, prompt: str, batch_index_map: Dict[int, str]) -> None:
