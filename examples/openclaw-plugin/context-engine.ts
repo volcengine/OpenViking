@@ -52,6 +52,7 @@ type ContextEngine = {
   }) => Promise<IngestBatchResult>;
   afterTurn?: (params: {
     sessionId: string;
+    sessionKey?: string;
     sessionFile: string;
     messages: AgentMessage[];
     prePromptMessageCount: number;
@@ -156,6 +157,102 @@ export function createMemoryOpenVikingContextEngine(params: {
     return client;
   };
 
+  type AfterTurnCaptureParams = {
+    sessionId: string;
+    sessionKey?: string;
+    messages: AgentMessage[];
+    prePromptMessageCount?: number;
+  };
+
+  const captureQueueBySession = new Map<string, Promise<void>>();
+
+  const runAutoCapture = async (afterTurnParams: AfterTurnCaptureParams): Promise<void> => {
+    try {
+      await switchClientAgent(afterTurnParams.sessionId, "afterTurn");
+
+      const messages = afterTurnParams.messages ?? [];
+      if (messages.length === 0) {
+        logger.info("openviking: auto-capture skipped (messages=0)");
+        return;
+      }
+
+      const start =
+        typeof afterTurnParams.prePromptMessageCount === "number" &&
+        afterTurnParams.prePromptMessageCount >= 0
+          ? afterTurnParams.prePromptMessageCount
+          : 0;
+
+      const { texts: newTexts, newCount } = extractNewTurnTexts(messages, start);
+
+      if (newTexts.length === 0) {
+        logger.info("openviking: auto-capture skipped (no new user/assistant messages)");
+        return;
+      }
+
+      const turnText = newTexts.join("\n");
+      const decision = getCaptureDecision(turnText, cfg.captureMode, cfg.captureMaxLength);
+      const preview = turnText.length > 80 ? `${turnText.slice(0, 80)}...` : turnText;
+      logger.info(
+        "openviking: capture-check " +
+          `shouldCapture=${String(decision.shouldCapture)} ` +
+          `reason=${decision.reason} newMsgCount=${newCount} text=\"${preview}\"`,
+      );
+
+      if (!decision.shouldCapture) {
+        logger.info("openviking: auto-capture skipped (capture decision rejected)");
+        return;
+      }
+
+      const client = await getClient();
+      const sessionId = await client.createSession();
+      try {
+        await client.addSessionMessage(sessionId, "user", decision.normalizedText);
+        await client.getSession(sessionId).catch(() => ({}));
+        const extracted = await client.extractSessionMemories(sessionId);
+
+        logger.info(
+          `openviking: auto-captured ${newCount} new messages, extracted ${extracted.length} memories`,
+        );
+        logger.info(
+          `openviking: capture-detail ${toJsonLog({
+            capturedCount: newCount,
+            captured: [trimForLog(turnText, 260)],
+            extractedCount: extracted.length,
+            extracted: summarizeExtractedMemories(extracted),
+          })}`,
+        );
+        if (extracted.length === 0) {
+          warnOrInfo(
+            logger,
+            "openviking: auto-capture completed but extract returned 0 memories. " +
+              "Check OpenViking server logs for embedding/extract errors.",
+          );
+        }
+      } finally {
+        await client.deleteSession(sessionId).catch(() => {});
+      }
+    } catch (err) {
+      warnOrInfo(logger, `openviking: auto-capture failed: ${String(err)}`);
+    }
+  };
+
+  const enqueueAutoCapture = (afterTurnParams: AfterTurnCaptureParams): void => {
+    const queueKey = afterTurnParams.sessionKey || afterTurnParams.sessionId;
+    const previous = captureQueueBySession.get(queueKey) ?? Promise.resolve();
+    const next = previous
+      .catch(() => {})
+      .then(() => runAutoCapture(afterTurnParams))
+      .catch((err) => {
+        warnOrInfo(logger, `openviking: queued auto-capture failed: ${String(err)}`);
+      })
+      .finally(() => {
+        if (captureQueueBySession.get(queueKey) === next) {
+          captureQueueBySession.delete(queueKey);
+        }
+      });
+    captureQueueBySession.set(queueKey, next);
+  };
+
   return {
     info: {
       id,
@@ -185,73 +282,12 @@ export function createMemoryOpenVikingContextEngine(params: {
         return;
       }
 
-      try {
-        await switchClientAgent(afterTurnParams.sessionId, "afterTurn");
-
-        const messages = afterTurnParams.messages ?? [];
-        if (messages.length === 0) {
-          logger.info("openviking: auto-capture skipped (messages=0)");
-          return;
-        }
-
-        const start =
-          typeof afterTurnParams.prePromptMessageCount === "number" &&
-          afterTurnParams.prePromptMessageCount >= 0
-            ? afterTurnParams.prePromptMessageCount
-            : 0;
-
-        const { texts: newTexts, newCount } = extractNewTurnTexts(messages, start);
-
-        if (newTexts.length === 0) {
-          logger.info("openviking: auto-capture skipped (no new user/assistant messages)");
-          return;
-        }
-
-        const turnText = newTexts.join("\n");
-        const decision = getCaptureDecision(turnText, cfg.captureMode, cfg.captureMaxLength);
-        const preview = turnText.length > 80 ? `${turnText.slice(0, 80)}...` : turnText;
-        logger.info(
-          "openviking: capture-check " +
-            `shouldCapture=${String(decision.shouldCapture)} ` +
-            `reason=${decision.reason} newMsgCount=${newCount} text=\"${preview}\"`,
-        );
-
-        if (!decision.shouldCapture) {
-          logger.info("openviking: auto-capture skipped (capture decision rejected)");
-          return;
-        }
-
-        const client = await getClient();
-        const sessionId = await client.createSession();
-        try {
-          await client.addSessionMessage(sessionId, "user", decision.normalizedText);
-          await client.getSession(sessionId).catch(() => ({}));
-          const extracted = await client.extractSessionMemories(sessionId);
-
-          logger.info(
-            `openviking: auto-captured ${newCount} new messages, extracted ${extracted.length} memories`,
-          );
-          logger.info(
-            `openviking: capture-detail ${toJsonLog({
-              capturedCount: newCount,
-              captured: [trimForLog(turnText, 260)],
-              extractedCount: extracted.length,
-              extracted: summarizeExtractedMemories(extracted),
-            })}`,
-          );
-          if (extracted.length === 0) {
-            warnOrInfo(
-              logger,
-              "openviking: auto-capture completed but extract returned 0 memories. " +
-                "Check OpenViking server logs for embedding/extract errors.",
-            );
-          }
-        } finally {
-          await client.deleteSession(sessionId).catch(() => {});
-        }
-      } catch (err) {
-        warnOrInfo(logger, `openviking: auto-capture failed: ${String(err)}`);
-      }
+      enqueueAutoCapture({
+        sessionId: afterTurnParams.sessionId,
+        sessionKey: afterTurnParams.sessionKey,
+        messages: afterTurnParams.messages ?? [],
+        prePromptMessageCount: afterTurnParams.prePromptMessageCount,
+      });
     },
 
     async compact(compactParams): Promise<CompactResult> {
