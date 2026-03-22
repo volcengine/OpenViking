@@ -57,7 +57,7 @@ async def test_vectorize_file_uses_summary_first(monkeypatch):
         embedding_utils,
         "get_openviking_config",
         lambda: types.SimpleNamespace(
-            embedding=types.SimpleNamespace(text_source="summary_first", max_text_chars=1000)
+            embedding=types.SimpleNamespace(text_source="summary_first", max_input_chars=1000)
         ),
     )
     monkeypatch.setattr(
@@ -87,7 +87,7 @@ async def test_vectorize_file_truncates_content_when_content_only(monkeypatch):
         embedding_utils,
         "get_openviking_config",
         lambda: types.SimpleNamespace(
-            embedding=types.SimpleNamespace(text_source="content_only", max_text_chars=1000)
+            embedding=types.SimpleNamespace(text_source="content_only", max_input_chars=1000)
         ),
     )
     monkeypatch.setattr(

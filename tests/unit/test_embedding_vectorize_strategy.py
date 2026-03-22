@@ -31,11 +31,11 @@ def test_embedding_text_source_validation_rejects_invalid_values(bad_value):
         _cfg(text_source=bad_value)
 
 
-def test_embedding_max_text_chars_validation_accepts_reasonable_value():
-    cfg = _cfg(max_text_chars=1000)
-    assert cfg.max_text_chars == 1000
+def test_embedding_max_input_chars_validation_accepts_reasonable_value():
+    cfg = _cfg(max_input_chars=1000)
+    assert cfg.max_input_chars == 1000
 
 
-def test_embedding_max_text_chars_validation_rejects_too_small_value():
+def test_embedding_max_input_chars_validation_rejects_too_small_value():
     with pytest.raises(ValueError):
-        _cfg(max_text_chars=10)
+        _cfg(max_input_chars=10)

@@ -220,9 +220,8 @@ async def vectorize_file(
     Vectorize a single file.
 
     Creates Context object for the file and enqueues it.
-    If use_summary=True and summary is available, uses summary for TEXT files (e.g. code scenario).
-    Otherwise reads raw file content for TEXT files, but now respects embedding strategy config
-    to avoid oversize embedding failures on long text files.
+    The effective vectorization strategy is resolved once from either the explicit
+    `use_summary` flag (code path override) or the embedding config.
     """
     enqueued = False
 
@@ -252,13 +251,14 @@ async def vectorize_file(
 
         content_type = get_resource_content_type(file_name)
         embedding_cfg = get_openviking_config().embedding
-        text_source = getattr(embedding_cfg, "text_source", "summary_first")
-        max_text_chars = int(getattr(embedding_cfg, "max_text_chars", 1000) or 1000)
+        configured_text_source = getattr(embedding_cfg, "text_source", "summary_first")
+        effective_text_source = "summary_only" if use_summary else configured_text_source
+        max_input_chars = int(getattr(embedding_cfg, "max_input_chars", 1000) or 1000)
 
         def _truncate_text(value: str) -> str:
-            if len(value) <= max_text_chars:
+            if len(value) <= max_input_chars:
                 return value
-            return value[:max_text_chars] + "\n...(truncated for embedding)"
+            return value[:max_input_chars] + "\n...(truncated for embedding)"
 
         if content_type is None:
             # Unsupported file type: fall back to summary if available
@@ -273,13 +273,10 @@ async def vectorize_file(
                 )
                 return
         elif content_type == ResourceContentType.TEXT:
-            if use_summary and summary:
-                # Explicit code scenario override: use pre-generated summary for embedding
-                context.set_vectorize(Vectorize(text=summary))
-            elif summary and text_source in {"summary_first", "summary_only"}:
+            if summary and effective_text_source in {"summary_first", "summary_only"}:
                 context.set_vectorize(Vectorize(text=summary))
             else:
-                # Default: read raw file content, but apply configured truncation guard
+                # Read raw file content and apply configured truncation guard.
                 try:
                     content = await viking_fs.read_file(file_path, ctx=ctx)
                     if isinstance(content, bytes):

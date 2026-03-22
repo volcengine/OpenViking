@@ -224,7 +224,7 @@ class EmbeddingConfig(BaseModel):
         default="summary_first",
         description="Text source for file vectorization: summary_first|summary_only|content_only",
     )
-    max_text_chars: int = Field(
+    max_input_chars: int = Field(
         default=1000,
         ge=100,
         description="Maximum characters sent to embeddings when raw text fallback is used",
