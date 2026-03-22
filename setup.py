@@ -8,9 +8,13 @@ import sys
 import sysconfig
 from pathlib import Path
 
-import pybind11
 from setuptools import Extension, setup
 from setuptools.command.build_ext import build_ext
+
+try:
+    from wheel.bdist_wheel import bdist_wheel
+except ImportError:  # pragma: no cover - local build_ext may not have wheel installed
+    bdist_wheel = None
 
 SETUP_DIR = Path(__file__).resolve().parent
 if str(SETUP_DIR) not in sys.path:
@@ -344,6 +348,7 @@ class OpenVikingBuildExt(build_ext):
         ext_dir = ext_fullpath.parent.resolve()
         build_dir = Path(self.build_temp) / "cmake_build"
         build_dir.mkdir(parents=True, exist_ok=True)
+        self._clean_stale_engine_artifacts(ext_dir)
 
         self._run_stage_with_artifact_checks(
             "CMake build",
@@ -352,9 +357,23 @@ class OpenVikingBuildExt(build_ext):
         )
         self._engine_extensions_built = True
 
+    def _clean_stale_engine_artifacts(self, ext_dir: Path):
+        """Remove stale non-abi3 engine binaries from wheel build output directories."""
+        source_engine_dir = (SETUP_DIR / "openviking" / "storage" / "vectordb" / "engine").resolve()
+        if ext_dir == source_engine_dir:
+            return
+
+        for pattern in ("*.so", "*.pyd"):
+            for artifact in ext_dir.glob(pattern):
+                artifact.unlink()
+
     def _build_extension_impl(self, ext_fullpath, ext_dir, build_dir):
         """Invoke CMake to build the Python native extension."""
-        py_ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ext_fullpath.suffix
+        ext_basename = ext_fullpath.stem.split(".")[0]
+        built_filename = Path(self.get_ext_filename(self.extensions[0].name)).name
+        py_ext_suffix = built_filename.removeprefix(ext_basename)
+        if not py_ext_suffix:
+            py_ext_suffix = sysconfig.get_config_var("EXT_SUFFIX") or ext_fullpath.suffix
 
         cmake_args = [
             f"-S{Path(ENGINE_SOURCE_DIR).resolve()}",
@@ -368,7 +387,6 @@ class OpenVikingBuildExt(build_ext):
             f"-DPython3_EXECUTABLE={sys.executable}",
             f"-DPython3_INCLUDE_DIRS={sysconfig.get_path('include')}",
             f"-DPython3_LIBRARIES={sysconfig.get_config_vars().get('LIBRARY')}",
-            f"-Dpybind11_DIR={pybind11.get_cmake_dir()}",
             f"-DCMAKE_C_COMPILER={C_COMPILER_PATH}",
             f"-DCMAKE_CXX_COMPILER={CXX_COMPILER_PATH}",
         ]
@@ -387,6 +405,23 @@ class OpenVikingBuildExt(build_ext):
         self.spawn([self.cmake_executable] + build_args)
 
 
+if bdist_wheel is not None:
+
+    class OpenVikingBdistWheel(bdist_wheel):
+        def finalize_options(self):
+            super().finalize_options()
+            self.py_limited_api = "cp310"
+else:
+    OpenVikingBdistWheel = None
+
+
+cmdclass = {
+    "build_ext": OpenVikingBuildExt,
+}
+if OpenVikingBdistWheel is not None:
+    cmdclass["bdist_wheel"] = OpenVikingBdistWheel
+
+
 setup(
     # install_requires=[
     #     f"pyagfs @ file://localhost/{os.path.abspath('third_party/agfs/agfs-sdk/python')}"
@@ -395,11 +430,10 @@ setup(
         Extension(
             name=ENGINE_BUILD_CONFIG.primary_extension,
             sources=[],
+            py_limited_api=True,
         )
     ],
-    cmdclass={
-        "build_ext": OpenVikingBuildExt,
-    },
+    cmdclass=cmdclass,
     package_data={
         "openviking": [
             "bin/agfs-server",
@@ -409,7 +443,7 @@ setup(
             "lib/libagfsbinding.dll",
             "bin/ov",
             "bin/ov.exe",
-            "storage/vectordb/engine/*.so",
+            "storage/vectordb/engine/*.abi3.so",
             "storage/vectordb/engine/*.pyd",
         ],
     },

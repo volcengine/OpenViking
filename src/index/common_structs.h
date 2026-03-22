@@ -38,10 +38,6 @@ struct SearchResult {
   std::string extra_json;
 };
 
-struct FetchDataResult {
-  std::vector<float> embedding;
-};
-
 struct StateResult {
   uint64_t update_timestamp = 0;
   uint64_t element_count = 0;

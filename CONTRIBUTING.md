@@ -163,7 +163,7 @@ openviking/
 │       ├── src/          # CLI source code
 │       └── install.sh    # Quick install script
 │
-├── src/                  # C++ extensions (pybind11)
+├── src/                  # C++ extension sources (Python abi3)
 │
 ├── tests/                # Test suite
 │   ├── client/           # Client tests
