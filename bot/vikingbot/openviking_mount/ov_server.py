@@ -57,13 +57,13 @@ class VikingClient:
             if not user_exists:
                 await self._initialize_user(self.admin_user_id, role="admin")
             admin_user_api_key = await self._get_or_create_user_apikey(self.admin_user_id)
-            logger.info(f"admin_user_api_key: {admin_user_api_key}")
-            self.admin_user_client = ov.AsyncHTTPClient(
-                url=self.openviking_config.server_url,
-                api_key=admin_user_api_key,
-                agent_id=self.agent_id,
-            )
-            await self.admin_user_client.initialize()
+            if admin_user_api_key:
+                self.admin_user_client = ov.AsyncHTTPClient(
+                    url=self.openviking_config.server_url,
+                    api_key=admin_user_api_key,
+                    agent_id=self.agent_id,
+                )
+                await self.admin_user_client.initialize()
 
     @classmethod
     async def create(cls, agent_id: Optional[str] = None):

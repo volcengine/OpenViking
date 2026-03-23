@@ -87,8 +87,7 @@ def run_vikingbot_chat(question: str) -> tuple[str, dict, float, int, list]:
             )
             time_cost = resp_json.get("time_cost", time_cost)
             iteration = resp_json.get("iteration", 0)
-            # 兼容拼写错误的字段名toos_used_names和正确的tools_used_names
-            tools_used_names = resp_json.get("toos_used_names", resp_json.get("tools_used_names", []))
+            tools_used_names = resp_json.get("tools_used_names", [])
         except (json.JSONDecodeError, ValueError) as e:
             response = f"[PARSE ERROR] {output}"
             token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
