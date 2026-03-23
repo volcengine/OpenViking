@@ -55,7 +55,7 @@ def serialize_with_metadata(content: str, metadata: Dict[str, Any]) -> str:
     Args:
         content: The main memory content (Markdown)
         metadata: Dictionary containing metadata fields:
-            - memory_type: Type of memory
+            - memory_type: Type of memory (NOT included in output)
             - fields: Structured fields (for template mode)
             - name: Memory name
             - tags: List of tags
@@ -67,8 +67,8 @@ def serialize_with_metadata(content: str, metadata: Dict[str, Any]) -> str:
     Returns:
         Combined string with content followed by metadata in HTML comment
     """
-    # Clean metadata - remove None values
-    clean_metadata = {k: v for k, v in metadata.items() if v is not None}
+    # Clean metadata - remove None values and memory_type
+    clean_metadata = {k: v for k, v in metadata.items() if v is not None and k != "memory_type"}
 
     if not clean_metadata:
         return content

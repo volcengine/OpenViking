@@ -7,7 +7,7 @@ This module provides a YAML-configurable memory templating system with
 ReAct (Reasoning + Action) pattern for memory updates.
 """
 
-from openviking.session.memory.memory_utils import (
+from openviking.session.memory.utils import (
     detect_language_from_conversation,
     generate_uri,
     is_uri_allowed,
@@ -16,35 +16,32 @@ from openviking.session.memory.memory_utils import (
     resolve_all_operations,
     validate_uri_template,
 )
-from openviking.session.memory.memory_data import (
-    FieldType,
+from openviking.session.memory.dataclass import (
     MemoryData,
     MemoryField,
-    MemoryType,
-    MemoryTypeSchema,
-    MergeOp,
-)
-from openviking.session.memory.memory_operations import (
     MemoryOperations,
+    MemoryTypeSchema,
     StructuredMemoryOperations,
 )
-from openviking.session.memory.memory_patch import MemoryPatchHandler
+from openviking.session.memory.merge_op import MergeOp, FieldType, MemoryPatchHandler
 from openviking.session.memory.memory_react import (
-    ActionType,
     MemoryReAct,
-    ReadAction,
 )
-from openviking.session.memory.memory_types import MemoryTypeRegistry
+from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.memory_updater import MemoryUpdater, MemoryUpdateResult
 from openviking.session.memory.schema_models import (
     SchemaModelGenerator,
     SchemaPromptGenerator,
 )
 from openviking.session.memory.tools import (
-    MemoryFindTool,
+    MemorySearchTool,
     MemoryLsTool,
     MemoryReadTool,
     MemoryTool,
+    add_tool_call_items_to_messages,
+    add_tool_call_pair_to_messages,
+    create_tool_call_message,
+    create_tool_result_message,
     get_tool,
     get_tool_schemas,
     list_tools,
@@ -56,7 +53,6 @@ __all__ = [
     "FieldType",
     "MergeOp",
     "MemoryField",
-    "MemoryType",
     "MemoryTypeSchema",
     "MemoryData",
     # Operations
@@ -73,19 +69,20 @@ __all__ = [
     "MemoryUpdater",
     "MemoryUpdateResult",
     # ReAct
-    "ActionType",
-    "ReadAction",
     "MemoryReAct",
     # Tools (Tool implementations)
     "MemoryTool",
     "MemoryReadTool",
-    "MemoryFindTool",
+    "MemorySearchTool",
     "MemoryLsTool",
-    "MemoryTreeTool",
     "register_tool",
     "get_tool",
     "list_tools",
     "get_tool_schemas",
+    "create_tool_call_message",
+    "create_tool_result_message",
+    "add_tool_call_pair_to_messages",
+    "add_tool_call_items_to_messages",
     # Language utilities and helpers
     "detect_language_from_conversation",
     "pretty_print_messages",

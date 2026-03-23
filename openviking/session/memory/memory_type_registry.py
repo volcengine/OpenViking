@@ -9,12 +9,9 @@ from typing import Dict, List, Optional
 
 import yaml
 
-from openviking.session.memory.memory_data import (
-    FieldType,
-    MemoryField,
-    MemoryTypeSchema,
-    MergeOp,
-)
+from openviking.session.memory.dataclass import MemoryField, MemoryTypeSchema
+from openviking.session.memory.merge_op import MergeOp
+from openviking.session.memory.merge_op.base import FieldType
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)

@@ -6,7 +6,7 @@ Tests for MemoryPatchHandler.
 
 import pytest
 
-from openviking.session.memory.memory_patch import MemoryPatchHandler, PatchParseError
+from openviking.session.memory.merge_op import MemoryPatchHandler, PatchParseError
 
 
 class TestMemoryPatchHandler:
@@ -77,72 +77,6 @@ content
 
         with pytest.raises(PatchParseError):
             self.handler.apply_content_patch("original", patch)
-
-    def test_apply_field_patches_patch_default(self):
-        """Test field patches with default patch strategy."""
-        current = {"name": "Alice", "age": 30}
-        patches = {"age": 31, "city": "Beijing"}
-
-        result = self.handler.apply_field_patches(current, patches)
-        assert result["age"] == 31
-        assert result["city"] == "Beijing"
-        assert result["name"] == "Alice"
-
-    def test_apply_field_patches_sum(self):
-        """Test field patches with sum strategy."""
-        current = {"count": 10}
-        patches = {"count": 5}
-        merge_ops = {"count": "sum"}
-
-        result = self.handler.apply_field_patches(current, patches, merge_ops)
-        assert result["count"] == 15
-
-    def test_apply_field_patches_avg(self):
-        """Test field patches with avg strategy."""
-        current = {"score": 80}
-        patches = {"score": 90}
-        merge_ops = {"score": "avg"}
-
-        result = self.handler.apply_field_patches(current, patches, merge_ops)
-        assert result["score"] == 85
-
-    def test_apply_field_patches_immutable_existing(self):
-        """Test immutable fields don't change if already present."""
-        current = {"id": "123"}
-        patches = {"id": "456"}
-        merge_ops = {"id": "immutable"}
-
-        result = self.handler.apply_field_patches(current, patches, merge_ops)
-        assert result["id"] == "123"
-
-    def test_apply_field_patches_immutable_new(self):
-        """Test immutable fields are set if not present."""
-        current = {}
-        patches = {"id": "123"}
-        merge_ops = {"id": "immutable"}
-
-        result = self.handler.apply_field_patches(current, patches, merge_ops)
-        assert result["id"] == "123"
-
-    def test_create_content_patch(self):
-        """Test creating a patch from original and updated content."""
-        original = "Original line"
-        updated = "Updated line"
-
-        patch = self.handler.create_content_patch(original, updated, start_line=5)
-
-        assert "<<<<<<< SEARCH" in patch
-        assert ":start_line:5" in patch
-        assert "Original line" in patch
-        assert "=======" in patch
-        assert "Updated line" in patch
-        assert ">>>>>>> REPLACE" in patch
-
-    def test_create_content_patch_identical(self):
-        """Test creating patch for identical content returns empty."""
-        content = "Same content"
-        patch = self.handler.create_content_patch(content, content)
-        assert patch == ""
 
     def test_apply_content_patch_multiple_blocks(self):
         """Test applying patch with multiple SEARCH/REPLACE blocks."""

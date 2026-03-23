@@ -11,22 +11,15 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 from openviking.server.identity import RequestContext
-from openviking.session.memory.memory_content import (
+from openviking.session.memory.utils import (
     deserialize_full,
     serialize_with_metadata,
+    resolve_all_operations,
+    flat_model_to_dict,
 )
-from openviking.session.memory.memory_data import (
-    MergeOpFactory,
-    MemoryField,
-    StrPatch,
-)
-from openviking.session.memory.memory_patch import (
-    MemoryPatchHandler,
-    apply_str_patch,
-    str_patch_to_string,
-)
-from openviking.session.memory.memory_types import MemoryTypeRegistry
-from openviking.session.memory.memory_utils import resolve_all_operations
+from openviking.session.memory.dataclass import MemoryField
+from openviking.session.memory.merge_op import MergeOpFactory
+from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
@@ -71,15 +64,6 @@ class MemoryUpdateResult:
         )
 
 
-def flat_model_to_dict(model: Any) -> Dict[str, Any]:
-    """Convert a flat model to a dictionary, handling both Pydantic models and raw dicts."""
-    if hasattr(model, 'model_dump'):
-        return model.model_dump(exclude_none=True)
-    elif hasattr(model, 'dict'):
-        # For backward compatibility with older Pydantic
-        return model.dict(exclude_none=True)
-    else:
-        return dict(model) if model else {}
 
 
 class MemoryUpdater:
@@ -92,7 +76,6 @@ class MemoryUpdater:
 
     def __init__(self, registry: Optional[MemoryTypeRegistry] = None):
         self._viking_fs = None
-        self._patch_handler = MemoryPatchHandler()
         self._registry = registry
 
     def set_registry(self, registry: MemoryTypeRegistry) -> None:
@@ -208,17 +191,8 @@ class MemoryUpdater:
                     if field_name in model_dict:
                         business_fields[field_name] = model_dict[field_name]
 
-        # Collect metadata
-        metadata = {
-            "memory_type": memory_type_str,
-            "fields": business_fields,
-            "name": model_dict.get("name"),
-            "tags": model_dict.get("tags", []),
-            "created_at": created_at,
-            "updated_at": updated_at,
-            "abstract": model_dict.get("abstract"),
-            "overview": model_dict.get("overview"),
-        }
+        # Collect metadata - only include business fields (from schema, except content)
+        metadata = business_fields.copy()
 
         # Serialize content with metadata
         full_content = serialize_with_metadata(content, metadata)
@@ -254,43 +228,38 @@ class MemoryUpdater:
             if schema:
                 field_schema_map = {f.name: f for f in schema.fields}
 
-        # Apply content patch if present
+        # Apply all fields (including content) through MergeOp
         new_plain_content = current_plain_content
-        if "content" in model_dict:
-            patch_value = model_dict["content"]
-
-            # Check if it's a StrPatch
-            if isinstance(patch_value, StrPatch):
-                new_plain_content = apply_str_patch(current_plain_content, patch_value)
-            elif isinstance(patch_value, str):
-                # If it's a string, check for SEARCH/REPLACE markers
-                if "<<<<<<< SEARCH" in patch_value:
-                    new_plain_content = self._patch_handler.apply_content_patch(current_plain_content, patch_value)
-                else:
-                    # Simple full replacement
-                    new_plain_content = patch_value
-
-        # Update metadata
         metadata = current_metadata or {}
-        if metadata:
-            metadata["updated_at"] = datetime.utcnow()
 
-            # Update business fields in metadata if they're present in the model
-            # (and are primitive values, not patches)
-            if "fields" not in metadata:
-                metadata["fields"] = {}
+        # Handle schema-defined fields first
+        for field_name, field_schema in field_schema_map.items():
+            if field_name in model_dict:
+                patch_value = model_dict[field_name]
 
-            for field_name, field_schema in field_schema_map.items():
-                if field_name in model_dict:
-                    value = model_dict[field_name]
-                    # Only update with primitive values (not patches)
-                    if isinstance(value, (str, int, float, bool)):
-                        metadata["fields"][field_name] = value
+                # Get current value
+                if field_name == "content":
+                    current_value = current_plain_content
+                else:
+                    current_value = metadata.get(field_name)
 
-            # Update other metadata fields if present
-            for field in ["name", "tags", "abstract", "overview"]:
-                if field in model_dict:
-                    metadata[field] = model_dict[field]
+                # Create MergeOp and apply
+                merge_op = MergeOpFactory.from_field(field_schema)
+                new_value = merge_op.apply(current_value, patch_value)
+
+                # Update the field
+                if field_name == "content":
+                    new_plain_content = new_value
+                else:
+                    metadata[field_name] = new_value
+
+        # Special case: handle content field even without schema (for backward compatibility/testing)
+        if "content" in model_dict and "content" not in field_schema_map:
+            from openviking.session.memory.merge_op import PatchOp
+            from openviking.session.memory.merge_op.base import FieldType
+            patch_value = model_dict["content"]
+            merge_op = PatchOp(FieldType.STRING)
+            new_plain_content = merge_op.apply(current_plain_content, patch_value)
 
         # Re-serialize with updated content and metadata
         new_full_content = serialize_with_metadata(new_plain_content, metadata)

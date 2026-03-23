@@ -32,6 +32,47 @@ This proposal discusses the extension mechanism for integrating OpenClaw Context
 
    Compact is typically triggered by /new or when messages reach a certain length. Messages that don't reach the length threshold won't trigger memory extraction. A timeout-based extraction mechanism can be added in the future (not needed currently).
 
+### Two-Threshold Compact Upload Mechanism / 双阈值 Compact 上报机制
+
+为了平衡记忆同步的实时性和用户体验，采用双阈值的非阻塞上报机制：
+
+**Threshold 1: Early Upload (e.g., 50% of context window) / 阈值 1：提前上报（如上下文窗口的 50%）**
+- **Trigger Condition / 触发条件**: When session reaches ~50% of context window limit / 当会话达到上下文窗口限制的约 50% 时
+- **Action / 行为**:
+  - Trigger memory upload to OpenViking in background / 后台触发记忆上报到 OpenViking
+  - **DO NOT block the main flow / 不阻塞主流程**
+  - **DO NOT clear session messages / 不清空会话消息**
+  - Record the range of messages being uploaded (start_index, end_index) / 记录正在上报的消息范围（start_index, end_index）
+  - Store upload state (upload_id, status, message_range) in session metadata / 在会话元数据中存储上报状态（upload_id, status, message_range）
+
+**Threshold 2: Force Cleanup (e.g., 70% of context window) / 阈值 2：强制清理（如上下文窗口的 70%）**
+- **Trigger Condition / 触发条件**: When session reaches ~70% of context window limit / 当会话达到上下文窗口限制的约 70% 时
+- **Action / 行为**:
+  - **Always clear the messages marked for upload** / 总是清理标记为待上报的消息
+  - The upload will continue in background, messages are already in memory buffer / 上报将在后台继续，消息已在内存缓冲区中
+  - Keep the newer messages that arrived after upload started / 保留上报开始后到达的新消息
+
+**Cleanup After Upload Completion (Before Threshold 2) / 上报完成后的清理（阈值 2 前）**
+- **Trigger Condition / 触发条件**: Upload to OpenViking has completed and session hasn't reached Threshold 2 / 上报到 OpenViking 已完成且会话未达到阈值 2
+- **Action / 行为**:
+  - Clear only the messages that were uploaded (from message_range) / 只清理已上报的消息（从 message_range）
+  - Keep the newer messages that arrived after upload started / 保留上报开始后到达的新消息
+
+**Compact Hook Integration / Compact Hook 集成**
+- In each compact hook (before message processing) / 在每次 compact hook 中（消息处理前）：
+  1. Check session size against thresholds / 检查会话大小是否达到阈值
+  2. If Threshold 1 reached and no ongoing upload: trigger background upload / 如果达到阈值 1 且无正在进行的上报：触发后台上报
+  3. If Threshold 2 reached: force cleanup marked messages / 如果达到阈值 2：强制清理标记的消息
+  4. If any upload has completed and below Threshold 2: cleanup those messages / 如果有上报完成且在阈值 2 以下：清理那些消息
+
+
+**Benefits / 优势**:
+- Non-blocking: User never waits for memory extraction / 非阻塞：用户永远不需要等待记忆提取
+- Progressive: Memory is uploaded early, reduces final compact work / 渐进式：记忆提前上报，减少最终 compact 的工作量
+- Safe: Messages only cleared after upload confirmation when possible / 安全：尽可能在上报确认后清理消息
+- Guaranteed: At Threshold 2, messages are cleared even if upload not complete / 保证：在阈值 2 时，即使上报未完成也清理消息
+- Backward compatible: Works with existing compact flow / 向后兼容：与现有 compact 流程兼容
+
 ---
 
 ### Active Memory (Tool-based) / 主动记忆（基于工具）（可选）

@@ -32,6 +32,7 @@ from .parser_config import (
 from .rerank_config import RerankConfig
 from .storage_config import StorageConfig
 from .vlm_config import VLMConfig
+from .memory_config import MemoryConfig
 
 
 class OpenVikingConfig(BaseModel):
@@ -125,6 +126,10 @@ class OpenVikingConfig(BaseModel):
 
     log: LogConfig = Field(default_factory=lambda: LogConfig(), description="Logging configuration")
 
+    memory: MemoryConfig = Field(
+        default_factory=lambda: MemoryConfig(), description="Memory configuration"
+    )
+
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid"}
 
     @classmethod
@@ -160,10 +165,19 @@ class OpenVikingConfig(BaseModel):
         if "log" in config_copy:
             log_config_data = config_copy.pop("log")
 
+        # Handle memory configuration from nested "memory" section
+        memory_config_data = None
+        if "memory" in config_copy:
+            memory_config_data = config_copy.pop("memory")
+
         instance = cls(**config_copy)
         # Apply log configuration
         if log_config_data is not None:
             instance.log = LogConfig.from_dict(log_config_data)
+
+        # Apply memory configuration
+        if memory_config_data is not None:
+            instance.memory = MemoryConfig.from_dict(memory_config_data)
 
         # Apply parser configurations
         for parser_type, parser_data in parser_configs.items():

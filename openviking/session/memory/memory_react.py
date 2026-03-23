@@ -13,15 +13,18 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from pydantic import BaseModel, Field
 
+from openviking.models.vlm.base import VLMBase, VLMResponse
 from openviking.server.identity import RequestContext
-from openviking.session.memory.memory_utils import (
+from openviking.session.memory.utils import (
     collect_allowed_directories,
     detect_language_from_conversation,
+    extract_json_from_markdown,
+    parse_json_with_stability,
     pretty_print_messages,
     validate_operations_uris,
 )
-from openviking.session.memory.memory_operations import MemoryOperations
-from openviking.session.memory.memory_types import MemoryTypeRegistry
+from openviking.session.memory.dataclass import MemoryOperations
+from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.schema_models import (
     SchemaModelGenerator,
     SchemaPromptGenerator,
@@ -29,6 +32,7 @@ from openviking.session.memory.schema_models import (
 from openviking.session.memory.tools import (
     get_tool,
     get_tool_schemas,
+    add_tool_call_pair_to_messages,
 )
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
 from openviking_cli.utils import get_logger
@@ -36,21 +40,6 @@ from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 
-
-class ActionType(str, Enum):
-    """Action type enumeration."""
-
-    READ = "read"
-    FIND = "find"
-    LS = "ls"
-    TREE = "tree"
-
-
-class ReadAction(BaseModel):
-    """Read action to execute."""
-
-    action_type: ActionType = Field(..., description="Action type: read/find/ls/tree")
-    params: Dict[str, Any] = Field(default_factory=dict, description="Call parameters")
 
 
 class MemoryReAct:
@@ -66,7 +55,7 @@ class MemoryReAct:
 
     def __init__(
         self,
-        llm_provider: Any,
+        vlm: VLMBase,
         viking_fs: Optional[VikingFS] = None,
         model: Optional[str] = None,
         max_iterations: int = 5,
@@ -76,15 +65,15 @@ class MemoryReAct:
         Initialize the MemoryReAct.
 
         Args:
-            llm_provider: LLM provider instance (from bot/vikingbot/providers/base.py)
+            vlm: VLM instance (from openviking.models.vlm.base)
             viking_fs: VikingFS instance for storage operations
             model: Model name to use
             max_iterations: Maximum number of ReAct iterations (default: 5)
             ctx: Request context
         """
-        self.llm_provider = llm_provider
+        self.vlm = vlm
         self.viking_fs = viking_fs or get_viking_fs()
-        self.model = model or llm_provider.get_default_model()
+        self.model = model or self.vlm.model
         self.max_iterations = max_iterations
         self.ctx = ctx
 
@@ -150,7 +139,7 @@ class MemoryReAct:
             for dir_uri in ls_dirs:
                 try:
                     result_str = await ls_tool.execute(self.viking_fs, self.ctx, uri=dir_uri)
-                    self._add_tool_calls_to_messages(
+                    add_tool_call_pair_to_messages(
                         messages=messages,
                         call_id=call_id_seq,
                         tool_name='ls',
@@ -163,7 +152,7 @@ class MemoryReAct:
 
                     result_str = await read_tool.execute(self.viking_fs, self.ctx, uri=f'{dir_uri}/.abstract.md')
 
-                    self._add_tool_calls_to_messages(
+                    add_tool_call_pair_to_messages(
                         messages=messages,
                         call_id=call_id_seq,
                         tool_name='read',
@@ -214,45 +203,56 @@ class MemoryReAct:
             iteration += 1
             logger.debug(f"ReAct iteration {iteration}/{self.max_iterations}")
 
+            # Check if this is the last iteration - force final result
+            is_last_iteration = iteration >= self.max_iterations
+
             # Call LLM with tools - model decides: tool calls OR final operations
-            tool_calls, operations = await self._call_llm(messages)
+            tool_calls, operations = await self._call_llm(messages, force_final=is_last_iteration)
 
             # If model returned final operations, we're done
             if operations is not None:
                 final_operations = operations
                 break
 
-            # If no tool calls either, something is wrong
+            # If no tool calls either, continue to next iteration (don't break!)
             if not tool_calls:
-                logger.warning("LLM returned neither tool calls nor operations")
-                final_operations = MemoryOperations()
-                break
+                logger.warning(f"LLM returned neither tool calls nor operations (iteration {iteration}/{self.max_iterations})")
+                # If it's the last iteration, use empty operations
+                if is_last_iteration:
+                    final_operations = MemoryOperations()
+                    break
+                # Otherwise continue and try again
+                continue
 
             # Execute all tool calls in parallel
-            async def execute_single_action(idx: int, action: ReadAction):
-                """Execute a single read action."""
-                result = await self._execute_read_action(action)
-                return idx, action, result
+            async def execute_single_tool_call(idx: int, tool_call):
+                """Execute a single tool call."""
+                result = await self._execute_tool(tool_call)
+                return idx, tool_call, result
 
             action_tasks = [
-                execute_single_action(idx, action)
-                for idx, action in enumerate(tool_calls)
+                execute_single_tool_call(idx, tool_call)
+                for idx, tool_call in enumerate(tool_calls)
             ]
             results = await self._execute_in_parallel(action_tasks)
 
             # Process results and add to messages
-            for _idx, action, result in results:
+            for _idx, tool_call, result in results:
                 tools_used.append({
-                    "tool_name": action.action_type.value,
-                    "params": action.params,
+                    "tool_name": tool_call.name,
+                    "params": tool_call.arguments,
                     "result": result,
                 })
-                messages = self._add_tool_result_to_messages(
+                add_tool_call_pair_to_messages(
                     messages,
-                    action,
-                    result,
+                    call_id=tool_call.id,
+                    tool_name=tool_call.name,
+                    params=tool_call.arguments,
+                    result=result,
                 )
-
+            # Print updated messages with tool results
+            pretty_print_messages(messages)
+        logger.info(f'final_operations={final_operations}')
         if final_operations is None:
             if iteration >= self.max_iterations:
                 raise RuntimeError(f"Reached {self.max_iterations} iterations without completion")
@@ -291,85 +291,6 @@ First, let's explore the memory directory structure and summaries to understand 
 
         return messages
 
-    def _format_pre_fetched_as_tool_calls(self, pre_fetched_context: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Format pre-fetched context as previous tool call messages."""
-        from typing import Tuple
-
-        messages: List[Dict[str, Any]] = []
-
-        # Collect all tool calls and results
-        tool_call_items: List[Tuple[str, str, Dict[str, Any], Any]] = []
-
-        # Add ls calls for directories
-        if "directories" in pre_fetched_context:
-            for idx, (uri, entries) in enumerate(pre_fetched_context["directories"].items()):
-                call_id = f"prefetch_ls_{idx}"
-                params = {"uri": uri, "output": "agent"}
-                result = {
-                    "uri": uri,
-                    "files": [e for e in entries if not e.get("isDir", False)],
-                    "directories": [e for e in entries if e.get("isDir", False)],
-                    "entries": entries,
-                    "_note": "This ls result only shows file names. Use read tool to get actual file content before editing any file.",
-                }
-                tool_call_items.append((call_id, "ls", params, result))
-
-        # Add read calls for summaries
-        if "summaries" in pre_fetched_context:
-            for idx, (uri, content) in enumerate(pre_fetched_context["summaries"].items()):
-                call_id = f"prefetch_read_{idx}"
-                params = {"uri": uri}
-                result = {
-                    "uri": uri,
-                    "content": str(content)[:2000],
-                }
-                tool_call_items.append((call_id, "read", params, result))
-
-        # Add find call for search results
-        if "search_results" in pre_fetched_context:
-            call_id = "prefetch_find_0"
-            params = {"query": "conversation context", "limit": 10}
-            search_results = pre_fetched_context["search_results"]
-            result = {
-                "memories": search_results if isinstance(search_results, list) else [],
-                "resources": [],
-                "skills": [],
-            }
-            tool_call_items.append((call_id, "find", params, result))
-
-        if tool_call_items:
-            # Use shared method to add tool calls and results
-            messages = self._add_tool_calls_to_messages([], tool_call_items)
-
-        return messages
-
-    def _add_tool_calls_to_messages(
-        self,
-        messages: List[Dict[str, Any]],
-        call_id,
-        tool_name,
-        params,
-        result
-    ) :
-        messages.append({
-            "role": "assistant",
-            "content": None,
-            "tool_calls": [{
-                "id": call_id,
-                "type": "function",
-                "function": {
-                    "name": tool_name,
-                    "arguments": json.dumps(params),
-                },
-            }],
-        })
-
-        # Add tool result message immediately after
-        messages.append({
-            "role": "tool",
-            "tool_call_id": call_id,
-            "content": json.dumps(result, ensure_ascii=False),
-        })
 
     def _get_allowed_directories_list(self) -> str:
         """Get a formatted list of allowed directories for the system prompt."""
@@ -385,15 +306,15 @@ First, let's explore the memory directory structure and summaries to understand 
     def _get_system_prompt(self, output_language: str) -> str:
         """Get the simplified system prompt."""
         import json
-        schema_str = json.dumps(self._json_schema, ensure_ascii=False, indent=2)
+        schema_str = json.dumps(self._json_schema, ensure_ascii=False)
         allowed_dirs_list = self._get_allowed_directories_list()
 
         return f"""You are a memory extraction agent. Your task is to analyze conversations and update memories.
 
 ## Workflow
 1. Analyze the conversation and pre-fetched context
-2. If you need more information, use the available tools (read/find/ls/tree)
-3. When you have enough information, output the final memory operations directly
+2. If you need more information, use the available tools (read/search/ls/tree)
+3. When you have enough information, output ONLY a JSON object (no extra text before or after)
 
 ## Critical: Read Before Edit
 IMPORTANT: Before you edit or update ANY existing memory file, you MUST first use the read tool to read its complete content.
@@ -420,15 +341,17 @@ IMPORTANT: All memory operations will be validated to be within these directorie
 {allowed_dirs_list}
 
 ## Final Output Format
-When you have enough information and are ready to update memories, respond with a JSON object in this format:
+Outputs will be a complete JSON object with the following fields (Don't have '```json' appear and do not use '//' to omit content)
 
+JSON schema:
 ```json
 {schema_str}
 ```
 
 ## Important Notes
 - Always read a file before editing it - ls and summaries are not enough
-- When you have enough information, output ONLY the final operations JSON
+- Output ONLY the JSON object - no extra text before or after
+- Put your thinking and reasoning in the `reasonning` field of the JSON
 """
 
     def _validate_operations(self, operations: MemoryOperations) -> None:
@@ -456,70 +379,89 @@ When you have enough information and are ready to update memories, respond with 
     async def _call_llm(
         self,
         messages: List[Dict[str, Any]],
-    ) -> Tuple[Optional[List[ReadAction]], Optional[MemoryOperations]]:
+        force_final: bool = False,
+    ) -> Tuple[Optional[List], Optional[MemoryOperations]]:
         """
         Call LLM with tools. Returns either tool calls OR final operations.
+
+        Args:
+            messages: Message list
+            force_final: If True, force model to return final result (not tool calls)
 
         Returns:
             Tuple of (tool_calls, operations) - one will be None, the other set
         """
         # Call LLM with tools
-        response = await self.llm_provider.chat(
+        tool_choice = "none" if force_final else None
+        response = await self.vlm.get_completion_async(
             messages=messages,
             tools=get_tool_schemas(),
-            model=self.model,
-            temperature=0.0,
+            tool_choice=tool_choice,
+            max_retries=self.vlm.max_retries,
         )
 
         # Case 1: LLM returned tool calls
         if response.has_tool_calls:
-            actions = []
-            for tool_call in response.tool_calls:
-                try:
-                    action_type = ActionType(tool_call.name.lower())
-                    actions.append(ReadAction(
-                        action_type=action_type,
-                        params=tool_call.arguments,
-                    ))
-                except ValueError:
-                    logger.warning(f"Unknown tool call: {tool_call.name}")
-            return (actions, None)
+            # Format tool calls nicely for debug logging
+            for tc in response.tool_calls:
+                logger.info(f"[assistant tool_call] (id={tc.id}, name={tc.name})")
+                logger.info(f"  {json.dumps(tc.arguments, indent=2, ensure_ascii=False)}")
+            return (response.tool_calls, None)
 
-        # Case 2: Try to parse MemoryOperations from content
+        # Case 2: Try to parse MemoryOperations from content with stability
         content = response.content or ""
         if content:
             try:
-                # Remove markdown fences if present
-                if content.startswith("```"):
-                    content = content.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-                data = json.loads(content)
-                operations = MemoryOperations(**data)
+                logger.debug(f"[assistant]\n{content}")
+                # Get the dynamically generated operations model for better type safety
+                operations_model = self.schema_model_generator.create_structured_operations_model()
+
+                # Use five-layer stable JSON parsing
+                operations, error = parse_json_with_stability(
+                    content=content,
+                    model_class=operations_model,
+                    expected_fields=['reasoning', 'write_uris', 'edit_uris', 'delete_uris'],
+                )
+
+                if error is not None:
+                    logger.warning(f"Failed to parse memory operations (stable parse): {error}")
+                    # Fallback: try with base MemoryOperations
+                    content_no_md = extract_json_from_markdown(content)
+                    operations, error_fallback = parse_json_with_stability(
+                        content=content_no_md,
+                        model_class=MemoryOperations,
+                        expected_fields=['reasoning', 'write_uris', 'edit_uris', 'delete_uris'],
+                    )
+                    if error_fallback is not None:
+                        logger.warning(f"Fallback parse also failed: {error_fallback}")
+                        return (None, None)
+
                 # Validate that all URIs are allowed
                 self._validate_operations(operations)
                 return (None, operations)
-            except (json.JSONDecodeError, ValueError) as e:
-                logger.warning(f"Failed to parse memory operations: {e}")
+            except Exception as e:
+                logger.warning(f"Unexpected error parsing memory operations: {e}")
 
         # Case 3: No tool calls and no parsable operations
         return (None, None)
 
-    async def _execute_read_action(
+    async def _execute_tool(
         self,
-        action: ReadAction,
+        tool_call,
     ) -> Any:
-        """Execute a single read action (read/find/ls/tree)."""
+        """Execute a single read action (read/search/ls/tree)."""
         if not self.viking_fs:
             return {"error": "VikingFS not available"}
 
-        tool = get_tool(action.action_type.value)
+        tool = get_tool(tool_call.name)
         if not tool:
-            return {"error": f"Unknown action type: {action.action_type}"}
+            return {"error": f"Unknown tool: {tool_call.name}"}
 
         try:
-            result_str = await tool.execute(self.viking_fs, self.ctx, **action.params)
-            return json.loads(result_str)
+            result = await tool.execute(self.viking_fs, self.ctx, **tool_call.arguments)
+            return result
         except Exception as e:
-            logger.error(f"Failed to execute {action.action_type}: {e}")
+            logger.error(f"Failed to execute {tool_call.name}: {e}")
             return {"error": str(e)}
 
     async def _execute_in_parallel(
@@ -528,14 +470,3 @@ When you have enough information and are ready to update memories, respond with 
     ) -> List[Any]:
         """Execute tasks in parallel, similar to AgentLoop."""
         return await asyncio.gather(*tasks)
-
-    def _add_tool_result_to_messages(
-        self,
-        messages: List[Dict[str, Any]],
-        action: ReadAction,
-        result: Any,
-    ) -> List[Dict[str, Any]]:
-        """Add tool result to messages."""
-        call_id = f"call_{action.action_type.value}"
-        tool_call_items = [(call_id, action.action_type.value, action.params, result)]
-        return self._add_tool_calls_to_messages(messages, tool_call_items)

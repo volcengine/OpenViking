@@ -1,146 +1,17 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 """
-Memory utilities - language detection, message formatting, and other helpers.
+URI generation and validation utilities.
 """
 
-import json
 import re
-from typing import Any, Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple, Type
 
-from openviking.session.memory.memory_data import MemoryTypeSchema
-from openviking.session.memory.memory_types import MemoryTypeRegistry
+from openviking.session.memory.dataclass import MemoryTypeSchema
+from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
-
-
-def _detect_language_from_text(user_text: str, fallback_language: str) -> str:
-    """Internal shared helper to detect dominant language from text."""
-    fallback = (fallback_language or "en").strip() or "en"
-
-    if not user_text:
-        return fallback
-
-    # Detect scripts that are largely language-unique first.
-    counts = {
-        "ko": len(re.findall(r"[\uac00-\ud7af]", user_text)),
-        "ru": len(re.findall(r"[\u0400-\u04ff]", user_text)),
-        "ar": len(re.findall(r"[\u0600-\u06ff]", user_text)),
-    }
-
-    detected, score = max(counts.items(), key=lambda item: item[1])
-    if score > 0:
-        return detected
-
-    # CJK disambiguation:
-    # - Japanese often includes Han characters too, so Han-count alone can
-    #   misclassify Japanese as Chinese.
-    # - If any Kana is present, prioritize Japanese.
-    kana_count = len(re.findall(r"[\u3040-\u30ff\u31f0-\u31ff\uff66-\uff9f]", user_text))
-    han_count = len(re.findall(r"[\u4e00-\u9fff]", user_text))
-
-    if kana_count > 0:
-        return "ja"
-    if han_count > 0:
-        return "zh-CN"
-
-    return fallback
-
-
-def detect_language_from_conversation(conversation: str, fallback_language: str = "en") -> str:
-    """Detect dominant language from user messages in conversation.
-
-    We intentionally scope detection to user role content so assistant/system
-    text does not bias the target output language for stored memories.
-    """
-    fallback = (fallback_language or "en").strip() or "en"
-
-    # Try to extract user messages from conversation string
-    # Look for patterns like "[user]: ..." or "User: ..."
-    user_lines = []
-    for line in conversation.split("\n"):
-        line_lower = line.strip().lower()
-        if line_lower.startswith("[user]:") or line_lower.startswith("user:"):
-            # Extract content after the role marker
-            content = line.split(":", 1)[1].strip() if ":" in line else line.strip()
-            if content:
-                user_lines.append(content)
-
-    user_text = "\n".join(user_lines)
-
-    # If no user messages found, use the whole conversation as fallback
-    if not user_text:
-        user_text = conversation
-
-    return _detect_language_from_text(user_text, fallback)
-
-
-def pretty_print_messages(messages: List[Dict[str, Any]]) -> None:
-    """
-    Print messages in a human-readable format.
-
-    Formats messages with [role] headers and indented content for readability.
-    Tool calls and results are printed in a way that shows their correspondence.
-
-    Args:
-        messages: List of message dictionaries with 'role', 'content', and optional 'tool_calls'
-    """
-    def _format_tool_call(tc: Dict[str, Any]) -> Dict[str, Any]:
-        """Format a single tool call, pretty-printing arguments if it's JSON."""
-        tc_copy = dict(tc)
-        if "function" in tc_copy and "arguments" in tc_copy["function"]:
-            args_str = tc_copy["function"]["arguments"]
-            if isinstance(args_str, str):
-                try:
-                    # Try to parse and pretty-print the arguments
-                    args_json = json.loads(args_str)
-                    tc_copy["function"] = dict(tc_copy["function"])
-                    tc_copy["function"]["arguments"] = args_json
-                except (json.JSONDecodeError, TypeError):
-                    # If it's not valid JSON, leave it as is
-                    pass
-        return tc_copy
-
-    print("=== Messages ===")
-    for msg in messages:
-        role = msg.get("role", "unknown")
-        content = msg.get("content", "")
-
-        if role == "tool":
-            # Tool result - show correspondence with tool_call_id
-            tool_call_id = msg.get("tool_call_id", "")
-            print(f"\n[{role}] (id={tool_call_id})")
-            if content:
-                # Try to pretty-print tool result if it's JSON
-                try:
-                    result_json = json.loads(content)
-                    print(json.dumps(result_json, indent=2, ensure_ascii=False))
-                except (json.JSONDecodeError, TypeError):
-                    # If it's not valid JSON, print as is
-                    print(content)
-        else:
-            if content:
-                print(f"\n[{role}]")
-                print(content)
-
-            if "tool_calls" in msg and msg["tool_calls"]:
-                tool_calls = msg["tool_calls"]
-                if len(tool_calls) == 1:
-                    # Single tool call - show its id
-                    tc = tool_calls[0]
-                    tc_id = tc.get("id", "")
-                    tc_name = tc.get("function", {}).get("name", "")
-                    print(f"\n[{role} tool_call] (id={tc_id}, name={tc_name})")
-                    formatted_tc = _format_tool_call(tc)
-                    print(json.dumps(formatted_tc, indent=2, ensure_ascii=False))
-                else:
-                    # Multiple tool calls
-                    print(f"\n[{role} tool_calls]")
-                    formatted_tcs = [_format_tool_call(tc) for tc in tool_calls]
-                    print(json.dumps(formatted_tcs, indent=2, ensure_ascii=False))
-
-    print("\n=== End Messages ===")
 
 
 def generate_uri(
@@ -372,6 +243,9 @@ def is_uri_allowed_for_schema(
     return is_uri_allowed(uri, allowed_dirs, allowed_patterns)
 
 
+from openviking.session.memory.utils.model import model_to_dict
+
+
 def extract_uri_fields_from_flat_model(model: Any, schema: MemoryTypeSchema) -> Dict[str, Any]:
     """
     Extract URI-friendly fields from a flat model, ignoring patch objects.
@@ -384,13 +258,7 @@ def extract_uri_fields_from_flat_model(model: Any, schema: MemoryTypeSchema) -> 
         Dict with only primitive type values suitable for URI generation
     """
     # Convert model to dict if it's a Pydantic model
-    if hasattr(model, 'model_dump'):
-        model_dict = model.model_dump(exclude_none=True)
-    elif hasattr(model, 'dict'):
-        # For backward compatibility with older Pydantic
-        model_dict = model.dict(exclude_none=True)
-    else:
-        model_dict = dict(model) if model else {}
+    model_dict = model_to_dict(model)
 
     uri_fields = {}
     # Only include fields that are in the schema

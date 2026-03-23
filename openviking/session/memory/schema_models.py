@@ -15,13 +15,10 @@ from pydantic import BaseModel, Field, create_model
 from pydantic.config import ConfigDict
 from typing_extensions import Annotated, Literal
 
-from openviking.session.memory.memory_data import (
-    FieldType,
-    MergeOp,
-    MergeOpFactory,
-    MemoryTypeSchema,
-)
-from openviking.session.memory.memory_types import MemoryTypeRegistry
+from openviking.session.memory.dataclass import MemoryTypeSchema
+from openviking.session.memory.merge_op import MergeOp, MergeOpFactory
+from openviking.session.memory.merge_op.base import FieldType, get_python_type_for_field
+from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -53,13 +50,7 @@ class SchemaModelGenerator:
 
     def _map_field_type(self, field_type: FieldType) -> Type[Any]:
         """Map YAML field type to Python type."""
-        type_mapping = {
-            FieldType.STRING: str,
-            FieldType.INT64: int,
-            FieldType.FLOAT32: float,
-            FieldType.BOOL: bool,
-        }
-        return type_mapping.get(field_type, str)
+        return get_python_type_for_field(field_type)
 
     def create_flat_data_model(self, memory_type: MemoryTypeSchema) -> Type[BaseModel]:
         """
@@ -217,6 +208,10 @@ class SchemaModelGenerator:
         class StructuredMemoryOperations(BaseModel):
             """Final memory operations output from LLM with type safety."""
 
+            reasoning: str = Field(
+                '',
+                description="reasoning",
+            )
             write_uris: List[FlatDataUnion] = Field(  # type: ignore
                 default_factory=list,
                 description="Write operations with flat data format",
@@ -237,6 +232,8 @@ class SchemaModelGenerator:
                     and len(self.edit_uris) == 0
                     and len(self.delete_uris) == 0
                 )
+
+            model_config = ConfigDict(extra='ignore')
 
         self._operations_model = StructuredMemoryOperations
         return self._operations_model

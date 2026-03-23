@@ -10,30 +10,28 @@ from pathlib import Path
 import pytest
 import yaml
 
-from openviking.session.memory.memory_data import (
-    FieldType,
+from openviking.session.memory.dataclass import (
+    MemoryField,
+    MemoryTypeSchema,
+)
+from openviking.session.memory.merge_op import (
     MergeOp,
     MergeOpBase,
     MergeOpFactory,
     PatchOp,
     SumOp,
-    AvgOp,
     ImmutableOp,
     SearchReplaceBlock,
     StrPatch,
-    MemoryField,
-    MemoryTypeSchema,
-)
-from openviking.session.memory.memory_patch import (
-    str_patch_to_string,
     apply_str_patch,
 )
+from openviking.session.memory.merge_op.base import FieldType
 from openviking.session.memory.schema_models import (
     SchemaModelGenerator,
     SchemaPromptGenerator,
     to_pascal_case,
 )
-from openviking.session.memory.memory_types import (
+from openviking.session.memory.memory_type_registry import (
     MemoryTypeRegistry,
     create_default_registry,
 )
@@ -83,9 +81,11 @@ class TestPatchOp:
 
     def test_apply(self):
         """PatchOp apply should just return the patch value."""
-        op = PatchOp(FieldType.STRING)
-        assert op.apply("old", "new") == "new"
-        assert op.apply(100, 200) == 200
+        op_str = PatchOp(FieldType.STRING)
+        assert op_str.apply("old", "new") == "new"
+
+        op_int = PatchOp(FieldType.INT64)
+        assert op_int.apply(100, 200) == 200
 
 
 class TestSumOp:
@@ -129,43 +129,6 @@ class TestSumOp:
         assert op.apply("not a number", 10) == 10
 
 
-class TestAvgOp:
-    """Tests for AvgOp."""
-
-    def test_get_output_schema_type(self):
-        """AvgOp should return appropriate numeric types."""
-        op = AvgOp()
-        assert op.get_output_schema_type(FieldType.INT64) == int
-        assert op.get_output_schema_type(FieldType.FLOAT32) == float
-
-    def test_get_output_schema_description(self):
-        """Description should mention average."""
-        op = AvgOp()
-        desc = op.get_output_schema_description("rating")
-        assert "average" in desc
-        assert "rating" in desc
-
-    def test_apply_both_int(self):
-        """Average of two ints."""
-        op = AvgOp()
-        assert op.apply(10, 20) == 15.0
-
-    def test_apply_both_float(self):
-        """Average of two floats."""
-        op = AvgOp()
-        assert op.apply(10.0, 20.0) == 15.0
-
-    def test_apply_current_none(self):
-        """Current is None should return patch."""
-        op = AvgOp()
-        assert op.apply(None, 10) == 10
-
-    def test_apply_invalid_values(self):
-        """Invalid values should fall back to patch."""
-        op = AvgOp()
-        assert op.apply("not a number", 10) == 10
-
-
 class TestImmutableOp:
     """Tests for ImmutableOp."""
 
@@ -206,11 +169,6 @@ class TestMergeOpFactory:
         """Factory should create SumOp for SUM."""
         op = MergeOpFactory.create(MergeOp.SUM, FieldType.INT64)
         assert isinstance(op, SumOp)
-
-    def test_create_avg(self):
-        """Factory should create AvgOp for AVG."""
-        op = MergeOpFactory.create(MergeOp.AVG, FieldType.FLOAT32)
-        assert isinstance(op, AvgOp)
 
     def test_create_immutable(self):
         """Factory should create ImmutableOp for IMMUTABLE."""
@@ -277,50 +235,6 @@ class TestStrPatch:
 # ============================================================================
 
 
-class TestStrPatchToString:
-    """Tests for str_patch_to_string."""
-
-    def test_empty_patch(self):
-        """Empty patch returns empty string."""
-        patch = StrPatch()
-        assert str_patch_to_string(patch) == ""
-
-    def test_single_block_no_start_line(self):
-        """Single block without start line."""
-        patch = StrPatch(blocks=[
-            SearchReplaceBlock(search="old line", replace="new line")
-        ])
-        result = str_patch_to_string(patch)
-        assert "<<<<<<< SEARCH" in result
-        assert "old line" in result
-        assert "=======" in result
-        assert "new line" in result
-        assert ">>>>>>> REPLACE" in result
-
-    def test_single_block_with_start_line(self):
-        """Single block with start line."""
-        patch = StrPatch(blocks=[
-            SearchReplaceBlock(
-                search="old line",
-                replace="new line",
-                start_line=5
-            )
-        ])
-        result = str_patch_to_string(patch)
-        assert ":start_line:5" in result
-        assert "-------" in result
-
-    def test_multiple_blocks(self):
-        """Multiple blocks."""
-        patch = StrPatch(blocks=[
-            SearchReplaceBlock(search="a", replace="b"),
-            SearchReplaceBlock(search="c", replace="d"),
-        ])
-        result = str_patch_to_string(patch)
-        assert result.count("<<<<<<< SEARCH") == 2
-        assert result.count(">>>>>>> REPLACE") == 2
-
-
 class TestApplyStrPatch:
     """Tests for apply_str_patch."""
 
@@ -341,189 +255,11 @@ class TestApplyStrPatch:
                 start_line=1
             )
         ])
-        # Note: This might fail if fuzzy matching can't find, use exact match format
-        # For test, let's use the string format directly with patch handler
-        patch_str = str_patch_to_string(patch)
-        from openviking.session.memory.memory_patch import MemoryPatchHandler
-        handler = MemoryPatchHandler()
-        result = handler.apply_content_patch(original, patch_str)
-        # If exact match fails, it appends, let's create a test that works
-        # Just verify our conversion produces valid format
-        assert "<<<<<<< SEARCH" in patch_str
+        result = apply_str_patch(original, patch)
+        # Directly test apply_str_patch
+        assert result == "hello there"
 
 
 # ============================================================================
-# Test Schema Generation Integration
+# Test Schema Generation Integration - tested in test_schema_models.py
 # ============================================================================
-
-
-class TestSchemaModelGeneratorWithMergeOps:
-    """Tests for SchemaModelGenerator with MergeOp integration."""
-
-    def test_create_memory_fields_model_with_base_types(self):
-        """Fields model should use base types (not MergeOp types)."""
-        schema = MemoryTypeSchema(
-            memory_type="test_type",
-            fields=[
-                MemoryField(
-                    name="content",
-                    field_type=FieldType.STRING,
-                    description="Main content",
-                    merge_op=MergeOp.PATCH,
-                ),
-                MemoryField(
-                    name="score",
-                    field_type=FieldType.INT64,
-                    description="Score",
-                    merge_op=MergeOp.SUM,
-                ),
-            ],
-        )
-        registry = MemoryTypeRegistry()
-        registry.register(schema)
-        generator = SchemaModelGenerator(registry)
-
-        model = generator.create_memory_fields_model(schema)
-        # Check that the model has fields
-        assert hasattr(model, "model_fields")
-        assert "content" in model.model_fields
-        assert "score" in model.model_fields
-        # Fields model uses base types
-        assert model.model_fields["content"].annotation == str
-        assert model.model_fields["score"].annotation == int
-
-    def test_create_edit_patches_model_with_mergeop_types(self):
-        """Edit patches model should use MergeOp-specific types."""
-        schema = MemoryTypeSchema(
-            memory_type="test_type",
-            fields=[
-                MemoryField(
-                    name="content",
-                    field_type=FieldType.STRING,
-                    description="Main content",
-                    merge_op=MergeOp.PATCH,
-                ),
-                MemoryField(
-                    name="score",
-                    field_type=FieldType.INT64,
-                    description="打分合",
-                    merge_op=MergeOp.SUM,
-                ),
-            ],
-        )
-        registry = MemoryTypeRegistry()
-        registry.register(schema)
-        generator = SchemaModelGenerator(registry)
-
-        model = generator.create_edit_patches_model(schema)
-        assert "content" in model.model_fields
-        assert "score" in model.model_fields
-        # Check description for sum has "add for"
-        field = model.model_fields["score"]
-        assert "add for" in field.description
-
-    def test_create_edit_patches_model(self):
-        """Edit patches model should have all Optional fields."""
-        schema = MemoryTypeSchema(
-            memory_type="test_type3",
-            fields=[
-                MemoryField(
-                    name="content",
-                    field_type=FieldType.STRING,
-                    merge_op=MergeOp.PATCH,
-                ),
-                MemoryField(
-                    name="score",
-                    field_type=FieldType.INT64,
-                    merge_op=MergeOp.SUM,
-                ),
-            ],
-        )
-        registry = MemoryTypeRegistry()
-        registry.register(schema)
-        generator = SchemaModelGenerator(registry)
-
-        model = generator.create_edit_patches_model(schema)
-        assert "content" in model.model_fields
-        assert "score" in model.model_fields
-
-    def test_create_edit_op_model(self):
-        """EditOp model should be created with correct structure."""
-        schema = MemoryTypeSchema(
-            memory_type="test_card",
-            fields=[
-                MemoryField(
-                    name="name",
-                    field_type=FieldType.STRING,
-                    merge_op=MergeOp.IMMUTABLE,
-                ),
-                MemoryField(
-                    name="content",
-                    field_type=FieldType.STRING,
-                    merge_op=MergeOp.PATCH,
-                ),
-            ],
-        )
-        registry = MemoryTypeRegistry()
-        registry.register(schema)
-        generator = SchemaModelGenerator(registry)
-
-        model = generator.create_edit_op_model(schema)
-        assert "memory_type" in model.model_fields
-        assert "fields" in model.model_fields
-        assert "patches" in model.model_fields
-
-
-# ============================================================================
-# Integration Tests
-# ============================================================================
-
-
-class TestEndToEnd:
-    """End-to-end integration tests."""
-
-    def test_full_workflow(self):
-        """Test the complete workflow from schema to model."""
-        # Create schema
-        schema = MemoryTypeSchema(
-            memory_type="profile",
-            description="User profile",
-            fields=[
-                MemoryField(
-                    name="content",
-                    field_type=FieldType.STRING,
-                    description="Profile content",
-                    merge_op=MergeOp.PATCH,
-                ),
-                MemoryField(
-                    name="rating",
-                    field_type=FieldType.INT64,
-                    description="User rating",
-                    merge_op=MergeOp.SUM,
-                ),
-                MemoryField(
-                    name="created_at",
-                    field_type=FieldType.STRING,
-                    description="Creation time",
-                    merge_op=MergeOp.IMMUTABLE,
-                ),
-            ],
-            enabled=True,
-        )
-
-        # Register schema
-        registry = MemoryTypeRegistry()
-        registry.register(schema)
-
-        # Create generator
-        generator = SchemaModelGenerator(registry)
-
-        # Generate operations model
-        ops_model = generator.create_structured_operations_model()
-        assert ops_model is not None
-
-        # Get JSON schema
-        json_schema = generator.get_llm_json_schema()
-        assert "properties" in json_schema
-        assert "write_uris" in json_schema["properties"]
-        assert "edit_uris" in json_schema["properties"]

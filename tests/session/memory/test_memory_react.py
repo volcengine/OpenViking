@@ -10,40 +10,13 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from openviking.session.memory.memory_react import (
-    ActionType,
     MemoryReAct,
-    ReadAction,
 )
-from openviking.session.memory.memory_data import (
+from openviking.session.memory.dataclass import (
     MemoryTypeSchema,
     MemoryField,
-    FieldType,
-    MergeOp,
 )
-
-
-class TestReadAction:
-    """Tests for ReadAction."""
-
-    def test_create_read(self):
-        """Test creating a read action."""
-        action = ReadAction(
-            action_type=ActionType.READ,
-            params={"uri": "viking://user/test/memories/profile.md"},
-        )
-
-        assert action.action_type == ActionType.READ
-        assert action.params["uri"] == "viking://user/test/memories/profile.md"
-
-    def test_create_find(self):
-        """Test creating a find action."""
-        action = ReadAction(
-            action_type=ActionType.FIND,
-            params={"query": "user preferences", "limit": 5},
-        )
-
-        assert action.action_type == ActionType.FIND
-        assert action.params["query"] == "user preferences"
+from openviking.session.memory.merge_op.base import FieldType, MergeOp
 
 
 class TestPreFetchFileFiltering:
@@ -168,19 +141,20 @@ class TestAllowedDirectoriesList:
     """Tests for _get_allowed_directories_list method."""
 
     @pytest.fixture
-    def mock_llm_provider(self):
-        """Create a mock LLM provider."""
-        provider = MagicMock()
-        provider.get_default_model = MagicMock(return_value="test-model")
-        provider.chat = AsyncMock()
-        return provider
+    def mock_vlm(self):
+        """Create a mock VLM."""
+        vlm = MagicMock()
+        vlm.model = "test-model"
+        vlm.max_retries = 2
+        vlm.get_completion_async = AsyncMock()
+        return vlm
 
     @pytest.fixture
     def mock_viking_fs(self):
         """Create a mock VikingFS."""
         return MagicMock()
 
-    def test_get_allowed_directories_list(self, mock_llm_provider, mock_viking_fs):
+    def test_get_allowed_directories_list(self, mock_vlm, mock_viking_fs):
         """Test that allowed directories list is properly formatted."""
         # Patch the registry loading so we can inject our own schemas
         with patch('openviking.session.memory.memory_react.MemoryTypeRegistry') as mock_registry_cls:
@@ -217,7 +191,7 @@ class TestAllowedDirectoriesList:
                 mock_spg.return_value = MagicMock()
 
                 # Create MemoryReAct
-                react = MemoryReAct(mock_llm_provider, mock_viking_fs)
+                react = MemoryReAct(mock_vlm, mock_viking_fs)
 
                 # Call the method
                 result = react._get_allowed_directories_list()

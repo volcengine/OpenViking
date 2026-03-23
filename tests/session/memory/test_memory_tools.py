@@ -6,10 +6,9 @@ Tests for memory tools.
 
 
 from openviking.session.memory.tools import (
-    MemoryFindTool,
+    MemorySearchTool,
     MemoryLsTool,
     MemoryReadTool,
-    MemoryTreeTool,
     get_tool,
     get_tool_schemas,
     list_tools,
@@ -28,13 +27,14 @@ class TestMemoryTools:
         assert "uri" in tool.parameters["properties"]
         assert "required" in tool.parameters
 
-    def test_find_tool_properties(self):
-        """Test MemoryFindTool properties."""
-        tool = MemoryFindTool()
+    def test_search_tool_properties(self):
+        """Test MemorySearchTool properties."""
+        tool = MemorySearchTool()
 
-        assert tool.name == "find"
+        assert tool.name == "search"
         assert "Semantic search" in tool.description
         assert "query" in tool.parameters["properties"]
+        assert "session_info" in tool.parameters["properties"]
 
     def test_ls_tool_properties(self):
         """Test MemoryLsTool properties."""
@@ -43,13 +43,6 @@ class TestMemoryTools:
         assert tool.name == "ls"
         assert "List directory" in tool.description
         assert "uri" in tool.parameters["properties"]
-
-    def test_tree_tool_properties(self):
-        """Test MemoryTreeTool properties."""
-        tool = MemoryTreeTool()
-
-        assert tool.name == "tree"
-        assert "Recursively list" in tool.description
 
     def test_to_schema(self):
         """Test tool to_schema method."""
@@ -66,9 +59,8 @@ class TestMemoryTools:
         # Check that default tools are registered
         all_tools = list_tools()
         assert "read" in all_tools
-        assert "find" in all_tools
+        assert "search" in all_tools
         assert "ls" in all_tools
-        assert "tree" in all_tools
 
         # Check get_tool
         read_tool = get_tool("read")
@@ -77,9 +69,8 @@ class TestMemoryTools:
 
         # Check get_tool_schemas
         schemas = get_tool_schemas()
-        assert len(schemas) == 4
+        assert len(schemas) == 3
         schema_names = [s["function"]["name"] for s in schemas]
         assert "read" in schema_names
-        assert "find" in schema_names
+        assert "search" in schema_names
         assert "ls" in schema_names
-        assert "tree" in schema_names

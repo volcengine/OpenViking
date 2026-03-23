@@ -1,6 +1,6 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field, model_validator
 
@@ -143,15 +143,26 @@ class VLMConfig(BaseModel):
 
         return result
 
-    def get_completion(self, prompt: str, thinking: bool = False) -> str:
+    def get_completion(
+        self,
+        prompt: str = "",
+        thinking: bool = False,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[str, Any]:
         """Get LLM completion."""
-        return self.get_vlm_instance().get_completion(prompt, thinking)
+        return self.get_vlm_instance().get_completion(prompt, thinking, tools, messages)
 
     async def get_completion_async(
-        self, prompt: str, thinking: bool = False, max_retries: int = 0
-    ) -> str:
+        self,
+        prompt: str = "",
+        thinking: bool = False,
+        max_retries: int = 0,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[str, Any]:
         """Get LLM completion asynchronously, max_retries=0 means no retry."""
-        return await self.get_vlm_instance().get_completion_async(prompt, thinking, max_retries)
+        return await self.get_vlm_instance().get_completion_async(prompt, thinking, max_retries, tools, messages)
 
     def is_available(self) -> bool:
         """Check if LLM is configured."""
@@ -159,18 +170,22 @@ class VLMConfig(BaseModel):
 
     def get_vision_completion(
         self,
-        prompt: str,
-        images: list,
+        prompt: str = "",
+        images: Optional[list] = None,
         thinking: bool = False,
-    ) -> str:
+        tools: Optional[List[Dict[str, Any]]] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[str, Any]:
         """Get LLM completion with images."""
-        return self.get_vlm_instance().get_vision_completion(prompt, images, thinking)
+        return self.get_vlm_instance().get_vision_completion(prompt, images, thinking, tools, messages)
 
     async def get_vision_completion_async(
         self,
-        prompt: str,
-        images: list,
+        prompt: str = "",
+        images: Optional[list] = None,
         thinking: bool = False,
-    ) -> str:
+        tools: Optional[List[Dict[str, Any]]] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[str, Any]:
         """Get LLM completion with images asynchronously."""
-        return await self.get_vlm_instance().get_vision_completion_async(prompt, images, thinking)
+        return await self.get_vlm_instance().get_vision_completion_async(prompt, images, thinking, tools, messages)

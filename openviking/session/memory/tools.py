@@ -8,13 +8,102 @@ Reference: bot/vikingbot/agent/tools/base.py design pattern
 
 import json
 from abc import ABC, abstractmethod
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from openviking.server.identity import RequestContext
+from openviking.session.memory.utils import parse_memory_file_with_fields
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+
+def create_tool_call_message(
+    call_id: Union[str, int],
+    tool_name: str,
+    params: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Create an assistant role message with tool_calls.
+
+    Args:
+        call_id: Unique identifier for the tool call
+        tool_name: Name of the tool being called
+        params: Parameters for the tool call
+
+    Returns:
+        Assistant message with tool_calls field
+    """
+    return {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": [{
+            "id": str(call_id),
+            "type": "function",
+            "function": {
+                "name": tool_name,
+                "arguments": json.dumps(params),
+            },
+        }],
+    }
+
+
+def create_tool_result_message(
+    call_id: Union[str, int],
+    result: Any,
+) -> Dict[str, Any]:
+    """
+    Create a tool role message with the tool execution result.
+
+    Args:
+        call_id: Unique identifier matching the tool call
+        result: Result from the tool execution
+
+    Returns:
+        Tool message with result content
+    """
+    return {
+        "role": "tool",
+        "tool_call_id": str(call_id),
+        "content": json.dumps(result, ensure_ascii=False),
+    }
+
+
+def add_tool_call_pair_to_messages(
+    messages: List[Dict[str, Any]],
+    call_id: Union[str, int],
+    tool_name: str,
+    params: Dict[str, Any],
+    result: Any,
+) -> None:
+    """
+    Add a pair of tool call + tool result messages to the messages list.
+
+    Args:
+        messages: List to append messages to
+        call_id: Unique identifier for the tool call
+        tool_name: Name of the tool being called
+        params: Parameters for the tool call
+        result: Result from the tool execution
+    """
+    messages.append(create_tool_call_message(call_id, tool_name, params))
+    messages.append(create_tool_result_message(call_id, result))
+
+
+def add_tool_call_items_to_messages(
+    messages: List[Dict[str, Any]],
+    tool_call_items: List[Tuple[Union[str, int], str, Dict[str, Any], Any]],
+) -> None:
+    """
+    Add multiple tool call pairs to the messages list.
+
+    Args:
+        messages: List to append messages to
+        tool_call_items: List of tuples (call_id, tool_name, params, result)
+    """
+    for call_id, tool_name, params, result in tool_call_items:
+
+        add_tool_call_pair_to_messages(messages, call_id, tool_name, params, result)
 
 
 class MemoryTool(ABC):
@@ -49,7 +138,7 @@ class MemoryTool(ABC):
         viking_fs: VikingFS,
         ctx: Optional[RequestContext],
         **kwargs: Any,
-    ) -> str:
+    ) -> Any:
         """
         Execute the tool with given parameters.
 
@@ -59,7 +148,7 @@ class MemoryTool(ABC):
             **kwargs: Tool-specific parameters
 
         Returns:
-            String result of the tool execution
+            Result of the tool execution (can be dict, list, string, etc.)
         """
         pass
 
@@ -104,29 +193,31 @@ class MemoryReadTool(MemoryTool):
         viking_fs: VikingFS,
         ctx: Optional[RequestContext],
         **kwargs: Any,
-    ) -> str:
+    ) -> Any:
         try:
             uri = kwargs.get("uri", "")
             content = await viking_fs.read_file(
                 uri,
                 ctx=ctx,
             )
-            return content
+            # Parse MEMORY_FIELDS from comment and return dict directly
+            parsed = parse_memory_file_with_fields(content)
+            return parsed
         except Exception as e:
             logger.error(f"Failed to execute read: {e}")
-            return json.dumps({"error": str(e)}, ensure_ascii=False)
+            return {"error": str(e)}
 
 
-class MemoryFindTool(MemoryTool):
+class MemorySearchTool(MemoryTool):
     """Tool to perform semantic search."""
 
     @property
     def name(self) -> str:
-        return "find"
+        return "search"
 
     @property
     def description(self) -> str:
-        return "Semantic search, target_uri is target directory URI"
+        return "Semantic search with session context, target_uri is target directory URI"
 
     @property
     def parameters(self) -> Dict[str, Any]:
@@ -141,6 +232,10 @@ class MemoryFindTool(MemoryTool):
                     "type": "string",
                     "description": "Target directory URI, default empty means search all",
                     "default": "",
+                },
+                "session_info": {
+                    "type": "object",
+                    "description": "Session information with summaries and recent_messages, optional",
                 },
                 "limit": {
                     "type": "integer",
@@ -164,25 +259,27 @@ class MemoryFindTool(MemoryTool):
         viking_fs: VikingFS,
         ctx: Optional[RequestContext],
         **kwargs: Any,
-    ) -> str:
+    ) -> Any:
         try:
             query = kwargs.get("query", "")
             target_uri = kwargs.get("target_uri", "")
+            session_info = kwargs.get("session_info")
             limit = kwargs.get("limit", 10)
             score_threshold = kwargs.get("score_threshold")
             filter = kwargs.get("filter")
-            find_result = await viking_fs.find(
+            search_result = await viking_fs.search(
                 query,
                 target_uri=target_uri,
+                session_info=session_info,
                 limit=limit,
                 score_threshold=score_threshold,
                 filter=filter,
                 ctx=ctx,
             )
-            return json.dumps(find_result, ensure_ascii=False)
+            return search_result
         except Exception as e:
-            logger.error(f"Failed to execute find: {e}")
-            return json.dumps({"error": str(e)}, ensure_ascii=False)
+            logger.error(f"Failed to execute search: {e}")
+            return {"error": str(e)}
 
 
 class MemoryLsTool(MemoryTool):
@@ -214,7 +311,7 @@ class MemoryLsTool(MemoryTool):
         viking_fs: VikingFS,
         ctx: Optional[RequestContext],
         **kwargs: Any,
-    ) -> str:
+    ) -> Any:
         try:
             uri = kwargs.get("uri", "")
             entries = await viking_fs.ls(
@@ -227,11 +324,11 @@ class MemoryLsTool(MemoryTool):
             )
             # ls -F style: files only (no directories), with type indicators
             # For our use case, we just filter to files only
-            files_only = [f'{e.get("name")} # {e.get("abstract")}' for e in entries if not e.get("isDir", False)]
+            files_only = [f'{e.get("name")}' for e in entries if not e.get("isDir", False)]
             return '\n'.join(files_only)
         except Exception as e:
             logger.error(f"Failed to execute ls: {e}")
-            return json.dumps({"error": str(e)}, ensure_ascii=False)
+            return {"error": str(e)}
 
 
 
@@ -263,5 +360,5 @@ def get_tool_schemas() -> List[Dict[str, Any]]:
 
 # Register default tools
 register_tool(MemoryReadTool())
-register_tool(MemoryFindTool())
+register_tool(MemorySearchTool())
 register_tool(MemoryLsTool())

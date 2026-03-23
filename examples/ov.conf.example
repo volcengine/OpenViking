@@ -67,6 +67,9 @@
   "default_search_limit": 3,
   "enable_memory_decay": true,
   "memory_decay_check_interval": 3600,
+  "memory": {
+    "version": "v1"
+  },
   "log": {
     "level": "INFO",
     "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",

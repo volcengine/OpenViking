@@ -9,13 +9,12 @@ from typing import Union
 import pytest
 import yaml
 
-from openviking.session.memory.memory_data import (
-    FieldType,
+from openviking.session.memory.dataclass import (
     MemoryField,
     MemoryTypeSchema,
-    MergeOp,
 )
-from openviking.session.memory.memory_types import (
+from openviking.session.memory.merge_op.base import FieldType, MergeOp
+from openviking.session.memory.memory_type_registry import (
     MemoryTypeRegistry,
     create_default_registry,
 )
