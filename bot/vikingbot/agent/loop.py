@@ -730,8 +730,8 @@ Respond with ONLY valid JSON, no markdown fences."""
             allow_from.append(self.config.ov_server.admin_user_id)
         for channel in self.config.channels_config.get_all_channels():
             if channel.channel_key() == msg.session_key.channel_key():
-                if channel.allow_from:
-                    allow_from.extend(channel.allow_from)
+                if channel.allow_cmd_from:
+                    allow_from.extend(channel.allow_cmd_from)
                 break
 
         # If channel not found or sender not in allow_from list, ignore message
