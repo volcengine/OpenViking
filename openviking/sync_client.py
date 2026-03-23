@@ -80,6 +80,10 @@ class SyncOpenViking:
         """Commit a session (archive and extract memories)."""
         return run_async(self._async_client.commit_session(session_id, telemetry=telemetry))
 
+    def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Query background task status."""
+        return run_async(self._async_client.get_task(task_id))
+
     def add_resource(
         self,
         path: str,

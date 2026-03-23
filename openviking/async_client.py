@@ -177,6 +177,11 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         return await self._client.commit_session(session_id, telemetry=telemetry)
 
+    async def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Query background task status."""
+        await self._ensure_initialized()
+        return await self._client.get_task(task_id)
+
     # ============= Resource methods =============
 
     async def add_resource(

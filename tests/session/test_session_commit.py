@@ -3,30 +3,50 @@
 
 """Commit tests"""
 
+import asyncio
+
 from openviking import AsyncOpenViking
 from openviking.message import TextPart
+from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
+
+
+async def _wait_for_task(task_id: str, timeout: float = 30.0) -> dict:
+    """Poll the task tracker until the task reaches a terminal state."""
+    tracker = get_task_tracker()
+    for _ in range(int(timeout / 0.1)):
+        task = tracker.get(task_id)
+        if task and task.status.value in ("completed", "failed"):
+            return task.to_dict()
+        await asyncio.sleep(0.1)
+    raise TimeoutError(f"Task {task_id} did not complete within {timeout}s")
 
 
 class TestCommit:
     """Test commit"""
 
     async def test_commit_success(self, session_with_messages: Session):
-        """Test successful commit"""
-        result = session_with_messages.commit()
+        """Test successful commit returns accepted with task_id"""
+        result = await session_with_messages.commit_async()
 
         assert isinstance(result, dict)
-        assert result.get("status") == "committed"
+        assert result.get("status") == "accepted"
         assert "session_id" in result
+        assert result.get("task_id") is not None
 
     async def test_commit_extracts_memories(
         self, session_with_messages: Session, client: AsyncOpenViking
     ):
-        """Test commit extracts memories"""
-        result = session_with_messages.commit()
+        """Test commit kicks off background memory extraction"""
+        result = await session_with_messages.commit_async()
+        task_id = result["task_id"]
 
-        assert "memories_extracted" in result
-        # Wait for memory extraction to complete
+        # Wait for background memory extraction to complete
+        task_result = await _wait_for_task(task_id)
+        assert task_result["status"] == "completed"
+        assert "memories_extracted" in task_result["result"]
+
+        # Wait for semantic/embedding queues
         await client.wait_processed(timeout=60.0)
 
     async def test_commit_archives_messages(self, session_with_messages: Session):
@@ -34,7 +54,7 @@ class TestCommit:
         initial_message_count = len(session_with_messages.messages)
         assert initial_message_count > 0
 
-        result = session_with_messages.commit()
+        result = await session_with_messages.commit_async()
 
         assert result.get("archived") is True
         # Current message list should be cleared after commit
@@ -43,9 +63,10 @@ class TestCommit:
     async def test_commit_empty_session(self, session: Session):
         """Test committing empty session"""
         # Empty session commit should not raise error
-        result = session.commit()
+        result = await session.commit_async()
 
         assert isinstance(result, dict)
+        assert result.get("archived") is False
 
     async def test_commit_multiple_times(self, client: AsyncOpenViking):
         """Test multiple commits"""
@@ -54,14 +75,19 @@ class TestCommit:
         # First round of conversation
         session.add_message("user", [TextPart("First round message")])
         session.add_message("assistant", [TextPart("First round response")])
-        result1 = session.commit()
-        assert result1.get("status") == "committed"
+        result1 = await session.commit_async()
+        assert result1.get("status") == "accepted"
+        assert result1.get("task_id") is not None
+
+        # Wait for first commit's background task to finish
+        await _wait_for_task(result1["task_id"])
 
         # Second round of conversation
         session.add_message("user", [TextPart("Second round message")])
         session.add_message("assistant", [TextPart("Second round response")])
-        result2 = session.commit()
-        assert result2.get("status") == "committed"
+        result2 = await session.commit_async()
+        assert result2.get("status") == "accepted"
+        assert result2.get("task_id") is not None
 
     async def test_commit_with_usage_records(self, client: AsyncOpenViking):
         """Test commit with usage records"""
@@ -71,10 +97,14 @@ class TestCommit:
         session.used(contexts=["viking://user/test/resources/doc.md"])
         session.add_message("assistant", [TextPart("Response")])
 
-        result = session.commit()
+        result = await session.commit_async()
 
-        assert result.get("status") == "committed"
-        assert "active_count_updated" in result
+        assert result.get("status") == "accepted"
+        assert result.get("task_id") is not None
+
+        # active_count_updated is now in the background task result
+        task_result = await _wait_for_task(result["task_id"])
+        assert task_result["status"] == "completed"
 
     async def test_active_count_incremented_after_commit(self, client_with_resource_sync: tuple):
         """Regression test: active_count must actually increment after commit.
@@ -112,9 +142,12 @@ class TestCommit:
         session.add_message("user", [TextPart("Query")])
         session.used(contexts=[uri])
         session.add_message("assistant", [TextPart("Answer")])
-        result = session.commit()
+        result = await session.commit_async()
 
-        assert result.get("active_count_updated") == 1
+        # Wait for background task to complete (active_count is updated there)
+        task_result = await _wait_for_task(result["task_id"])
+        assert task_result["status"] == "completed"
+        assert task_result["result"]["active_count_updated"] == 1
 
         # Verify the count actually changed in storage
         records_after = await vikingdb.get_context_by_uri(

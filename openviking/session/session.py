@@ -5,6 +5,7 @@
 Session as Context: Sessions integrated into L0/L1/L2 system.
 """
 
+import asyncio
 import json
 import re
 from dataclasses import dataclass, field
@@ -224,123 +225,220 @@ class Session:
         return run_async(self.commit_async())
 
     async def commit_async(self) -> Dict[str, Any]:
-        """Async commit session: two-phase approach.
+        """Async commit session: archive immediately, extract memories in background.
 
-        Phase 1 (Archive): Write archive, clear messages.
-        Phase 2 (Memory, redo-log protected): Extract memories, write, enqueue.
+        Phase 1 (Archive): Write archive, clear messages — always inline.
+        Phase 2 (Memory extraction): Always runs in background via asyncio.create_task().
+
+        Returns a task_id for tracking Phase 2 progress.
         """
-        import uuid
+        from openviking.service.task_tracker import get_task_tracker
 
-        from openviking.storage.transaction import get_lock_manager
-
-        result = {
-            "session_id": self.session_id,
-            "status": "committed",
-            "memories_extracted": 0,
-            "active_count_updated": 0,
-            "archived": False,
-            "stats": None,
-        }
         if not self._messages:
             get_current_telemetry().set("memory.extracted", 0)
-            return result
+            return {
+                "session_id": self.session_id,
+                "status": "accepted",
+                "task_id": None,
+                "archive_uri": None,
+                "archived": False,
+            }
 
         # ===== Preparation =====
         self._compression.compression_index += 1
         messages_to_archive = self._messages.copy()
 
-        summary = await self._generate_archive_summary_async(messages_to_archive)
-        archive_abstract = self._extract_abstract_from_summary(summary)
-        archive_overview = summary
-
-        # ===== Phase 1: Archive (no lock) =====
+        # ===== Phase 1: Archive messages only (no LLM calls) =====
         archive_uri = (
             f"{self._session_uri}/history/archive_{self._compression.compression_index:03d}"
         )
-        await self._write_archive_async(
-            index=self._compression.compression_index,
-            messages=messages_to_archive,
-            abstract=archive_abstract,
-            overview=archive_overview,
-        )
+        if self._viking_fs:
+            lines = [m.to_jsonl() for m in messages_to_archive]
+            await self._viking_fs.write_file(
+                uri=f"{archive_uri}/messages.jsonl",
+                content="\n".join(lines) + "\n",
+                ctx=self.ctx,
+            )
         await self._write_to_agfs_async(messages=[])
         self._messages.clear()
 
         self._compression.original_count += len(messages_to_archive)
-        result["archived"] = True
         logger.info(
             f"Archived: {len(messages_to_archive)} messages → "
             f"history/archive_{self._compression.compression_index:03d}/"
         )
 
-        # ===== Phase 2: Memory extraction + write (redo-log protected) =====
-        redo_log = get_lock_manager().redo_log
-        task_id = str(uuid.uuid4())
-        redo_log.write_pending(
-            task_id,
-            {
-                "archive_uri": archive_uri,
-                "session_uri": self._session_uri,
-                "account_id": self.ctx.account_id,
-                "user_id": self.ctx.user.user_id,
-                "agent_id": self.ctx.user.agent_id,
-                "role": self.ctx.role.value,
-            },
+        # Snapshot mutable state for Phase 2
+        usage_snapshot = self._usage_records.copy()
+        first_message_id = messages_to_archive[0].id if messages_to_archive else ""
+        last_message_id = messages_to_archive[-1].id if messages_to_archive else ""
+
+        # Create TaskRecord for tracking Phase 2
+        tracker = get_task_tracker()
+        task = tracker.create("session_commit", resource_id=self.session_id)
+
+        asyncio.create_task(
+            self._run_memory_extraction(
+                task_id=task.task_id,
+                archive_uri=archive_uri,
+                messages=messages_to_archive,
+                usage_records=usage_snapshot,
+                first_message_id=first_message_id,
+                last_message_id=last_message_id,
+            )
         )
 
-        if self._session_compressor:
-            logger.info(
-                f"Starting memory extraction from {len(messages_to_archive)} archived messages"
-            )
-            memories = await self._session_compressor.extract_long_term_memories(
-                messages=messages_to_archive,
-                user=self.user,
-                session_id=self.session_id,
-                ctx=self.ctx,
-            )
-            logger.info(f"Extracted {len(memories)} memories")
-            result["memories_extracted"] = len(memories)
-            self._stats.memories_extracted += len(memories)
-            get_current_telemetry().set("memory.extracted", len(memories))
-
-        await self._write_to_agfs_async(self._messages)
-        await self._write_relations_async()
-
-        # Enqueue semantic processing directly
-        from openviking.storage.queuefs import get_queue_manager
-        from openviking.storage.queuefs.semantic_msg import SemanticMsg
-
-        queue_manager = get_queue_manager()
-        if queue_manager:
-            msg = SemanticMsg(
-                uri=self._session_uri,
-                context_type="memory",
-                account_id=self.ctx.account_id,
-                user_id=self.ctx.user.user_id,
-                agent_id=self.ctx.user.agent_id,
-                role=self.ctx.role.value,
-            )
-            semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC)
-            await semantic_queue.enqueue(msg)
-
-        redo_log.mark_done(task_id)
-
-        # Update active_count
-        active_count_updated = await self._update_active_counts_async()
-        result["active_count_updated"] = active_count_updated
-
-        # Update statistics
-        self._stats.compression_count = self._compression.compression_index
-        result["stats"] = {
-            "total_turns": self._stats.total_turns,
-            "contexts_used": self._stats.contexts_used,
-            "skills_used": self._stats.skills_used,
-            "memories_extracted": self._stats.memories_extracted,
+        return {
+            "session_id": self.session_id,
+            "status": "accepted",
+            "task_id": task.task_id,
+            "archive_uri": archive_uri,
+            "archived": True,
         }
 
-        self._stats.total_tokens = 0
-        logger.info(f"Session {self.session_id} committed (async)")
-        return result
+    async def _run_memory_extraction(
+        self,
+        task_id: str,
+        archive_uri: str,
+        messages: List[Message],
+        usage_records: List["Usage"],
+        first_message_id: str,
+        last_message_id: str,
+    ) -> None:
+        """Phase 2: Extract memories, write relations, enqueue — runs in background."""
+        import uuid
+
+        from openviking.service.task_tracker import get_task_tracker
+        from openviking.storage.transaction import get_lock_manager
+
+        tracker = get_task_tracker()
+        tracker.start(task_id)
+
+        memories_extracted = 0
+        active_count_updated = 0
+
+        try:
+            # redo-log protection
+            redo_task_id = str(uuid.uuid4())
+            redo_log = get_lock_manager().redo_log
+            redo_log.write_pending(
+                redo_task_id,
+                {
+                    "archive_uri": archive_uri,
+                    "session_uri": self._session_uri,
+                    "account_id": self.ctx.account_id,
+                    "user_id": self.ctx.user.user_id,
+                    "agent_id": self.ctx.user.agent_id,
+                    "role": self.ctx.role.value,
+                },
+            )
+
+            # Generate summary and write L0/L1 to archive
+            summary = await self._generate_archive_summary_async(messages)
+            if self._viking_fs and summary:
+                abstract = self._extract_abstract_from_summary(summary)
+                await self._viking_fs.write_file(
+                    uri=f"{archive_uri}/.abstract.md",
+                    content=abstract,
+                    ctx=self.ctx,
+                )
+                await self._viking_fs.write_file(
+                    uri=f"{archive_uri}/.overview.md",
+                    content=summary,
+                    ctx=self.ctx,
+                )
+
+            # Memory extraction
+            if self._session_compressor:
+                logger.info(f"Starting memory extraction from {len(messages)} archived messages")
+                extracted = await self._session_compressor.extract_long_term_memories(
+                    messages=messages,
+                    user=self.user,
+                    session_id=self.session_id,
+                    ctx=self.ctx,
+                )
+                logger.info(f"Extracted {len(extracted)} memories")
+                memories_extracted = len(extracted)
+                self._stats.memories_extracted += len(extracted)
+                get_current_telemetry().set("memory.extracted", len(extracted))
+
+            # Write relations (using snapshot, not self._usage_records)
+            if self._viking_fs:
+                for usage in usage_records:
+                    try:
+                        await self._viking_fs.link(self._session_uri, usage.uri, ctx=self.ctx)
+                    except Exception as e:
+                        logger.warning(f"Failed to create relation to {usage.uri}: {e}")
+
+            # Enqueue semantic processing
+            from openviking.storage.queuefs import get_queue_manager
+            from openviking.storage.queuefs.semantic_msg import SemanticMsg
+
+            queue_manager = get_queue_manager()
+            if queue_manager:
+                msg = SemanticMsg(
+                    uri=self._session_uri,
+                    context_type="memory",
+                    account_id=self.ctx.account_id,
+                    user_id=self.ctx.user.user_id,
+                    agent_id=self.ctx.user.agent_id,
+                    role=self.ctx.role.value,
+                )
+                semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC)
+                await semantic_queue.enqueue(msg)
+
+            redo_log.mark_done(redo_task_id)
+
+            # Update active_count (using snapshot, not self._usage_records)
+            if self._vikingdb_manager:
+                uris = [u.uri for u in usage_records if u.uri]
+                try:
+                    active_count_updated = await self._vikingdb_manager.increment_active_count(
+                        self.ctx, uris
+                    )
+                except Exception as e:
+                    logger.debug(f"Could not update active_count for usage URIs: {e}")
+                if active_count_updated > 0:
+                    logger.info(f"Updated active_count for {active_count_updated} contexts/skills")
+
+            # Write .done file
+            await self._write_done_file(archive_uri, first_message_id, last_message_id)
+
+            tracker.complete(
+                task_id,
+                {
+                    "session_id": self.session_id,
+                    "archive_uri": archive_uri,
+                    "memories_extracted": memories_extracted,
+                    "active_count_updated": active_count_updated,
+                },
+            )
+            logger.info(f"Session {self.session_id} memory extraction completed")
+        except Exception as e:
+            tracker.fail(task_id, str(e))
+            logger.exception(f"Memory extraction failed for session {self.session_id}")
+
+    async def _write_done_file(
+        self,
+        archive_uri: str,
+        first_message_id: str,
+        last_message_id: str,
+    ) -> None:
+        """Write .done marker file to the archive directory."""
+        if not self._viking_fs:
+            return
+        content = json.dumps(
+            {
+                "starting_message_id": first_message_id,
+                "ending_message_id": last_message_id,
+            },
+            ensure_ascii=False,
+        )
+        await self._viking_fs.write_file(
+            uri=f"{archive_uri}/.done",
+            content=content,
+            ctx=self.ctx,
+        )
 
     def _update_active_counts(self) -> int:
         """Update active_count for used contexts/skills."""
@@ -519,39 +617,6 @@ class Session:
         )
         run_async(
             viking_fs.write_file(uri=f"{archive_uri}/.overview.md", content=overview, ctx=self.ctx)
-        )
-
-        logger.debug(f"Written archive: {archive_uri}")
-
-    async def _write_archive_async(
-        self,
-        index: int,
-        messages: List[Message],
-        abstract: str,
-        overview: str,
-    ) -> None:
-        """Write archive to history/archive_N/ (async)."""
-        if not self._viking_fs:
-            return
-
-        viking_fs = self._viking_fs
-        archive_uri = f"{self._session_uri}/history/archive_{index:03d}"
-
-        lines = [m.to_jsonl() for m in messages]
-        await viking_fs.write_file(
-            uri=f"{archive_uri}/messages.jsonl",
-            content="\n".join(lines) + "\n",
-            ctx=self.ctx,
-        )
-        await viking_fs.write_file(
-            uri=f"{archive_uri}/.abstract.md",
-            content=abstract,
-            ctx=self.ctx,
-        )
-        await viking_fs.write_file(
-            uri=f"{archive_uri}/.overview.md",
-            content=overview,
-            ctx=self.ctx,
         )
 
         logger.debug(f"Written archive: {archive_uri}")

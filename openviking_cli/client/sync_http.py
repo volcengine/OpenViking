@@ -113,6 +113,10 @@ class SyncHTTPClient:
         """
         return run_async(self._async_client.add_message(session_id, role, content, parts))
 
+    def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Query background task status."""
+        return run_async(self._async_client.get_task(task_id))
+
     def commit_session(
         self, session_id: str, telemetry: TelemetryRequest = False
     ) -> Dict[str, Any]:

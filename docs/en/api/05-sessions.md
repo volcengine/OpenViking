@@ -101,18 +101,18 @@ openviking session list
 
 ### get_session()
 
-Get session details.
+Get session details. If the session does not exist, it will be automatically created.
 
 **Parameters**
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| session_id | str | Yes | - | Session ID |
+| session_id | str | Yes | - | Session ID. Auto-creates the session if it does not exist |
 
 **Python SDK (Embedded / HTTP)**
 
 ```python
-# Load existing session
+# Load existing session (auto-creates if not found)
 session = client.session(session_id="a1b2c3d4")
 session.load()
 print(f"Loaded {len(session.messages)} messages")
@@ -395,7 +395,7 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
 
 ### commit()
 
-Commit a session by archiving messages and extracting memories.
+Commit a session. Message archiving (Phase 1) completes immediately. Summary generation and memory extraction (Phase 2) run asynchronously in the background. Returns a `task_id` for polling progress.
 
 **Parameters**
 
@@ -409,10 +409,15 @@ Commit a session by archiving messages and extracting memories.
 session = client.session(session_id="a1b2c3d4")
 session.load()
 
-# Commit archives messages and extracts memories
+# Commit returns immediately with task_id; summary + memory extraction runs in background
 result = session.commit()
-print(f"Status: {result['status']}")
-print(f"Memories extracted: {result['memories_extracted']}")
+print(f"Status: {result['status']}")       # "accepted"
+print(f"Task ID: {result['task_id']}")
+
+# Poll background task progress
+task = client.get_task(result["task_id"])
+if task["status"] == "completed":
+    print(f"Memories extracted: {task['result']['memories_extracted']}")
 ```
 
 **HTTP API**
@@ -422,8 +427,13 @@ POST /api/v1/sessions/{session_id}/commit
 ```
 
 ```bash
+# Commit session (returns immediately)
 curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/commit \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key"
+
+# Poll task status
+curl -X GET http://localhost:1933/api/v1/tasks/{task_id} \
   -H "X-API-Key: your-key"
 ```
 
@@ -440,10 +450,73 @@ openviking session commit a1b2c3d4
   "status": "ok",
   "result": {
     "session_id": "a1b2c3d4",
-    "status": "committed",
+    "status": "accepted",
+    "task_id": "uuid-xxx",
+    "archive_uri": "viking://session/a1b2c3d4/history/archive_001",
     "archived": true
-  },
-  "time": 0.1
+  }
+}
+```
+
+---
+
+### get_task()
+
+Query background task status (e.g., commit summary generation and memory extraction progress).
+
+**Parameters**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| task_id | str | Yes | - | Task ID (returned by commit) |
+
+**Python SDK (Embedded / HTTP)**
+
+```python
+task = client.get_task(task_id)
+print(f"Status: {task['status']}")  # "pending" | "running" | "completed" | "failed"
+```
+
+**HTTP API**
+
+```
+GET /api/v1/tasks/{task_id}
+```
+
+```bash
+curl -X GET http://localhost:1933/api/v1/tasks/uuid-xxx \
+  -H "X-API-Key: your-key"
+```
+
+**Response (in progress)**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "task_id": "uuid-xxx",
+    "task_type": "session_commit",
+    "status": "running"
+  }
+}
+```
+
+**Response (completed)**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "task_id": "uuid-xxx",
+    "task_type": "session_commit",
+    "status": "completed",
+    "result": {
+      "session_id": "a1b2c3d4",
+      "archive_uri": "viking://session/a1b2c3d4/history/archive_001",
+      "memories_extracted": 5,
+      "active_count_updated": 2
+    }
+  }
 }
 ```
 
@@ -475,9 +548,10 @@ viking://session/{session_id}/
 +-- .relations.json           # Related contexts
 +-- history/                  # Archived history
     +-- archive_001/
-    |   +-- messages.jsonl
-    |   +-- .abstract.md
-    |   +-- .overview.md
+    |   +-- messages.jsonl    # Written in Phase 1
+    |   +-- .abstract.md      # Written in Phase 2 (background)
+    |   +-- .overview.md      # Written in Phase 2 (background)
+    |   +-- .done             # Phase 2 completion marker
     +-- archive_002/
 ```
 
@@ -532,9 +606,14 @@ session.add_message("assistant", [
 # Track actually used contexts
 session.used(contexts=[results.resources[0].uri])
 
-# Commit session (archive messages, extract memories)
+# Commit session (returns immediately; summary + memory extraction runs in background)
 result = session.commit()
-print(f"Memories extracted: {result['memories_extracted']}")
+print(f"Task ID: {result['task_id']}")
+
+# Optional: poll for completion
+task = client.get_task(result["task_id"])
+if task and task["status"] == "completed":
+    print(f"Memories extracted: {task['result']['memories_extracted']}")
 
 client.close()
 ```
@@ -572,9 +651,14 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
   -H "X-API-Key: your-key" \
   -d '{"contexts": ["viking://resources/docs/embedding/"]}'
 
-# Step 6: Commit session
+# Step 6: Commit session (returns immediately with task_id)
 curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/commit \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key"
+# Returns: {"status": "ok", "result": {"status": "accepted", "task_id": "uuid-xxx", ...}}
+
+# Step 7: Poll background task progress (optional)
+curl -X GET http://localhost:1933/api/v1/tasks/uuid-xxx \
   -H "X-API-Key: your-key"
 ```
 

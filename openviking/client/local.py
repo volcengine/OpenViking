@@ -348,6 +348,10 @@ class LocalClient(BaseClient):
             execution.telemetry,
         )
 
+    async def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Query background task status."""
+        return await self._service.sessions.get_commit_task(task_id)
+
     async def add_message(
         self,
         session_id: str,
