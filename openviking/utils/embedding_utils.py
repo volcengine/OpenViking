@@ -6,6 +6,7 @@ Embedding utilities for OpenViking.
 Common logic for creating Context objects and enqueuing them to EmbeddingQueue.
 """
 
+import hashlib
 import os
 from datetime import datetime
 from typing import Dict, Optional
@@ -214,6 +215,7 @@ async def vectorize_file(
     ctx: Optional[RequestContext] = None,
     semantic_msg_id: Optional[str] = None,
     use_summary: bool = False,
+    skip_unchanged: bool = True,
 ) -> None:
     """
     Vectorize a single file.
@@ -289,6 +291,32 @@ async def vectorize_file(
         else:
             logger.debug(f"Skipping file {file_path} (no text content or summary)")
             return
+
+        # Content hash check: skip re-embedding if content hasn't changed
+        embed_text = context.vectorize.text if context.vectorize else None
+        if skip_unchanged and embed_text:
+            content_hash = hashlib.sha256(
+                embed_text.encode("utf-8", errors="replace")
+                if isinstance(embed_text, str)
+                else embed_text
+            ).hexdigest()
+            hash_uri = file_path + ".__embed_hash"
+            try:
+                existing_hash = await viking_fs.read_file(hash_uri, ctx=ctx)
+                if isinstance(existing_hash, bytes):
+                    existing_hash = existing_hash.decode("utf-8").strip()
+                if existing_hash == content_hash:
+                    logger.debug(f"Skipping embedding for {file_path} (content unchanged)")
+                    await _decrement_embedding_tracker(semantic_msg_id, 1)
+                    return
+            except Exception:
+                pass  # No existing hash or read failed - proceed with embedding
+
+            # Store new hash for future comparisons
+            try:
+                await viking_fs.write_file(hash_uri, content_hash.encode("utf-8"), ctx=ctx)
+            except Exception as e:
+                logger.debug(f"Failed to write embedding hash for {file_path}: {e}")
 
         embedding_msg = EmbeddingMsgConverter.from_context(context)
         if not embedding_msg:
