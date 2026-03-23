@@ -24,9 +24,6 @@ English / [中文](README_CN.md) / [日本語](README_JA.md)
 📱 <a href="./docs/en/about/01-about-us.md#lark-group">Lark Group</a> · <a href="./docs/en/about/01-about-us.md#wechat-group">WeChat</a> · <a href="https://discord.com/invite/eHvx8E9XF3">Discord</a> · <a href="https://x.com/openvikingai">X</a>
 
 <a href="https://trendshift.io/repositories/19668" target="_blank"><img src="https://trendshift.io/api/badge/repositories/19668" alt="volcengine%2FOpenViking | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
-  <a href="https://gitcgr.com/volcengine/OpenViking">
-    <img src="https://gitcgr.com/badge/volcengine/OpenViking.svg" alt="gitcgr" />
-  </a>
 
 </div>
 
