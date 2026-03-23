@@ -1,5 +1,6 @@
-import pytest
 from unittest.mock import AsyncMock
+
+import pytest
 
 from openviking.storage.queuefs.semantic_processor import SemanticProcessor
 
