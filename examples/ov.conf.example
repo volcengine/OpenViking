@@ -161,7 +161,7 @@
       "max_paragraph_length": 1000,
       "preserve_line_breaks": false
     }
-  }
+  },
   "encryption": {
     "enabled": true,
     "provider": "local",

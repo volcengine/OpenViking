@@ -204,6 +204,36 @@ class VikingFS:
         real_ctx = self._ctx_or_default(ctx)
         return await self._encryptor.decrypt(real_ctx.account_id, content)
 
+    async def encrypt_bytes(self, account_id: str, data: bytes) -> bytes:
+        """
+        Encrypt bytes using the encryptor for the specified account.
+
+        Args:
+            account_id: Account ID to use for encryption
+            data: Bytes to encrypt
+
+        Returns:
+            Encrypted bytes, or original bytes if encryption is disabled
+        """
+        if not self._encryptor:
+            return data
+        return await self._encryptor.encrypt(account_id, data)
+
+    async def decrypt_bytes(self, account_id: str, data: bytes) -> bytes:
+        """
+        Decrypt bytes using the encryptor for the specified account.
+
+        Args:
+            account_id: Account ID to use for decryption
+            data: Bytes to decrypt
+
+        Returns:
+            Decrypted bytes, or original bytes if encryption is disabled
+        """
+        if not self._encryptor:
+            return data
+        return await self._encryptor.decrypt(account_id, data)
+
     @contextmanager
     def bind_request_context(self, ctx: RequestContext):
         """Temporarily bind ctx for legacy internal call paths without explicit ctx param."""
@@ -258,17 +288,34 @@ class VikingFS:
         """Read file"""
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
-        result = self.agfs.read(path, offset, size)
-        if isinstance(result, bytes):
-            raw = result
-        elif result is not None and hasattr(result, "content"):
-            raw = result.content
-        else:
-            raw = b""
 
-        # If encryption is enabled and not reading from offset, try to decrypt
-        if self._encryptor and offset == 0 and size == -1:
+        if self._encryptor:
+            # When encryption is enabled: must read entire file for decryption
+            result = self.agfs.read(path, 0, -1)
+            if isinstance(result, bytes):
+                raw = result
+            elif result is not None and hasattr(result, "content"):
+                raw = result.content
+            else:
+                raw = b""
+
             raw = await self._decrypt_content(raw, ctx=ctx)
+
+            # Apply slicing on decrypted plaintext
+            if offset > 0 or size != -1:
+                if size != -1:
+                    raw = raw[offset : offset + size]
+                else:
+                    raw = raw[offset:]
+        else:
+            # When not encrypted: normal read
+            result = self.agfs.read(path, offset, size)
+            if isinstance(result, bytes):
+                raw = result
+            elif result is not None and hasattr(result, "content"):
+                raw = result.content
+            else:
+                raw = b""
 
         return raw
 
@@ -517,13 +564,11 @@ class VikingFS:
                         lines = content.split("\n")
                         for line_num, line in enumerate(lines, 1):
                             if compiled_pattern.search(line):
-                                results.append(
-                                    {
-                                        "line": line_num,
-                                        "uri": entry_uri,
-                                        "content": line,
-                                    }
-                                )
+                                results.append({
+                                    "line": line_num,
+                                    "uri": entry_uri,
+                                    "content": line,
+                                })
                                 if node_limit and len(results) >= node_limit:
                                     break
                     except Exception as e:
@@ -1558,8 +1603,8 @@ class VikingFS:
             else:
                 raw = b""
 
-            # If encryption is enabled and not reading from offset, try to decrypt
-            if self._encryptor and offset == 0 and limit == -1:
+            # If encryption is enabled, always decrypt full file first
+            if self._encryptor:
                 raw = await self._decrypt_content(raw, ctx=ctx)
 
             text = self._decode_bytes(raw)
@@ -1684,13 +1729,13 @@ class VikingFS:
             if len(all_entries) >= node_limit:
                 break
             name = entry.get("name", "")
-            # 修改后：通过截断字符串来兼容 7 位或更多位的微秒
+            # After modification: compatible with 7+ digits of microseconds by truncating
             raw_time = entry.get("modTime", "")
             if raw_time and len(raw_time) > 26 and "+" in raw_time:
-                # 处理像 2026-02-21T13:20:23.1470042+08:00 这样的字符串
-                # 截断为 2026-02-21T13:20:23.147004+08:00
+                # Handle strings like 2026-02-21T13:20:23.1470042+08:00
+                # Truncate to 2026-02-21T13:20:23.147004+08:00
                 parts = raw_time.split("+")
-                # 保持时间部分最多 26 位 (YYYY-MM-DDTHH:MM:SS.mmmmmm)
+                # Keep time part at most 26 characters (YYYY-MM-DDTHH:MM:SS.mmmmmm)
                 raw_time = parts[0][:26] + "+" + parts[1]
             new_entry = {
                 "uri": self._path_to_uri(f"{path}/{name}", ctx=ctx),

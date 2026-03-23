@@ -786,6 +786,98 @@ Path locks are enabled by default and usually require no configuration. **The de
 
 For details on the lock mechanism, see [Path Locks and Crash Recovery](../concepts/09-transaction.md).
 
+## encryption Section
+
+Enable at-rest data encryption to ensure data security and isolation in multi-tenant environments. Encryption is completely transparent to users with no API changes.
+
+```json
+{
+  "encryption": {
+    "enabled": true,
+    "provider": "local|vault|volcengine_kms"
+  }
+}
+```
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `enabled` | bool | Whether encryption is enabled | `false` |
+| `provider` | str | Key provider: `"local"`, `"vault"`, or `"volcengine_kms"` | - |
+
+### Local (File)
+
+Suitable for development environments and single-node deployments:
+
+```json
+{
+  "encryption": {
+    "enabled": true,
+    "provider": "local",
+    "local": {
+      "key_file": "~/.openviking/master.key"
+    }
+  }
+}
+```
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `local.key_file` | str | Root key file path | `~/.openviking/master.key` |
+
+### Vault (HashiCorp Vault)
+
+Suitable for production and multi-cloud deployments:
+
+```json
+{
+  "encryption": {
+    "enabled": true,
+    "provider": "vault",
+    "vault": {
+      "address": "https://vault.example.com:8200",
+      "token": "vault-token-xxx",
+      "mount_point": "transit",
+      "key_name": "openviking-root"
+    }
+  }
+}
+```
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `vault.address` | str | Vault service address | - |
+| `vault.token` | str | Vault access token | - |
+| `vault.mount_point` | str | Transit engine mount point | `"transit"` |
+| `vault.key_name` | str | Root key name | `"openviking-root"` |
+
+### Volcengine KMS
+
+Suitable for Volcengine cloud deployments:
+
+```json
+{
+  "encryption": {
+    "enabled": true,
+    "provider": "volcengine_kms",
+    "volcengine_kms": {
+      "key_id": "kms-key-id-xxx",
+      "region": "cn-beijing",
+      "access_key": "AKLTxxxxxxxx",
+      "secret_key": "Tmpxxxxxxxx"
+    }
+  }
+}
+```
+
+| Parameter | Type | Description | Default |
+|-----------|------|-------------|---------|
+| `volcengine_kms.key_id` | str | KMS key ID | - |
+| `volcengine_kms.region` | str | Region | `"cn-beijing"` |
+| `volcengine_kms.access_key` | str | Volcengine Access Key | - |
+| `volcengine_kms.secret_key` | str | Volcengine Secret Key | - |
+
+For detailed encryption explanations, see [Data Encryption](../concepts/10-encryption.md). For complete usage instructions, see [Encryption Guide](./08-encryption.md).
+
 ## Full Schema
 
 ```json
@@ -816,6 +908,25 @@ For details on the lock mechanism, see [Path Locks and Crash Recovery](../concep
     "model": "string",
     "api_base": "string",
     "threshold": 0.1
+  },
+  "encryption": {
+    "enabled": false,
+    "provider": "local|vault|volcengine_kms",
+    "local": {
+      "key_file": "~/.openviking/master.key"
+    },
+    "vault": {
+      "address": "https://vault.example.com:8200",
+      "token": "string",
+      "mount_point": "transit",
+      "key_name": "openviking-root"
+    },
+    "volcengine_kms": {
+      "key_id": "string",
+      "region": "cn-beijing",
+      "access_key": "string",
+      "secret_key": "string"
+    }
   },
   "storage": {
     "workspace": "string",
