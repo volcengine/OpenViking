@@ -202,7 +202,7 @@ class BaseClient(ABC):
         ...
 
     @abstractmethod
-    async def get_session(self, session_id: str) -> Dict[str, Any]:
+    async def get_session(self, session_id: str, *, auto_create: bool = False) -> Dict[str, Any]:
         """Get session details."""
         ...
 

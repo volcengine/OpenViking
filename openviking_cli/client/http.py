@@ -704,9 +704,12 @@ class AsyncHTTPClient(BaseClient):
         response = await self._http.get("/api/v1/sessions")
         return self._handle_response(response)
 
-    async def get_session(self, session_id: str) -> Dict[str, Any]:
+    async def get_session(self, session_id: str, *, auto_create: bool = False) -> Dict[str, Any]:
         """Get session details."""
-        response = await self._http.get(f"/api/v1/sessions/{session_id}")
+        params = {}
+        if auto_create:
+            params["auto_create"] = "true"
+        response = await self._http.get(f"/api/v1/sessions/{session_id}", params=params)
         return self._handle_response(response)
 
     async def delete_session(self, session_id: str) -> None:

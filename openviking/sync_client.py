@@ -47,9 +47,9 @@ class SyncOpenViking:
         """List all sessions."""
         return run_async(self._async_client.list_sessions())
 
-    def get_session(self, session_id: str) -> Dict[str, Any]:
+    def get_session(self, session_id: str, *, auto_create: bool = False) -> Dict[str, Any]:
         """Get session details."""
-        return run_async(self._async_client.get_session(session_id))
+        return run_async(self._async_client.get_session(session_id, auto_create=auto_create))
 
     def delete_session(self, session_id: str) -> None:
         """Delete a session."""

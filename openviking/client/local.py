@@ -321,14 +321,12 @@ class LocalClient(BaseClient):
         """List all sessions."""
         return await self._service.sessions.sessions(self._ctx)
 
-    async def get_session(self, session_id: str) -> Dict[str, Any]:
+    async def get_session(self, session_id: str, *, auto_create: bool = False) -> Dict[str, Any]:
         """Get session details."""
-        session = await self._service.sessions.get(session_id, self._ctx)
-        return {
-            "session_id": session.session_id,
-            "user": session.user.to_dict(),
-            "message_count": len(session.messages),
-        }
+        session = await self._service.sessions.get(session_id, self._ctx, auto_create=auto_create)
+        result = session.meta.to_dict()
+        result["user"] = session.user.to_dict()
+        return result
 
     async def delete_session(self, session_id: str) -> None:
         """Delete a session."""

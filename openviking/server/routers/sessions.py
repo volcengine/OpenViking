@@ -5,7 +5,7 @@
 import logging
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Depends, Path
+from fastapi import APIRouter, Depends, Path, Query
 from pydantic import BaseModel, model_validator
 
 from openviking.message.part import TextPart, part_from_dict
@@ -122,19 +122,23 @@ async def list_sessions(
 @router.get("/{session_id}")
 async def get_session(
     session_id: str = Path(..., description="Session ID"),
+    auto_create: bool = Query(False, description="Create the session if it does not exist"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get session details."""
+    from openviking_cli.exceptions import NotFoundError
+
     service = get_service()
-    session = await service.sessions.get(session_id, _ctx)
-    return Response(
-        status="ok",
-        result={
-            "session_id": session.session_id,
-            "user": session.user.to_dict(),
-            "message_count": len(session.messages),
-        },
-    )
+    try:
+        session = await service.sessions.get(session_id, _ctx, auto_create=auto_create)
+    except NotFoundError:
+        return Response(
+            status="error",
+            error=ErrorInfo(code="NOT_FOUND", message=f"Session {session_id} not found"),
+        )
+    result = session.meta.to_dict()
+    result["user"] = session.user.to_dict()
+    return Response(status="ok", result=result)
 
 
 @router.delete("/{session_id}")

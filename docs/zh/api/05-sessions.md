@@ -101,27 +101,30 @@ openviking session list
 
 ### get_session()
 
-获取会话详情。如果会话不存在，将自动创建。
+获取会话详情。默认当会话不存在时返回 NOT_FOUND 错误，可通过 `auto_create=True` 自动创建。
 
 **参数**
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| session_id | str | 是 | - | 会话 ID。如果会话不存在则自动创建 |
+| session_id | str | 是 | - | 会话 ID |
+| auto_create | bool | 否 | False | 会话不存在时是否自动创建 |
 
 **Python SDK (Embedded / HTTP)**
 
 ```python
-# 加载会话（不存在时自动创建）
-session = client.session(session_id="a1b2c3d4")
-session.load()
-print(f"Loaded {len(session.messages)} messages")
+# 获取已有会话（不存在时抛 NotFoundError）
+info = client.get_session("a1b2c3d4")
+print(f"Messages: {info['message_count']}, Commits: {info['commit_count']}")
+
+# 获取或创建会话
+info = client.get_session("a1b2c3d4", auto_create=True)
 ```
 
 **HTTP API**
 
 ```
-GET /api/v1/sessions/{session_id}
+GET /api/v1/sessions/{session_id}?auto_create=false
 ```
 
 ```bash
@@ -142,10 +145,32 @@ openviking session get a1b2c3d4
   "status": "ok",
   "result": {
     "session_id": "a1b2c3d4",
-    "user": "alice",
-    "message_count": 5
-  },
-  "time": 0.1
+    "created_at": "2026-03-23T10:00:00+08:00",
+    "updated_at": "2026-03-23T11:30:00+08:00",
+    "message_count": 5,
+    "commit_count": 3,
+    "memories_extracted": {
+      "profile": 1,
+      "preferences": 2,
+      "entities": 3,
+      "events": 1,
+      "cases": 2,
+      "patterns": 1,
+      "tools": 0,
+      "skills": 0,
+      "total": 10
+    },
+    "last_commit_at": "2026-03-23T11:00:00+08:00",
+    "llm_token_usage": {
+      "prompt_tokens": 5200,
+      "completion_tokens": 1800,
+      "total_tokens": 7000
+    },
+    "user": {
+      "user_id": "alice",
+      "agent_id": "default"
+    }
+  }
 }
 ```
 

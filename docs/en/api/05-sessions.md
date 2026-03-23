@@ -101,27 +101,30 @@ openviking session list
 
 ### get_session()
 
-Get session details. If the session does not exist, it will be automatically created.
+Get session details. Returns NOT_FOUND when the session does not exist by default. Pass `auto_create=True` to create it automatically.
 
 **Parameters**
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| session_id | str | Yes | - | Session ID. Auto-creates the session if it does not exist |
+| session_id | str | Yes | - | Session ID |
+| auto_create | bool | No | False | Whether to auto-create the session if it does not exist |
 
 **Python SDK (Embedded / HTTP)**
 
 ```python
-# Load existing session (auto-creates if not found)
-session = client.session(session_id="a1b2c3d4")
-session.load()
-print(f"Loaded {len(session.messages)} messages")
+# Get existing session (raises NotFoundError if not found)
+info = client.get_session("a1b2c3d4")
+print(f"Messages: {info['message_count']}, Commits: {info['commit_count']}")
+
+# Get or create session
+info = client.get_session("a1b2c3d4", auto_create=True)
 ```
 
 **HTTP API**
 
 ```
-GET /api/v1/sessions/{session_id}
+GET /api/v1/sessions/{session_id}?auto_create=false
 ```
 
 ```bash
@@ -142,10 +145,32 @@ openviking session get a1b2c3d4
   "status": "ok",
   "result": {
     "session_id": "a1b2c3d4",
-    "user": "alice",
-    "message_count": 5
-  },
-  "time": 0.1
+    "created_at": "2026-03-23T10:00:00+08:00",
+    "updated_at": "2026-03-23T11:30:00+08:00",
+    "message_count": 5,
+    "commit_count": 3,
+    "memories_extracted": {
+      "profile": 1,
+      "preferences": 2,
+      "entities": 3,
+      "events": 1,
+      "cases": 2,
+      "patterns": 1,
+      "tools": 0,
+      "skills": 0,
+      "total": 10
+    },
+    "last_commit_at": "2026-03-23T11:00:00+08:00",
+    "llm_token_usage": {
+      "prompt_tokens": 5200,
+      "completion_tokens": 1800,
+      "total_tokens": 7000
+    },
+    "user": {
+      "user_id": "alice",
+      "agent_id": "default"
+    }
+  }
 }
 ```
 

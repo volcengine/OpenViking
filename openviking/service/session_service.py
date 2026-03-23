@@ -74,10 +74,21 @@ class SessionService:
         await session.ensure_exists()
         return session
 
-    async def get(self, session_id: str, ctx: RequestContext) -> Session:
-        """Get an existing session, or create it if it does not exist."""
+    async def get(
+        self, session_id: str, ctx: RequestContext, *, auto_create: bool = False
+    ) -> Session:
+        """Get an existing session.
+
+        Args:
+            session_id: Session ID
+            ctx: Request context
+            auto_create: If True, create the session when it does not exist.
+                         Default is False (raise NotFoundError).
+        """
         session = self.session(ctx, session_id)
         if not await session.exists():
+            if not auto_create:
+                raise NotFoundError(session_id, "session")
             await session.ensure_exists()
         await session.load()
         return session
