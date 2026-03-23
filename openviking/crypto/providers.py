@@ -286,18 +286,18 @@ class VaultProvider(BaseProvider):
             # Try to read the key
             await asyncio.to_thread(
                 self._client.secrets.transit.read_key,
-                name=self.ROOT_KEY_NAME,
+                name=self.root_key_name,
                 mount_point=self.mount_path,
             )
         except Exception:
             # Key doesn't exist, create it
             await asyncio.to_thread(
                 self._client.secrets.transit.create_key,
-                name=self.ROOT_KEY_NAME,
+                name=self.root_key_name,
                 key_type="aes256-gcm96",
                 mount_point=self.mount_path,
             )
-            logger.info(f"Created root key {self.ROOT_KEY_NAME} in Vault")
+            logger.info(f"Created root key {self.root_key_name} in Vault")
 
     async def _encrypt_with_vault(self, plaintext: bytes) -> bytes:
         """
@@ -586,7 +586,7 @@ class VolcengineKMSProvider(BaseProvider):
             Encrypted data
         """
         client = await self._get_kms_client()
-        return client.encrypt(self.key_id, plaintext)
+        return await asyncio.to_thread(client.encrypt, self.key_id, plaintext)
 
     async def _decrypt_with_kms(self, ciphertext: bytes) -> bytes:
         """
@@ -599,7 +599,7 @@ class VolcengineKMSProvider(BaseProvider):
             Decrypted data
         """
         client = await self._get_kms_client()
-        return client.decrypt(ciphertext, self.key_id)
+        return await asyncio.to_thread(client.decrypt, ciphertext, self.key_id)
 
     async def _get_or_create_root_key(self) -> bytes:
         """
