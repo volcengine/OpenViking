@@ -7,7 +7,6 @@ import {
 import {
   trimForLog,
   toJsonLog,
-  summarizeExtractedMemories,
 } from "./memory-ranking.js";
 
 type AgentMessage = {
@@ -226,28 +225,28 @@ export function createMemoryOpenVikingContextEngine(params: {
         try {
           await client.addSessionMessage(sessionId, "user", decision.normalizedText);
           await client.getSession(sessionId).catch(() => ({}));
-          const extracted = await client.extractSessionMemories(sessionId);
+
+          // Fire-and-forget: use wait=false so extraction runs in the
+          // background on the server.  This prevents the HTTP call from
+          // blocking the single-worker uvicorn server which would make
+          // /health and /recall endpoints unresponsive (#527).
+          const { task_id } = await client.extractSessionMemoriesAsync(sessionId);
 
           logger.info(
-            `openviking: auto-captured ${newCount} new messages, extracted ${extracted.length} memories`,
+            `openviking: auto-capture submitted ${newCount} new messages for background extraction (task=${task_id})`,
           );
           logger.info(
             `openviking: capture-detail ${toJsonLog({
               capturedCount: newCount,
               captured: [trimForLog(turnText, 260)],
-              extractedCount: extracted.length,
-              extracted: summarizeExtractedMemories(extracted),
+              taskId: task_id,
             })}`,
           );
-          if (extracted.length === 0) {
-            warnOrInfo(
-              logger,
-              "openviking: auto-capture completed but extract returned 0 memories. " +
-                "Check OpenViking server logs for embedding/extract errors.",
-            );
-          }
         } finally {
-          await client.deleteSession(sessionId).catch(() => {});
+          // NOTE: We intentionally do NOT delete the session here because
+          // the server is still extracting memories in the background.
+          // The session will be cleaned up when the extraction completes
+          // (or by the server's session TTL garbage collection).
         }
       } catch (err) {
         warnOrInfo(logger, `openviking: auto-capture failed: ${String(err)}`);

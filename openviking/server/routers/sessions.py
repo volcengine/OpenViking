@@ -258,12 +258,85 @@ async def _background_commit_tracked(
 @router.post("/{session_id}/extract")
 async def extract_session(
     session_id: str = Path(..., description="Session ID"),
+    wait: bool = Query(
+        True,
+        description="If False, extraction runs in background and returns immediately",
+    ),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Extract memories from a session."""
+    """Extract memories from a session.
+
+    When wait=False, the extraction is processed in the background and a
+    ``task_id`` is returned.  Use ``GET /tasks/{task_id}`` to poll for
+    completion status, results, or errors.
+
+    When wait=True (default), the extraction blocks until complete and
+    returns the full result inline.
+    """
     service = get_service()
-    result = await service.sessions.extract(session_id, _ctx)
-    return Response(status="ok", result=_to_jsonable(result))
+    tracker = get_task_tracker()
+
+    if wait:
+        if tracker.has_running("session_extract", session_id):
+            return Response(
+                status="error",
+                error=ErrorInfo(
+                    code="CONFLICT",
+                    message=f"Session {session_id} already has an extraction in progress",
+                ),
+            )
+        result = await service.sessions.extract(session_id, _ctx)
+        return Response(status="ok", result=_to_jsonable(result))
+
+    task = tracker.create_if_no_running("session_extract", session_id)
+    if task is None:
+        return Response(
+            status="error",
+            error=ErrorInfo(
+                code="CONFLICT",
+                message=f"Session {session_id} already has an extraction in progress",
+            ),
+        )
+    asyncio.create_task(_background_extract_tracked(service, session_id, _ctx, task.task_id))
+
+    return Response(
+        status="ok",
+        result={
+            "session_id": session_id,
+            "status": "accepted",
+            "task_id": task.task_id,
+            "message": "Extraction is processing in the background",
+        },
+    )
+
+
+async def _background_extract_tracked(
+    service, session_id: str, ctx: RequestContext, task_id: str
+) -> None:
+    """Run session extraction in background with task tracking."""
+    tracker = get_task_tracker()
+    tracker.start(task_id)
+    try:
+        result = await service.sessions.extract(session_id, ctx)
+        memories = _to_jsonable(result)
+        tracker.complete(
+            task_id,
+            {
+                "session_id": session_id,
+                "memories_extracted": len(memories) if isinstance(memories, list) else 0,
+                "memories": memories,
+            },
+        )
+        count = len(memories) if isinstance(memories, list) else 0
+        logger.info(
+            "Background extraction completed: session=%s task=%s memories=%d",
+            session_id,
+            task_id,
+            count,
+        )
+    except Exception as exc:
+        tracker.fail(task_id, str(exc))
+        logger.exception("Background extraction failed: session=%s task=%s", session_id, task_id)
 
 
 @router.post("/{session_id}/messages")

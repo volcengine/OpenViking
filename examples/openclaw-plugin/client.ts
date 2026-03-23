@@ -281,6 +281,18 @@ export class OpenVikingClient {
     );
   }
 
+  /**
+   * Fire-and-forget extraction: returns immediately with a task_id.
+   * The server processes the extraction in the background.
+   * Use GET /tasks/{task_id} to poll for completion if needed.
+   */
+  async extractSessionMemoriesAsync(sessionId: string): Promise<{ task_id: string }> {
+    return this.request<{ task_id: string }>(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/extract?wait=false`,
+      { method: "POST", body: JSON.stringify({}) },
+    );
+  }
+
   async deleteSession(sessionId: string): Promise<void> {
     await this.request(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
   }
