@@ -74,6 +74,7 @@ class Summarizer:
                 telemetry_id=telemetry.telemetry_id if telemetry.enabled else "",
                 target_uri=uri if uri != temp_uri else None,
                 lifecycle_lock_handle_id=lifecycle_lock_handle_id,
+                is_code_repo=kwargs.get("is_code_repo", False),
             )
             await semantic_queue.enqueue(msg)
             enqueued_count += 1

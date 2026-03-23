@@ -55,4 +55,4 @@ def test_record_resource_wait_metrics_collects_queue_and_dag_stats(monkeypatch):
     assert summary["semantic_nodes"]["total"] == 9
     assert summary["semantic_nodes"]["done"] == 8
     assert summary["semantic_nodes"]["pending"] == 1
-    assert summary["semantic_nodes"]["running"] == 0
+    assert "running" not in summary["semantic_nodes"]

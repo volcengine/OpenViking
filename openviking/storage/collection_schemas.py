@@ -248,9 +248,23 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     try:
                         # embed() is a blocking HTTP call; offload to thread pool to avoid
                         # blocking the event loop and allow real concurrency.
+                        import time as _time
+
+                        _embed_t0 = _time.monotonic()
                         result: EmbedResult = await asyncio.to_thread(
                             self._embedder.embed, embedding_msg.message
                         )
+                        _embed_elapsed = _time.monotonic() - _embed_t0
+                        try:
+                            from openviking.storage.observers.prometheus_observer import (
+                                get_prometheus_observer,
+                            )
+
+                            _prom = get_prometheus_observer()
+                            if _prom is not None:
+                                _prom.record_embedding(_embed_elapsed)
+                        except Exception:
+                            pass
                     except Exception as embed_err:
                         error_msg = f"Failed to generate embedding: {embed_err}"
                         logger.error(error_msg)

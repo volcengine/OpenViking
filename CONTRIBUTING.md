@@ -15,8 +15,15 @@ Thank you for your interest in OpenViking! We welcome contributions of all kinds
 
 - **Python**: 3.10+
 - **Go**: 1.22+ (Required for building AGFS components from source)
+- **Rust**: 1.88+ (Required for source builds because the bundled `ov` CLI is built during packaging)
 - **C++ Compiler**: GCC 9+ or Clang 11+ (Required for building core extensions, must support C++17)
 - **CMake**: 3.12+
+
+#### Platform-Specific Native Build Tools
+
+- **Linux**: Install `build-essential`; some environments may also require `pkg-config`
+- **macOS**: Install Xcode Command Line Tools (`xcode-select --install`)
+- **Windows**: Install CMake and MinGW for local native builds
 
 #### Supported Platforms (Pre-compiled Wheels)
 
@@ -24,9 +31,9 @@ OpenViking provides pre-compiled **Wheel** packages for the following environmen
 
 - **Windows**: x86_64
 - **macOS**: x86_64, arm64 (Apple Silicon)
-- **Linux**: x86_64 (manylinux)
+- **Linux**: x86_64, arm64 (manylinux)
 
-For other platforms (e.g., Linux ARM64, FreeBSD), the package will be automatically compiled from source during installation via `pip`. Ensure you have the [Prerequisites](#prerequisites) installed.
+For other platforms (e.g., FreeBSD), the package will be automatically compiled from source during installation via `pip`. Ensure you have the [Prerequisites](#prerequisites) installed.
 
 ### 1. Fork and Clone
 
@@ -49,15 +56,15 @@ source .venv/bin/activate  # Linux/macOS
 # or .venv\Scripts\activate  # Windows
 ```
 
-#### Local Development & AGFS Compilation
+#### Local Development & Native Rebuilds
 
-OpenViking defaults to `binding-client` mode for AGFS, which requires a pre-built shared library. If you modify the **AGFS (Go)** code or **C++ extensions**, or if the pre-built library is not found, you need to re-compile and re-install them. Run the following command in the project root:
+OpenViking defaults to `binding-client` mode for AGFS, which requires pre-built native artifacts. If you modify the **AGFS (Go)** code, the bundled **Rust CLI**, or the **C++ extensions**, or if the pre-built artifacts are not found, you need to re-compile and re-install them. Run the following command in the project root:
 
 ```bash
 uv pip install -e . --force-reinstall
 ```
 
-This command ensures that `setup.py` is re-executed, triggering the compilation of AGFS and C++ components.
+This command ensures that `setup.py` is re-executed, triggering rebuilds for AGFS, the bundled `ov` CLI, and the C++ components.
 
 ### 3. Configure Environment
 
@@ -108,7 +115,7 @@ asyncio.run(main())
 
 The Rust CLI (`ov`) provides a high-performance command-line client for interacting with OpenViking Server.
 
-**Prerequisites**: Rust >= 1.88
+Even if you do not plan to use `ov` directly, the Rust toolchain is still required when building OpenViking from source because packaging also builds the bundled CLI binary.
 
 ```bash
 # Build and install from source
@@ -134,53 +141,44 @@ openviking/
 ├── openviking/           # Python SDK
 │   ├── async_client.py   # AsyncOpenViking client
 │   ├── sync_client.py    # SyncOpenViking client
-│   │
-│   ├── core/             # Core data models
-│   │   ├── context.py    # Context base class
-│   │   └── directories.py # Directory definitions
-│   │
-│   ├── parse/            # Resource parsers
-│   │   ├── parsers/      # Parser implementations
-│   │   ├── tree_builder.py
-│   │   └── registry.py
-│   │
+│   ├── client/           # Local and HTTP client implementations
+│   ├── console/          # Standalone console UI and proxy service
+│   ├── core/             # Core data models and directory abstractions
+│   ├── message/          # Session message and part models
+│   ├── models/           # Embedding and VLM backends
+│   ├── parse/            # Resource parsers and detectors
+│   ├── resource/         # Resource processing and watch management
 │   ├── retrieve/         # Retrieval system
-│   │   ├── retriever.py  # Main retriever
-│   │   ├── reranker.py   # Reranking
-│   │   └── intent_analyzer.py
-│   │
-│   ├── session/          # Session management
-│   │   ├── session.py    # Session core
-│   │   └── compressor.py # Compression
-│   │
 │   ├── server/           # HTTP server
-│   │   ├── app.py        # FastAPI app factory
-│   │   ├── bootstrap.py  # Entry point (openviking-server)
-│   │   └── routers/      # API routers
-│   │
+│   ├── service/          # Shared service layer
+│   ├── session/          # Session management and compression
 │   ├── storage/          # Storage layer
-│   │   ├── viking_fs.py  # VikingFS
-│   │   └── vectordb/     # Vector database
-│   │
-│   ├── utils/            # Utilities
-│   │   └── config/       # Configuration
-│   │
+│   ├── telemetry/        # Operation telemetry
+│   ├── trace/            # Trace and runtime tracing helpers
+│   ├── utils/            # Utilities and configuration helpers
 │   └── prompts/          # Prompt templates
 │
 ├── crates/               # Rust components
 │   └── ov_cli/           # Rust CLI client
-│       ├── src/           # CLI source code
-│       └── install.sh     # Quick install script
+│       ├── src/          # CLI source code
+│       └── install.sh    # Quick install script
 │
 ├── src/                  # C++ extensions (pybind11)
 │
 ├── tests/                # Test suite
 │   ├── client/           # Client tests
-│   ├── server/           # Server tests
-│   ├── session/          # Session tests
+│   ├── console/          # Console tests
+│   ├── core/             # Core logic tests
 │   ├── parse/            # Parser tests
+│   ├── resource/         # Resource processing tests
+│   ├── retrieve/         # Retrieval tests
+│   ├── server/           # Server tests
+│   ├── service/          # Service layer tests
+│   ├── session/          # Session tests
+│   ├── storage/          # Storage tests
+│   ├── telemetry/        # Telemetry tests
 │   ├── vectordb/         # Vector database tests
-│   └── integration/      # Integration tests
+│   └── integration/      # End-to-end tests
 │
 └── docs/                 # Documentation
     ├── en/               # English docs
@@ -278,16 +276,16 @@ class TestAsyncOpenViking:
         assert uninitialized_client._service is not None
         await uninitialized_client.close()
 
-    async def test_add_resource(self, client: AsyncOpenViking):
+    async def test_add_resource(self, client: AsyncOpenViking, sample_markdown_file):
         result = await client.add_resource(
-            "./test.md",
+            path=str(sample_markdown_file),
             reason="test document"
         )
-        assert result["status"] == "success"
         assert "root_uri" in result
+        assert result["root_uri"].startswith("viking://")
 ```
 
-Common fixtures are defined in `tests/conftest.py`, including `client` (initialized `AsyncOpenViking`), `uninitialized_client`, `temp_dir`, etc.
+Common fixtures are defined in `tests/conftest.py`, including `client` (initialized `AsyncOpenViking`), `uninitialized_client`, `temp_dir`, `sample_markdown_file`, and more.
 
 ---
 
@@ -424,9 +422,11 @@ We use **GitHub Actions** for Continuous Integration and Continuous Deployment. 
 | Event | Workflow | Description |
 |-------|----------|-------------|
 | **Pull Request** | `pr.yml` | Runs **Lint** (Ruff, Mypy) and **Test Lite** (Integration tests on Linux + Python 3.10). Provides fast feedback for contributors. (Displayed as **01. Pull Request Checks**) |
-| **Push to Main** | `ci.yml` | Runs **Test Full** (All OS: Linux/Win/Mac, All Py versions: 3.10-3.13) and **CodeQL** (Security scan). Ensures main branch stability. (Displayed as **02. Main Branch Checks**) |
+| **Push to Main** | `ci.yml` | Runs **Test Full** (All OS: Linux/Win/Mac, All Py versions: 3.10-3.14) and **CodeQL** (Security scan). Ensures main branch stability. (Displayed as **02. Main Branch Checks**) |
 | **Release Published** | `release.yml` | Triggered when you create a Release on GitHub. Automatically builds source distribution and wheels, determines version from Git Tag, and publishes to **PyPI**. (Displayed as **03. Release**) |
 | **Weekly Cron** | `schedule.yml` | Runs **CodeQL** security scan every Sunday. (Displayed as **04. Weekly Security Scan**) |
+
+Other repository workflows also exist for PR review automation, Docker image builds, and Rust CLI packaging.
 
 ### 2. Manual Trigger Workflows
 
@@ -445,11 +445,11 @@ Runs fast integration tests, supports custom matrix configuration.
     *   `python_json`: JSON string array of Python versions (e.g., `["3.10"]`).
 
 #### C. Test Suite (Full) (`13. _Test Suite (Full)`)
-Runs the full test suite on all supported platforms (Linux/Mac/Win) and Python versions (3.10-3.13). Supports custom matrix configuration when triggered manually.
+Runs the full test suite on all supported platforms (Linux/Mac/Win) and Python versions (3.10-3.14). Supports custom matrix configuration when triggered manually.
 
 *   **Inputs**:
     *   `os_json`: List of OS to run on (Default: `["ubuntu-24.04", "macos-14", "windows-latest"]`).
-    *   `python_json`: List of Python versions (Default: `["3.10", "3.11", "3.12", "3.13"]`).
+    *   `python_json`: List of Python versions (Default: `["3.10", "3.11", "3.12", "3.13", "3.14"]`).
 
 #### D. Security Scan (`14. _CodeQL Scan`)
 Runs CodeQL security analysis. No arguments required.
@@ -459,7 +459,7 @@ Builds Python wheel packages only, does not publish.
 
 *   **Inputs**:
     *   `os_json`: List of OS to build on (Default: `["ubuntu-24.04", "ubuntu-24.04-arm", "macos-14", "macos-15-intel", "windows-latest"]`).
-    *   `python_json`: List of Python versions (Default: `["3.10", "3.11", "3.12", "3.13"]`).
+    *   `python_json`: List of Python versions (Default: `["3.10", "3.11", "3.12", "3.13", "3.14"]`).
     *   `build_sdist`: Whether to build source distribution (Default: `true`).
     *   `build_wheels`: Whether to build wheel distribution (Default: `true`).
 

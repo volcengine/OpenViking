@@ -1,0 +1,348 @@
+# =============================================================================
+# Qodo PR-Agent Configuration for OpenViking
+# =============================================================================
+# OpenViking: polyglot (Python/TypeScript/Rust) context database for AI agents.
+# By ByteDance/Volcengine — Apache-2.0 licensed.
+#
+# Rules derived from: real bug history (PRs #505, #728, #749, #740/#745),
+# codebase conventions, CI pipeline (ruff, mypy, pytest), and Qodo best
+# practices (Rule System blog, 2.2 PR History, raw configuration.toml).
+#
+# Principle: edit only what you need (Qodo Tip #1). Every override here has
+# a documented reason tied to OpenViking's specific patterns.
+# =============================================================================
+
+# ---------------------------------------------------------------------------
+# Global Config
+# ---------------------------------------------------------------------------
+[config]
+output_relevant_configurations = false
+# Use high reasoning for this complex polyglot codebase with subtle async/
+# concurrency bugs. Worth the extra latency for quality.
+reasoning_effort = "high"
+# More context around hunks helps the model understand memory pipeline flows
+# that often span multiple functions.
+patch_extra_lines_before = 8
+patch_extra_lines_after = 3
+allow_dynamic_context = true
+# Auto-detect language from PR content (Chinese contributors are common)
+response_language = "en-US"
+# Custom labels for OpenViking-specific PR categorization
+enable_custom_labels = true
+
+# ---------------------------------------------------------------------------
+# Ignore: skip generated/vendored/lock files from analysis
+# Reduces noise and token waste on files humans don't review.
+# ---------------------------------------------------------------------------
+[ignore]
+glob = [
+    # Lock files (auto-generated, not human-authored)
+    'uv.lock',
+    '*.lock',
+    'package-lock.json',
+    # Third-party vendored code (not our responsibility)
+    'third_party/**',
+    # Rust build artifacts
+    'target/**',
+    # Test data fixtures (binary/large JSON blobs)
+    'db_test_*/**',
+    'test_data/**',
+    'test_data_sync/**',
+    # Worktree scratch spaces
+    '.worktrees/**',
+    # Build support (C++ profiles, not core logic)
+    'build_support/**',
+]
+
+# ---------------------------------------------------------------------------
+# Auto-triggers on PR open
+# ---------------------------------------------------------------------------
+[github_app]
+pr_commands = [
+    "/describe",
+    "/review",
+    "/improve --pr_code_suggestions.commitable_code_suggestions=false",
+]
+push_commands = [
+    "/describe",
+    "/review --pr_reviewer.remove_previous_review_comment=true",
+    "/improve --pr_code_suggestions.commitable_code_suggestions=false",
+]
+
+# ---------------------------------------------------------------------------
+# Custom Labels: OpenViking-specific PR categorization
+# Each description is a conditional statement (Qodo best practice) so the
+# model knows exactly when to apply it.
+# ---------------------------------------------------------------------------
+[custom_labels."memory-pipeline"]
+description = "Apply when the PR modifies memory extraction, deduplication, archival, or any code in openviking/session/ that touches MemoryCategory, SessionCompressor, MemoryDeduplicator, or MemoryExtractor."
+
+[custom_labels."async-change"]
+description = "Apply when the PR modifies async/await patterns, changes commit() to commit_async(), adds asyncio.gather/TaskGroup usage, or modifies any coroutine in the session or storage layer."
+
+[custom_labels."embedding-vectorization"]
+description = "Apply when the PR modifies embedding models, vectorization logic, chunked vectorization, or VLM provider integrations in openviking/embedding/ or openviking/vlm/."
+
+[custom_labels."plugin-bot"]
+description = "Apply when the PR modifies TypeScript code in bot/ or examples/openclaw-plugin/, including hook handlers, process management, or client initialization."
+
+[custom_labels."api-breaking"]
+description = "Apply when the PR removes, renames, or changes the type of any public API parameter, REST endpoint, SDK method, or configuration key that external consumers depend on."
+
+[custom_labels."multi-tenant"]
+description = "Apply when the PR modifies authentication, authorization, account/user routing, root key handling, or RequestContext identity resolution."
+
+[custom_labels."retrieval"]
+description = "Apply when the PR modifies the retrieval pipeline: find, rerank, semantic search, or context level (L0/L1/L2) scoring logic."
+
+[custom_labels."rust-cli"]
+description = "Apply when the PR modifies Rust source files (src/*.rs) or Cargo.toml for the CLI tool."
+
+# ---------------------------------------------------------------------------
+# Review Tool
+# ---------------------------------------------------------------------------
+[pr_reviewer]
+persistent_comment = true
+final_update_message = true
+# Increased from default 3 → 8 because OpenViking PRs often span multiple
+# subsystems (Python core + TypeScript bot + config) with cross-cutting concerns.
+num_max_findings = 8
+enable_intro_text = true
+enable_help_text = false
+publish_output_no_suggestions = true
+
+# --- Feature toggles (overrides from defaults) ---
+require_score_review = true          # Score each PR 1-100 (disabled by default, useful for quality tracking)
+require_tests_review = true          # Check if tests are present (default: true)
+require_estimate_effort_to_review = true  # Effort estimate label (default: true)
+require_can_be_split_review = true   # Flag large PRs that should be split (default: false → enabled)
+require_security_review = true       # Dedicated security audit section (default: true)
+require_todo_scan = true             # Surface TODO/FIXME/HACK in changed code (default: false → enabled)
+require_ticket_analysis_review = true # Check ticket compliance if linked
+
+# --- Labels ---
+enable_review_labels_security = true
+enable_review_labels_effort = true
+
+extra_instructions = """\
+You are reviewing OpenViking — an agent-native context database.
+Stack: Python 3.10+ core (FastAPI, pydantic, httpx, loguru), TypeScript bot
+(Vikingbot/OpenClaw plugin), Rust CLI, C++ extensions (AGFS).
+
+## Severity Classification (exactly ONE per finding)
+
+[Critical] — Blocks release. Security vulnerability, data loss/corruption, crash in
+production path, resource leak without cleanup, auth bypass.
+
+[Bug] — Must fix before merge. Logic error, behavioral regression, API contract
+violation, race condition, missing await on coroutine, silent exception swallowing.
+
+[Perf] — Performance regression. O(n²)+ algorithmic complexity, unbounded collection
+growth, N+1 queries against VikingDB, redundant embedding/VLM API calls,
+unnecessary large object copies in hot paths.
+
+[Suggestion] — Recommended improvement. Missing tests, dead code, naming inconsistency,
+poor observability (missing telemetry/logging), unclear intent, unrelated changes in PR.
+
+## Rules (structured as: WHEN condition → THEN check → BECAUSE rationale)
+
+### PYTHON CORE (openviking/, openviking_cli/)
+
+R1. ASYNC DISCIPLINE
+WHEN code is inside an async function or coroutine
+THEN verify all I/O calls use async variants (commit_async not commit,
+     httpx.AsyncClient not requests, async for on streams)
+BECAUSE blocking calls in async context starve the event loop.
+     Real bug: PR #728 replaced blocking commit() with commit_async().
+     Also check: missing `await` on coroutine calls (silent bug — returns
+     coroutine object instead of result).
+
+R2. MEMORY PIPELINE COMPLETENESS
+WHEN code touches MemoryCategory, MemoryExtractor, MemoryDeduplicator,
+     SessionCompressor, or MemoryArchiver
+THEN verify all 6 categories are handled: PREFERENCES, ENTITIES, PATTERNS,
+     EVENTS, TOOLS, SKILLS. Check that match/if-elif chains on DedupDecision
+     (KEEP/MERGE/DELETE/SKIP) are exhaustive.
+BECAUSE partial handling silently drops memories. The 6-category model is
+     a core invariant of the extraction pipeline.
+
+R3. QUADRATIC REPROCESSING GUARD
+WHEN code enqueues items (SemanticMsg, embedding tasks) inside a loop that
+     also processes the queue, or when a callback re-enqueues work
+THEN flag as [Perf] or [Bug] — this pattern causes O(n²) reprocessing.
+BECAUSE PR #505 fixed exactly this: misdirected SemanticMsg enqueue inside
+     a processing loop caused quadratic growth.
+
+R4. VLM/EMBEDDING API RESILIENCE
+WHEN code calls VLM providers (OpenAI, Doubao/Ark, Gemini) or embedding APIs
+THEN verify: (a) timeout is set (ai_timeout or explicit), (b) retry/fallback
+     exists for transient failures, (c) streaming responses handle partial
+     failure gracefully, (d) JSON output uses json-repair not raw json.loads.
+BECAUSE PR #740 was reverted (#745) due to streaming response issues, then
+     re-landed in #756 with proper handling. This is a repeat-risk area.
+
+R5. TYPE SAFETY
+WHEN new Python code is added or modified
+THEN check: no bare `type: ignore` (must have explanation comment), consistent
+     Optional[X] vs X|None style within each file, proper use of
+     TYPE_CHECKING imports for circular dependency avoidance.
+BECAUSE CI enforces ruff + mypy on changed files. Suppressions without
+     rationale hide real type errors.
+
+R6. LICENSE HEADERS
+WHEN a new .py file is created in openviking/ or openviking_cli/
+THEN it MUST contain at the top:
+     # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+     # SPDX-License-Identifier: Apache-2.0
+BECAUSE Apache-2.0 compliance requires headers on all source files.
+     Every existing file in these directories follows this convention.
+
+R7. ERROR HANDLING
+WHEN code uses try/except
+THEN verify: no bare `except:` or `except Exception:` without logging (loguru)
+     or re-raising. Narrow exceptions to specific types where possible.
+BECAUSE PR #148f6e3 fixed overly broad `except Exception` to specific
+     (ImportError, ModuleNotFoundError, AttributeError). Broad catches hide
+     real bugs.
+
+### TYPESCRIPT / BOT (bot/, examples/openclaw-plugin/)
+
+R8. PLUGIN HOOK TIMEOUT
+WHEN code registers or modifies a hook handler (before_prompt_build,
+     after_prompt_build, etc.) or calls getClient()
+THEN verify the call has timeout protection (Promise.race with timeout,
+     AbortController, or equivalent).
+BECAUSE PR #749 added timeout protection to getClient() after discovering
+     hooks could hang indefinitely, blocking the entire bot.
+
+R9. PROCESS LIFECYCLE
+WHEN code spawns child processes or manages bot lifecycle
+THEN verify: SIGTERM/SIGINT handlers exist, stdio streams are properly
+     closed, and cleanup runs in all exit paths (including uncaught exceptions).
+BECAUSE the bot uses process-manager.ts for lifecycle; leaked processes or
+     file descriptors degrade the host system.
+
+### CROSS-CUTTING
+
+R10. API BACKWARD COMPATIBILITY
+WHEN a PR modifies public interfaces (FastAPI endpoints, SDK client params,
+     RequestContext fields, config keys in ov.conf)
+THEN verify: existing params are not removed or renamed (only deprecated),
+     new params have defaults, multi-tenant changes preserve single-tenant
+     behavior as the default path.
+BECAUSE PR #767 added account/user params — these must be optional to avoid
+     breaking existing single-tenant deployments.
+
+R11. CONCURRENCY SAFETY
+WHEN code modifies shared mutable state (dicts, lists, sets) in async
+     functions, or uses _pending_semantic_changes or similar shared structures
+THEN verify proper synchronization (asyncio.Lock, thread-safe collections)
+     and that no produce-and-consume-in-same-loop pattern exists.
+BECAUSE the SessionCompressor._pending_semantic_changes dict is accessed
+     from multiple async paths; unsynchronized access causes data races.
+
+R12. RETRIEVAL PIPELINE INTEGRITY
+WHEN code modifies find/rerank/search logic or ContextLevel scoring (L0/L1/L2)
+THEN verify: rerank is optional (PR #754 fixed find-without-rerank), level-2
+     scores are preserved through the pipeline, and search results maintain
+     their ranking order.
+BECAUSE PR #754 fixed a bug where find() required rerank and level-2 scores
+     were silently dropped.
+
+R13. TESTING REQUIREMENTS
+WHEN a PR fixes a bug → it MUST include a regression test or explicitly
+     explain in the PR description why one is impractical.
+WHEN a PR adds a feature → it SHOULD include unit tests for the happy path
+     and at least one error/edge case.
+WHEN a PR modifies embedding/VLM integration → verify test isolation (no
+     hardcoded API keys — construct test keys dynamically as in PR #148f6e3).
+BECAUSE the repo uses pytest; test patterns should use fixtures, not globals.
+
+R14. DOCUMENTATION CONSISTENCY
+WHEN a PR modifies docs/ (en/ and zh/cn/ and ja/) or README files
+THEN verify all language versions are updated consistently. Flag if only
+     one language is updated when the content change is substantive.
+BECAUSE the repo maintains en/zh/ja translations (PR #755 added Japanese docs).
+
+R15. TELEMETRY & OBSERVABILITY
+WHEN code adds or modifies operations that call external services (VLM, embedding,
+     VikingDB) or processes memories
+THEN verify telemetry integration exists (get_current_telemetry pattern) and that
+     timing/count metrics are recorded for the operation.
+BECAUSE PR #735 added memory extract telemetry breakdown — new operations
+     should follow this pattern for production observability.
+
+## Output Format
+Be specific: reference exact variable names, function calls, line numbers.
+When suggesting a fix, include a minimal code block.
+Match PR language (Chinese PR → Chinese review, English PR → English review).
+"""
+
+# ---------------------------------------------------------------------------
+# Improve Tool (code suggestions)
+# ---------------------------------------------------------------------------
+[pr_code_suggestions]
+commitable_code_suggestions = false
+persistent_comment = true
+focus_only_on_problems = true
+# Filter low-confidence suggestions. 0 = show all, 7+ = high quality only.
+# Set to 5 to balance signal-to-noise for this codebase.
+suggestions_score_threshold = 5
+# Extended mode for thorough analysis of large PRs
+auto_extended_mode = true
+num_code_suggestions_per_chunk = 4
+max_number_of_calls = 3
+parallel_calls = true
+
+extra_instructions = """\
+Focus suggestions on these OpenViking-specific anti-patterns:
+
+1. BLOCKING IN ASYNC: Replace `commit()`, `requests.get()`, `time.sleep()` with
+   `commit_async()`, `httpx.AsyncClient`, `asyncio.sleep()` inside async functions.
+
+2. QUADRATIC LOOPS: Simplify nested loops over memory categories or semantic queues.
+   If an inner loop re-processes items already in the outer loop, suggest flattening
+   or using a set-based approach.
+
+3. PROMPT CONSTRUCTION: Extract repeated LLM prompt strings into Jinja2 templates
+   (the dependency exists in pyproject.toml). Inline f-string prompts over 5 lines
+   should be templated.
+
+4. LOGGING: Replace `print()` with `logger = get_logger(__name__)` (loguru pattern
+   used throughout the codebase). Include structured context in log messages.
+
+5. VALIDATION: Prefer pydantic models for API request/response validation over raw
+   dicts. The codebase already depends on pydantic>=2.0.0.
+
+6. API RESILIENCE: Flag any VLM/embedding API call missing timeout or retry logic.
+   Suggest wrapping with httpx timeout config or litellm retry patterns.
+
+7. RESOURCE CLEANUP: Ensure context managers (async with) are used for DB connections,
+   HTTP clients, and file handles. Flag bare open() without context manager.
+"""
+
+# ---------------------------------------------------------------------------
+# Describe Tool
+# ---------------------------------------------------------------------------
+[pr_description]
+generate_ai_title = false
+use_bullet_points = true
+add_original_user_description = true
+enable_pr_type = true
+enable_pr_diagram = true
+enable_semantic_files_types = true
+collapsible_file_list = 'adaptive'
+collapsible_file_list_threshold = 8
+enable_large_pr_handling = true
+include_generated_by_header = true
+publish_labels = true
+final_update_message = true
+
+extra_instructions = """\
+For OpenViking PRs, structure the description to include:
+- **Layer affected**: core (Python), bot (TypeScript), CLI (Rust), AGFS (C++/Go), or docs.
+- **Backward compatibility**: state whether existing APIs, config keys, or SDK params are affected.
+- **Memory pipeline impact**: if session/ is touched, list which of the 6 memory categories
+  (PREFERENCES, ENTITIES, PATTERNS, EVENTS, TOOLS, SKILLS) are affected.
+- **Multi-tenant impact**: if auth/identity is touched, note whether single-tenant default is preserved.
+"""

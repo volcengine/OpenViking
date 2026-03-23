@@ -24,6 +24,7 @@ async def get_watch_task(client: AsyncOpenViking, to_uri: str):
         account_id=client._service.user.account_id,
         user_id=client._service.user.user_id,
         role=Role.USER.value,
+        agent_id=client._service.user.agent_id,
     )
 
 

@@ -70,6 +70,8 @@ dependencies = [
     "tree-sitter-go>=0.23.0",
     "tree-sitter-c-sharp>=0.23.0",
     "loguru>=0.7.3",
+    "cryptography>=42.0.0",
+    "argon2-cffi>=23.0.0",
 ]
 
 [tool.uv.sources]
@@ -84,6 +86,7 @@ test = [
     "ragas>=0.1.0",
     "datasets>=2.0.0",
     "pandas>=2.0.0",
+    "hvac>=2.0.0",
 ]
 dev = [
     "mypy>=1.0.0",
@@ -101,6 +104,12 @@ eval = [
 ]
 oceanbase = [
     "pyobvector>=0.2.20",
+gemini = [
+    "google-genai>=1.0.0",
+]
+gemini-async = [
+    "google-genai>=1.0.0",
+    "anyio>=4.0.0",
 ]
 build = [
     "setuptools>=61.0",
@@ -128,6 +137,7 @@ bot = [
     "html2text>=2020.1.16",
     "beautifulsoup4>=4.12.0",
     "ddgs>=9.0.0",
+    "tavily-python>=0.5.0",
     "gradio>=6.6.0",
     "py-machineid>=1.0.0",
 ]

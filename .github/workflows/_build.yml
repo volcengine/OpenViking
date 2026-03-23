@@ -220,6 +220,15 @@ jobs:
     - name: Install build dependencies
       run: uv pip install setuptools setuptools_scm pybind11 cmake wheel build
 
+    - name: Resolve OpenViking version for Rust CLI (Linux)
+      shell: bash
+      run: |
+        OPENVIKING_VERSION=$(
+          uv run --frozen python -c "from build_support.versioning import resolve_openviking_version; print(resolve_openviking_version())"
+        )
+        echo "OPENVIKING_VERSION=$OPENVIKING_VERSION" >> "$GITHUB_ENV"
+        echo "Resolved OpenViking version: $OPENVIKING_VERSION"
+
     - name: Build Rust CLI (Linux)
       run: cargo build --release --target ${{ matrix.arch == 'aarch64' && 'aarch64-unknown-linux-gnu' || 'x86_64-unknown-linux-gnu' }} -p ov_cli
 
@@ -367,6 +376,15 @@ jobs:
 
     - name: Install build dependencies
       run: uv pip install setuptools setuptools_scm pybind11 cmake wheel build
+
+    - name: Resolve OpenViking version for Rust CLI (macOS/Windows)
+      shell: bash
+      run: |
+        OPENVIKING_VERSION=$(
+          uv run --frozen python -c "from build_support.versioning import resolve_openviking_version; print(resolve_openviking_version())"
+        )
+        echo "OPENVIKING_VERSION=$OPENVIKING_VERSION" >> "$GITHUB_ENV"
+        echo "Resolved OpenViking version: $OPENVIKING_VERSION"
 
     - name: Build Rust CLI (macOS/Windows)
       shell: bash

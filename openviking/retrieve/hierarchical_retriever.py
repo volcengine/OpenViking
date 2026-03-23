@@ -8,6 +8,7 @@ and rerank-based relevance scoring.
 """
 
 import heapq
+import math
 import logging
 import time
 from datetime import datetime
@@ -145,7 +146,7 @@ class HierarchicalRetriever:
             context_type=query.context_type.value if query.context_type else None,
             target_dirs=target_dirs,
             scope_dsl=scope_dsl,
-            limit=min(limit, self.GLOBAL_SEARCH_TOPK),
+            limit=max(limit, self.GLOBAL_SEARCH_TOPK),
         )
 
         # Debug: Print all URIs in global_results
@@ -175,6 +176,12 @@ class HierarchicalRetriever:
 
         # 从 global_results 中提取 level 2 的文件作为初始候选者
         initial_candidates = [r for r in global_results if r.get("level", 2) == 2]
+
+        initial_candidates = self._prepare_initial_candidates(
+            query.query,
+            initial_candidates,
+            mode=mode,
+        )
 
         # Step 4: Recursive search
         candidates = await self._recursive_search(
@@ -285,6 +292,8 @@ class HierarchicalRetriever:
         points = []
         seen = set()
 
+        global_results = [r for r in global_results if r.get("level", 2) != 2]
+
         # Results from global search
         default_scores = [r.get("_score", 0.0) for r in global_results]
         if self._rerank_client and mode == RetrieverMode.THINKING:
@@ -309,6 +318,29 @@ class HierarchicalRetriever:
                 seen.add(uri)
 
         return points
+
+    def _prepare_initial_candidates(
+        self,
+        query: str,
+        global_results: List[Dict[str, Any]],
+        mode: str = RetrieverMode.THINKING,
+    ) -> List[Dict[str, Any]]:
+        """Extract level-2 global hits and preserve rerank scores for them."""
+        initial_candidates = [dict(r) for r in global_results if r.get("level", 2) == 2]
+        if not initial_candidates:
+            return []
+
+        default_scores = [r.get("_score", 0.0) for r in initial_candidates]
+        if self._rerank_client and mode == RetrieverMode.THINKING:
+            docs = [str(r.get("abstract", "")) for r in initial_candidates]
+            query_scores = self._rerank_scores(query, docs, default_scores)
+        else:
+            query_scores = default_scores
+
+        for candidate, score in zip(initial_candidates, query_scores):
+            candidate["_score"] = score
+
+        return initial_candidates
 
     async def _recursive_search(
         self,
@@ -485,6 +517,9 @@ class HierarchicalRetriever:
                             relations.append(RelatedContext(uri=uri, abstract=abstract))
 
             semantic_score = c.get("_final_score", c.get("_score", 0.0))
+            # Fix: clamp inf/nan scores from vector search (#inf-score)
+            if not math.isfinite(semantic_score):
+                semantic_score = 0.0
 
             # --- hotness boost ---
             updated_at_raw = c.get("updated_at")
@@ -505,6 +540,8 @@ class HierarchicalRetriever:
 
             alpha = self.HOTNESS_ALPHA
             final_score = (1 - alpha) * semantic_score + alpha * h_score
+            if not math.isfinite(final_score):
+                final_score = 0.0
             level = c.get("level", 2)
             display_uri = self._append_level_suffix(c.get("uri", ""), level)
 

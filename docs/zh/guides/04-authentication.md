@@ -91,6 +91,43 @@ client = ov.SyncHTTPClient(
 }
 ```
 
+### 使用 Root Key 访问租户数据
+
+使用 root key 访问租户级数据 API（如 `ls`、`find`、`sessions` 等）时，必须指定目标 account 和 user，否则服务端将拒绝请求。Admin API 和系统状态端点不受此限制。
+
+**curl**
+
+```bash
+curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
+  -H "X-API-Key: your-secret-root-key" \
+  -H "X-OpenViking-Account: acme" \
+  -H "X-OpenViking-User: alice"
+```
+
+**Python SDK**
+
+```python
+import openviking as ov
+
+client = ov.SyncHTTPClient(
+    url="http://localhost:1933",
+    api_key="your-secret-root-key",
+    account="acme",
+    user="alice",
+)
+```
+
+**ovcli.conf**
+
+```json
+{
+  "url": "http://localhost:1933",
+  "api_key": "your-secret-root-key",
+  "account": "acme",
+  "user": "alice"
+}
+```
+
 ## 角色与权限
 
 | 角色 | 作用域 | 能力 |

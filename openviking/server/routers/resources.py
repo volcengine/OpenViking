@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, File, UploadFile
+from fastapi import APIRouter, Depends, File, Form, UploadFile
 from pydantic import BaseModel, model_validator
 
 from openviking.server.auth import get_request_context
@@ -109,24 +109,38 @@ def _cleanup_temp_files(temp_dir: Path, max_age_hours: int = 1):
 @router.post("/resources/temp_upload")
 async def temp_upload(
     file: UploadFile = File(...),
+    telemetry: bool = Form(False),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Upload a temporary file for add_resource or import_ovpack."""
-    config = get_openviking_config()
-    temp_dir = config.storage.get_upload_temp_dir()
 
-    # Clean up old temporary files
-    _cleanup_temp_files(temp_dir)
+    async def _upload() -> dict[str, str]:
+        config = get_openviking_config()
+        temp_dir = config.storage.get_upload_temp_dir()
 
-    # Save the uploaded file
-    file_ext = Path(file.filename).suffix if file.filename else ".tmp"
-    temp_filename = f"upload_{uuid.uuid4().hex}{file_ext}"
-    temp_file_path = temp_dir / temp_filename
+        # Clean up old temporary files
+        _cleanup_temp_files(temp_dir)
 
-    with open(temp_file_path, "wb") as f:
-        f.write(await file.read())
+        # Save the uploaded file
+        file_ext = Path(file.filename).suffix if file.filename else ".tmp"
+        temp_filename = f"upload_{uuid.uuid4().hex}{file_ext}"
+        temp_file_path = temp_dir / temp_filename
 
-    return Response(status="ok", result={"temp_path": str(temp_file_path)})
+        with open(temp_file_path, "wb") as f:
+            f.write(await file.read())
+
+        return {"temp_path": str(temp_file_path)}
+
+    execution = await run_operation(
+        operation="resources.temp_upload",
+        telemetry=telemetry,
+        fn=_upload,
+    )
+    return Response(
+        status="ok",
+        result=execution.result,
+        telemetry=execution.telemetry,
+    ).model_dump(exclude_none=True)
 
 
 @router.post("/resources")

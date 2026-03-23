@@ -49,7 +49,7 @@ Get system status including initialization state and user info.
 **Python SDK (Embedded / HTTP)**
 
 ```python
-print(client.observer.system)
+print(client.observer.system())
 ```
 
 **HTTP API**
@@ -204,16 +204,16 @@ Get VikingDB status (collections, indexes, vector counts).
 **Python SDK (Embedded / HTTP)**
 
 ```python
-print(client.observer.vikingdb)
+print(client.observer.vikingdb())
 # Output:
 # [vikingdb] (healthy)
 # Collection  Index Count  Vector Count  Status
 # context     1            55            OK
 # TOTAL       1            55
 
-# Access specific properties
-print(client.observer.vikingdb.is_healthy)  # True
-print(client.observer.vikingdb.status)      # Status table string
+# Access specific attributes
+print(client.observer.vikingdb().is_healthy)  # True
+print(client.observer.vikingdb().status)      # Status table string
 ```
 
 **HTTP API**
@@ -306,7 +306,7 @@ Get overall system status including all components.
 **Python SDK (Embedded / HTTP)**
 
 ```python
-print(client.observer.system)
+print(client.observer.system())
 # Output:
 # [queue] (healthy)
 # ...
@@ -382,7 +382,7 @@ Quick health check for the entire system.
 if client.observer.is_healthy():
     print("System OK")
 else:
-    print(client.observer.system)
+    print(client.observer.system())
 ```
 
 **HTTP API**

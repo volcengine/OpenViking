@@ -42,7 +42,7 @@ impl CliContext {
 #[derive(Parser)]
 #[command(name = "openviking")]
 #[command(about = "OpenViking - An Agent-native context database")]
-#[command(version = env!("CARGO_PKG_VERSION"))]
+#[command(version = env!("OPENVIKING_CLI_VERSION"))]
 #[command(arg_required_else_help = true)]
 struct Cli {
     /// Output format
@@ -264,6 +264,17 @@ enum Commands {
         /// Viking URI
         uri: String,
     },
+    /// Reindex content at URI (regenerates .abstract.md and .overview.md)
+    Reindex {
+        /// Viking URI
+        uri: String,
+        /// Force regenerate summaries even if they exist
+        #[arg(short, long)]
+        regenerate: bool,
+        /// Wait for reindex to complete
+        #[arg(long, default_value = "true")]
+        wait: bool,
+    },
     /// Download file to local path (supports binaries/images)
     Get {
         /// Viking URI
@@ -382,6 +393,11 @@ enum SystemCommands {
     Status,
     /// Quick health check
     Health,
+    /// Cryptographic key management commands
+    Crypto {
+        #[command(subcommand)]
+        action: commands::crypto::CryptoCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -619,12 +635,15 @@ async fn main() {
         }
         Commands::Config { action } => handle_config(action, ctx).await,
         Commands::Version => {
-            println!("{}", env!("CARGO_PKG_VERSION"));
+            println!("{}", env!("OPENVIKING_CLI_VERSION"));
             Ok(())
         }
         Commands::Read { uri } => handle_read(uri, ctx).await,
         Commands::Abstract { uri } => handle_abstract(uri, ctx).await,
         Commands::Overview { uri } => handle_overview(uri, ctx).await,
+        Commands::Reindex { uri, regenerate, wait } => {
+            handle_reindex(uri, regenerate, wait, ctx).await
+        }
         Commands::Get { uri, local_path } => handle_get(uri, local_path, ctx).await,
         Commands::Find { query, uri, node_limit, threshold } => {
             handle_find(query, uri, node_limit, threshold, ctx).await
@@ -808,6 +827,7 @@ async fn handle_system(cmd: SystemCommands, ctx: CliContext) -> Result<()> {
             commands::system::health(&client, ctx.output_format, ctx.compact).await?;
             Ok(())
         }
+        SystemCommands::Crypto { action } => commands::crypto::handle_crypto(action).await,
     }
 }
 
@@ -951,6 +971,11 @@ async fn handle_abstract(uri: String, ctx: CliContext) -> Result<()> {
 async fn handle_overview(uri: String, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     commands::content::overview(&client, &uri, ctx.output_format, ctx.compact).await
+}
+
+async fn handle_reindex(uri: String, regenerate: bool, wait: bool, ctx: CliContext) -> Result<()> {
+    let client = ctx.get_client();
+    commands::content::reindex(&client, &uri, regenerate, wait, ctx.output_format, ctx.compact).await
 }
 
 async fn handle_get(uri: String, local_path: String, ctx: CliContext) -> Result<()> {

@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field
 class LogConfig(BaseModel):
     """Logging configuration for OpenViking."""
 
+    model_config = {"extra": "forbid"}
+
     level: str = Field(
         default="WARNING", description="Logging level: DEBUG, INFO, WARNING, ERROR, CRITICAL"
     )

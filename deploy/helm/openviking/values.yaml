@@ -1,0 +1,149 @@
+# Default values for openviking.
+
+replicaCount: 1
+
+image:
+  repository: ghcr.io/volcengine/openviking
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+serviceAccount:
+  # Specifies whether a service account should be created.
+  create: false
+  # Annotations to add to the service account.
+  annotations: {}
+  # The name of the service account to use.
+  # If not set and create is true, a name is generated using the fullname template.
+  name: ""
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext: {}
+  # fsGroup: 1000
+
+securityContext: {}
+  # runAsNonRoot: true
+  # runAsUser: 1000
+
+service:
+  type: ClusterIP
+  port: 1933
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+    # kubernetes.io/ingress.class: nginx
+    # cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: openviking.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+  #  - secretName: openviking-tls
+  #    hosts:
+  #      - openviking.local
+
+resources:
+  limits:
+    cpu: "2"
+    memory: 4Gi
+  requests:
+    cpu: 500m
+    memory: 1Gi
+
+persistence:
+  enabled: true
+  # Storage class for the PVC. Leave empty for the default storage class.
+  storageClass: ""
+  accessMode: ReadWriteOnce
+  size: 20Gi
+  # Existing PVC name. If set, no new PVC is created.
+  existingClaim: ""
+  # Mount path inside the container for data directory.
+  mountPath: /app/data
+
+# OpenViking server configuration (ov.conf).
+# This is rendered into a ConfigMap and mounted at /app/ov.conf.
+config:
+  storage:
+    workspace: /app/data/openviking_workspace
+    vectordb:
+      name: context
+      backend: local
+      project: default
+    agfs:
+      port: 1833
+      log_level: warn
+      backend: local
+      timeout: 10
+      retry_times: 3
+  log:
+    level: INFO
+    output: stdout
+  server:
+    host: "0.0.0.0"
+    port: 1933
+    workers: 1
+    root_api_key: ""
+    cors_origins:
+      - "*"
+  embedding:
+    dense:
+      api_base: "https://ark.cn-beijing.volces.com/api/v3"
+      api_key: ""
+      provider: "volcengine"
+      dimension: 1024
+      model: "doubao-embedding-vision-250615"
+      input: "multimodal"
+    max_concurrent: 10
+  vlm:
+    api_base: "https://ark.cn-beijing.volces.com/api/v3"
+    api_key: ""
+    provider: "volcengine"
+    model: "doubao-seed-2-0-pro-260215"
+    temperature: 0.0
+    max_retries: 2
+    thinking: false
+    max_concurrent: 100
+
+# Extra environment variables to set on the container.
+# Use this for secrets or overrides that should not be in the ConfigMap.
+extraEnv: []
+  # - name: OPENVIKING_CONFIG_FILE
+  #   value: /app/ov.conf
+  # - name: SOME_SECRET
+  #   valueFrom:
+  #     secretKeyRef:
+  #       name: my-secret
+  #       key: api-key
+
+# Liveness and readiness probes.
+livenessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 30
+  periodSeconds: 30
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  initialDelaySeconds: 15
+  periodSeconds: 10
+  timeoutSeconds: 5
+  failureThreshold: 3
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -115,7 +115,7 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `max_concurrent` | int | Maximum concurrent embedding requests (`embedding.max_concurrent`, default: `10`) |
-| `provider` | str | `"volcengine"`, `"openai"`, `"vikingdb"`, `"jina"`, or `"voyage"` |
+| `provider` | str | `"volcengine"`, `"openai"`, `"vikingdb"`, `"jina"`, `"voyage"`, or `"gemini"` |
 | `api_key` | str | API key |
 | `model` | str | Model name |
 | `dimension` | int | Vector dimension. For Voyage, this maps to `output_dimension` |
@@ -137,6 +137,28 @@ With `input: "multimodal"`, OpenViking can embed text, images (PNG, JPG, etc.), 
 - `vikingdb`: VikingDB Embedding API
 - `jina`: Jina AI Embedding API
 - `voyage`: Voyage AI Embedding API
+- `minimax`: MiniMax Embedding API
+- `gemini`: Google Gemini Embedding API (text-only; requires `google-genai>=1.0.0`)
+
+**minimax provider example:**
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "minimax",
+      "api_key": "your-minimax-api-key",
+      "model": "embo-01",
+      "dimension": 1536,
+      "query_param": "query",
+      "document_param": "db",
+      "extra_headers": {
+        "GroupId": "your-group-id"
+      }
+    }
+  }
+}
+```
 
 **vikingdb provider example:**
 
@@ -206,7 +228,6 @@ Supported Voyage text embedding models include:
 
 If `dimension` is omitted, OpenViking uses the model's default output dimension when creating the vector schema.
 
-OpenViking currently configures a single dense embedder for both indexing and query-time retrieval, so provider-specific query/document modes are not exposed in config yet.
 OpenViking also expects dense float vectors throughout storage and retrieval, so Voyage quantized output dtypes are not exposed in config.
 
 **Local deployment (GGUF/MLX):** Jina embedding models are open-weight and available in GGUF and MLX formats on [Hugging Face](https://huggingface.co/jinaai). You can run them locally with any OpenAI-compatible server (e.g. llama.cpp, MLX, vLLM) and point the `api_base` to your local endpoint:
@@ -224,6 +245,51 @@ OpenViking also expects dense float vectors throughout storage and retrieval, so
   }
 }
 ```
+
+**gemini provider example:**
+
+> **Note:** Requires `pip install "google-genai>=1.0.0"`. For async batching: `pip install "openviking[gemini-async]"`.
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "gemini",
+      "api_key": "your-google-api-key",
+      "model": "gemini-embedding-2-preview",
+      "dimension": 3072
+    }
+  }
+}
+```
+
+Available Gemini embedding models:
+- `gemini-embedding-2-preview`: 8192 token input limit, 1–3072 output dimension (MRL)
+- `gemini-embedding-001`: 2048 token input limit, 1–3072 output dimension (MRL)
+- `text-embedding-004`: 2048 token input limit, 768 output dimension (fixed)
+
+Recommended dimensions: `768`, `1536`, or `3072` (default: `3072`).
+
+Get your API key at https://aistudio.google.com/apikey
+
+**Non-symmetric retrieval** (different task types for indexing vs. query):
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "gemini",
+      "api_key": "your-google-api-key",
+      "model": "gemini-embedding-2-preview",
+      "dimension": 3072,
+      "query_param": "RETRIEVAL_QUERY",
+      "document_param": "RETRIEVAL_DOCUMENT"
+    }
+  }
+}
+```
+
+Supported task types: `RETRIEVAL_QUERY`, `RETRIEVAL_DOCUMENT`, `SEMANTIC_SIMILARITY`, `CLASSIFICATION`, `CLUSTERING`, `CODE_RETRIEVAL_QUERY`, `QUESTION_ANSWERING`, `FACT_VERIFICATION`.
 
 #### Sparse Embedding
 
@@ -304,6 +370,7 @@ Vision Language Model for semantic extraction (L0/L1 generation).
 | `thinking` | bool | Enable thinking mode for VolcEngine models (default: `false`) |
 | `max_concurrent` | int | Maximum concurrent semantic LLM calls (default: `100`) |
 | `extra_headers` | object | Custom HTTP headers (for OpenAI-compatible providers, optional) |
+| `stream` | bool | Enable streaming mode (for OpenAI-compatible providers, default: `false`) |
 
 **Available Models**
 
@@ -342,6 +409,24 @@ Common use cases:
 - **OpenRouter**: Requires `HTTP-Referer` and `X-Title` to identify your application
 - **Custom proxies**: Add authentication or tracing headers
 - **API gateways**: Add version or routing identifiers
+
+**Streaming Mode**
+
+For OpenAI-compatible providers that return SSE (Server-Sent Events) format responses, enable `stream` mode:
+
+```json
+{
+  "vlm": {
+    "provider": "openai",
+    "api_key": "your-api-key",
+    "model": "gpt-4o",
+    "api_base": "https://api.example.com/v1",
+    "stream": true
+  }
+}
+```
+
+> **Note**: The OpenAI SDK requires `stream=true` to properly parse SSE responses. When using providers that force SSE format, you must set this option to `true`.
 
 ### code
 
@@ -391,11 +476,27 @@ Reranking model for search result refinement.
 }
 ```
 
+**OpenAI-compatible provider (e.g. DashScope qwen3-rerank):**
+
+```json
+{
+  "rerank": {
+    "provider": "openai",
+    "api_key": "your-api-key",
+    "api_base": "https://dashscope.aliyuncs.com/compatible-api/v1/reranks",
+    "model": "qwen3-rerank",
+    "threshold": 0.1
+  }
+}
+```
+
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `provider` | str | `"volcengine"` |
+| `provider` | str | `"volcengine"` or `"openai"` |
 | `api_key` | str | API key |
 | `model` | str | Model name |
+| `api_base` | str | Endpoint URL (openai provider only) |
+| `threshold` | float | Score threshold; results below this are filtered out. Default: `0.1` |
 
 If rerank is not configured, search uses vector similarity only.
 
@@ -730,12 +831,15 @@ For details on the lock mechanism, see [Path Locks and Crash Recovery](../concep
     "api_base": "string",
     "thinking": false,
     "max_concurrent": 100,
-    "extra_headers": {}
+    "extra_headers": {},
+    "stream": false
   },
   "rerank": {
-    "provider": "volcengine",
+    "provider": "volcengine|openai",
     "api_key": "string",
-    "model": "string"
+    "model": "string",
+    "api_base": "string",
+    "threshold": 0.1
   },
   "storage": {
     "workspace": "string",

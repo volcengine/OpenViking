@@ -49,7 +49,7 @@ openviking health
 **Python SDK (Embedded / HTTP)**
 
 ```python
-print(client.observer.system)
+print(client.observer.system())
 ```
 
 **HTTP API**
@@ -204,7 +204,7 @@ openviking observer queue
 **Python SDK (Embedded / HTTP)**
 
 ```python
-print(client.observer.vikingdb)
+print(client.observer.vikingdb())
 # Output:
 # [vikingdb] (healthy)
 # Collection  Index Count  Vector Count  Status
@@ -212,8 +212,8 @@ print(client.observer.vikingdb)
 # TOTAL       1            55
 
 # 访问特定属性
-print(client.observer.vikingdb.is_healthy)  # True
-print(client.observer.vikingdb.status)      # Status table string
+print(client.observer.vikingdb().is_healthy)  # True
+print(client.observer.vikingdb().status)      # Status table string
 ```
 
 **HTTP API**
@@ -306,7 +306,7 @@ openviking observer vlm
 **Python SDK (Embedded / HTTP)**
 
 ```python
-print(client.observer.system)
+print(client.observer.system())
 # Output:
 # [queue] (healthy)
 # ...
@@ -382,7 +382,7 @@ openviking observer system
 if client.observer.is_healthy():
     print("System OK")
 else:
-    print(client.observer.system)
+    print(client.observer.system())
 ```
 
 **HTTP API**

@@ -19,6 +19,9 @@ if str(SETUP_DIR) not in sys.path:
 get_host_engine_build_config = importlib.import_module(
     "build_support.x86_profiles"
 ).get_host_engine_build_config
+resolve_openviking_version = importlib.import_module(
+    "build_support.versioning"
+).resolve_openviking_version
 
 CMAKE_PATH = shutil.which("cmake") or "cmake"
 C_COMPILER_PATH = shutil.which("gcc") or "gcc"
@@ -280,6 +283,9 @@ class OpenVikingBuildExt(build_ext):
             print("Building ov CLI from source...")
             try:
                 env = os.environ.copy()
+                env["OPENVIKING_VERSION"] = resolve_openviking_version(
+                    env=env, project_root=SETUP_DIR
+                )
                 build_args = ["cargo", "build", "--release"]
                 target = env.get("CARGO_BUILD_TARGET")
                 if target:

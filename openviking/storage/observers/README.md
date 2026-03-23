@@ -58,7 +58,7 @@ Monitors VikingDB collection status (index count and vector count per collection
 import openviking as ov
 
 client = ov.OpenViking(path="./data")
-print(client.observer.vikingdb)
+print(client.observer.vikingdb())
 # Output:
 #    Collection  Index Count  Vector Count Status
 #    context            1            69     OK

@@ -137,6 +137,16 @@ class RetrievalStatsCollector:
             if latency_ms > self._stats.max_latency_ms:
                 self._stats.max_latency_ms = latency_ms
 
+        # Notify the Prometheus observer (if enabled) outside our lock.
+        try:
+            from openviking.storage.observers.prometheus_observer import get_prometheus_observer
+
+            prom = get_prometheus_observer()
+            if prom is not None:
+                prom.record_retrieval(latency_ms / 1000.0)
+        except Exception:
+            pass
+
     def snapshot(self) -> RetrievalStats:
         """Return a copy of the current stats."""
         with self._lock:
