@@ -22,6 +22,7 @@ class VikingClient:
             self.client = ov.AsyncHTTPClient(url=openviking_config.server_url)
             self.agent_id = "default"
             self.account_id = "default"
+            self.user_id = "default"
             self.admin_user_id = "default"
             self._apikey_manager = None
         else:
@@ -473,7 +474,7 @@ async def account_test():
 
     client = ov.AsyncHTTPClient(
         url="http://localhost:1933",
-        api_key="8727fe38fe04afd6a52360bffca949c24caf3e29835154e60ba0a04afbfe31fc",
+        api_key="",
         agent_id="shared",
     )
     await client.initialize()
@@ -489,5 +490,5 @@ async def account_test():
 
 
 if __name__ == "__main__":
-    # asyncio.run(main_test())
-    asyncio.run(account_test())
+    asyncio.run(main_test())
+    # asyncio.run(account_test())
