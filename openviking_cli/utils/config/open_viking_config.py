@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 import json
+import os
 from pathlib import Path
 from threading import Lock
 from typing import Any, Dict, Optional
@@ -270,7 +271,12 @@ class OpenVikingConfigSingleton:
                 raise FileNotFoundError(f"Config file does not exist: {config_file}")
 
             with open(config_path, "r", encoding="utf-8") as f:
-                config_data = json.load(f)
+                raw = f.read()
+
+            # Expand $VAR and ${VAR} inside the JSON text (useful for container deployments).
+            # Unset variables are left unchanged by expandvars().
+            raw = os.path.expandvars(raw)
+            config_data = json.loads(raw)
 
             return OpenVikingConfig.from_dict(config_data)
         except json.JSONDecodeError as e:
