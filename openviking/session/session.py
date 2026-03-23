@@ -306,23 +306,6 @@ class Session:
         await self._write_to_agfs_async(self._messages)
         await self._write_relations_async()
 
-        # Enqueue semantic processing directly
-        from openviking.storage.queuefs import get_queue_manager
-        from openviking.storage.queuefs.semantic_msg import SemanticMsg
-
-        queue_manager = get_queue_manager()
-        if queue_manager:
-            msg = SemanticMsg(
-                uri=self._session_uri,
-                context_type="memory",
-                account_id=self.ctx.account_id,
-                user_id=self.ctx.user.user_id,
-                agent_id=self.ctx.user.agent_id,
-                role=self.ctx.role.value,
-            )
-            semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC)
-            await semantic_queue.enqueue(msg)
-
         redo_log.mark_done(task_id)
 
         # Update active_count
@@ -554,6 +537,23 @@ class Session:
             ctx=self.ctx,
         )
 
+        from openviking.storage.queuefs import get_queue_manager
+        from openviking.storage.queuefs.semantic_msg import SemanticMsg
+
+        queue_manager = get_queue_manager()
+        if queue_manager:
+            msg = SemanticMsg(
+                uri=archive_uri,
+                context_type="session",
+                recursive=False,
+                account_id=self.ctx.account_id,
+                user_id=self.ctx.user.user_id,
+                agent_id=self.ctx.user.agent_id,
+                role=self.ctx.role.value,
+            )
+            semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
+            await semantic_queue.enqueue(msg)
+
         logger.debug(f"Written archive: {archive_uri}")
 
     def _write_to_agfs(self, messages: List[Message]) -> None:
@@ -623,6 +623,23 @@ class Session:
             content=overview,
             ctx=self.ctx,
         )
+
+        from openviking.storage.queuefs import get_queue_manager
+        from openviking.storage.queuefs.semantic_msg import SemanticMsg
+
+        queue_manager = get_queue_manager()
+        if queue_manager:
+            msg = SemanticMsg(
+                uri=self._session_uri,
+                context_type="session",
+                recursive=False,
+                account_id=self.ctx.account_id,
+                user_id=self.ctx.user.user_id,
+                agent_id=self.ctx.user.agent_id,
+                role=self.ctx.role.value,
+            )
+            semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC, allow_create=True)
+            await semantic_queue.enqueue(msg)
 
     def _append_to_jsonl(self, msg: Message) -> None:
         """Append to messages.jsonl."""

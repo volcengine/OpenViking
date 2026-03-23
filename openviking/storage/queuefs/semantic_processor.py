@@ -232,6 +232,8 @@ class SemanticProcessor(DequeueHandlerBase):
 
                 if msg.context_type == "memory":
                     await self._process_memory_directory(msg)
+                elif msg.context_type == "session":
+                    await self._process_session_directory(msg)
                 else:
                     is_incremental = False
                     viking_fs = get_viking_fs()
@@ -327,6 +329,30 @@ class SemanticProcessor(DequeueHandlerBase):
         logger.warning(f"Failed to re-acquire lifecycle lock on {lock_path}")
         await lm.release(new_handle)
         return ""
+
+    async def _process_session_directory(self, msg: SemanticMsg) -> None:
+        viking_fs = get_viking_fs()
+        dir_uri = msg.uri
+        ctx = self._current_ctx
+        try:
+            overview = await viking_fs.read_file(f"{dir_uri}/.overview.md", ctx=ctx)
+            abstract = await viking_fs.read_file(f"{dir_uri}/.abstract.md", ctx=ctx)
+        except Exception as e:
+            logger.warning(f"Failed to read session overview/abstract for {dir_uri}: {e}")
+            return
+
+        if not overview or not abstract:
+            logger.info(f"Session overview/abstract missing or empty for {dir_uri}, skipping")
+            return
+        # session directories are vectorized as memory directories
+        await self._vectorize_directory(
+            uri=dir_uri,
+            context_type="memory",
+            abstract=abstract,
+            overview=overview,
+            ctx=ctx,
+            semantic_msg_id=msg.id,
+        )
 
     async def _process_memory_directory(self, msg: SemanticMsg) -> None:
         """Process a memory directory with special handling.
