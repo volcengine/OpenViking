@@ -10,12 +10,14 @@ native vector engine, AGFS, embedding provider, VLM provider, and disk space.
 from __future__ import annotations
 
 import json
-import os
 import platform
 import shutil
 import sys
 from pathlib import Path
 from typing import Optional
+
+from openviking_cli.utils.config.config_loader import resolve_config_path
+from openviking_cli.utils.config.consts import OPENVIKING_CONFIG_ENV
 
 # ANSI helpers (disabled when stdout is not a terminal)
 _USE_COLOR = hasattr(sys.stdout, "isatty") and sys.stdout.isatty()
@@ -41,29 +43,18 @@ def _dim(text: str) -> str:
 # Individual check functions
 # ---------------------------------------------------------------------------
 
-_CONFIG_SEARCH_PATHS = [
-    Path(os.environ.get("OPENVIKING_CONFIG_FILE", "")),
-    Path.home() / ".openviking" / "ov.conf",
-    Path("/etc/openviking/ov.conf"),
-]
-
-
 def _find_config() -> Optional[Path]:
-    for p in _CONFIG_SEARCH_PATHS:
-        if p and p.is_file():
-            return p
-    return None
+    return resolve_config_path(None, OPENVIKING_CONFIG_ENV, "ov.conf")
 
 
 def check_config() -> tuple[bool, str, Optional[str]]:
     """Validate ov.conf exists and is valid JSON with required sections."""
     config_path = _find_config()
     if config_path is None:
-        locations = ", ".join(str(p) for p in _CONFIG_SEARCH_PATHS[1:])
         return (
             False,
             "Configuration file not found",
-            f"Create {locations} or set OPENVIKING_CONFIG_FILE",
+            f"Create ~/.openviking/ov.conf or set {OPENVIKING_CONFIG_ENV}",
         )
 
     try:
@@ -155,12 +146,12 @@ def check_embedding() -> tuple[bool, str, Optional[str]]:
     if provider == "unknown":
         return False, "No embedding provider configured", "Add embedding.dense section to ov.conf"
 
-    api_key = dense.get("api_key", os.environ.get("OPENAI_API_KEY", ""))
+    api_key = dense.get("api_key", "")
     if not api_key or api_key.startswith("{"):
         return (
             False,
             f"{provider}/{model} (no API key)",
-            "Set embedding.dense.api_key in ov.conf or OPENAI_API_KEY env var",
+            "Set embedding.dense.api_key in ov.conf",
         )
 
     return True, f"{provider}/{model}", None
@@ -184,12 +175,12 @@ def check_vlm() -> tuple[bool, str, Optional[str]]:
     if not provider:
         return False, "No VLM provider configured", "Add vlm section to ov.conf"
 
-    api_key = vlm.get("api_key", os.environ.get("OPENAI_API_KEY", ""))
+    api_key = vlm.get("api_key", "")
     if not api_key or api_key.startswith("{"):
         return (
             False,
             f"{provider}/{model} (no API key)",
-            "Set vlm.api_key in ov.conf or set the provider's API key env var",
+            "Set vlm.api_key in ov.conf",
         )
 
     return True, f"{provider}/{model}", None
