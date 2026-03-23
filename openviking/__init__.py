@@ -23,6 +23,7 @@ except ImportError:
         "pyagfs not found. Please install: pip install -e third_party/agfs/agfs-sdk/python"
     )
 
+
 def __getattr__(name: str):
     if name == "AsyncOpenViking":
         from openviking.async_client import AsyncOpenViking

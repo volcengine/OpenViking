@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """OpenViking HTTP Server module."""
 
+
 def __getattr__(name: str):
     if name == "create_app":
         from openviking.server.app import create_app
@@ -12,5 +13,6 @@ def __getattr__(name: str):
 
         return run_server
     raise AttributeError(name)
+
 
 __all__ = ["create_app", "run_server"]
