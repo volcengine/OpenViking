@@ -138,6 +138,8 @@ async def get_session(
         )
     result = session.meta.to_dict()
     result["user"] = session.user.to_dict()
+    pending_tokens = sum(len(m.content) // 4 for m in session.messages)
+    result["pending_tokens"] = pending_tokens
     return Response(status="ok", result=result)
 
 
