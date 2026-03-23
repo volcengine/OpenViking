@@ -55,6 +55,14 @@ class VikingClient:
             user_exists = await self._check_user_exists(self.admin_user_id)
             if not user_exists:
                 await self._initialize_user(self.admin_user_id, role="admin")
+            admin_user_api_key = await self._get_or_create_user_apikey(self.admin_user_id)
+            logger.info(f"admin_user_api_key: {admin_user_api_key}")
+            self.admin_user_client = ov.AsyncHTTPClient(
+                url=self.openviking_config.server_url,
+                api_key=admin_user_api_key,
+                agent_id=self.agent_id,
+            )
+            await self.admin_user_client.initialize()
 
     @classmethod
     async def create(cls, agent_id: Optional[str] = None):
@@ -462,17 +470,24 @@ async def main_test():
 
 
 async def account_test():
-    client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="test")
+
+    client = ov.AsyncHTTPClient(
+        url="http://localhost:1933",
+        api_key="8727fe38fe04afd6a52360bffca949c24caf3e29835154e60ba0a04afbfe31fc",
+        agent_id="shared",
+    )
     await client.initialize()
 
     # res = await client.admin_list_users("eval")
     # res = await client.admin_remove_user("default", "")
     # res = await client.admin_remove_user("default", "admin")
     # res = await client.admin_list_accounts()
-    res = await client.admin_create_account("eval", "default")
+    # res = await client.admin_create_account("eval", "default")
+    res = await client.search("123")
+
     print(res)
 
 
 if __name__ == "__main__":
-    asyncio.run(main_test())
-    # asyncio.run(account_test())
+    # asyncio.run(main_test())
+    asyncio.run(account_test())

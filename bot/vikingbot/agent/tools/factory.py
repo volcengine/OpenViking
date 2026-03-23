@@ -11,12 +11,9 @@ from vikingbot.agent.tools.ov_file import (
     VikingSearchTool,
     VikingGrepTool,
     VikingGlobTool,
-    VikingSearchUserMemoryTool,
-    VikingSearchUserMemoryToolV2,
     VikingMultiReadTool,
     VikingMemoryCommitTool,
     VikingAddResourceTool,
-    VikingUserProfileTool,
 )
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.agent.tools.shell import ExecTool
@@ -94,9 +91,6 @@ def register_default_tools(
         registry.register(VikingSearchTool())
         registry.register(VikingGrepTool())
         registry.register(VikingGlobTool())
-        # registry.register(VikingUserProfileTool())
-        # registry.register(VikingSearchUserMemoryTool())
-        registry.register(VikingSearchUserMemoryToolV2())
         registry.register(VikingMemoryCommitTool())
         if not config.read_only:
             registry.register(VikingAddResourceTool())

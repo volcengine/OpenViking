@@ -56,7 +56,7 @@ class MemoryStore:
             user_id = sender_id if config.mode == "remote" else admin_user_id
             client = await VikingClient.create(agent_id=workspace_id)
             admin_user_id = load_config().ov_server.admin_user_id
-            result = await client.search_memory(current_message, user_id=user_id, agent_user_id=admin_user_id, limit=5)
+            result = await client.search_memory(query=current_message, user_id=user_id, agent_user_id=admin_user_id, limit=5)
             if not result:
                 return ""
             user_memory = self._parse_viking_memory(result["user_memory"])

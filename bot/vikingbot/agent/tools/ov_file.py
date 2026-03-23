@@ -88,7 +88,7 @@ class VikingSearchTool(OVFileTool):
 
     @property
     def description(self) -> str:
-        return "Search for resources in OpenViking using a query."
+        return "Search for resources in OpenViking using a query"
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -113,7 +113,7 @@ class VikingSearchTool(OVFileTool):
     ) -> str:
         try:
             client = await self._get_client(tool_context)
-            results = await client.search(query, target_uri=target_uri)
+            results = await client.admin_user_client.search(query, target_uri=target_uri)
 
             if not results:
                 return f"No results found for query: {query}"

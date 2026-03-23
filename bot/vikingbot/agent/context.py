@@ -272,7 +272,7 @@ Always be helpful, accurate, and concise. When using tools, think step by step: 
             messages.extend(history)
 
         # User
-        user_info = await self._build_user_memory(session_key, current_message, history)
+        user_info = await self._build_user_memory(session_key, current_message, self._sender_id)
         messages.append({"role": "user", "content": user_info})
 
         # Current message (with optional image attachments)
