@@ -150,7 +150,7 @@ class QueueManager:
             if thread.is_alive():
                 return
 
-        max_concurrent = self._max_concurrent_embedding if queue.name == self.EMBEDDING else 1
+        max_concurrent = self._max_concurrent_embedding if queue.name == self.EMBEDDING else self._max_concurrent_semantic
         stop_event = threading.Event()
         self._queue_stop_events[queue.name] = stop_event
         thread = threading.Thread(
