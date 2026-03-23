@@ -276,7 +276,7 @@ class MemorySearchTool(MemoryTool):
                 filter=filter,
                 ctx=ctx,
             )
-            return search_result
+            return search_result.to_dict()
         except Exception as e:
             logger.error(f"Failed to execute search: {e}")
             return {"error": str(e)}
