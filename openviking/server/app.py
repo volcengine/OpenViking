@@ -2,6 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """FastAPI application for OpenViking HTTP Server."""
 
+import json
+import math
 import time
 from contextlib import asynccontextmanager
 from typing import Callable, Optional
@@ -39,6 +41,30 @@ from openviking_cli.exceptions import OpenVikingError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+
+def _sanitize_floats(obj):
+    """Recursively replace inf/nan with None to ensure JSON compliance."""
+    if isinstance(obj, float):
+        if math.isinf(obj) or math.isnan(obj):
+            return None
+        return obj
+    if isinstance(obj, dict):
+        return {k: _sanitize_floats(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_sanitize_floats(v) for v in obj]
+    return obj
+
+
+class SafeJSONResponse(JSONResponse):
+    """JSONResponse that handles inf/nan float values by replacing them with null."""
+
+    def render(self, content) -> bytes:
+        return json.dumps(
+            _sanitize_floats(content),
+            ensure_ascii=False,
+            default=str,
+        ).encode("utf-8")
 
 
 def create_app(
@@ -144,7 +170,7 @@ def create_app(
     @app.exception_handler(OpenVikingError)
     async def openviking_error_handler(request: Request, exc: OpenVikingError):
         http_status = ERROR_CODE_TO_HTTP_STATUS.get(exc.code, 500)
-        return JSONResponse(
+        return SafeJSONResponse(
             status_code=http_status,
             content=Response(
                 status="error",
@@ -160,7 +186,7 @@ def create_app(
     @app.exception_handler(Exception)
     async def general_error_handler(request: Request, exc: Exception):
         logger.warning("Unhandled exception: %s", exc)
-        return JSONResponse(
+        return SafeJSONResponse(
             status_code=500,
             content=Response(
                 status="error",
