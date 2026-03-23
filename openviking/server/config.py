@@ -3,14 +3,16 @@
 """Server configuration for OpenViking HTTP Server."""
 
 import sys
-from dataclasses import dataclass, field
 from typing import List, Optional
+
+from pydantic import BaseModel, Field, ValidationError
 
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.config_loader import (
     load_json_config,
     resolve_config_path,
 )
+from openviking_cli.utils.config.config_utils import format_validation_error
 from openviking_cli.utils.config.consts import (
     DEFAULT_CONFIG_DIR,
     DEFAULT_OV_CONF,
@@ -21,22 +23,23 @@ from openviking_cli.utils.config.consts import (
 logger = get_logger(__name__)
 
 
-@dataclass
-class PrometheusConfig:
+class PrometheusConfig(BaseModel):
     """Prometheus exporter configuration."""
 
     enabled: bool = False
 
+    model_config = {"extra": "forbid"}
 
-@dataclass
-class TelemetryConfig:
+
+class TelemetryConfig(BaseModel):
     """Telemetry configuration."""
 
-    prometheus: PrometheusConfig = field(default_factory=PrometheusConfig)
+    prometheus: PrometheusConfig = Field(default_factory=PrometheusConfig)
+
+    model_config = {"extra": "forbid"}
 
 
-@dataclass
-class ServerConfig:
+class ServerConfig(BaseModel):
     """Server configuration (from the ``server`` section of ov.conf)."""
 
     host: str = "127.0.0.1"
@@ -44,11 +47,13 @@ class ServerConfig:
     workers: int = 1
     auth_mode: str = "api_key"
     root_api_key: Optional[str] = None
-    cors_origins: List[str] = field(default_factory=lambda: ["*"])
+    cors_origins: List[str] = Field(default_factory=lambda: ["*"])
     with_bot: bool = False  # Enable Bot API proxy to Vikingbot
     bot_api_url: str = "http://localhost:18790"  # Vikingbot OpenAPIChannel URL (default port)
     encryption_enabled: bool = False  # Whether API key hashing is enabled
-    telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
+    telemetry: TelemetryConfig = Field(default_factory=TelemetryConfig)
+
+    model_config = {"extra": "forbid"}
 
 
 def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
@@ -84,28 +89,23 @@ def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
 
     data = load_json_config(path)
     server_data = data.get("server", {})
-    telemetry_data = server_data.get("telemetry", {}) or {}
-    prometheus_data = telemetry_data.get("prometheus", {}) or {}
+    if server_data is None:
+        server_data = {}
+    if not isinstance(server_data, dict):
+        raise ValueError("Invalid server config: 'server' section must be an object")
 
     # Get encryption enabled from config data directly (for test compatibility)
     encryption_enabled = data.get("encryption", {}).get("enabled", False)
 
-    config = ServerConfig(
-        host=server_data.get("host", "127.0.0.1"),
-        port=server_data.get("port", 1933),
-        workers=server_data.get("workers", 1),
-        auth_mode=server_data.get("auth_mode", "api_key"),
-        root_api_key=server_data.get("root_api_key"),
-        cors_origins=server_data.get("cors_origins", ["*"]),
-        encryption_enabled=encryption_enabled,
-        telemetry=TelemetryConfig(
-            prometheus=PrometheusConfig(
-                enabled=prometheus_data.get("enabled", False),
-            )
-        ),
-    )
+    try:
+        config = ServerConfig.model_validate(server_data)
+    except ValidationError as e:
+        raise ValueError(
+            f"Invalid server config in {path}:\n"
+            f"{format_validation_error(root_model=ServerConfig, error=e, path_prefix='server')}"
+        ) from e
 
-    return config
+    return config.model_copy(update={"encryption_enabled": encryption_enabled})
 
 
 _LOCALHOST_HOSTS = {"127.0.0.1", "localhost", "::1"}

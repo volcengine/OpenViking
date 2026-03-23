@@ -24,6 +24,7 @@ from .open_viking_config import (
     is_valid_openviking_config,
     set_openviking_config,
 )
+from .ovcli_config import OVCLIConfig, load_ovcli_config
 from .parser_config import (
     PARSER_CONFIG_REGISTRY,
     AudioConfig,
@@ -54,6 +55,7 @@ __all__ = [
     "OPENVIKING_CONFIG_ENV",
     "OpenVikingConfig",
     "OpenVikingConfigSingleton",
+    "OVCLIConfig",
     "RerankConfig",
     "StorageConfig",
     "VectorDBBackendConfig",
@@ -73,6 +75,7 @@ __all__ = [
     "get_openviking_config",
     "initialize_openviking_config",
     "load_json_config",
+    "load_ovcli_config",
     "require_config",
     "resolve_config_path",
     "set_openviking_config",

@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from openviking.parse.parsers.markdown import MarkdownParser
-from openviking_cli.utils.config.parser_config import ParserConfig
+from openviking_cli.utils.config.parser_config import ParserConfig, load_parser_configs_from_dict
 
 # ---------------------------------------------------------------------------
 # ParserConfig
@@ -30,6 +30,14 @@ class TestParserConfigMaxSectionChars:
     def test_from_dict_missing_key_uses_default(self):
         config = ParserConfig.from_dict({})
         assert config.max_section_chars == 6000
+
+    def test_from_dict_rejects_unknown_key(self):
+        with pytest.raises(ValueError, match="max_section_chars"):
+            ParserConfig.from_dict({"max_section_chras": 2000})
+
+    def test_load_parser_configs_rejects_unknown_parser_section(self):
+        with pytest.raises(ValueError, match="markdown"):
+            load_parser_configs_from_dict({"markdwon": {}})
 
     def test_validate_rejects_zero(self):
         config = ParserConfig(max_section_chars=0)
