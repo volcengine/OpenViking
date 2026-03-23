@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import math
 import uuid
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Iterable, Optional
@@ -458,7 +459,10 @@ class CollectionAdapter(ABC):
         for item in result.data:
             record = dict(item.fields) if item.fields else {}
             record["id"] = item.id
-            record["_score"] = item.score if item.score is not None else 0.0
+            raw_score = item.score if item.score is not None else 0.0
+            if not math.isfinite(raw_score):
+                raw_score = 0.0
+            record["_score"] = raw_score
             record = self._normalize_record_for_read(record)
             records.append(record)
         return records
