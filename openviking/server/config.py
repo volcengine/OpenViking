@@ -22,16 +22,33 @@ logger = get_logger(__name__)
 
 
 @dataclass
+class PrometheusConfig:
+    """Prometheus exporter configuration."""
+
+    enabled: bool = False
+
+
+@dataclass
+class TelemetryConfig:
+    """Telemetry configuration."""
+
+    prometheus: PrometheusConfig = field(default_factory=PrometheusConfig)
+
+
+@dataclass
 class ServerConfig:
     """Server configuration (from the ``server`` section of ov.conf)."""
 
     host: str = "127.0.0.1"
     port: int = 1933
     workers: int = 1
+    auth_mode: str = "api_key"
     root_api_key: Optional[str] = None
     cors_origins: List[str] = field(default_factory=lambda: ["*"])
     with_bot: bool = False  # Enable Bot API proxy to Vikingbot
     bot_api_url: str = "http://localhost:18790"  # Vikingbot OpenAPIChannel URL (default port)
+    encryption_enabled: bool = False  # Whether API key hashing is enabled
+    telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
 
 
 def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
@@ -67,13 +84,25 @@ def load_server_config(config_path: Optional[str] = None) -> ServerConfig:
 
     data = load_json_config(path)
     server_data = data.get("server", {})
+    telemetry_data = server_data.get("telemetry", {}) or {}
+    prometheus_data = telemetry_data.get("prometheus", {}) or {}
+
+    # Get encryption enabled from config data directly (for test compatibility)
+    encryption_enabled = data.get("encryption", {}).get("enabled", False)
 
     config = ServerConfig(
         host=server_data.get("host", "127.0.0.1"),
         port=server_data.get("port", 1933),
         workers=server_data.get("workers", 1),
+        auth_mode=server_data.get("auth_mode", "api_key"),
         root_api_key=server_data.get("root_api_key"),
         cors_origins=server_data.get("cors_origins", ["*"]),
+        encryption_enabled=encryption_enabled,
+        telemetry=TelemetryConfig(
+            prometheus=PrometheusConfig(
+                enabled=prometheus_data.get("enabled", False),
+            )
+        ),
     )
 
     return config
@@ -90,14 +119,30 @@ def _is_localhost(host: str) -> bool:
 def validate_server_config(config: ServerConfig) -> None:
     """Validate server config for safe startup.
 
-    When ``root_api_key`` is not set, authentication is disabled (dev mode).
-    This is only acceptable when the server binds to localhost.  Binding to a
-    non-loopback address without authentication exposes an unauthenticated ROOT
-    endpoint to the network.
+    In ``api_key`` mode, when ``root_api_key`` is not set, authentication is
+    disabled (dev mode). This is only acceptable when the server binds to
+    localhost. Binding to a non-loopback address without authentication
+    exposes an unauthenticated ROOT endpoint to the network.
 
     Raises:
         SystemExit: If the configuration is unsafe.
     """
+    if config.auth_mode not in {"api_key", "trusted"}:
+        logger.error(
+            "Invalid server.auth_mode=%r. Expected one of: 'api_key', 'trusted'.",
+            config.auth_mode,
+        )
+        sys.exit(1)
+
+    if config.auth_mode == "trusted":
+        if not _is_localhost(config.host):
+            logger.warning(
+                "SECURITY: server.auth_mode='trusted' on non-localhost host '%s'. "
+                "Only use this behind a trusted network boundary or identity-injecting gateway.",
+                config.host,
+            )
+        return
+
     if config.root_api_key:
         return
 

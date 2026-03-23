@@ -25,8 +25,9 @@ class ParserConfig:
         enabled: Whether the parser is enabled
         max_content_length: Maximum content length to process (characters)
         encoding: Default file encoding
-        max_section_size: Maximum characters per section before splitting
+        max_section_size: Maximum tokens per section before splitting
         section_size_flexibility: Allow overflow to maintain coherence (0.0-1.0)
+        max_section_chars: Hard character limit per section (guards against token estimation errors)
     """
 
     enabled: bool = True
@@ -36,6 +37,9 @@ class ParserConfig:
     # Smart splitting configuration
     max_section_size: int = 1000  # Maximum tokens per section before splitting
     section_size_flexibility: float = 0.3  # Allow 30% overflow to maintain coherence
+    max_section_chars: int = (
+        6000  # Hard character limit per section (guards against token estimation errors)
+    )
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ParserConfig":
@@ -48,11 +52,37 @@ class ParserConfig:
         Returns:
             ParserConfig instance
 
+        Raises:
+            ValueError: If the dictionary contains unknown fields (with suggestions)
+
         Examples:
             >>> config = ParserConfig.from_dict({"max_content_length": 50000})
         """
+        import logging
+        import difflib
+
+        logger = logging.getLogger(__name__)
+
         # Filter only fields that belong to this class
         valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
+        unknown_fields = {k: v for k, v in data.items() if k not in valid_fields}
+
+        if unknown_fields:
+            warnings = []
+            for field_name in unknown_fields:
+                close_matches = difflib.get_close_matches(field_name, valid_fields, n=1, cutoff=0.6)
+                if close_matches:
+                    warnings.append(
+                        f"Unknown config field '{field_name}' in {cls.__name__} — "
+                        f"did you mean '{close_matches[0]}'?"
+                    )
+                else:
+                    warnings.append(
+                        f"Unknown config field '{field_name}' in {cls.__name__} — ignoring"
+                    )
+            for w in warnings:
+                logger.warning(w)
+
         filtered_data = {k: v for k, v in data.items() if k in valid_fields}
         return cls(**filtered_data)
 
@@ -103,6 +133,9 @@ class ParserConfig:
 
         if not 0.0 <= self.section_size_flexibility <= 1.0:
             raise ValueError("section_size_flexibility must be between 0.0 and 1.0")
+
+        if self.max_section_chars <= 0:
+            raise ValueError("max_section_chars must be positive")
 
     def to_dict(self) -> Dict[str, Any]:
         """
@@ -466,6 +499,30 @@ class TextConfig(ParserConfig):
 
 
 @dataclass
+class FeishuConfig(ParserConfig):
+    """
+    Configuration for Feishu/Lark document parsing.
+
+    Attributes:
+        app_id: Feishu app ID (can also be set via FEISHU_APP_ID env var)
+        app_secret: Feishu app secret (can also be set via FEISHU_APP_SECRET env var)
+        domain: Feishu API domain
+        max_rows_per_sheet: Maximum rows per sheet for spreadsheets
+        max_records_per_table: Maximum records per table for bitable
+        download_images: Whether to download images from documents
+        request_timeout: HTTP request timeout in seconds
+    """
+
+    app_id: str = ""
+    app_secret: str = ""
+    domain: str = "https://open.feishu.cn"
+    max_rows_per_sheet: int = 1000
+    max_records_per_table: int = 1000
+    download_images: bool = True  # TODO: not yet implemented, reserved for future image download support
+    request_timeout: float = 30.0  # TODO: not yet passed to lark-oapi client, reserved for future use
+
+
+@dataclass
 class DirectoryConfig(ParserConfig):
     """
     Configuration for directory parsing.
@@ -527,6 +584,7 @@ PARSER_CONFIG_REGISTRY = {
     "html": HTMLConfig,
     "text": TextConfig,
     "directory": DirectoryConfig,
+    "feishu": FeishuConfig,
 }
 
 

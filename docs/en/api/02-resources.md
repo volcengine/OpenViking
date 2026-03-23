@@ -47,6 +47,18 @@ Add a resource to the knowledge base.
 | timeout | float | No | None | Timeout in seconds (only used when wait=True) |
 | watch_interval | float | No | 0 | Watch interval (minutes). >0 enables/updates watch; <=0 disables watch. Only takes effect when target is provided |
 
+**Incremental Updates**
+
+When you call `add_resource()` repeatedly for the same resource URI, the system performs an incremental update instead of rebuilding everything from scratch:
+
+- **Trigger**: `target` is provided and already exists in the knowledge base.
+- **High-level idea**: each ingestion first builds a temporary resource tree from the new input. During asynchronous semantic processing, the temporary tree is compared against the existing tree at `target`, and only the changed parts are re-processed and synchronized.
+- **Incremental behavior in the semantic stage**:
+  - **Unchanged files**: reuse existing L0 summaries and vector index records; skip vectorization.
+  - **Changed files**: regenerate summaries and vector index entries.
+  - **Directory-level L0/L1 (abstract/overview)**: if the child set and their change status are unchanged, reuse existing results and skip vectorization; otherwise recompute and update.
+- **Filesystem + index sync**: after the semantic DAG finishes, a top-down diff is applied from the temporary tree to `target` to synchronize additions, deletions, and updates. Vector store records are kept consistent: deletions remove corresponding vectors, while moves/overwrites update vector records’ URI mapping, completing an incremental update of both the resource tree and the semantic index.
+
 **Python SDK (Embedded / HTTP)**
 
 ```python

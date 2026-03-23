@@ -4,6 +4,7 @@
 
 from unittest.mock import MagicMock, patch
 
+from openviking.models.vlm.backends.litellm_vlm import LiteLLMVLMProvider
 from openviking.models.vlm.backends.openai_vlm import OpenAIVLM
 
 
@@ -219,3 +220,30 @@ class TestVLMConfigExtraHeaders:
             "HTTP-Referer": "https://example.com",
             "X-Title": "My App",
         }
+
+
+class TestLiteLLMVLMModelResolution:
+    """Regression tests for LiteLLM model prefix resolution."""
+
+    def test_zhipu_zai_model_keeps_existing_zai_prefix(self):
+        """Zhipu GLM models already using LiteLLM's zai/ prefix must not be double-prefixed."""
+        vlm = LiteLLMVLMProvider(
+            {
+                "model": "zai/glm-4.5",
+                "provider": "litellm",
+            }
+        )
+
+        assert vlm._resolve_model("zai/glm-4.5") == "zai/glm-4.5"
+
+    def test_non_zhipu_provider_still_applies_prefix(self):
+        """The zai/ exception should not affect other providers."""
+        vlm = LiteLLMVLMProvider(
+            {
+                "model": "zai/custom-model",
+                "provider": "gemini",
+                "api_key": "sk-test",
+            }
+        )
+
+        assert vlm._resolve_model("zai/custom-model") == "gemini/zai/custom-model"

@@ -325,13 +325,13 @@ async def index_resource(
     abstract = ""
     overview = ""
 
-    if await viking_fs.exists(abstract_uri):
-        content = await viking_fs.read_file(abstract_uri)
+    if await viking_fs.exists(abstract_uri, ctx=ctx):
+        content = await viking_fs.read_file(abstract_uri, ctx=ctx)
         if isinstance(content, bytes):
             abstract = content.decode("utf-8")
 
-    if await viking_fs.exists(overview_uri):
-        content = await viking_fs.read_file(overview_uri)
+    if await viking_fs.exists(overview_uri, ctx=ctx):
+        content = await viking_fs.read_file(overview_uri, ctx=ctx)
         if isinstance(content, bytes):
             overview = content.decode("utf-8")
 

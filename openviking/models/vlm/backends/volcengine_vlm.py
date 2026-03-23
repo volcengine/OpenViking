@@ -5,6 +5,7 @@
 import asyncio
 import base64
 import logging
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Union
 
@@ -71,9 +72,11 @@ class VolcEngineVLM(OpenAIVLM):
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
 
+        t0 = time.perf_counter()
         response = client.chat.completions.create(**kwargs)
-        self._update_token_usage_from_response(response)
-        return self._clean_response(response.choices[0].message.content or "")
+        elapsed = time.perf_counter() - t0
+        self._update_token_usage_from_response(response, duration_seconds=elapsed)
+        return self._clean_response(self._extract_content_from_response(response))
 
     async def get_completion_async(
         self, prompt: str, thinking: bool = False, max_retries: int = 0
@@ -92,9 +95,13 @@ class VolcEngineVLM(OpenAIVLM):
         last_error = None
         for attempt in range(max_retries + 1):
             try:
+                t0 = time.perf_counter()
                 response = await client.chat.completions.create(**kwargs)
-                self._update_token_usage_from_response(response)
-                return self._clean_response(response.choices[0].message.content or "")
+                elapsed = time.perf_counter() - t0
+                self._update_token_usage_from_response(
+                    response, duration_seconds=elapsed,
+                )
+                return self._clean_response(self._extract_content_from_response(response))
             except Exception as e:
                 last_error = e
                 if attempt < max_retries:
@@ -242,9 +249,11 @@ class VolcEngineVLM(OpenAIVLM):
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
 
+        t0 = time.perf_counter()
         response = client.chat.completions.create(**kwargs)
-        self._update_token_usage_from_response(response)
-        return self._clean_response(response.choices[0].message.content or "")
+        elapsed = time.perf_counter() - t0
+        self._update_token_usage_from_response(response, duration_seconds=elapsed)
+        return self._clean_response(self._extract_content_from_response(response))
 
     async def get_vision_completion_async(
         self,
@@ -269,6 +278,8 @@ class VolcEngineVLM(OpenAIVLM):
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
 
+        t0 = time.perf_counter()
         response = await client.chat.completions.create(**kwargs)
-        self._update_token_usage_from_response(response)
-        return self._clean_response(response.choices[0].message.content or "")
+        elapsed = time.perf_counter() - t0
+        self._update_token_usage_from_response(response, duration_seconds=elapsed)
+        return self._clean_response(self._extract_content_from_response(response))

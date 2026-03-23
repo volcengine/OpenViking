@@ -60,6 +60,7 @@ def register_default_tools(
     exec_config = config.tools.exec
     brave_api_key = config.tools.web.search.api_key if config.tools.web.search else None
     exa_api_key = None  # TODO: Add to config if needed
+    tavily_api_key = config.tools.web.search.tavily_api_key if config.tools.web.search else None
 
     # Get provider API key and base from config
 
@@ -68,10 +69,10 @@ def register_default_tools(
     provider_api_base = agent_config.api_base if agent_config else None
     gen_image_model = agent_config.gen_image_model
     # File tools
-    # registry.register(ReadFileTool())
-    # registry.register(WriteFileTool())
-    # registry.register(EditFileTool())
-    # registry.register(ListDirTool())
+    registry.register(ReadFileTool())
+    registry.register(WriteFileTool())
+    registry.register(EditFileTool())
+    registry.register(ListDirTool())
 
     # Shell tool
     registry.register(
@@ -81,10 +82,10 @@ def register_default_tools(
     )
 
     # Web tools
-    # registry.register(
-    #     WebSearchTool(backend="auto", brave_api_key=brave_api_key, exa_api_key=exa_api_key)
-    # )
-    # registry.register(WebFetchTool())
+    registry.register(
+        WebSearchTool(backend="auto", brave_api_key=brave_api_key, exa_api_key=exa_api_key, tavily_api_key=tavily_api_key)
+    )
+    registry.register(WebFetchTool())
 
     # Open Viking tools
     if include_viking_tools:

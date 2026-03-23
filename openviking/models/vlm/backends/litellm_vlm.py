@@ -9,6 +9,7 @@ os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
 import asyncio
 import base64
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Union
 
@@ -131,7 +132,9 @@ class LiteLLMVLMProvider(VLMBase):
 
         if provider and provider in PROVIDER_CONFIGS:
             prefix = PROVIDER_CONFIGS[provider]["litellm_prefix"]
-            if prefix and not model.startswith(f"{prefix}/"):
+            # LiteLLM uses the `zai/` prefix for Zhipu GLM; do not prepend `zhipu/` (see #784).
+            is_zhipu_zai_model = provider == "zhipu" and model.startswith("zai/")
+            if prefix and not model.startswith(f"{prefix}/") and not is_zhipu_zai_model:
                 return f"{prefix}/{model}"
             return model
 
@@ -224,9 +227,11 @@ class LiteLLMVLMProvider(VLMBase):
         messages = [{"role": "user", "content": prompt}]
         kwargs = self._build_kwargs(model, messages)
 
+        t0 = time.perf_counter()
         response = completion(**kwargs)
-        self._update_token_usage_from_response(response)
-        return self._clean_response(response.choices[0].message.content or "")
+        elapsed = time.perf_counter() - t0
+        self._update_token_usage_from_response(response, duration_seconds=elapsed)
+        return self._clean_response(self._extract_content_from_response(response))
 
     async def get_completion_async(
         self, prompt: str, thinking: bool = False, max_retries: int = 0
@@ -239,9 +244,13 @@ class LiteLLMVLMProvider(VLMBase):
         last_error = None
         for attempt in range(max_retries + 1):
             try:
+                t0 = time.perf_counter()
                 response = await acompletion(**kwargs)
-                self._update_token_usage_from_response(response)
-                return self._clean_response(response.choices[0].message.content or "")
+                elapsed = time.perf_counter() - t0
+                self._update_token_usage_from_response(
+                    response, duration_seconds=elapsed,
+                )
+                return self._clean_response(self._extract_content_from_response(response))
             except Exception as e:
                 last_error = e
                 if attempt < max_retries:
@@ -268,9 +277,11 @@ class LiteLLMVLMProvider(VLMBase):
         messages = [{"role": "user", "content": content}]
         kwargs = self._build_kwargs(model, messages)
 
+        t0 = time.perf_counter()
         response = completion(**kwargs)
-        self._update_token_usage_from_response(response)
-        return self._clean_response(response.choices[0].message.content or "")
+        elapsed = time.perf_counter() - t0
+        self._update_token_usage_from_response(response, duration_seconds=elapsed)
+        return self._clean_response(self._extract_content_from_response(response))
 
     async def get_vision_completion_async(
         self,
@@ -289,11 +300,15 @@ class LiteLLMVLMProvider(VLMBase):
         messages = [{"role": "user", "content": content}]
         kwargs = self._build_kwargs(model, messages)
 
+        t0 = time.perf_counter()
         response = await acompletion(**kwargs)
-        self._update_token_usage_from_response(response)
-        return self._clean_response(response.choices[0].message.content or "")
+        elapsed = time.perf_counter() - t0
+        self._update_token_usage_from_response(response, duration_seconds=elapsed)
+        return self._clean_response(self._extract_content_from_response(response))
 
-    def _update_token_usage_from_response(self, response) -> None:
+    def _update_token_usage_from_response(
+        self, response, duration_seconds: float = 0.0,
+    ) -> None:
         """Update token usage from response."""
         if hasattr(response, "usage") and response.usage:
             prompt_tokens = response.usage.prompt_tokens
@@ -303,4 +318,5 @@ class LiteLLMVLMProvider(VLMBase):
                 provider=self.provider,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=completion_tokens,
+                duration_seconds=duration_seconds,
             )

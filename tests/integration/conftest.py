@@ -7,6 +7,8 @@ Automatically starts an OpenViking server in a background thread so that
 AsyncHTTPClient integration tests can run without a manually started server process.
 """
 
+import math
+import os
 import shutil
 import socket
 import threading
@@ -24,6 +26,32 @@ from openviking_cli.session.user_id import UserIdentifier
 
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 TEST_TMP_DIR = PROJECT_ROOT / "test_data" / "tmp_integration"
+
+# ── Gemini integration test helpers ──────────────────────────────────────────
+GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
+requires_api_key = pytest.mark.skipif(not GOOGLE_API_KEY, reason="GOOGLE_API_KEY not set")
+
+# (model_name, default_dimension, token_limit)
+GEMINI_MODELS = [
+    ("gemini-embedding-2-preview", 3072, 8192),
+]
+
+
+def l2_norm(vec: list[float]) -> float:
+    """Compute L2 norm of a vector."""
+    return math.sqrt(sum(v * v for v in vec))
+
+
+@pytest.fixture(scope="session")
+def gemini_embedder():
+    """Session-scoped GeminiDenseEmbedder for integration tests."""
+    if not GOOGLE_API_KEY:
+        pytest.skip("GOOGLE_API_KEY not set")
+    try:
+        from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
+    except (ImportError, ModuleNotFoundError, AttributeError):
+        pytest.skip("google-genai not installed")
+    return GeminiDenseEmbedder("gemini-embedding-2-preview", api_key=GOOGLE_API_KEY, dimension=768)
 
 
 @pytest.fixture(scope="session")

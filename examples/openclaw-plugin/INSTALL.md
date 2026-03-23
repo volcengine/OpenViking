@@ -24,8 +24,20 @@ Provide long-term memory capabilities for [OpenClaw](https://github.com/openclaw
 
 ### Prerequisite Steps for Upgrading from Legacy `memory-openviking` to New `openviking`
 
-If the current environment already has the legacy `memory-openviking` plugin installed, complete the following prerequisite steps before installing the new version. Plugin 2.0 is not backward-compatible with the legacy plugin/configuration, so do not keep both versions active at the same time.
+- If the current environment already has the legacy `memory-openviking` plugin installed, complete the following prerequisite steps before installing the new version. Plugin 2.0 is not backward-compatible with the legacy plugin/configuration, so do not keep both versions active at the same time.
 
+- If you have never installed the legacy plugin before, you can skip this section and go straight to installation.
+
+- Plugin 2.0 is not backward-compatible with the legacy plugin/configuration, so do not keep both versions active at the same time.
+
+#### Method A: Download and Run the Legacy Plugin Cleanup Script (Recommended)
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/upgrade_scripts/cleanup-memory-openviking.sh
+bash cleanup-memory-openviking.sh
+```
+
+#### Method B: Manually Clean Up the Legacy Plugin Configuration
 1. Stop the OpenClaw gateway:
 
 ```bash
@@ -44,11 +56,13 @@ mv ~/.openclaw/extensions/memory-openviking ~/.openclaw/disabled-extensions/memo
 
 Edit `~/.openclaw/openclaw.json`, remove `"memory-openviking"` from `plugins.allow`, remove `plugins.entries.memory-openviking`, change `plugins.slots.memory` to `"none"`, and remove the legacy `memory-openviking` plugin path from `plugins.load.paths`.
 
-4. Install the new plugin by following Method A or Method B below.
+After cleaning up the legacy plugin configuration using either approach above, install the new plugin by following Method A or Method B below.
 
-5. Preserve and migrate legacy runtime settings into the new configuration if needed (the new version works with defaults; legacy parameters are optional to migrate):
+Preserve and migrate legacy runtime settings into the new configuration if needed (the new version works with defaults; legacy parameters are optional to migrate):
 
 If the legacy plugin was using `plugins.entries.memory-openviking.config`, migrate `mode`, `configPath`, `port`, `baseUrl`, `apiKey`, `agentId`, and any other needed parameters from the backup `openclaw.json` file created in Step 2 into `plugins.entries.openviking.config`.
+
+Run the prerequisite steps above only if they apply to your environment. Once finished, continue with the Plugin 2.0 installation flow. For now, we do not recommend direct natural-language installation; the npm one-click installer is the preferred path.
 
 ### Method A: npm Installation (Recommended, Cross-platform)
 
@@ -56,6 +70,16 @@ If the legacy plugin was using `plugins.entries.memory-openviking.config`, migra
 npm install -g openclaw-openviking-setup-helper
 ov-install
 
+```
+
+If the installation fails because the system is missing tools to create a virtual environment, operate these commands below and re-run `ov-install`:
+
+```bash
+apt update
+apt install -y software-properties-common
+add-apt-repository universe
+apt update
+apt install -y python3-venv
 ```
 
 Non-interactive mode (uses default configuration):
@@ -94,6 +118,62 @@ curl -fsSL ... | bash -s -- --workdir ~/.openclaw-openclaw-second
 ```
 
 The script will automatically detect multiple OpenClaw instances and let you choose. It will also prompt you to select local/remote mode—remote mode connects to a remote OpenViking service and does not require installing Python.
+
+### Start OpenClaw + OpenViking
+
+```bash
+source ~/.openclaw/openviking.env && openclaw gateway restart
+```
+
+Seeing `openviking: registered context-engine` indicates the plugin was loaded.
+
+Then verify:
+
+```bash
+openclaw config get plugins.slots.contextEngine
+```
+
+If it shows `openviking`, the startup is successful.
+
+### Verify Read and Write
+
+Use OpenClaw logs to verify memory capture and recall:
+
+```bash
+openclaw logs --follow
+```
+
+Look for:
+
+```
+openviking: auto-captured 2 new messages, extracted 1 memories
+```
+
+You can also check a specific log file:
+
+```bash
+cat <your-log-file> | grep auto-capture
+cat <your-log-file> | grep inject
+```
+
+Example:
+
+```bash
+cat /tmp/openclaw/openclaw-2026-03-20.log | grep auto-capture
+cat /tmp/openclaw/openclaw-2026-03-20.log | grep inject
+```
+
+### View Memories with `ov tui`
+
+In your OpenViking directory, activate the virtual environment and open the TUI:
+
+```bash
+source venv/bin/activate
+ov --help
+ov tui
+```
+
+Press `.` to expand folders, use arrow keys to navigate, and press `q` to quit.
 
 ---
 
@@ -309,7 +389,7 @@ openclaw config set plugins.entries.openviking.config.agentId "my-agent"
 
 ```
 
-If not configured, the plugin falls back to `default`. When OpenClaw provides a per-session `agentId` at runtime, the context engine will switch to that session-specific value automatically.
+If not configured, the plugin auto-generates a unique ID in the format `openclaw-<hostname>-<random>`.
 
 ### `~/.openclaw/openviking.env`
 
@@ -329,7 +409,7 @@ export OPENVIKING_PYTHON='/usr/local/bin/python3'
 source ~/.openclaw/openviking.env && openclaw gateway
 
 # Disable the context engine
-openclaw config set plugins.slots.contextEngine none
+openclaw config set plugins.slots.contextEngine legacy
 
 # Enable OpenViking as the context engine
 openclaw config set plugins.slots.contextEngine openviking
@@ -361,6 +441,6 @@ python3 -m pip uninstall openviking -y && rm -rf ~/.openviking
 
 ---
 
-**See also:** [INSTALL-ZH.md](https://github.com/volcengine/OpenViking/blob/main/examples/openclaw-plugin/INSTALL-ZH.md) (Chinese) · [INSTALL-AGENT.md](https://www.google.com/search?q=./INSTALL-AGENT.md) (Agent Install Guide)
+**See also:** [INSTALL-ZH.md](https://github.com/volcengine/OpenViking/blob/main/examples/openclaw-plugin/INSTALL-ZH.md) (Chinese) · [INSTALL-AGENT.md](https://github.com/volcengine/OpenViking/blob/main/examples/openclaw-plugin/INSTALL-AGENT.md) (Agent Install Guide)
 
 ---

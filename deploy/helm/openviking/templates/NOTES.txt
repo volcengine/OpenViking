@@ -1,0 +1,41 @@
+Thank you for installing OpenViking!
+
+Your release is named: {{ .Release.Name }}
+
+To check the status of your deployment:
+
+  kubectl get pods -l "app.kubernetes.io/name={{ include "openviking.name" . }},app.kubernetes.io/instance={{ .Release.Name }}"
+
+To access the OpenViking API:
+
+{{- if .Values.ingress.enabled }}
+{{- range $host := .Values.ingress.hosts }}
+  http{{ if $.Values.ingress.tls }}s{{ end }}://{{ $host.host }}
+{{- end }}
+{{- else if contains "NodePort" .Values.service.type }}
+  export NODE_PORT=$(kubectl get --namespace {{ .Release.Namespace }} -o jsonpath="{.spec.ports[0].nodePort}" services {{ include "openviking.fullname" . }})
+  export NODE_IP=$(kubectl get nodes --namespace {{ .Release.Namespace }} -o jsonpath="{.items[0].status.addresses[0].address}")
+  echo "http://$NODE_IP:$NODE_PORT"
+{{- else if contains "LoadBalancer" .Values.service.type }}
+  NOTE: It may take a few minutes for the LoadBalancer IP to be available.
+  kubectl get --namespace {{ .Release.Namespace }} svc {{ include "openviking.fullname" . }} -w
+{{- else }}
+  kubectl port-forward --namespace {{ .Release.Namespace }} svc/{{ include "openviking.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+  echo "Visit http://127.0.0.1:{{ .Values.service.port }}/health to verify the server is running."
+{{- end }}
+
+IMPORTANT: Make sure to configure your embedding and VLM API keys in values.yaml
+or via extraEnv before using OpenViking. The server will not function correctly
+without valid model provider credentials.
+
+{{- if not .Values.config.server.root_api_key }}
+
+WARNING: config.server.root_api_key is not set. When the server binds to 0.0.0.0
+(the default), a root_api_key is REQUIRED for security. The server will refuse to
+start without it.
+
+Set it via:
+
+  helm upgrade {{ .Release.Name }} <chart> --set config.server.root_api_key="YOUR_SECRET_KEY"
+
+{{- end }}
