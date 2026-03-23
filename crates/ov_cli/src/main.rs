@@ -42,7 +42,7 @@ impl CliContext {
 #[derive(Parser)]
 #[command(name = "openviking")]
 #[command(about = "OpenViking - An Agent-native context database")]
-#[command(version = env!("CARGO_PKG_VERSION"))]
+#[command(version = env!("OPENVIKING_CLI_VERSION"))]
 #[command(arg_required_else_help = true)]
 struct Cli {
     /// Output format
@@ -635,7 +635,7 @@ async fn main() {
         }
         Commands::Config { action } => handle_config(action, ctx).await,
         Commands::Version => {
-            println!("{}", env!("CARGO_PKG_VERSION"));
+            println!("{}", env!("OPENVIKING_CLI_VERSION"));
             Ok(())
         }
         Commands::Read { uri } => handle_read(uri, ctx).await,

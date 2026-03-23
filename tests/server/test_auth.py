@@ -35,12 +35,14 @@ def _make_request(
     path: str,
     headers: dict[str, str] | None = None,
     auth_enabled: bool = True,
+    auth_mode: str = "api_key",
 ) -> Request:
     """Create a minimal Starlette request for auth dependency tests."""
     raw_headers = []
     for key, value in (headers or {}).items():
         raw_headers.append((key.lower().encode("latin-1"), value.encode("latin-1")))
     app = FastAPI()
+    app.state.config = ServerConfig(auth_mode=auth_mode)
     if auth_enabled:
         # Non-empty api_key_manager means the server is in authenticated mode.
         app.state.api_key_manager = object()
@@ -54,8 +56,9 @@ def _make_request(
 
 
 def _build_auth_http_test_app(
-    identity: ResolvedIdentity,
+    identity: ResolvedIdentity | None,
     auth_enabled: bool = True,
+    auth_mode: str = "api_key",
 ) -> FastAPI:
     """Create a lightweight app that exercises auth dependency wiring.
 
@@ -63,6 +66,7 @@ def _build_auth_http_test_app(
     the test focused on request auth behavior and the structured HTTP error body.
     """
     app = FastAPI()
+    app.state.config = ServerConfig(auth_mode=auth_mode)
     if auth_enabled:
         # Match production auth mode so get_request_context enters the guard path.
         app.state.api_key_manager = object()
@@ -87,7 +91,8 @@ def _build_auth_http_test_app(
         """Return a fixed identity so tests can isolate request header behavior."""
         return identity
 
-    app.dependency_overrides[resolve_identity] = _resolve_identity_override
+    if identity is not None:
+        app.dependency_overrides[resolve_identity] = _resolve_identity_override
 
     @app.get("/api/v1/fs/ls")
     async def fs_ls(ctx=Depends(get_request_context)):
@@ -480,6 +485,71 @@ async def test_dev_mode_root_tenant_scoped_requests_keep_200_via_http():
     assert response.json()["status"] == "ok"
 
 
+async def test_trusted_mode_allows_header_identity_without_api_key():
+    """Trusted mode should accept explicit tenant headers without API key."""
+    request = _make_request(
+        "/api/v1/resources",
+        headers={
+            "X-OpenViking-Account": "acme",
+            "X-OpenViking-User": "alice",
+            "X-OpenViking-Agent": "assistant-1",
+        },
+        auth_enabled=False,
+        auth_mode="trusted",
+    )
+
+    identity = await resolve_identity(
+        request,
+        x_openviking_account="acme",
+        x_openviking_user="alice",
+        x_openviking_agent="assistant-1",
+    )
+
+    assert identity.role == Role.USER
+    assert identity.account_id == "acme"
+    assert identity.user_id == "alice"
+    assert identity.agent_id == "assistant-1"
+
+
+async def test_trusted_mode_tenant_http_routes_require_explicit_identity_headers():
+    """Trusted mode should reject tenant-scoped routes without account/user headers."""
+    app = _build_auth_http_test_app(
+        identity=None,
+        auth_enabled=False,
+        auth_mode="trusted",
+    )
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get("/api/v1/fs/ls")
+
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "INVALID_ARGUMENT"
+
+
+async def test_trusted_mode_tenant_http_routes_accept_explicit_identity_headers():
+    """Trusted mode should allow tenant-scoped routes with account/user headers."""
+    app = _build_auth_http_test_app(
+        identity=None,
+        auth_enabled=False,
+        auth_mode="trusted",
+    )
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get(
+            "/api/v1/fs/ls",
+            headers={
+                "X-OpenViking-Account": "acme",
+                "X-OpenViking-User": "alice",
+                "X-OpenViking-Agent": "assistant-1",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["result"] == {"account_id": "acme", "user_id": "alice"}
+
+
 # ---- _is_localhost tests ----
 
 
@@ -515,3 +585,9 @@ def test_validate_with_key_any_host_passes():
     for host in ("0.0.0.0", "::", "192.168.1.1", "127.0.0.1"):
         config = ServerConfig(host=host, root_api_key="some-secret-key")
         validate_server_config(config)  # should not raise
+
+
+def test_validate_trusted_mode_without_key_non_localhost_passes():
+    """Trusted mode should bypass the localhost-only dev-mode restriction."""
+    config = ServerConfig(host="0.0.0.0", root_api_key=None, auth_mode="trusted")
+    validate_server_config(config)

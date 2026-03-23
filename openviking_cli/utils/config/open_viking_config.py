@@ -23,6 +23,7 @@ from .parser_config import (
     AudioConfig,
     CodeConfig,
     DirectoryConfig,
+    FeishuConfig,
     HTMLConfig,
     ImageConfig,
     MarkdownConfig,
@@ -101,6 +102,10 @@ class OpenVikingConfig(BaseModel):
         default_factory=lambda: DirectoryConfig(), description="Directory parsing configuration"
     )
 
+    feishu: FeishuConfig = Field(
+        default_factory=lambda: FeishuConfig(), description="Feishu/Lark document parsing configuration"
+    )
+
     semantic: SemanticConfig = Field(
         default_factory=lambda: SemanticConfig(),
         description="Semantic processing configuration (overview/abstract limits)",
@@ -163,6 +168,7 @@ class OpenVikingConfig(BaseModel):
             "html",
             "text",
             "directory",
+            "feishu",
         ]
         for parser_type in parser_types:
             if parser_type in config_copy:

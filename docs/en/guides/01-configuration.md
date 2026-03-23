@@ -115,7 +115,7 @@ Embedding model configuration for vector search, supporting dense, sparse, and h
 | Parameter | Type | Description |
 |-----------|------|-------------|
 | `max_concurrent` | int | Maximum concurrent embedding requests (`embedding.max_concurrent`, default: `10`) |
-| `provider` | str | `"volcengine"`, `"openai"`, `"vikingdb"`, `"jina"`, or `"voyage"` |
+| `provider` | str | `"volcengine"`, `"openai"`, `"vikingdb"`, `"jina"`, `"voyage"`, or `"gemini"` |
 | `api_key` | str | API key |
 | `model` | str | Model name |
 | `dimension` | int | Vector dimension. For Voyage, this maps to `output_dimension` |
@@ -138,6 +138,7 @@ With `input: "multimodal"`, OpenViking can embed text, images (PNG, JPG, etc.), 
 - `jina`: Jina AI Embedding API
 - `voyage`: Voyage AI Embedding API
 - `minimax`: MiniMax Embedding API
+- `gemini`: Google Gemini Embedding API (text-only; requires `google-genai>=1.0.0`)
 
 **minimax provider example:**
 
@@ -227,7 +228,6 @@ Supported Voyage text embedding models include:
 
 If `dimension` is omitted, OpenViking uses the model's default output dimension when creating the vector schema.
 
-OpenViking currently configures a single dense embedder for both indexing and query-time retrieval, so provider-specific query/document modes are not exposed in config yet.
 OpenViking also expects dense float vectors throughout storage and retrieval, so Voyage quantized output dtypes are not exposed in config.
 
 **Local deployment (GGUF/MLX):** Jina embedding models are open-weight and available in GGUF and MLX formats on [Hugging Face](https://huggingface.co/jinaai). You can run them locally with any OpenAI-compatible server (e.g. llama.cpp, MLX, vLLM) and point the `api_base` to your local endpoint:
@@ -245,6 +245,51 @@ OpenViking also expects dense float vectors throughout storage and retrieval, so
   }
 }
 ```
+
+**gemini provider example:**
+
+> **Note:** Requires `pip install "google-genai>=1.0.0"`. For async batching: `pip install "openviking[gemini-async]"`.
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "gemini",
+      "api_key": "your-google-api-key",
+      "model": "gemini-embedding-2-preview",
+      "dimension": 3072
+    }
+  }
+}
+```
+
+Available Gemini embedding models:
+- `gemini-embedding-2-preview`: 8192 token input limit, 1–3072 output dimension (MRL)
+- `gemini-embedding-001`: 2048 token input limit, 1–3072 output dimension (MRL)
+- `text-embedding-004`: 2048 token input limit, 768 output dimension (fixed)
+
+Recommended dimensions: `768`, `1536`, or `3072` (default: `3072`).
+
+Get your API key at https://aistudio.google.com/apikey
+
+**Non-symmetric retrieval** (different task types for indexing vs. query):
+
+```json
+{
+  "embedding": {
+    "dense": {
+      "provider": "gemini",
+      "api_key": "your-google-api-key",
+      "model": "gemini-embedding-2-preview",
+      "dimension": 3072,
+      "query_param": "RETRIEVAL_QUERY",
+      "document_param": "RETRIEVAL_DOCUMENT"
+    }
+  }
+}
+```
+
+Supported task types: `RETRIEVAL_QUERY`, `RETRIEVAL_DOCUMENT`, `SEMANTIC_SIMILARITY`, `CLASSIFICATION`, `CLUSTERING`, `CODE_RETRIEVAL_QUERY`, `QUESTION_ANSWERING`, `FACT_VERIFICATION`.
 
 #### Sparse Embedding
 

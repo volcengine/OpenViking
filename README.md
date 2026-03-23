@@ -24,6 +24,9 @@ English / [中文](README_CN.md) / [日本語](README_JA.md)
 📱 <a href="./docs/en/about/01-about-us.md#lark-group">Lark Group</a> · <a href="./docs/en/about/01-about-us.md#wechat-group">WeChat</a> · <a href="https://discord.com/invite/eHvx8E9XF3">Discord</a> · <a href="https://x.com/openvikingai">X</a>
 
 <a href="https://trendshift.io/repositories/19668" target="_blank"><img src="https://trendshift.io/api/badge/repositories/19668" alt="volcengine%2FOpenViking | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+  <a href="https://gitcgr.com/volcengine/OpenViking">
+    <img src="https://gitcgr.com/badge/volcengine/OpenViking.svg" alt="gitcgr" />
+  </a>
 
 </div>
 
@@ -277,7 +280,7 @@ Create a configuration file `~/.openviking/ov.conf`, remove the comments before 
 }
 ```
 
-> **Note**: For embedding models, currently `volcengine` (Doubao), `openai`, and `jina` providers are supported. For VLM models, we support three providers: `volcengine`, `openai`, and `litellm`. The `litellm` provider supports various models including Anthropic (Claude), DeepSeek, Gemini, Moonshot, Zhipu, DashScope, MiniMax, vLLM, Ollama, and more.
+> **Note**: For embedding models, supported providers are `volcengine` (Doubao), `openai`, `jina`, `voyage`, `minimax`, `vikingdb`, and `gemini` (requires `pip install "google-genai>=1.0.0"`). For VLM models, we support three providers: `volcengine`, `openai`, and `litellm`. The `litellm` provider supports various models including Anthropic (Claude), DeepSeek, Gemini, Moonshot, Zhipu, DashScope, MiniMax, vLLM, Ollama, and more.
 
 #### Server Configuration Examples
 
@@ -348,6 +351,43 @@ Create a configuration file `~/.openviking/ov.conf`, remove the comments before 
   }
 }
 ```
+
+</details>
+
+<details>
+<summary><b>Example 3: Using Google Gemini Embedding</b></summary>
+
+Install the required package first:
+
+```bash
+pip install "google-genai>=1.0.0"
+```
+
+```json
+{
+  "storage": {
+    "workspace": "/home/your-name/openviking_workspace"
+  },
+  "embedding": {
+    "dense": {
+      "provider": "gemini",
+      "api_key": "your-google-api-key",
+      "model": "gemini-embedding-2-preview",
+      "dimension": 3072
+    },
+    "max_concurrent": 10
+  },
+  "vlm": {
+    "api_base" : "https://api.openai.com/v1",
+    "api_key"  : "your-openai-api-key",
+    "provider" : "openai",
+    "model"    : "gpt-4o",
+    "max_concurrent": 100
+  }
+}
+```
+
+Get your Google API key at https://aistudio.google.com/apikey
 
 </details>
 

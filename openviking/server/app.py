@@ -72,7 +72,7 @@ def create_app(
         set_service(service)
 
         # Initialize APIKeyManager after service (needs VikingFS)
-        if config.root_api_key:
+        if config.auth_mode == "api_key" and config.root_api_key:
             api_key_manager = APIKeyManager(
                 root_key=config.root_api_key,
                 viking_fs=service.viking_fs,
@@ -82,6 +82,13 @@ def create_app(
             app.state.api_key_manager = api_key_manager
             logger.info(
                 "APIKeyManager initialized with encryption_enabled=%s", config.encryption_enabled
+            )
+        elif config.auth_mode == "trusted":
+            app.state.api_key_manager = None
+            logger.warning(
+                "Trusted mode enabled: authentication uses X-OpenViking-Account/User/Agent "
+                "headers without API keys. Only expose this server behind a trusted "
+                "network boundary or identity-injecting gateway."
             )
         else:
             app.state.api_key_manager = None
