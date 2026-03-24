@@ -346,7 +346,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
     def _get_system_prompt(self, output_language: str) -> str:
         """Get the simplified system prompt."""
         import json
-        schema_str = json.dumps(self._json_schema, ensure_ascii=False, indent=4)
+        schema_str = json.dumps(self._json_schema, ensure_ascii=False)
         allowed_dirs_list = self._get_allowed_directories_list()
 
         return f"""You are a memory extraction agent. Your task is to analyze conversations and update memories.
