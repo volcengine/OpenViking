@@ -60,7 +60,7 @@ type ContextEngine = {
     tokenBudget?: number;
     runtimeContext?: Record<string, unknown>;
   }) => Promise<void>;
-  assemble: (params: { sessionId: string; sessionKey?: string; messages: AgentMessage[]; tokenBudget?: number }) => Promise<AssembleResult>;
+  assemble: (params: { sessionId: string; messages: AgentMessage[]; tokenBudget?: number }) => Promise<AssembleResult>;
   compact: (params: {
     sessionId: string;
     sessionFile: string;
@@ -73,13 +73,9 @@ type ContextEngine = {
   }) => Promise<CompactResult>;
 };
 
-export type ContextEngineWithSessionMapping = ContextEngine & {
-  /** Return the OV session ID for an OpenClaw sessionKey (identity: sessionKey IS the OV session ID). */
-  getOVSessionForKey: (sessionKey: string) => string;
-  /** Ensure an OV session exists on the server for the given OpenClaw sessionKey (auto-created by getSession if absent). */
-  resolveOVSession: (sessionKey: string) => Promise<string>;
+export type ContextEngineWithCommit = ContextEngine & {
   /** Commit (archive + extract) the OV session. Returns true on success. */
-  commitOVSession: (sessionKey: string) => Promise<boolean>;
+  commitOVSession: (sessionId: string) => Promise<boolean>;
 };
 
 type Logger = {
@@ -281,7 +277,7 @@ export function createMemoryOpenVikingContextEngine(params: {
   logger: Logger;
   getClient: () => Promise<OpenVikingClient>;
   resolveAgentId: (sessionId: string) => string;
-}): ContextEngineWithSessionMapping {
+}): ContextEngineWithCommit {
   const {
     id,
     name,
@@ -293,36 +289,28 @@ export function createMemoryOpenVikingContextEngine(params: {
   } = params;
 
   /** Returns true when commit + extraction succeeded, false otherwise. */
-  async function doCommitOVSession(sessionKey: string): Promise<boolean> {
+  async function doCommitOVSession(sessionId: string): Promise<boolean> {
     try {
       const client = await getClient();
-      const agentId = resolveAgentId(sessionKey);
-      const commitResult = await client.commitSession(sessionKey, { wait: true, agentId });
+      const agentId = resolveAgentId(sessionId);
+      const commitResult = await client.commitSession(sessionId, { wait: true, agentId });
       const memCount = totalMemories(commitResult.memories_extracted);
       if (commitResult.status === "failed") {
-        warnOrInfo(logger, `openviking: commit Phase 2 failed for sessionKey=${sessionKey}: ${commitResult.error ?? "unknown"}`);
+        warnOrInfo(logger, `openviking: commit Phase 2 failed for session=${sessionId}: ${commitResult.error ?? "unknown"}`);
         return false;
       }
       if (commitResult.status === "timeout") {
-        warnOrInfo(logger, `openviking: commit Phase 2 timed out for sessionKey=${sessionKey}, task_id=${commitResult.task_id ?? "none"}`);
+        warnOrInfo(logger, `openviking: commit Phase 2 timed out for session=${sessionId}, task_id=${commitResult.task_id ?? "none"}`);
         return false;
       }
       logger.info(
-        `openviking: committed OV session for sessionKey=${sessionKey}, archived=${commitResult.archived ?? false}, memories=${memCount}, task_id=${commitResult.task_id ?? "none"}`,
+        `openviking: committed OV session=${sessionId}, archived=${commitResult.archived ?? false}, memories=${memCount}, task_id=${commitResult.task_id ?? "none"}`,
       );
       return true;
     } catch (err) {
-      warnOrInfo(logger, `openviking: commit failed for sessionKey=${sessionKey}: ${String(err)}`);
+      warnOrInfo(logger, `openviking: commit failed for session=${sessionId}: ${String(err)}`);
       return false;
     }
-  }
-
-  function extractSessionKey(runtimeContext: Record<string, unknown> | undefined): string | undefined {
-    if (!runtimeContext) {
-      return undefined;
-    }
-    const key = runtimeContext.sessionKey;
-    return typeof key === "string" && key.trim() ? key.trim() : undefined;
   }
 
   return {
@@ -330,14 +318,6 @@ export function createMemoryOpenVikingContextEngine(params: {
       id,
       name,
       version,
-    },
-
-    // --- session-mapping extensions ---
-
-    getOVSessionForKey: (sessionKey: string) => sessionKey,
-
-    async resolveOVSession(sessionKey: string): Promise<string> {
-      return sessionKey;
     },
 
     commitOVSession: doCommitOVSession,
@@ -358,7 +338,7 @@ export function createMemoryOpenVikingContextEngine(params: {
 
       try {
         const client = await getClient();
-        const OVSessionId = assembleParams.sessionKey?.trim() || assembleParams.sessionId;
+        const OVSessionId = assembleParams.sessionId;
         const agentId = resolveAgentId(OVSessionId);
         const ctx = await client.getContextForAssemble(
           OVSessionId,
@@ -403,8 +383,8 @@ export function createMemoryOpenVikingContextEngine(params: {
       }
 
       try {
-        const sessionKey = extractSessionKey(afterTurnParams.runtimeContext);
-        const agentId = resolveAgentId(sessionKey ?? afterTurnParams.sessionId);
+        const OVSessionId = afterTurnParams.sessionId;
+        const agentId = resolveAgentId(OVSessionId);
 
         const messages = afterTurnParams.messages ?? [];
         if (messages.length === 0) {
@@ -440,7 +420,6 @@ export function createMemoryOpenVikingContextEngine(params: {
         }
 
         const client = await getClient();
-        const OVSessionId = sessionKey ?? afterTurnParams.sessionId;
         await client.addSessionMessage(OVSessionId, "user", decision.normalizedText, agentId);
 
         const session = await client.getSession(OVSessionId, agentId);
