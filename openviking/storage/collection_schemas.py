@@ -16,13 +16,17 @@ from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
 from openviking.models.embedder.base import EmbedResult
-from openviking.models.embedder.volcengine_embedders import is_429_error
 from openviking.server.identity import RequestContext, Role
 from openviking.storage.errors import CollectionNotFoundError
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.storage.queuefs.named_queue import DequeueHandlerBase
 from openviking.storage.viking_vector_index_backend import VikingVectorIndexBackend
 from openviking.telemetry import bind_telemetry, resolve_telemetry
+from openviking.utils.circuit_breaker import (
+    CircuitBreaker,
+    CircuitBreakerOpen,
+    classify_api_error,
+)
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
@@ -162,6 +166,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
         self._collection_name = config.storage.vectordb.name
         self._vector_dim = config.embedding.dimension
         self._initialize_embedder(config)
+        self._circuit_breaker = CircuitBreaker()
 
     def _initialize_embedder(self, config: "OpenVikingConfig"):
         """Initialize the embedder instance from config."""
@@ -236,6 +241,24 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                     self.report_success()
                     return data
 
+                # Circuit breaker: if API is known-broken, re-enqueue and wait
+                try:
+                    self._circuit_breaker.check()
+                except CircuitBreakerOpen:
+                    logger.warning(
+                        f"Circuit breaker is open, re-enqueueing embedding: {embedding_msg.id}"
+                    )
+                    if self._vikingdb.has_queue_manager:
+                        wait = self._circuit_breaker.retry_after
+                        if wait > 0:
+                            await asyncio.sleep(wait)
+                        await self._vikingdb.enqueue_embedding_msg(embedding_msg)
+                        self.report_success()
+                        return None
+                    # No queue manager — cannot re-enqueue, drop with error
+                    self.report_error("Circuit breaker open and no queue manager", data)
+                    return None
+
                 # Initialize embedder if not already initialized
                 if not self._embedder:
                     from openviking_cli.utils.config import get_openviking_config
@@ -267,13 +290,23 @@ class TextEmbeddingHandler(DequeueHandlerBase):
                             pass
                     except Exception as embed_err:
                         error_msg = f"Failed to generate embedding: {embed_err}"
-                        logger.error(error_msg)
+                        error_class = classify_api_error(embed_err)
 
-                        if is_429_error(embed_err) and self._vikingdb.has_queue_manager:
+                        if error_class == "permanent":
+                            logger.critical(error_msg)
+                            self._circuit_breaker.record_failure(embed_err)
+                            self._merge_request_stats(embedding_msg.telemetry_id, error_count=1)
+                            self.report_error(error_msg, data)
+                            return None
+
+                        # Transient or unknown — re-enqueue for retry
+                        logger.warning(error_msg)
+                        self._circuit_breaker.record_failure(embed_err)
+                        if self._vikingdb.has_queue_manager:
                             try:
                                 await self._vikingdb.enqueue_embedding_msg(embedding_msg)
                                 logger.info(
-                                    f"Re-enqueued embedding message after rate limit: {embedding_msg.id}"
+                                    f"Re-enqueued embedding message after transient error: {embedding_msg.id}"
                                 )
                                 self.report_success()
                                 return None
@@ -356,6 +389,7 @@ class TextEmbeddingHandler(DequeueHandlerBase):
 
                 self._merge_request_stats(embedding_msg.telemetry_id, processed=1)
                 self.report_success()
+                self._circuit_breaker.record_success()
                 return inserted_data
 
         except Exception as e:

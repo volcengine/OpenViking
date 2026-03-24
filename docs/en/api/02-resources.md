@@ -16,6 +16,7 @@ Resources are external knowledge that agents can reference. This guide covers ho
 | Video | `.mp4`, `.mov`, `.avi` | Frame extraction + VLM |
 | Audio | `.mp3`, `.wav`, `.m4a` | Transcription |
 | Documents | `.docx` | Text extraction |
+| Feishu/Lark | URL (`*.feishu.cn`, `*.larksuite.com`) | Cloud document parsing via `lark-oapi` |
 
 ## Processing Pipeline
 
@@ -139,6 +140,57 @@ curl -X POST http://localhost:1933/api/v1/resources \
 
 ```bash
 openviking add-resource https://example.com/api-docs.md --to viking://resources/external/ --reason "External API documentation"
+```
+
+**Example: Add Feishu/Lark Cloud Documents**
+
+[Feishu](https://www.feishu.cn) (飞书) and its international version [Lark](https://www.larksuite.com) are widely used for documentation in Chinese tech companies. OpenViking can directly import cloud documents by URL.
+
+Supported document types:
+
+| Type | URL Pattern |
+|------|-------------|
+| Documents | `https://*.feishu.cn/docx/{id}` |
+| Wiki pages | `https://*.feishu.cn/wiki/{token}` |
+| Spreadsheets | `https://*.feishu.cn/sheets/{token}` |
+| Bitable | `https://*.feishu.cn/base/{token}` |
+
+> **Setup**: Install the optional dependency: `pip install 'openviking[bot-feishu]'`
+>
+> Configure credentials via `ov.conf` (see [Configuration](../../guides/01-configuration.md#feishu)) or environment variables:
+> ```bash
+> export FEISHU_APP_ID="cli_xxx"
+> export FEISHU_APP_SECRET="xxx"
+> ```
+
+**Python SDK (Embedded / HTTP)**
+
+```python
+# Import a Feishu document
+result = client.add_resource(
+    "https://example.feishu.cn/docx/doxcnABC123",
+    reason="Project design document"
+)
+client.wait_processed()
+
+# Import a wiki page (auto-resolves to underlying type)
+client.add_resource("https://example.feishu.cn/wiki/wikiXYZ")
+
+# Import a spreadsheet
+client.add_resource("https://example.feishu.cn/sheets/shtcn456")
+```
+
+**CLI**
+
+```bash
+# Import a Feishu document
+openviking add-resource "https://example.feishu.cn/docx/doxcnABC123" --reason "Project design document"
+
+# Import a wiki page
+openviking add-resource "https://example.feishu.cn/wiki/wikiXYZ"
+
+# Incremental update to an existing target
+openviking add-resource "https://example.feishu.cn/docx/doxcnABC123" --to viking://resources/design-doc
 ```
 
 **Example: Wait for Processing**
