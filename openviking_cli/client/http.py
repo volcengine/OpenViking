@@ -711,6 +711,11 @@ class AsyncHTTPClient(BaseClient):
         response = await self._http.get(f"/api/v1/sessions/{session_id}", params=params)
         return self._handle_response(response)
 
+    async def get_session_context(self, session_id: str) -> Dict[str, Any]:
+        """Get full merged session context."""
+        response = await self._http.get(f"/api/v1/sessions/{session_id}/context")
+        return self._handle_response(response)
+
     async def delete_session(self, session_id: str) -> None:
         """Delete a session."""
         response = await self._http.delete(f"/api/v1/sessions/{session_id}")

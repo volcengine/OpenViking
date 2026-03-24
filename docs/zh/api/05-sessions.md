@@ -176,6 +176,79 @@ openviking session get a1b2c3d4
 
 ---
 
+### get_session_context()
+
+获取供会话感知检索使用的完整合并上下文。
+
+该接口返回：
+- `latest_archive_overview`：最新一个已完成归档的 overview
+- `current_messages`：最新已完成归档之后的所有未完成归档消息，再加上当前 live session 消息
+
+**参数**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| session_id | str | 是 | - | 会话 ID |
+
+**Python SDK (Embedded / HTTP)**
+
+```python
+context = await client.get_session_context("a1b2c3d4")
+print(context["latest_archive_overview"])
+print(len(context["current_messages"]))
+
+session = client.session("a1b2c3d4")
+context = await session.get_session_context()
+```
+
+**HTTP API**
+
+```
+GET /api/v1/sessions/{session_id}/context
+```
+
+```bash
+curl -X GET http://localhost:1933/api/v1/sessions/a1b2c3d4/context \
+  -H "X-API-Key: your-key"
+```
+
+**CLI**
+
+```bash
+ov session get-session-context a1b2c3d4
+```
+
+**响应**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "latest_archive_overview": "# Session Summary\n\n**Overview**: User discussed deployment and auth setup.",
+    "current_messages": [
+      {
+        "id": "msg_pending_1",
+        "role": "user",
+        "parts": [
+          {"type": "text", "text": "Pending user message"}
+        ],
+        "created_at": "2026-03-24T09:10:11Z"
+      },
+      {
+        "id": "msg_live_1",
+        "role": "assistant",
+        "parts": [
+          {"type": "text", "text": "Current live message"}
+        ],
+        "created_at": "2026-03-24T09:10:20Z"
+      }
+    ]
+  }
+}
+```
+
+---
+
 ### delete_session()
 
 删除会话。

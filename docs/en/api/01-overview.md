@@ -323,6 +323,7 @@ Compact JSON with status wrapper (when `--compact` is true, which is the default
 | POST | `/api/v1/sessions` | Create session |
 | GET | `/api/v1/sessions` | List sessions |
 | GET | `/api/v1/sessions/{id}` | Get session |
+| GET | `/api/v1/sessions/{id}/context` | Get merged session context |
 | DELETE | `/api/v1/sessions/{id}` | Delete session |
 | POST | `/api/v1/sessions/{id}/commit` | Commit session |
 | POST | `/api/v1/sessions/{id}/messages` | Add message |

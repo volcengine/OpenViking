@@ -176,6 +176,79 @@ openviking session get a1b2c3d4
 
 ---
 
+### get_session_context()
+
+Get the full merged context used by session-aware retrieval.
+
+This endpoint returns:
+- `latest_archive_overview`: the latest completed archive overview
+- `current_messages`: all incomplete archive messages after the latest completed archive, plus current live session messages
+
+**Parameters**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| session_id | str | Yes | - | Session ID |
+
+**Python SDK (Embedded / HTTP)**
+
+```python
+context = await client.get_session_context("a1b2c3d4")
+print(context["latest_archive_overview"])
+print(len(context["current_messages"]))
+
+session = client.session("a1b2c3d4")
+context = await session.get_session_context()
+```
+
+**HTTP API**
+
+```
+GET /api/v1/sessions/{session_id}/context
+```
+
+```bash
+curl -X GET http://localhost:1933/api/v1/sessions/a1b2c3d4/context \
+  -H "X-API-Key: your-key"
+```
+
+**CLI**
+
+```bash
+ov session get-session-context a1b2c3d4
+```
+
+**Response**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "latest_archive_overview": "# Session Summary\n\n**Overview**: User discussed deployment and auth setup.",
+    "current_messages": [
+      {
+        "id": "msg_pending_1",
+        "role": "user",
+        "parts": [
+          {"type": "text", "text": "Pending user message"}
+        ],
+        "created_at": "2026-03-24T09:10:11Z"
+      },
+      {
+        "id": "msg_live_1",
+        "role": "assistant",
+        "parts": [
+          {"type": "text", "text": "Current live message"}
+        ],
+        "created_at": "2026-03-24T09:10:20Z"
+      }
+    ]
+  }
+}
+```
+
+---
+
 ### delete_session()
 
 Delete a session.

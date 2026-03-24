@@ -51,6 +51,10 @@ class SyncOpenViking:
         """Get session details."""
         return run_async(self._async_client.get_session(session_id, auto_create=auto_create))
 
+    def get_session_context(self, session_id: str) -> Dict[str, Any]:
+        """Get full merged session context."""
+        return run_async(self._async_client.get_session_context(session_id))
+
     def delete_session(self, session_id: str) -> None:
         """Delete a session."""
         run_async(self._async_client.delete_session(session_id))

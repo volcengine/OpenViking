@@ -5,6 +5,7 @@
 
 import httpx
 
+from openviking.message import Message
 from openviking.server.identity import RequestContext, Role
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -36,6 +37,66 @@ async def test_get_session(client: httpx.AsyncClient):
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"]["session_id"] == session_id
+
+
+async def test_get_session_context(client: httpx.AsyncClient):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={"role": "user", "content": "Current live message"},
+    )
+
+    resp = await client.get(f"/api/v1/sessions/{session_id}/context")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["result"]["latest_archive_overview"] == ""
+    assert [m["parts"][0]["text"] for m in body["result"]["current_messages"]] == [
+        "Current live message"
+    ]
+
+
+async def test_get_session_context_includes_incomplete_archive_messages(
+    client: httpx.AsyncClient, service
+):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={"role": "user", "content": "Archived seed"},
+    )
+    commit_resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
+    assert commit_resp.status_code == 200
+
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    session = service.sessions.session(ctx, session_id)
+    await session.load()
+    pending_messages = [
+        Message.create_user("Pending user message"),
+        Message.create_assistant("Pending assistant response"),
+    ]
+    await session._viking_fs.write_file(
+        uri=f"{session.uri}/history/archive_002/messages.jsonl",
+        content="\n".join(msg.to_jsonl() for msg in pending_messages) + "\n",
+        ctx=session.ctx,
+    )
+
+    await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={"role": "user", "content": "Current live message"},
+    )
+
+    resp = await client.get(f"/api/v1/sessions/{session_id}/context")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [m["parts"][0]["text"] for m in body["result"]["current_messages"]] == [
+        "Pending user message",
+        "Pending assistant response",
+        "Current live message",
+    ]
 
 
 async def test_add_message(client: httpx.AsyncClient):

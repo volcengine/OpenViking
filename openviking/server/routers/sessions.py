@@ -141,6 +141,19 @@ async def get_session(
     return Response(status="ok", result=result)
 
 
+@router.get("/{session_id}/context")
+async def get_session_context(
+    session_id: str = Path(..., description="Session ID"),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Get full merged session context."""
+    service = get_service()
+    session = service.sessions.session(_ctx, session_id)
+    await session.load()
+    result = await session.get_session_context()
+    return Response(status="ok", result=_to_jsonable(result))
+
+
 @router.delete("/{session_id}")
 async def delete_session(
     session_id: str = Path(..., description="Session ID"),

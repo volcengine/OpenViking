@@ -634,24 +634,34 @@ class Session:
             logger.info(f"Updated active_count for {updated} contexts/skills")
         return updated
 
-    async def get_context_for_search(self, query: str, max_messages: int = 20) -> Dict[str, Any]:
-        """Get session context for intent analysis.
-
-        Args:
-            query: Query string for the current request.
-            max_messages: Maximum number of current messages to retrieve (default 20)
+    async def get_session_context(self) -> Dict[str, Any]:
+        """Get full merged session context.
 
         Returns:
             - latest_archive_overview: Latest completed archive overview, if any
-            - current_messages: Current message list (List[Message])
+            - current_messages: Pending archive messages + current live messages (List[Message])
         """
-        del query  # Current query no longer affects historical archive selection.
-
-        current_messages = list(self._messages[-max_messages:]) if self._messages else []
+        pending_messages = await self._get_pending_archive_messages()
         latest_archive_overview = await self._get_latest_completed_archive_overview()
 
         return {
             "latest_archive_overview": latest_archive_overview,
+            "current_messages": pending_messages + list(self._messages),
+        }
+
+    async def get_context_for_search(self, query: str, max_messages: int = 20) -> Dict[str, Any]:
+        """Get session context for intent analysis."""
+        del query  # Current query no longer affects historical archive selection.
+
+        context = await self.get_session_context()
+        current_messages = context["current_messages"]
+        if max_messages > 0:
+            current_messages = current_messages[-max_messages:]
+        else:
+            current_messages = []
+
+        return {
+            "latest_archive_overview": context["latest_archive_overview"],
             "current_messages": current_messages,
         }
 
@@ -699,6 +709,71 @@ class Session:
                 continue
 
         return ""
+
+    async def _get_pending_archive_messages(self) -> List[Message]:
+        """Return messages from incomplete archives newer than the latest completed archive."""
+        if not self._viking_fs or self.compression.compression_index <= 0:
+            return []
+
+        try:
+            history_items = await self._viking_fs.ls(f"{self._session_uri}/history", ctx=self.ctx)
+        except Exception:
+            return []
+
+        archive_names: List[str] = []
+        for item in history_items:
+            name = item.get("name") if isinstance(item, dict) else item
+            if name and name.startswith("archive_"):
+                archive_names.append(name)
+
+        def _archive_index(name: str) -> int:
+            try:
+                return int(name.split("_")[1])
+            except Exception:
+                return -1
+
+        archives = sorted(
+            ((name, _archive_index(name)) for name in archive_names),
+            key=lambda item: item[1],
+        )
+
+        latest_completed_index = 0
+        incomplete_archives: List[str] = []
+        for name, index in archives:
+            if index < 0:
+                continue
+            archive_uri = f"{self._session_uri}/history/{name}"
+            try:
+                await self._viking_fs.read_file(f"{archive_uri}/.done", ctx=self.ctx)
+                latest_completed_index = index
+            except Exception:
+                incomplete_archives.append(archive_uri)
+
+        pending_messages: List[Message] = []
+        for archive_uri in incomplete_archives:
+            try:
+                archive_index = int(archive_uri.rsplit("_", 1)[1])
+            except Exception:
+                continue
+            if archive_index <= latest_completed_index:
+                continue
+
+            try:
+                content = await self._viking_fs.read_file(
+                    f"{archive_uri}/messages.jsonl", ctx=self.ctx
+                )
+            except Exception:
+                continue
+
+            for line in content.strip().split("\n"):
+                if not line.strip():
+                    continue
+                try:
+                    pending_messages.append(Message.from_dict(json.loads(line)))
+                except Exception:
+                    continue
+
+        return pending_messages
 
     def _extract_abstract_from_summary(self, summary: str) -> str:
         """Extract one-sentence overview from structured summary."""

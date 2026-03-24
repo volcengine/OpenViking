@@ -207,6 +207,11 @@ class BaseClient(ABC):
         ...
 
     @abstractmethod
+    async def get_session_context(self, session_id: str) -> Dict[str, Any]:
+        """Get merged search context for a session."""
+        ...
+
+    @abstractmethod
     async def delete_session(self, session_id: str) -> None:
         """Delete a session."""
         ...

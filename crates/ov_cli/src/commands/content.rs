@@ -51,17 +51,14 @@ pub async fn reindex(
     Ok(())
 }
 
-pub async fn get(
-    client: &HttpClient,
-    uri: &str,
-    local_path: &str,
-) -> Result<()> {
+pub async fn get(client: &HttpClient, uri: &str, local_path: &str) -> Result<()> {
     // Check if target path already exists
     let path = Path::new(local_path);
     if path.exists() {
-        return Err(crate::error::Error::Client(
-            format!("File already exists: {}", local_path)
-        ));
+        return Err(crate::error::Error::Client(format!(
+            "File already exists: {}",
+            local_path
+        )));
     }
 
     // Ensure parent directory exists

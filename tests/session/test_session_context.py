@@ -6,7 +6,7 @@
 import asyncio
 
 from openviking import AsyncOpenViking
-from openviking.message import TextPart
+from openviking.message import Message, TextPart
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
 
@@ -87,6 +87,64 @@ class TestGetContextForSearch:
         context = await session.get_context_for_search(query="test")
 
         assert context["latest_archive_overview"] == completed_overview
+
+    async def test_get_context_includes_incomplete_archive_messages(self, client: AsyncOpenViking):
+        """Pending archive messages should be merged with current live messages."""
+        session = client.session(session_id="archive_context_pending_messages_test")
+
+        session.add_message("user", [TextPart("First message")])
+        result = await session.commit_async()
+        await _wait_for_task(result["task_id"])
+
+        pending_messages = [
+            Message.create_user("Pending user message"),
+            Message.create_assistant("Pending assistant response"),
+        ]
+        await session._viking_fs.write_file(
+            uri=f"{session.uri}/history/archive_002/messages.jsonl",
+            content="\n".join(msg.to_jsonl() for msg in pending_messages) + "\n",
+            ctx=session.ctx,
+        )
+
+        session.add_message("user", [TextPart("Current live message")])
+        context = await session.get_context_for_search(query="test")
+
+        assert [m.content for m in context["current_messages"]] == [
+            "Pending user message",
+            "Pending assistant response",
+            "Current live message",
+        ]
+
+    async def test_get_context_max_messages_applies_after_pending_merge(
+        self, client: AsyncOpenViking
+    ):
+        """max_messages should trim the merged pending + live message sequence."""
+        session = client.session(session_id="archive_context_pending_max_messages_test")
+
+        session.add_message("user", [TextPart("First message")])
+        result = await session.commit_async()
+        await _wait_for_task(result["task_id"])
+
+        pending_messages = [
+            Message.create_user("Pending 1"),
+            Message.create_assistant("Pending 2"),
+        ]
+        await session._viking_fs.write_file(
+            uri=f"{session.uri}/history/archive_002/messages.jsonl",
+            content="\n".join(msg.to_jsonl() for msg in pending_messages) + "\n",
+            ctx=session.ctx,
+        )
+
+        session.add_message("user", [TextPart("Live 1")])
+        session.add_message("assistant", [TextPart("Live 2")])
+
+        context = await session.get_context_for_search(query="test", max_messages=3)
+
+        assert [m.content for m in context["current_messages"]] == [
+            "Pending 2",
+            "Live 1",
+            "Live 2",
+        ]
 
     async def test_get_context_empty_session(self, session: Session):
         """Test getting context from empty session"""

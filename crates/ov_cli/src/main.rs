@@ -202,7 +202,12 @@ enum Commands {
         #[arg(short, long)]
         all: bool,
         /// Maximum number of nodes to list
-        #[arg(long = "node-limit", short = 'n', alias = "limit", default_value = "256")]
+        #[arg(
+            long = "node-limit",
+            short = 'n',
+            alias = "limit",
+            default_value = "256"
+        )]
         node_limit: i32,
     },
     /// Get directory tree
@@ -216,7 +221,12 @@ enum Commands {
         #[arg(short, long)]
         all: bool,
         /// Maximum number of nodes to list
-        #[arg(long = "node-limit", short = 'n', alias = "limit", default_value = "256")]
+        #[arg(
+            long = "node-limit",
+            short = 'n',
+            alias = "limit",
+            default_value = "256"
+        )]
         node_limit: i32,
         /// Maximum depth level to traverse (default: 3)
         #[arg(short = 'L', long = "level-limit", default_value = "3")]
@@ -290,7 +300,12 @@ enum Commands {
         #[arg(short, long, default_value = "")]
         uri: String,
         /// Maximum number of results
-        #[arg(short = 'n', long = "node-limit", alias = "limit", default_value = "10")]
+        #[arg(
+            short = 'n',
+            long = "node-limit",
+            alias = "limit",
+            default_value = "10"
+        )]
         node_limit: i32,
         /// Score threshold
         #[arg(short, long)]
@@ -307,7 +322,12 @@ enum Commands {
         #[arg(long)]
         session_id: Option<String>,
         /// Maximum number of results
-        #[arg(short = 'n', long = "node-limit", alias = "limit", default_value = "10")]
+        #[arg(
+            short = 'n',
+            long = "node-limit",
+            alias = "limit",
+            default_value = "10"
+        )]
         node_limit: i32,
         /// Score threshold
         #[arg(short, long)]
@@ -324,7 +344,12 @@ enum Commands {
         #[arg(short, long)]
         ignore_case: bool,
         /// Maximum number of results
-        #[arg(short = 'n', long = "node-limit", alias = "limit", default_value = "256")]
+        #[arg(
+            short = 'n',
+            long = "node-limit",
+            alias = "limit",
+            default_value = "256"
+        )]
         node_limit: i32,
     },
     /// Run file glob pattern search
@@ -335,7 +360,12 @@ enum Commands {
         #[arg(short, long, default_value = "viking://")]
         uri: String,
         /// Maximum number of results
-        #[arg(short = 'n', long = "node-limit", alias = "limit", default_value = "256")]
+        #[arg(
+            short = 'n',
+            long = "node-limit",
+            alias = "limit",
+            default_value = "256"
+        )]
         node_limit: i32,
     },
     /// Add memory in one shot (creates session, adds messages, commits)
@@ -424,6 +454,11 @@ enum SessionCommands {
     List,
     /// Get session details
     Get {
+        /// Session ID
+        session_id: String,
+    },
+    /// Get full merged session context
+    GetSessionContext {
         /// Session ID
         session_id: String,
     },
@@ -564,65 +599,71 @@ async fn main() {
             )
             .await
         }
-        Commands::AddSkill { data, wait, timeout } => {
-            handle_add_skill(data, wait, timeout, ctx).await
-        }
-        Commands::Relations { uri } => {
-            handle_relations(uri, ctx).await
-        }
-        Commands::Link { from_uri, to_uris, reason } => {
-            handle_link(from_uri, to_uris, reason, ctx).await
-        }
-        Commands::Unlink { from_uri, to_uri } => {
-            handle_unlink(from_uri, to_uri, ctx).await
-        }
-        Commands::Export { uri, to } => {
-            handle_export(uri, to, ctx).await
-        }
-        Commands::Import { file_path, target_uri, force, no_vectorize } => {
-            handle_import(file_path, target_uri, force, no_vectorize, ctx).await
-        }
+        Commands::AddSkill {
+            data,
+            wait,
+            timeout,
+        } => handle_add_skill(data, wait, timeout, ctx).await,
+        Commands::Relations { uri } => handle_relations(uri, ctx).await,
+        Commands::Link {
+            from_uri,
+            to_uris,
+            reason,
+        } => handle_link(from_uri, to_uris, reason, ctx).await,
+        Commands::Unlink { from_uri, to_uri } => handle_unlink(from_uri, to_uri, ctx).await,
+        Commands::Export { uri, to } => handle_export(uri, to, ctx).await,
+        Commands::Import {
+            file_path,
+            target_uri,
+            force,
+            no_vectorize,
+        } => handle_import(file_path, target_uri, force, no_vectorize, ctx).await,
         Commands::Wait { timeout } => {
             let client = ctx.get_client();
             commands::system::wait(&client, timeout, ctx.output_format, ctx.compact).await
-        },
+        }
         Commands::Status => {
             let client = ctx.get_client();
             commands::observer::system(&client, ctx.output_format, ctx.compact).await
-        },
+        }
         Commands::Health => handle_health(ctx).await,
         Commands::System { action } => handle_system(action, ctx).await,
         Commands::Observer { action } => handle_observer(action, ctx).await,
         Commands::Session { action } => handle_session(action, ctx).await,
         Commands::Admin { action } => handle_admin(action, ctx).await,
-        Commands::Ls { uri, simple, recursive, abs_limit, all, node_limit } => {
-            handle_ls(uri, simple, recursive, abs_limit, all, node_limit, ctx).await
-        }
-        Commands::Tree { uri, abs_limit, all, node_limit, level_limit } => {
-            handle_tree(uri, abs_limit, all, node_limit, level_limit, ctx).await
-        }
-        Commands::Mkdir { uri } => {
-            handle_mkdir(uri, ctx).await
-        }
-        Commands::Rm { uri, recursive } => {
-            handle_rm(uri, recursive, ctx).await
-        }
-        Commands::Mv { from_uri, to_uri } => {
-            handle_mv(from_uri, to_uri, ctx).await
-        }
-        Commands::Stat { uri } => {
-            handle_stat(uri, ctx).await
-        }
-        Commands::AddMemory { content } => {
-            handle_add_memory(content, ctx).await
-        }
-        Commands::Tui { uri } => {
-            handle_tui(uri, ctx).await
-        }
-        Commands::Chat { message, session, sender, stream, no_format, no_history } => {
+        Commands::Ls {
+            uri,
+            simple,
+            recursive,
+            abs_limit,
+            all,
+            node_limit,
+        } => handle_ls(uri, simple, recursive, abs_limit, all, node_limit, ctx).await,
+        Commands::Tree {
+            uri,
+            abs_limit,
+            all,
+            node_limit,
+            level_limit,
+        } => handle_tree(uri, abs_limit, all, node_limit, level_limit, ctx).await,
+        Commands::Mkdir { uri } => handle_mkdir(uri, ctx).await,
+        Commands::Rm { uri, recursive } => handle_rm(uri, recursive, ctx).await,
+        Commands::Mv { from_uri, to_uri } => handle_mv(from_uri, to_uri, ctx).await,
+        Commands::Stat { uri } => handle_stat(uri, ctx).await,
+        Commands::AddMemory { content } => handle_add_memory(content, ctx).await,
+        Commands::Tui { uri } => handle_tui(uri, ctx).await,
+        Commands::Chat {
+            message,
+            session,
+            sender,
+            stream,
+            no_format,
+            no_history,
+        } => {
             let session_id = session.or_else(|| config::get_or_create_machine_id().ok());
             let cmd = commands::chat::ChatCommand {
-                endpoint: std::env::var("VIKINGBOT_ENDPOINT").unwrap_or_else(|_| "http://localhost:1933/bot/v1".to_string()),
+                endpoint: std::env::var("VIKINGBOT_ENDPOINT")
+                    .unwrap_or_else(|_| "http://localhost:1933/bot/v1".to_string()),
                 api_key: std::env::var("VIKINGBOT_API_KEY").ok(),
                 session: session_id,
                 sender,
@@ -641,23 +682,37 @@ async fn main() {
         Commands::Read { uri } => handle_read(uri, ctx).await,
         Commands::Abstract { uri } => handle_abstract(uri, ctx).await,
         Commands::Overview { uri } => handle_overview(uri, ctx).await,
-        Commands::Reindex { uri, regenerate, wait } => {
-            handle_reindex(uri, regenerate, wait, ctx).await
-        }
+        Commands::Reindex {
+            uri,
+            regenerate,
+            wait,
+        } => handle_reindex(uri, regenerate, wait, ctx).await,
         Commands::Get { uri, local_path } => handle_get(uri, local_path, ctx).await,
-        Commands::Find { query, uri, node_limit, threshold } => {
-            handle_find(query, uri, node_limit, threshold, ctx).await
-        }
-        Commands::Search { query, uri, session_id, node_limit, threshold } => {
-            handle_search(query, uri, session_id, node_limit, threshold, ctx).await
-        }
-        Commands::Grep { uri, pattern, ignore_case, node_limit } => {
-            handle_grep(uri, pattern, ignore_case, node_limit, ctx).await
-        }
+        Commands::Find {
+            query,
+            uri,
+            node_limit,
+            threshold,
+        } => handle_find(query, uri, node_limit, threshold, ctx).await,
+        Commands::Search {
+            query,
+            uri,
+            session_id,
+            node_limit,
+            threshold,
+        } => handle_search(query, uri, session_id, node_limit, threshold, ctx).await,
+        Commands::Grep {
+            uri,
+            pattern,
+            ignore_case,
+            node_limit,
+        } => handle_grep(uri, pattern, ignore_case, node_limit, ctx).await,
 
-        Commands::Glob { pattern, uri, node_limit } => {
-            handle_glob(pattern, uri, node_limit, ctx).await
-        }
+        Commands::Glob {
+            pattern,
+            uri,
+            node_limit,
+        } => handle_glob(pattern, uri, node_limit, ctx).await,
     };
 
     if let Err(e) = result {
@@ -682,32 +737,35 @@ async fn handle_add_resource(
     watch_interval: f64,
     ctx: CliContext,
 ) -> Result<()> {
-    let is_url = path.starts_with("http://") 
-        || path.starts_with("https://")
-        || path.starts_with("git@");
-    
+    let is_url =
+        path.starts_with("http://") || path.starts_with("https://") || path.starts_with("git@");
+
     if !is_url {
         use std::path::Path;
-        
+
         // Unescape path: replace backslash followed by space with just space
         let unescaped_path = path.replace("\\ ", " ");
         let path_obj = Path::new(&unescaped_path);
         if !path_obj.exists() {
             eprintln!("Error: Path '{}' does not exist.", path);
-            
+
             // Check if there might be unquoted spaces
             use std::env;
             let args: Vec<String> = env::args().collect();
-            
-            if let Some(add_resource_pos) = args.iter().position(|s| s == "add-resource" || s == "add") {
+
+            if let Some(add_resource_pos) =
+                args.iter().position(|s| s == "add-resource" || s == "add")
+            {
                 if args.len() > add_resource_pos + 2 {
                     let extra_args = &args[add_resource_pos + 2..];
                     let suggested_path = format!("{} {}", path, extra_args.join(" "));
-                    eprintln!("\nIt looks like you may have forgotten to quote a path with spaces.");
+                    eprintln!(
+                        "\nIt looks like you may have forgotten to quote a path with spaces."
+                    );
                     eprintln!("Suggested command: ov add-resource \"{}\"", suggested_path);
                 }
             }
-            
+
             std::process::exit(1);
         }
         path = unescaped_path;
@@ -750,7 +808,8 @@ async fn handle_add_resource(
         watch_interval,
         ctx.output_format,
         ctx.compact,
-    ).await
+    )
+    .await
 }
 
 async fn handle_add_skill(
@@ -761,14 +820,19 @@ async fn handle_add_skill(
 ) -> Result<()> {
     let client = ctx.get_client();
     commands::resources::add_skill(
-        &client, &data, wait, timeout, ctx.output_format, ctx.compact
-    ).await
+        &client,
+        &data,
+        wait,
+        timeout,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
 }
 
 async fn handle_relations(uri: String, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
-    commands::relations::list_relations(&client, &uri, ctx.output_format, ctx.compact
-    ).await
+    commands::relations::list_relations(&client, &uri, ctx.output_format, ctx.compact).await
 }
 
 async fn handle_link(
@@ -779,25 +843,24 @@ async fn handle_link(
 ) -> Result<()> {
     let client = ctx.get_client();
     commands::relations::link(
-        &client, &from_uri, &to_uris, &reason, ctx.output_format, ctx.compact
-    ).await
+        &client,
+        &from_uri,
+        &to_uris,
+        &reason,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
 }
 
-async fn handle_unlink(
-    from_uri: String,
-    to_uri: String,
-    ctx: CliContext,
-) -> Result<()> {
+async fn handle_unlink(from_uri: String, to_uri: String, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
-    commands::relations::unlink(
-        &client, &from_uri, &to_uri, ctx.output_format, ctx.compact
-    ).await
+    commands::relations::unlink(&client, &from_uri, &to_uri, ctx.output_format, ctx.compact).await
 }
 
 async fn handle_export(uri: String, to: String, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
-    commands::pack::export(&client, &uri, &to, ctx.output_format, ctx.compact
-    ).await
+    commands::pack::export(&client, &uri, &to, ctx.output_format, ctx.compact).await
 }
 
 async fn handle_import(
@@ -809,8 +872,15 @@ async fn handle_import(
 ) -> Result<()> {
     let client = ctx.get_client();
     commands::pack::import(
-        &client, &file_path, &target_uri, force, no_vectorize, ctx.output_format, ctx.compact
-    ).await
+        &client,
+        &file_path,
+        &target_uri,
+        force,
+        no_vectorize,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
 }
 
 async fn handle_system(cmd: SystemCommands, ctx: CliContext) -> Result<()> {
@@ -823,8 +893,7 @@ async fn handle_system(cmd: SystemCommands, ctx: CliContext) -> Result<()> {
             commands::system::status(&client, ctx.output_format, ctx.compact).await
         }
         SystemCommands::Health => {
-            let _ =
-            commands::system::health(&client, ctx.output_format, ctx.compact).await?;
+            let _ = commands::system::health(&client, ctx.output_format, ctx.compact).await?;
             Ok(())
         }
         SystemCommands::Crypto { action } => commands::crypto::handle_crypto(action).await,
@@ -865,21 +934,40 @@ async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()> {
             commands::session::list_sessions(&client, ctx.output_format, ctx.compact).await
         }
         SessionCommands::Get { session_id } => {
-            commands::session::get_session(&client, &session_id, ctx.output_format, ctx.compact
-            ).await
+            commands::session::get_session(&client, &session_id, ctx.output_format, ctx.compact)
+                .await
+        }
+        SessionCommands::GetSessionContext { session_id } => {
+            commands::session::get_session_context(
+                &client,
+                &session_id,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
         }
         SessionCommands::Delete { session_id } => {
-            commands::session::delete_session(&client, &session_id, ctx.output_format, ctx.compact
-            ).await
+            commands::session::delete_session(&client, &session_id, ctx.output_format, ctx.compact)
+                .await
         }
-        SessionCommands::AddMessage { session_id, role, content } => {
+        SessionCommands::AddMessage {
+            session_id,
+            role,
+            content,
+        } => {
             commands::session::add_message(
-                &client, &session_id, &role, &content, ctx.output_format, ctx.compact
-            ).await
+                &client,
+                &session_id,
+                &role,
+                &content,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
         }
         SessionCommands::Commit { session_id } => {
-            commands::session::commit_session(&client, &session_id, ctx.output_format, ctx.compact
-            ).await
+            commands::session::commit_session(&client, &session_id, ctx.output_format, ctx.compact)
+                .await
         }
     }
 }
@@ -887,43 +975,84 @@ async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()> {
 async fn handle_admin(cmd: AdminCommands, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     match cmd {
-        AdminCommands::CreateAccount { account_id, admin_user_id } => {
+        AdminCommands::CreateAccount {
+            account_id,
+            admin_user_id,
+        } => {
             commands::admin::create_account(
-                &client, &account_id, &admin_user_id, ctx.output_format, ctx.compact,
-            ).await
+                &client,
+                &account_id,
+                &admin_user_id,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
         }
         AdminCommands::ListAccounts => {
             commands::admin::list_accounts(&client, ctx.output_format, ctx.compact).await
         }
         AdminCommands::DeleteAccount { account_id } => {
-            commands::admin::delete_account(
-                &client, &account_id, ctx.output_format, ctx.compact,
-            ).await
+            commands::admin::delete_account(&client, &account_id, ctx.output_format, ctx.compact)
+                .await
         }
-        AdminCommands::RegisterUser { account_id, user_id, role } => {
+        AdminCommands::RegisterUser {
+            account_id,
+            user_id,
+            role,
+        } => {
             commands::admin::register_user(
-                &client, &account_id, &user_id, &role, ctx.output_format, ctx.compact,
-            ).await
+                &client,
+                &account_id,
+                &user_id,
+                &role,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
         }
         AdminCommands::ListUsers { account_id } => {
-            commands::admin::list_users(
-                &client, &account_id, ctx.output_format, ctx.compact,
-            ).await
+            commands::admin::list_users(&client, &account_id, ctx.output_format, ctx.compact).await
         }
-        AdminCommands::RemoveUser { account_id, user_id } => {
+        AdminCommands::RemoveUser {
+            account_id,
+            user_id,
+        } => {
             commands::admin::remove_user(
-                &client, &account_id, &user_id, ctx.output_format, ctx.compact,
-            ).await
+                &client,
+                &account_id,
+                &user_id,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
         }
-        AdminCommands::SetRole { account_id, user_id, role } => {
+        AdminCommands::SetRole {
+            account_id,
+            user_id,
+            role,
+        } => {
             commands::admin::set_role(
-                &client, &account_id, &user_id, &role, ctx.output_format, ctx.compact,
-            ).await
+                &client,
+                &account_id,
+                &user_id,
+                &role,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
         }
-        AdminCommands::RegenerateKey { account_id, user_id } => {
+        AdminCommands::RegenerateKey {
+            account_id,
+            user_id,
+        } => {
             commands::admin::regenerate_key(
-                &client, &account_id, &user_id, ctx.output_format, ctx.compact,
-            ).await
+                &client,
+                &account_id,
+                &user_id,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
         }
     }
 }
@@ -940,21 +1069,17 @@ async fn handle_config(cmd: ConfigCommands, _ctx: CliContext) -> Result<()> {
             output::output_success(
                 &serde_json::to_value(config).unwrap(),
                 output::OutputFormat::Json,
-                true
+                true,
             );
             Ok(())
         }
-        ConfigCommands::Validate => {
-            match Config::load() {
-                Ok(_) => {
-                    println!("Configuration is valid");
-                    Ok(())
-                }
-                Err(e) => {
-                    Err(Error::Config(e.to_string()))
-                }
+        ConfigCommands::Validate => match Config::load() {
+            Ok(_) => {
+                println!("Configuration is valid");
+                Ok(())
             }
-        }
+            Err(e) => Err(Error::Config(e.to_string())),
+        },
     }
 }
 
@@ -975,7 +1100,15 @@ async fn handle_overview(uri: String, ctx: CliContext) -> Result<()> {
 
 async fn handle_reindex(uri: String, regenerate: bool, wait: bool, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
-    commands::content::reindex(&client, &uri, regenerate, wait, ctx.output_format, ctx.compact).await
+    commands::content::reindex(
+        &client,
+        &uri,
+        regenerate,
+        wait,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
 }
 
 async fn handle_get(uri: String, local_path: String, ctx: CliContext) -> Result<()> {
@@ -997,7 +1130,16 @@ async fn handle_find(
     params.push(format!("\"{}\"", query));
     print_command_echo("ov find", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
-    commands::search::find(&client, &query, &uri, node_limit, threshold, ctx.output_format, ctx.compact).await
+    commands::search::find(
+        &client,
+        &query,
+        &uri,
+        node_limit,
+        threshold,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
 }
 
 async fn handle_search(
@@ -1018,7 +1160,17 @@ async fn handle_search(
     params.push(format!("\"{}\"", query));
     print_command_echo("ov search", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
-    commands::search::search(&client, &query, &uri, session_id, node_limit, threshold, ctx.output_format, ctx.compact).await
+    commands::search::search(
+        &client,
+        &query,
+        &uri,
+        session_id,
+        node_limit,
+        threshold,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
 }
 
 /// Print command with specified parameters for debugging
@@ -1028,35 +1180,81 @@ fn print_command_echo(command: &str, params: &str, echo_enabled: bool) {
     }
 }
 
-async fn handle_ls(uri: String, simple: bool, recursive: bool, abs_limit: i32, show_all_hidden: bool, node_limit: i32, ctx: CliContext) -> Result<()> {
+async fn handle_ls(
+    uri: String,
+    simple: bool,
+    recursive: bool,
+    abs_limit: i32,
+    show_all_hidden: bool,
+    node_limit: i32,
+    ctx: CliContext,
+) -> Result<()> {
     let mut params = vec![
         uri.clone(),
         format!("-l {}", abs_limit),
         format!("-n {}", node_limit),
     ];
-    if simple { params.push("-s".to_string()); }
-    if recursive { params.push("-r".to_string()); }
-    if show_all_hidden { params.push("-a".to_string()); }
+    if simple {
+        params.push("-s".to_string());
+    }
+    if recursive {
+        params.push("-r".to_string());
+    }
+    if show_all_hidden {
+        params.push("-a".to_string());
+    }
     print_command_echo("ov ls", &params.join(" "), ctx.config.echo_command);
 
     let client = ctx.get_client();
     let api_output = if ctx.compact { "agent" } else { "original" };
-    commands::filesystem::ls(&client, &uri, simple, recursive, api_output, abs_limit, show_all_hidden, node_limit, ctx.output_format, ctx.compact).await
+    commands::filesystem::ls(
+        &client,
+        &uri,
+        simple,
+        recursive,
+        api_output,
+        abs_limit,
+        show_all_hidden,
+        node_limit,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
 }
 
-async fn handle_tree(uri: String, abs_limit: i32, show_all_hidden: bool, node_limit: i32, level_limit: i32, ctx: CliContext) -> Result<()> {
+async fn handle_tree(
+    uri: String,
+    abs_limit: i32,
+    show_all_hidden: bool,
+    node_limit: i32,
+    level_limit: i32,
+    ctx: CliContext,
+) -> Result<()> {
     let mut params = vec![
         uri.clone(),
         format!("-l {}", abs_limit),
         format!("-n {}", node_limit),
         format!("-L {}", level_limit),
     ];
-    if show_all_hidden { params.push("-a".to_string()); }
+    if show_all_hidden {
+        params.push("-a".to_string());
+    }
     print_command_echo("ov tree", &params.join(" "), ctx.config.echo_command);
 
     let client = ctx.get_client();
     let api_output = if ctx.compact { "agent" } else { "original" };
-    commands::filesystem::tree(&client, &uri, api_output, abs_limit, show_all_hidden, node_limit, level_limit, ctx.output_format, ctx.compact).await
+    commands::filesystem::tree(
+        &client,
+        &uri,
+        api_output,
+        abs_limit,
+        show_all_hidden,
+        node_limit,
+        level_limit,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
 }
 
 async fn handle_mkdir(uri: String, ctx: CliContext) -> Result<()> {
@@ -1079,29 +1277,57 @@ async fn handle_stat(uri: String, ctx: CliContext) -> Result<()> {
     commands::filesystem::stat(&client, &uri, ctx.output_format, ctx.compact).await
 }
 
-async fn handle_grep(uri: String, pattern: String, ignore_case: bool, node_limit: i32, ctx: CliContext) -> Result<()> {
+async fn handle_grep(
+    uri: String,
+    pattern: String,
+    ignore_case: bool,
+    node_limit: i32,
+    ctx: CliContext,
+) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
-    if ignore_case { params.push("-i".to_string()); }
+    if ignore_case {
+        params.push("-i".to_string());
+    }
     params.push(format!("\"{}\"", pattern));
     print_command_echo("ov grep", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
-    commands::search::grep(&client, &uri, &pattern, ignore_case, node_limit, ctx.output_format, ctx.compact).await
+    commands::search::grep(
+        &client,
+        &uri,
+        &pattern,
+        ignore_case,
+        node_limit,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
 }
 
-
 async fn handle_glob(pattern: String, uri: String, node_limit: i32, ctx: CliContext) -> Result<()> {
-    let params = vec![format!("--uri={}", uri), format!("-n {}", node_limit), format!("\"{}\"", pattern)];
+    let params = vec![
+        format!("--uri={}", uri),
+        format!("-n {}", node_limit),
+        format!("\"{}\"", pattern),
+    ];
     print_command_echo("ov glob", &params.join(" "), ctx.config.echo_command);
     let client = ctx.get_client();
-    commands::search::glob(&client, &pattern, &uri, node_limit, ctx.output_format, ctx.compact).await
+    commands::search::glob(
+        &client,
+        &pattern,
+        &uri,
+        node_limit,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
 }
 
 async fn handle_health(ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
-    
+
     // Reuse the system health command
     let _ = commands::system::health(&client, ctx.output_format, ctx.compact).await?;
-    
+
     Ok(())
 }
 

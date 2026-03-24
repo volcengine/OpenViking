@@ -87,5 +87,9 @@ class Session:
         """
         return await self._client.get_session(self.session_id)
 
+    async def get_session_context(self) -> Dict[str, Any]:
+        """Get full merged session context."""
+        return await self._client.get_session_context(self.session_id)
+
     def __repr__(self) -> str:
         return f"Session(id={self.session_id}, user={self.user.__str__()})"

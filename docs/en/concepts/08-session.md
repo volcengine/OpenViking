@@ -6,7 +6,7 @@ Session manages conversation messages, tracks context usage, and extracts long-t
 
 **Lifecycle**: Create → Interact → Commit
 
-Getting a session by ID will auto-create it if it does not exist.
+Getting a session by ID does not auto-create it by default. Use `client.get_session(..., auto_create=True)` when you want missing sessions to be created automatically.
 
 ```python
 session = client.session(session_id="chat_001")

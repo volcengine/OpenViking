@@ -143,6 +143,11 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         return await self._client.get_session(session_id, auto_create=auto_create)
 
+    async def get_session_context(self, session_id: str) -> Dict[str, Any]:
+        """Get full merged session context."""
+        await self._ensure_initialized()
+        return await self._client.get_session_context(session_id)
+
     async def delete_session(self, session_id: str) -> None:
         """Delete a session."""
         await self._ensure_initialized()
