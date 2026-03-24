@@ -54,7 +54,7 @@ def sample_locomo(
     sample_size: Optional[int] = None,
     num_docs: Optional[int] = None,
     seed: int = 42,
-    sample_mode: str = "stratified"
+    sample_mode: str = "random"
 ) -> Dict[str, Any]:
     """Sample Locomo dataset with stratified sampling support."""
     input_file = input_dir / "locomo10.json"
@@ -68,14 +68,30 @@ def sample_locomo(
     original_num_docs = len(data)
     print(f"Locomo original size: {original_num_docs} documents")
     
-    # 计算总 QA 数（过滤 category 5）
-    total_qas = 0
-    for item in data:
-        if "qa" in item:
-            for q in item["qa"]:
-                if str(q.get("category")) != "5":
-                    total_qas += 1
+    # 按类别分组 QA
+    category_qas = {}
+    doc_category_qas = []
+    for doc in data:
+        doc_cat_qas = {}
+        if "qa" in doc:
+            for q in doc["qa"]:
+                cat = str(q.get("category"))
+                if cat != "5":
+                    if cat not in category_qas:
+                        category_qas[cat] = []
+                    category_qas[cat].append((doc, q))
+                    if cat not in doc_cat_qas:
+                        doc_cat_qas[cat] = []
+                    doc_cat_qas[cat].append(q)
+        doc_category_qas.append(doc_cat_qas)
+    
+    # 计算总 QA 数
+    total_qas = sum(len(qas) for qas in category_qas.values())
+    categories = sorted(category_qas.keys())
     print(f"Total QAs (excluding category 5): {total_qas}")
+    print(f"Categories: {categories}")
+    for cat in categories:
+        print(f"  Category {cat}: {len(category_qas[cat])} QAs")
     
     is_full = (sample_size is None and num_docs is None)
     if is_full:
@@ -94,32 +110,99 @@ def sample_locomo(
                 selected_docs = random.sample(data, num_docs)
                 print(f"Sampled {len(selected_docs)} documents (seed={seed})")
         else:
-            # 按 QA 数抽样，但保持文档完整性
-            # 策略：随机选文档，直到达到或超过 sample_size 个 QA（过滤 category 5）
-            random.seed(seed)
-            doc_indices = list(range(original_num_docs))
-            random.shuffle(doc_indices)
-            
-            selected_docs = []
-            selected_qas_count = 0
-            
-            for idx in doc_indices:
-                doc = data[idx]
-                # 计算文档中的有效 QA 数（排除 category 5）
-                doc_qas = 0
-                for q in doc.get("qa", []):
-                    if str(q.get("category")) != "5":
-                        doc_qas += 1
+            if sample_mode == "stratified":
+                # 分层抽样
+                print(f"Using stratified sampling (seed={seed})")
+                random.seed(seed)
                 
-                if selected_qas_count + doc_qas <= sample_size or not selected_docs:
-                    selected_docs.append(doc)
-                    selected_qas_count += doc_qas
+                num_categories = len(categories)
+                base_per_category = sample_size // num_categories
+                remainder = sample_size % num_categories
+                
+                if base_per_category == 0:
+                    print(f"Warning: Sample size {sample_size} is too small for {num_categories} categories")
+                    print("Falling back to random sampling")
+                    sample_mode = "random"
                 else:
-                    # 如果已经达到样本量，停止
-                    if selected_qas_count >= sample_size:
-                        break
+                    category_targets = {}
+                    for i, cat in enumerate(categories):
+                        category_targets[cat] = base_per_category + (1 if i < remainder else 0)
+                    
+                    if remainder > 0:
+                        print(f"Cannot split {sample_size} QAs evenly into {num_categories} categories")
+                        print(f"Distributing {remainder} extra QA(s) to first {remainder} category(ies)")
+                    
+                    print("Category targets:")
+                    for cat in categories:
+                        print(f"  Category {cat}: {category_targets[cat]} QAs")
+                    
+                    selected_docs = []
+                    selected_qas_by_cat = {cat: 0 for cat in categories}
+                    doc_used = [False] * len(data)
+                    
+                    for cat in categories:
+                        target = category_targets[cat]
+                        if target == 0:
+                            continue
+                        
+                        # 获取该类别的所有 QA 并打乱
+                        cat_qas = category_qas[cat].copy()
+                        random.shuffle(cat_qas)
+                        
+                        for doc, q in cat_qas:
+                            doc_idx = data.index(doc)
+                            if doc_used[doc_idx]:
+                                continue
+                            
+                            # 检查添加这个文档是否会超过目标
+                            new_count = selected_qas_by_cat[cat] + doc_category_qas[doc_idx].get(cat, 0)
+                            if new_count > target:
+                                continue
+                            
+                            selected_docs.append(doc)
+                            doc_used[doc_idx] = True
+                            
+                            # 更新各类别的计数
+                            for c, qs in doc_category_qas[doc_idx].items():
+                                selected_qas_by_cat[c] += len(qs)
+                            
+                            if selected_qas_by_cat[cat] >= target:
+                                break
+                    
+                    # 检查是否达到目标
+                    total_selected = sum(selected_qas_by_cat.values())
+                    print(f"Sampled {len(selected_docs)} documents with {total_selected} QAs")
+                    for cat in categories:
+                        print(f"  Category {cat}: {selected_qas_by_cat[cat]} QAs (target: {category_targets[cat]})")
             
-            print(f"Sampled {len(selected_docs)} documents with {selected_qas_count} QAs (seed={seed})")
+            if sample_mode == "random":
+                # 按 QA 数抽样，但保持文档完整性
+                # 策略：随机选文档，直到达到或超过 sample_size 个 QA（过滤 category 5）
+                print(f"Using random sampling (seed={seed})")
+                random.seed(seed)
+                doc_indices = list(range(original_num_docs))
+                random.shuffle(doc_indices)
+                
+                selected_docs = []
+                selected_qas_count = 0
+                
+                for idx in doc_indices:
+                    doc = data[idx]
+                    # 计算文档中的有效 QA 数（排除 category 5）
+                    doc_qas = 0
+                    for q in doc.get("qa", []):
+                        if str(q.get("category")) != "5":
+                            doc_qas += 1
+                    
+                    if selected_qas_count + doc_qas <= sample_size or not selected_docs:
+                        selected_docs.append(doc)
+                        selected_qas_count += doc_qas
+                    else:
+                        # 如果已经达到样本量，停止
+                        if selected_qas_count >= sample_size:
+                            break
+                
+                print(f"Sampled {len(selected_docs)} documents with {selected_qas_count} QAs (seed={seed})")
     
     # 保存数据 - 保持完整文档结构（包含所有 QA，包括 category 5）
     # adapter 会在加载时过滤 category 5
@@ -161,9 +244,9 @@ def sample_syllabusqa(
     sample_size: Optional[int] = None,
     num_docs: Optional[int] = None,
     seed: int = 42,
-    sample_mode: str = "stratified"
+    sample_mode: str = "random"
 ) -> Dict[str, Any]:
-    """Sample SyllabusQA dataset."""
+    """Sample SyllabusQA dataset with stratified sampling support."""
     # Read all CSV files from data/dataset_split/
     dataset_split_dir = input_dir / "data" / "dataset_split"
     if not dataset_split_dir.exists():
@@ -190,22 +273,34 @@ def sample_syllabusqa(
         course_name = item.get("course_name", "unknown")
         doc_groups[course_name].append(item)
     
-    # 计算有效 QA 数（排除 no answer）
-    doc_valid_qas = {}
-    total_valid_qas = 0
+    # 按类别分组 QA
+    category_qas = {}
+    doc_category_qas = {}
     for doc_name, items in doc_groups.items():
-        valid_count = 0
+        doc_cat_qas = {}
         for item in items:
-            if item.get("question_type") != "no answer":
-                valid_count += 1
-        doc_valid_qas[doc_name] = valid_count
-        total_valid_qas += valid_count
+            q_type = item.get("question_type")
+            if q_type != "no answer":
+                if q_type not in category_qas:
+                    category_qas[q_type] = []
+                category_qas[q_type].append((doc_name, item))
+                if q_type not in doc_cat_qas:
+                    doc_cat_qas[q_type] = []
+                doc_cat_qas[q_type].append(item)
+        doc_category_qas[doc_name] = doc_cat_qas
+    
+    # 计算有效 QA 数
+    total_valid_qas = sum(len(qas) for qas in category_qas.values())
+    categories = sorted(category_qas.keys())
     
     all_doc_names = list(doc_groups.keys())
     original_num_docs = len(all_doc_names)
     original_total_qas = len(all_data)
     print(f"SyllabusQA original size: {original_num_docs} documents, {original_total_qas} QAs (from {len(csv_files)} files)")
     print(f"Total valid QAs (excluding 'no answer'): {total_valid_qas}")
+    print(f"Categories: {categories}")
+    for cat in categories:
+        print(f"  {cat}: {len(category_qas[cat])} QAs")
     
     is_full = (sample_size is None and num_docs is None)
     if is_full:
@@ -224,29 +319,105 @@ def sample_syllabusqa(
                 selected_docs = random.sample(all_doc_names, num_docs)
                 print(f"Sampled {len(selected_docs)} documents (seed={seed})")
         else:
-            # 按 QA 数抽样，但保持文档完整性（只计算有效 QA）
-            random.seed(seed)
-            shuffled_docs = all_doc_names.copy()
-            random.shuffle(shuffled_docs)
-            
-            selected_docs = []
-            selected_qas_count = 0
-            
-            for doc_name in shuffled_docs:
-                doc_qas = doc_valid_qas[doc_name]
+            if sample_mode == "stratified":
+                # 分层抽样
+                print(f"Using stratified sampling (seed={seed})")
+                random.seed(seed)
                 
-                if doc_qas == 0:
-                    continue
+                num_categories = len(categories)
+                base_per_category = sample_size // num_categories
+                remainder = sample_size % num_categories
                 
-                if selected_qas_count + doc_qas <= sample_size or not selected_docs:
-                    selected_docs.append(doc_name)
-                    selected_qas_count += doc_qas
+                if base_per_category == 0:
+                    print(f"Warning: Sample size {sample_size} is too small for {num_categories} categories")
+                    print("Falling back to random sampling")
+                    sample_mode = "random"
                 else:
-                    # 如果已经达到样本量，停止
-                    if selected_qas_count >= sample_size:
-                        break
+                    category_targets = {}
+                    for i, cat in enumerate(categories):
+                        category_targets[cat] = base_per_category + (1 if i < remainder else 0)
+                    
+                    if remainder > 0:
+                        print(f"Cannot split {sample_size} QAs evenly into {num_categories} categories")
+                        print(f"Distributing {remainder} extra QA(s) to first {remainder} category(ies)")
+                    
+                    print("Category targets:")
+                    for cat in categories:
+                        print(f"  {cat}: {category_targets[cat]} QAs")
+                    
+                    selected_docs = []
+                    selected_qas_by_cat = {cat: 0 for cat in categories}
+                    doc_used = {doc_name: False for doc_name in all_doc_names}
+                    
+                    for cat in categories:
+                        target = category_targets[cat]
+                        if target == 0:
+                            continue
+                        
+                        # 获取该类别的所有 QA 并打乱
+                        cat_qas = category_qas[cat].copy()
+                        random.shuffle(cat_qas)
+                        
+                        for doc_name, item in cat_qas:
+                            if doc_used[doc_name]:
+                                continue
+                            
+                            # 检查添加这个文档是否会超过目标
+                            doc_cat_qas = doc_category_qas[doc_name]
+                            new_count = selected_qas_by_cat[cat] + len(doc_cat_qas.get(cat, []))
+                            if new_count > target:
+                                continue
+                            
+                            selected_docs.append(doc_name)
+                            doc_used[doc_name] = True
+                            
+                            # 更新各类别的计数
+                            for c, qs in doc_cat_qas.items():
+                                selected_qas_by_cat[c] += len(qs)
+                            
+                            if selected_qas_by_cat[cat] >= target:
+                                break
+                    
+                    # 检查是否达到目标
+                    total_selected = sum(selected_qas_by_cat.values())
+                    print(f"Sampled {len(selected_docs)} documents with {total_selected} QAs")
+                    for cat in categories:
+                        print(f"  {cat}: {selected_qas_by_cat[cat]} QAs (target: {category_targets[cat]})")
             
-            print(f"Sampled {len(selected_docs)} documents with {selected_qas_count} valid QAs (seed={seed})")
+            if sample_mode == "random":
+                # 按 QA 数抽样，但保持文档完整性（只计算有效 QA）
+                print(f"Using random sampling (seed={seed})")
+                random.seed(seed)
+                shuffled_docs = all_doc_names.copy()
+                random.shuffle(shuffled_docs)
+                
+                # 计算每个文档的有效 QA 数
+                doc_valid_qas = {}
+                for doc_name, items in doc_groups.items():
+                    valid_count = 0
+                    for item in items:
+                        if item.get("question_type") != "no answer":
+                            valid_count += 1
+                    doc_valid_qas[doc_name] = valid_count
+                
+                selected_docs = []
+                selected_qas_count = 0
+                
+                for doc_name in shuffled_docs:
+                    doc_qas = doc_valid_qas[doc_name]
+                    
+                    if doc_qas == 0:
+                        continue
+                    
+                    if selected_qas_count + doc_qas <= sample_size or not selected_docs:
+                        selected_docs.append(doc_name)
+                        selected_qas_count += doc_qas
+                    else:
+                        # 如果已经达到样本量，停止
+                        if selected_qas_count >= sample_size:
+                            break
+                
+                print(f"Sampled {len(selected_docs)} documents with {selected_qas_count} valid QAs (seed={seed})")
     
     # 构建选中的数据
     selected_data = []
@@ -317,14 +488,17 @@ def sample_qasper(
     sample_size: Optional[int] = None,
     num_docs: Optional[int] = None,
     seed: int = 42,
-    sample_mode: str = "stratified"
+    sample_mode: str = "random"
 ) -> Dict[str, Any]:
-    """Sample Qasper dataset."""
+    """Sample Qasper dataset with stratified sampling support."""
     # Read all JSON files and keep track of source file
     json_files = ["qasper-train-v0.3.json", "qasper-dev-v0.3.json", "qasper-test-v0.3.json"]
     all_paper_ids = []
     paper_data_map = {}  # paper_id -> (paper_data, source_file)
-    paper_qas_count = {}  # paper_id -> number of QAs (excluding unanswerable)
+    
+    # 按 answer type 分组 QA
+    category_qas = {}
+    paper_category_qas = {}
     
     for json_file in json_files:
         file_path = input_dir / json_file
@@ -333,8 +507,9 @@ def sample_qasper(
             for paper_id, paper_data in data.items():
                 all_paper_ids.append(paper_id)
                 paper_data_map[paper_id] = (paper_data, json_file)
-                # 计算有效 QA 数（排除 unanswerable）
-                qas_count = 0
+                
+                # 按 answer type 分组
+                paper_cat_qas = {}
                 if "qas" in paper_data:
                     for qa_item in paper_data["qas"]:
                         # 检查是否所有 answer 都是 unanswerable
@@ -342,16 +517,44 @@ def sample_qasper(
                             ans.get("answer", {}).get("unanswerable", False)
                             for ans in qa_item.get("answers", [])
                         )
-                        if not is_unanswerable:
-                            qas_count += 1
-                paper_qas_count[paper_id] = qas_count
+                        if is_unanswerable:
+                            continue
+                        
+                        # 确定 answer type
+                        answer_types = set()
+                        for ans in qa_item.get("answers", []):
+                            ans_obj = ans.get("answer", {})
+                            if ans_obj.get("unanswerable", False):
+                                continue
+                            if ans_obj.get("extractive_spans"):
+                                answer_types.add("extractive")
+                            elif ans_obj.get("free_form_answer", "").strip():
+                                answer_types.add("free_form")
+                            elif ans_obj.get("yes_no") is not None:
+                                answer_types.add("yes_no")
+                        
+                        # 选择第一个类型作为主要类型
+                        primary_type = next(iter(answer_types), "extractive")
+                        if primary_type not in category_qas:
+                            category_qas[primary_type] = []
+                        category_qas[primary_type].append((paper_id, qa_item))
+                        
+                        if primary_type not in paper_cat_qas:
+                            paper_cat_qas[primary_type] = []
+                        paper_cat_qas[primary_type].append(qa_item)
+                
+                paper_category_qas[paper_id] = paper_cat_qas
     
     original_num_docs = len(all_paper_ids)
     print(f"Qasper original size: {original_num_docs} documents (from {len(json_files)} files)")
     
-    # 计算总 QA 数（排除 unanswerable）
-    total_qas = sum(paper_qas_count.values())
+    # 计算总 QA 数
+    total_qas = sum(len(qas) for qas in category_qas.values())
+    categories = sorted(category_qas.keys())
     print(f"Total QAs (excluding unanswerable): {total_qas}")
+    print(f"Categories: {categories}")
+    for cat in categories:
+        print(f"  {cat}: {len(category_qas[cat])} QAs")
     
     is_full = (sample_size is None and num_docs is None)
     if is_full:
@@ -370,26 +573,101 @@ def sample_qasper(
                 selected_ids = random.sample(all_paper_ids, num_docs)
                 print(f"Sampled {len(selected_ids)} documents (seed={seed})")
         else:
-            # 按 QA 数抽样，但保持文档完整性
-            random.seed(seed)
-            shuffled_ids = all_paper_ids.copy()
-            random.shuffle(shuffled_ids)
-            
-            selected_ids = []
-            selected_qas_count = 0
-            
-            for paper_id in shuffled_ids:
-                paper_qas = paper_qas_count[paper_id]
+            if sample_mode == "stratified":
+                # 分层抽样
+                print(f"Using stratified sampling (seed={seed})")
+                random.seed(seed)
                 
-                if selected_qas_count + paper_qas <= sample_size or not selected_ids:
-                    selected_ids.append(paper_id)
-                    selected_qas_count += paper_qas
+                num_categories = len(categories)
+                base_per_category = sample_size // num_categories
+                remainder = sample_size % num_categories
+                
+                if base_per_category == 0:
+                    print(f"Warning: Sample size {sample_size} is too small for {num_categories} categories")
+                    print("Falling back to random sampling")
+                    sample_mode = "random"
                 else:
-                    # 如果已经达到样本量，停止
-                    if selected_qas_count >= sample_size:
-                        break
+                    category_targets = {}
+                    for i, cat in enumerate(categories):
+                        category_targets[cat] = base_per_category + (1 if i < remainder else 0)
+                    
+                    if remainder > 0:
+                        print(f"Cannot split {sample_size} QAs evenly into {num_categories} categories")
+                        print(f"Distributing {remainder} extra QA(s) to first {remainder} category(ies)")
+                    
+                    print("Category targets:")
+                    for cat in categories:
+                        print(f"  {cat}: {category_targets[cat]} QAs")
+                    
+                    selected_ids = []
+                    selected_qas_by_cat = {cat: 0 for cat in categories}
+                    doc_used = {paper_id: False for paper_id in all_paper_ids}
+                    
+                    for cat in categories:
+                        target = category_targets[cat]
+                        if target == 0:
+                            continue
+                        
+                        # 获取该类别的所有 QA 并打乱
+                        cat_qas = category_qas[cat].copy()
+                        random.shuffle(cat_qas)
+                        
+                        for paper_id, qa_item in cat_qas:
+                            if doc_used[paper_id]:
+                                continue
+                            
+                            # 检查添加这个文档是否会超过目标
+                            paper_cat_qas = paper_category_qas[paper_id]
+                            new_count = selected_qas_by_cat[cat] + len(paper_cat_qas.get(cat, []))
+                            if new_count > target:
+                                continue
+                            
+                            selected_ids.append(paper_id)
+                            doc_used[paper_id] = True
+                            
+                            # 更新各类别的计数
+                            for c, qs in paper_cat_qas.items():
+                                selected_qas_by_cat[c] += len(qs)
+                            
+                            if selected_qas_by_cat[cat] >= target:
+                                break
+                    
+                    # 检查是否达到目标
+                    total_selected = sum(selected_qas_by_cat.values())
+                    print(f"Sampled {len(selected_ids)} documents with {total_selected} QAs")
+                    for cat in categories:
+                        print(f"  {cat}: {selected_qas_by_cat[cat]} QAs (target: {category_targets[cat]})")
             
-            print(f"Sampled {len(selected_ids)} documents with {selected_qas_count} QAs (seed={seed})")
+            if sample_mode == "random":
+                # 按 QA 数抽样，但保持文档完整性
+                print(f"Using random sampling (seed={seed})")
+                random.seed(seed)
+                shuffled_ids = all_paper_ids.copy()
+                random.shuffle(shuffled_ids)
+                
+                # 计算每个文档的有效 QA 数
+                paper_qas_count = {}
+                for paper_id in all_paper_ids:
+                    count = 0
+                    for cat_qas in paper_category_qas[paper_id].values():
+                        count += len(cat_qas)
+                    paper_qas_count[paper_id] = count
+                
+                selected_ids = []
+                selected_qas_count = 0
+                
+                for paper_id in shuffled_ids:
+                    paper_qas = paper_qas_count[paper_id]
+                    
+                    if selected_qas_count + paper_qas <= sample_size or not selected_ids:
+                        selected_ids.append(paper_id)
+                        selected_qas_count += paper_qas
+                    else:
+                        # 如果已经达到样本量，停止
+                        if selected_qas_count >= sample_size:
+                            break
+                
+                print(f"Sampled {len(selected_ids)} documents with {selected_qas_count} QAs (seed={seed})")
     
     # Group by source file
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -407,7 +685,10 @@ def sample_qasper(
         print(f"Saved {len(output_data)} papers to {json_file}")
     
     # 计算抽样后的 QA 数
-    sampled_qas = sum(paper_qas_count[paper_id] for paper_id in selected_ids)
+    sampled_qas = 0
+    for paper_id in selected_ids:
+        for cat_qas in paper_category_qas[paper_id].values():
+            sampled_qas += len(cat_qas)
     
     # Save metadata
     metadata = {
@@ -433,7 +714,7 @@ def sample_financebench(
     sample_size: Optional[int] = None,
     num_docs: Optional[int] = None,
     seed: int = 42,
-    sample_mode: str = "stratified"
+    sample_mode: str = "random"
 ) -> Dict[str, Any]:
     """Sample Financebench dataset with stratified sampling support."""
     input_file = input_dir / "data" / "financebench_open_source.jsonl"
@@ -449,10 +730,30 @@ def sample_financebench(
         doc_name = item.get("doc_name", "unknown")
         doc_groups[doc_name].append(item)
     
+    # 按 question_type 分组 QA
+    category_qas = {}
+    doc_category_qas = {}
+    for doc_name, items in doc_groups.items():
+        doc_cat_qas = {}
+        for item in items:
+            q_type = item.get("question_type", "domain-relevant")
+            if q_type not in category_qas:
+                category_qas[q_type] = []
+            category_qas[q_type].append((doc_name, item))
+            if q_type not in doc_cat_qas:
+                doc_cat_qas[q_type] = []
+            doc_cat_qas[q_type].append(item)
+        doc_category_qas[doc_name] = doc_cat_qas
+    
     all_doc_names = list(doc_groups.keys())
     original_num_docs = len(all_doc_names)
     original_total_qas = len(data)
+    total_qas = sum(len(qas) for qas in category_qas.values())
+    categories = sorted(category_qas.keys())
     print(f"Financebench original size: {original_num_docs} documents, {original_total_qas} QAs")
+    print(f"Categories: {categories}")
+    for cat in categories:
+        print(f"  {cat}: {len(category_qas[cat])} QAs")
     
     is_full = (sample_size is None and num_docs is None)
     if is_full:
@@ -471,26 +772,93 @@ def sample_financebench(
                 selected_docs = random.sample(all_doc_names, num_docs)
                 print(f"Sampled {len(selected_docs)} documents (seed={seed})")
         else:
-            # 按 QA 数抽样，但保持文档完整性
-            random.seed(seed)
-            shuffled_docs = all_doc_names.copy()
-            random.shuffle(shuffled_docs)
-            
-            selected_docs = []
-            selected_qas_count = 0
-            
-            for doc_name in shuffled_docs:
-                doc_qas = len(doc_groups[doc_name])
+            if sample_mode == "stratified":
+                # 分层抽样
+                print(f"Using stratified sampling (seed={seed})")
+                random.seed(seed)
                 
-                if selected_qas_count + doc_qas <= sample_size or not selected_docs:
-                    selected_docs.append(doc_name)
-                    selected_qas_count += doc_qas
+                num_categories = len(categories)
+                base_per_category = sample_size // num_categories
+                remainder = sample_size % num_categories
+                
+                if base_per_category == 0:
+                    print(f"Warning: Sample size {sample_size} is too small for {num_categories} categories")
+                    print("Falling back to random sampling")
+                    sample_mode = "random"
                 else:
-                    # 如果已经达到样本量，停止
-                    if selected_qas_count >= sample_size:
-                        break
+                    category_targets = {}
+                    for i, cat in enumerate(categories):
+                        category_targets[cat] = base_per_category + (1 if i < remainder else 0)
+                    
+                    if remainder > 0:
+                        print(f"Cannot split {sample_size} QAs evenly into {num_categories} categories")
+                        print(f"Distributing {remainder} extra QA(s) to first {remainder} category(ies)")
+                    
+                    print("Category targets:")
+                    for cat in categories:
+                        print(f"  {cat}: {category_targets[cat]} QAs")
+                    
+                    selected_docs = []
+                    selected_qas_by_cat = {cat: 0 for cat in categories}
+                    doc_used = {doc_name: False for doc_name in all_doc_names}
+                    
+                    for cat in categories:
+                        target = category_targets[cat]
+                        if target == 0:
+                            continue
+                        
+                        # 获取该类别的所有 QA 并打乱
+                        cat_qas = category_qas[cat].copy()
+                        random.shuffle(cat_qas)
+                        
+                        for doc_name, item in cat_qas:
+                            if doc_used[doc_name]:
+                                continue
+                            
+                            # 检查添加这个文档是否会超过目标
+                            doc_cat_qas = doc_category_qas[doc_name]
+                            new_count = selected_qas_by_cat[cat] + len(doc_cat_qas.get(cat, []))
+                            if new_count > target:
+                                continue
+                            
+                            selected_docs.append(doc_name)
+                            doc_used[doc_name] = True
+                            
+                            # 更新各类别的计数
+                            for c, qs in doc_cat_qas.items():
+                                selected_qas_by_cat[c] += len(qs)
+                            
+                            if selected_qas_by_cat[cat] >= target:
+                                break
+                    
+                    # 检查是否达到目标
+                    total_selected = sum(selected_qas_by_cat.values())
+                    print(f"Sampled {len(selected_docs)} documents with {total_selected} QAs")
+                    for cat in categories:
+                        print(f"  {cat}: {selected_qas_by_cat[cat]} QAs (target: {category_targets[cat]})")
             
-            print(f"Sampled {len(selected_docs)} documents with {selected_qas_count} QAs (seed={seed})")
+            if sample_mode == "random":
+                # 按 QA 数抽样，但保持文档完整性
+                print(f"Using random sampling (seed={seed})")
+                random.seed(seed)
+                shuffled_docs = all_doc_names.copy()
+                random.shuffle(shuffled_docs)
+                
+                selected_docs = []
+                selected_qas_count = 0
+                
+                for doc_name in shuffled_docs:
+                    doc_qas = len(doc_groups[doc_name])
+                    
+                    if selected_qas_count + doc_qas <= sample_size or not selected_docs:
+                        selected_docs.append(doc_name)
+                        selected_qas_count += doc_qas
+                    else:
+                        # 如果已经达到样本量，停止
+                        if selected_qas_count >= sample_size:
+                            break
+                
+                print(f"Sampled {len(selected_docs)} documents with {selected_qas_count} QAs (seed={seed})")
     
     # 构建选中的数据
     selected_data = []

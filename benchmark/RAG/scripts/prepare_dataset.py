@@ -149,9 +149,9 @@ Examples:
     parser.add_argument(
         "--sample-mode",
         type=str,
-        choices=["stratified"],
-        default="stratified",
-        help="Sampling mode (default: stratified)"
+        choices=["random", "stratified"],
+        default="random",
+        help="Sampling mode: 'random' (default) for random sampling, 'stratified' for stratified sampling by category"
     )
     
     # Skip options
