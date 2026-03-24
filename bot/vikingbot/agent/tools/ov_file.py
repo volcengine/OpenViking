@@ -34,7 +34,7 @@ class VikingListTool(OVFileTool):
 
     @property
     def description(self) -> str:
-        return "List resources in a OpenViking path."
+        return "List resources in a OpenViking folder path."
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -88,7 +88,9 @@ class VikingSearchTool(OVFileTool):
 
     @property
     def description(self) -> str:
-        return "Search for resources in OpenViking using a query"
+        return ("Using query to search for resources (knowledge, code, files, workflow, etc.) in OpenViking. "
+                "This operation performs semantic retrieval, not full character matching. Please avoid repeated calls with similar queries as much as possible."
+                "bad-case: after searching with ‘Nate Joanna dog playdate 3:00 pm', another search was performed using 'Nate Joanna dog playdate'.")
 
     @property
     def parameters(self) -> dict[str, Any]:
@@ -194,7 +196,8 @@ class VikingGrepTool(OVFileTool):
 
     @property
     def description(self) -> str:
-        return "Search Viking resources using regex patterns (like grep). Supports multiple patterns to search concurrently."
+        return ("Search Viking resources using regex patterns (like grep). Supports multiple patterns to search concurrently."
+                "Please avoid repeated calls with similar queries as much as possible.")
 
     @property
     def parameters(self) -> dict[str, Any]:
