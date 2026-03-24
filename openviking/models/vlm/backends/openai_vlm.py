@@ -8,6 +8,7 @@ import json
 import logging
 import time
 from pathlib import Path
+from urllib.parse import urlparse
 from typing import Any, Dict, List, Optional, Union
 
 from ..base import VLMBase, VLMResponse, ToolCall
@@ -15,6 +16,11 @@ from ..registry import DEFAULT_AZURE_API_VERSION
 
 logger = logging.getLogger(__name__)
 
+
+_DASHSCOPE_HOSTS = {
+    "dashscope.aliyuncs.com",
+    "dashscope-intl.aliyuncs.com",
+}
 
 def _build_openai_client_kwargs(
     provider: str,
@@ -81,6 +87,31 @@ class OpenAIVLM(VLMBase):
             else:
                 self._async_client = openai.AsyncOpenAI(**kwargs)
         return self._async_client
+
+    def _supports_enable_thinking(self) -> bool:
+        """Return True for OpenAI-compatible DashScope endpoints that accept enable_thinking."""
+        if self.provider != "openai":
+            return False
+
+        if isinstance(self.model, str) and self.model.lower().startswith("dashscope/"):
+            return True
+
+        if not self.api_base:
+            return False
+
+        try:
+            host = urlparse(self.api_base).hostname or ""
+        except ValueError:
+            return False
+
+        return host.lower() in _DASHSCOPE_HOSTS
+
+    def _apply_provider_specific_extra_body(
+        self, kwargs: Dict[str, Any], thinking: bool
+    ) -> None:
+        """Attach provider-specific raw body parameters understood by compatible APIs."""
+        if self._supports_enable_thinking():
+            kwargs["extra_body"] = {"enable_thinking": bool(thinking)}
 
     def _update_token_usage_from_response(
         self, response, duration_seconds: float = 0.0,
@@ -247,6 +278,7 @@ class OpenAIVLM(VLMBase):
             "temperature": self.temperature,
             "stream": self.stream,
         }
+        self._apply_provider_specific_extra_body(kwargs, thinking)
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
 
@@ -292,6 +324,7 @@ class OpenAIVLM(VLMBase):
             "temperature": self.temperature,
             "stream": self.stream,
         }
+        self._apply_provider_specific_extra_body(kwargs, thinking)
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
 
@@ -409,6 +442,7 @@ class OpenAIVLM(VLMBase):
             "temperature": self.temperature,
             "stream": self.stream,
         }
+        self._apply_provider_specific_extra_body(kwargs, thinking)
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
 
@@ -460,6 +494,7 @@ class OpenAIVLM(VLMBase):
             "temperature": self.temperature,
             "stream": self.stream,
         }
+        self._apply_provider_specific_extra_body(kwargs, thinking)
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
 
