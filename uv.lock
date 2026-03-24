@@ -1042,6 +1042,15 @@ wheels = [
 ]
 
 [[package]]
+name = "diff-match-patch"
+version = "20241021"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/0e/ad/32e1777dd57d8e85fa31e3a243af66c538245b8d64b7265bec9a61f2ca33/diff_match_patch-20241021.tar.gz", hash = "sha256:beae57a99fa48084532935ee2968b8661db861862ec82c6f21f4acdd6d835073", size = 39962, upload-time = "2024-10-21T19:41:21.094Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f7/bb/2aa9b46a01197398b901e458974c20ed107935c26e44e37ad5b0e5511e44/diff_match_patch-20241021-py3-none-any.whl", hash = "sha256:93cea333fb8b2bc0d181b0de5e16df50dd344ce64828226bda07728818936782", size = 43252, upload-time = "2024-10-21T19:41:19.914Z" },
+]
+
+[[package]]
 name = "dill"
 version = "0.4.0"
 source = { registry = "https://pypi.org/simple" }
@@ -3498,6 +3507,7 @@ gemini-async = [
 test = [
     { name = "boto3" },
     { name = "datasets" },
+    { name = "diff-match-patch" },
     { name = "hvac" },
     { name = "pandas", version = "2.3.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.11'" },
     { name = "pandas", version = "3.0.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.11'" },
@@ -3527,6 +3537,7 @@ requires-dist = [
     { name = "datasets", marker = "extra == 'eval'", specifier = ">=2.0.0" },
     { name = "datasets", marker = "extra == 'test'", specifier = ">=2.0.0" },
     { name = "ddgs", marker = "extra == 'bot'", specifier = ">=9.0.0" },
+    { name = "diff-match-patch", marker = "extra == 'test'", specifier = ">=20200713" },
     { name = "dingtalk-stream", marker = "extra == 'bot-dingtalk'", specifier = ">=0.4.0" },
     { name = "ebooklib", specifier = ">=0.18.0" },
     { name = "fastapi", specifier = ">=0.128.0" },

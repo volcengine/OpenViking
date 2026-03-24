@@ -3,16 +3,20 @@
 """OpenAI VLM backend implementation"""
 
 import base64
+import json
 import logging
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional, Union
 
-import openai
+try:
+    import openai
+except ImportError:
+    openai = None
 
 from openviking.utils.model_retry import retry_async, retry_sync
 
-from ..base import VLMBase
+from ..base import ToolCall, VLMBase, VLMResponse
 from ..registry import DEFAULT_AZURE_API_VERSION
 
 logger = logging.getLogger(__name__)
@@ -53,6 +57,8 @@ class OpenAIVLM(VLMBase):
     def get_client(self):
         """Get sync client"""
         if self._sync_client is None:
+            if openai is None:
+                raise ImportError("Please install openai: pip install openai")
             kwargs = _build_openai_client_kwargs(
                 self.provider,
                 self.api_key,
@@ -69,6 +75,8 @@ class OpenAIVLM(VLMBase):
     def get_async_client(self):
         """Get async client"""
         if self._async_client is None:
+            if openai is None:
+                raise ImportError("Please install openai: pip install openai")
             kwargs = _build_openai_client_kwargs(
                 self.provider,
                 self.api_key,
@@ -99,6 +107,43 @@ class OpenAIVLM(VLMBase):
             )
         return
 
+    def _parse_tool_calls(self, message) -> List[ToolCall]:
+        """Parse tool calls from OpenAI response message."""
+        tool_calls = []
+        if hasattr(message, "tool_calls") and message.tool_calls:
+            for tc in message.tool_calls:
+                args = tc.function.arguments
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except json.JSONDecodeError:
+                        args = {"raw": args}
+                tool_calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=args))
+        return tool_calls
+
+    def _build_vlm_response(self, response, has_tools: bool) -> Union[str, VLMResponse]:
+        """Build response from OpenAI response. Returns str or VLMResponse based on has_tools."""
+        choice = response.choices[0]
+        message = choice.message
+
+        if has_tools:
+            usage = {}
+            if hasattr(response, "usage") and response.usage:
+                usage = {
+                    "prompt_tokens": response.usage.prompt_tokens,
+                    "completion_tokens": response.usage.completion_tokens,
+                    "total_tokens": response.usage.total_tokens,
+                    "prompt_tokens_details": getattr(response.usage, "prompt_tokens_details", None),
+                }
+
+            return VLMResponse(
+                content=message.content,
+                tool_calls=self._parse_tool_calls(message),
+                finish_reason=choice.finish_reason or "stop",
+                usage=usage,
+            )
+        return message.content or ""
+
     def _extract_from_chunk(self, chunk):
         """Extract content and usage from a single chunk.
 
@@ -109,11 +154,9 @@ class OpenAIVLM(VLMBase):
         prompt_tokens = 0
         completion_tokens = 0
 
-        # Extract content from delta
         if chunk.choices and chunk.choices[0].delta:
             content = getattr(chunk.choices[0].delta, "content", None)
 
-        # Extract usage from chunk if available
         if hasattr(chunk, "usage") and chunk.usage:
             prompt_tokens = chunk.usage.prompt_tokens or 0
             completion_tokens = chunk.usage.completion_tokens or 0
@@ -121,14 +164,7 @@ class OpenAIVLM(VLMBase):
         return content, prompt_tokens, completion_tokens
 
     def _process_streaming_response(self, response):
-        """Process streaming response and extract content and token usage.
-
-        Args:
-            response: Streaming response iterator from OpenAI client
-
-        Returns:
-            str: Extracted content
-        """
+        """Process streaming response and extract content and token usage."""
         content_parts = []
         prompt_tokens = 0
         completion_tokens = 0
@@ -142,7 +178,6 @@ class OpenAIVLM(VLMBase):
             if ct > 0:
                 completion_tokens = ct
 
-        # Update token usage if we got it from streaming chunks
         if prompt_tokens > 0 or completion_tokens > 0:
             self.update_token_usage(
                 model_name=self.model or "gpt-4o-mini",
@@ -154,14 +189,7 @@ class OpenAIVLM(VLMBase):
         return "".join(content_parts)
 
     async def _process_streaming_response_async(self, response):
-        """Process async streaming response and extract content and token usage.
-
-        Args:
-            response: Async streaming response iterator from OpenAI client
-
-        Returns:
-            str: Extracted content
-        """
+        """Process async streaming response and extract content and token usage."""
         content_parts = []
         prompt_tokens = 0
         completion_tokens = 0
@@ -175,7 +203,6 @@ class OpenAIVLM(VLMBase):
             if ct > 0:
                 completion_tokens = ct
 
-        # Update token usage if we got it from streaming chunks
         if prompt_tokens > 0 or completion_tokens > 0:
             self.update_token_usage(
                 model_name=self.model or "gpt-4o-mini",
@@ -186,33 +213,56 @@ class OpenAIVLM(VLMBase):
 
         return "".join(content_parts)
 
-    def _build_text_kwargs(self, prompt: str) -> Dict[str, Any]:
+    def _build_text_kwargs(
+        self,
+        prompt: str = "",
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        kwargs_messages = messages or [{"role": "user", "content": prompt}]
         kwargs = {
             "model": self.model or "gpt-4o-mini",
-            "messages": [{"role": "user", "content": prompt}],
+            "messages": kwargs_messages,
             "temperature": self.temperature,
             "stream": self.stream,
         }
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = tool_choice or "auto"
         return kwargs
 
     def _build_vision_kwargs(
         self,
-        prompt: str,
-        images: List[Union[str, Path, bytes]],
+        prompt: str = "",
+        images: Optional[List[Union[str, Path, bytes]]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
-        content = [self._prepare_image(img) for img in images]
-        content.append({"type": "text", "text": prompt})
+        if messages:
+            kwargs_messages = messages
+        else:
+            content = []
+            if images:
+                content.extend(self._prepare_image(img) for img in images)
+            if prompt:
+                content.append({"type": "text", "text": prompt})
+            kwargs_messages = [{"role": "user", "content": content}]
 
         kwargs = {
             "model": self.model or "gpt-4o-mini",
-            "messages": [{"role": "user", "content": content}],
+            "messages": kwargs_messages,
             "temperature": self.temperature,
             "stream": self.stream,
         }
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = tool_choice or "auto"
         return kwargs
 
     def _extract_completion_content(self, response, elapsed: float) -> str:
@@ -231,15 +281,25 @@ class OpenAIVLM(VLMBase):
             content = self._extract_content_from_response(response)
         return self._clean_response(content)
 
-    def get_completion(self, prompt: str, thinking: bool = False) -> str:
+    def get_completion(
+        self,
+        prompt: str = "",
+        thinking: bool = False,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[str, VLMResponse]:
         """Get text completion"""
         client = self.get_client()
-        kwargs = self._build_text_kwargs(prompt)
+        kwargs = self._build_text_kwargs(prompt, tools, tool_choice, messages)
 
-        def _call() -> str:
+        def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
             response = client.chat.completions.create(**kwargs)
             elapsed = time.perf_counter() - t0
+            if tools:
+                self._update_token_usage_from_response(response, duration_seconds=elapsed)
+                return self._build_vlm_response(response, has_tools=True)
             return self._extract_completion_content(response, elapsed)
 
         return retry_sync(
@@ -249,15 +309,25 @@ class OpenAIVLM(VLMBase):
             operation_name="OpenAI VLM completion",
         )
 
-    async def get_completion_async(self, prompt: str, thinking: bool = False) -> str:
+    async def get_completion_async(
+        self,
+        prompt: str = "",
+        thinking: bool = False,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously"""
         client = self.get_async_client()
-        kwargs = self._build_text_kwargs(prompt)
+        kwargs = self._build_text_kwargs(prompt, tools, tool_choice, messages)
 
-        async def _call() -> str:
+        async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
             response = await client.chat.completions.create(**kwargs)
             elapsed = time.perf_counter() - t0
+            if tools:
+                self._update_token_usage_from_response(response, duration_seconds=elapsed)
+                return self._build_vlm_response(response, has_tools=True)
             return await self._extract_completion_content_async(response, elapsed)
 
         return await retry_async(
@@ -278,11 +348,11 @@ class OpenAIVLM(VLMBase):
 
         if data[:8] == b"\x89PNG\r\n\x1a\n":
             return "image/png"
-        elif data[:2] == b"\xff\xd8":
+        if data[:2] == b"\xff\xd8":
             return "image/jpeg"
-        elif data[:6] in (b"GIF87a", b"GIF89a"):
+        if data[:6] in (b"GIF87a", b"GIF89a"):
             return "image/gif"
-        elif data[:4] == b"RIFF" and len(data) >= 12 and data[8:12] == b"WEBP":
+        if data[:4] == b"RIFF" and len(data) >= 12 and data[8:12] == b"WEBP":
             return "image/webp"
 
         logger.warning(f"[OpenAIVLM] Unknown image format, magic bytes: {data[:8].hex()}")
@@ -297,7 +367,7 @@ class OpenAIVLM(VLMBase):
                 "type": "image_url",
                 "image_url": {"url": f"data:{mime_type};base64,{b64}"},
             }
-        elif isinstance(image, Path) or (
+        if isinstance(image, Path) or (
             isinstance(image, str) and not image.startswith(("http://", "https://"))
         ):
             path = Path(image)
@@ -316,23 +386,27 @@ class OpenAIVLM(VLMBase):
                 "type": "image_url",
                 "image_url": {"url": f"data:{mime_type};base64,{b64}"},
             }
-        else:
-            return {"type": "image_url", "image_url": {"url": image}}
+        return {"type": "image_url", "image_url": {"url": image}}
 
     def get_vision_completion(
         self,
-        prompt: str,
-        images: List[Union[str, Path, bytes]],
+        prompt: str = "",
+        images: Optional[List[Union[str, Path, bytes]]] = None,
         thinking: bool = False,
-    ) -> str:
+        tools: Optional[List[Dict[str, Any]]] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[str, VLMResponse]:
         """Get vision completion"""
         client = self.get_client()
-        kwargs = self._build_vision_kwargs(prompt, images)
+        kwargs = self._build_vision_kwargs(prompt, images, tools, None, messages)
 
-        def _call() -> str:
+        def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
             response = client.chat.completions.create(**kwargs)
             elapsed = time.perf_counter() - t0
+            if tools:
+                self._update_token_usage_from_response(response, duration_seconds=elapsed)
+                return self._build_vlm_response(response, has_tools=True)
             return self._extract_completion_content(response, elapsed)
 
         return retry_sync(
@@ -344,18 +418,23 @@ class OpenAIVLM(VLMBase):
 
     async def get_vision_completion_async(
         self,
-        prompt: str,
-        images: List[Union[str, Path, bytes]],
+        prompt: str = "",
+        images: Optional[List[Union[str, Path, bytes]]] = None,
         thinking: bool = False,
-    ) -> str:
+        tools: Optional[List[Dict[str, Any]]] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[str, VLMResponse]:
         """Get vision completion asynchronously"""
         client = self.get_async_client()
-        kwargs = self._build_vision_kwargs(prompt, images)
+        kwargs = self._build_vision_kwargs(prompt, images, tools, None, messages)
 
-        async def _call() -> str:
+        async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
             response = await client.chat.completions.create(**kwargs)
             elapsed = time.perf_counter() - t0
+            if tools:
+                self._update_token_usage_from_response(response, duration_seconds=elapsed)
+                return self._build_vlm_response(response, has_tools=True)
             return await self._extract_completion_content_async(response, elapsed)
 
         return await retry_async(

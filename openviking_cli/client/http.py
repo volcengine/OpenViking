@@ -127,6 +127,7 @@ class AsyncHTTPClient(BaseClient):
         self,
         url: Optional[str] = None,
         api_key: Optional[str] = None,
+        user_id: Optional[str] = None,
         agent_id: Optional[str] = None,
         account: Optional[str] = None,
         user: Optional[str] = None,
@@ -137,6 +138,7 @@ class AsyncHTTPClient(BaseClient):
         Args:
             url: OpenViking Server URL. If not provided, reads from ovcli.conf.
             api_key: API key for authentication. If not provided, reads from ovcli.conf.
+            user_id: User identifier. If not provided, defaults to "default".
             agent_id: Agent identifier. If not provided, reads from ovcli.conf.
             account: Account identifier for multi-tenant auth. Required when using root key
                      to access tenant-scoped APIs. If not provided, reads from ovcli.conf.

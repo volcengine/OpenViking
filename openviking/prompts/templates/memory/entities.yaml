@@ -1,0 +1,44 @@
+memory_type: entities
+description: |
+  Entity memory - manages knowledge using Zettelkasten method.
+  Each card represents an entity with relative path links to other cards.
+  Relative path format: ../entities/entity_name.md
+  - Example: [skin_itching](../entities/skin_itching.md) → see dermatologist
+  - Cards should be rich and distributed - avoid putting all info in one card.
+directory: "viking://user/{user_space}/memories/entities"
+filename_template: "{name}.md"
+enabled: true
+
+fields:
+  - name: name
+    type: string
+    description: |
+      # Content
+      - Entity card name in English, lowercase with underscores, max 3 words
+
+      # Format Requirements
+      ## Entity Cards
+      - In triage scenarios, each card represents a department or symptom
+      - Entities should be as granular as possible - split combined symptoms into individual entities
+
+      ### Good Examples
+      emergency_department
+      cough_symptom
+      daily_20260110
+
+      ### Bad Examples
+      progressive_memory_loss_with_personality_change  // Too long, max 3 words
+    merge_op: immutable
+
+  - name: content
+    type: string
+    description: |
+      # Content
+      - Detailed Zettelkasten card content in markdown format
+      - Use standard markdown links to connect cards:
+          [emergency_department](../entities/{name})
+          [fever](../entities/{name})
+
+      - One card per topic, link to related cards; if content is too long, create new cards
+      - If retrieved content is related to current card, update content to establish connections
+    merge_op: patch
