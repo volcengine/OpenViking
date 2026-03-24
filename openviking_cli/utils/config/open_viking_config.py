@@ -117,6 +117,11 @@ class OpenVikingConfig(BaseModel):
         description="Semantic processing configuration (overview/abstract limits)",
     )
 
+    sources: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Reserved source ingestion configuration",
+    )
+
     auto_generate_l0: bool = Field(
         default=True, description="Automatically generate L0 (abstract) if not provided"
     )

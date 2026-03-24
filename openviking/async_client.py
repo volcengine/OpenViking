@@ -317,6 +317,7 @@ class AsyncOpenViking:
         since: Optional[str] = None,
         until: Optional[str] = None,
         time_field: Optional[str] = None,
+        source: Optional[str] = None,
     ):
         """
         Complex search with session context.
@@ -345,6 +346,7 @@ class AsyncOpenViking:
             since=since,
             until=until,
             time_field=time_field,
+            source=source,
         )
 
     async def find(
@@ -358,6 +360,7 @@ class AsyncOpenViking:
         since: Optional[str] = None,
         until: Optional[str] = None,
         time_field: Optional[str] = None,
+        source: Optional[str] = None,
     ):
         """Semantic search"""
         await self._ensure_initialized()
@@ -371,6 +374,7 @@ class AsyncOpenViking:
             since=since,
             until=until,
             time_field=time_field,
+            source=source,
         )
 
     # ============= FS methods =============

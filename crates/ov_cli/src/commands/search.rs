@@ -1,6 +1,8 @@
 use crate::client::HttpClient;
 use crate::error::Result;
 use crate::output::{OutputFormat, output_success};
+use serde_json::{Value, json};
+
 fn normalize_source_filter(source: &str) -> String {
     match source.trim().to_lowercase().as_str() {
         "session" | "sessions" => "sessions".to_string(),
@@ -22,7 +24,6 @@ fn source_root_uri(source: &str) -> Option<String> {
         "gist" => Some("viking://resources/sources/gist".to_string()),
         "imessages" => Some("viking://resources/sources/imessages".to_string()),
         "notion" => Some("viking://resources/sources/notion".to_string()),
-        "sessions" => Some("viking://resources/sources/sessions".to_string()),
         "slack" => Some("viking://resources/sources/slack".to_string()),
         "taildrive" => Some("viking://resources/sources/taildrive".to_string()),
         "telegram" => Some("viking://resources/sources/telegram".to_string()),
@@ -31,6 +32,16 @@ fn source_root_uri(source: &str) -> Option<String> {
         "resource" => Some("viking://resources".to_string()),
         _ => None,
     }
+}
+
+fn source_filter(source: Option<&str>) -> Option<Value> {
+    source.map(|value| {
+        json!({
+            "op": "must",
+            "field": "source",
+            "conds": [normalize_source_filter(value)],
+        })
+    })
 }
 
 pub async fn find(
@@ -58,7 +69,7 @@ pub async fn find(
             effective_uri,
             node_limit,
             threshold,
-            None,
+            source_filter(source),
             after.map(|s| s.to_string()),
             before.map(|s| s.to_string()),
         )
@@ -94,13 +105,32 @@ pub async fn search(
             session_id,
             node_limit,
             threshold,
-            None,
+            source_filter(source),
             after.map(|s| s.to_string()),
             before.map(|s| s.to_string()),
         )
         .await?;
     output_success(&result, output_format, compact);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{normalize_source_filter, source_filter, source_root_uri};
+
+    #[test]
+    fn source_filter_builds_canonical_metadata_filter() {
+        let payload = source_filter(Some("Documents")).expect("expected source filter");
+        assert_eq!(payload["op"], "must");
+        assert_eq!(payload["field"], "source");
+        assert_eq!(payload["conds"][0], "documents");
+    }
+
+    #[test]
+    fn sessions_source_does_not_force_wrong_resource_root() {
+        assert_eq!(normalize_source_filter("session"), "sessions");
+        assert!(source_root_uri("sessions").is_none());
+    }
 }
 
 pub async fn grep(

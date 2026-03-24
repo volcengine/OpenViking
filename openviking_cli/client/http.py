@@ -595,6 +595,7 @@ class AsyncHTTPClient(BaseClient):
         since: Optional[str] = None,
         until: Optional[str] = None,
         time_field: Optional[str] = None,
+        source: Optional[str] = None,
     ) -> FindResult:
         """Semantic search without session context."""
         telemetry = self._validate_telemetry(telemetry)
@@ -610,6 +611,7 @@ class AsyncHTTPClient(BaseClient):
                 "score_threshold": score_threshold,
                 "filter": filter,
                 "telemetry": telemetry,
+                "source": source,
                 "since": since,
                 "until": until,
                 "time_field": time_field,
@@ -632,6 +634,7 @@ class AsyncHTTPClient(BaseClient):
         since: Optional[str] = None,
         until: Optional[str] = None,
         time_field: Optional[str] = None,
+        source: Optional[str] = None,
     ) -> FindResult:
         """Semantic search with optional session context."""
         telemetry = self._validate_telemetry(telemetry)
@@ -649,6 +652,7 @@ class AsyncHTTPClient(BaseClient):
                 "score_threshold": score_threshold,
                 "filter": filter,
                 "telemetry": telemetry,
+                "source": source,
                 "since": since,
                 "until": until,
                 "time_field": time_field,

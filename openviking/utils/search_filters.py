@@ -4,6 +4,7 @@ import re
 from datetime import datetime, time, timedelta, timezone
 from typing import Any, Dict, Optional
 
+from openviking.utils.source_utils import normalize_source_name
 from openviking.utils.time_utils import format_iso8601, parse_iso_datetime
 
 _DATE_ONLY_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
@@ -35,6 +36,26 @@ def merge_time_filter(
     if not existing_filter:
         return time_filter
     return {"op": "and", "conds": [existing_filter, time_filter]}
+
+
+def merge_source_filter(
+    existing_filter: Optional[Dict[str, Any]],
+    source: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """Merge a canonical source constraint into an existing metadata filter tree."""
+    normalized_source = normalize_source_name(source)
+    if not normalized_source:
+        return existing_filter
+
+    source_filter: Dict[str, Any] = {
+        "op": "must",
+        "field": "source",
+        "conds": [normalized_source],
+    }
+
+    if not existing_filter:
+        return source_filter
+    return {"op": "and", "conds": [existing_filter, source_filter]}
 
 
 def resolve_time_bounds(

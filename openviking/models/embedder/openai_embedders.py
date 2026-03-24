@@ -3,6 +3,7 @@
 """OpenAI Embedder Implementation"""
 
 import logging
+import os
 from typing import Any, Dict, List, Optional
 
 import openai
@@ -112,7 +113,11 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         """
         super().__init__(model_name, config)
 
-        self.api_key = api_key
+        self.api_key = (
+            api_key
+            or os.environ.get("OPENVIKING_EMBEDDING_API_KEY")
+            or os.environ.get("OPENAI_API_KEY")
+        )
         self.api_base = api_base
         self.api_version = api_version
         self.dimension = dimension
