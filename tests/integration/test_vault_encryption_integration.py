@@ -234,11 +234,9 @@ async def openviking_client_with_vault_encryption(test_data_dir: Path, vault_enc
     }
     config_dict["embedding"] = {
         "dense": {
-            "model": "doubao-embedding-vision-250615",
-            "api_key": "2a2284d9-79a3-4978-b718-dfeffdda04ad",
-            "api_base": "https://ark.cn-beijing.volces.com/api/v3",
-            "dimension": 1024,
-            "provider": "volcengine",
+            "provider": "openai",
+            "api_key": "fake",
+            "model": "text-embedding-3-small",
         }
     }
 
@@ -346,11 +344,9 @@ class TestVikingFSEncryptionWithVault:
         }
         config_dict["embedding"] = {
             "dense": {
-                "model": "doubao-embedding-vision-250615",
-                "api_key": "2a2284d9-79a3-4978-b718-dfeffdda04ad",
-                "api_base": "https://ark.cn-beijing.volces.com/api/v3",
-                "dimension": 1024,
-                "provider": "volcengine",
+                "provider": "openai",
+                "api_key": "fake",
+                "model": "text-embedding-3-small",
             }
         }
         config_dict["server"] = {"root_api_key": self.ROOT_KEY}
