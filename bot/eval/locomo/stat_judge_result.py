@@ -8,7 +8,7 @@ def main():
     parser = argparse.ArgumentParser(description="Statistics for judge result csv")
     parser.add_argument(
         "--input",
-        default="./result/judge_result.csv",
+        default="./result/locomo_qa_result_only_sys_memory.csv",
         help="Path to judge result csv file, default: ./result/judge_result.csv",
     )
     args = parser.parse_args()
@@ -24,6 +24,7 @@ def main():
     total_completion_tokens = 0
     total_tokens = 0
     valid_rows = 0
+    total_iteration = 0
 
     with open(args.input, "r", encoding="utf-8", newline="") as f:
         reader = csv.DictReader(f)
@@ -36,6 +37,7 @@ def main():
             elif result == "WRONG":
                 wrong += 1
 
+            total_iteration += int(row.get("iteration", "0"))
             # 统计耗时
             time_cost = row.get("time_cost", "")
             if time_cost:
@@ -67,6 +69,7 @@ def main():
         f"Wrong: {wrong}",
         f"Accuracy: {accuracy:.2%}",
         f"\nAverage time cost: {avg_time:.2f}s",
+        f"\nAverage iteration: {total_iteration / valid_rows if valid_rows > 0 else 0.0:.2f}",
         f"\nToken usage:",
         f"  Total prompt tokens: {total_prompt_tokens}",
         f"  Total completion tokens: {total_completion_tokens}",

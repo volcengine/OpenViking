@@ -217,7 +217,7 @@ class AgentLoop:
         session_key: SessionKey,
         publish_events: bool = True,
         sender_id: str | None = None,
-    ) -> tuple[str | None, list[dict], dict[str, int]]:
+    ) -> tuple[str | None, list[dict], dict[str, int], int]:
         """
         Run the core agent loop: call LLM, execute tools, repeat until done.
 
@@ -363,7 +363,7 @@ class AgentLoop:
             else:
                 final_content = "I've completed processing but have no response to give."
 
-        return final_content, tools_used, token_usage
+        return final_content, tools_used, token_usage, iteration
 
     @trace(
         name="process_message",
@@ -512,7 +512,7 @@ class AgentLoop:
             # logger.info(f"New messages: {messages}")
 
             # Run agent loop
-            final_content, tools_used, token_usage = await self._run_agent_loop(
+            final_content, tools_used, token_usage, iteration = await self._run_agent_loop(
                 messages=messages,
                 session_key=session_key,
                 publish_events=True,
@@ -532,13 +532,18 @@ class AgentLoop:
             await self.sessions.save(session)
 
             time_cost = round(time.time() - start_time, 2)
+            if tools_used is not None:
+                tools_used_names = [tool["tool_name"] for tool in tools_used]
+            else:
+                tools_used_names = []
             return OutboundMessage(
                 session_key=msg.session_key,
                 content=final_content,
                 metadata=msg.metadata,
                 token_usage=token_usage,
-                time_cost=time_cost
-                or {},  # Pass through for channel-specific needs (e.g. Slack thread_ts)
+                time_cost=time_cost,
+                iteration=iteration,
+                tools_used_names=tools_used_names
             )
         finally:
             long_running_notified = True
@@ -565,7 +570,7 @@ class AgentLoop:
         )
 
         # Run agent loop (no events published)
-        final_content, tools_used, token_usage = await self._run_agent_loop(
+        final_content, tools_used, token_usage, iteration = await self._run_agent_loop(
             messages=messages,
             session_key=msg.session_key,
             publish_events=False,
@@ -724,8 +729,9 @@ Respond with ONLY valid JSON, no markdown fences."""
             allow_from.append(self.config.ov_server.admin_user_id)
         for channel in self.config.channels_config.get_all_channels():
             if channel.channel_key() == msg.session_key.channel_key():
-                if channel.allow_from:
-                    allow_from.extend(channel.allow_from)
+                allow_cmd = getattr(channel, 'allow_cmd_from', [])
+                if allow_cmd:
+                    allow_from.extend(allow_cmd)
                 break
 
         # If channel not found or sender not in allow_from list, ignore message

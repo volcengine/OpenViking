@@ -428,6 +428,34 @@ For OpenAI-compatible providers that return SSE (Server-Sent Events) format resp
 
 > **Note**: The OpenAI SDK requires `stream=true` to properly parse SSE responses. When using providers that force SSE format, you must set this option to `true`.
 
+### feishu
+
+Configuration for Feishu/Lark cloud document parsing. See [Resources](../api/02-resources.md) for supported URL patterns.
+
+```json
+{
+  "feishu": {
+    "app_id": "",
+    "app_secret": "",
+    "domain": "https://open.feishu.cn",
+    "max_rows_per_sheet": 1000,
+    "max_records_per_table": 1000
+  }
+}
+```
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `app_id` | str | Feishu app ID (can also be set via `FEISHU_APP_ID` env var) |
+| `app_secret` | str | Feishu app secret (can also be set via `FEISHU_APP_SECRET` env var) |
+| `domain` | str | Feishu API domain. Use `https://open.larksuite.com` for Lark international |
+| `max_rows_per_sheet` | int | Maximum rows to import per spreadsheet sheet (default: `1000`) |
+| `max_records_per_table` | int | Maximum records to import per bitable table (default: `1000`) |
+
+**Dependency**: `pip install 'openviking[bot-feishu]'`
+
+**Lark international**: For Lark URLs (`*.larksuite.com`), set `domain` to `https://open.larksuite.com`.
+
 ### code
 
 Controls how code files are summarized via `code_summary_mode`. Both config formats are equivalent:

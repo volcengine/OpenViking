@@ -16,7 +16,6 @@ from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
 
 
-
 def _sanitize_floats(obj: Any) -> Any:
     """Recursively replace inf/nan with 0.0 to ensure JSON compliance."""
     if isinstance(obj, float):
@@ -28,6 +27,7 @@ def _sanitize_floats(obj: Any) -> Any:
     if isinstance(obj, list):
         return [_sanitize_floats(v) for v in obj]
     return obj
+
 
 router = APIRouter(prefix="/api/v1/search", tags=["search"])
 
@@ -41,6 +41,7 @@ class FindRequest(BaseModel):
     node_limit: Optional[int] = None
     score_threshold: Optional[float] = None
     filter: Optional[Dict[str, Any]] = None
+    include_provenance: bool = False
     telemetry: TelemetryRequest = False
 
 
@@ -54,6 +55,7 @@ class SearchRequest(BaseModel):
     node_limit: Optional[int] = None
     score_threshold: Optional[float] = None
     filter: Optional[Dict[str, Any]] = None
+    include_provenance: bool = False
     telemetry: TelemetryRequest = False
 
 
@@ -96,7 +98,7 @@ async def find(
     )
     result = execution.result
     if hasattr(result, "to_dict"):
-        result = result.to_dict()
+        result = result.to_dict(include_provenance=request.include_provenance)
     result = _sanitize_floats(result)
     return Response(
         status="ok",
@@ -136,7 +138,7 @@ async def search(
     )
     result = execution.result
     if hasattr(result, "to_dict"):
-        result = result.to_dict()
+        result = result.to_dict(include_provenance=request.include_provenance)
     result = _sanitize_floats(result)
     return Response(
         status="ok",

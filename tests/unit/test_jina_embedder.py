@@ -148,6 +148,54 @@ class TestJinaDenseEmbedder:
         assert call_kwargs["extra_body"]["task"] == "retrieval.query"
 
     @patch("openviking.models.embedder.jina_embedders.openai.OpenAI")
+    def test_code_model_uses_code_task_defaults(self, mock_openai_class):
+        """Jina code models should use code-specific default task names."""
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
+
+        mock_embedding = MagicMock()
+        mock_embedding.embedding = [0.1] * 1024
+
+        mock_response = MagicMock()
+        mock_response.data = [mock_embedding]
+        mock_client.embeddings.create.return_value = mock_response
+
+        embedder = JinaDenseEmbedder(
+            model_name="jina-code-embeddings-1.5b",
+            api_key="test-api-key",
+        )
+
+        embedder.embed("Write a binary search in Python", is_query=True)
+
+        call_kwargs = mock_client.embeddings.create.call_args[1]
+        assert call_kwargs["extra_body"]["task"] == "nl2code.query"
+
+    @patch("openviking.models.embedder.jina_embedders.openai.OpenAI")
+    def test_code_model_keeps_explicit_task_override(self, mock_openai_class):
+        """Explicit task params should override the model-specific defaults."""
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
+
+        mock_embedding = MagicMock()
+        mock_embedding.embedding = [0.1] * 1024
+
+        mock_response = MagicMock()
+        mock_response.data = [mock_embedding]
+        mock_client.embeddings.create.return_value = mock_response
+
+        embedder = JinaDenseEmbedder(
+            model_name="jina-code-embeddings-1.5b",
+            api_key="test-api-key",
+            query_param="custom.query",
+            document_param="custom.passage",
+        )
+
+        embedder.embed("Write a binary search in Python", is_query=True)
+
+        call_kwargs = mock_client.embeddings.create.call_args[1]
+        assert call_kwargs["extra_body"]["task"] == "custom.query"
+
+    @patch("openviking.models.embedder.jina_embedders.openai.OpenAI")
     def test_embed_with_late_chunking(self, mock_openai_class):
         """Test embedding with late_chunking parameter"""
         mock_client = MagicMock()

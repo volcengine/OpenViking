@@ -5,12 +5,39 @@ import time
 import csv
 import os
 import re
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+
+
+def load_csv_qa(input_path: str, count: int | None = None) -> list[dict]:
+    """从CSV文件加载QA数据，取sample_id和question字段"""
+    qa_list = []
+    with open(input_path, "r", encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            qa_list.append(
+                {
+                    "sample_id": row.get("sample_id", ""),
+                    "question": row.get("question", ""),
+                    "answer": row.get("answer", ""),
+                    "category": "",
+                    "evidence": [],
+                }
+            )
+
+    if count is not None:
+        qa_list = qa_list[:count]
+    return qa_list
 
 
 def load_locomo_qa(
     input_path: str, sample_index: int | None = None, count: int | None = None
 ) -> list[dict]:
-    """加载LoCoMo数据集的QA部分，逻辑同原eval.py"""
+    """加载LoCoMo数据集的QA部分，支持JSON和CSV格式"""
+    if input_path.lower().endswith(".csv"):
+        return load_csv_qa(input_path, count)
+
+    # 原有JSON格式处理逻辑
     with open(input_path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
@@ -40,8 +67,8 @@ def load_locomo_qa(
     return qa_list
 
 
-def run_vikingbot_chat(question: str) -> tuple[str, dict, float]:
-    """执行vikingbot chat命令，返回回答、token使用情况、耗时（秒）"""
+def run_vikingbot_chat(question: str) -> tuple[str, dict, float, int, list]:
+    """执行vikingbot chat命令，返回回答、token使用情况、耗时（秒）、迭代次数、使用的工具列表"""
     input = f"Answer the question directly: {question}"
     cmd = ["vikingbot", "chat", "-m", input, "-e"]
     start_time = time.time()
@@ -59,15 +86,21 @@ def run_vikingbot_chat(question: str) -> tuple[str, dict, float]:
                 "token_usage", {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
             )
             time_cost = resp_json.get("time_cost", time_cost)
+            iteration = resp_json.get("iteration", 0)
+            tools_used_names = resp_json.get("tools_used_names", [])
         except (json.JSONDecodeError, ValueError) as e:
             response = f"[PARSE ERROR] {output}"
             token_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-        return response, token_usage, time_cost
+            iteration = 0
+            tools_used_names = []
+        return response, token_usage, time_cost, iteration, tools_used_names
     except subprocess.CalledProcessError as e:
         return (
             f"[CMD ERROR] {e.stderr}",
             {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
             0,
+            0,
+            [],
         )
     except subprocess.TimeoutExpired:
         time_cost = 0
@@ -75,6 +108,8 @@ def run_vikingbot_chat(question: str) -> tuple[str, dict, float]:
             "[TIMEOUT]",
             {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
             time_cost,
+            0,
+            [],
         )
 
 
@@ -111,6 +146,9 @@ def main():
     parser.add_argument(
         "--count", type=int, default=None, help="Number of QA questions to run, default all"
     )
+    parser.add_argument(
+        "--threads", type=int, default=5, help="Number of concurrent threads, default: 5"
+    )
     args = parser.parse_args()
 
     # 确保输出目录存在
@@ -134,10 +172,15 @@ def main():
         "response",
         "token_usage",
         "time_cost",
+        "iteration",
+        "tools_used_names",
         "result",
     ]
     # 打开CSV文件，不存在则创建写表头，存在则追加
     file_exists = os.path.exists(args.output)
+    # 创建线程锁，确保多线程写文件安全
+    write_lock = threading.Lock()
+
     with open(args.output, "a+", encoding="utf-8", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
         if not file_exists:
@@ -145,15 +188,18 @@ def main():
             f.flush()
 
         processed_count = len(processed_questions)
-        for idx, qa_item in enumerate(qa_list, 1):
-            question = qa_item["question"]
-            if question in processed_questions:
-                print(f"Skipping {idx}/{total}: already processed")
-                continue
+        # 过滤掉已经处理过的问题
+        remaining_qa = [qa for qa in qa_list if qa["question"] not in processed_questions]
+        remaining_count = len(remaining_qa)
+        print(f"Starting evaluation with {args.threads} concurrent threads, {remaining_count} questions to process")
 
+        def process_qa(qa_item, idx, total_count):
+            """单个QA处理函数，供多线程调用"""
+            question = qa_item["question"]
             answer = qa_item["answer"]
-            print(f"Processing {idx}/{total}: {question[:60]}...")
-            response, token_usage, time_cost = run_vikingbot_chat(question)
+            print(f"Processing {idx}/{total_count}: {question[:60]}...")
+
+            response, token_usage, time_cost, iteration, tools_used_names = run_vikingbot_chat(question)
 
             row = {
                 "sample_id": qa_item["sample_id"],
@@ -162,13 +208,34 @@ def main():
                 "response": response,
                 "token_usage": json.dumps(token_usage, ensure_ascii=False),
                 "time_cost": round(time_cost, 2),
+                "iteration": iteration,
+                "tools_used_names": json.dumps(tools_used_names, ensure_ascii=False),
                 "result": "",
             }
-            writer.writerow(row)
-            f.flush()
-            processed_questions.add(question)
-            processed_count += 1
-            print(f"Completed {processed_count}/{total}, time cost: {round(time_cost, 2)}s")
+
+            # 线程安全的文件写入
+            with write_lock:
+                nonlocal processed_count
+                writer.writerow(row)
+                f.flush()
+                processed_questions.add(question)
+                processed_count += 1
+                print(f"Completed {processed_count}/{total}, time cost: {round(time_cost, 2)}s")
+            return True
+
+        # 使用线程池处理
+        with ThreadPoolExecutor(max_workers=args.threads) as executor:
+            # 提交所有任务
+            futures = []
+            for idx, qa_item in enumerate(remaining_qa, 1):
+                futures.append(executor.submit(process_qa, qa_item, idx, remaining_count))
+
+            # 等待所有任务完成
+            for future in as_completed(futures):
+                try:
+                    future.result()
+                except Exception as e:
+                    print(f"Error processing QA item: {str(e)}")
 
     print(f"Evaluation completed, results saved to {args.output}")
 

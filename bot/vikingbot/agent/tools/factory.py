@@ -7,12 +7,11 @@ from vikingbot.agent.tools.filesystem import ReadFileTool, WriteFileTool, EditFi
 from vikingbot.agent.tools.image import ImageGenerationTool
 from vikingbot.agent.tools.message import MessageTool
 from vikingbot.agent.tools.ov_file import (
-    VikingReadTool,
     VikingListTool,
     VikingSearchTool,
     VikingGrepTool,
     VikingGlobTool,
-    VikingSearchUserMemoryTool,
+    VikingMultiReadTool,
     VikingMemoryCommitTool,
     VikingAddResourceTool,
 )
@@ -87,12 +86,11 @@ def register_default_tools(
 
     # Open Viking tools
     if include_viking_tools:
-        registry.register(VikingReadTool())
+        registry.register(VikingMultiReadTool())
         registry.register(VikingListTool())
         registry.register(VikingSearchTool())
         registry.register(VikingGrepTool())
         registry.register(VikingGlobTool())
-        registry.register(VikingSearchUserMemoryTool())
         registry.register(VikingMemoryCommitTool())
         if not config.read_only:
             registry.register(VikingAddResourceTool())
