@@ -329,23 +329,6 @@ class Session:
         await self._write_to_agfs_async(self._messages)
         await self._write_relations_async()
 
-        # Enqueue semantic processing directly
-        from openviking.storage.queuefs import get_queue_manager
-        from openviking.storage.queuefs.semantic_msg import SemanticMsg
-
-        queue_manager = get_queue_manager()
-        if queue_manager:
-            msg = SemanticMsg(
-                uri=self._session_uri,
-                context_type="memory",
-                account_id=self.ctx.account_id,
-                user_id=self.ctx.user.user_id,
-                agent_id=self.ctx.user.agent_id,
-                role=self.ctx.role.value,
-            )
-            semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC)
-            await semantic_queue.enqueue(msg)
-
         redo_log.mark_done(task_id)
 
         # Update active_count
