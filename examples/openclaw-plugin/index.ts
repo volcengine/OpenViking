@@ -607,7 +607,7 @@ const contextEnginePlugin = {
         return contextEngineRef;
       });
       api.logger.info(
-        "openviking: registered context-engine (before_prompt_build=auto-recall, afterTurn=auto-capture, sessionId=1:1 mapping)",
+        "openviking: registered context-engine (afterTurn=auto-capture, assemble=archive+active, compact=commit+extract, before_prompt_build=auto-recall)",
       );
     } else {
       api.logger.warn(
