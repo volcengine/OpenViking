@@ -224,7 +224,7 @@ Vikingbot 提供 7 个专用的 OpenViking 工具：
 | `openviking_add_resource` | 添加本地文件为 OpenViking 资源 |
 | `openviking_grep` | 使用正则表达式搜索 OpenViking 资源 |
 | `openviking_glob` | 使用 glob 模式匹配 OpenViking 资源 |
-| `user_memory_search` | 搜索 OpenViking 用户记忆 |
+| `openviking_memory_commit` | 提交session到Openviking|
 
 ### OpenViking 钩子
 

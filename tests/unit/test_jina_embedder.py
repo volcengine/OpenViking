@@ -324,3 +324,63 @@ class TestJinaDenseEmbedder:
             dimension=256,
         )
         assert embedder.get_dimension() == 256
+
+    @patch("openviking.models.embedder.jina_embedders.openai.OpenAI")
+    def test_422_task_error_actionable_message(self, mock_openai_class):
+        """422 error mentioning 'task' should produce actionable RuntimeError."""
+        import openai
+
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
+
+        error = openai.BadRequestError(
+            message="Validation error",
+            response=MagicMock(status_code=422, headers={}),
+            body={"detail": "Input should be 'nl2code.query' ... task"},
+        )
+        mock_client.embeddings.create.side_effect = error
+
+        embedder = JinaDenseEmbedder(
+            model_name="jina-code-embeddings-1.5b",
+            api_key="test-key",
+        )
+
+        with pytest.raises(RuntimeError, match="query_param.*document_param"):
+            embedder.embed("hello")
+
+    @patch("openviking.models.embedder.jina_embedders.openai.OpenAI")
+    def test_non_422_error_passthrough(self, mock_openai_class):
+        """Non-422 API errors should use the generic 'Jina API error' message."""
+        import openai
+
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
+
+        error = openai.APIError(
+            message="Internal server error",
+            request=MagicMock(),
+            body=None,
+        )
+        mock_client.embeddings.create.side_effect = error
+
+        embedder = JinaDenseEmbedder(
+            model_name="jina-embeddings-v5-text-small",
+            api_key="test-key",
+        )
+
+        with pytest.raises(RuntimeError, match="Jina API error"):
+            embedder.embed("hello")
+
+    def test_code_model_dimensions(self):
+        """Code models should have correct default dimensions."""
+        embedder_1_5b = JinaDenseEmbedder(
+            model_name="jina-code-embeddings-1.5b",
+            api_key="test-key",
+        )
+        assert embedder_1_5b.get_dimension() == 1024
+
+        embedder_0_5b = JinaDenseEmbedder(
+            model_name="jina-code-embeddings-0.5b",
+            api_key="test-key",
+        )
+        assert embedder_0_5b.get_dimension() == 768

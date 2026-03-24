@@ -221,7 +221,7 @@ Vikingbot provides 7 dedicated OpenViking tools:
 | `openviking_add_resource` | Add local files as OpenViking resources |
 | `openviking_grep` | Search OpenViking resources using regular expressions |
 | `openviking_glob` | Match OpenViking resources using glob patterns |
-| `user_memory_search` | Search OpenViking user memory |
+| `openviking_memory_commit` | Commit session to ov |
 
 ### OpenViking Hooks
 
