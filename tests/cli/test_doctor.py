@@ -167,6 +167,14 @@ class TestCheckEmbedding:
         assert not ok
         assert "no API key" in detail
 
+    def test_fail_invalid_json(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text("{not valid json")
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            ok, detail, fix = check_embedding()
+        assert not ok
+        assert "unreadable" in detail
+
 
 class TestCheckVlm:
     def test_pass_with_config(self, tmp_path: Path):
@@ -186,6 +194,14 @@ class TestCheckVlm:
         with patch("openviking_cli.doctor._find_config", return_value=config):
             ok, detail, fix = check_vlm()
         assert not ok
+
+    def test_fail_invalid_json(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text("{not valid json")
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            ok, detail, fix = check_vlm()
+        assert not ok
+        assert "unreadable" in detail
 
 
 class TestCheckDisk:
