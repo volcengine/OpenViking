@@ -8,9 +8,7 @@ from pydantic import BaseModel, Field, model_validator
 class RerankConfig(BaseModel):
     """Configuration for rerank API (VikingDB or OpenAI-compatible providers)."""
 
-    provider: str = Field(
-        default="vikingdb", description="Rerank provider: 'vikingdb', 'openai', or 'litellm'"
-    )
+    provider: str = Field(default="vikingdb", description="Rerank provider: 'vikingdb' or 'openai'")
 
     # VikingDB fields
     ak: Optional[str] = Field(default=None, description="VikingDB Access Key")
@@ -38,7 +36,12 @@ class RerankConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_provider_fields(self) -> "RerankConfig":
-        allowed = ["vikingdb", "openai", "litellm"]
+        if self.provider == "litellm":
+            raise ValueError(
+                "Rerank provider 'litellm' has been temporarily disabled for security reasons"
+            )
+
+        allowed = ["vikingdb", "openai"]
         if self.provider not in allowed:
             raise ValueError(f"Rerank provider must be one of {allowed}, got '{self.provider}'")
         if self.provider == "openai":
@@ -46,15 +49,10 @@ class RerankConfig(BaseModel):
                 raise ValueError(
                     "OpenAI-compatible rerank provider requires 'api_key' and 'api_base'"
                 )
-        if self.provider == "litellm":
-            if not self.model:
-                raise ValueError("LiteLLM rerank provider requires 'model'")
         return self
 
     def is_available(self) -> bool:
         """Check if rerank is configured."""
         if self.provider == "openai":
             return self.api_key is not None and self.api_base is not None
-        if self.provider == "litellm":
-            return self.model is not None
         return self.ak is not None and self.sk is not None
