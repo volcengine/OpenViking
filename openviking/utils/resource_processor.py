@@ -228,13 +228,16 @@ class ResourceProcessor:
                     dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
                     parent_path = dst_path.rsplit("/", 1)[0] if "/" in dst_path else dst_path
 
-                    parent_uri = "/".join(root_uri.rsplit("/", 1)[:-1])
+                    parent_uri = "/".join(root_uri.rstrip("/").rsplit("/", 1)[:-1])
                     if parent_uri:
                         await viking_fs.mkdir(parent_uri, exist_ok=True, ctx=ctx)
 
                     async with LockContext(lock_manager, [parent_path], lock_mode="point"):
                         if candidate_uri:
-                            root_uri = await self.tree_builder._resolve_unique_uri(candidate_uri)
+                            with viking_fs.bind_request_context(ctx):
+                                root_uri = await self.tree_builder._resolve_unique_uri(
+                                    candidate_uri
+                                )
                             result["root_uri"] = root_uri
                             dst_path = viking_fs._uri_to_path(root_uri, ctx=ctx)
 

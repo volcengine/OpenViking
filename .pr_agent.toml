@@ -63,6 +63,11 @@ pr_commands = [
     "/review",
     "/improve --pr_code_suggestions.commitable_code_suggestions=false",
 ]
+push_commands = [
+    "/describe",
+    "/review --pr_reviewer.remove_previous_review_comment=true",
+    "/improve --pr_code_suggestions.commitable_code_suggestions=false",
+]
 
 # ---------------------------------------------------------------------------
 # Custom Labels: OpenViking-specific PR categorization

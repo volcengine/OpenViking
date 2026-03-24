@@ -26,8 +26,9 @@ class VolcengineCollectionAdapter(CollectionAdapter):
         region: str,
         project_name: str,
         collection_name: str,
+        index_name: str,
     ):
-        super().__init__(collection_name=collection_name)
+        super().__init__(collection_name=collection_name, index_name=index_name)
         self.mode = "volcengine"
         self._ak = ak
         self._sk = sk
@@ -49,6 +50,7 @@ class VolcengineCollectionAdapter(CollectionAdapter):
             region=config.volcengine.region,
             project_name=config.project_name or "default",
             collection_name=config.name or "context",
+            index_name=config.index_name or "default",
         )
 
     def _meta(self) -> Dict[str, Any]:

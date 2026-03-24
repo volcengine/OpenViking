@@ -81,11 +81,17 @@ def load_json_config(path: Path) -> Dict[str, Any]:
         raise FileNotFoundError(f"Config file does not exist: {path}")
 
     with open(path, "r", encoding="utf-8-sig") as f:
-        try:
-            print(f"Loading config file: {path}")
-            return json.load(f)
-        except json.JSONDecodeError as e:
-            raise ValueError(f"Invalid JSON in config file {path}: {e}") from e
+        raw = f.read()
+
+    # Expand $VAR and ${VAR} inside the JSON text (useful for container deployments).
+    # Unset variables are left unchanged by expandvars().
+    raw = os.path.expandvars(raw)
+
+    try:
+        print(f"Loading config file: {path}")
+        return json.loads(raw)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON in config file {path}: {e}") from e
 
 
 def require_config(

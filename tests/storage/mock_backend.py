@@ -1,10 +1,9 @@
 from typing import Any, Dict, List, Optional
-from openviking.storage.vectordb.collection.collection import ICollection
+
+from openviking.storage.vectordb.collection.collection import Collection, ICollection
 from openviking.storage.vectordb.collection.result import AggregateResult, SearchResult
 from openviking.storage.vectordb.index.index import IIndex
-
 from openviking.storage.vectordb_adapters.base import CollectionAdapter
-from openviking.storage.vectordb.collection.collection import Collection
 
 
 class MockCollectionAdapter(CollectionAdapter):
@@ -13,8 +12,14 @@ class MockCollectionAdapter(CollectionAdapter):
     Inherits from CollectionAdapter and wraps MockCollection.
     """
 
-    def __init__(self, collection_name: str, custom_param1: str = "", custom_param2: int = 0):
-        super().__init__(collection_name=collection_name)
+    def __init__(
+        self,
+        collection_name: str,
+        index_name: str = "default",
+        custom_param1: str = "",
+        custom_param2: int = 0,
+    ):
+        super().__init__(collection_name=collection_name, index_name=index_name)
         self.mode = "mock"
         self.custom_param1 = custom_param1
         self.custom_param2 = custom_param2
@@ -24,6 +29,7 @@ class MockCollectionAdapter(CollectionAdapter):
         custom_params = getattr(config, "custom_params", {})
         return cls(
             collection_name=config.name or "mock_collection",
+            index_name=config.index_name or "default",
             custom_param1=custom_params.get("custom_param1", ""),
             custom_param2=custom_params.get("custom_param2", 0),
         )

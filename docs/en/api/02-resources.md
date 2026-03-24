@@ -16,6 +16,7 @@ Resources are external knowledge that agents can reference. This guide covers ho
 | Video | `.mp4`, `.mov`, `.avi` | Frame extraction + VLM |
 | Audio | `.mp3`, `.wav`, `.m4a` | Transcription |
 | Documents | `.docx` | Text extraction |
+| Feishu/Lark | URL (`*.feishu.cn`, `*.larksuite.com`) | Cloud document parsing via `lark-oapi` |
 
 ## Processing Pipeline
 
@@ -46,6 +47,18 @@ Add a resource to the knowledge base.
 | wait | bool | No | False | Wait for semantic processing to complete |
 | timeout | float | No | None | Timeout in seconds (only used when wait=True) |
 | watch_interval | float | No | 0 | Watch interval (minutes). >0 enables/updates watch; <=0 disables watch. Only takes effect when target is provided |
+
+**Incremental Updates**
+
+When you call `add_resource()` repeatedly for the same resource URI, the system performs an incremental update instead of rebuilding everything from scratch:
+
+- **Trigger**: `target` is provided and already exists in the knowledge base.
+- **High-level idea**: each ingestion first builds a temporary resource tree from the new input. During asynchronous semantic processing, the temporary tree is compared against the existing tree at `target`, and only the changed parts are re-processed and synchronized.
+- **Incremental behavior in the semantic stage**:
+  - **Unchanged files**: reuse existing L0 summaries and vector index records; skip vectorization.
+  - **Changed files**: regenerate summaries and vector index entries.
+  - **Directory-level L0/L1 (abstract/overview)**: if the child set and their change status are unchanged, reuse existing results and skip vectorization; otherwise recompute and update.
+- **Filesystem + index sync**: after the semantic DAG finishes, a top-down diff is applied from the temporary tree to `target` to synchronize additions, deletions, and updates. Vector store records are kept consistent: deletions remove corresponding vectors, while moves/overwrites update vector records’ URI mapping, completing an incremental update of both the resource tree and the semantic index.
 
 **Python SDK (Embedded / HTTP)**
 
@@ -127,6 +140,57 @@ curl -X POST http://localhost:1933/api/v1/resources \
 
 ```bash
 openviking add-resource https://example.com/api-docs.md --to viking://resources/external/ --reason "External API documentation"
+```
+
+**Example: Add Feishu/Lark Cloud Documents**
+
+[Feishu](https://www.feishu.cn) (飞书) and its international version [Lark](https://www.larksuite.com) are widely used for documentation in Chinese tech companies. OpenViking can directly import cloud documents by URL.
+
+Supported document types:
+
+| Type | URL Pattern |
+|------|-------------|
+| Documents | `https://*.feishu.cn/docx/{id}` |
+| Wiki pages | `https://*.feishu.cn/wiki/{token}` |
+| Spreadsheets | `https://*.feishu.cn/sheets/{token}` |
+| Bitable | `https://*.feishu.cn/base/{token}` |
+
+> **Setup**: Install the optional dependency: `pip install 'openviking[bot-feishu]'`
+>
+> Configure credentials via `ov.conf` (see [Configuration](../../guides/01-configuration.md#feishu)) or environment variables:
+> ```bash
+> export FEISHU_APP_ID="cli_xxx"
+> export FEISHU_APP_SECRET="xxx"
+> ```
+
+**Python SDK (Embedded / HTTP)**
+
+```python
+# Import a Feishu document
+result = client.add_resource(
+    "https://example.feishu.cn/docx/doxcnABC123",
+    reason="Project design document"
+)
+client.wait_processed()
+
+# Import a wiki page (auto-resolves to underlying type)
+client.add_resource("https://example.feishu.cn/wiki/wikiXYZ")
+
+# Import a spreadsheet
+client.add_resource("https://example.feishu.cn/sheets/shtcn456")
+```
+
+**CLI**
+
+```bash
+# Import a Feishu document
+openviking add-resource "https://example.feishu.cn/docx/doxcnABC123" --reason "Project design document"
+
+# Import a wiki page
+openviking add-resource "https://example.feishu.cn/wiki/wikiXYZ"
+
+# Incremental update to an existing target
+openviking add-resource "https://example.feishu.cn/docx/doxcnABC123" --to viking://resources/design-doc
 ```
 
 **Example: Wait for Processing**

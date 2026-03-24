@@ -1,0 +1,100 @@
+memory_type: skills
+description: |
+  Skill execution memory - captures "how this skill is executed, what works well, and what doesn't".
+  Extract skill execution patterns, statistics, and learnings from skill usage in conversation.
+  For each skill, track: how many times it's been executed, success rate, what it's best for, recommended execution flow, key dependencies, common failure modes, and actionable recommendations.
+  Also accumulate complete guidelines with "Good Cases" and "Bad Cases" examples.
+  Skill memories help the agent learn from experience and execute skills more effectively over time.
+directory: "viking://agent/{agent_space}/memories/skills"
+filename_template: "{skill_name}.md"
+
+content_template: |
+  Skill: {skill_name}
+
+  Skill Memory Context:
+  Based on {total_executions} historical executions:
+  - Success rate: {success_rate}% ({success_count} successful, {fail_count} failed)
+  - Best for: {best_for}
+  - Recommended flow: {recommended_flow}
+  - Key dependencies: {key_dependencies}
+  - Common failures: {common_failures}
+  - Recommendation: {recommendation}
+
+  {guidelines}
+
+enabled: true
+fields:
+  - name: skill_name
+    type: string
+    description: |
+      Skill name, copied exactly from [ToolCall] if skill_name is present, otherwise inferred from conversation context.
+      Used to uniquely identify this skill memory.
+      Examples: "create_presentation", "analyze_code", "write_document"
+    merge_op: immutable
+
+  - name: total_executions
+    type: int64
+    description: |
+      Total number of skill executions, accumulated from historical statistics.
+      Used to calculate success rate.
+    merge_op: sum
+
+  - name: success_count
+    type: int64
+    description: |
+      Number of successful skill executions, accumulated from historical statistics.
+      Counts successful executions.
+    merge_op: sum
+
+  - name: fail_count
+    type: int64
+    description: |
+      Number of failed skill executions, accumulated from historical statistics.
+      Counts failed executions.
+    merge_op: sum
+
+  - name: best_for
+    type: string
+    description: |
+      Best use cases for the skill, describing in what scenarios this skill works best.
+      Examples: "Slide creation tasks with clear topic and target audience"
+    merge_op: patch
+
+  - name: recommended_flow
+    type: string
+    description: |
+      Recommended execution flow for the skill, describing the best steps to execute this skill.
+      Examples: "1. Confirm topic and audience → 2. Collect reference materials → 3. Generate outline → 4. Create slides → 5. Refine content"
+    merge_op: patch
+
+  - name: key_dependencies
+    type: string
+    description: |
+      Key dependencies/prerequisites for the skill, describing what prerequisites and inputs are needed to execute this skill.
+      Examples: "Clear topic (e.g., 'Q3 project update', 'Python tutorial'); Target audience (e.g., 'executives', 'beginners'); Reference materials (optional but recommended)"
+    merge_op: patch
+
+  - name: common_failures
+    type: string
+    description: |
+      Common failure modes of the skill, describing problems and error patterns this skill frequently encounters.
+      Examples: "Vague topic like 'make a PPT' leads to multiple rework cycles; Missing audience info causes style mismatch; No reference materials results in generic content"
+    merge_op: patch
+
+  - name: recommendation
+    type: string
+    description: |
+      Actionable recommendations for skill usage, short actionable recommendations.
+      Examples: "Always confirm topic and audience before starting; Collect 2-3 reference materials for better quality"
+    merge_op: patch
+
+  - name: guidelines
+    type: string
+    description: |
+      Skill usage guidelines, complete usage guide content.
+      Must include exact English headings:
+      - "## Guidelines" - best practices
+      - "### Good Cases" - successful usage examples
+      - "### Bad Cases" - failed usage examples
+      Headings must be in English, content can be in target language.
+    merge_op: patch

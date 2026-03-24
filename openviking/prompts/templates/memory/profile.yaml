@@ -1,0 +1,17 @@
+memory_type: profile
+description: |
+  User profile memory - captures "who the user is" as a person.
+  Extract relatively stable personal attributes that define the user's identity, work style, and preferences.
+  Include: profession, experience level, technical background, communication style, work habits, etc.
+  Do NOT include transient conversation content or temporary mood states.
+directory: "viking://user/{user_space}/memories"
+filename_template: "profile.md"
+enabled: true
+fields:
+  - name: content
+    type: string
+    description: |
+      User profile content in Markdown format describing "who the user is".
+      Includes relatively stable personal attributes: profession, experience, tech stack, communication style, etc.
+      Example: "User is an AI development engineer with 3 years of LLM application development experience, mainly using Python and LangChain tech stack. Communication style is concise and direct, prefers efficient code implementation."
+    merge_op: patch

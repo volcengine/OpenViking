@@ -9,6 +9,7 @@ directory, which causes silent failures in AGFS and VectorDB.
 import atexit
 import os
 import signal
+import sys
 
 from openviking_cli.utils import get_logger
 
@@ -43,11 +44,16 @@ def _is_pid_alive(pid: int) -> bool:
         # Process exists but we can't signal it.
         return True
     except OSError:
-        # On Windows, os.kill(pid, 0) raises OSError (WinError 87 "The
-        # parameter is incorrect") for stale or invalid PIDs instead of
-        # ProcessLookupError.  Treat this as "not alive" so stale lock
-        # files are correctly reclaimed.
-        return False
+        if sys.platform == "win32":
+            # On Windows, os.kill(pid, 0) raises OSError for stale or invalid
+            # PIDs instead of ProcessLookupError. Common errors include:
+            # - WinError 87 "The parameter is incorrect"
+            # - WinError 11 "An attempt was made to load a program with an
+            #   incorrect format"
+            # Treat any OSError as "not alive" so stale lock files are
+            # correctly reclaimed on Windows.
+            return False
+        raise
 
 
 def acquire_data_dir_lock(data_dir: str) -> str:

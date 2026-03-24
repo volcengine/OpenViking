@@ -88,7 +88,7 @@ async def main():
     )
     parser.add_argument(
         "--input",
-        default="./result/locomo_qa_result.csv",
+        default="./result/locomo_qa_result_only_sys_memory.csv",
         help="Path to QA result csv file, default: ./result/locomo_qa_result.csv",
     )
     parser.add_argument(

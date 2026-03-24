@@ -42,7 +42,7 @@ impl CliContext {
 #[derive(Parser)]
 #[command(name = "openviking")]
 #[command(about = "OpenViking - An Agent-native context database")]
-#[command(version = env!("CARGO_PKG_VERSION"))]
+#[command(version = env!("OPENVIKING_CLI_VERSION"))]
 #[command(arg_required_else_help = true)]
 struct Cli {
     /// Output format
@@ -393,6 +393,11 @@ enum SystemCommands {
     Status,
     /// Quick health check
     Health,
+    /// Cryptographic key management commands
+    Crypto {
+        #[command(subcommand)]
+        action: commands::crypto::CryptoCommands,
+    },
 }
 
 #[derive(Subcommand)]
@@ -630,7 +635,7 @@ async fn main() {
         }
         Commands::Config { action } => handle_config(action, ctx).await,
         Commands::Version => {
-            println!("{}", env!("CARGO_PKG_VERSION"));
+            println!("{}", env!("OPENVIKING_CLI_VERSION"));
             Ok(())
         }
         Commands::Read { uri } => handle_read(uri, ctx).await,
@@ -822,6 +827,7 @@ async fn handle_system(cmd: SystemCommands, ctx: CliContext) -> Result<()> {
             commands::system::health(&client, ctx.output_format, ctx.compact).await?;
             Ok(())
         }
+        SystemCommands::Crypto { action } => commands::crypto::handle_crypto(action).await,
     }
 }
 

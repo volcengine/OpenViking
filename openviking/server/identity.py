@@ -2,9 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Identity and role types for OpenViking multi-tenant HTTP Server."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
-from typing import Optional
+from typing import List, Optional
 
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -31,6 +31,7 @@ class RequestContext:
 
     user: UserIdentifier
     role: Role
+    default_search_uris: List[str] = field(default_factory=list)
 
     @property
     def account_id(self) -> str:

@@ -35,14 +35,7 @@ from openviking_cli.exceptions import (
 from openviking_cli.retrieve.types import FindResult
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import run_async
-from openviking_cli.utils.config.config_loader import (
-    load_json_config,
-    resolve_config_path,
-)
-from openviking_cli.utils.config.consts import (
-    DEFAULT_OVCLI_CONF,
-    OPENVIKING_CLI_CONFIG_ENV,
-)
+from openviking_cli.utils.config.ovcli_config import load_ovcli_config
 from openviking_cli.utils.uri import VikingURI
 
 # Error code to exception class mapping
@@ -134,6 +127,7 @@ class AsyncHTTPClient(BaseClient):
         self,
         url: Optional[str] = None,
         api_key: Optional[str] = None,
+        user_id: Optional[str] = None,
         agent_id: Optional[str] = None,
         account: Optional[str] = None,
         user: Optional[str] = None,
@@ -144,6 +138,7 @@ class AsyncHTTPClient(BaseClient):
         Args:
             url: OpenViking Server URL. If not provided, reads from ovcli.conf.
             api_key: API key for authentication. If not provided, reads from ovcli.conf.
+            user_id: User identifier. If not provided, defaults to "default".
             agent_id: Agent identifier. If not provided, reads from ovcli.conf.
             account: Account identifier for multi-tenant auth. Required when using root key
                      to access tenant-scoped APIs. If not provided, reads from ovcli.conf.
@@ -151,20 +146,24 @@ class AsyncHTTPClient(BaseClient):
                   to access tenant-scoped APIs. If not provided, reads from ovcli.conf.
             timeout: HTTP request timeout in seconds. Default 60.0.
         """
-        if url is None:
-            # print(f"OPENVIKING_CLI_CONFIG_ENV={OPENVIKING_CLI_CONFIG_ENV}")
-            # print(f"DEFAULT_OVCLI_CONF={DEFAULT_OVCLI_CONF}")
-            config_path = resolve_config_path(None, OPENVIKING_CLI_CONFIG_ENV, DEFAULT_OVCLI_CONF)
-            if config_path:
-                cfg = load_json_config(config_path)
-
-                url = cfg.get("url")
-                api_key = api_key or cfg.get("api_key")
-                agent_id = agent_id or cfg.get("agent_id")
-                account = account or cfg.get("account")
-                user = user or cfg.get("user")
+        should_load_cli_config = (
+            url is None
+            or api_key is None
+            or agent_id is None
+            or account is None
+            or user is None
+            or timeout == 60.0
+        )
+        if should_load_cli_config:
+            cli_config = load_ovcli_config()
+            if cli_config is not None:
+                url = url or cli_config.url
+                api_key = api_key or cli_config.api_key
+                agent_id = agent_id or cli_config.agent_id
+                account = account or cli_config.account
+                user = user or cli_config.user
                 if timeout == 60.0:  # only override default with config value
-                    timeout = cfg.get("timeout", 60.0)
+                    timeout = cli_config.timeout
         if not url:
             raise ValueError(
                 "url is required. Pass it explicitly or configure in "

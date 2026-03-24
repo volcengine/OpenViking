@@ -1,5 +1,14 @@
 """CLI commands for vikingbot."""
 
+import warnings
+# Ignore Pydantic V1 compatibility warning with Python 3.14+ from volcenginesdkarkruntime
+warnings.filterwarnings(
+    "ignore",
+    message="Core Pydantic V1 functionality isn't compatible with Python 3.14 or greater.",
+    category=UserWarning,
+    module="volcenginesdkarkruntime._compat"
+)
+
 import asyncio
 import json
 import os
@@ -573,21 +582,9 @@ def chat(
     bus = MessageBus()
     config = ensure_config(path)
     _init_bot_data(config)
-    session_manager = SessionManager(config.bot_data_path)
-
-    is_single_turn = message is not None
-    # Use unified default session ID
-    if session_id is None:
-        session_id = get_or_create_machine_id()
-    cron = prepare_cron(bus, quiet=is_single_turn)
-    channels = prepare_agent_channel(config, bus, message, session_id, markdown, logs, eval, sender)
-    agent_loop = prepare_agent_loop(
-        config, bus, session_manager, cron, quiet=is_single_turn, eval=eval
-    )
 
     logger.remove()
-
-    log_file = get_data_dir() / f"vikingbot.debug.{os.getpid()}.log"
+    log_file = get_data_dir() /"log" / f"vikingbot.debug.{os.getpid()}.log"
     logger.add(
         log_file,
         level="DEBUG",
@@ -602,6 +599,18 @@ def chat(
         logger.add(sys.stderr, level="DEBUG")
     else:
         logger.add(sys.stderr, level="ERROR")
+
+    session_manager = SessionManager(config.bot_data_path)
+
+    is_single_turn = message is not None
+    # Use unified default session ID
+    if session_id is None:
+        session_id = get_or_create_machine_id()
+    cron = prepare_cron(bus, quiet=is_single_turn)
+    channels = prepare_agent_channel(config, bus, message, session_id, markdown, logs, eval, sender)
+    agent_loop = prepare_agent_loop(
+        config, bus, session_manager, cron, quiet=is_single_turn, eval=eval
+    )
 
     async def run():
         if is_single_turn:

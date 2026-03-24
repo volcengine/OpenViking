@@ -93,6 +93,14 @@ def test_vectordb_validation():
         print(f"   Fail: {e}")
 
 
+def test_vectordb_index_name_defaults_and_overrides():
+    default_config = VectorDBBackendConfig()
+    assert default_config.index_name == "default"
+
+    custom_config = VectorDBBackendConfig(index_name="context_idx")
+    assert custom_config.index_name == "context_idx"
+
+
 def test_embedding_validation():
     """Test Embedding config validation"""
     print("\n" + "=" * 60)
