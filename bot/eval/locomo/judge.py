@@ -134,12 +134,14 @@ async def main():
     file_lock = asyncio.Lock()  # 用于同步文件写入
 
     async def save_results():
-        """保存当前所有结果到CSV文件"""
+        """保存当前所有结果到CSV文件，使用临时文件+原子替换避免文件损坏"""
         async with file_lock:
-            with open(args.input, "w", encoding="utf-8", newline="") as f:
+            temp_file = f"{args.input}.tmp"
+            with open(temp_file, "w", encoding="utf-8", newline="") as f:
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
                 writer.writeheader()
                 writer.writerows(rows)
+            os.replace(temp_file, args.input)
 
     async def process_row(idx):
         async with semaphore:
