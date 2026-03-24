@@ -349,6 +349,54 @@ class VikingGlobTool(OVFileTool):
         except Exception as e:
             return f"Error searching Viking with glob: {str(e)}"
 
+class VikingMemoryCommitTool(OVFileTool):
+    """Tool to commit messages to OpenViking session."""
+
+    @property
+    def name(self) -> str:
+        return "openviking_memory_commit"
+
+    @property
+    def description(self) -> str:
+        return "When user has personal information needs to be remembered, Commit messages to OpenViking."
+
+    @property
+    def parameters(self) -> dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "messages": {
+                    "type": "array",
+                    "description": "List of messages to commit, each with role, content",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "role": {"type": "string", "enum": ["user", "assistant"]},
+                            "content": {"type": "string"},
+                        },
+                        "required": ["role", "content"],
+                    },
+                },
+            },
+            "required": ["messages"],
+        }
+
+    async def execute(
+        self,
+        tool_context: ToolContext,
+        messages: list[dict[str, Any]],
+        **kwargs: Any,
+    ) -> str:
+        try:
+            if not tool_context.sender_id:
+                return "Error committed, sender_id is required."
+            client = await self._get_client(tool_context)
+            session_id = tool_context.session_key.safe_name()
+            await client.commit(session_id, messages, tool_context.sender_id)
+            return f"Successfully committed to session {session_id}"
+        except Exception as e:
+            logger.exception(f"Error processing message: {e}")
+            return f"Error committing to Viking: {str(e)}"
 
 class VikingMultiReadTool(OVFileTool):
     """Tool to read content from multiple Viking resources concurrently."""
