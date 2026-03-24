@@ -222,8 +222,11 @@ class BenchmarkPipeline:
             # Build enhanced query with instruction if provided
             if retrieval_instruction:
                 enhanced_query = f"{retrieval_instruction} {qa.question}"
+                self.logger.debug(f"[Query-{task['id']}] Using retrieval instruction: {retrieval_instruction}")
+                self.logger.debug(f"[Query-{task['id']}] Enhanced query: {enhanced_query}")
             else:
                 enhanced_query = qa.question
+                self.logger.debug(f"[Query-{task['id']}] No retrieval instruction, using raw query")
             search_res = self.db.retrieve(query=enhanced_query, topk=self.config['execution']['retrieval_topk'])
             latency = time.time() - t0
             

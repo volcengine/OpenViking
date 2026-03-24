@@ -36,7 +36,7 @@ retrieval_instruction: ""
 # All paths support {dataset_name} placeholder, which will be automatically replaced with the current dataset name
 paths:
   # Dataset directory or file path
-  dataset_dir: "datasets/Benchmark_Lite/{dataset_name}/test.csv"
+  dataset_path: "datasets/{dataset_name}"
   # Output directory for processed documents
   doc_output_dir: "datasets/{dataset_name}/{dataset_name}_processed_docs"
   # Vector index storage directory

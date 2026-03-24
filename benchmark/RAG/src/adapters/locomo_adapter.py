@@ -136,9 +136,21 @@ class LocomoAdapter(BaseAdapter):
                 txt = turn.get("text", "")
 
                 raw_id = turn.get("dia_id") or turn.get("id")
-                suffix = f" [{raw_id}]" if raw_id else ""
-
-                md_lines.append(f"**{spk}**: {txt}{suffix}")
+                
+                image_suffix = ""
+                img_url = turn.get("img_url", [])
+                blip_caption = turn.get("blip_caption", "")
+                
+                if img_url and blip_caption:
+                    if len(img_url) == 1:
+                        image_suffix = f"[Attached image：{blip_caption}]"
+                    else:
+                        for i, caption in enumerate([blip_caption] * len(img_url)):
+                            image_suffix += f"[Attached image {i+1}：{caption}]"
+                
+                dia_suffix = f" [{raw_id}]" if raw_id else ""
+                
+                md_lines.append(f"**{spk}**: {txt}{image_suffix}{dia_suffix}")
 
             session_idx += 1
 

@@ -57,13 +57,14 @@ def prepare_dataset(
         dataset_output_dir = output_dir / dataset_name
         
         actual_sample_size = None if use_full else sample_size
+        actual_num_docs = None if use_full else num_docs
         
         sample_success = sample_dataset(
             dataset_name,
             input_dir,
             dataset_output_dir,
             actual_sample_size,
-            num_docs,
+            actual_num_docs,
             seed,
             sample_mode
         )
@@ -182,9 +183,10 @@ Examples:
         print(f"Available datasets: {', '.join(sorted(available_datasets))}")
         return 1
     
-    # Handle --full flag
+    # Handle --full flag - use full dataset, no sampling
     if args.full:
         args.sample_size = None
+        args.num_docs = None
     
     # Resolve paths
     download_dir = args.download_dir.resolve()

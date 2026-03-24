@@ -86,7 +86,7 @@ class QasperAdapter(BaseAdapter):
         data = {}
 
         if os.path.isdir(self.raw_file_path):
-            json_files = [f for f in os.listdir(self.raw_file_path) if f.endswith('.json')]
+            json_files = [f for f in os.listdir(self.raw_file_path) if f.endswith('.json') and f != 'sampling_metadata.json']
             for json_file in json_files:
                 file_path = os.path.join(self.raw_file_path, json_file)
                 with open(file_path, 'r', encoding='utf-8') as f:
@@ -138,7 +138,7 @@ class QasperAdapter(BaseAdapter):
         data = {}
 
         if os.path.isdir(self.raw_file_path):
-            json_files = [f for f in os.listdir(self.raw_file_path) if f.endswith('.json')]
+            json_files = [f for f in os.listdir(self.raw_file_path) if f.endswith('.json') and f != 'sampling_metadata.json']
             for json_file in json_files:
                 file_path = os.path.join(self.raw_file_path, json_file)
                 with open(file_path, 'r', encoding='utf-8') as f:

@@ -18,7 +18,7 @@ execution:
 # ==================================  
 
 paths:
-  dataset_path: "raw_data/{dataset_name}/data/financebench_open_source.jsonl"
+  dataset_path: "datasets/{dataset_name}/financebench_open_source.jsonl"
   doc_output_dir: "ov_storage/{dataset_name}/{dataset_name}_processed_docs"
   vector_store: "ov_storage/{dataset_name}/{dataset_name}_viking_store_index"
   output_dir: "Output/{dataset_name}/experiment_test_top_{retrieval_topk}"
@@ -29,4 +29,4 @@ llm:
   model: "doubao-seed-2-0-pro-260215"
   temperature: 0
   base_url: "https://ark.cn-beijing.volces.com/api/v3"
-  api_key: ""
+  api_key: "your_api_key_here"
