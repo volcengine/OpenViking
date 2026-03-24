@@ -1,8 +1,9 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 // SPDX-License-Identifier: Apache-2.0
-#include <pybind11/pybind11.h>
-#include <pybind11/stl.h>
+#define Py_LIMITED_API 0x030A0000
+#include <Python.h>
 
+#include <string>
 #include <vector>
 
 #if defined(__x86_64__) || defined(_M_X64) || defined(__i386__) || defined(_M_IX86)
@@ -14,8 +15,6 @@
 #include <immintrin.h>
 #endif
 #endif
-
-namespace py = pybind11;
 
 namespace {
 
@@ -93,10 +92,9 @@ CpuFeatures detect_cpu_features() {
 CpuFeatures detect_cpu_features() { return CpuFeatures{}; }
 #endif
 
-std::vector<std::string> get_supported_variants() {
+std::vector<std::string> get_supported_variants_impl() {
   std::vector<std::string> variants;
   const auto features = detect_cpu_features();
-
   if (features.sse3) {
     variants.emplace_back("x86_sse3");
   }
@@ -110,9 +108,41 @@ std::vector<std::string> get_supported_variants() {
   return variants;
 }
 
+PyObject* py_get_supported_variants(PyObject*, PyObject*) {
+  const auto variants = get_supported_variants_impl();
+  PyObject* list = PyList_New(static_cast<Py_ssize_t>(variants.size()));
+  if (list == nullptr) {
+    return nullptr;
+  }
+  for (Py_ssize_t i = 0; i < static_cast<Py_ssize_t>(variants.size()); ++i) {
+    const auto& variant = variants[static_cast<size_t>(i)];
+    PyObject* item = PyUnicode_FromStringAndSize(
+        variant.data(), static_cast<Py_ssize_t>(variant.size()));
+    if (item == nullptr) {
+      Py_DECREF(list);
+      return nullptr;
+    }
+    PyList_SetItem(list, i, item);
+  }
+  return list;
+}
+
+PyMethodDef kMethods[] = {
+    {"get_supported_variants", py_get_supported_variants, METH_NOARGS,
+     "Return CPU-supported x86 engine variants."},
+    {nullptr, nullptr, 0, nullptr},
+};
+
+PyModuleDef kModuleDef = {
+    PyModuleDef_HEAD_INIT,
+    "_x86_caps",
+    "OpenViking abi3 x86 capability probe.",
+    -1,
+    kMethods,
+};
+
 }  // namespace
 
-PYBIND11_MODULE(_x86_caps, m) {
-  m.def("get_supported_variants", &get_supported_variants,
-        "Return CPU-supported x86 engine variants");
+PyMODINIT_FUNC PyInit__x86_caps(void) {
+  return PyModule_Create(&kModuleDef);
 }

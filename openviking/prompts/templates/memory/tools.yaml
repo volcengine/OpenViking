@@ -1,0 +1,117 @@
+memory_type: tools
+description: |
+  Tool usage memory - captures "how this tool is used, what works well, and what doesn't".
+  Extract tool usage patterns, statistics, and learnings from [ToolCall] records and conversation context.
+  For each tool, track: how many times it's been called, success rate, average time/tokens, what it's best for, optimal parameters, common failure modes, and actionable recommendations.
+  Also accumulate complete guidelines with "Good Cases" and "Bad Cases" examples.
+  Tool memories help the agent learn from experience and use tools more effectively over time.
+directory: "viking://agent/{agent_space}/memories/tools"
+filename_template: "{tool_name}.md"
+enabled: true
+content_template: |
+  Tool: {tool_name}
+
+  Static Description:
+  "{static_desc}"
+
+  Tool Memory Context:
+  Based on {total_calls} historical calls:
+  - Success rate: {success_rate}% ({success_count} successful, {fail_count} failed)
+  - Avg time: {total_time_ms/total_calls}, Avg tokens: {total_tokens/total_calls}
+  - Best for: {best_for}
+  - Optimal params: {optimal_params}
+  - Common failures: {common_failures}
+  - Recommendation: {recommendation}
+
+  {guidelines}
+
+fields:
+  - name: tool_name
+    type: string
+    description: |
+      Tool name, copied exactly from [ToolCall] records without modification.
+      Used to uniquely identify this tool memory.
+      Examples: "web_search", "read_file", "execute_code"
+    merge_op: immutable
+
+  - name: static_desc
+    type: string
+    description: |
+      Static description of the tool, basic functionality description.
+      Examples: "Searches the web for information", "Reads files from the file system"
+
+  - name: total_calls
+    type: int64
+    description: |
+      Total number of tool calls, accumulated from historical statistics.
+      Used to calculate success rate and average duration.
+    merge_op: sum
+
+  - name: success_count
+    type: int64
+    description: |
+      Number of successful tool calls, accumulated from historical statistics.
+      Counts calls with status "completed".
+    merge_op: sum
+
+  - name: fail_count
+    type: int64
+    description: |
+      Number of failed tool calls, accumulated from historical statistics.
+      Counts calls with status not "completed".
+    merge_op: sum
+
+  - name: total_time_ms
+    type: int64
+    description: |
+      Total tool call duration in milliseconds, accumulated from historical statistics.
+      Used to calculate average duration.
+    merge_op: sum
+
+  - name: total_tokens
+    type: int64
+    description: |
+      Total tokens used by tool calls (prompt tokens + completion tokens), accumulated from historical statistics.
+      Used to calculate average token consumption.
+    merge_op: sum
+
+  - name: best_for
+    type: string
+    description: |
+      Best use cases for the tool, describing in what scenarios this tool works best.
+      Examples: "Technical documentation, tutorials, API references"
+    merge_op: patch
+
+  - name: optimal_params
+    type: string
+    description: |
+      Optimal parameter range/best practices for the tool, describing general parameter optimization suggestions.
+      Should describe general best practices (such as "max_results=5-20", "timeout>30s for large files"),
+      do not describe specific case values (such as "command: 'echo hello'").
+      Examples: "max_results: 5-20 (larger values may timeout); language: 'en' for better results; query: specific multi-word phrases with qualifiers"
+    merge_op: patch
+
+  - name: common_failures
+    type: string
+    description: |
+      Common failure modes of the tool, describing problems and error patterns this tool frequently encounters.
+      Examples: "Single-word queries return irrelevant results; max_results>50 causes timeout; non-English queries have lower quality"
+    merge_op: patch
+
+  - name: recommendation
+    type: string
+    description: |
+      Actionable recommendations for tool usage, short actionable recommendations.
+      Examples: "Use specific multi-word queries like 'Python asyncio tutorial'; add qualifiers like 'guide', 'docs', 'example'"
+    merge_op: patch
+
+  - name: guidelines
+    type: string
+    description: |
+      Tool usage guidelines, complete usage guide content.
+      Must include exact English headings:
+      - "## Guidelines" - best practices
+      - "### Good Cases" - successful usage examples
+      - "### Bad Cases" - failed usage examples
+      Headings must be in English, content can be in target language.
+    merge_op: patch

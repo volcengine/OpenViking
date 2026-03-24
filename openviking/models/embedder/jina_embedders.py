@@ -17,6 +17,19 @@ JINA_MODEL_DIMENSIONS = {
     "jina-embeddings-v5-text-nano": 768,  # 239M params, max seq 8192
 }
 
+DEFAULT_JINA_QUERY_TASK = "retrieval.query"
+DEFAULT_JINA_DOCUMENT_TASK = "retrieval.passage"
+DEFAULT_JINA_CODE_QUERY_TASK = "nl2code.query"
+DEFAULT_JINA_CODE_DOCUMENT_TASK = "nl2code.passage"
+_UNSET = object()
+
+
+def _get_default_task_params(model_name: str) -> tuple[str, str]:
+    """Return the default Jina task names for the selected model."""
+    if model_name.startswith("jina-code-embeddings-"):
+        return DEFAULT_JINA_CODE_QUERY_TASK, DEFAULT_JINA_CODE_DOCUMENT_TASK
+    return DEFAULT_JINA_QUERY_TASK, DEFAULT_JINA_DOCUMENT_TASK
+
 
 class JinaDenseEmbedder(DenseEmbedderBase):
     """Jina AI Dense Embedder Implementation
@@ -56,8 +69,8 @@ class JinaDenseEmbedder(DenseEmbedderBase):
         api_key: Optional[str] = None,
         api_base: Optional[str] = None,
         dimension: Optional[int] = None,
-        query_param: Optional[str] = "retrieval.query",
-        document_param: Optional[str] = "retrieval.passage",
+        query_param: Any = _UNSET,
+        document_param: Any = _UNSET,
         late_chunking: Optional[bool] = None,
         config: Optional[Dict[str, Any]] = None,
         task: Optional[str] = None,
@@ -85,6 +98,11 @@ class JinaDenseEmbedder(DenseEmbedderBase):
         self.api_key = api_key
         self.api_base = api_base or "https://api.jina.ai/v1"
         self.dimension = dimension
+        default_query_param, default_document_param = _get_default_task_params(model_name)
+        if query_param is _UNSET:
+            query_param = default_query_param
+        if document_param is _UNSET:
+            document_param = default_document_param
         self.query_param = query_param
         self.document_param = document_param
         self.late_chunking = late_chunking

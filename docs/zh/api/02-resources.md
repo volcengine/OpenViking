@@ -16,6 +16,7 @@
 | 视频 | `.mp4`, `.mov`, `.avi` | 帧提取 + VLM |
 | 音频 | `.mp3`, `.wav`, `.m4a` | 语音转录 |
 | 文档 | `.docx` | 文本提取 |
+| 飞书/Lark | URL（`*.feishu.cn`、`*.larksuite.com`） | 云端文档解析（`lark-oapi`） |
 
 ## 处理流程
 
@@ -139,6 +140,57 @@ curl -X POST http://localhost:1933/api/v1/resources \
 
 ```bash
 openviking add-resource https://example.com/api-docs.md --to viking://resources/external/ --reason "External API documentation"
+```
+
+**示例：添加飞书/Lark 云端文档**
+
+[飞书](https://www.feishu.cn)及其国际版 [Lark](https://www.larksuite.com) 是国内科技公司广泛使用的协作平台。OpenViking 可以通过 URL 直接导入飞书云端文档。
+
+支持的文档类型：
+
+| 类型 | URL 格式 |
+|------|----------|
+| 文档 | `https://*.feishu.cn/docx/{id}` |
+| 知识库 | `https://*.feishu.cn/wiki/{token}` |
+| 电子表格 | `https://*.feishu.cn/sheets/{token}` |
+| 多维表格 | `https://*.feishu.cn/base/{token}` |
+
+> **前置配置**：安装可选依赖 `pip install 'openviking[bot-feishu]'`
+>
+> 通过 `ov.conf` 配置凭据（详见[配置文档](../../zh/guides/01-configuration.md#feishu)），或设置环境变量：
+> ```bash
+> export FEISHU_APP_ID="cli_xxx"
+> export FEISHU_APP_SECRET="xxx"
+> ```
+
+**Python SDK (Embedded / HTTP)**
+
+```python
+# 导入飞书文档
+result = client.add_resource(
+    "https://example.feishu.cn/docx/doxcnABC123",
+    reason="项目设计文档"
+)
+client.wait_processed()
+
+# 导入知识库页面（自动解析为底层文档类型）
+client.add_resource("https://example.feishu.cn/wiki/wikiXYZ")
+
+# 导入电子表格
+client.add_resource("https://example.feishu.cn/sheets/shtcn456")
+```
+
+**CLI**
+
+```bash
+# 导入飞书文档
+openviking add-resource "https://example.feishu.cn/docx/doxcnABC123" --reason "项目设计文档"
+
+# 导入知识库页面
+openviking add-resource "https://example.feishu.cn/wiki/wikiXYZ"
+
+# 增量更新到已有 target
+openviking add-resource "https://example.feishu.cn/docx/doxcnABC123" --to viking://resources/design-doc
 ```
 
 **示例：等待处理完成**

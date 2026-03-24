@@ -86,6 +86,9 @@
   "default_search_limit": 3,
   "enable_memory_decay": true,
   "memory_decay_check_interval": 3600,
+  "memory": {
+    "version": "v1"
+  },
   "log": {
     "level": "INFO",
     "format": "%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -161,12 +164,39 @@
       "max_paragraph_length": 1000,
       "preserve_line_breaks": false
     }
-  }
+  },
   "encryption": {
     "enabled": true,
     "provider": "local",
     "local": {
       "key_file": "~/.openviking/master.key"
+    }
+  },
+  "encryption_vault_example": {
+    "_comment": "For HashiCorp Vault integration:",
+    "enabled": true,
+    "provider": "vault",
+    "vault": {
+      "address": "http://127.0.0.1:8200",
+      "token": "hvs.your-vault-token",
+      "mount_point": "transit",
+      "kv_mount_point": "secret",
+      "kv_version": 1,
+      "root_key_name": "openviking-root-key",
+      "encrypted_root_key_key": "openviking-encrypted-root-key"
+    }
+  },
+  "encryption_volcengine_kms_example": {
+    "_comment": "For Volcengine KMS integration:",
+    "enabled": true,
+    "provider": "volcengine_kms",
+    "volcengine_kms": {
+      "region": "cn-beijing",
+      "access_key": "AKLTyour-access-key",
+      "secret_key": "your-secret-key",
+      "key_id": "your-kms-key-id",
+      "endpoint": null,
+      "key_file": "~/.openviking/openviking-volcengine-root-key.enc"
     }
   }
 }

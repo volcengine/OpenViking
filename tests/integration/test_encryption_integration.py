@@ -1092,6 +1092,110 @@ This is a test skill for verifying encryption functionality.
         print("✅ All tests completed!")
         print("=" * 80)
 
+    async def test_read_file_with_offset_and_limit_encryption(
+        self, openviking_service_with_encryption
+    ):
+        """
+        Test read_file() with offset and limit returns correct plaintext when encryption is enabled.
+        Verifies that partial reads (by line) work correctly with encryption.
+        """
+        data = openviking_service_with_encryption
+        svc = data["service"]
+
+        # Create request context
+        from openviking.server.identity import RequestContext, Role
+        from openviking_cli.session.user_id import UserIdentifier
+
+        default_user = UserIdentifier("default", "default", "default")
+        ctx = RequestContext(user=default_user, role=Role.ROOT)
+
+        # Write a multi-line test file
+        test_lines = [
+            "Line 0: This is the first line",
+            "Line 1: Second line content",
+            "Line 2: Third line here",
+            "Line 3: Fourth line",
+            "Line 4: Fifth and final line",
+        ]
+        test_content = "\n".join(test_lines)
+        test_uri = "viking://default/test_multiline.txt"
+
+        await svc.viking_fs.write_file(test_uri, test_content, ctx=ctx)
+
+        # Test 1: Read with offset=0, limit=-1 (full file)
+        full_content = await svc.viking_fs.read_file(test_uri, offset=0, limit=-1, ctx=ctx)
+        assert full_content == test_content, "Full file read should return correct content"
+
+        # Test 2: Read with offset=1, limit=3 (lines 1, 2, 3)
+        partial_content = await svc.viking_fs.read_file(test_uri, offset=1, limit=3, ctx=ctx)
+        expected_lines = test_lines[1:4]
+        expected_content = "\n".join(expected_lines)
+        # read_file() 会在最后一行后添加换行符，所以需要处理这种情况
+        assert partial_content.rstrip("\n") == expected_content, "Partial read failed"
+
+        # Test 3: Read with offset=3, limit=-1 (from line 3 to end)
+        from_line_3 = await svc.viking_fs.read_file(test_uri, offset=3, limit=-1, ctx=ctx)
+        expected_from_line_3 = "\n".join(test_lines[3:])
+        assert from_line_3.rstrip("\n") == expected_from_line_3, "Read from offset failed"
+
+        # Verify file is encrypted on disk
+        agfs_client = svc._agfs_client
+        agfs_path = svc.viking_fs._uri_to_path(test_uri, ctx=ctx)
+        raw_content = agfs_client.read(agfs_path)
+        assert raw_content.startswith(b"OVE1"), "File should be encrypted"
+
+        print("\n" + "=" * 80)
+        print("✅ read_file() with offset/limit encryption test completed!")
+        print("=" * 80)
+
+    async def test_read_with_offset_and_size_encryption(self, openviking_service_with_encryption):
+        """
+        Test read() with offset and size returns correct plaintext when encryption is enabled.
+        Verifies that partial reads (by byte) work correctly with encryption.
+        """
+        data = openviking_service_with_encryption
+        svc = data["service"]
+
+        # Create request context
+        from openviking.server.identity import RequestContext, Role
+        from openviking_cli.session.user_id import UserIdentifier
+
+        default_user = UserIdentifier("default", "default", "default")
+        ctx = RequestContext(user=default_user, role=Role.ROOT)
+
+        # Write a test file
+        test_content = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+        test_uri = "viking://default/test_bytes.txt"
+
+        await svc.viking_fs.write_file(test_uri, test_content.decode("utf-8"), ctx=ctx)
+
+        # Test 1: Read with offset=0, size=-1 (full file)
+        full_bytes = await svc.viking_fs.read(test_uri, offset=0, size=-1, ctx=ctx)
+        # read() 返回的字节会在末尾多一个换行符，所以使用 rstrip(b"\n")
+        assert full_bytes.rstrip(b"\n") == test_content, (
+            "Full file read should return correct bytes"
+        )
+
+        # Test 2: Read with offset=5, size=10 (bytes 5-14)
+        partial_bytes = await svc.viking_fs.read(test_uri, offset=5, size=10, ctx=ctx)
+        expected_bytes = test_content[5:15]
+        assert partial_bytes == expected_bytes, "Partial read failed"
+
+        # Test 3: Read with offset=10, size=-1 (from byte 10 to end)
+        from_byte_10 = await svc.viking_fs.read(test_uri, offset=10, size=-1, ctx=ctx)
+        expected_from_byte_10 = test_content[10:]
+        assert from_byte_10.rstrip(b"\n") == expected_from_byte_10, "Read from offset failed"
+
+        # Verify file is encrypted on disk
+        agfs_client = svc._agfs_client
+        agfs_path = svc.viking_fs._uri_to_path(test_uri, ctx=ctx)
+        raw_content = agfs_client.read(agfs_path)
+        assert raw_content.startswith(b"OVE1"), "File should be encrypted"
+
+        print("\n" + "=" * 80)
+        print("✅ read() with offset/size encryption test completed!")
+        print("=" * 80)
+
 
 class TestAddResourceWithSemanticProcessing:
     """

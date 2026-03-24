@@ -207,6 +207,30 @@ class EmbeddingModelConfig(BaseModel):
 
             return GeminiDenseEmbedder._default_dimension(self.model)
 
+        if provider == "ollama":
+            # Common Ollama embedding models and their dimensions
+            # Users should set dimension explicitly for other models
+            ollama_model_dimensions = {
+                "nomic-embed-text": 768,
+                "nomic-embed-text-v1": 768,
+                "nomic-embed-text-v1.5": 768,
+                "mxbai-embed-large": 1024,
+                "mxbai-embed-large-v1": 1024,
+                "all-minilm": 384,
+                "all-minilm-l6-v2": 384,
+                "snowflake-arctic-embed": 1024,
+                "snowflake-arctic-embed-l": 1024,
+            }
+            model_lower = (self.model or "").lower()
+            if model_lower in ollama_model_dimensions:
+                return ollama_model_dimensions[model_lower]
+            # For unknown Ollama models, require explicit dimension
+            raise ValueError(
+                f"Unknown dimension for Ollama model '{self.model}'. "
+                f"Please set 'dimension' explicitly in your embedding config. "
+                f"Known models: {list(ollama_model_dimensions.keys())}"
+            )
+
         return 2048
 
 
@@ -229,6 +253,15 @@ class EmbeddingConfig(BaseModel):
     max_concurrent: int = Field(
         default=10, description="Maximum number of concurrent embedding requests"
     )
+    text_source: str = Field(
+        default="summary_first",
+        description="Text source for file vectorization: summary_first|summary_only|content_only",
+    )
+    max_input_chars: int = Field(
+        default=1000,
+        ge=100,
+        description="Maximum characters sent to embeddings when raw text fallback is used",
+    )
 
     model_config = {"extra": "forbid"}
 
@@ -238,6 +271,10 @@ class EmbeddingConfig(BaseModel):
         if not self.dense and not self.sparse and not self.hybrid:
             raise ValueError(
                 "At least one embedding configuration (dense, sparse, or hybrid) is required"
+            )
+        if self.text_source not in {"summary_first", "summary_only", "content_only"}:
+            raise ValueError(
+                "embedding.text_source must be one of: summary_first, summary_only, content_only"
             )
         return self
 

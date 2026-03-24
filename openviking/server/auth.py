@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Authentication and authorization middleware for OpenViking multi-tenant HTTP Server."""
 
+import hmac
 from typing import Optional
 
 from fastapi import Depends, Header, Request
@@ -44,6 +45,23 @@ def _root_request_requires_explicit_tenant(path: str) -> bool:
     return True
 
 
+def _configured_root_api_key(request: Request) -> Optional[str]:
+    config = getattr(request.app.state, "config", None)
+    return getattr(config, "root_api_key", None)
+
+
+def _extract_api_key(x_api_key: Optional[str], authorization: Optional[str]) -> Optional[str]:
+    if not isinstance(x_api_key, str):
+        x_api_key = None
+    if not isinstance(authorization, str):
+        authorization = None
+    if x_api_key:
+        return x_api_key
+    if authorization and authorization.startswith("Bearer "):
+        return authorization[7:]
+    return None
+
+
 async def resolve_identity(
     request: Request,
     x_api_key: Optional[str] = Header(None),
@@ -61,8 +79,15 @@ async def resolve_identity(
     """
     auth_mode = _auth_mode(request)
     api_key_manager = getattr(request.app.state, "api_key_manager", None)
+    api_key = _extract_api_key(x_api_key, authorization)
 
     if auth_mode == "trusted":
+        configured_root_api_key = _configured_root_api_key(request)
+        if configured_root_api_key:
+            if not api_key:
+                raise UnauthenticatedError("Missing API Key")
+            if not hmac.compare_digest(api_key, configured_root_api_key):
+                raise UnauthenticatedError("Invalid API Key")
         if not x_openviking_account or not x_openviking_user:
             raise InvalidArgumentError(
                 "Trusted mode requests must include X-OpenViking-Account and X-OpenViking-User."
@@ -81,12 +106,6 @@ async def resolve_identity(
             user_id=x_openviking_user or "default",
             agent_id=x_openviking_agent or "default",
         )
-
-    # Extract API key from request
-    api_key = x_api_key
-    if not api_key and authorization:
-        if authorization.startswith("Bearer "):
-            api_key = authorization[7:]
 
     if not api_key:
         raise UnauthenticatedError("Missing API Key")

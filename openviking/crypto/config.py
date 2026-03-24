@@ -67,22 +67,25 @@ def _validate_local_provider_config(config: Dict[str, Any]) -> List[str]:
         return errors
 
     # Check if file exists or can be created
-    key_file = Path(key_file_path)
+    key_file = Path(key_file_path).expanduser()
     if key_file.exists():
         # Check permissions
         if os.name != "nt":  # Skip permission check on Windows
             if (key_file.stat().st_mode & 0o077) != 0:
                 errors.append(f"Key file permissions too open: {key_file_path} (should be 0600)")
     else:
-        # Check if parent directory is writable
+        # Check if parent directory exists or can be written to
         parent_dir = key_file.parent
-        if not parent_dir.exists():
-            try:
-                parent_dir.mkdir(parents=True, exist_ok=True)
-            except Exception as e:
-                errors.append(f"Cannot create parent directory for key file: {e}")
-        elif not os.access(parent_dir, os.W_OK):
-            errors.append(f"Cannot create key file at: {key_file_path}")
+        if parent_dir.exists():
+            if not os.access(parent_dir, os.W_OK):
+                errors.append(f"Cannot create key file at: {key_file_path}")
+        else:
+            # Check if we can write to the closest existing ancestor directory
+            current = parent_dir
+            while not current.exists() and current.parent != current:
+                current = current.parent
+            if not os.access(current, os.W_OK):
+                errors.append(f"Cannot create parent directory for key file at: {parent_dir}")
 
     return errors
 

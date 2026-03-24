@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Optional
 
 from openviking.parse import DocumentConverter, parse
 from openviking.parse.base import ParseResult
+from openviking.utils.zip_safe import safe_extract_zip
 from openviking_cli.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -152,7 +153,7 @@ class UnifiedResourceProcessor:
             temp_dir = Path(tempfile.mkdtemp())
             try:
                 with zipfile.ZipFile(file_path, "r") as zipf:
-                    zipf.extractall(temp_dir)
+                    safe_extract_zip(zipf, temp_dir)
                 return await self._process_directory(temp_dir, instruction, **kwargs)
             finally:
                 pass  # Don't delete temp_dir yet, it will be used by TreeBuilder

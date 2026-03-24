@@ -21,7 +21,7 @@ from openviking.service.relation_service import RelationService
 from openviking.service.resource_service import ResourceService
 from openviking.service.search_service import SearchService
 from openviking.service.session_service import SessionService
-from openviking.session.compressor import SessionCompressor
+from openviking.session import create_session_compressor, SessionCompressor
 from openviking.storage import VikingDBManager
 from openviking.storage.collection_schemas import init_context_collection
 from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_manager
@@ -307,7 +307,7 @@ class OpenVikingService:
             vikingdb=self._vikingdb_manager,
         )
         self._skill_processor = SkillProcessor(vikingdb=self._vikingdb_manager)
-        self._session_compressor = SessionCompressor(vikingdb=self._vikingdb_manager)
+        self._session_compressor = create_session_compressor(vikingdb=self._vikingdb_manager)
 
         # Start LockManager if initialized
         if self._lock_manager:

@@ -2,7 +2,6 @@
 requires = [
     "setuptools>=61.0",
     "setuptools-scm>=8.0",
-    "pybind11>=2.13.0",
     "cmake>=3.15",
     "wheel",
 ]
@@ -86,6 +85,7 @@ test = [
     "ragas>=0.1.0",
     "datasets>=2.0.0",
     "pandas>=2.0.0",
+    "diff-match-patch>=20200713",
     "hvac>=2.0.0",
 ]
 dev = [
@@ -112,7 +112,6 @@ gemini-async = [
 build = [
     "setuptools>=61.0",
     "setuptools-scm>=8.0",
-    "pybind11>=2.13.0",
     "cmake>=3.15",
     "wheel",
     "build",
@@ -189,7 +188,7 @@ openviking = [
     "lib/libagfsbinding.dll",
     "bin/ov",
     "bin/ov.exe",
-    "storage/vectordb/engine/*.so",
+    "storage/vectordb/engine/*.abi3.so",
     "storage/vectordb/engine/*.pyd",
 ]
 vikingbot = [
@@ -223,7 +222,7 @@ addopts = "-v --cov=openviking --cov-report=term-missing"
 [tool.ruff]
 line-length = 100
 exclude = ["third_party"]
-target-version = "py39"
+target-version = "py310"
 
 [tool.ruff.lint]
 select = [

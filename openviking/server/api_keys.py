@@ -498,11 +498,10 @@ class APIKeyManager:
                 raw = content.content if hasattr(content, "content") else b""
 
             # Decrypt content if encryption is enabled
-            if self._viking_fs._encryptor:
-                # Extract account ID from path
-                parts = path.split("/")
-                account_id = parts[2] if len(parts) >= 3 else "default"
-                raw = await self._viking_fs._encryptor.decrypt(account_id, raw)
+            # Extract account ID from path
+            parts = path.split("/")
+            account_id = parts[2] if len(parts) >= 3 else "default"
+            raw = await self._viking_fs.decrypt_bytes(account_id, raw)
 
             text = raw.decode("utf-8") if isinstance(raw, bytes) else raw
             return json.loads(text)
@@ -516,11 +515,10 @@ class APIKeyManager:
             content = content.encode("utf-8")
 
         # Encrypt content if encryption is enabled
-        if self._viking_fs._encryptor:
-            # Extract account ID from path
-            parts = path.split("/")
-            account_id = parts[2] if len(parts) >= 3 else "default"
-            content = await self._viking_fs._encryptor.encrypt(account_id, content)
+        # Extract account ID from path
+        parts = path.split("/")
+        account_id = parts[2] if len(parts) >= 3 else "default"
+        content = await self._viking_fs.encrypt_bytes(account_id, content)
 
         # Ensure parent directories exist
         self._ensure_parent_dirs(path)
