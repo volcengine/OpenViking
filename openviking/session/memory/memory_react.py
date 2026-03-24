@@ -178,6 +178,35 @@ class MemoryReAct:
                 except Exception as e:
                     logger.warning(f"Failed to ls {dir_uri}: {e}")
 
+        # Step 3: Search for relevant memories based on user messages in conversation
+        search_tool = get_tool("search")
+        if search_tool and self.viking_fs and self.ctx:
+            try:
+                # Extract only user messages from conversation
+                user_messages = []
+                for line in conversation.split("\n"):
+                    if line.startswith("[user]:"):
+                        user_messages.append(line[len("[user]:"):].strip())
+                user_query = " ".join(user_messages)
+
+                if user_query:
+                    search_result = await search_tool.execute(
+                        viking_fs=self.viking_fs,
+                        ctx=self.ctx,
+                        query=user_query,
+                    )
+                    if search_result and not search_result.get("error"):
+                        add_tool_call_pair_to_messages(
+                            messages=messages,
+                            call_id=call_id_seq,
+                            tool_name='search',
+                            params={"query": user_query},
+                            result=str(search_result)
+                        )
+                        call_id_seq += 1
+            except Exception as e:
+                logger.warning(f"Pre-fetch search failed: {e}")
+
         return messages
 
 
@@ -364,7 +393,6 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
 ## Critical: Read Before Edit
 IMPORTANT: Before you edit or update ANY existing memory file, you MUST first use the read tool to read its complete content.
 
-- The pre-fetched .overview.md files are only partial information - they are NOT the complete memory content
 - The pre-fetched .overview.md files are only partial information - they are NOT the complete memory content
 - You MUST use the read tool to get the actual content of any file you want to edit
 - Without reading the actual file first, your edit operations will fail because the search string won't match
