@@ -965,12 +965,10 @@ class VikingFS:
         # Use first URI for context inference and access check
         primary_target_uri = target_uri_list[0] if target_uri_list else ""
 
-        summary_list = session_info.get("summaries") if session_info else None
-        if isinstance(summary_list, list):
-            session_summary = "\n\n".join(str(item) for item in summary_list if item)
-        else:
-            session_summary = ""
-        recent_messages = session_info.get("recent_messages") if session_info else None
+        session_summary = (
+            str(session_info.get("latest_archive_overview") or "") if session_info else ""
+        )
+        current_messages = session_info.get("current_messages") if session_info else None
 
         query_plan: Optional[QueryPlan] = None
         if primary_target_uri and primary_target_uri not in {"/", "viking://"}:
@@ -987,11 +985,11 @@ class VikingFS:
                 target_abstract = ""
 
         # With session context: intent analysis
-        if session_summary or recent_messages:
+        if session_summary or current_messages:
             analyzer = IntentAnalyzer(max_recent_messages=5)
             query_plan = await analyzer.analyze(
                 compression_summary=session_summary or "",
-                messages=recent_messages or [],
+                messages=current_messages or [],
                 current_message=query,
                 context_type=target_context_type,
                 target_abstract=target_abstract,

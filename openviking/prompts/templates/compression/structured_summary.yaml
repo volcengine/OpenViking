@@ -7,6 +7,11 @@ metadata:
   category: "compression"
 
 variables:
+  - name: "latest_archive_overview"
+    type: "string"
+    description: "Latest completed archive overview"
+    required: false
+    default: ""
   - name: "messages"
     type: "string"
     description: "Session content"
@@ -15,6 +20,11 @@ variables:
 template: |
   Analyze the following session and generate a structured summary.
 
+  {% if latest_archive_overview %}
+  Latest completed archive overview:
+  {{ latest_archive_overview }}
+
+  {% endif %}
   Session content:
   {{ messages }}
 

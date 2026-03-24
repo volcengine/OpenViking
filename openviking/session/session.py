@@ -479,8 +479,15 @@ class Session:
                     },
                 )
 
+                latest_archive_overview = await self._get_latest_completed_archive_overview(
+                    exclude_archive_uri=archive_uri
+                )
+
                 # Generate summary and write L0/L1 to archive
-                summary = await self._generate_archive_summary_async(messages)
+                summary = await self._generate_archive_summary_async(
+                    messages,
+                    latest_archive_overview=latest_archive_overview,
+                )
                 if self._viking_fs and summary:
                     abstract = self._extract_abstract_from_summary(summary)
                     await self._viking_fs.write_file(
@@ -504,6 +511,7 @@ class Session:
                         user=self.user,
                         session_id=self.session_id,
                         ctx=self.ctx,
+                        latest_archive_overview=latest_archive_overview,
                     )
                     logger.info(f"Extracted {len(extracted)} memories")
                     for ctx_item in extracted:
@@ -626,63 +634,71 @@ class Session:
             logger.info(f"Updated active_count for {updated} contexts/skills")
         return updated
 
-    async def get_context_for_search(
-        self, query: str, max_archives: int = 3, max_messages: int = 20
-    ) -> Dict[str, Any]:
+    async def get_context_for_search(self, query: str, max_messages: int = 20) -> Dict[str, Any]:
         """Get session context for intent analysis.
 
         Args:
-            query: Query string for matching relevant archives
-            max_archives: Maximum number of archives to retrieve (default 3)
-            max_messages: Maximum number of messages to retrieve (default 20)
+            query: Query string for the current request.
+            max_messages: Maximum number of current messages to retrieve (default 20)
 
         Returns:
-            - summaries: Most relevant and recent archive overview list (List[str])
-            - recent_messages: Recent message list (List[Message])
+            - latest_archive_overview: Latest completed archive overview, if any
+            - current_messages: Current message list (List[Message])
         """
-        # 1. Recent messages
-        recent_messages = list(self._messages[-max_messages:]) if self._messages else []
+        del query  # Current query no longer affects historical archive selection.
 
-        # 2. Find most relevant and recent archives using query
-        summaries = []
-        if self.compression.compression_index > 0:
-            try:
-                history_items = await self._viking_fs.ls(
-                    f"{self._session_uri}/history", ctx=self.ctx
-                )
-                query_lower = query.lower()
-
-                # Collect all archives with relevance scores
-                scored_archives = []
-                for item in history_items:
-                    name = item.get("name") if isinstance(item, dict) else item
-                    if name and name.startswith("archive_"):
-                        overview_uri = f"{self._session_uri}/history/{name}/.overview.md"
-                        try:
-                            overview = await self._viking_fs.read_file(overview_uri, ctx=self.ctx)
-                            # Calculate relevance by keyword matching
-                            score = 0
-                            if query_lower in overview.lower():
-                                score = overview.lower().count(query_lower)
-                            # Infer time from name (higher archive_NNN = newer)
-                            archive_num = int(name.split("_")[1]) if "_" in name else 0
-                            scored_archives.append((score, archive_num, overview))
-                        except Exception:
-                            pass
-
-                # Sort: relevance first, then time, take top N
-                scored_archives.sort(key=lambda x: (x[0], x[1]), reverse=True)
-                summaries = [overview for _, _, overview in scored_archives[:max_archives]]
-
-            except Exception:
-                pass
+        current_messages = list(self._messages[-max_messages:]) if self._messages else []
+        latest_archive_overview = await self._get_latest_completed_archive_overview()
 
         return {
-            "summaries": summaries,
-            "recent_messages": recent_messages,
+            "latest_archive_overview": latest_archive_overview,
+            "current_messages": current_messages,
         }
 
     # ============= Internal methods =============
+
+    async def _get_latest_completed_archive_overview(
+        self,
+        exclude_archive_uri: Optional[str] = None,
+    ) -> str:
+        """Return the newest completed archive overview, skipping incomplete archives."""
+        if not self._viking_fs or self.compression.compression_index <= 0:
+            return ""
+
+        try:
+            history_items = await self._viking_fs.ls(f"{self._session_uri}/history", ctx=self.ctx)
+        except Exception:
+            return ""
+
+        archive_names: List[str] = []
+        for item in history_items:
+            name = item.get("name") if isinstance(item, dict) else item
+            if name and name.startswith("archive_"):
+                archive_names.append(name)
+
+        def _archive_index(name: str) -> int:
+            try:
+                return int(name.split("_")[1])
+            except Exception:
+                return -1
+
+        exclude = exclude_archive_uri.rstrip("/") if exclude_archive_uri else None
+        for name in sorted(archive_names, key=_archive_index, reverse=True):
+            archive_uri = f"{self._session_uri}/history/{name}"
+            if exclude and archive_uri == exclude:
+                continue
+            try:
+                await self._viking_fs.read_file(f"{archive_uri}/.done", ctx=self.ctx)
+                overview = await self._viking_fs.read_file(
+                    f"{archive_uri}/.overview.md",
+                    ctx=self.ctx,
+                )
+                if overview:
+                    return overview
+            except Exception:
+                continue
+
+        return ""
 
     def _extract_abstract_from_summary(self, summary: str) -> str:
         """Extract one-sentence overview from structured summary."""
@@ -696,7 +712,11 @@ class Session:
         first_line = summary.split("\n")[0].strip()
         return first_line if first_line else ""
 
-    def _generate_archive_summary(self, messages: List[Message]) -> str:
+    def _generate_archive_summary(
+        self,
+        messages: List[Message],
+        latest_archive_overview: str = "",
+    ) -> str:
         """Generate structured summary for archive."""
         if not messages:
             return ""
@@ -710,7 +730,10 @@ class Session:
 
                 prompt = render_prompt(
                     "compression.structured_summary",
-                    {"messages": formatted},
+                    {
+                        "messages": formatted,
+                        "latest_archive_overview": latest_archive_overview,
+                    },
                 )
                 return run_async(vlm.get_completion_async(prompt))
             except Exception as e:
@@ -719,7 +742,11 @@ class Session:
         turn_count = len([m for m in messages if m.role == "user"])
         return f"# Session Summary\n\n**Overview**: {turn_count} turns, {len(messages)} messages"
 
-    async def _generate_archive_summary_async(self, messages: List[Message]) -> str:
+    async def _generate_archive_summary_async(
+        self,
+        messages: List[Message],
+        latest_archive_overview: str = "",
+    ) -> str:
         """Generate structured summary for archive (async)."""
         if not messages:
             return ""
@@ -733,7 +760,10 @@ class Session:
 
                 prompt = render_prompt(
                     "compression.structured_summary",
-                    {"messages": formatted},
+                    {
+                        "messages": formatted,
+                        "latest_archive_overview": latest_archive_overview,
+                    },
                 )
                 return await vlm.get_completion_async(prompt)
             except Exception as e:
