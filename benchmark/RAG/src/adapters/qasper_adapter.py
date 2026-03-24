@@ -82,13 +82,21 @@ class QasperAdapter(BaseAdapter):
         Raises:
             FileNotFoundError: Raw data file not found
         """
-        if not os.path.exists(self.raw_file_path):
-            raise FileNotFoundError(f"Raw data file not found: {self.raw_file_path}")
-
         res: List[StandardDoc] = []
+        data = {}
 
-        with open(self.raw_file_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
+        if os.path.isdir(self.raw_file_path):
+            json_files = [f for f in os.listdir(self.raw_file_path) if f.endswith('.json')]
+            for json_file in json_files:
+                file_path = os.path.join(self.raw_file_path, json_file)
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    file_data = json.load(f)
+                    data.update(file_data)
+        else:
+            if not os.path.exists(self.raw_file_path):
+                raise FileNotFoundError(f"Raw data file not found: {self.raw_file_path}")
+            with open(self.raw_file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
 
         os.makedirs(doc_dir, exist_ok=True)
         
@@ -127,11 +135,20 @@ class QasperAdapter(BaseAdapter):
         Raises:
             FileNotFoundError: Raw data file not found
         """
-        if not os.path.exists(self.raw_file_path):
-            raise FileNotFoundError(f"Raw data file not found: {self.raw_file_path}")
+        data = {}
 
-        with open(self.raw_file_path, 'r', encoding='utf-8') as f:
-            data = json.load(f)
+        if os.path.isdir(self.raw_file_path):
+            json_files = [f for f in os.listdir(self.raw_file_path) if f.endswith('.json')]
+            for json_file in json_files:
+                file_path = os.path.join(self.raw_file_path, json_file)
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    file_data = json.load(f)
+                    data.update(file_data)
+        else:
+            if not os.path.exists(self.raw_file_path):
+                raise FileNotFoundError(f"Raw data file not found: {self.raw_file_path}")
+            with open(self.raw_file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
 
         standard_samples = []
 

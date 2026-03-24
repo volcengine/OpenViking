@@ -18,9 +18,9 @@ execution:
 # ==================================  
 
 paths:
-  raw_data: "datasets/Benchmark_Lite/{dataset_name}/Locomo.json"
-  doc_output_dir: "datasets/{dataset_name}/{dataset_name}_processed_docs"
-  vector_store: "datasets/{dataset_name}/{dataset_name}_viking_store_index_dir"
+  dataset_path: "raw_data/{dataset_name}/locomo10.json"
+  doc_output_dir: "ov_storage/{dataset_name}/{dataset_name}_processed_docs"
+  vector_store: "ov_storage/{dataset_name}/{dataset_name}_viking_store_index_dir"
   output_dir: "Output/{dataset_name}/experiment_test_top_{retrieval_topk}"
   log_file: "Output/{dataset_name}/experiment_test_top_{retrieval_topk}/benchmark.log"
 

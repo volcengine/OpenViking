@@ -1,7 +1,7 @@
 project_name: "RAG_Benchmark"
 
 # ===========Modify Configuration================
-dataset_name: "Financebench" 
+dataset_name: "FinanceBench" 
 
 adapter:
   module: "src.adapters.financebench_adapter"  
@@ -18,9 +18,9 @@ execution:
 # ==================================  
 
 paths:
-  raw_data: "datasets/Benchmark_Lite/{dataset_name}/financebench_subset.jsonl"
-  doc_output_dir: "datasets/{dataset_name}/{dataset_name}_processed_docs"
-  vector_store: "datasets/{dataset_name}/{dataset_name}_viking_store_index"
+  dataset_path: "raw_data/{dataset_name}/data/financebench_open_source.jsonl"
+  doc_output_dir: "ov_storage/{dataset_name}/{dataset_name}_processed_docs"
+  vector_store: "ov_storage/{dataset_name}/{dataset_name}_viking_store_index"
   output_dir: "Output/{dataset_name}/experiment_test_top_{retrieval_topk}"
   log_file: "Output/{dataset_name}/experiment_test_top_{retrieval_topk}/benchmark.log"
 

@@ -1,0 +1,689 @@
+#!/usr/bin/env python3
+"""
+Sample datasets to create subsets with configurable size.
+Supports both full dataset and sampled subsets with seed-based reproducibility.
+"""
+
+import argparse
+import json
+import os
+import random
+import shutil
+import sys
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+sys.path.append(str(Path(__file__).parent.parent))
+
+
+def load_json_data(file_path: Path) -> Any:
+    """Load JSON data from file."""
+    with open(file_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+def load_jsonl_data(file_path: Path) -> List[Dict]:
+    """Load JSONL data from file."""
+    data = []
+    with open(file_path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if line:
+                data.append(json.loads(line))
+    return data
+
+
+def save_json_data(data: Any, file_path: Path) -> None:
+    """Save JSON data to file."""
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def save_jsonl_data(data: List[Dict], file_path: Path) -> None:
+    """Save JSONL data to file."""
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(file_path, "w", encoding="utf-8") as f:
+        for item in data:
+            f.write(json.dumps(item, ensure_ascii=False) + "\n")
+
+
+def sample_locomo(
+    input_dir: Path,
+    output_dir: Path,
+    sample_size: Optional[int] = None,
+    num_docs: Optional[int] = None,
+    seed: int = 42,
+    sample_mode: str = "stratified"
+) -> Dict[str, Any]:
+    """Sample Locomo dataset with stratified sampling support."""
+    input_file = input_dir / "locomo10.json"
+    if not input_file.exists():
+        raise FileNotFoundError(f"locomo10.json not found at {input_file}")
+    
+    data = load_json_data(input_file)
+    if not isinstance(data, list):
+        data = [data]
+    
+    original_num_docs = len(data)
+    print(f"Locomo original size: {original_num_docs} documents")
+    
+    # 计算总 QA 数（过滤 category 5）
+    total_qas = 0
+    for item in data:
+        if "qa" in item:
+            for q in item["qa"]:
+                if str(q.get("category")) != "5":
+                    total_qas += 1
+    print(f"Total QAs (excluding category 5): {total_qas}")
+    
+    is_full = (sample_size is None and num_docs is None)
+    if is_full:
+        # 全量模式
+        selected_docs = data
+        print("Using full Locomo dataset")
+    else:
+        # 先抽样文档
+        if num_docs is not None:
+            # 按文档数抽样
+            if num_docs >= original_num_docs:
+                selected_docs = data
+                print("Using all documents")
+            else:
+                random.seed(seed)
+                selected_docs = random.sample(data, num_docs)
+                print(f"Sampled {len(selected_docs)} documents (seed={seed})")
+        else:
+            # 按 QA 数抽样，但保持文档完整性
+            # 策略：随机选文档，直到达到或超过 sample_size 个 QA（过滤 category 5）
+            random.seed(seed)
+            doc_indices = list(range(original_num_docs))
+            random.shuffle(doc_indices)
+            
+            selected_docs = []
+            selected_qas_count = 0
+            
+            for idx in doc_indices:
+                doc = data[idx]
+                # 计算文档中的有效 QA 数（排除 category 5）
+                doc_qas = 0
+                for q in doc.get("qa", []):
+                    if str(q.get("category")) != "5":
+                        doc_qas += 1
+                
+                if selected_qas_count + doc_qas <= sample_size or not selected_docs:
+                    selected_docs.append(doc)
+                    selected_qas_count += doc_qas
+                else:
+                    # 如果已经达到样本量，停止
+                    if selected_qas_count >= sample_size:
+                        break
+            
+            print(f"Sampled {len(selected_docs)} documents with {selected_qas_count} QAs (seed={seed})")
+    
+    # 保存数据 - 保持完整文档结构（包含所有 QA，包括 category 5）
+    # adapter 会在加载时过滤 category 5
+    output_data = selected_docs
+    
+    # Save data
+    output_file = output_dir / "locomo10.json"
+    save_json_data(output_data, output_file)
+    
+    # 计算抽样后的 QA 数（过滤 category 5）
+    sampled_qas = 0
+    for doc in selected_docs:
+        if "qa" in doc:
+            for q in doc["qa"]:
+                if str(q.get("category")) != "5":
+                    sampled_qas += 1
+    
+    # Save metadata
+    metadata = {
+        "dataset": "Locomo",
+        "original_num_docs": original_num_docs,
+        "original_total_qas": total_qas,
+        "sampled_num_docs": len(selected_docs),
+        "sampled_total_qas": sampled_qas,
+        "sample_size": sample_size,
+        "num_docs": num_docs,
+        "seed": seed,
+        "sample_mode": sample_mode,
+        "is_full": is_full,
+        "note": "Category 5 questions are excluded from QA count"
+    }
+    
+    return metadata
+
+
+def sample_syllabusqa(
+    input_dir: Path,
+    output_dir: Path,
+    sample_size: Optional[int] = None,
+    num_docs: Optional[int] = None,
+    seed: int = 42,
+    sample_mode: str = "stratified"
+) -> Dict[str, Any]:
+    """Sample SyllabusQA dataset."""
+    # Read all CSV files from data/dataset_split/
+    dataset_split_dir = input_dir / "data" / "dataset_split"
+    if not dataset_split_dir.exists():
+        raise FileNotFoundError(f"data/dataset_split not found at {dataset_split_dir}")
+    
+    # Read all CSV files
+    import csv
+    all_data = []
+    csv_files = ["train.csv", "val.csv", "test.csv"]
+    for csv_file in csv_files:
+        file_path = dataset_split_dir / csv_file
+        if file_path.exists():
+            with open(file_path, "r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                file_data = list(reader)
+                for item in file_data:
+                    item["_source_file"] = csv_file
+                all_data.extend(file_data)
+    
+    # 按课程 ID 分组（每个 course_name 对应一个文档）
+    from collections import defaultdict
+    doc_groups = defaultdict(list)
+    for item in all_data:
+        course_name = item.get("course_name", "unknown")
+        doc_groups[course_name].append(item)
+    
+    # 计算有效 QA 数（排除 no answer）
+    doc_valid_qas = {}
+    total_valid_qas = 0
+    for doc_name, items in doc_groups.items():
+        valid_count = 0
+        for item in items:
+            if item.get("question_type") != "no answer":
+                valid_count += 1
+        doc_valid_qas[doc_name] = valid_count
+        total_valid_qas += valid_count
+    
+    all_doc_names = list(doc_groups.keys())
+    original_num_docs = len(all_doc_names)
+    original_total_qas = len(all_data)
+    print(f"SyllabusQA original size: {original_num_docs} documents, {original_total_qas} QAs (from {len(csv_files)} files)")
+    print(f"Total valid QAs (excluding 'no answer'): {total_valid_qas}")
+    
+    is_full = (sample_size is None and num_docs is None)
+    if is_full:
+        # 全量模式
+        selected_docs = all_doc_names
+        print("Using full SyllabusQA dataset")
+    else:
+        # 先抽样文档
+        if num_docs is not None:
+            # 按文档数抽样
+            if num_docs >= original_num_docs:
+                selected_docs = all_doc_names
+                print("Using all documents")
+            else:
+                random.seed(seed)
+                selected_docs = random.sample(all_doc_names, num_docs)
+                print(f"Sampled {len(selected_docs)} documents (seed={seed})")
+        else:
+            # 按 QA 数抽样，但保持文档完整性（只计算有效 QA）
+            random.seed(seed)
+            shuffled_docs = all_doc_names.copy()
+            random.shuffle(shuffled_docs)
+            
+            selected_docs = []
+            selected_qas_count = 0
+            
+            for doc_name in shuffled_docs:
+                doc_qas = doc_valid_qas[doc_name]
+                
+                if doc_qas == 0:
+                    continue
+                
+                if selected_qas_count + doc_qas <= sample_size or not selected_docs:
+                    selected_docs.append(doc_name)
+                    selected_qas_count += doc_qas
+                else:
+                    # 如果已经达到样本量，停止
+                    if selected_qas_count >= sample_size:
+                        break
+            
+            print(f"Sampled {len(selected_docs)} documents with {selected_qas_count} valid QAs (seed={seed})")
+    
+    # 构建选中的数据
+    selected_data = []
+    for doc_name in selected_docs:
+        selected_data.extend(doc_groups[doc_name])
+    
+    # Save data - split by source file
+    output_dir.mkdir(parents=True, exist_ok=True)
+    for csv_file in csv_files:
+        file_data = [item for item in selected_data if item.get("_source_file") == csv_file]
+        if file_data:
+            # Remove _source_file field
+            for item in file_data:
+                item.pop("_source_file", None)
+            output_file = output_dir / csv_file
+            with open(output_file, "w", encoding="utf-8", newline="") as f:
+                if file_data:
+                    writer = csv.DictWriter(f, fieldnames=file_data[0].keys())
+                    writer.writeheader()
+                    writer.writerows(file_data)
+            print(f"Saved {len(file_data)} samples to {csv_file}")
+    
+    # Copy only required syllabi files
+    syllabi_src = input_dir / "syllabi"
+    syllabi_dst = output_dir / "syllabi"
+    if syllabi_src.exists():
+        syllabi_dst.mkdir(parents=True, exist_ok=True)
+        
+        # 只复制选中的文档对应的 PDF
+        for doc_name in selected_docs:
+            # SyllabusQA 中的 syllabus 文件可能需要根据实际情况处理
+            # 这里我们复制整个 syllabi 目录，但之后可以优化
+            pass
+        
+        # 临时方案：复制整个 syllabi 目录
+        if syllabi_dst.exists():
+            shutil.rmtree(syllabi_dst)
+        shutil.copytree(syllabi_src, syllabi_dst)
+    
+    # 计算抽样后的有效 QA 数（排除 no answer）
+    sampled_valid_qas = 0
+    for doc_name in selected_docs:
+        sampled_valid_qas += doc_valid_qas[doc_name]
+    
+    # Save metadata
+    metadata = {
+        "dataset": "SyllabusQA",
+        "original_num_docs": original_num_docs,
+        "original_total_qas": original_total_qas,
+        "original_valid_qas": total_valid_qas,
+        "sampled_num_docs": len(selected_docs),
+        "sampled_total_qas": len(selected_data),
+        "sampled_valid_qas": sampled_valid_qas,
+        "sample_size": sample_size,
+        "num_docs": num_docs,
+        "seed": seed,
+        "sample_mode": sample_mode,
+        "is_full": is_full,
+        "note": "'no answer' type questions are excluded from QA count"
+    }
+    
+    return metadata
+
+
+def sample_qasper(
+    input_dir: Path,
+    output_dir: Path,
+    sample_size: Optional[int] = None,
+    num_docs: Optional[int] = None,
+    seed: int = 42,
+    sample_mode: str = "stratified"
+) -> Dict[str, Any]:
+    """Sample Qasper dataset."""
+    # Read all JSON files and keep track of source file
+    json_files = ["qasper-train-v0.3.json", "qasper-dev-v0.3.json", "qasper-test-v0.3.json"]
+    all_paper_ids = []
+    paper_data_map = {}  # paper_id -> (paper_data, source_file)
+    paper_qas_count = {}  # paper_id -> number of QAs (excluding unanswerable)
+    
+    for json_file in json_files:
+        file_path = input_dir / json_file
+        if file_path.exists():
+            data = load_json_data(file_path)
+            for paper_id, paper_data in data.items():
+                all_paper_ids.append(paper_id)
+                paper_data_map[paper_id] = (paper_data, json_file)
+                # 计算有效 QA 数（排除 unanswerable）
+                qas_count = 0
+                if "qas" in paper_data:
+                    for qa_item in paper_data["qas"]:
+                        # 检查是否所有 answer 都是 unanswerable
+                        is_unanswerable = all(
+                            ans.get("answer", {}).get("unanswerable", False)
+                            for ans in qa_item.get("answers", [])
+                        )
+                        if not is_unanswerable:
+                            qas_count += 1
+                paper_qas_count[paper_id] = qas_count
+    
+    original_num_docs = len(all_paper_ids)
+    print(f"Qasper original size: {original_num_docs} documents (from {len(json_files)} files)")
+    
+    # 计算总 QA 数（排除 unanswerable）
+    total_qas = sum(paper_qas_count.values())
+    print(f"Total QAs (excluding unanswerable): {total_qas}")
+    
+    is_full = (sample_size is None and num_docs is None)
+    if is_full:
+        # 全量模式
+        selected_ids = all_paper_ids
+        print("Using full Qasper dataset")
+    else:
+        # 先抽样文档
+        if num_docs is not None:
+            # 按文档数抽样
+            if num_docs >= original_num_docs:
+                selected_ids = all_paper_ids
+                print("Using all documents")
+            else:
+                random.seed(seed)
+                selected_ids = random.sample(all_paper_ids, num_docs)
+                print(f"Sampled {len(selected_ids)} documents (seed={seed})")
+        else:
+            # 按 QA 数抽样，但保持文档完整性
+            random.seed(seed)
+            shuffled_ids = all_paper_ids.copy()
+            random.shuffle(shuffled_ids)
+            
+            selected_ids = []
+            selected_qas_count = 0
+            
+            for paper_id in shuffled_ids:
+                paper_qas = paper_qas_count[paper_id]
+                
+                if selected_qas_count + paper_qas <= sample_size or not selected_ids:
+                    selected_ids.append(paper_id)
+                    selected_qas_count += paper_qas
+                else:
+                    # 如果已经达到样本量，停止
+                    if selected_qas_count >= sample_size:
+                        break
+            
+            print(f"Sampled {len(selected_ids)} documents with {selected_qas_count} QAs (seed={seed})")
+    
+    # Group by source file
+    output_dir.mkdir(parents=True, exist_ok=True)
+    data_by_file = {}
+    for paper_id in selected_ids:
+        paper_data, source_file = paper_data_map[paper_id]
+        if source_file not in data_by_file:
+            data_by_file[source_file] = {}
+        data_by_file[source_file][paper_id] = paper_data
+    
+    # Save each file
+    for json_file, output_data in data_by_file.items():
+        output_file = output_dir / json_file
+        save_json_data(output_data, output_file)
+        print(f"Saved {len(output_data)} papers to {json_file}")
+    
+    # 计算抽样后的 QA 数
+    sampled_qas = sum(paper_qas_count[paper_id] for paper_id in selected_ids)
+    
+    # Save metadata
+    metadata = {
+        "dataset": "Qasper",
+        "original_num_docs": original_num_docs,
+        "original_total_qas": total_qas,
+        "sampled_num_docs": len(selected_ids),
+        "sampled_total_qas": sampled_qas,
+        "sample_size": sample_size,
+        "num_docs": num_docs,
+        "seed": seed,
+        "sample_mode": sample_mode,
+        "is_full": is_full,
+        "note": "Unanswerable questions are excluded from QA count"
+    }
+    
+    return metadata
+
+
+def sample_financebench(
+    input_dir: Path,
+    output_dir: Path,
+    sample_size: Optional[int] = None,
+    num_docs: Optional[int] = None,
+    seed: int = 42,
+    sample_mode: str = "stratified"
+) -> Dict[str, Any]:
+    """Sample Financebench dataset with stratified sampling support."""
+    input_file = input_dir / "data" / "financebench_open_source.jsonl"
+    if not input_file.exists():
+        raise FileNotFoundError(f"financebench_open_source.jsonl not found at {input_file}")
+    
+    data = load_jsonl_data(input_file)
+    
+    # 按文档分组
+    from collections import defaultdict
+    doc_groups = defaultdict(list)
+    for item in data:
+        doc_name = item.get("doc_name", "unknown")
+        doc_groups[doc_name].append(item)
+    
+    all_doc_names = list(doc_groups.keys())
+    original_num_docs = len(all_doc_names)
+    original_total_qas = len(data)
+    print(f"Financebench original size: {original_num_docs} documents, {original_total_qas} QAs")
+    
+    is_full = (sample_size is None and num_docs is None)
+    if is_full:
+        # 全量模式
+        selected_docs = all_doc_names
+        print("Using full Financebench dataset")
+    else:
+        # 先抽样文档
+        if num_docs is not None:
+            # 按文档数抽样
+            if num_docs >= original_num_docs:
+                selected_docs = all_doc_names
+                print("Using all documents")
+            else:
+                random.seed(seed)
+                selected_docs = random.sample(all_doc_names, num_docs)
+                print(f"Sampled {len(selected_docs)} documents (seed={seed})")
+        else:
+            # 按 QA 数抽样，但保持文档完整性
+            random.seed(seed)
+            shuffled_docs = all_doc_names.copy()
+            random.shuffle(shuffled_docs)
+            
+            selected_docs = []
+            selected_qas_count = 0
+            
+            for doc_name in shuffled_docs:
+                doc_qas = len(doc_groups[doc_name])
+                
+                if selected_qas_count + doc_qas <= sample_size or not selected_docs:
+                    selected_docs.append(doc_name)
+                    selected_qas_count += doc_qas
+                else:
+                    # 如果已经达到样本量，停止
+                    if selected_qas_count >= sample_size:
+                        break
+            
+            print(f"Sampled {len(selected_docs)} documents with {selected_qas_count} QAs (seed={seed})")
+    
+    # 构建选中的数据
+    selected_data = []
+    for doc_name in selected_docs:
+        selected_data.extend(doc_groups[doc_name])
+    
+    # Save data
+    output_file = output_dir / "financebench_open_source.jsonl"
+    save_jsonl_data(selected_data, output_file)
+    
+    # Copy document info JSONL
+    doc_info_src = input_dir / "data" / "financebench_document_information.jsonl"
+    if doc_info_src.exists():
+        doc_info_dst = output_dir / "financebench_document_information.jsonl"
+        shutil.copy2(doc_info_src, doc_info_dst)
+    
+    # Copy PDFs used by selected samples
+    pdfs_src = input_dir / "pdfs"
+    pdfs_dst = output_dir / "pdfs"
+    
+    if pdfs_src.exists():
+        pdfs_dst.mkdir(parents=True, exist_ok=True)
+        
+        # Copy required PDFs
+        for doc_name in selected_docs:
+            src_pdf = pdfs_src / f"{doc_name}.pdf"
+            if src_pdf.exists():
+                shutil.copy2(src_pdf, pdfs_dst / f"{doc_name}.pdf")
+                print(f"Copied PDF: {doc_name}.pdf")
+    
+    # Save metadata
+    metadata = {
+        "dataset": "Financebench",
+        "original_num_docs": original_num_docs,
+        "original_total_qas": original_total_qas,
+        "sampled_num_docs": len(selected_docs),
+        "sampled_total_qas": len(selected_data),
+        "sample_size": sample_size,
+        "num_docs": num_docs,
+        "seed": seed,
+        "sample_mode": sample_mode,
+        "is_full": is_full
+    }
+    
+    return metadata
+
+
+DATASET_SAMPLERS = {
+    "Locomo": sample_locomo,
+    "SyllabusQA": sample_syllabusqa,
+    "Qasper": sample_qasper,
+    "FinanceBench": sample_financebench,
+}
+
+
+def sample_dataset(
+    dataset_name: str,
+    input_dir: Path,
+    output_dir: Path,
+    sample_size: Optional[int] = None,
+    num_docs: Optional[int] = None,
+    seed: int = 42,
+    sample_mode: str = "stratified"
+) -> bool:
+    """Sample a single dataset."""
+    if dataset_name not in DATASET_SAMPLERS:
+        print(f"Unknown dataset: {dataset_name}")
+        return False
+    
+    print(f"\nProcessing {dataset_name}...")
+    print(f"Input: {input_dir}")
+    print(f"Output: {output_dir}")
+    
+    try:
+        sampler = DATASET_SAMPLERS[dataset_name]
+        metadata = sampler(input_dir, output_dir, sample_size, num_docs, seed, sample_mode)
+        
+        # Save metadata
+        metadata_file = output_dir / "sampling_metadata.json"
+        save_json_data(metadata, metadata_file)
+        print(f"✓ Saved metadata to {metadata_file}")
+        
+        return True
+    except Exception as e:
+        print(f"Error sampling {dataset_name}: {e}")
+        import traceback
+        traceback.print_exc()
+        return False
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description="Sample datasets for RAG benchmark"
+    )
+    parser.add_argument(
+        "--dataset", "-d",
+        type=str,
+        choices=list(DATASET_SAMPLERS.keys()) + ["all"],
+        default="all",
+        help="Dataset to sample (default: all)"
+    )
+    parser.add_argument(
+        "--input-dir", "-i",
+        type=Path,
+        default=Path(__file__).parent.parent / "raw_data",
+        help="Input directory with full datasets (default: raw_data/)"
+    )
+    parser.add_argument(
+        "--output-dir", "-o",
+        type=Path,
+        default=Path(__file__).parent.parent / "datasets",
+        help="Output directory for sampled datasets (default: datasets/)"
+    )
+    parser.add_argument(
+        "--sample-size", "-n",
+        type=int,
+        default=None,
+        help="Number of samples to use (default: use full dataset)"
+    )
+    parser.add_argument(
+        "--num-docs",
+        type=int,
+        default=None,
+        help="Number of documents to sample (for document-level sampling)"
+    )
+    parser.add_argument(
+        "--seed", "-s",
+        type=int,
+        default=42,
+        help="Random seed for reproducibility (default: 42)"
+    )
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="Use full dataset (overrides --sample-size)"
+    )
+    parser.add_argument(
+        "--sample-mode",
+        type=str,
+        choices=["stratified"],
+        default="stratified",
+        help="Sampling mode (default: stratified)"
+    )
+    
+    args = parser.parse_args()
+    
+    # Handle --full flag
+    if args.full:
+        args.sample_size = None
+    
+    input_dir = args.input_dir.resolve()
+    output_dir = args.output_dir.resolve()
+    
+    datasets = (
+        list(DATASET_SAMPLERS.keys()) 
+        if args.dataset == "all" 
+        else [args.dataset]
+    )
+    
+    print("=" * 60)
+    print("RAG Benchmark Dataset Sampler")
+    print("=" * 60)
+    print(f"Input directory: {input_dir}")
+    print(f"Output directory: {output_dir}")
+    print(f"Sample size: {args.sample_size if args.sample_size else 'full'}")
+    print(f"Number of docs: {args.num_docs if args.num_docs else 'not set'}")
+    print(f"Sample mode: {args.sample_mode}")
+    print(f"Random seed: {args.seed}")
+    print(f"Datasets: {', '.join(datasets)}")
+    print("=" * 60)
+    
+    success_count = 0
+    for dataset in datasets:
+        dataset_input_dir = input_dir / dataset
+        dataset_output_dir = output_dir / dataset
+        
+        if sample_dataset(
+            dataset,
+            dataset_input_dir,
+            dataset_output_dir,
+            args.sample_size,
+            args.num_docs,
+            args.seed,
+            args.sample_mode
+        ):
+            success_count += 1
+    
+    print("\n" + "=" * 60)
+    print(f"Sampling complete: {success_count}/{len(datasets)} successful")
+    print("=" * 60)
+    
+    return 0 if success_count == len(datasets) else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

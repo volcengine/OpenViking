@@ -18,11 +18,11 @@ execution:
 # ==================================  
 
 paths:
-  raw_data: "datasets/Benchmark_Lite/{dataset_name}/test.csv"
-  doc_output_dir: "datasets/{dataset_name}/{dataset_name}_processed_docs"
-  vector_store: "datasets/{dataset_name}/{dataset_name}_viking_store_index"
-  output_dir: "Output/{dataset_name}/experiment_test_top_{retrieval_topk}_111"
-  log_file: "Output/{dataset_name}/experiment_test_top_{retrieval_topk}_111/benchmark.log"
+  dataset_path: "datasets/{dataset_name}/test.csv"
+  doc_output_dir: "ov_storage/{dataset_name}/{dataset_name}_processed_docs"
+  vector_store: "ov_storage/{dataset_name}/{dataset_name}_viking_store_index"
+  output_dir: "Output/{dataset_name}/experiment_test_top_{retrieval_topk}"
+  log_file: "Output/{dataset_name}/experiment_test_top_{retrieval_topk}/benchmark.log"
 
 
 llm:

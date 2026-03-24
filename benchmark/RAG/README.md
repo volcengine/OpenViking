@@ -145,7 +145,7 @@ RAG uses YAML configuration files to control the evaluation process. Each datase
    - `ingest_mode`: Document ingestion mode ("directory" or "per\_file")
    - `retrieval_instruction`: Custom instruction for retrieval (empty by default)
 4. **Path Configuration**:
-   - `raw_data`: Path to raw dataset file
+   - `dataset_dir`: Path to dataset file or directory
    - `doc_output_dir`: Directory for processed documents
    - `vector_store`: Directory for vector index storage
    - `output_dir`: Directory for evaluation results
@@ -675,7 +675,7 @@ RAG 使用 YAML 配置文件来控制评测过程。每个数据集在 `config/`
    - `ingest_mode`：文档入库模式（"directory" 或 "per\_file"）
    - `retrieval_instruction`：自定义检索指令（默认为空）
 4. **路径配置**：
-   - `raw_data`：原始数据集文件路径
+   - `dataset_dir`：数据集文件或目录路径
    - `doc_output_dir`：处理后文档的目录
    - `vector_store`：向量索引存储目录
    - `output_dir`：评测结果目录

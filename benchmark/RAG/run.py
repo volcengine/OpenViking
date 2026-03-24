@@ -88,7 +88,7 @@ def main():
         'retrieval_topk': retrieval_topk
     }
     
-    path_keys = ['raw_data', 'output_dir', 'vector_store', 'log_file', 'doc_output_dir']
+    path_keys = ['dataset_path', 'output_dir', 'vector_store', 'log_file', 'doc_output_dir']
     for key in path_keys:
         if key in config.get('paths', {}):
             original = config['paths'][key]
@@ -108,12 +108,12 @@ def main():
         class_name = adapter_cfg.get('class_name', 'LocomoAdapter')
         
         logger.info(f"Dynamically loading Adapter: {class_name} from {module_path}")
-        logger.info(f"Loading raw data from: {config['paths']['raw_data']}")
+        logger.info(f"Loading dataset from: {config['paths']['dataset_path']}")
         
         try:
             mod = importlib.import_module(module_path)
             AdapterClass = getattr(mod, class_name)
-            adapter = AdapterClass(raw_file_path=config['paths']['raw_data'])
+            adapter = AdapterClass(raw_file_path=config['paths']['dataset_path'])
         except ImportError as e:
             logger.error(f"Could not import module '{module_path}'. Please check your config 'adapter.module'. Error: {e}")
             raise e

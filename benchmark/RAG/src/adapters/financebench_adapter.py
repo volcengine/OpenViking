@@ -51,7 +51,12 @@ class FinanceBenchAdapter(BaseAdapter):
     def __init__(self, raw_file_path: str):
         super().__init__(raw_file_path)
         data_dir = os.path.dirname(self.raw_file_path)
+        # Check if pdfs is in data directory or parent directory
         self.pdf_dir = os.path.join(data_dir, "pdfs")
+        if not os.path.exists(self.pdf_dir):
+            # Try parent directory (new structure: raw_data/dataset_name/data/ and raw_data/dataset_name/pdfs/)
+            parent_dir = os.path.dirname(data_dir)
+            self.pdf_dir = os.path.join(parent_dir, "pdfs")
 
     def data_prepare(self, doc_dir: str) -> List[StandardDoc]:
         """

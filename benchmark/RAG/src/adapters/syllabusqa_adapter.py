@@ -94,9 +94,17 @@ class SyllabusQAAdapter(BaseAdapter):
         super().__init__(raw_file_path)
         # docx file directory, defaults to syllabi subdirectory under data directory
         if os.path.isdir(raw_file_path):
-            self.syllabus_dir = os.path.join(raw_file_path, 'syllabi')
+            base_dir = raw_file_path
         else:
-            self.syllabus_dir = os.path.join(os.path.dirname(raw_file_path), 'syllabi')
+            base_dir = os.path.dirname(raw_file_path)
+        
+        # Check for official repo structure first
+        official_syllabus_dir = os.path.join(base_dir, 'syllabi', 'syllabi_redacted', 'word')
+        if os.path.exists(official_syllabus_dir):
+            self.syllabus_dir = official_syllabus_dir
+        else:
+            # Fallback to original structure
+            self.syllabus_dir = os.path.join(base_dir, 'syllabi')
     
     def data_prepare(self, doc_dir: str) -> List[StandardDoc]:
         """
