@@ -23,6 +23,7 @@ export type MemoryOpenVikingConfig = {
   recallMaxContentChars?: number;
   recallPreferAbstract?: boolean;
   recallTokenBudget?: number;
+  commitTokenThreshold?: number;
   ingestReplyAssist?: boolean;
   ingestReplyAssistMinSpeakerTurns?: number;
   ingestReplyAssistMinChars?: number;
@@ -39,6 +40,7 @@ const DEFAULT_RECALL_SCORE_THRESHOLD = 0.15;
 const DEFAULT_RECALL_MAX_CONTENT_CHARS = 500;
 const DEFAULT_RECALL_PREFER_ABSTRACT = true;
 const DEFAULT_RECALL_TOKEN_BUDGET = 2000;
+const DEFAULT_COMMIT_TOKEN_THRESHOLD = 2000;
 const DEFAULT_INGEST_REPLY_ASSIST = true;
 const DEFAULT_INGEST_REPLY_ASSIST_MIN_SPEAKER_TURNS = 2;
 const DEFAULT_INGEST_REPLY_ASSIST_MIN_CHARS = 120;
@@ -118,6 +120,7 @@ export const memoryOpenVikingConfigSchema = {
         "recallMaxContentChars",
         "recallPreferAbstract",
         "recallTokenBudget",
+        "commitTokenThreshold",
         "ingestReplyAssist",
         "ingestReplyAssistMinSpeakerTurns",
         "ingestReplyAssistMinChars",
@@ -180,6 +183,10 @@ export const memoryOpenVikingConfigSchema = {
       recallTokenBudget: Math.max(
         100,
         Math.min(50000, Math.floor(toNumber(cfg.recallTokenBudget, DEFAULT_RECALL_TOKEN_BUDGET))),
+      ),
+      commitTokenThreshold: Math.max(
+        0,
+        Math.min(100_000, Math.floor(toNumber(cfg.commitTokenThreshold, DEFAULT_COMMIT_TOKEN_THRESHOLD))),
       ),
       ingestReplyAssist: cfg.ingestReplyAssist !== false,
       ingestReplyAssistMinSpeakerTurns: Math.max(
@@ -291,6 +298,12 @@ export const memoryOpenVikingConfigSchema = {
       placeholder: String(DEFAULT_RECALL_TOKEN_BUDGET),
       advanced: true,
       help: "Maximum estimated tokens for auto-recall memory injection. Injection stops when budget is exhausted.",
+    },
+    commitTokenThreshold: {
+      label: "Commit Token Threshold",
+      placeholder: String(DEFAULT_COMMIT_TOKEN_THRESHOLD),
+      advanced: true,
+      help: "Minimum estimated pending tokens before auto-commit triggers. Set to 0 to commit every turn.",
     },
     ingestReplyAssist: {
       label: "Ingest Reply Assist",
