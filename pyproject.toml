@@ -85,6 +85,7 @@ test = [
     "ragas>=0.1.0",
     "datasets>=2.0.0",
     "pandas>=2.0.0",
+    "diff-match-patch>=20200713",
     "hvac>=2.0.0",
 ]
 dev = [

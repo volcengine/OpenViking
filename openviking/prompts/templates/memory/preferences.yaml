@@ -1,0 +1,26 @@
+memory_type: preferences
+description: |
+  User preference memory - captures "what the user likes/dislikes or is accustomed to".
+  Extract specific preferences the user has expressed across conversations.
+  Each preference should be about a specific topic (not generic).
+  Topics can be: code style, communication style, tools, workflow, food, commute, etc.
+  Store different topics as separate memory files, do NOT mix unrelated preferences.
+directory: "viking://user/{user_space}/memories/preferences"
+filename_template: "{topic}.md"
+enabled: true
+fields:
+  - name: topic
+    type: string
+    description: |
+      Preference topic in Chinese or English. If English, use lowercase with underscores, max 3 words.
+      Preference topic used to uniquely identify this preference memory.
+      Should be a semantic topic description such as "Python code style", "Communication style", "Food preference", "Commute preference", etc.
+      Different preference topics should be stored as separate memories, do not mix unrelated preferences.
+    merge_op: immutable
+
+  - name: content
+    type: string
+    description: |
+      Preference content in Markdown format describing "what the user prefers/is accustomed to".
+      Example: "User has shown clear preferences for Python code style in multiple conversations: dislikes using type hints, considers them redundant; requires concise function comments, limited to 1-2 lines; prefers direct implementation, avoids excessive fallbacks and over-engineering."
+    merge_op: patch
