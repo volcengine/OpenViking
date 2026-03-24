@@ -222,7 +222,7 @@ python run.py --config config/locomo_config.yaml --step del
 | **Locomo**       | Multi-turn | 10   | 1540 | Long conversation understanding, 4 question types (factual, temporal, reasoning, understanding)                                |
 | **SyllabusQA**   | Syllabus   | 39   | 5078 | Education domain, 6 question types (single factual, multi factual, single reasoning, multi reasoning, summarization, yes/no)   |
 | **Qasper**       | Academic   | 1585 | 5049 | Research domain, 1585 NLP papers, 3 answer types (extractive, free-form, yes/no)                                               |
-| **FinanceBench** | Financial  | -    | 150  | Financial domain, open-source subset with 150 QA pairs, 3 question types (domain-relevant, metrics-generated, novel-generated) |
+| **FinanceBench** | Financial  | 84   | 150  | Financial domain, open-source subset with 150 QA pairs, 3 question types (domain-relevant, metrics-generated, novel-generated) |
 
 ### How to Use Different Datasets
 
