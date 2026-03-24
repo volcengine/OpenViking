@@ -3,17 +3,16 @@
 
 """Context retrieval tests"""
 
-import json
 import asyncio
+import json
 from unittest.mock import patch
 
-import pytest
 import pytest_asyncio
 
 from openviking import AsyncOpenViking
 from openviking.message import TextPart
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
-from openviking.service.task_tracker import TaskStatus, get_task_tracker
+from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
@@ -101,15 +100,14 @@ def _estimate_tokens(text: str) -> int:
     return -(-len(text) // 4)
 
 
-async def _wait_for_task(task_id: str, timeout_s: float = 5.0) -> None:
+async def _wait_for_task(task_id: str, timeout: float = 30.0) -> dict:
     tracker = get_task_tracker()
-    deadline = asyncio.get_running_loop().time() + timeout_s
-    while asyncio.get_running_loop().time() < deadline:
+    for _ in range(int(timeout / 0.1)):
         task = tracker.get(task_id)
-        if task and task.status in (TaskStatus.COMPLETED, TaskStatus.FAILED):
-            return
-        await asyncio.sleep(0.05)
-    raise TimeoutError(f"Timed out waiting for background task {task_id}")
+        if task and task.status.value in ("completed", "failed"):
+            return task.to_dict()
+        await asyncio.sleep(0.1)
+    raise TimeoutError(f"Task {task_id} did not complete within {timeout}s")
 
 
 class TestGetContextForSearch:
@@ -120,56 +118,90 @@ class TestGetContextForSearch:
         context = await session_with_messages.get_context_for_search(query="testing help")
 
         assert isinstance(context, dict)
-        assert "summaries" in context or "recent_messages" in context
+        assert "latest_archive_overview" in context
+        assert "current_messages" in context
 
     async def test_get_context_with_max_messages(self, session_with_messages: Session):
         """Test limiting max messages"""
         context = await session_with_messages.get_context_for_search(query="test", max_messages=2)
 
         assert isinstance(context, dict)
-        if "recent_messages" in context:
-            assert len(context["recent_messages"]) <= 2
+        assert len(context["current_messages"]) <= 2
 
-    async def test_get_context_with_max_archives(self, client: AsyncOpenViking):
-        """Test limiting max archives"""
+    async def test_get_context_returns_latest_completed_archive_only(self, client: AsyncOpenViking):
+        """Current context should expose only the latest completed archive overview."""
         session = client.session(session_id="archive_context_test")
 
-        # Add messages and commit (create archive)
         session.add_message("user", [TextPart("First message")])
         session.add_message("assistant", [TextPart("First response")])
-        session.commit()
+        result1 = await session.commit_async()
+        await _wait_for_task(result1["task_id"])
 
-        # Add more messages
         session.add_message("user", [TextPart("Second message")])
+        session.add_message("assistant", [TextPart("Second response")])
+        session.add_message("user", [TextPart("Third message")])
+        result2 = await session.commit_async()
+        await _wait_for_task(result2["task_id"])
+        latest_overview = await session._viking_fs.read_file(
+            f"{result2['archive_uri']}/.overview.md",
+            ctx=session.ctx,
+        )
 
-        context = await session.get_context_for_search(query="test", max_archives=1)
+        session.add_message("user", [TextPart("Current message")])
+        context = await session.get_context_for_search(query="test")
 
         assert isinstance(context, dict)
+        assert context["latest_archive_overview"] == latest_overview
+        assert len(context["current_messages"]) == 1
+
+    async def test_get_context_skips_incomplete_latest_archive(self, client: AsyncOpenViking):
+        """Incomplete archives without .done must not replace the latest completed overview."""
+        session = client.session(session_id="archive_context_incomplete_test")
+
+        session.add_message("user", [TextPart("First message")])
+        session.add_message("assistant", [TextPart("First response")])
+        result = await session.commit_async()
+        await _wait_for_task(result["task_id"])
+
+        completed_overview = await session._viking_fs.read_file(
+            f"{result['archive_uri']}/.overview.md",
+            ctx=session.ctx,
+        )
+        await session._viking_fs.write_file(
+            uri=f"{session.uri}/history/archive_999/.overview.md",
+            content="INCOMPLETE OVERVIEW",
+            ctx=session.ctx,
+        )
+
+        context = await session.get_context_for_search(query="test")
+
+        assert context["latest_archive_overview"] == completed_overview
 
     async def test_get_context_empty_session(self, session: Session):
         """Test getting context from empty session"""
         context = await session.get_context_for_search(query="test")
 
         assert isinstance(context, dict)
+        assert context["latest_archive_overview"] == ""
+        assert context["current_messages"] == []
 
     async def test_get_context_after_commit(self, client: AsyncOpenViking):
         """Test getting context after commit"""
         session = client.session(session_id="post_commit_context_test")
 
-        # Add messages
         session.add_message("user", [TextPart("Test message before commit")])
         session.add_message("assistant", [TextPart("Response before commit")])
 
-        # Commit
-        session.commit()
+        result = await session.commit_async()
+        await _wait_for_task(result["task_id"])
 
-        # Add new messages
         session.add_message("user", [TextPart("New message after commit")])
 
-        # Getting context should include archive summary
         context = await session.get_context_for_search(query="test")
 
         assert isinstance(context, dict)
+        assert context["latest_archive_overview"]
+        assert len(context["current_messages"]) == 1
 
 
 class TestGetContextForAssemble:
@@ -184,7 +216,8 @@ class TestGetContextForAssemble:
             "# Session Summary\n\n" + ("B" * 20),
         ]
 
-        async def fake_generate(_messages):
+        async def fake_generate(_messages, latest_archive_overview=""):
+            del latest_archive_overview
             return summaries.pop(0)
 
         monkeypatch.setattr(session, "_generate_archive_summary_async", fake_generate)
@@ -245,7 +278,8 @@ class TestGetContextForAssemble:
             "# Summary\n\n" + ("C" * 80),
         ]
 
-        async def fake_generate(_messages):
+        async def fake_generate(_messages, latest_archive_overview=""):
+            del latest_archive_overview
             return summaries.pop(0)
 
         monkeypatch.setattr(session, "_generate_archive_summary_async", fake_generate)
@@ -299,7 +333,8 @@ class TestGetContextForAssemble:
             "# Session Summary\n\narchive two",
         ]
 
-        async def fake_generate(_messages):
+        async def fake_generate(_messages, latest_archive_overview=""):
+            del latest_archive_overview
             return summaries.pop(0)
 
         monkeypatch.setattr(session, "_generate_archive_summary_async", fake_generate)

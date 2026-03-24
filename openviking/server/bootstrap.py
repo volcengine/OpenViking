@@ -112,8 +112,15 @@ def main():
     if args.config is not None:
         os.environ["OPENVIKING_CONFIG_FILE"] = args.config
 
+    from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+
     # Load server config from ov.conf
-    config = load_server_config(args.config)
+    try:
+        config = load_server_config(args.config)
+        OpenVikingConfigSingleton.initialize(config_path=args.config)
+    except (FileNotFoundError, ValueError) as e:
+        print(e, file=sys.stderr)
+        sys.exit(1)
 
     # Override with command line arguments
     if args.host is not None:

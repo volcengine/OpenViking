@@ -12,6 +12,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional, Union
 
+from .config_utils import raise_unknown_config_fields
+
 
 @dataclass
 class ParserConfig:
@@ -58,33 +60,9 @@ class ParserConfig:
         Examples:
             >>> config = ParserConfig.from_dict({"max_content_length": 50000})
         """
-        import logging
-        import difflib
-
-        logger = logging.getLogger(__name__)
-
-        # Filter only fields that belong to this class
         valid_fields = {f.name for f in cls.__dataclass_fields__.values()}
-        unknown_fields = {k: v for k, v in data.items() if k not in valid_fields}
-
-        if unknown_fields:
-            warnings = []
-            for field_name in unknown_fields:
-                close_matches = difflib.get_close_matches(field_name, valid_fields, n=1, cutoff=0.6)
-                if close_matches:
-                    warnings.append(
-                        f"Unknown config field '{field_name}' in {cls.__name__} — "
-                        f"did you mean '{close_matches[0]}'?"
-                    )
-                else:
-                    warnings.append(
-                        f"Unknown config field '{field_name}' in {cls.__name__} — ignoring"
-                    )
-            for w in warnings:
-                logger.warning(w)
-
-        filtered_data = {k: v for k, v in data.items() if k in valid_fields}
-        return cls(**filtered_data)
+        raise_unknown_config_fields(data=data, valid_fields=valid_fields, context_name=cls.__name__)
+        return cls(**data)
 
     @classmethod
     def from_yaml(cls, yaml_path: Union[str, Path]) -> "ParserConfig":
@@ -518,8 +496,12 @@ class FeishuConfig(ParserConfig):
     domain: str = "https://open.feishu.cn"
     max_rows_per_sheet: int = 1000
     max_records_per_table: int = 1000
-    download_images: bool = True  # TODO: not yet implemented, reserved for future image download support
-    request_timeout: float = 30.0  # TODO: not yet passed to lark-oapi client, reserved for future use
+    download_images: bool = (
+        True  # TODO: not yet implemented, reserved for future image download support
+    )
+    request_timeout: float = (
+        30.0  # TODO: not yet passed to lark-oapi client, reserved for future use
+    )
 
 
 @dataclass
@@ -644,6 +626,12 @@ def load_parser_configs_from_dict(config_dict: Dict[str, Any]) -> Dict[str, Pars
         >>> pdf_config = configs["pdf"]
         >>> code_config = configs["code"]
     """
+    raise_unknown_config_fields(
+        data=config_dict,
+        valid_fields=set(PARSER_CONFIG_REGISTRY.keys()),
+        context_name="parsers",
+    )
+
     configs = {}
 
     for parser_type, config_class in PARSER_CONFIG_REGISTRY.items():

@@ -10,8 +10,8 @@ import httpx
 import pytest
 
 from openviking.server.identity import RequestContext, Role
-from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 from tests.utils.mock_agfs import MockLocalAGFS
 
 
@@ -247,9 +247,7 @@ async def test_get_context_for_assemble_endpoint_returns_trimmed_context(client:
         },
     )
 
-    resp = await client.get(
-        f"/api/v1/sessions/{session_id}/context-for-assemble?token_budget=1"
-    )
+    resp = await client.get(f"/api/v1/sessions/{session_id}/context-for-assemble?token_budget=1")
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"

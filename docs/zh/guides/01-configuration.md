@@ -403,6 +403,34 @@ OpenViking 使用 JSON 配置文件（`ov.conf`）进行设置。配置文件支
 
 > **注意**: OpenAI SDK 需要 `stream=true` 才能正确解析 SSE 响应。使用强制返回 SSE 格式的 provider 时，必须将此选项设置为 `true`。
 
+### feishu
+
+飞书/Lark 云端文档解析配置。支持的 URL 格式详见[资源管理](../api/02-resources.md)。
+
+```json
+{
+  "feishu": {
+    "app_id": "",
+    "app_secret": "",
+    "domain": "https://open.feishu.cn",
+    "max_rows_per_sheet": 1000,
+    "max_records_per_table": 1000
+  }
+}
+```
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| `app_id` | str | 飞书应用 ID（也可通过 `FEISHU_APP_ID` 环境变量设置） |
+| `app_secret` | str | 飞书应用密钥（也可通过 `FEISHU_APP_SECRET` 环境变量设置） |
+| `domain` | str | 飞书 API 域名。Lark 国际版请设为 `https://open.larksuite.com` |
+| `max_rows_per_sheet` | int | 电子表格每个 sheet 最大导入行数（默认 `1000`） |
+| `max_records_per_table` | int | 多维表格每个表最大导入记录数（默认 `1000`） |
+
+**依赖**：`pip install 'openviking[bot-feishu]'`
+
+**Lark 国际版**：对于 Lark URL（`*.larksuite.com`），请将 `domain` 设为 `https://open.larksuite.com`。
+
 ### code
 
 通过 `code_summary_mode` 控制代码文件的摘要生成方式。以下两种写法等价：

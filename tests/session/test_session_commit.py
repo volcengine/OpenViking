@@ -89,6 +89,47 @@ class TestCommit:
         assert result2.get("status") == "accepted"
         assert result2.get("task_id") is not None
 
+    async def test_commit_uses_latest_archive_overview_for_summary_and_extraction(
+        self, client: AsyncOpenViking
+    ):
+        """Second commit should pass the latest completed archive overview into Phase 2."""
+        session = client.session(session_id="latest_overview_threading_test")
+
+        session.add_message("user", [TextPart("First round message")])
+        session.add_message("assistant", [TextPart("First round response")])
+        result1 = await session.commit_async()
+        await _wait_for_task(result1["task_id"])
+
+        previous_overview = await session._viking_fs.read_file(
+            f"{result1['archive_uri']}/.overview.md",
+            ctx=session.ctx,
+        )
+        seen: dict[str, str] = {}
+
+        original_generate = session._generate_archive_summary_async
+
+        async def capture_generate(messages, latest_archive_overview=""):
+            seen["summary"] = latest_archive_overview
+            return await original_generate(
+                messages, latest_archive_overview=latest_archive_overview
+            )
+
+        async def capture_extract(*args, **kwargs):
+            seen["extract"] = kwargs.get("latest_archive_overview", "")
+            return []
+
+        session._generate_archive_summary_async = capture_generate
+        session._session_compressor.extract_long_term_memories = capture_extract
+
+        session.add_message("user", [TextPart("Second round message")])
+        session.add_message("assistant", [TextPart("Second round response")])
+        result2 = await session.commit_async()
+        task_result = await _wait_for_task(result2["task_id"])
+
+        assert task_result["status"] == "completed"
+        assert seen["summary"] == previous_overview
+        assert seen["extract"] == previous_overview
+
     async def test_commit_with_usage_records(self, client: AsyncOpenViking):
         """Test commit with usage records"""
         session = client.session(session_id="usage_commit_test")

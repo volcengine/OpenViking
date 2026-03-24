@@ -388,7 +388,6 @@ export class OpenVikingClient {
   async deleteSession(sessionId: string, agentId?: string): Promise<void> {
     await this.request(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" }, agentId);
   }
-
   async deleteUri(uri: string, agentId?: string): Promise<void> {
     await this.request(`/api/v1/fs?uri=${encodeURIComponent(uri)}&recursive=false`, {
       method: "DELETE",

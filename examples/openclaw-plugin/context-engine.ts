@@ -73,9 +73,13 @@ type ContextEngine = {
   }) => Promise<CompactResult>;
 };
 
-export type ContextEngineWithCommit = ContextEngine & {
-  /** Commit (archive + extract) the OV session. Returns true on success. */
-  commitOVSession: (sessionId: string) => Promise<boolean>;
+export type ContextEngineWithSessionMapping = ContextEngine & {
+  /** Return the OV session ID for an OpenClaw sessionKey (identity: sessionKey IS the OV session ID). */
+  getOVSessionForKey: (sessionKey: string) => string;
+  /** Ensure an OV session exists on the server for the given OpenClaw sessionKey (auto-created by getSession if absent). */
+  resolveOVSession: (sessionKey: string) => Promise<string>;
+  /** Commit (extract + archive) then delete the OV session, so a fresh one is created on next use. */
+  commitOVSession: (sessionKey: string) => Promise<void>;
 };
 
 type Logger = {
@@ -90,6 +94,13 @@ function estimateTokens(messages: AgentMessage[]): number {
 
 function roughEstimate(messages: AgentMessage[]): number {
   return Math.ceil(JSON.stringify(messages).length / 4);
+}
+
+function totalExtractedMemories(memories?: Record<string, number>): number {
+  if (!memories || typeof memories !== "object") {
+    return 0;
+  }
+  return Object.values(memories).reduce((sum, count) => sum + (count ?? 0), 0);
 }
 
 function validTokenBudget(raw: unknown): number | undefined {
@@ -299,7 +310,7 @@ export function createMemoryOpenVikingContextEngine(params: {
   logger: Logger;
   getClient: () => Promise<OpenVikingClient>;
   resolveAgentId: (sessionId: string) => string;
-}): ContextEngineWithCommit {
+}): ContextEngineWithSessionMapping {
   const {
     id,
     name,
@@ -310,24 +321,26 @@ export function createMemoryOpenVikingContextEngine(params: {
     resolveAgentId,
   } = params;
 
-  /** Returns true when commit (Phase 1 archive) succeeded, false otherwise. Memory extraction runs in background. */
-  async function doCommitOVSession(sessionId: string): Promise<boolean> {
+  async function doCommitOVSession(sessionKey: string): Promise<void> {
     try {
       const client = await getClient();
-      const agentId = resolveAgentId(sessionId);
-      const commitResult = await client.commitSession(sessionId, { wait: false, agentId });
-      if (commitResult.status === "failed") {
-        warnOrInfo(logger, `openviking: commit failed for session=${sessionId}: ${commitResult.error ?? "unknown"}`);
-        return false;
-      }
+      const agentId = resolveAgentId(sessionKey);
+      const commitResult = await client.commitSession(sessionKey, { wait: true, agentId });
       logger.info(
-        `openviking: committed OV session=${sessionId}, archived=${commitResult.archived ?? false}, task_id=${commitResult.task_id ?? "none"}`,
+        `openviking: committed OV session for sessionKey=${sessionKey}, archived=${commitResult.archived ?? false}, memories=${totalExtractedMemories(commitResult.memories_extracted)}, task_id=${commitResult.task_id ?? "none"}`,
       );
-      return true;
+      await client.deleteSession(sessionKey, agentId).catch(() => {});
     } catch (err) {
-      warnOrInfo(logger, `openviking: commit failed for session=${sessionId}: ${String(err)}`);
-      return false;
+      warnOrInfo(logger, `openviking: commit failed for sessionKey=${sessionKey}: ${String(err)}`);
     }
+  }
+
+  function extractSessionKey(runtimeContext: Record<string, unknown> | undefined): string | undefined {
+    if (!runtimeContext) {
+      return undefined;
+    }
+    const key = runtimeContext.sessionKey;
+    return typeof key === "string" && key.trim() ? key.trim() : undefined;
   }
 
   return {
@@ -335,6 +348,14 @@ export function createMemoryOpenVikingContextEngine(params: {
       id,
       name,
       version,
+    },
+
+    // --- session-mapping extensions ---
+
+    getOVSessionForKey: (sessionKey: string) => sessionKey,
+
+    async resolveOVSession(sessionKey: string): Promise<string> {
+      return sessionKey;
     },
 
     commitOVSession: doCommitOVSession,
@@ -413,7 +434,8 @@ export function createMemoryOpenVikingContextEngine(params: {
       }
 
       try {
-        const OVSessionId = afterTurnParams.sessionId;
+        const sessionKey = extractSessionKey(afterTurnParams.runtimeContext);
+        const OVSessionId = sessionKey ?? afterTurnParams.sessionId;
         const agentId = resolveAgentId(OVSessionId);
 
         const messages = afterTurnParams.messages ?? [];
@@ -456,6 +478,11 @@ export function createMemoryOpenVikingContextEngine(params: {
         logger.info(
           `openviking: capture-check shouldCapture=${String(decision.shouldCapture)} reason=${decision.reason}`,
         );
+
+        if (!decision.shouldCapture) {
+          logger.info("openviking: afterTurn skipped commit (capture decision rejected)");
+          return;
+        }
 
         const session = await client.getSession(OVSessionId, agentId);
         const pendingTokens = session.pending_tokens ?? 0;

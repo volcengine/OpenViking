@@ -85,11 +85,19 @@ def create_app(
             )
         elif config.auth_mode == "trusted":
             app.state.api_key_manager = None
-            logger.warning(
-                "Trusted mode enabled: authentication uses X-OpenViking-Account/User/Agent "
-                "headers without API keys. Only expose this server behind a trusted "
-                "network boundary or identity-injecting gateway."
-            )
+            if config.root_api_key:
+                logger.info(
+                    "Trusted mode enabled: authentication trusts X-OpenViking-Account/User/Agent "
+                    "headers and requires the configured server API key on each request. "
+                    "Only expose this server behind a trusted network boundary or "
+                    "identity-injecting gateway."
+                )
+            else:
+                logger.warning(
+                    "Trusted mode enabled: authentication uses X-OpenViking-Account/User/Agent "
+                    "headers without API keys. Only expose this server behind a trusted "
+                    "network boundary or identity-injecting gateway."
+                )
         else:
             app.state.api_key_manager = None
             logger.warning(

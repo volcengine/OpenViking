@@ -7,63 +7,78 @@ metadata:
   category: "compression"
 
 variables:
+  - name: "latest_archive_overview"
+    type: "string"
+    description: "Latest completed archive overview"
+    required: false
+    default: ""
   - name: "messages"
     type: "string"
     description: "Session content"
     required: true
 
 template: |
-  Analyze the following session and generate a structured summary.
+  Analyze the following session archive and generate a structured summary.
 
-  Session content:
+  {% if latest_archive_overview %}
+  Latest completed archive overview:
+  {{ latest_archive_overview }}
+
+  {% endif %}
+  Current archive session content:
   {{ messages }}
 
   Please output the summary directly in Markdown format:
 
   # Session Summary
 
-  **One-sentence overview**: [Topic]: [Intent] | [Result] | [Status: Completed/In Progress/Pending]
+  **One-sentence overview**: One concise sentence that explains how the current archive continues prior context and what new topics or decisions were added in this archive.
 
-  ## Analysis
-  Chronological conversation progress (2-4 key milestones):
+  ## Historical Context Carried Forward
+  Still-valid prior background that should carry into future sessions.
+  - ...
+
+  ## New Information In This Archive
+  Important facts, preferences, events, requests, or decisions introduced or updated in the current archive only.
+  - ...
+
+  ## Current Archive Analysis
+  Chronological progression within the current archive only (2-4 key milestones).
   1. ...
   2. ...
 
-  ## Primary Request and Intent
-  User's core objectives:
+  ## Key User Messages
+  Preserve 3-6 important user quotes that remain useful for future continuity.
+  - Include quotes from both prior context and the current archive when relevant.
+  - Prioritize stable preferences, constraints, goals, relationships, and interaction style.
+  - Prefer exact original wording when available from the current archive or prior overview.
   - ...
 
-  ## Key Concepts
-  Key technical concepts/terms:
+  ## Open Loops
+  Unresolved items that remain active after this archive. Prefer items newly introduced here, but include older ones if they are still clearly relevant.
   - ...
-
-  ## Context References
-  Context referenced in the session (viking:// URIs, external links, etc.):
-  - ...
-
-  ## Errors and Fixes
-  Problems encountered and solutions (write "None" if none):
-  - Problem → Solution
-
-  ## User Messages
-  Key user quotes (preserve important expressions):
-  - "..."
-
-  ## Pending Tasks
-  Incomplete tasks (write "None" if none):
-  - ...
-
-  ## Current Work
-  Work in progress at the end of the conversation.
 
   ## Next Step
-  Recommended next actions.
+  Recommended follow-up actions for the assistant or future conversation turns.
+  1. ...
+  2. ...
 
   ---
 
   Notes:
-  - Analysis should reflect the complete timeline
-  - User Messages should preserve original quotes
+  - The current archive summary must be continuity-aware, not a standalone recap that ignores prior context.
+  - If latest_archive_overview is provided, first extract 3-6 concise bullets of still-valid background into "Historical Context Carried Forward".
+  - Do not copy the previous overview verbatim. Compress it into durable, reusable context only.
+  - "New Information In This Archive" must focus on what is newly introduced, newly clarified, or newly changed in the current archive.
+  - "Current Archive Analysis" should describe the progression of the current archive itself, not the full historical timeline.
+  - "Key User Messages" should be continuity-aware: do not limit it to the current archive if older user quotes remain important for future turns.
+  - When selecting historical quotes, keep only the most durable and still-relevant ones. Do not repeat quotes that add no future value.
+  - Do not fabricate quotes. Only use wording grounded in the current archive content or in quoted material already present in latest_archive_overview.
+  - Avoid mixing carried-forward background and new information in the same bullet unless the new archive explicitly updates prior context.
+  - If there is no prior overview, write "None" under "Historical Context Carried Forward".
+  - Do not leave placeholder tokens such as [Topic], [Result], or [Status] in the output.
+  - Prefer durable user context: identity, work situation, long-lived preferences, health constraints, ongoing goals, relationship context, recurring interaction preferences.
+  - Do not invent continuity. If a prior detail is not stable or is no longer relevant, omit it.
   - Keep overall length within 1000 words
 
 llm_config:

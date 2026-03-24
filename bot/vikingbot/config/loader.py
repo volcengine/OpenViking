@@ -75,7 +75,13 @@ def load_config() -> Config:
     if path.exists():
         try:
             with open(path) as f:
-                full_data = json.load(f)
+                raw = f.read()
+
+            # Expand $VAR and ${VAR} inside the JSON text (useful for container deployments).
+            # Unset variables are left unchanged by expandvars().
+            raw = os.path.expandvars(raw)
+
+            full_data = json.loads(raw)
 
             # Extract bot section
             bot_data = full_data.get("bot", {})

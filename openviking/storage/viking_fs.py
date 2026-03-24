@@ -931,7 +931,7 @@ class VikingFS:
     async def search(
         self,
         query: str,
-        target_uri: str = "",
+        target_uri: Union[str, List[str]] = "",
         session_info: Optional[Dict] = None,
         limit: int = 10,
         score_threshold: Optional[float] = None,
@@ -942,7 +942,7 @@ class VikingFS:
 
         Args:
             query: Search query
-            target_uri: Target directory URI
+            target_uri: Target directory URI(s), supports str or List[str]
             session_info: Session information
             limit: Return count
             filter: Metadata filter
@@ -960,42 +960,45 @@ class VikingFS:
             TypedQuery,
         )
 
-        summary_list = session_info.get("summaries") if session_info else None
-        if isinstance(summary_list, list):
-            session_summary = "\n\n".join(str(item) for item in summary_list if item)
-        else:
-            session_summary = ""
-        recent_messages = session_info.get("recent_messages") if session_info else None
+        # Normalize target_uri to list
+        target_uri_list = [target_uri] if isinstance(target_uri, str) else (target_uri or [])
+        # Use first URI for context inference and access check
+        primary_target_uri = target_uri_list[0] if target_uri_list else ""
+
+        session_summary = (
+            str(session_info.get("latest_archive_overview") or "") if session_info else ""
+        )
+        current_messages = session_info.get("current_messages") if session_info else None
 
         query_plan: Optional[QueryPlan] = None
-        if target_uri and target_uri not in {"/", "viking://"}:
-            self._ensure_access(target_uri, ctx)
+        if primary_target_uri and primary_target_uri not in {"/", "viking://"}:
+            self._ensure_access(primary_target_uri, ctx)
 
         # When target_uri exists: read abstract, infer context_type
         target_context_type: Optional[ContextType] = None
         target_abstract = ""
-        if target_uri:
-            target_context_type = self._infer_context_type(target_uri)
+        if primary_target_uri:
+            target_context_type = self._infer_context_type(primary_target_uri)
             try:
-                target_abstract = await self.abstract(target_uri, ctx=ctx)
+                target_abstract = await self.abstract(primary_target_uri, ctx=ctx)
             except Exception:
                 target_abstract = ""
 
         # With session context: intent analysis
-        if session_summary or recent_messages:
+        if session_summary or current_messages:
             analyzer = IntentAnalyzer(max_recent_messages=5)
             query_plan = await analyzer.analyze(
                 compression_summary=session_summary or "",
-                messages=recent_messages or [],
+                messages=current_messages or [],
                 current_message=query,
                 context_type=target_context_type,
                 target_abstract=target_abstract,
             )
             typed_queries = query_plan.queries
             # Set target_directories
-            if target_uri:
+            if target_uri_list:
                 for tq in typed_queries:
-                    tq.target_directories = [target_uri]
+                    tq.target_directories = target_uri_list
         else:
             # No session context: create query directly
             if target_context_type:
@@ -1006,7 +1009,7 @@ class VikingFS:
                         context_type=target_context_type,
                         intent="",
                         priority=1,
-                        target_directories=[target_uri] if target_uri else [],
+                        target_directories=target_uri_list,
                     )
                 ]
             else:
@@ -1017,7 +1020,7 @@ class VikingFS:
                         context_type=ctx_type,
                         intent="",
                         priority=1,
-                        target_directories=[target_uri] if target_uri else [],
+                        target_directories=target_uri_list,
                     )
                     for ctx_type in [ContextType.MEMORY, ContextType.RESOURCE, ContextType.SKILL]
                 ]
