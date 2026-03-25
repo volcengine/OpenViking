@@ -744,6 +744,22 @@ openviking-server --config /path/to/ov.conf
 
 The config sections documented above (embedding, vlm, rerank, storage) all belong to `ov.conf`. SDK embedded mode and server share this file.
 
+For memory-related settings, add a `memory` section in `ov.conf`:
+
+```json
+{
+  "memory": {
+    "agent_scope_mode": "user+agent"
+  }
+}
+```
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| `agent_scope_mode` | Agent memory namespace mode: `"user+agent"` isolates by `(user_id, agent_id)`, while `"agent"` isolates only by `agent_id` and shares agent memories across users of the same agent | `"user+agent"` |
+
+`agent_scope_mode` only affects agent-level namespaces such as `viking://agent/{agent_space}/memories/...`. User memories under `viking://user/{user_space}/memories/...` are not affected.
+
 ### ovcli.conf
 
 Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI to connect to a remote server:
@@ -761,7 +777,7 @@ Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI t
 |-------|-------------|---------|
 | `url` | Server address | (required) |
 | `api_key` | API key for authentication (root key or user key) | `null` (no auth) |
-| `agent_id` | Agent identifier for agent space isolation | `null` |
+| `agent_id` | Agent identifier used to derive the agent memory namespace. The final isolation behavior also depends on `memory.agent_scope_mode` in `ov.conf` | `null` |
 | `output` | Default output format: `"table"` or `"json"` | `"table"` |
 
 See [Deployment](./03-deployment.md) for details.
