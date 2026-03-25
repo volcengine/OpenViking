@@ -187,6 +187,43 @@ async def test_semantic_queue_preserves_same_message_retry_while_active(monkeypa
     assert payload.id == msg.id
 
 
+async def test_semantic_queue_retry_does_not_clobber_coalesced_follow_up(monkeypatch):
+    monkeypatch.setattr(
+        "openviking.storage.queuefs.semantic_queue.get_openviking_config",
+        lambda: _semantic_config(300),
+    )
+    queue = SemanticQueue(FakeQueueAGFS(), "/queue", "Semantic")
+
+    original = SemanticMsg(
+        uri="viking://user/default/memories/entities",
+        context_type="memory",
+        changes={"added": ["a.md"], "modified": [], "deleted": []},
+    )
+    incremental = SemanticMsg(
+        uri="viking://user/default/memories/entities",
+        context_type="memory",
+        changes={"added": [], "modified": ["b.md"], "deleted": []},
+    )
+
+    await queue.enqueue(original)
+    await queue.enqueue(incremental)
+    await queue.enqueue(original)
+
+    raw = await queue.dequeue_raw()
+    assert raw is not None
+    queue._on_dequeue_start()
+    await queue.ack(raw["id"])
+
+    follow_up = await queue.dequeue_raw()
+    assert follow_up is not None
+    payload = SemanticMsg.from_json(follow_up["data"])
+    assert payload.changes == {
+        "added": ["a.md"],
+        "modified": ["b.md"],
+        "deleted": [],
+    }
+
+
 async def test_semantic_queue_does_not_release_follow_up_when_ack_fails(monkeypatch):
     monkeypatch.setattr(
         "openviking.storage.queuefs.semantic_queue.get_openviking_config",
