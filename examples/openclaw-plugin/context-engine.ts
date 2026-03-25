@@ -1,4 +1,4 @@
-import type { OpenVikingClient } from "./client.js";
+import type { OpenVikingClient, OVMessage } from "./client.js";
 import type { MemoryOpenVikingConfig } from "./config.js";
 import {
   getCaptureDecision,
@@ -73,13 +73,9 @@ type ContextEngine = {
   }) => Promise<CompactResult>;
 };
 
-export type ContextEngineWithSessionMapping = ContextEngine & {
-  /** Return the OV session ID for an OpenClaw sessionKey (identity: sessionKey IS the OV session ID). */
-  getOVSessionForKey: (sessionKey: string) => string;
-  /** Ensure an OV session exists on the server for the given OpenClaw sessionKey (auto-created by getSession if absent). */
-  resolveOVSession: (sessionKey: string) => Promise<string>;
-  /** Commit (extract + archive) then delete the OV session, so a fresh one is created on next use. */
-  commitOVSession: (sessionKey: string) => Promise<void>;
+export type ContextEngineWithCommit = ContextEngine & {
+  /** Commit (archive + extract) the OV session. Returns true on success. */
+  commitOVSession: (sessionId: string) => Promise<boolean>;
 };
 
 type Logger = {
@@ -94,6 +90,42 @@ function estimateTokens(messages: AgentMessage[]): number {
 
 function roughEstimate(messages: AgentMessage[]): number {
   return Math.ceil(JSON.stringify(messages).length / 4);
+}
+
+function msgTokenEstimate(msg: AgentMessage): number {
+  const raw = (msg as Record<string, unknown>).content;
+  if (typeof raw === "string") return Math.ceil(raw.length / 4);
+  if (Array.isArray(raw)) return Math.ceil(JSON.stringify(raw).length / 4);
+  return 1;
+}
+
+function messageDigest(messages: AgentMessage[]): Array<{role: string; preview: string; tokens: number}> {
+  return messages.map((msg) => {
+    const m = msg as Record<string, unknown>;
+    const role = String(m.role ?? "unknown");
+    const raw = m.content;
+    let preview: string;
+    if (typeof raw === "string") {
+      preview = raw.slice(0, 120);
+    } else if (Array.isArray(raw)) {
+      preview = (raw as Record<string, unknown>[])
+        .map((b) => {
+          if (b.type === "text") return String(b.text ?? "").slice(0, 80);
+          if (b.type === "toolUse") return `[toolUse: ${b.name}]`;
+          if (b.type === "toolResult") return `[toolResult]`;
+          return `[${b.type}]`;
+        })
+        .join(" | ")
+        .slice(0, 120);
+    } else {
+      preview = JSON.stringify(raw)?.slice(0, 120) ?? "";
+    }
+    return { role, preview, tokens: msgTokenEstimate(msg) };
+  });
+}
+
+function emitDiag(log: typeof logger, stage: string, sessionId: string, data: Record<string, unknown>): void {
+  log.info(`openviking: diag ${JSON.stringify({ ts: Date.now(), stage, sessionId, data })}`);
 }
 
 function totalExtractedMemories(memories?: Record<string, number>): number {
@@ -213,21 +245,80 @@ function normalizeAssistantContent(messages: AgentMessage[]): void {
   }
 }
 
+export function formatMessageFaithful(msg: OVMessage): string {
+  const roleTag = `[${msg.role}]`;
+  if (!msg.parts || msg.parts.length === 0) {
+    return `${roleTag}: (empty)`;
+  }
+
+  const sections: string[] = [];
+  for (const part of msg.parts) {
+    if (!part || typeof part !== "object") continue;
+    switch (part.type) {
+      case "text":
+        if (part.text) sections.push(part.text);
+        break;
+      case "tool": {
+        const status = part.tool_status ?? "unknown";
+        const header = `[Tool: ${part.tool_name ?? "unknown"}] (${status})`;
+        const inputStr = part.tool_input
+          ? `Input: ${JSON.stringify(part.tool_input, null, 2)}`
+          : "";
+        const outputStr = part.tool_output ? `Output:\n${part.tool_output}` : "";
+        sections.push([header, inputStr, outputStr].filter(Boolean).join("\n"));
+        break;
+      }
+      case "context":
+        sections.push(
+          `[Context: ${part.uri ?? "?"}]${part.abstract ? ` ${part.abstract}` : ""}`,
+        );
+        break;
+      default:
+        sections.push(`[${part.type}]: ${JSON.stringify(part)}`);
+    }
+  }
+
+  return `${roleTag}:\n${sections.join("\n\n")}`;
+}
+
 function buildSystemPromptAddition(): string {
   return [
-    "## Compressed Context",
+    "## Session Context Guide",
     "",
-    "The conversation history above includes compressed session summaries",
-    '(marked as "# Session Summary"). These summaries contain condensed',
-    "information from earlier parts of the conversation.",
+    "Your conversation history may include:",
     "",
-    "**Important:**",
-    "- Summaries are compressed context — maps to details, not the details",
-    "  themselves.",
-    "- For precision questions (exact commands, file paths, timestamps,",
-    "  config values): state that the information comes from a summary and",
-    "  may need verification.",
-    "- Do not fabricate specific details from compressed summaries.",
+    "1. **[Session History Summary]** — A compressed summary of all prior",
+    "   conversation sessions. Use it to understand background and continuity.",
+    "   It is lossy: specific details (commands, file paths, code, config",
+    "   values) may have been compressed away. It may be omitted when the",
+    "   token budget is tight.",
+    "",
+    "2. **[Archive Index]** — A list of archive entries in chronological order",
+    "   (archive_001 is the oldest, higher numbers are more recent). Most",
+    "   lines summarize one archive; the latest archive may appear as an ID",
+    "   pointer only.",
+    "",
+    "3. **Active messages** — The current, uncompressed conversation.",
+    "",
+    "**When you need precise details from a prior session:**",
+    "",
+    "1. Review [Archive Index] to identify which archive likely contains",
+    "   the information you need.",
+    "2. Call `ov_archive_expand` with that archive ID to retrieve the",
+    "   archived conversation content.",
+    "3. If multiple archives look relevant, try the most recent one first.",
+    "4. Answer using the retrieved content together with active messages.",
+    "",
+    "**Rules:**",
+    "- If active messages conflict with archive content, trust active",
+    "  messages as the newer source of truth.",
+    "- Only expand an archive when the existing context lacks the specific detail needed.",
+    "- If [Session History Summary] is absent, use [Archive Index] and active",
+    "  messages to decide whether to expand an archive.",
+    "- Do not fabricate details from summaries. When uncertain, expand first",
+    "  or state that the information comes from a compressed summary.",
+    "- After expanding, cite the archive ID in your answer",
+    '  (e.g. "Based on archive_003, ...").',
   ].join("\n");
 }
 
@@ -310,7 +401,7 @@ export function createMemoryOpenVikingContextEngine(params: {
   logger: Logger;
   getClient: () => Promise<OpenVikingClient>;
   resolveAgentId: (sessionId: string) => string;
-}): ContextEngineWithSessionMapping {
+}): ContextEngineWithCommit {
   const {
     id,
     name,
@@ -321,26 +412,28 @@ export function createMemoryOpenVikingContextEngine(params: {
     resolveAgentId,
   } = params;
 
-  async function doCommitOVSession(sessionKey: string): Promise<void> {
+  async function doCommitOVSession(sessionId: string): Promise<boolean> {
     try {
       const client = await getClient();
-      const agentId = resolveAgentId(sessionKey);
-      const commitResult = await client.commitSession(sessionKey, { wait: true, agentId });
+      const agentId = resolveAgentId(sessionId);
+      const commitResult = await client.commitSession(sessionId, { wait: true, agentId });
+      const memCount = totalExtractedMemories(commitResult.memories_extracted);
+      if (commitResult.status === "failed") {
+        warnOrInfo(logger, `openviking: commit Phase 2 failed for session=${sessionId}: ${commitResult.error ?? "unknown"}`);
+        return false;
+      }
+      if (commitResult.status === "timeout") {
+        warnOrInfo(logger, `openviking: commit Phase 2 timed out for session=${sessionId}, task_id=${commitResult.task_id ?? "none"}`);
+        return false;
+      }
       logger.info(
-        `openviking: committed OV session for sessionKey=${sessionKey}, archived=${commitResult.archived ?? false}, memories=${totalExtractedMemories(commitResult.memories_extracted)}, task_id=${commitResult.task_id ?? "none"}`,
+        `openviking: committed OV session=${sessionId}, archived=${commitResult.archived ?? false}, memories=${memCount}, task_id=${commitResult.task_id ?? "none"}`,
       );
-      await client.deleteSession(sessionKey, agentId).catch(() => {});
+      return true;
     } catch (err) {
-      warnOrInfo(logger, `openviking: commit failed for sessionKey=${sessionKey}: ${String(err)}`);
+      warnOrInfo(logger, `openviking: commit failed for session=${sessionId}: ${String(err)}`);
+      return false;
     }
-  }
-
-  function extractSessionKey(runtimeContext: Record<string, unknown> | undefined): string | undefined {
-    if (!runtimeContext) {
-      return undefined;
-    }
-    const key = runtimeContext.sessionKey;
-    return typeof key === "string" && key.trim() ? key.trim() : undefined;
   }
 
   return {
@@ -348,14 +441,6 @@ export function createMemoryOpenVikingContextEngine(params: {
       id,
       name,
       version,
-    },
-
-    // --- session-mapping extensions ---
-
-    getOVSessionForKey: (sessionKey: string) => sessionKey,
-
-    async resolveOVSession(sessionKey: string): Promise<string> {
-      return sessionKey;
     },
 
     commitOVSession: doCommitOVSession,
@@ -377,51 +462,151 @@ export function createMemoryOpenVikingContextEngine(params: {
       const originalTokens = roughEstimate(messages);
       logger.info(formatMessagesForLog(`ORIGINAL CONTEXT (openclaw raw) msgs=${messages.length} ~${originalTokens} tokens`, messages));
 
+      const OVSessionId = assembleParams.sessionId;
+      emitDiag(logger, "assemble_input", OVSessionId, {
+        messagesCount: messages.length,
+        inputTokenEstimate: originalTokens,
+        tokenBudget,
+        messages: messageDigest(messages),
+      });
+
       try {
         const client = await getClient();
-        const OVSessionId = assembleParams.sessionId;
         const agentId = resolveAgentId(OVSessionId);
         const ctx = await client.getSessionContext(
           OVSessionId,
           tokenBudget,
           agentId,
         );
-        const hasSummaryArchive = ctx?.latest_archive_overview ? 1 : 0;
+
+        const hasArchives = !!ctx?.latest_archive_id;
         const activeCount = ctx?.messages?.length ?? 0;
-        logger.info(`openviking: assemble OV ctx summaryArchive=${hasSummaryArchive} active=${activeCount}`);
+        const preAbstracts = ctx?.pre_archive_abstracts ?? [];
+        logger.info(
+          `openviking: assemble OV ctx hasArchives=${hasArchives} latestId=${ctx?.latest_archive_id ?? "none"} preAbstracts=${preAbstracts.length} active=${activeCount}`,
+        );
 
-        if (!ctx || (hasSummaryArchive === 0 && activeCount === 0)) {
+        if (!ctx || (!hasArchives && activeCount === 0)) {
           logger.info("openviking: assemble passthrough (no OV data)");
+          emitDiag(logger, "context_assemble", OVSessionId, {
+            archiveCount: 0, activeCount: 0,
+            assembledMessagesCount: messages.length,
+            assembledTokens: originalTokens,
+            passthrough: true, reason: "no_ov_data",
+          });
+          emitDiag(logger, "assemble_output", OVSessionId, {
+            outputMessagesCount: messages.length,
+            estimatedTokens: originalTokens,
+            inputTokenEstimate: originalTokens,
+            tokensSaved: 0, savingPct: 0,
+            passthrough: true,
+            messages: messageDigest(messages),
+          });
           return { messages, estimatedTokens: roughEstimate(messages) };
         }
 
-        if (!ctx.latest_archive_overview && ctx.messages.length < messages.length) {
+        if (!hasArchives && ctx.messages.length < messages.length) {
           logger.info(`openviking: assemble passthrough (OV msgs=${ctx.messages.length} < input msgs=${messages.length})`);
+          emitDiag(logger, "context_assemble", OVSessionId, {
+            archiveCount: 0, activeCount,
+            assembledMessagesCount: messages.length,
+            assembledTokens: originalTokens,
+            passthrough: true, reason: "ov_msgs_fewer_than_input",
+          });
+          emitDiag(logger, "assemble_output", OVSessionId, {
+            outputMessagesCount: messages.length,
+            estimatedTokens: originalTokens,
+            inputTokenEstimate: originalTokens,
+            tokensSaved: 0, savingPct: 0,
+            passthrough: true,
+            messages: messageDigest(messages),
+          });
           return { messages, estimatedTokens: roughEstimate(messages) };
         }
 
-        const assembled: AgentMessage[] = [
-          ...(ctx.latest_archive_overview
-            ? [{ role: "user" as const, content: ctx.latest_archive_overview }]
-            : []),
-          ...ctx.messages.flatMap((m) => convertToAgentMessages(m)),
-        ];
+        const assembled: AgentMessage[] = [];
+
+        // [1] L1: latest cascading summary
+        if (ctx.latest_archive_overview) {
+          assembled.push({
+            role: "user" as const,
+            content: `[Session History Summary]\n${ctx.latest_archive_overview}`,
+          });
+        }
+
+        // [2] L0: archive index for locating original messages
+        if (preAbstracts.length > 0 || ctx.latest_archive_id) {
+          const lines: string[] = preAbstracts.map(
+            (a) => `${a.archive_id}: ${a.abstract}`,
+          );
+          if (ctx.latest_archive_id) {
+            lines.push(
+              `(latest: ${ctx.latest_archive_id} — see [Session History Summary] above)`,
+            );
+          }
+          assembled.push({
+            role: "user" as const,
+            content: `[Archive Index]\n${lines.join("\n")}`,
+          });
+        }
+
+        // [3..N] L2: active messages (pending + live)
+        assembled.push(...ctx.messages.flatMap((m) => convertToAgentMessages(m)));
 
         normalizeAssistantContent(assembled);
         const sanitized = sanitizeToolUseResultPairing(assembled as never[]) as AgentMessage[];
 
         if (sanitized.length === 0 && messages.length > 0) {
           logger.info("openviking: assemble passthrough (sanitized=0, falling back to original)");
+          const archiveCountFallback = preAbstracts.length + (ctx.latest_archive_id ? 1 : 0);
+          emitDiag(logger, "context_assemble", OVSessionId, {
+            archiveCount: archiveCountFallback, activeCount,
+            assembledMessagesCount: messages.length,
+            assembledTokens: originalTokens,
+            passthrough: true, reason: "sanitized_empty",
+          });
+          emitDiag(logger, "assemble_output", OVSessionId, {
+            outputMessagesCount: messages.length,
+            estimatedTokens: originalTokens,
+            inputTokenEstimate: originalTokens,
+            tokensSaved: 0, savingPct: 0,
+            passthrough: true,
+            messages: messageDigest(messages),
+          });
           return { messages, estimatedTokens: roughEstimate(messages) };
         }
 
         const assembledTokens = roughEstimate(sanitized);
         logger.info(formatMessagesForLog(`ASSEMBLED CONTEXT (openviking) ~${assembledTokens} tokens (ovEstimate=${ctx.estimatedTokens})`, sanitized));
 
+        const archiveCount = preAbstracts.length + (ctx.latest_archive_id ? 1 : 0);
+        const tokensSaved = originalTokens - assembledTokens;
+        const savingPct = originalTokens > 0 ? Math.round((tokensSaved / originalTokens) * 100) : 0;
+
+        emitDiag(logger, "context_assemble", OVSessionId, {
+          archiveCount,
+          activeCount,
+          assembledMessagesCount: sanitized.length,
+          assembledTokens,
+          passthrough: false,
+          assembledMessages: messageDigest(sanitized),
+          systemPromptAddition: hasArchives ? buildSystemPromptAddition() : undefined,
+        });
+
+        emitDiag(logger, "assemble_output", OVSessionId, {
+          outputMessagesCount: sanitized.length,
+          estimatedTokens: assembledTokens,
+          inputTokenEstimate: originalTokens,
+          tokensSaved,
+          savingPct,
+          passthrough: false,
+          messages: messageDigest(sanitized),
+        });
+
         return {
           messages: sanitized,
           estimatedTokens: ctx.estimatedTokens,
-          ...(ctx.latest_archive_overview
+          ...(hasArchives
             ? { systemPromptAddition: buildSystemPromptAddition() }
             : {}),
         };
@@ -436,8 +621,7 @@ export function createMemoryOpenVikingContextEngine(params: {
       }
 
       try {
-        const sessionKey = extractSessionKey(afterTurnParams.runtimeContext);
-        const OVSessionId = sessionKey ?? afterTurnParams.sessionId;
+        const OVSessionId = afterTurnParams.sessionId;
         const agentId = resolveAgentId(OVSessionId);
 
         const messages = afterTurnParams.messages ?? [];
@@ -460,7 +644,6 @@ export function createMemoryOpenVikingContextEngine(params: {
         }
 
         // Always store messages into OV session so assemble can retrieve them.
-        // Capture decision only controls whether we trigger commit (archive+extract).
         const client = await getClient();
         const turnText = newTexts.join("\n");
         const sanitized = turnText.replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>/gi, " ").replace(/\s+/g, " ").trim();
@@ -472,17 +655,6 @@ export function createMemoryOpenVikingContextEngine(params: {
           );
         } else {
           logger.info("openviking: afterTurn skipped store (sanitized text empty)");
-          return;
-        }
-
-        // Capture decision: controls commit (archive + memory extraction)
-        const decision = getCaptureDecision(turnText, cfg.captureMode, cfg.captureMaxLength);
-        logger.info(
-          `openviking: capture-check shouldCapture=${String(decision.shouldCapture)} reason=${decision.reason}`,
-        );
-
-        if (!decision.shouldCapture) {
-          logger.info("openviking: afterTurn skipped commit (capture decision rejected)");
           return;
         }
 
