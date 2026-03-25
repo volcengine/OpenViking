@@ -320,12 +320,23 @@ async def vectorize_file(
 async def index_resource(
     uri: str,
     ctx: RequestContext,
+    recursive: bool = True,
+    max_depth: int = 10,
+    _current_depth: int = 0,
 ) -> None:
     """
     Build vector index for a resource directory.
 
     1. Reads .abstract.md and .overview.md and vectorizes them.
     2. Scans files in the directory and vectorizes them.
+    3. Optionally recurses into subdirectories.
+
+    Args:
+        uri: Resource directory URI to index.
+        ctx: Request context for tenant scoping.
+        recursive: Whether to recurse into subdirectories (default True).
+        max_depth: Maximum recursion depth to prevent runaway traversal (default 10).
+        _current_depth: Internal depth tracker, do not set manually.
     """
     viking_fs = get_viking_fs()
 
@@ -360,7 +371,15 @@ async def index_resource(
                 continue
 
             if file_info.get("type") == "directory" or file_info.get("isDir"):
-                # TODO: Recursive indexing? For now, skip subdirectories to match previous behavior
+                if recursive and _current_depth < max_depth:
+                    subdir_uri = file_info.get("uri") or f"{uri}/{file_name}"
+                    await index_resource(
+                        subdir_uri,
+                        ctx=ctx,
+                        recursive=True,
+                        max_depth=max_depth,
+                        _current_depth=_current_depth + 1,
+                    )
                 continue
 
             file_uri = file_info.get("uri") or f"{uri}/{file_name}"
