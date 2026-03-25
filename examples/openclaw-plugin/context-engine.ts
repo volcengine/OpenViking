@@ -8,7 +8,7 @@ import {
   trimForLog,
   toJsonLog,
 } from "./memory-ranking.js";
-import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
+import { sanitizeToolUseResultPairing } from "./session-transcript-repair";
 
 type AgentMessage = {
   role?: string;
