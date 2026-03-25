@@ -210,7 +210,7 @@ def _make_provider(config, langfuse_client: None = None):
 
     p = config.agents
 
-    model = p.model
+    model = p.model if p else None
     api_key = p.api_key if p else None
     api_base = p.api_base if p else None
     provider_name = p.provider if p else None
