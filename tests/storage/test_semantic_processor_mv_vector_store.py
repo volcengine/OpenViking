@@ -21,7 +21,6 @@ class _FakeVectorStore:
         ctx: RequestContext,
         uri: str,
         new_uri: str,
-        new_parent_uri: str,
         levels: Optional[List[int]] = None,
     ) -> bool:
         def seed_uri_for_id(target_uri: str, level: int) -> str:
@@ -58,7 +57,7 @@ class _FakeVectorStore:
             new_record = dict(record)
             new_record["id"] = new_id
             new_record["uri"] = new_uri
-            new_record["parent_uri"] = new_parent_uri
+            new_record.pop("parent_uri", None)
             self.records.append(new_record)
             touched = True
 
@@ -132,9 +131,27 @@ async def test_mv_vector_store_moves_records(monkeypatch):
 
     store = _FakeVectorStore(
         [
-            {"id": "l0", "uri": old_uri, "level": 0, "account_id": ctx.account_id, "owner_space": ""},
-            {"id": "l1", "uri": old_uri, "level": 1, "account_id": ctx.account_id, "owner_space": ""},
-            {"id": "l2", "uri": old_uri, "level": 2, "account_id": ctx.account_id, "owner_space": ""},
+            {
+                "id": "l0",
+                "uri": old_uri,
+                "level": 0,
+                "account_id": ctx.account_id,
+                "owner_space": "",
+            },
+            {
+                "id": "l1",
+                "uri": old_uri,
+                "level": 1,
+                "account_id": ctx.account_id,
+                "owner_space": "",
+            },
+            {
+                "id": "l2",
+                "uri": old_uri,
+                "level": 2,
+                "account_id": ctx.account_id,
+                "owner_space": "",
+            },
             {
                 "id": "child-l0",
                 "uri": f"{old_uri}/x",
@@ -175,6 +192,7 @@ async def test_mv_vector_store_moves_records(monkeypatch):
     assert {r["id"] for r in store.records if r.get("uri") == old_uri} == {"l2"}
     assert {r["id"] for r in store.records if r.get("uri") == f"{old_uri}/x"} == {"child-l0"}
     assert {int(r["level"]) for r in store.records if r.get("uri") == new_uri} == {0, 1}
+    assert all("parent_uri" not in r for r in store.records if r.get("uri") == new_uri)
     assert set(store.deleted_ids) == {"l0", "l1"}
 
 

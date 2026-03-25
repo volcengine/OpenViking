@@ -57,28 +57,27 @@ class CollectionSchemas:
         Returns:
             Schema definition for the context collection
         """
-        return {
-            "CollectionName": name,
-            "Description": "Unified context collection",
-            "Fields": [
-                {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
-                {"FieldName": "uri", "FieldType": "path"},
-                # type 字段：当前版本未使用，保留用于未来扩展
-                # 预留用于表示资源的具体类型，如 "file", "directory", "image", "video", "repository" 等
-                {"FieldName": "type", "FieldType": "string"},
-                # context_type 字段：区分上下文的大类
-                # 枚举值："resource"（资源，默认）, "memory"（记忆）, "skill"（技能）
-                # 推导规则：
-                #   - URI 以 viking://agent/skills 开头 → "skill"
-                #   - URI 包含 "memories" → "memory"
-                #   - 其他情况 → "resource"
-                {"FieldName": "context_type", "FieldType": "string"},
-                {"FieldName": "vector", "FieldType": "vector", "Dim": vector_dim},
-                {"FieldName": "sparse_vector", "FieldType": "sparse_vector"},
-                {"FieldName": "created_at", "FieldType": "date_time"},
-                {"FieldName": "updated_at", "FieldType": "date_time"},
-                {"FieldName": "active_count", "FieldType": "int64"},
-                {"FieldName": "parent_uri", "FieldType": "path"},
+        fields = [
+            {"FieldName": "id", "FieldType": "string", "IsPrimaryKey": True},
+            {"FieldName": "uri", "FieldType": "path"},
+            # type 字段：当前版本未使用，保留用于未来扩展
+            # 预留用于表示资源的具体类型，如 "file", "directory", "image", "video", "repository" 等
+            {"FieldName": "type", "FieldType": "string"},
+            # context_type 字段：区分上下文的大类
+            # 枚举值："resource"（资源，默认）, "memory"（记忆）, "skill"（技能）
+            # 推导规则：
+            #   - URI 以 viking://agent/skills 开头 → "skill"
+            #   - URI 包含 "memories" → "memory"
+            #   - 其他情况 → "resource"
+            {"FieldName": "context_type", "FieldType": "string"},
+            {"FieldName": "vector", "FieldType": "vector", "Dim": vector_dim},
+            {"FieldName": "sparse_vector", "FieldType": "sparse_vector"},
+            {"FieldName": "created_at", "FieldType": "date_time"},
+            {"FieldName": "updated_at", "FieldType": "date_time"},
+            {"FieldName": "active_count", "FieldType": "int64"},
+        ]
+        fields.extend(
+            [
                 # level 字段：区分 L0/L1/L2 层级
                 # 枚举值：
                 #   - 0 = L0（abstract，摘要）
@@ -95,21 +94,30 @@ class CollectionSchemas:
                 {"FieldName": "abstract", "FieldType": "string"},
                 {"FieldName": "account_id", "FieldType": "string"},
                 {"FieldName": "owner_space", "FieldType": "string"},
-            ],
-            "ScalarIndex": [
-                "uri",
-                "type",
-                "context_type",
-                "created_at",
-                "updated_at",
-                "active_count",
-                "parent_uri",
+            ]
+        )
+        scalar_index = [
+            "uri",
+            "type",
+            "context_type",
+            "created_at",
+            "updated_at",
+            "active_count",
+        ]
+        scalar_index.extend(
+            [
                 "level",
                 "name",
                 "tags",
                 "account_id",
                 "owner_space",
-            ],
+            ]
+        )
+        return {
+            "CollectionName": name,
+            "Description": "Unified context collection",
+            "Fields": fields,
+            "ScalarIndex": scalar_index,
         }
 
 
