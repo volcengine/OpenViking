@@ -619,6 +619,19 @@ Directly uses the AGFS Go implementation through a shared library.
 | `prefix` | str | Optional key prefix for namespace isolation | "" |
 | `use_ssl` | bool | Enable/disable SSL (HTTPS) for S3 connections | true |
 | `use_path_style` | bool | true for PathStyle used by MinIO and some S3-compatible services; false for VirtualHostStyle used by TOS and some S3-compatible services | true |
+| `directory_marker_mode` | str | How to persist directory markers: `none`, `empty`, or `nonempty` | `"empty"` |
+
+`directory_marker_mode` controls how AGFS materializes directory objects in S3:
+
+- `empty` is the default. AGFS writes a zero-byte directory marker and preserves empty-directory semantics.
+- `nonempty` writes a non-empty marker payload. Use this for S3-compatible services such as TOS that reject zero-byte directory markers.
+- `none` switches AGFS to prefix-style S3 semantics. AGFS does not create directory marker objects, so empty directories are not persisted and may not be discoverable until they contain at least one child object.
+
+Typical choices:
+
+- For MinIO, SeaweedFS, and most PathStyle backends, keep the default `empty`.
+- For TOS or other VirtualHostStyle backends that reject zero-byte directory markers, use `nonempty`.
+- If you want pure prefix-style behavior and do not need persisted empty directories, use `none`.
 
 </details>
 
@@ -660,7 +673,8 @@ Supports S3 storage in VirtualHostStyle mode, such as TOS.
         "region": "us-east-1",
         "access_key": "your-ak",
         "secret_key": "your-sk",
-        "use_path_style": false
+        "use_path_style": false,
+        "directory_marker_mode": "nonempty"
       }
     }
   }
