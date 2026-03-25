@@ -37,9 +37,9 @@ class EmbeddingModelConfig(BaseModel):
     provider: Optional[str] = Field(
         default="volcengine",
         description=(
-            "Provider type: 'openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage'. "
-            "For OpenRouter or other OpenAI-compatible providers, use 'openai' with "
-            "api_base and extra_headers."
+            "Provider type: 'openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'litellm'. "
+            "For OpenRouter or other OpenAI-compatible providers, use 'litellm' with "
+            "api_base and api_key, or 'openai' with api_base and extra_headers."
         ),
     )
     backend: Optional[str] = Field(
@@ -103,10 +103,11 @@ class EmbeddingModelConfig(BaseModel):
             "gemini",
             "voyage",
             "minimax",
+            "litellm",
         ]:
             raise ValueError(
                 f"Invalid embedding provider: '{self.provider}'. Must be one of: "
-                "'openai', 'azure', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'minimax'"
+                "'openai', 'azure', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'minimax', 'litellm'"
             )
 
         # Provider-specific validation
@@ -178,6 +179,14 @@ class EmbeddingModelConfig(BaseModel):
             if not self.api_key:
                 raise ValueError("MiniMax provider requires 'api_key' to be set")
 
+        elif self.provider == "litellm":
+            # litellm handles auth via env vars or explicit api_key; no strict requirement
+            if not self.dimension:
+                raise ValueError(
+                    "LiteLLM provider requires 'dimension' to be set explicitly. "
+                    "Check your embedding model's documentation for the correct dimension."
+                )
+
         return self
 
     def get_effective_dimension(self) -> int:
@@ -198,12 +207,36 @@ class EmbeddingModelConfig(BaseModel):
 
             return GeminiDenseEmbedder._default_dimension(self.model)
 
+        if provider == "ollama":
+            # Common Ollama embedding models and their dimensions
+            # Users should set dimension explicitly for other models
+            ollama_model_dimensions = {
+                "nomic-embed-text": 768,
+                "nomic-embed-text-v1": 768,
+                "nomic-embed-text-v1.5": 768,
+                "mxbai-embed-large": 1024,
+                "mxbai-embed-large-v1": 1024,
+                "all-minilm": 384,
+                "all-minilm-l6-v2": 384,
+                "snowflake-arctic-embed": 1024,
+                "snowflake-arctic-embed-l": 1024,
+            }
+            model_lower = (self.model or "").lower()
+            if model_lower in ollama_model_dimensions:
+                return ollama_model_dimensions[model_lower]
+            # For unknown Ollama models, require explicit dimension
+            raise ValueError(
+                f"Unknown dimension for Ollama model '{self.model}'. "
+                f"Please set 'dimension' explicitly in your embedding config. "
+                f"Known models: {list(ollama_model_dimensions.keys())}"
+            )
+
         return 2048
 
 
 class EmbeddingConfig(BaseModel):
     """
-    Embedding configuration, supports OpenAI, VolcEngine, VikingDB, Jina, Gemini, or Voyage APIs.
+    Embedding configuration, supports OpenAI, VolcEngine, VikingDB, Jina, Gemini, Voyage, or LiteLLM APIs.
 
     Structure:
     - dense: Configuration for dense embedder
@@ -220,6 +253,15 @@ class EmbeddingConfig(BaseModel):
     max_concurrent: int = Field(
         default=10, description="Maximum number of concurrent embedding requests"
     )
+    text_source: str = Field(
+        default="summary_first",
+        description="Text source for file vectorization: summary_first|summary_only|content_only",
+    )
+    max_input_chars: int = Field(
+        default=1000,
+        ge=100,
+        description="Maximum characters sent to embeddings when raw text fallback is used",
+    )
 
     model_config = {"extra": "forbid"}
 
@@ -229,6 +271,10 @@ class EmbeddingConfig(BaseModel):
         if not self.dense and not self.sparse and not self.hybrid:
             raise ValueError(
                 "At least one embedding configuration (dense, sparse, or hybrid) is required"
+            )
+        if self.text_source not in {"summary_first", "summary_only", "content_only"}:
+            raise ValueError(
+                "embedding.text_source must be one of: summary_first, summary_only, content_only"
             )
         return self
 
@@ -241,7 +287,7 @@ class EmbeddingConfig(BaseModel):
         """Factory method to create embedder instance based on provider and type.
 
         Args:
-            provider: Provider type ('openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage')
+            provider: Provider type ('openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'litellm')
             embedder_type: Embedder type ('dense', 'sparse', 'hybrid')
             config: EmbeddingModelConfig instance
 
@@ -254,6 +300,7 @@ class EmbeddingConfig(BaseModel):
         from openviking.models.embedder import (
             GeminiDenseEmbedder,
             JinaDenseEmbedder,
+            LiteLLMDenseEmbedder,
             MinimaxDenseEmbedder,
             OpenAIDenseEmbedder,
             VikingDBDenseEmbedder,
@@ -264,6 +311,9 @@ class EmbeddingConfig(BaseModel):
             VolcengineSparseEmbedder,
             VoyageDenseEmbedder,
         )
+
+        if provider == "litellm" and LiteLLMDenseEmbedder is None:
+            raise ValueError("LiteLLM is not installed. Install it with: pip install litellm")
 
         # Factory registry: (provider, type) -> (embedder_class, param_builder)
         factory_registry = {
@@ -404,6 +454,18 @@ class EmbeddingConfig(BaseModel):
             ),
             ("minimax", "dense"): (
                 MinimaxDenseEmbedder,
+                lambda cfg: {
+                    "model_name": cfg.model,
+                    "api_key": cfg.api_key,
+                    "api_base": cfg.api_base,
+                    "dimension": cfg.dimension,
+                    **({"query_param": cfg.query_param} if cfg.query_param else {}),
+                    **({"document_param": cfg.document_param} if cfg.document_param else {}),
+                    **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
+                },
+            ),
+            ("litellm", "dense"): (
+                LiteLLMDenseEmbedder,
                 lambda cfg: {
                     "model_name": cfg.model,
                     "api_key": cfg.api_key,

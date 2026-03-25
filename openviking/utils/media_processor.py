@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Optional
 
 from openviking.parse import DocumentConverter, parse
 from openviking.parse.base import ParseResult
+from openviking.utils.zip_safe import safe_extract_zip
 from openviking_cli.utils.logger import get_logger
 
 if TYPE_CHECKING:
@@ -80,6 +81,18 @@ class UnifiedResourceProcessor:
         if url.startswith("git@"):
             validate_git_ssh_uri(url)
 
+        # Route Feishu/Lark cloud document URLs to FeishuParser
+        if self._is_feishu_url(url):
+            from openviking.parse.registry import get_registry
+
+            parser = get_registry().get_parser("feishu")
+            if parser is None:
+                raise ImportError(
+                    "FeishuParser not available. "
+                    "Install lark-oapi: pip install 'openviking[bot-feishu]'"
+                )
+            return await parser.parse(url, instruction=instruction)
+
         # Route git protocols and repo URLs to CodeRepositoryParser
         if url.startswith(("git@", "git://", "ssh://")) or is_git_repo_url(url):
             from openviking.parse.parsers.code.code import CodeRepositoryParser
@@ -91,6 +104,21 @@ class UnifiedResourceProcessor:
 
         parser = HTMLParser()
         return await parser.parse(url, instruction=instruction)
+
+    @staticmethod
+    def _is_feishu_url(url: str) -> bool:
+        """Check if URL is a Feishu/Lark cloud document."""
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        host = parsed.hostname or ""
+        path = parsed.path
+        is_feishu_domain = host.endswith(".feishu.cn") or host.endswith(".larksuite.com")
+        has_doc_path = any(
+            path == f"/{t}" or path.startswith(f"/{t}/")
+            for t in ("docx", "wiki", "sheets", "base")
+        )
+        return is_feishu_domain and has_doc_path
 
     async def _process_directory(
         self,
@@ -125,7 +153,7 @@ class UnifiedResourceProcessor:
             temp_dir = Path(tempfile.mkdtemp())
             try:
                 with zipfile.ZipFile(file_path, "r") as zipf:
-                    zipf.extractall(temp_dir)
+                    safe_extract_zip(zipf, temp_dir)
                 return await self._process_directory(temp_dir, instruction, **kwargs)
             finally:
                 pass  # Don't delete temp_dir yet, it will be used by TreeBuilder

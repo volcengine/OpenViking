@@ -27,6 +27,7 @@ import {
   prepareLocalPort,
 } from "./process-manager.js";
 import { createMemoryOpenVikingContextEngine } from "./context-engine.js";
+import type { ContextEngineWithSessionMapping } from "./context-engine.js";
 
 type PluginLogger = {
   debug?: (message: string) => void;
@@ -238,6 +239,7 @@ const contextEnginePlugin = {
           text: Type.String({ description: "Information to store as memory source text" }),
           role: Type.Optional(Type.String({ description: "Session role, default user" })),
           sessionId: Type.Optional(Type.String({ description: "Existing OpenViking session ID" })),
+          sessionKey: Type.Optional(Type.String({ description: "OpenClaw sessionKey — uses the persistent 1:1 mapped OV session" })),
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
           const { text } = params as { text: string };
@@ -246,46 +248,50 @@ const contextEnginePlugin = {
               ? (params as { role: string }).role
               : "user";
           const sessionIdIn = (params as { sessionId?: string }).sessionId;
+          const sessionKeyIn = (params as { sessionKey?: string }).sessionKey;
 
           api.logger.info?.(
-            `openviking: memory_store invoked (textLength=${text?.length ?? 0}, sessionId=${sessionIdIn ?? "temp"})`,
+            `openviking: memory_store invoked (textLength=${text?.length ?? 0}, sessionId=${sessionIdIn ?? "auto"}, sessionKey=${sessionKeyIn ?? "none"})`,
           );
 
           let sessionId = sessionIdIn;
-          let createdTempSession = false;
+          let usedMappedSession = false;
+          const storeAgentId = sessionKeyIn ? resolveAgentId(sessionKeyIn) : undefined;
           try {
             const c = await getClient();
-            if (!sessionId) {
-              sessionId = await c.createSession();
-              createdTempSession = true;
+            if (!sessionId && sessionKeyIn && contextEngineRef) {
+              sessionId = await contextEngineRef.resolveOVSession(sessionKeyIn);
+              usedMappedSession = true;
             }
-            await c.addSessionMessage(sessionId, role, text);
-            const extracted = await c.extractSessionMemories(sessionId);
-            if (extracted.length === 0) {
+            if (!sessionId) {
+              return {
+                content: [{ type: "text", text: "Either sessionKey or sessionId is required to store memory." }],
+                details: { action: "rejected", reason: "missing_session_identifier" },
+              };
+            }
+            await c.addSessionMessage(sessionId, role, text, storeAgentId);
+            const commitResult = await c.commitSession(sessionId, { wait: true, agentId: storeAgentId });
+            const memoriesCount = commitResult.memories_extracted ?? 0;
+            if (memoriesCount === 0) {
               api.logger.warn(
-                `openviking: memory_store completed but extract returned 0 memories (sessionId=${sessionId}). ` +
+                `openviking: memory_store committed but 0 memories extracted (sessionId=${sessionId}). ` +
                   "Check OpenViking server logs for embedding/extract errors (e.g. 401 API key, or extraction pipeline).",
               );
             } else {
-              api.logger.info?.(`openviking: memory_store extracted ${extracted.length} memories`);
+              api.logger.info?.(`openviking: memory_store committed, memories=${memoriesCount}`);
             }
             return {
               content: [
                 {
                   type: "text",
-                  text: `Stored in OpenViking session ${sessionId} and extracted ${extracted.length} memories.`,
+                  text: `Stored in OpenViking session ${sessionId} and committed ${memoriesCount} memories.`,
                 },
               ],
-              details: { action: "stored", sessionId, extractedCount: extracted.length, extracted },
+              details: { action: "stored", sessionId, memoriesCount, archived: commitResult.archived ?? false, usedMappedSession },
             };
           } catch (err) {
             api.logger.warn(`openviking: memory_store failed: ${String(err)}`);
             throw err;
-          } finally {
-            if (createdTempSession && sessionId) {
-              const c = await getClient().catch(() => null);
-              if (c) await c.deleteSession(sessionId!).catch(() => {});
-            }
           }
         },
       },
@@ -394,6 +400,8 @@ const contextEnginePlugin = {
       },
       { name: "memory_forget" },
     );
+    let contextEngineRef: ContextEngineWithSessionMapping | null = null;
+
     const sessionAgentIds = new Map<string, string>();
     const rememberSessionAgentId = (ctx: {
       agentId?: string;
@@ -423,7 +431,7 @@ const contextEnginePlugin = {
       rememberSessionAgentId(ctx ?? {});
 
       const hookSessionId = ctx?.sessionId ?? ctx?.sessionKey ?? "";
-      const resolvedAgentId = resolveAgentId(hookSessionId);
+      const agentId = resolveAgentId(hookSessionId);
       let client: OpenVikingClient;
       try {
         client = await withTimeout(
@@ -434,10 +442,6 @@ const contextEnginePlugin = {
       } catch (err) {
         api.logger.warn?.(`openviking: failed to get client: ${String(err)}`);
         return;
-      }
-      if (resolvedAgentId && client.getAgentId() !== resolvedAgentId) {
-        client.setAgentId(resolvedAgentId);
-        api.logger.info(`openviking: switched to agentId=${resolvedAgentId} for before_prompt_build`);
       }
 
       const eventObj = (event ?? {}) as { messages?: unknown[]; prompt?: string };
@@ -466,12 +470,12 @@ const contextEnginePlugin = {
                     targetUri: "viking://user/memories",
                     limit: candidateLimit,
                     scoreThreshold: 0,
-                  }),
+                  }, agentId),
                   client.find(queryText, {
                     targetUri: "viking://agent/memories",
                     limit: candidateLimit,
                     scoreThreshold: 0,
-                  }),
+                  }, agentId),
                 ]);
 
                 const userResult = userSettled.status === "fulfilled" ? userSettled.value : { memories: [] };
@@ -495,23 +499,19 @@ const contextEnginePlugin = {
                 const memories = pickMemoriesForInjection(processed, cfg.recallLimit, queryText);
 
                 if (memories.length > 0) {
-                  const memoryLines = await Promise.all(
-                    memories.map(async (item: FindResultItem) => {
-                      if (item.level === 2) {
-                        try {
-                          const content = await client.read(item.uri);
-                          if (content && typeof content === "string" && content.trim()) {
-                            return `- [${item.category ?? "memory"}] ${content.trim()}`;
-                          }
-                        } catch {
-                          // fallback to abstract
-                        }
-                      }
-                      return `- [${item.category ?? "memory"}] ${item.abstract ?? item.uri}`;
-                    }),
+                  const { lines: memoryLines, estimatedTokens } = await buildMemoryLinesWithBudget(
+                    memories,
+                    (uri) => client.read(uri, agentId),
+                    {
+                      recallPreferAbstract: cfg.recallPreferAbstract,
+                      recallMaxContentChars: cfg.recallMaxContentChars,
+                      recallTokenBudget: cfg.recallTokenBudget,
+                    },
                   );
                   const memoryContext = memoryLines.join("\n");
-                  api.logger.info(`openviking: injecting ${memories.length} memories into context`);
+                  api.logger.info(
+                    `openviking: injecting ${memoryLines.length} memories (~${estimatedTokens} tokens, budget=${cfg.recallTokenBudget})`,
+                  );
                   api.logger.info(
                     `openviking: inject-detail ${toJsonLog({ count: memories.length, memories: summarizeInjectionMemories(memories) })}`,
                   );
@@ -560,16 +560,24 @@ const contextEnginePlugin = {
     api.on("agent_end", async (_event: unknown, ctx?: HookAgentContext) => {
       rememberSessionAgentId(ctx ?? {});
     });
-    api.on("before_reset", async (_event: unknown, _ctx?: HookAgentContext) => {
-      // Reserved hook registration for future memory flush/reset handling.
+    api.on("before_reset", async (_event: unknown, ctx?: HookAgentContext) => {
+      const sessionKey = ctx?.sessionKey;
+      if (sessionKey && contextEngineRef) {
+        try {
+          await contextEngineRef.commitOVSession(sessionKey);
+          api.logger.info(`openviking: committed OV session on reset for sessionKey=${sessionKey}`);
+        } catch (err) {
+          api.logger.warn(`openviking: failed to commit OV session on reset: ${String(err)}`);
+        }
+      }
     });
     api.on("after_compaction", async (_event: unknown, _ctx?: HookAgentContext) => {
       // Reserved hook registration for future post-compaction memory integration.
     });
 
     if (typeof api.registerContextEngine === "function") {
-      api.registerContextEngine(contextEnginePlugin.id, () =>
-        createMemoryOpenVikingContextEngine({
+      api.registerContextEngine(contextEnginePlugin.id, () => {
+        contextEngineRef = createMemoryOpenVikingContextEngine({
           id: contextEnginePlugin.id,
           name: contextEnginePlugin.name,
           version: "0.1.0",
@@ -577,10 +585,11 @@ const contextEnginePlugin = {
           logger: api.logger,
           getClient,
           resolveAgentId,
-        }),
-      );
+        });
+        return contextEngineRef;
+      });
       api.logger.info(
-        "openviking: registered context-engine (before_prompt_build=auto-recall, afterTurn=auto-capture)",
+        "openviking: registered context-engine (before_prompt_build=auto-recall, afterTurn=auto-capture, sessionKey=1:1 mapping)",
       );
     } else {
       api.logger.warn(
@@ -612,8 +621,9 @@ const contextEnginePlugin = {
 
           // Inherit system environment; optionally override Go/Python paths via env vars
           const pathSep = IS_WIN ? ";" : ":";
+	  const { ALL_PROXY, all_proxy, HTTP_PROXY, http_proxy, HTTPS_PROXY, https_proxy, ...filteredEnv } = process.env;
           const env = {
-            ...process.env,
+            ...filteredEnv,
             PYTHONUNBUFFERED: "1",
             PYTHONWARNINGS: "ignore::RuntimeWarning",
             OPENVIKING_CONFIG_FILE: cfg.configPath,
@@ -715,5 +725,103 @@ const contextEnginePlugin = {
     });
   },
 };
+
+/** Estimate token count using chars/4 heuristic (adequate for budget enforcement). */
+export function estimateTokenCount(text: string): number {
+  if (!text) return 0;
+  return Math.ceil(text.length / 4);
+}
+
+export type BuildMemoryLinesOptions = {
+  recallPreferAbstract: boolean;
+  recallMaxContentChars: number;
+};
+
+async function resolveMemoryContent(
+  item: FindResultItem,
+  readFn: (uri: string) => Promise<string>,
+  options: BuildMemoryLinesOptions,
+): Promise<string> {
+  let content: string;
+
+  if (options.recallPreferAbstract && item.abstract?.trim()) {
+    content = item.abstract.trim();
+  } else if (item.level === 2) {
+    try {
+      const fullContent = await readFn(item.uri);
+      content =
+        fullContent && typeof fullContent === "string" && fullContent.trim()
+          ? fullContent.trim()
+          : (item.abstract?.trim() || item.uri);
+    } catch {
+      content = item.abstract?.trim() || item.uri;
+    }
+  } else {
+    content = item.abstract?.trim() || item.uri;
+  }
+
+  if (content.length > options.recallMaxContentChars) {
+    content = content.slice(0, options.recallMaxContentChars) + "...";
+  }
+
+  return content;
+}
+
+export async function buildMemoryLines(
+  memories: FindResultItem[],
+  readFn: (uri: string) => Promise<string>,
+  options: BuildMemoryLinesOptions,
+): Promise<string[]> {
+  const lines: string[] = [];
+  for (const item of memories) {
+    const content = await resolveMemoryContent(item, readFn, options);
+    lines.push(`- [${item.category ?? "memory"}] ${content}`);
+  }
+  return lines;
+}
+
+export type BuildMemoryLinesWithBudgetOptions = BuildMemoryLinesOptions & {
+  recallTokenBudget: number;
+};
+
+/**
+ * Build memory lines with a token budget constraint.
+ *
+ * The first memory is always included even if its token count exceeds the
+ * remaining budget. This is intentional (spec Section 6.2): with
+ * `recallMaxContentChars=500`, a single line is at most ~128 tokens — well
+ * within the 2000-token default budget — so overshoot is bounded and
+ * guarantees at least one memory is surfaced.
+ */
+export async function buildMemoryLinesWithBudget(
+  memories: FindResultItem[],
+  readFn: (uri: string) => Promise<string>,
+  options: BuildMemoryLinesWithBudgetOptions,
+): Promise<{ lines: string[]; estimatedTokens: number }> {
+  let budgetRemaining = options.recallTokenBudget;
+  const lines: string[] = [];
+  let totalTokens = 0;
+
+  for (const item of memories) {
+    if (budgetRemaining <= 0) {
+      break;
+    }
+
+    const content = await resolveMemoryContent(item, readFn, options);
+    const line = `- [${item.category ?? "memory"}] ${content}`;
+    const lineTokens = estimateTokenCount(line);
+
+    // First line is always included even if it exceeds the budget (spec §6.2).
+    if (lineTokens > budgetRemaining && lines.length > 0) {
+      break;
+    }
+
+    lines.push(line);
+    totalTokens += lineTokens;
+    budgetRemaining -= lineTokens;
+  }
+
+  return { lines, estimatedTokens: totalTokens };
+}
 
 export default contextEnginePlugin;

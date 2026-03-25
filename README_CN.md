@@ -534,7 +534,7 @@ ov chat
 🚀 **在云端部署 OpenViking**：
 为确保最佳的存储性能和数据安全，我们建议在 **火山引擎弹性计算服务 (ECS)** 上使用 **veLinux** 操作系统进行部署。我们准备了详细的分步指南，帮助您快速上手。
 
-👉 **[查看：服务器部署与 ECS 设置指南](./docs/en/getting-started/03-quickstart-server.md)**
+👉 **[查看：服务器部署与 ECS 设置指南](./docs/zh/getting-started/03-quickstart-server.md)**
 
 
 ## OpenClaw 上下文插件详情
@@ -555,15 +555,15 @@ ov chat
 * 实验结论：
 结合 OpenViking 后，若仍开启原生记忆，效果在原 OpenClaw 上提升 43%，输入 token 成本降低 91%；在 LanceDB 上效果提升 15%，输入 token 降低 96%。若关闭原生记忆，效果在原 OpenClaw 上提升 49%，输入 token 成本降低 83%；在 LanceDB 上效果提升 17%，输入 token 降低 92%。
 
-👉 **[查看：OpenClaw 上下文插件](examples/openclaw-plugin/README.md)**
+👉 **[查看：OpenClaw 上下文插件](examples/openclaw-plugin/README_CN.md)**
 
-👉 **[查看：OpenCode 记忆插件示例](examples/opencode-memory-plugin/README.md)**
+👉 **[查看：OpenCode 记忆插件示例](examples/opencode-memory-plugin/README_CN.md)**
 
 ## VikingBot 部署详情
 
 OpenViking 有一个类似 nanobot 的机器人用于交互工作，现已可用。
 
-👉 **[查看：使用 VikingBot 部署服务器](bot/README.md)**
+👉 **[查看：使用 VikingBot 部署服务器](bot/README_CN.md)**
 
 --
 
@@ -575,7 +575,7 @@ OpenViking 有一个类似 nanobot 的机器人用于交互工作，现已可用
 
 我们不再将上下文视为扁平的文本切片，而是将它们统一到一个抽象的虚拟文件系统中。无论是记忆、资源还是能力，都映射到 `viking://` 协议下的虚拟目录中，每个都有唯一的 URI。
 
-这种范式赋予智能体前所未有的上下文操作能力，使它们能够像开发者一样，通过 `ls` 和 `find` 等标准命令精确、确定地定位、浏览和操作信息。这将上下文管理从模糊的语义匹配转变为直观、可追踪的"文件操作"。了解更多：[Viking URI](./docs/en/concepts/04-viking-uri.md) | [上下文类型](./docs/en/concepts/02-context-types.md)
+这种范式赋予智能体前所未有的上下文操作能力，使它们能够像开发者一样，通过 `ls` 和 `find` 等标准命令精确、确定地定位、浏览和操作信息。这将上下文管理从模糊的语义匹配转变为直观、可追踪的"文件操作"。了解更多：[Viking URI](./docs/zh/concepts/04-viking-uri.md) | [上下文类型](./docs/zh/concepts/02-context-types.md)
 
 ```
 viking://
@@ -608,7 +608,7 @@ viking://
 - **L1 (概览)**：包含核心信息和使用场景，用于智能体在规划阶段的决策。
 - **L2 (详情)**：完整的原始数据，供智能体在绝对必要时深度阅读。
 
-了解更多：[上下文分层](./docs/en/concepts/03-context-layers.md)
+了解更多：[上下文分层](./docs/zh/concepts/03-context-layers.md)
 
 ```
 viking://resources/my_project/
@@ -637,13 +637,13 @@ viking://resources/my_project/
 4. **递归深入**：如果存在子目录，则逐层递归重复二次检索步骤。
 5. **结果聚合**：最终获取最相关的上下文返回。
 
-这种"先锁定高分目录，再精细化内容探索"的策略不仅找到语义最佳匹配的片段，还能理解信息所在的完整上下文，从而提高检索的全局性和准确性。了解更多：[检索机制](./docs/en/concepts/07-retrieval.md)
+这种"先锁定高分目录，再精细化内容探索"的策略不仅找到语义最佳匹配的片段，还能理解信息所在的完整上下文，从而提高检索的全局性和准确性。了解更多：[检索机制](./docs/zh/concepts/07-retrieval.md)
 
 ### 4. 可视化检索轨迹 → 可观察上下文
 
 OpenViking 的组织采用分层虚拟文件系统结构。所有上下文以统一格式集成，每个条目对应一个唯一的 URI（如 `viking://` 路径），打破了传统的扁平黑盒管理模式，具有清晰易懂的层次结构。
 
-检索过程采用目录递归策略。每次检索的目录浏览和文件定位轨迹被完整保留，让用户能够清晰观察问题的根源，指导检索逻辑的优化。了解更多：[检索机制](./docs/en/concepts/07-retrieval.md)
+检索过程采用目录递归策略。每次检索的目录浏览和文件定位轨迹被完整保留，让用户能够清晰观察问题的根源，指导检索逻辑的优化。了解更多：[检索机制](./docs/zh/concepts/07-retrieval.md)
 
 ### 5. 自动会话管理 → 上下文自迭代
 
@@ -652,7 +652,7 @@ OpenViking 内置了记忆自迭代循环。在每个会话结束时，开发者
 - **用户记忆更新**：更新与用户偏好相关的记忆，使智能体响应更好地适应用户需求。
 - **智能体经验积累**：从任务执行经验中提取操作技巧和工具使用经验等核心内容，辅助后续任务的高效决策。
 
-这使得智能体能够通过与世界的交互"越用越聪明"，实现自我进化。了解更多：[会话管理](./docs/en/concepts/08-session.md)
+这使得智能体能够通过与世界的交互"越用越聪明"，实现自我进化。了解更多：[会话管理](./docs/zh/concepts/08-session.md)
 
 ---
 
@@ -660,11 +660,11 @@ OpenViking 内置了记忆自迭代循环。在每个会话结束时，开发者
 
 ### 文档
 
-更多详情，请访问我们的[完整文档](./docs/en/)。
+更多详情，请访问我们的[完整文档](./docs/zh/)。
 
 ### 社区与团队
 
-更多详情，请参见：**[关于我们](./docs/en/about/01-about-us.md)**
+更多详情，请参见：**[关于我们](./docs/zh/about/01-about-us.md)**
 
 ### 加入社区
 

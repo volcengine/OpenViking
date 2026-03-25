@@ -85,12 +85,8 @@ class FileEncryptor:
         data_iv = secrets.token_bytes(12)
         encrypted_content = await self._aes_gcm_encrypt(file_key, data_iv, plaintext)
 
-        # 3. Encrypt File Key
-        key_iv = b""
-        if self._provider_type == PROVIDER_LOCAL:
-            encrypted_file_key, key_iv = await self.provider.encrypt_file_key(file_key, account_id)
-        else:
-            encrypted_file_key = await self.provider.encrypt_file_key(file_key, account_id)
+        # 3. Encrypt File Key (all providers now return (encrypted_key, iv)
+        encrypted_file_key, key_iv = await self.provider.encrypt_file_key(file_key, account_id)
 
         # 4. Build Envelope
         return self._build_envelope(
@@ -133,13 +129,8 @@ class FileEncryptor:
             raise CorruptedCiphertextError(f"Failed to parse envelope: {e}")
 
         try:
-            # 3. Decrypt File Key
-            if provider_type == PROVIDER_LOCAL:
-                file_key = await self.provider.decrypt_file_key(
-                    encrypted_file_key, key_iv, account_id
-                )
-            else:
-                file_key = await self.provider.decrypt_file_key(encrypted_file_key, account_id)
+            # 3. Decrypt File Key (all providers now use (encrypted_key, iv, account_id)
+            file_key = await self.provider.decrypt_file_key(encrypted_file_key, key_iv, account_id)
         except Exception as e:
             raise KeyMismatchError(f"Failed to decrypt file key: {e}")
 

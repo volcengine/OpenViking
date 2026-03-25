@@ -75,7 +75,13 @@ def load_config() -> Config:
     if path.exists():
         try:
             with open(path) as f:
-                full_data = json.load(f)
+                raw = f.read()
+
+            # Expand $VAR and ${VAR} inside the JSON text (useful for container deployments).
+            # Unset variables are left unchanged by expandvars().
+            raw = os.path.expandvars(raw)
+
+            full_data = json.loads(raw)
 
             # Extract bot section
             bot_data = full_data.get("bot", {})
@@ -122,11 +128,8 @@ def _merge_vlm_model_config(bot_data: dict, vlm_data: dict) -> None:
     if vlm_data.get("model"):
         if "agents" not in bot_data:
             bot_data["agents"] = {}
-        # Prepend provider prefix if provider is specified
         model = vlm_data["model"]
         provider = vlm_data.get("provider")
-        if provider and "/" not in model:
-            model = f"{provider}/{model}"
         bot_data["agents"]["model"] = model
         bot_data["agents"]["provider"] = provider if provider else ""
         bot_data["agents"]["api_base"] = vlm_data.get("api_base", "")

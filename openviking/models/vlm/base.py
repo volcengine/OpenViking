@@ -4,14 +4,48 @@
 
 import re
 from abc import ABC, abstractmethod
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Union
+from typing import Any, Dict, List, Optional, Union
 
 from openviking.utils.time_utils import format_iso8601
 
 from .token_usage import TokenUsageTracker
 
 _THINK_TAG_RE = re.compile(r"<think>[\s\S]*?</think>")
+
+
+@dataclass
+class ToolCall:
+    """Single tool call from LLM."""
+
+    id: str
+    name: str
+    arguments: Dict[str, Any]
+
+
+@dataclass
+class VLMResponse:
+    """VLM response that supports both text content and tool calls."""
+
+    content: Optional[str] = None
+    tool_calls: List[ToolCall] = field(default_factory=list)
+    finish_reason: str = "stop"  # stop, tool_calls, length, error
+    usage: Dict[str, int] = field(
+        default_factory=dict
+    )  # prompt_tokens, completion_tokens, total_tokens
+    reasoning_content: Optional[str] = (
+        None  # For thinking process (doubao thinking, deepseek r1, etc.)
+    )
+
+    @property
+    def has_tool_calls(self) -> bool:
+        """Check if response contains tool calls."""
+        return len(self.tool_calls) > 0
+
+    def __str__(self) -> str:
+        """String representation for backward compatibility - returns content."""
+        return self.content or ""
 
 
 class VLMBase(ABC):
@@ -33,35 +67,101 @@ class VLMBase(ABC):
         self._token_tracker = TokenUsageTracker()
 
     @abstractmethod
-    def get_completion(self, prompt: str, thinking: bool = False) -> str:
-        """Get text completion"""
+    def get_completion(
+        self,
+        prompt: str = "",
+        thinking: bool = False,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[str, VLMResponse]:
+        """Get text completion
+
+        Args:
+            prompt: Text prompt (used if messages not provided)
+            thinking: Whether to enable thinking mode
+            tools: Optional list of tool definitions in OpenAI function format
+            tool_choice: Optional tool choice mode ("auto", "none", or specific tool name)
+            messages: Optional list of message dicts (takes precedence over prompt)
+
+        Returns:
+            str if no tools provided, VLMResponse if tools provided
+        """
         pass
 
     @abstractmethod
     async def get_completion_async(
-        self, prompt: str, thinking: bool = False, max_retries: int = 0
-    ) -> str:
-        """Get text completion asynchronously"""
+        self,
+        prompt: str = "",
+        thinking: bool = False,
+        max_retries: int = 0,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[str, VLMResponse]:
+        """Get text completion asynchronously
+
+        Args:
+            prompt: Text prompt (used if messages not provided)
+            thinking: Whether to enable thinking mode
+            max_retries: Maximum number of retries
+            tools: Optional list of tool definitions in OpenAI function format
+            tool_choice: Optional tool choice mode ("auto", "none", or specific tool name)
+            messages: Optional list of message dicts (takes precedence over prompt)
+
+        Returns:
+            str if no tools provided, VLMResponse if tools provided
+        """
         pass
 
     @abstractmethod
     def get_vision_completion(
         self,
-        prompt: str,
-        images: List[Union[str, Path, bytes]],
+        prompt: str = "",
+        images: Optional[List[Union[str, Path, bytes]]] = None,
         thinking: bool = False,
-    ) -> str:
-        """Get vision completion"""
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[str, VLMResponse]:
+        """Get vision completion
+
+        Args:
+            prompt: Text prompt (used if messages not provided)
+            images: List of images (used if messages not provided)
+            thinking: Whether to enable thinking mode
+            tools: Optional list of tool definitions in OpenAI function format
+            tool_choice: Optional tool choice mode ("auto", "none", or specific tool name)
+            messages: Optional list of message dicts (takes precedence over prompt/images)
+
+        Returns:
+            str if no tools provided, VLMResponse if tools provided
+        """
         pass
 
     @abstractmethod
     async def get_vision_completion_async(
         self,
-        prompt: str,
-        images: List[Union[str, Path, bytes]],
+        prompt: str = "",
+        images: Optional[List[Union[str, Path, bytes]]] = None,
         thinking: bool = False,
-    ) -> str:
-        """Get vision completion asynchronously"""
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[str, VLMResponse]:
+        """Get vision completion asynchronously
+
+        Args:
+            prompt: Text prompt (used if messages not provided)
+            images: List of images (used if messages not provided)
+            thinking: Whether to enable thinking mode
+            tools: Optional list of tool definitions in OpenAI function format
+            tool_choice: Optional tool choice mode ("auto", "none", or specific tool name)
+            messages: Optional list of message dicts (takes precedence over prompt/images)
+
+        Returns:
+            str if no tools provided, VLMResponse if tools provided
+        """
         pass
 
     def _clean_response(self, content: str) -> str:
@@ -74,7 +174,11 @@ class VLMBase(ABC):
 
     # Token usage tracking methods
     def update_token_usage(
-        self, model_name: str, provider: str, prompt_tokens: int, completion_tokens: int,
+        self,
+        model_name: str,
+        provider: str,
+        prompt_tokens: int,
+        completion_tokens: int,
         duration_seconds: float = 0.0,
     ) -> None:
         """Update token usage
@@ -141,6 +245,7 @@ class VLMBase(ABC):
         if isinstance(response, str):
             return response
         return response.choices[0].message.content or ""
+
 
 class VLMFactory:
     """VLM factory class, creates corresponding VLM instance based on config"""

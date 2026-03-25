@@ -42,7 +42,7 @@ pub struct ChatCommand {
     pub sender: String,
 
     /// Non-interactive mode (single message)
-    #[arg(short = 'M', long)]
+    #[arg(short, long)]
     pub message: Option<String>,
 
     /// Stream the response (default: true)

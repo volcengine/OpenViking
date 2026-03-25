@@ -58,37 +58,22 @@ export function isMemoryUri(uri: string): boolean {
 }
 
 export class OpenVikingClient {
-  private resolvedSpaceByScope: Partial<Record<ScopeName, string>> = {};
-  private runtimeIdentity: RuntimeIdentity | null = null;
+  private spaceCache = new Map<string, Partial<Record<ScopeName, string>>>();
+  private identityCache = new Map<string, RuntimeIdentity>();
 
   constructor(
     private readonly baseUrl: string,
     private readonly apiKey: string,
-    private agentId: string,
+    private readonly defaultAgentId: string,
     private readonly timeoutMs: number,
   ) {}
 
-  /**
-   * Dynamically switch the agent identity for multi-agent memory isolation.
-   * When a shared client serves multiple agents (e.g. in OpenClaw multi-agent
-   * gateway), call this before each agent's recall/capture to route memories
-   * to the correct agent_space = md5(user_id + agent_id)[:12].
-   * Clears cached space resolution so the next request re-derives agent_space.
-   */
-  setAgentId(newAgentId: string): void {
-    if (newAgentId && newAgentId !== this.agentId) {
-      this.agentId = newAgentId;
-      // Clear cached identity and spaces — they depend on agentId
-      this.runtimeIdentity = null;
-      this.resolvedSpaceByScope = {};
-    }
+  getDefaultAgentId(): string {
+    return this.defaultAgentId;
   }
 
-  getAgentId(): string {
-    return this.agentId;
-  }
-
-  private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  private async request<T>(path: string, init: RequestInit = {}, agentId?: string): Promise<T> {
+    const effectiveAgentId = agentId ?? this.defaultAgentId;
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), this.timeoutMs);
     try {
@@ -96,8 +81,8 @@ export class OpenVikingClient {
       if (this.apiKey) {
         headers.set("X-API-Key", this.apiKey);
       }
-      if (this.agentId) {
-        headers.set("X-OpenViking-Agent", this.agentId);
+      if (effectiveAgentId) {
+        headers.set("X-OpenViking-Agent", effectiveAgentId);
       }
       if (init.body && !headers.has("Content-Type")) {
         headers.set("Content-Type", "application/json");
@@ -131,44 +116,57 @@ export class OpenVikingClient {
     await this.request<{ status: string }>("/health");
   }
 
-  private async ls(uri: string): Promise<Array<Record<string, unknown>>> {
+  private async ls(uri: string, agentId?: string): Promise<Array<Record<string, unknown>>> {
     return this.request<Array<Record<string, unknown>>>(
       `/api/v1/fs/ls?uri=${encodeURIComponent(uri)}&output=original`,
+      {},
+      agentId,
     );
   }
 
-  private async getRuntimeIdentity(): Promise<RuntimeIdentity> {
-    if (this.runtimeIdentity) {
-      return this.runtimeIdentity;
+  private async getRuntimeIdentity(agentId?: string): Promise<RuntimeIdentity> {
+    const effectiveAgentId = agentId ?? this.defaultAgentId;
+    const cached = this.identityCache.get(effectiveAgentId);
+    if (cached) {
+      return cached;
     }
-    const fallback: RuntimeIdentity = { userId: "default", agentId: this.agentId || "default" };
+    const fallback: RuntimeIdentity = { userId: "default", agentId: effectiveAgentId || "default" };
     try {
-      const status = await this.request<{ user?: unknown }>("/api/v1/system/status");
+      const status = await this.request<{ user?: unknown }>("/api/v1/system/status", {}, agentId);
       const userId =
         typeof status.user === "string" && status.user.trim() ? status.user.trim() : "default";
-      this.runtimeIdentity = { userId, agentId: this.agentId || "default" };
-      return this.runtimeIdentity;
+      const identity: RuntimeIdentity = { userId, agentId: effectiveAgentId || "default" };
+      this.identityCache.set(effectiveAgentId, identity);
+      return identity;
     } catch {
-      this.runtimeIdentity = fallback;
+      this.identityCache.set(effectiveAgentId, fallback);
       return fallback;
     }
   }
 
-  private async resolveScopeSpace(scope: ScopeName): Promise<string> {
-    const cached = this.resolvedSpaceByScope[scope];
+  private async resolveScopeSpace(scope: ScopeName, agentId?: string): Promise<string> {
+    const effectiveAgentId = agentId ?? this.defaultAgentId;
+    const agentScopes = this.spaceCache.get(effectiveAgentId);
+    const cached = agentScopes?.[scope];
     if (cached) {
       return cached;
     }
 
-    const identity = await this.getRuntimeIdentity();
+    const identity = await this.getRuntimeIdentity(agentId);
     const fallbackSpace =
       scope === "user" ? identity.userId : md5Short(`${identity.userId}:${identity.agentId}`);
     const reservedDirs = scope === "user" ? USER_STRUCTURE_DIRS : AGENT_STRUCTURE_DIRS;
     const preferredSpace =
       scope === "user" ? identity.userId : md5Short(`${identity.userId}:${identity.agentId}`);
 
+    const saveSpace = (space: string) => {
+      const existing = this.spaceCache.get(effectiveAgentId) ?? {};
+      existing[scope] = space;
+      this.spaceCache.set(effectiveAgentId, existing);
+    };
+
     try {
-      const entries = await this.ls(`viking://${scope}`);
+      const entries = await this.ls(`viking://${scope}`, agentId);
       const spaces = entries
         .filter((entry) => entry?.isDir === true)
         .map((entry) => (typeof entry.name === "string" ? entry.name.trim() : ""))
@@ -176,15 +174,15 @@ export class OpenVikingClient {
 
       if (spaces.length > 0) {
         if (spaces.includes(preferredSpace)) {
-          this.resolvedSpaceByScope[scope] = preferredSpace;
+          saveSpace(preferredSpace);
           return preferredSpace;
         }
         if (scope === "user" && spaces.includes("default")) {
-          this.resolvedSpaceByScope[scope] = "default";
+          saveSpace("default");
           return "default";
         }
         if (spaces.length === 1) {
-          this.resolvedSpaceByScope[scope] = spaces[0]!;
+          saveSpace(spaces[0]!);
           return spaces[0]!;
         }
       }
@@ -192,11 +190,11 @@ export class OpenVikingClient {
       // Fall back to identity-derived space when listing fails.
     }
 
-    this.resolvedSpaceByScope[scope] = fallbackSpace;
+    saveSpace(fallbackSpace);
     return fallbackSpace;
   }
 
-  private async normalizeTargetUri(targetUri: string): Promise<string> {
+  private async normalizeTargetUri(targetUri: string, agentId?: string): Promise<string> {
     const trimmed = targetUri.trim().replace(/\/+$/, "");
     const match = trimmed.match(/^viking:\/\/(user|agent)(?:\/(.*))?$/);
     if (!match) {
@@ -217,7 +215,7 @@ export class OpenVikingClient {
       return trimmed;
     }
 
-    const space = await this.resolveScopeSpace(scope);
+    const space = await this.resolveScopeSpace(scope, agentId);
     return `viking://${scope}/${space}/${parts.join("/")}`;
   }
 
@@ -228,8 +226,9 @@ export class OpenVikingClient {
       limit: number;
       scoreThreshold?: number;
     },
+    agentId?: string,
   ): Promise<FindResult> {
-    const normalizedTargetUri = await this.normalizeTargetUri(options.targetUri);
+    const normalizedTargetUri = await this.normalizeTargetUri(options.targetUri, agentId);
     const body = {
       query,
       target_uri: normalizedTargetUri,
@@ -239,55 +238,74 @@ export class OpenVikingClient {
     return this.request<FindResult>("/api/v1/search/find", {
       method: "POST",
       body: JSON.stringify(body),
-    });
+    }, agentId);
   }
 
-  async read(uri: string): Promise<string> {
+  async read(uri: string, agentId?: string): Promise<string> {
     return this.request<string>(
       `/api/v1/content/read?uri=${encodeURIComponent(uri)}`,
+      {},
+      agentId,
     );
   }
 
-  async createSession(): Promise<string> {
-    const result = await this.request<{ session_id: string }>("/api/v1/sessions", {
-      method: "POST",
-      body: JSON.stringify({}),
-    });
-    return result.session_id;
-  }
-
-  async addSessionMessage(sessionId: string, role: string, content: string): Promise<void> {
+  async addSessionMessage(sessionId: string, role: string, content: string, agentId?: string): Promise<void> {
     await this.request<{ session_id: string }>(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`,
       {
         method: "POST",
         body: JSON.stringify({ role, content }),
       },
+      agentId,
     );
   }
 
-  /** GET session so server loads messages from storage before extract (workaround for AGFS visibility). */
-  async getSession(sessionId: string): Promise<{ message_count?: number }> {
+  /** GET session — server auto-creates if absent; also loads messages from storage before extract. */
+  async getSession(sessionId: string, agentId?: string): Promise<{ message_count?: number }> {
     return this.request<{ message_count?: number }>(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
       { method: "GET" },
+      agentId,
     );
   }
 
-  async extractSessionMemories(sessionId: string): Promise<Array<Record<string, unknown>>> {
-    return this.request<Array<Record<string, unknown>>>(
-      `/api/v1/sessions/${encodeURIComponent(sessionId)}/extract`,
-      { method: "POST", body: JSON.stringify({}) },
-    );
+  /**
+   * Commit a session: archive (Phase 1) and extract memories (Phase 2).
+   * wait=false (default): Phase 2 runs in background, returns task_id for polling.
+   * wait=true: blocks until Phase 2 completes, returns memories_extracted count.
+   */
+  async commitSession(
+    sessionId: string,
+    options?: { wait?: boolean; agentId?: string },
+  ): Promise<{
+    session_id: string;
+    status: string;
+    task_id?: string;
+    archive_uri?: string;
+    archived?: boolean;
+    memories_extracted?: number;
+  }> {
+    const wait = options?.wait ?? false;
+    return this.request<{
+      session_id: string;
+      status: string;
+      task_id?: string;
+      archive_uri?: string;
+      archived?: boolean;
+      memories_extracted?: number;
+    }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/commit?wait=${wait}`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    }, options?.agentId);
   }
 
-  async deleteSession(sessionId: string): Promise<void> {
-    await this.request(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
+  async deleteSession(sessionId: string, agentId?: string): Promise<void> {
+    await this.request(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" }, agentId);
   }
 
-  async deleteUri(uri: string): Promise<void> {
+  async deleteUri(uri: string, agentId?: string): Promise<void> {
     await this.request(`/api/v1/fs?uri=${encodeURIComponent(uri)}&recursive=false`, {
       method: "DELETE",
-    });
+    }, agentId);
   }
 }

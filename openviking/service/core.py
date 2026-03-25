@@ -21,7 +21,7 @@ from openviking.service.relation_service import RelationService
 from openviking.service.resource_service import ResourceService
 from openviking.service.search_service import SearchService
 from openviking.service.session_service import SessionService
-from openviking.session.compressor import SessionCompressor
+from openviking.session import create_session_compressor, SessionCompressor
 from openviking.storage import VikingDBManager
 from openviking.storage.collection_schemas import init_context_collection
 from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_manager
@@ -238,15 +238,6 @@ class OpenVikingService:
 
         acquire_data_dir_lock(self._config.storage.workspace)
 
-        # Clean up stale RocksDB LOCK files left by crashed processes.
-        # On Windows, these persist after process death and block PersistStore
-        # from opening (see https://github.com/volcengine/OpenViking/issues/650).
-        from openviking.storage.vectordb.utils.stale_lock import (
-            clean_stale_rocksdb_locks,
-        )
-
-        clean_stale_rocksdb_locks(self._config.storage.workspace)
-
         if self._vikingdb_manager is None:
             self._init_storage(
                 self._config.storage,
@@ -316,7 +307,7 @@ class OpenVikingService:
             vikingdb=self._vikingdb_manager,
         )
         self._skill_processor = SkillProcessor(vikingdb=self._vikingdb_manager)
-        self._session_compressor = SessionCompressor(vikingdb=self._vikingdb_manager)
+        self._session_compressor = create_session_compressor(vikingdb=self._vikingdb_manager)
 
         # Start LockManager if initialized
         if self._lock_manager:

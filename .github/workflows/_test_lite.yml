@@ -78,7 +78,7 @@ jobs:
       run: uv sync --frozen --extra test
 
     - name: Install build dependencies
-      run: uv pip install setuptools pybind11 cmake wheel
+      run: uv pip install setuptools setuptools_scm cmake wheel
 
     - name: Build C++ extensions
       run: uv run python setup.py build_ext --inplace

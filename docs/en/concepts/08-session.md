@@ -6,6 +6,8 @@ Session manages conversation messages, tracks context usage, and extracts long-t
 
 **Lifecycle**: Create → Interact → Commit
 
+Getting a session by ID will auto-create it if it does not exist.
+
 ```python
 session = client.session(session_id="chat_001")
 session.add_message("user", [TextPart("...")])
@@ -18,7 +20,8 @@ session.commit()
 |--------|-------------|
 | `add_message(role, parts)` | Add message |
 | `used(contexts, skill)` | Record used contexts/skills |
-| `commit()` | Commit: archive + memory extraction |
+| `commit()` | Commit: archive (sync) + summary generation and memory extraction (async background) |
+| `get_task(task_id)` | Query background task status |
 
 ### add_message
 
@@ -57,11 +60,15 @@ session.used(skill={
 ```python
 result = session.commit()
 # {
-#   "status": "committed",
-#   "memories_extracted": 5,
-#   "active_count_updated": 2,
+#   "status": "accepted",
+#   "task_id": "uuid-xxx",
+#   "archive_uri": "viking://session/.../history/archive_001",
 #   "archived": True
 # }
+
+# Poll background task progress
+task = client.get_task(result["task_id"])
+# task["status"]: "pending" | "running" | "completed" | "failed"
 ```
 
 ## Message Structure
@@ -89,12 +96,19 @@ class Message:
 
 ### Archive Flow
 
-Auto-archive on commit():
+commit() executes in two phases:
 
+**Phase 1 (synchronous, returns immediately)**:
 1. Increment compression_index
-2. Copy current messages to archive directory
-3. Generate structured summary (LLM)
-4. Clear current messages list
+2. Write messages to archive directory (`messages.jsonl`)
+3. Clear current messages list
+4. Return `task_id`
+
+**Phase 2 (asynchronous background)**:
+5. Generate structured summary (LLM) → write `.abstract.md` and `.overview.md`
+6. Extract long-term memories
+7. Update active_count
+8. Write `.done` completion marker
 
 ### Summary Format
 
@@ -160,9 +174,10 @@ viking://session/{session_id}/
 ├── .overview.md              # Current overview
 ├── history/
 │   ├── archive_001/
-│   │   ├── messages.jsonl
-│   │   ├── .abstract.md
-│   │   └── .overview.md
+│   │   ├── messages.jsonl    # Written in Phase 1
+│   │   ├── .abstract.md      # Written in Phase 2 (background)
+│   │   ├── .overview.md      # Written in Phase 2 (background)
+│   │   └── .done             # Phase 2 completion marker
 │   └── archive_NNN/
 └── tools/
     └── {tool_id}/tool.json

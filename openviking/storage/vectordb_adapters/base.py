@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import math
 import uuid
 from abc import ABC, abstractmethod
 from typing import Any, Dict, Iterable, Optional
@@ -25,6 +26,7 @@ from openviking.storage.expr import (
 from openviking.storage.vectordb.collection.collection import Collection
 from openviking.storage.vectordb.collection.result import FetchDataInCollectionResult
 from openviking_cli.utils import get_logger
+from openviking_cli.utils.config.vectordb_config import DEFAULT_INDEX_NAME
 
 logger = get_logger(__name__)
 
@@ -61,13 +63,18 @@ class CollectionAdapter(ABC):
     mode: str
     _URI_FIELD_NAMES = {"uri", "parent_uri"}
 
-    def __init__(self, collection_name: str):
+    def __init__(self, collection_name: str, index_name: str = DEFAULT_INDEX_NAME):
         self._collection_name = collection_name
+        self._index_name = index_name
         self._collection: Optional[Collection] = None
 
     @property
     def collection_name(self) -> str:
         return self._collection_name
+
+    @property
+    def index_name(self) -> str:
+        return self._index_name
 
     @classmethod
     @abstractmethod
@@ -105,6 +112,7 @@ class CollectionAdapter(ABC):
             return False
 
         self._collection_name = name
+        self._index_name = index_name
         collection_meta = dict(schema)
         scalar_index_fields = collection_meta.pop("ScalarIndex", [])
         if "CollectionName" not in collection_meta:
@@ -420,7 +428,7 @@ class CollectionAdapter(ABC):
 
         if query_vector or sparse_query_vector:
             result = coll.search_by_vector(
-                index_name="default",
+                index_name=self._index_name,
                 dense_vector=query_vector,
                 sparse_vector=sparse_query_vector,
                 limit=limit,
@@ -430,7 +438,7 @@ class CollectionAdapter(ABC):
             )
         elif order_by:
             result = coll.search_by_scalar(
-                index_name="default",
+                index_name=self._index_name,
                 field=order_by,
                 order="desc" if order_desc else "asc",
                 limit=limit,
@@ -440,7 +448,7 @@ class CollectionAdapter(ABC):
             )
         else:
             result = coll.search_by_random(
-                index_name="default",
+                index_name=self._index_name,
                 limit=limit,
                 offset=offset,
                 filters=vectordb_filter,
@@ -451,7 +459,10 @@ class CollectionAdapter(ABC):
         for item in result.data:
             record = dict(item.fields) if item.fields else {}
             record["id"] = item.id
-            record["_score"] = item.score if item.score is not None else 0.0
+            raw_score = item.score if item.score is not None else 0.0
+            if not math.isfinite(raw_score):
+                raw_score = 0.0
+            record["_score"] = raw_score
             record = self._normalize_record_for_read(record)
             records.append(record)
         return records
@@ -492,7 +503,7 @@ class CollectionAdapter(ABC):
     def count(self, filter: Optional[Dict[str, Any] | FilterExpr] = None) -> int:
         coll = self.get_collection()
         result = coll.aggregate_data(
-            index_name="default",
+            index_name=self._index_name,
             op="count",
             filters=self._compile_filter(filter),
         )

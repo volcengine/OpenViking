@@ -22,6 +22,7 @@ class VikingClient:
             self.client = ov.AsyncHTTPClient(url=openviking_config.server_url)
             self.agent_id = "default"
             self.account_id = "default"
+            self.user_id = "default"
             self.admin_user_id = "default"
             self._apikey_manager = None
         else:
@@ -55,6 +56,14 @@ class VikingClient:
             user_exists = await self._check_user_exists(self.admin_user_id)
             if not user_exists:
                 await self._initialize_user(self.admin_user_id, role="admin")
+            admin_user_api_key = await self._get_or_create_user_apikey(self.admin_user_id)
+            if admin_user_api_key:
+                self.admin_user_client = ov.AsyncHTTPClient(
+                    url=self.openviking_config.server_url,
+                    api_key=admin_user_api_key,
+                    agent_id=self.agent_id,
+                )
+                await self.admin_user_client.initialize()
 
     @classmethod
     async def create(cls, agent_id: Optional[str] = None):
@@ -289,7 +298,7 @@ class VikingClient:
             return None
 
     async def search_memory(
-        self, query: str, user_id: str, limit: int = 10
+        self, query: str, user_id: str, agent_user_id: str, limit: int = 10
     ) -> dict[str, list[Any]]:
         """通过上下文消息，检索viking 的user、Agent memory。
 
@@ -313,7 +322,7 @@ class VikingClient:
             target_uri=uri_user_memory,
             limit=limit,
         )
-        agent_space_name = self.get_agent_space_name(user_id)
+        agent_space_name = self.get_agent_space_name(agent_user_id)
         uri_agent_memory = f"viking://agent/{agent_space_name}/memories/"
         agent_memory = await self.client.find(
             query=query,
@@ -462,7 +471,12 @@ async def main_test():
 
 
 async def account_test():
-    client = ov.AsyncHTTPClient(url="http://localhost:1933", api_key="test")
+
+    client = ov.AsyncHTTPClient(
+        url="http://localhost:1933",
+        api_key="",
+        agent_id="shared",
+    )
     await client.initialize()
 
     # res = await client.admin_list_users("eval")
@@ -470,7 +484,8 @@ async def account_test():
     # res = await client.admin_remove_user("default", "admin")
     # res = await client.admin_list_accounts()
     # res = await client.admin_create_account("eval", "default")
-    res = await client.admin_register_user("default", "test_root", "root")
+    res = await client.search("123")
+
     print(res)
 
 

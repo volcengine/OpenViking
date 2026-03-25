@@ -70,8 +70,25 @@
     },
     "recallScoreThreshold": {
       "label": "Recall Score Threshold",
-      "placeholder": "0.01",
+      "placeholder": "0.15",
       "advanced": true
+    },
+    "recallMaxContentChars": {
+      "label": "Recall Max Content Chars",
+      "placeholder": "500",
+      "advanced": true,
+      "help": "Maximum characters per memory content in auto-recall injection"
+    },
+    "recallPreferAbstract": {
+      "label": "Recall Prefer Abstract",
+      "advanced": true,
+      "help": "Use memory abstract instead of fetching full content when available"
+    },
+    "recallTokenBudget": {
+      "label": "Recall Token Budget",
+      "placeholder": "2000",
+      "advanced": true,
+      "help": "Maximum estimated tokens for auto-recall memory injection"
     },
     "ingestReplyAssist": {
       "label": "Ingest Reply Assist",
@@ -135,6 +152,15 @@
         "type": "number"
       },
       "recallScoreThreshold": {
+        "type": "number"
+      },
+      "recallMaxContentChars": {
+        "type": "number"
+      },
+      "recallPreferAbstract": {
+        "type": "boolean"
+      },
+      "recallTokenBudget": {
         "type": "number"
       },
       "ingestReplyAssist": {

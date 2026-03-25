@@ -503,9 +503,6 @@ class TestRecall(unittest.TestCase):
         # For LocalCollection, non-vector fields are often serialized into a 'fields' JSON string or accessible directly if mapped.
         # We need to check if the data came back.
 
-        # NOTE: FetchDataResult structure: result_num, labels, scores, extra_json?
-        # Actually fetch_data returns a list of results.
-
         print(f"Full Record Fetch: {res_full.items[0]}")
 
         res_min = collection.fetch_data(["2"])

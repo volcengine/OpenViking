@@ -89,12 +89,13 @@ uv pip install -e ".[bot,bot-langfuse,bot-telegram]"
 **1. Initialize configuration**
 
 ```bash
-vikingbot gateway
+openviking-server --with-bot
 ```
 
 This will automatically:
 - Create a default config at `~/.openviking/ov.conf`
 - Create bot startup files in the OpenViking workspace, default path is `~/.openviking/data/bot/`
+- Start the OpenViking server with bot integration
 
 **2. Configure via ov.conf**
 
@@ -104,16 +105,13 @@ Edit `~/.openviking/ov.conf` to add your provider API keys (OpenRouter, OpenAI, 
 
 ```bash
 # Send a single message directly
-vikingbot chat -m "What is 2+2?"
+ov chat -m "What is 2+2?"
 
 # Enter interactive chat mode (supports multi-turn conversations)
-vikingbot chat
+ov chat
 
 # Show plain-text replies (no Markdown rendering)
-vikingbot chat --no-markdown
-
-# Show runtime logs during chat (useful for debugging)
-vikingbot chat --logs
+ov chat --no-format
 ```
 
 That's it! You have a working AI assistant in 2 minutes.
@@ -173,6 +171,8 @@ All configurations are under the `bot` field in `ov.conf`, with default values f
 - `ov_server`: OpenViking Server configuration.
   - If not configured, the OpenViking server information configured in `ov.conf` is used by default
   - If you don't use the locally started OpenViking Server, you can configure the url and the corresponding root user's API Key here
+    - root_api_key: In a multi-tenant scenario, the API KEY must have root privileges; otherwise, the bot cannot automatically register multiple OpenViking users, which is used to implement memory isolation.
+    - account_id: Defaults to default, which is the account ID of OpenViking. All users under an OpenViking account share resources.
 - `channels`: Message platform configuration, see [Message Platform Configuration](bot/docs/CHANNEL.md) for details
 
 ```json
@@ -219,7 +219,7 @@ Vikingbot provides 7 dedicated OpenViking tools:
 | `openviking_add_resource` | Add local files as OpenViking resources |
 | `openviking_grep` | Search OpenViking resources using regular expressions |
 | `openviking_glob` | Match OpenViking resources using glob patterns |
-| `user_memory_search` | Search OpenViking user memory |
+| `openviking_memory_commit` | Commit session to ov |
 
 ### OpenViking Hooks
 
@@ -546,29 +546,6 @@ which nodejs
 
 | Command | Description |
 |---------|-------------|
-| `vikingbot chat -m "..."` | Chat with the agent |
-| `vikingbot chat` | Interactive chat mode |
-| `vikingbot chat --no-markdown` | Show plain-text replies |
-| `vikingbot chat --logs` | Show runtime logs during chat |
-| `vikingbot gateway` | Start the gateway |
-| `vikingbot status` | Show status |
-| `vikingbot channels login` | Link WhatsApp (scan QR) |
-| `vikingbot channels status` | Show channel status |
-
-
-<details>
-<summary><b>Scheduled Tasks (Cron)</b></summary>
-
-```bash
-# Add a job
-vikingbot cron add --name "daily" --message "Good morning!" --cron "0 9 * * *"
-vikingbot cron add --name "hourly" --message "Check status" --every 3600
-
-# List jobs
-vikingbot cron list
-
-# Remove a job
-vikingbot cron remove <job_id>
-```
-
-</details>
+| `ov chat -m "..."` | Send a single message to the agent |
+| `ov chat` | Interactive chat mode |
+| `ov chat --no-format` | Show plain-text replies (no Markdown) |

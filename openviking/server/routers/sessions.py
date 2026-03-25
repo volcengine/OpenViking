@@ -2,11 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 """Sessions endpoints for OpenViking HTTP Server."""
 
-import asyncio
 import logging
 from typing import Any, Dict, List, Literal, Optional
 
-from fastapi import APIRouter, Body, Depends, Path, Query
+from fastapi import APIRouter, Depends, Path, Query
 from pydantic import BaseModel, model_validator
 
 from openviking.message.part import TextPart, part_from_dict
@@ -14,10 +13,7 @@ from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import ErrorInfo, Response
-from openviking.server.telemetry import resolve_selection, run_operation
 from openviking.service.task_tracker import get_task_tracker
-from openviking.telemetry import TelemetryRequest
-from openviking_cli.exceptions import InvalidArgumentError
 
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
 logger = logging.getLogger(__name__)
@@ -83,12 +79,6 @@ class UsedRequest(BaseModel):
     skill: Optional[Dict[str, Any]] = None
 
 
-class CommitSessionRequest(BaseModel):
-    """Request model for session commit."""
-
-    telemetry: TelemetryRequest = False
-
-
 def _to_jsonable(value: Any) -> Any:
     """Convert internal objects (e.g. Context) into JSON-serializable values."""
     to_dict = getattr(value, "to_dict", None)
@@ -132,19 +122,23 @@ async def list_sessions(
 @router.get("/{session_id}")
 async def get_session(
     session_id: str = Path(..., description="Session ID"),
+    auto_create: bool = Query(False, description="Create the session if it does not exist"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Get session details."""
+    from openviking_cli.exceptions import NotFoundError
+
     service = get_service()
-    session = await service.sessions.get(session_id, _ctx)
-    return Response(
-        status="ok",
-        result={
-            "session_id": session.session_id,
-            "user": session.user.to_dict(),
-            "message_count": len(session.messages),
-        },
-    )
+    try:
+        session = await service.sessions.get(session_id, _ctx, auto_create=auto_create)
+    except NotFoundError:
+        return Response(
+            status="error",
+            error=ErrorInfo(code="NOT_FOUND", message=f"Session {session_id} not found"),
+        )
+    result = session.meta.to_dict()
+    result["user"] = session.user.to_dict()
+    return Response(status="ok", result=result)
 
 
 @router.delete("/{session_id}")
@@ -160,54 +154,20 @@ async def delete_session(
 
 @router.post("/{session_id}/commit")
 async def commit_session(
-    request: CommitSessionRequest = Body(default_factory=CommitSessionRequest),
     session_id: str = Path(..., description="Session ID"),
-    wait: bool = Query(
-        True,
-        description="If False, commit runs in background and returns immediately",
-    ),
     _ctx: RequestContext = Depends(get_request_context),
 ):
     """Commit a session (archive and extract memories).
 
-    When wait=False, the commit is processed in the background and a
-    ``task_id`` is returned.  Use ``GET /tasks/{task_id}`` to poll for
-    completion status, results, or errors.
-
-    When wait=True (default), the commit blocks until complete and
-    returns the full result inline.
+    Archive (Phase 1) completes before returning.  Memory extraction
+    (Phase 2) runs in the background.  A ``task_id`` is returned for
+    polling progress via ``GET /tasks/{task_id}``.
     """
     service = get_service()
     tracker = get_task_tracker()
 
-    if wait:
-        # Reject if same session already has a background commit running
-        if tracker.has_running("session_commit", session_id):
-            return Response(
-                status="error",
-                error=ErrorInfo(
-                    code="CONFLICT",
-                    message=f"Session {session_id} already has a commit in progress",
-                ),
-            )
-        execution = await run_operation(
-            operation="session.commit",
-            telemetry=request.telemetry,
-            fn=lambda: service.sessions.commit_async(session_id, _ctx),
-        )
-        return Response(
-            status="ok",
-            result=execution.result,
-            telemetry=execution.telemetry,
-        ).model_dump(exclude_none=True)
-
-    selection = resolve_selection(request.telemetry)
-    if selection.include_payload:
-        raise InvalidArgumentError("telemetry is not supported when wait=false for session.commit")
-
-    # Atomically check + create to prevent race conditions
-    task = tracker.create_if_no_running("session_commit", session_id)
-    if task is None:
+    # Reject if same session already has a commit in progress
+    if tracker.has_running("session_commit", session_id):
         return Response(
             status="error",
             error=ErrorInfo(
@@ -215,47 +175,9 @@ async def commit_session(
                 message=f"Session {session_id} already has a commit in progress",
             ),
         )
-    asyncio.create_task(_background_commit_tracked(service, session_id, _ctx, task.task_id))
 
-    return Response(
-        status="ok",
-        result={
-            "session_id": session_id,
-            "status": "accepted",
-            "task_id": task.task_id,
-            "message": "Commit is processing in the background",
-        },
-    )
-
-
-async def _background_commit_tracked(
-    service, session_id: str, ctx: RequestContext, task_id: str
-) -> None:
-    """Run session commit in background with task tracking."""
-    tracker = get_task_tracker()
-    tracker.start(task_id)
-    try:
-        result = await service.sessions.commit_async(session_id, ctx)
-        tracker.complete(
-            task_id,
-            {
-                "session_id": session_id,
-                "memories_extracted": result.get("memories_extracted", 0),
-                "archived": result.get("archived", False),
-            },
-        )
-        logger.info(
-            "Background commit completed: session=%s task=%s memories=%d",
-            session_id,
-            task_id,
-            result.get("memories_extracted", 0),
-        )
-    except asyncio.CancelledError:
-        tracker.fail(task_id, "Background commit cancelled during shutdown")
-        logger.warning("Background commit cancelled: session=%s task=%s", session_id, task_id)
-    except Exception as exc:
-        tracker.fail(task_id, str(exc))
-        logger.exception("Background commit failed: session=%s task=%s", session_id, task_id)
+    result = await service.sessions.commit_async(session_id, _ctx)
+    return Response(status="ok", result=result).model_dump(exclude_none=True)
 
 
 @router.post("/{session_id}/extract")

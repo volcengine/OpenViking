@@ -28,6 +28,11 @@ from openviking.storage.queuefs.semantic_dag import DagStats, SemanticDagExecuto
 from openviking.storage.queuefs.semantic_msg import SemanticMsg
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import bind_telemetry, resolve_telemetry
+from openviking.utils.circuit_breaker import (
+    CircuitBreaker,
+    CircuitBreakerOpen,
+    classify_api_error,
+)
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import VikingURI
 from openviking_cli.utils.config import get_openviking_config
@@ -82,6 +87,7 @@ class SemanticProcessor(DequeueHandlerBase):
         self._dag_executor: Optional[SemanticDagExecutor] = None
         self._current_ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
         self._current_msg: Optional[SemanticMsg] = None
+        self._circuit_breaker = CircuitBreaker()
 
     @classmethod
     def _cache_dag_stats(cls, telemetry_id: str, uri: str, stats: DagStats) -> None:
@@ -204,6 +210,29 @@ class SemanticProcessor(DequeueHandlerBase):
         except Exception:
             return True
 
+    async def _reenqueue_semantic_msg(self, msg: SemanticMsg) -> None:
+        """Re-enqueue a semantic message for later processing.
+
+        Throttles with a sleep when the circuit breaker is open to prevent
+        re-enqueue storms (messages cycling at 5/sec during OPEN window).
+        """
+        import asyncio
+
+        from openviking.storage.queuefs import get_queue_manager
+
+        # Throttle to prevent re-enqueue storm during OPEN window
+        wait = self._circuit_breaker.retry_after
+        if wait > 0:
+            await asyncio.sleep(wait)
+
+        queue_manager = get_queue_manager()
+        if queue_manager is not None:
+            semantic_queue = queue_manager.get_queue(queue_manager.SEMANTIC)
+            await semantic_queue.enqueue(msg)
+            logger.info(f"Re-enqueued semantic message: {msg.uri}")
+        else:
+            logger.warning(f"No queue manager available, cannot re-enqueue: {msg.uri}")
+
     async def on_dequeue(self, data: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """Process dequeued SemanticMsg, recursively process all subdirectories."""
         msg: Optional[SemanticMsg] = None
@@ -219,6 +248,16 @@ class SemanticProcessor(DequeueHandlerBase):
 
             assert data is not None
             msg = SemanticMsg.from_dict(data)
+            # Circuit breaker: if API is known-broken, re-enqueue and wait
+            try:
+                self._circuit_breaker.check()
+            except CircuitBreakerOpen:
+                logger.warning(
+                    f"Circuit breaker is open, re-enqueueing semantic message: {msg.uri}"
+                )
+                await self._reenqueue_semantic_msg(msg)
+                self.report_success()
+                return None
             collector = resolve_telemetry(msg.telemetry_id)
             telemetry_ctx = bind_telemetry(collector) if collector is not None else nullcontext()
             with telemetry_ctx:
@@ -276,13 +315,38 @@ class SemanticProcessor(DequeueHandlerBase):
                 self._merge_request_stats(msg.telemetry_id, processed=1)
                 logger.info(f"Completed semantic generation for: {msg.uri}")
                 self.report_success()
+                self._circuit_breaker.record_success()
                 return None
 
         except Exception as e:
-            logger.error(f"Failed to process semantic message: {e}", exc_info=True)
-            if msg is not None:
-                self._merge_request_stats(msg.telemetry_id, error_count=1)
-            self.report_error(str(e), data)
+            error_class = classify_api_error(e)
+            if error_class == "permanent":
+                logger.critical(
+                    f"Permanent API error processing semantic message, dropping: {e}",
+                    exc_info=True,
+                )
+                self._circuit_breaker.record_failure(e)
+                if msg is not None:
+                    self._merge_request_stats(msg.telemetry_id, error_count=1)
+                self.report_error(str(e), data)
+            else:
+                # Transient or unknown — re-enqueue for retry
+                logger.warning(
+                    f"Transient API error processing semantic message, re-enqueueing: {e}",
+                    exc_info=True,
+                )
+                self._circuit_breaker.record_failure(e)
+                if msg is not None:
+                    try:
+                        await self._reenqueue_semantic_msg(msg)
+                    except Exception as requeue_err:
+                        logger.error(f"Failed to re-enqueue semantic message: {requeue_err}")
+                        self._merge_request_stats(msg.telemetry_id, error_count=1)
+                        self.report_error(str(e), data)
+                        return None
+                    self.report_success()
+                else:
+                    self.report_error(str(e), data)
             return None
         finally:
             # Safety net: release lifecycle lock if still held (e.g. on exception
@@ -388,24 +452,42 @@ class SemanticProcessor(DequeueHandlerBase):
                 f"deleted={len(deleted_files)}"
             )
 
-        for file_path in file_paths:
+        # Separate cached from changed files to allow concurrent VLM calls
+        pending_indices: List[Tuple[int, str]] = []
+        file_summaries: List[Optional[Dict[str, str]]] = [None] * len(file_paths)
+
+        for idx, file_path in enumerate(file_paths):
             file_name = file_path.split("/")[-1]
 
             if file_path not in changed_files and file_name in existing_summaries:
-                file_summaries.append({"name": file_name, "summary": existing_summaries[file_name]})
+                file_summaries[idx] = {"name": file_name, "summary": existing_summaries[file_name]}
                 logger.debug(f"Reused existing summary for {file_name}")
             else:
+                pending_indices.append((idx, file_path))
+
+        if pending_indices:
+            logger.info(
+                f"Generating summaries for {len(pending_indices)} changed files concurrently "
+                f"(reused {len(file_paths) - len(pending_indices)} cached)"
+            )
+
+            async def _gen(idx: int, file_path: str) -> None:
+                file_name = file_path.split("/")[-1]
                 try:
                     summary_dict = await self._generate_single_file_summary(
                         file_path, llm_sem=llm_sem, ctx=ctx
                     )
-                    file_summaries.append(summary_dict)
+                    file_summaries[idx] = summary_dict
                     logger.debug(f"Generated summary for {file_name}")
                 except Exception as e:
                     logger.warning(f"Failed to generate summary for {file_path}: {e}")
-                    file_summaries.append({"name": file_name, "summary": ""})
+                    file_summaries[idx] = {"name": file_name, "summary": ""}
 
-        overview = await self._generate_overview(dir_uri, file_summaries, [])
+            await asyncio.gather(*[_gen(i, fp) for i, fp in pending_indices])
+
+        file_summaries = [s for s in file_summaries if s is not None]
+
+        overview = await self._generate_overview(dir_uri, file_summaries, [], llm_sem=llm_sem)
         abstract = self._extract_abstract_from_overview(overview)
         overview, abstract = self._enforce_size_limits(overview, abstract)
 
@@ -816,6 +898,7 @@ class SemanticProcessor(DequeueHandlerBase):
         dir_uri: str,
         file_summaries: List[Dict[str, str]],
         children_abstracts: List[Dict[str, str]],
+        llm_sem: Optional[asyncio.Semaphore] = None,
     ) -> str:
         """Generate directory's .overview.md (L1).
 
@@ -869,7 +952,11 @@ class SemanticProcessor(DequeueHandlerBase):
                 f"Splitting into batches of {semantic.overview_batch_size}."
             )
             overview = await self._batched_generate_overview(
-                dir_uri, file_summaries, children_abstracts, file_index_map
+                dir_uri,
+                file_summaries,
+                children_abstracts,
+                file_index_map,
+                llm_sem=llm_sem,
             )
         elif over_budget:
             # Few files but long summaries → truncate summaries to fit budget
@@ -948,6 +1035,7 @@ class SemanticProcessor(DequeueHandlerBase):
         file_summaries: List[Dict[str, str]],
         children_abstracts: List[Dict[str, str]],
         file_index_map: Dict[int, str],
+        llm_sem: Optional[asyncio.Semaphore] = None,
     ) -> str:
         """Generate overview by batching file summaries and merging.
 
@@ -974,9 +1062,13 @@ class SemanticProcessor(DequeueHandlerBase):
             else "None"
         )
 
-        # Generate partial overview per batch using global file indices
-        partial_overviews = []
+        # Generate partial overview per batch concurrently using global file indices
+        if llm_sem is None:
+            llm_sem = asyncio.Semaphore(self.max_concurrent_llm)
+        partial_overviews = [None] * len(batches)
         global_offset = 0
+        batch_prompts: List[Tuple[int, str, Dict[int, str]]] = []
+
         for batch_idx, batch in enumerate(batches):
             # Build per-batch index map using global offsets
             batch_lines = []
@@ -991,32 +1083,37 @@ class SemanticProcessor(DequeueHandlerBase):
             # Include children abstracts in the first batch
             children_str = children_abstracts_str if batch_idx == 0 else "None"
 
+            prompt = render_prompt(
+                "semantic.overview_generation",
+                {
+                    "dir_name": dir_name,
+                    "file_summaries": batch_str,
+                    "children_abstracts": children_str,
+                },
+            )
+            batch_prompts.append((batch_idx, prompt, batch_index_map))
+
+        def make_replacer(idx_map):
+            def replacer(match):
+                idx = int(match.group(1))
+                return idx_map.get(idx, match.group(0))
+
+            return replacer
+
+        async def _run_batch(batch_idx: int, prompt: str, batch_index_map: Dict[int, str]) -> None:
             try:
-                prompt = render_prompt(
-                    "semantic.overview_generation",
-                    {
-                        "dir_name": dir_name,
-                        "file_summaries": batch_str,
-                        "children_abstracts": children_str,
-                    },
-                )
-                partial = await vlm.get_completion_async(prompt)
-
-                # Replace [number] references per batch using batch-local map
-                def make_replacer(idx_map):
-                    def replacer(match):
-                        idx = int(match.group(1))
-                        return idx_map.get(idx, match.group(0))
-
-                    return replacer
-
+                async with llm_sem:
+                    partial = await vlm.get_completion_async(prompt)
                 partial = re.sub(r"\[(\d+)\]", make_replacer(batch_index_map), partial)
-                partial_overviews.append(partial.strip())
+                partial_overviews[batch_idx] = partial.strip()
             except Exception as e:
                 logger.warning(
                     f"Failed to generate partial overview batch "
                     f"{batch_idx + 1}/{len(batches)} for {dir_uri}: {e}"
                 )
+
+        await asyncio.gather(*[_run_batch(*bp) for bp in batch_prompts])
+        partial_overviews = [p for p in partial_overviews if p is not None]
 
         if not partial_overviews:
             return f"# {dir_name}\n\nDirectory overview"

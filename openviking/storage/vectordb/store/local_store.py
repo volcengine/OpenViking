@@ -4,6 +4,7 @@ from typing import List, Tuple, Union
 
 import openviking.storage.vectordb.engine as engine
 from openviking.storage.vectordb.store.store import BatchOp, IMutiTableStore, Op, OpType
+from openviking.storage.vectordb.utils.stale_lock import clean_stale_rocksdb_locks
 
 # Constant for the maximum Unicode character, used for range queries to cover all possible keys
 MAX_UNICODE_CHAR = "\U0010ffff"
@@ -19,7 +20,11 @@ def create_store_engine_proxy(path: str = "") -> "StoreEngineProxy":
     Returns:
         StoreEngineProxy: Proxy instance wrapping the underlying storage engine.
     """
-    date_engine = engine.PersistStore(path) if path else engine.VolatileStore()
+    if path:
+        clean_stale_rocksdb_locks(path)
+        date_engine = engine.PersistStore(path)
+    else:
+        date_engine = engine.VolatileStore()
     return StoreEngineProxy(date_engine)
 
 

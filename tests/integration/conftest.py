@@ -31,6 +31,21 @@ TEST_TMP_DIR = PROJECT_ROOT / "test_data" / "tmp_integration"
 GOOGLE_API_KEY = os.environ.get("GOOGLE_API_KEY", "")
 requires_api_key = pytest.mark.skipif(not GOOGLE_API_KEY, reason="GOOGLE_API_KEY not set")
 
+# ── Vault integration test helpers ──────────────────────────────────────────
+VAULT_ADDR = os.environ.get("VAULT_ADDR", "http://127.0.0.1:8200")
+VAULT_TOKEN = os.environ.get("VAULT_TOKEN", "")
+requires_vault = pytest.mark.skipif(not VAULT_TOKEN, reason="VAULT_TOKEN not set")
+
+# ── Volcengine KMS integration test helpers ──────────────────────────────────────────
+VOLCENGINE_ACCESS_KEY = os.environ.get("VOLCENGINE_ACCESS_KEY", "")
+VOLCENGINE_SECRET_KEY = os.environ.get("VOLCENGINE_SECRET_KEY", "")
+VOLCENGINE_KMS_KEY_ID = os.environ.get("VOLCENGINE_KMS_KEY_ID", "")
+VOLCENGINE_KMS_REGION = os.environ.get("VOLCENGINE_KMS_REGION", "cn-beijing")
+requires_volcengine_kms = pytest.mark.skipif(
+    not (VOLCENGINE_ACCESS_KEY and VOLCENGINE_SECRET_KEY and VOLCENGINE_KMS_KEY_ID),
+    reason="VOLCENGINE_ACCESS_KEY, VOLCENGINE_SECRET_KEY, or VOLCENGINE_KMS_KEY_ID not set",
+)
+
 # (model_name, default_dimension, token_limit)
 GEMINI_MODELS = [
     ("gemini-embedding-2-preview", 3072, 8192),

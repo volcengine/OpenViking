@@ -49,6 +49,25 @@ async def test_sdk_add_resource(http_client):
     assert result["root_uri"].startswith("viking://")
 
 
+async def test_sdk_add_skill_from_local_file(http_client):
+    client, _ = http_client
+    f = TEST_TMP_DIR / "sdk_skill.md"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_text(
+        """---
+name: sdk-skill
+description: SDK localhost upload test
+---
+
+# SDK Skill
+"""
+    )
+
+    result = await client.add_skill(data=str(f), wait=True)
+    assert "uri" in result
+    assert result["uri"].startswith("viking://agent/skills/")
+
+
 async def test_sdk_wait_processed(http_client):
     client, _ = http_client
     result = await client.wait_processed()

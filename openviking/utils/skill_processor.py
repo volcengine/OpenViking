@@ -19,6 +19,7 @@ from openviking.server.identity import RequestContext
 from openviking.storage import VikingDBManager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.viking_fs import VikingFS
+from openviking.utils.zip_safe import safe_extract_zip
 from openviking.telemetry import get_current_telemetry
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
@@ -149,7 +150,7 @@ class SkillProcessor:
                 if zipfile.is_zipfile(path_obj):
                     temp_dir = Path(tempfile.mkdtemp())
                     with zipfile.ZipFile(path_obj, "r") as zipf:
-                        zipf.extractall(temp_dir)
+                        safe_extract_zip(zipf, temp_dir)
                     data = temp_dir
                 else:
                     data = path_obj

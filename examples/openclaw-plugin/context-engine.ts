@@ -7,7 +7,6 @@ import {
 import {
   trimForLog,
   toJsonLog,
-  summarizeExtractedMemories,
 } from "./memory-ranking.js";
 
 type AgentMessage = {
@@ -73,6 +72,15 @@ type ContextEngine = {
   }) => Promise<CompactResult>;
 };
 
+export type ContextEngineWithSessionMapping = ContextEngine & {
+  /** Return the OV session ID for an OpenClaw sessionKey (identity: sessionKey IS the OV session ID). */
+  getOVSessionForKey: (sessionKey: string) => string;
+  /** Ensure an OV session exists on the server for the given OpenClaw sessionKey (auto-created by getSession if absent). */
+  resolveOVSession: (sessionKey: string) => Promise<string>;
+  /** Commit (extract + archive) then delete the OV session, so a fresh one is created on next use. */
+  commitOVSession: (sessionKey: string) => Promise<void>;
+};
+
 type Logger = {
   info: (msg: string) => void;
   warn?: (msg: string) => void;
@@ -134,7 +142,7 @@ export function createMemoryOpenVikingContextEngine(params: {
   logger: Logger;
   getClient: () => Promise<OpenVikingClient>;
   resolveAgentId: (sessionId: string) => string;
-}): ContextEngine {
+}): ContextEngineWithSessionMapping {
   const {
     id,
     name,
@@ -145,16 +153,27 @@ export function createMemoryOpenVikingContextEngine(params: {
     resolveAgentId,
   } = params;
 
-  const switchClientAgent = async (sessionId: string, phase: "assemble" | "afterTurn") => {
-    const client = await getClient();
-    const resolvedAgentId = resolveAgentId(sessionId);
-    const before = client.getAgentId();
-    if (resolvedAgentId && resolvedAgentId !== before) {
-      client.setAgentId(resolvedAgentId);
-      logger.info(`openviking: switched to agentId=${resolvedAgentId} for ${phase}`);
+  async function doCommitOVSession(sessionKey: string): Promise<void> {
+    try {
+      const client = await getClient();
+      const agentId = resolveAgentId(sessionKey);
+      const commitResult = await client.commitSession(sessionKey, { wait: true, agentId });
+      logger.info(
+        `openviking: committed OV session for sessionKey=${sessionKey}, archived=${commitResult.archived ?? false}, memories=${commitResult.memories_extracted ?? 0}, task_id=${commitResult.task_id ?? "none"}`,
+      );
+      await client.deleteSession(sessionKey, agentId).catch(() => {});
+    } catch (err) {
+      warnOrInfo(logger, `openviking: commit failed for sessionKey=${sessionKey}: ${String(err)}`);
     }
-    return client;
-  };
+  }
+
+  function extractSessionKey(runtimeContext: Record<string, unknown> | undefined): string | undefined {
+    if (!runtimeContext) {
+      return undefined;
+    }
+    const key = runtimeContext.sessionKey;
+    return typeof key === "string" && key.trim() ? key.trim() : undefined;
+  }
 
   return {
     info: {
@@ -163,13 +182,23 @@ export function createMemoryOpenVikingContextEngine(params: {
       version,
     },
 
+    // --- session-mapping extensions ---
+
+    getOVSessionForKey: (sessionKey: string) => sessionKey,
+
+    async resolveOVSession(sessionKey: string): Promise<string> {
+      return sessionKey;
+    },
+
+    commitOVSession: doCommitOVSession,
+
+    // --- standard ContextEngine methods ---
+
     async ingest(): Promise<IngestResult> {
-      // Keep canonical capture behavior in afterTurn (same semantics as old agent_end hook).
       return { ingested: false };
     },
 
     async ingestBatch(): Promise<IngestBatchResult> {
-      // Keep canonical capture behavior in afterTurn (same semantics as old agent_end hook).
       return { ingestedCount: 0 };
     },
 
@@ -186,7 +215,8 @@ export function createMemoryOpenVikingContextEngine(params: {
       }
 
       try {
-        await switchClientAgent(afterTurnParams.sessionId, "afterTurn");
+        const sessionKey = extractSessionKey(afterTurnParams.runtimeContext);
+        const agentId = resolveAgentId(sessionKey ?? afterTurnParams.sessionId);
 
         const messages = afterTurnParams.messages ?? [];
         if (messages.length === 0) {
@@ -222,33 +252,14 @@ export function createMemoryOpenVikingContextEngine(params: {
         }
 
         const client = await getClient();
-        const sessionId = await client.createSession();
-        try {
-          await client.addSessionMessage(sessionId, "user", decision.normalizedText);
-          await client.getSession(sessionId).catch(() => ({}));
-          const extracted = await client.extractSessionMemories(sessionId);
-
-          logger.info(
-            `openviking: auto-captured ${newCount} new messages, extracted ${extracted.length} memories`,
-          );
-          logger.info(
-            `openviking: capture-detail ${toJsonLog({
-              capturedCount: newCount,
-              captured: [trimForLog(turnText, 260)],
-              extractedCount: extracted.length,
-              extracted: summarizeExtractedMemories(extracted),
-            })}`,
-          );
-          if (extracted.length === 0) {
-            warnOrInfo(
-              logger,
-              "openviking: auto-capture completed but extract returned 0 memories. " +
-                "Check OpenViking server logs for embedding/extract errors.",
-            );
-          }
-        } finally {
-          await client.deleteSession(sessionId).catch(() => {});
-        }
+        const OVSessionId = sessionKey ?? afterTurnParams.sessionId;
+        await client.addSessionMessage(OVSessionId, "user", decision.normalizedText, agentId);
+        const commitResult = await client.commitSession(OVSessionId, { wait: true, agentId });
+        logger.info(
+          `openviking: committed ${newCount} messages in session=${OVSessionId}, ` +
+            `archived=${commitResult.archived ?? false}, memories=${commitResult.memories_extracted ?? 0}, ` +
+            `task_id=${commitResult.task_id ?? "none"} ${toJsonLog({ captured: [trimForLog(turnText, 260)] })}`,
+        );
       } catch (err) {
         warnOrInfo(logger, `openviking: auto-capture failed: ${String(err)}`);
       }

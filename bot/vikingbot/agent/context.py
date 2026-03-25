@@ -149,7 +149,7 @@ Skills with available="false" need dependencies installed first - you can try in
         return "\n\n---\n\n".join(parts)
 
     async def _build_user_memory(
-        self, session_key: SessionKey, current_message: str, history: list[dict[str, Any]]
+        self, session_key: SessionKey, current_message: str, sender_id: str
     ) -> str:
         """
         Build the system prompt from bootstrap files, memory, and skills.
@@ -170,7 +170,7 @@ Skills with available="false" need dependencies installed first - you can try in
         # Viking agent memory
         start = _time.time()
         viking_memory = await self.memory.get_viking_memory_context(
-            current_message=current_message, workspace_id=workspace_id
+            current_message=current_message, workspace_id=workspace_id, sender_id=sender_id
         )
         cost = round(_time.time() - start, 2)
         logger.info(
@@ -178,7 +178,9 @@ Skills with available="false" need dependencies installed first - you can try in
         )
         if viking_memory:
             parts.append(
-                f"## Your memories about the current conversation. If you need to know more details, please use the tools.\n{viking_memory}"
+                f"## Long term memory about this conversation.\n"
+                f"You do not need to use tool to search again:\n"
+                f"{viking_memory}"
             )
 
         return "\n\n---\n\n".join(parts)
@@ -215,8 +217,6 @@ You have access to tools that allow you to:
 You have two workspaces:
 1. Local workspace: {workspace_display}
 2. OpenViking workspace: managed via OpenViking tools
-- Long-term memory: using user_memory_search tool to search memory
-- History log: tow types, a. using user_memory_search tool to search history; b. memory/HISTORY.md (grep-searchable)
 - Custom skills: {workspace_display}/skills/{{skill-name}}/SKILL.md
 
 IMPORTANT: When responding to direct questions or conversations, reply directly with your text response.
@@ -226,8 +226,7 @@ For normal conversation, just respond with text - do not call the message tool.
 Always be helpful, accurate, and concise. When using tools, think step by step: what you know, what you need, and why you chose this tool.
 
 ## Memory
-- Remember important facts: using openviking_memory_commit tool to commit
-- Recall past events: prioritize using user_memory_search tool to search history"""
+- Remember important facts: using openviking_memory_commit tool to commit"""
 
     def _load_bootstrap_files(self) -> str:
         """Load all bootstrap files from workspace."""
@@ -273,7 +272,7 @@ Always be helpful, accurate, and concise. When using tools, think step by step: 
             messages.extend(history)
 
         # User
-        user_info = await self._build_user_memory(session_key, current_message, history)
+        user_info = await self._build_user_memory(session_key, current_message, self._sender_id)
         messages.append({"role": "user", "content": user_info})
 
         # Current message (with optional image attachments)
