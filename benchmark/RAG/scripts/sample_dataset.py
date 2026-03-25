@@ -1246,9 +1246,18 @@ def sample_financebench(
                 selected_docs = all_doc_names
                 print("Using all documents")
             else:
+                # 优先选择 QA 数量多的文档
                 random.seed(seed)
-                selected_docs = random.sample(all_doc_names, num_docs)
-                print(f"Sampled {len(selected_docs)} documents (seed={seed})")
+                # 按 QA 数量排序
+                sorted_docs = sorted(all_doc_names, key=lambda x: len(doc_groups[x]), reverse=True)
+                # 打乱顺序（但优先选择 QA 多的）
+                random.shuffle(sorted_docs)
+                # 重新按 QA 数量排序（保留随机性但优先选择多的）
+                selected_docs = sorted(sorted_docs, key=lambda x: len(doc_groups[x]), reverse=True)[:num_docs]
+                print(f"Sampled {len(selected_docs)} documents with highest QA counts (seed={seed})")
+                print("Selected documents:")
+                for doc in selected_docs:
+                    print(f"  {doc}: {len(doc_groups[doc])} QAs")
             
             # 如果同时指定了 sample_size，则在选中的文档中再抽样 QA
             if sample_size is not None:
@@ -1289,21 +1298,67 @@ def sample_financebench(
                             for cat in cats:
                                 print(f"  {cat}: {category_targets[cat]} QAs")
                             
-                            # 抽样 QA
+                            # 抽样 QA，支持剩余配额重新分配
                             random.seed(seed)
                             sampled_items = []
+                            remaining_quota = sample_size
                             
-                            for doc_name in selected_docs:
-                                doc_items = doc_groups[doc_name]
-                                doc_cat_qas = doc_category_qas[doc_name]
+                            # 第一轮：按目标抽样，但不超过每个类别的可用数量
+                            category_actual = {}
+                            for cat in cats:
+                                if cat not in category_targets or category_targets[cat] <= 0:
+                                    category_actual[cat] = 0
+                                    continue
                                 
-                                for cat, items in doc_cat_qas.items():
-                                    if cat in category_targets and category_targets[cat] > 0:
-                                        # 从该类别的 QA 中抽样
-                                        random.shuffle(items)
-                                        sample_count = min(len(items), category_targets[cat])
-                                        sampled_items.extend(items[:sample_count])
-                                        category_targets[cat] -= sample_count
+                                cat_qas = selected_doc_category_qas[cat].copy()
+                                random.shuffle(cat_qas)
+                                sample_count = min(len(cat_qas), category_targets[cat])
+                                category_actual[cat] = sample_count
+                                remaining_quota -= sample_count
+                                
+                                for doc_name, item in cat_qas[:sample_count]:
+                                    sampled_items.append(item)
+                            
+                            # 第二轮：如果还有剩余配额，分配给还有可用 QA 的类别
+                            if remaining_quota > 0:
+                                print(f"Reallocating remaining {remaining_quota} QA(s) to categories with available QAs")
+                                
+                                # 为每个类别计算还有多少可用 QA
+                                category_available = {}
+                                for cat in cats:
+                                    if cat in selected_doc_category_qas:
+                                        total_available = len(selected_doc_category_qas[cat])
+                                        used = category_actual.get(cat, 0)
+                                        category_available[cat] = total_available - used
+                                
+                                # 循环分配剩余配额
+                                while remaining_quota > 0:
+                                    allocated_this_round = 0
+                                    for cat in cats:
+                                        if remaining_quota <= 0:
+                                            break
+                                        if category_available.get(cat, 0) > 0:
+                                            # 从该类别再抽样一个
+                                            cat_qas = selected_doc_category_qas[cat].copy()
+                                            random.shuffle(cat_qas)
+                                            # 找到还没有被抽样的 QA
+                                            for doc_name, item in cat_qas:
+                                                if item not in sampled_items:
+                                                    sampled_items.append(item)
+                                                    category_actual[cat] += 1
+                                                    category_available[cat] -= 1
+                                                    remaining_quota -= 1
+                                                    allocated_this_round += 1
+                                                    break
+                                    
+                                    # 如果这一轮没有分配任何配额，说明没有更多可用 QA 了
+                                    if allocated_this_round == 0:
+                                        print(f"Warning: No more QAs available to sample. Stopping with {remaining_quota} unallocated.")
+                                        break
+                            
+                            print("Actual category counts after reallocation:")
+                            for cat in cats:
+                                print(f"  {cat}: {category_actual.get(cat, 0)} QAs")
                             
                             # 更新 doc_groups，只保留抽样的 items
                             new_doc_groups = defaultdict(list)
@@ -1430,12 +1485,6 @@ def sample_financebench(
     # Save data
     output_file = output_dir / "financebench_open_source.jsonl"
     save_jsonl_data(selected_data, output_file)
-    
-    # Copy document info JSONL
-    doc_info_src = input_dir / "data" / "financebench_document_information.jsonl"
-    if doc_info_src.exists():
-        doc_info_dst = output_dir / "financebench_document_information.jsonl"
-        shutil.copy2(doc_info_src, doc_info_dst)
     
     # Copy PDFs used by selected samples
     pdfs_src = input_dir / "pdfs"

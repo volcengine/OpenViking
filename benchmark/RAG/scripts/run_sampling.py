@@ -20,16 +20,16 @@ def main():
     success_count = 0
     total_count = 0
     
-    # Locomo: 3 documents, 100 QAs, stratified
+    # Locomo: 3 documents, 80 QAs, stratified
     total_count += 1
     print("\n" + "=" * 60)
-    print("Sampling Locomo: 3 documents, 100 QAs")
+    print("Sampling Locomo: 3 documents, 80 QAs")
     print("=" * 60)
     if sample_dataset(
         "Locomo",
         input_dir / "Locomo",
         output_dir / "Locomo",
-        sample_size=100,
+        sample_size=80,
         num_docs=3,
         seed=42,
         sample_mode="stratified"
@@ -68,16 +68,16 @@ def main():
     ):
         success_count += 1
     
-    # FinanceBench: 3 documents
+    # FinanceBench: 3 documents, 12 QAs, stratified
     total_count += 1
     print("\n" + "=" * 60)
-    print("Sampling FinanceBench: 3 documents")
+    print("Sampling FinanceBench: 3 documents, 12 QAs")
     print("=" * 60)
     if sample_dataset(
         "FinanceBench",
         input_dir / "FinanceBench",
         output_dir / "FinanceBench",
-        sample_size=None,
+        sample_size=12,
         num_docs=3,
         seed=42,
         sample_mode="stratified"
