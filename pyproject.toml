@@ -108,6 +108,9 @@ gemini-async = [
     "google-genai>=1.0.0",
     "anyio>=4.0.0",
 ]
+ocr = [
+    "pytesseract>=0.3.10",
+]
 build = [
     "setuptools>=61.0",
     "setuptools-scm>=8.0",
