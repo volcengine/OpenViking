@@ -535,52 +535,41 @@ class FeishuChannel(BaseChannel):
 
             content_with_mentions = cleaned_content
 
-            # Check if we need to reply to a specific message
-            # Get reply message ID from metadata (original incoming message ID)
+            # --- Build interactive card with markdown rendering ---
+            original_sender_id = None
+            chat_type = "group"
             reply_to_message_id = None
             if msg.metadata:
                 reply_to_message_id = msg.metadata.get("reply_to_message_id") or msg.metadata.get(
                     "message_id"
                 )
-
-            # Build post message content
-            content_elements = []
-
-            # Add @mention for the original sender when replying
-            original_sender_id = None
-            chat_type = "group"
-            if reply_to_message_id and msg.metadata:
                 original_sender_id = msg.metadata.get("sender_id")
                 chat_type = msg.metadata.get("chat_type", "group")
 
-            # Build content line: [@mention, text content]
-            content_line = []
+            # Build card elements using markdown for proper formatting
+            card_elements: list[dict] = []
 
-            # Add @mention element for original sender when replying (only in group chats)
+            # @mention prefix for group replies (Feishu card markdown supports <at> tag)
+            mention_prefix = ""
             if original_sender_id and chat_type == "group":
-                content_line.append({"tag": "at", "user_id": original_sender_id})
+                mention_prefix = f"<at id={original_sender_id}></at> "
 
-            # Add text content
             if content_with_mentions.strip():
-                content_line.append({"tag": "text", "text": content_with_mentions})
-
-            # Add content line if not empty
-            if content_line:
-                content_elements.append(content_line)
+                md_content = mention_prefix + content_with_mentions
+                card_elements.extend(self._build_card_elements(md_content))
+            elif mention_prefix:
+                card_elements.append({"tag": "markdown", "content": mention_prefix})
 
             # Add images
             for img in images:
-                content_elements.append([{"tag": "img", "image_key": img["image_key"]}])
+                card_elements.append({"tag": "img", "img_key": img["image_key"]})
 
-            # Ensure we have content
-            if not content_elements:
-                content_elements.append([{"tag": "text", "text": " "}])
+            if not card_elements:
+                card_elements.append({"tag": "markdown", "content": " "})
 
-            post_content = {"zh_cn": {"title": "", "content": content_elements}}
-
-            import json
-
-            content = json.dumps(post_content, ensure_ascii=False)
+            # Build interactive card message
+            card = {"elements": card_elements}
+            card_content = json.dumps({"card": card}, ensure_ascii=False)
 
             if reply_to_message_id:
                 # Reply to existing message (quotes the original)
@@ -588,9 +577,6 @@ class FeishuChannel(BaseChannel):
                 should_reply_in_thread = False
                 if msg.metadata:
                     root_id = msg.metadata.get("root_id")
-                    # Only use reply_in_thread=True if this is an actual topic group thread
-                    # In Feishu, topic groups have root_id set for messages in threads
-                    # root_id will be set if the message is already part of a thread
                     should_reply_in_thread = root_id is not None and root_id != reply_to_message_id
 
                 request = (
@@ -598,9 +584,8 @@ class FeishuChannel(BaseChannel):
                     .message_id(reply_to_message_id)
                     .request_body(
                         ReplyMessageRequestBody.builder()
-                        .content(content)
-                        .msg_type("post")
-                        # Only reply in topic thread if it's actually a topic thread (not regular group)
+                        .content(card_content)
+                        .msg_type("interactive")
                         .reply_in_thread(should_reply_in_thread)
                         .build()
                     )
@@ -615,8 +600,8 @@ class FeishuChannel(BaseChannel):
                     .request_body(
                         CreateMessageRequestBody.builder()
                         .receive_id(reply_to)
-                        .msg_type("post")
-                        .content(content)
+                        .msg_type("interactive")
+                        .content(card_content)
                         .build()
                     )
                     .build()
