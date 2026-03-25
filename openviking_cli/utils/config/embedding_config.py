@@ -37,9 +37,9 @@ class EmbeddingModelConfig(BaseModel):
     provider: Optional[str] = Field(
         default="volcengine",
         description=(
-            "Provider type: 'openai', 'azure', 'volcengine', 'vikingdb', 'jina', 'ollama', "
-            "'gemini', 'voyage', or 'minimax'. For OpenRouter or other OpenAI-compatible "
-            "providers, use 'openai' with api_base and extra_headers."
+            "Provider type: 'openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'litellm'. "
+            "For OpenRouter or other OpenAI-compatible providers, use 'litellm' with "
+            "api_base and api_key, or 'openai' with api_base and extra_headers."
         ),
     )
     backend: Optional[str] = Field(
@@ -93,7 +93,7 @@ class EmbeddingModelConfig(BaseModel):
         if not self.provider:
             raise ValueError("Embedding provider is required")
 
-        allowed_providers = [
+        if self.provider not in [
             "openai",
             "azure",
             "volcengine",
@@ -103,16 +103,11 @@ class EmbeddingModelConfig(BaseModel):
             "gemini",
             "voyage",
             "minimax",
-        ]
-        if self.provider == "litellm":
-            raise ValueError(
-                "Embedding provider 'litellm' has been temporarily disabled for security reasons"
-            )
-
-        if self.provider not in allowed_providers:
+            "litellm",
+        ]:
             raise ValueError(
                 f"Invalid embedding provider: '{self.provider}'. Must be one of: "
-                "'openai', 'azure', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'minimax'"
+                "'openai', 'azure', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'minimax', 'litellm'"
             )
 
         # Provider-specific validation
@@ -184,6 +179,14 @@ class EmbeddingModelConfig(BaseModel):
             if not self.api_key:
                 raise ValueError("MiniMax provider requires 'api_key' to be set")
 
+        elif self.provider == "litellm":
+            # litellm handles auth via env vars or explicit api_key; no strict requirement
+            if not self.dimension:
+                raise ValueError(
+                    "LiteLLM provider requires 'dimension' to be set explicitly. "
+                    "Check your embedding model's documentation for the correct dimension."
+                )
+
         return self
 
     def get_effective_dimension(self) -> int:
@@ -233,8 +236,7 @@ class EmbeddingModelConfig(BaseModel):
 
 class EmbeddingConfig(BaseModel):
     """
-    Embedding configuration, supports OpenAI, Azure, VolcEngine, VikingDB, Jina, Gemini, Voyage,
-    MiniMax, and Ollama APIs.
+    Embedding configuration, supports OpenAI, VolcEngine, VikingDB, Jina, Gemini, Voyage, or LiteLLM APIs.
 
     Structure:
     - dense: Configuration for dense embedder
@@ -285,7 +287,7 @@ class EmbeddingConfig(BaseModel):
         """Factory method to create embedder instance based on provider and type.
 
         Args:
-            provider: Provider type ('openai', 'azure', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'minimax')
+            provider: Provider type ('openai', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'litellm')
             embedder_type: Embedder type ('dense', 'sparse', 'hybrid')
             config: EmbeddingModelConfig instance
 
@@ -298,6 +300,7 @@ class EmbeddingConfig(BaseModel):
         from openviking.models.embedder import (
             GeminiDenseEmbedder,
             JinaDenseEmbedder,
+            LiteLLMDenseEmbedder,
             MinimaxDenseEmbedder,
             OpenAIDenseEmbedder,
             VikingDBDenseEmbedder,
@@ -308,6 +311,9 @@ class EmbeddingConfig(BaseModel):
             VolcengineSparseEmbedder,
             VoyageDenseEmbedder,
         )
+
+        if provider == "litellm" and LiteLLMDenseEmbedder is None:
+            raise ValueError("LiteLLM is not installed. Install it with: pip install litellm")
 
         # Factory registry: (provider, type) -> (embedder_class, param_builder)
         factory_registry = {
@@ -448,6 +454,18 @@ class EmbeddingConfig(BaseModel):
             ),
             ("minimax", "dense"): (
                 MinimaxDenseEmbedder,
+                lambda cfg: {
+                    "model_name": cfg.model,
+                    "api_key": cfg.api_key,
+                    "api_base": cfg.api_base,
+                    "dimension": cfg.dimension,
+                    **({"query_param": cfg.query_param} if cfg.query_param else {}),
+                    **({"document_param": cfg.document_param} if cfg.document_param else {}),
+                    **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
+                },
+            ),
+            ("litellm", "dense"): (
+                LiteLLMDenseEmbedder,
                 lambda cfg: {
                     "model_name": cfg.model,
                     "api_key": cfg.api_key,
