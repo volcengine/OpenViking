@@ -54,6 +54,10 @@ coverage.xml
 cover/
 test_data/
 test_data_sync/
+reports/
+test-results.xml
+test-reports/
+report.html
 
 # Virtual environments
 .env
@@ -77,6 +81,9 @@ venv.bak/
 .AppleDouble
 .LSOverride
 
+# Windows
+Thumbs.db
+
 # Thumbnails
 ._*
 
@@ -96,6 +103,12 @@ Network Trash Folder
 Temporary Items
 .apdisk
 
+# Config files - contains sensitive information
+config/settings.py
+
+# Docker
+docker-compose.override.yml
+
 # OpenViking specific
 /data/*
 /demo_data/*
@@ -103,6 +116,13 @@ Temporary Items
 .claude
 .openviking
 *.code-workspace
+.openviking.pid
+exports/
+
+# API Test temporary files
+tests/api_test/api-test-report.html
+tests/api_test/openviking-server.log
+tests/api_test/openviking-server.pid
 
 # AI Coding
 CLAUDE.md
