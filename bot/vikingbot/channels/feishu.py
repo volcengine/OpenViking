@@ -212,7 +212,6 @@ class FeishuChannel(BaseChannel):
 
             # 处理业务结果
             data = response.data
-            logger.info(f"client.im.v1.chat.get success, data: {data.group_message_type}")
             mode = "group"
             group_message_type = getattr(data, "group_message_type", "")
             if group_message_type and group_message_type == "thread":
