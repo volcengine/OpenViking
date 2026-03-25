@@ -10,6 +10,7 @@ native vector engine, AGFS, embedding provider, VLM provider, and disk space.
 from __future__ import annotations
 
 import json
+import os
 import platform
 import shutil
 import sys
@@ -43,6 +44,7 @@ def _dim(text: str) -> str:
 # Individual check functions
 # ---------------------------------------------------------------------------
 
+
 def _find_config() -> Optional[Path]:
     return resolve_config_path(None, OPENVIKING_CONFIG_ENV, "ov.conf")
 
@@ -50,7 +52,9 @@ def _find_config() -> Optional[Path]:
 def _load_config_json(config_path: Path) -> Optional[dict]:
     """Parse ov.conf as JSON. Returns None if the file is unreadable or not valid JSON."""
     try:
-        return json.loads(config_path.read_text(encoding="utf-8"))
+        raw = config_path.read_text(encoding="utf-8")
+        raw = os.path.expandvars(raw)
+        return json.loads(raw)
     except (OSError, json.JSONDecodeError):
         return None
 
@@ -66,7 +70,9 @@ def check_config() -> tuple[bool, str, Optional[str]]:
         )
 
     try:
-        data = json.loads(config_path.read_text(encoding="utf-8"))
+        raw = config_path.read_text(encoding="utf-8")
+        raw = os.path.expandvars(raw)
+        data = json.loads(raw)
     except json.JSONDecodeError as exc:
         return False, f"Invalid JSON in {config_path}", f"Fix syntax error: {exc}"
 

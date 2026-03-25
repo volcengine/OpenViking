@@ -75,11 +75,7 @@ class MemoryUpdater:
     No function calls are used for write/edit/delete - these are executed directly.
     """
 
-    def __init__(
-        self,
-        registry: Optional[MemoryTypeRegistry] = None,
-        vikingdb=None,
-    ):
+    def __init__(self, registry: Optional[MemoryTypeRegistry] = None, vikingdb=None):
         self._viking_fs = None
         self._registry = registry
         self._vikingdb = vikingdb

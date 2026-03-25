@@ -37,14 +37,16 @@ def create_tool_call_message(
     return {
         "role": "assistant",
         "content": None,
-        "tool_calls": [{
-            "id": str(call_id),
-            "type": "function",
-            "function": {
-                "name": tool_name,
-                "arguments": json.dumps(params),
-            },
-        }],
+        "tool_calls": [
+            {
+                "id": str(call_id),
+                "type": "function",
+                "function": {
+                    "name": tool_name,
+                    "arguments": json.dumps(params),
+                },
+            }
+        ],
     }
 
 
@@ -102,7 +104,6 @@ def add_tool_call_items_to_messages(
         tool_call_items: List of tuples (call_id, tool_name, params, result)
     """
     for call_id, tool_name, params, result in tool_call_items:
-
         add_tool_call_pair_to_messages(messages, call_id, tool_name, params, result)
 
 
@@ -235,7 +236,7 @@ class MemorySearchTool(MemoryTool):
                 },
                 "session_info": {
                     "type": "object",
-                    "description": "Session information with summaries and recent_messages, optional",
+                    "description": "Session information with latest_archive_overview and current_messages, optional",
                 },
                 "limit": {
                     "type": "integer",
@@ -264,7 +265,12 @@ class MemorySearchTool(MemoryTool):
             query = kwargs.get("query", "")
             target_uri = kwargs.get("target_uri", "")
             # If target_uri is empty, use default from ctx
-            if not target_uri and ctx and hasattr(ctx, 'default_search_uris') and ctx.default_search_uris:
+            if (
+                not target_uri
+                and ctx
+                and hasattr(ctx, "default_search_uris")
+                and ctx.default_search_uris
+            ):
                 target_uri = ctx.default_search_uris
             session_info = kwargs.get("session_info")
             limit = kwargs.get("limit", 10)
@@ -347,13 +353,11 @@ class MemoryLsTool(MemoryTool):
                     size = e.get("size", 0)
                     result_lines.append(f"{name} {_format_size(size)}")
             if not result_lines:
-                return f"Directory is empty. You can write new files to create memory content."
-            return '\n'.join(result_lines)
+                return "Directory is empty. You can write new files to create memory content."
+            return "\n".join(result_lines)
         except Exception as e:
             logger.error(f"Failed to execute ls: {e}")
             return {"error": str(e)}
-
-
 
 
 # Tool registry

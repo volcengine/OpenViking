@@ -703,15 +703,32 @@ class AsyncHTTPClient(BaseClient):
         response = await self._http.get("/api/v1/sessions")
         return self._handle_response(response)
 
-    async def get_session(self, session_id: str) -> Dict[str, Any]:
+    async def get_session(self, session_id: str, *, auto_create: bool = False) -> Dict[str, Any]:
         """Get session details."""
-        response = await self._http.get(f"/api/v1/sessions/{session_id}")
+        params = {}
+        if auto_create:
+            params["auto_create"] = "true"
+        response = await self._http.get(f"/api/v1/sessions/{session_id}", params=params)
         return self._handle_response(response)
 
     async def delete_session(self, session_id: str) -> None:
         """Delete a session."""
         response = await self._http.delete(f"/api/v1/sessions/{session_id}")
         self._handle_response(response)
+
+    async def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Query background task status.
+
+        Args:
+            task_id: Task ID (returned by commit)
+
+        Returns:
+            Task info dict, or None if not found
+        """
+        response = await self._http.get(f"/api/v1/tasks/{task_id}")
+        if response.status_code == 404:
+            return None
+        return self._handle_response(response)
 
     async def commit_session(
         self, session_id: str, telemetry: TelemetryRequest = False

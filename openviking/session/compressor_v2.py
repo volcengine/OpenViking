@@ -7,9 +7,9 @@ Uses the new Memory Templating System with ReAct orchestrator.
 Maintains the same interface as compressor.py for backward compatibility.
 """
 
-from dataclasses import dataclass
 import os
-from typing import Dict, List, Optional
+from dataclasses import dataclass
+from typing import List, Optional
 
 from openviking.core.context import Context
 from openviking.message import Message
@@ -46,15 +46,15 @@ class SessionCompressorV2:
         self.vikingdb = vikingdb
         # Initialize registry once - used by both MemoryReAct and MemoryUpdater
         self._registry = MemoryTypeRegistry()
-        schemas_dir = os.path.join(os.path.dirname(__file__), "..", "prompts", "templates", "memory")
+        schemas_dir = os.path.join(
+            os.path.dirname(__file__), "..", "prompts", "templates", "memory"
+        )
         self._registry.load_from_directory(schemas_dir)
         # Lazy initialize MemoryReAct - we need vlm and ctx
         self._react_orchestrator: Optional[MemoryReAct] = None
         self._memory_updater: Optional[MemoryUpdater] = None
 
-    def _get_or_create_react(
-        self, ctx: Optional[RequestContext] = None
-    ) -> MemoryReAct:
+    def _get_or_create_react(self, ctx: Optional[RequestContext] = None) -> MemoryReAct:
         """Create new MemoryReAct instance with current ctx.
 
         Note: Always create new instance to avoid cross-session isolation issues.
@@ -86,6 +86,7 @@ class SessionCompressorV2:
         session_id: Optional[str] = None,
         ctx: Optional[RequestContext] = None,
         strict_extract_errors: bool = False,
+        latest_archive_overview: str = "",
     ) -> List[Context]:
         """Extract long-term memories from messages using v2 templating system.
 
@@ -99,8 +100,15 @@ class SessionCompressorV2:
             logger.warning("No RequestContext provided, skipping memory extraction")
             return []
 
-        # Format conversation as string
-        conversation_str = "\n".join([f"[{msg.role}]: {msg.content}" for msg in messages])
+        # Provide the latest completed archive overview as non-actionable history context.
+        conversation_sections: List[str] = []
+        if latest_archive_overview:
+            conversation_sections.append(f"## Previous Archive Overview\n{latest_archive_overview}")
+
+        conversation_sections.append(
+            "\n".join([f"[{msg.role}]: {msg.content}" for msg in messages])
+        )
+        conversation_str = "\n\n".join(section for section in conversation_sections if section)
 
         logger.info("Starting v2 memory extraction from conversation")
 
@@ -123,9 +131,7 @@ class SessionCompressorV2:
             )
 
             # Apply operations
-            result = await updater.apply_operations(
-                operations, ctx, registry=orchestrator.registry
-            )
+            result = await updater.apply_operations(operations, ctx, registry=orchestrator.registry)
 
             logger.info(
                 f"Applied memory operations: written={len(result.written_uris)}, "
@@ -136,9 +142,7 @@ class SessionCompressorV2:
             # Return list with dummy values to preserve count for stats in session.py
             # v2 directly writes to storage, so we return None objects to maintain len() accuracy
             total_changes = (
-                len(result.written_uris)
-                + len(result.edited_uris)
-                + len(result.deleted_uris)
+                len(result.written_uris) + len(result.edited_uris) + len(result.deleted_uris)
             )
             return [None] * total_changes
 

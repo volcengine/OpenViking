@@ -3,6 +3,8 @@
 
 """Tests for multi-tenant authentication (openviking/server/auth.py)."""
 
+import io
+import logging
 import uuid
 
 import httpx
@@ -13,6 +15,7 @@ from fastapi import Request as FastAPIRequest
 from fastapi.responses import JSONResponse
 from starlette.requests import Request
 
+from openviking.server import app as server_app_module
 from openviking.server.app import create_app
 from openviking.server.auth import get_request_context, resolve_identity
 from openviking.server.config import ServerConfig, _is_localhost, validate_server_config
@@ -36,13 +39,14 @@ def _make_request(
     headers: dict[str, str] | None = None,
     auth_enabled: bool = True,
     auth_mode: str = "api_key",
+    root_api_key: str | None = None,
 ) -> Request:
     """Create a minimal Starlette request for auth dependency tests."""
     raw_headers = []
     for key, value in (headers or {}).items():
         raw_headers.append((key.lower().encode("latin-1"), value.encode("latin-1")))
     app = FastAPI()
-    app.state.config = ServerConfig(auth_mode=auth_mode)
+    app.state.config = ServerConfig(auth_mode=auth_mode, root_api_key=root_api_key)
     if auth_enabled:
         # Non-empty api_key_manager means the server is in authenticated mode.
         app.state.api_key_manager = object()
@@ -59,6 +63,7 @@ def _build_auth_http_test_app(
     identity: ResolvedIdentity | None,
     auth_enabled: bool = True,
     auth_mode: str = "api_key",
+    root_api_key: str | None = None,
 ) -> FastAPI:
     """Create a lightweight app that exercises auth dependency wiring.
 
@@ -66,7 +71,7 @@ def _build_auth_http_test_app(
     the test focused on request auth behavior and the structured HTTP error body.
     """
     app = FastAPI()
-    app.state.config = ServerConfig(auth_mode=auth_mode)
+    app.state.config = ServerConfig(auth_mode=auth_mode, root_api_key=root_api_key)
     if auth_enabled:
         # Match production auth mode so get_request_context enters the guard path.
         app.state.api_key_manager = object()
@@ -511,6 +516,56 @@ async def test_trusted_mode_allows_header_identity_without_api_key():
     assert identity.agent_id == "assistant-1"
 
 
+async def test_trusted_mode_with_root_api_key_requires_matching_api_key():
+    """Trusted mode should require the configured server API key when present."""
+    request = _make_request(
+        "/api/v1/resources",
+        headers={
+            "X-OpenViking-Account": "acme",
+            "X-OpenViking-User": "alice",
+        },
+        auth_enabled=False,
+        auth_mode="trusted",
+        root_api_key=ROOT_KEY,
+    )
+
+    with pytest.raises(OpenVikingError, match="Missing API Key"):
+        await resolve_identity(
+            request,
+            x_openviking_account="acme",
+            x_openviking_user="alice",
+        )
+
+
+async def test_trusted_mode_with_root_api_key_accepts_matching_api_key():
+    """Trusted mode should accept explicit identity headers plus the configured server API key."""
+    request = _make_request(
+        "/api/v1/resources",
+        headers={
+            "X-API-Key": ROOT_KEY,
+            "X-OpenViking-Account": "acme",
+            "X-OpenViking-User": "alice",
+            "X-OpenViking-Agent": "assistant-1",
+        },
+        auth_enabled=False,
+        auth_mode="trusted",
+        root_api_key=ROOT_KEY,
+    )
+
+    identity = await resolve_identity(
+        request,
+        x_api_key=ROOT_KEY,
+        x_openviking_account="acme",
+        x_openviking_user="alice",
+        x_openviking_agent="assistant-1",
+    )
+
+    assert identity.role == Role.USER
+    assert identity.account_id == "acme"
+    assert identity.user_id == "alice"
+    assert identity.agent_id == "assistant-1"
+
+
 async def test_trusted_mode_tenant_http_routes_require_explicit_identity_headers():
     """Trusted mode should reject tenant-scoped routes without account/user headers."""
     app = _build_auth_http_test_app(
@@ -548,6 +603,75 @@ async def test_trusted_mode_tenant_http_routes_accept_explicit_identity_headers(
 
     assert response.status_code == 200
     assert response.json()["result"] == {"account_id": "acme", "user_id": "alice"}
+
+
+async def test_trusted_mode_http_routes_require_api_key_when_root_key_configured():
+    """Trusted mode HTTP routes should require the configured server API key when present."""
+    app = _build_auth_http_test_app(
+        identity=None,
+        auth_enabled=False,
+        auth_mode="trusted",
+        root_api_key=ROOT_KEY,
+    )
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get(
+            "/api/v1/fs/ls",
+            headers={
+                "X-OpenViking-Account": "acme",
+                "X-OpenViking-User": "alice",
+            },
+        )
+
+    assert response.status_code == 401
+    assert response.json()["error"]["code"] == "UNAUTHENTICATED"
+
+
+async def test_trusted_mode_http_routes_accept_api_key_when_root_key_configured():
+    """Trusted mode HTTP routes should accept the configured server API key plus explicit identity headers."""
+    app = _build_auth_http_test_app(
+        identity=None,
+        auth_enabled=False,
+        auth_mode="trusted",
+        root_api_key=ROOT_KEY,
+    )
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.get(
+            "/api/v1/fs/ls",
+            headers={
+                "X-API-Key": ROOT_KEY,
+                "X-OpenViking-Account": "acme",
+                "X-OpenViking-User": "alice",
+                "X-OpenViking-Agent": "assistant-1",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["result"] == {"account_id": "acme", "user_id": "alice"}
+
+
+@pytest.mark.asyncio
+async def test_trusted_mode_startup_log_mentions_root_key_requirement_when_configured(
+    auth_service,
+):
+    """Trusted mode startup warning should mention the configured server API key requirement."""
+    config = ServerConfig(auth_mode="trusted", root_api_key=ROOT_KEY)
+    app = create_app(config=config, service=auth_service)
+    log_stream = io.StringIO()
+    handler = logging.StreamHandler(log_stream)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    server_app_module.logger.addHandler(handler)
+
+    try:
+        async with app.router.lifespan_context(app):
+            pass
+    finally:
+        server_app_module.logger.removeHandler(handler)
+
+    assert "configured server API key" in log_stream.getvalue()
 
 
 # ---- _is_localhost tests ----

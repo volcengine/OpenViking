@@ -3,11 +3,52 @@
 
 """Tests for session endpoints."""
 
+import json
+from unittest.mock import patch
+
 import httpx
+import pytest
 
 from openviking.server.identity import RequestContext, Role
-from openviking.telemetry import get_current_telemetry
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+from tests.utils.mock_agfs import MockLocalAGFS
+
+
+@pytest.fixture(autouse=True)
+def _configure_test_env(monkeypatch, tmp_path):
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(
+        json.dumps(
+            {
+                "storage": {
+                    "workspace": str(tmp_path / "workspace"),
+                    "agfs": {"backend": "local", "mode": "binding-client"},
+                    "vectordb": {"backend": "local"},
+                },
+                "embedding": {
+                    "dense": {
+                        "provider": "openai",
+                        "model": "test-embedder",
+                        "api_base": "http://127.0.0.1:11434/v1",
+                        "dimension": 1024,
+                    }
+                },
+                "encryption": {"enabled": False},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    mock_agfs = MockLocalAGFS(root_path=tmp_path / "mock_agfs_root")
+
+    monkeypatch.setenv("OPENVIKING_CONFIG_FILE", str(config_path))
+    OpenVikingConfigSingleton.reset_instance()
+
+    with patch("openviking.utils.agfs_utils.create_agfs_client", return_value=mock_agfs):
+        yield
+
+    OpenVikingConfigSingleton.reset_instance()
 
 
 async def test_create_session(client: httpx.AsyncClient):
@@ -141,112 +182,14 @@ async def test_compress_session(client: httpx.AsyncClient):
         json={"role": "user", "content": "Hello"},
     )
 
+    # Default wait=False: returns accepted with task_id
     resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "ok"
+    assert body["result"]["status"] == "accepted"
     assert "usage" not in body
     assert "telemetry" not in body
-
-
-async def test_compress_session_with_telemetry(client: httpx.AsyncClient):
-    create_resp = await client.post("/api/v1/sessions", json={})
-    session_id = create_resp.json()["result"]["session_id"]
-    await client.post(
-        f"/api/v1/sessions/{session_id}/messages",
-        json={"role": "user", "content": "Trace this commit"},
-    )
-
-    resp = await client.post(
-        f"/api/v1/sessions/{session_id}/commit",
-        json={"telemetry": True},
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    summary = body["telemetry"]["summary"]
-    assert summary["operation"] == "session.commit"
-    assert {"total", "llm", "embedding"}.issubset(summary["tokens"].keys())
-    assert summary["memory"]["extracted"] is not None
-    assert "extract" in summary["memory"]
-    assert "semantic_nodes" not in summary
-    assert "usage" not in body
-
-
-async def test_compress_session_with_telemetry_includes_memory_extract_breakdown(
-    client: httpx.AsyncClient, service, monkeypatch
-):
-    create_resp = await client.post("/api/v1/sessions", json={})
-    session_id = create_resp.json()["result"]["session_id"]
-
-    async def fake_commit_async(_session_id: str, _ctx):
-        telemetry = get_current_telemetry()
-        telemetry.set("memory.extracted", 2)
-        telemetry.set("memory.extract.total.duration_ms", 321.5)
-        telemetry.set("memory.extract.candidates.total", 4)
-        telemetry.set("memory.extract.candidates.standard", 3)
-        telemetry.set("memory.extract.candidates.tool_skill", 1)
-        telemetry.set("memory.extract.created", 1)
-        telemetry.set("memory.extract.merged", 1)
-        telemetry.set("memory.extract.deleted", 0)
-        telemetry.set("memory.extract.skipped", 2)
-        telemetry.set("memory.extract.stage.prepare_inputs.duration_ms", 5.0)
-        telemetry.set("memory.extract.stage.llm_extract.duration_ms", 200.0)
-        telemetry.set("memory.extract.stage.normalize_candidates.duration_ms", 10.0)
-        telemetry.set("memory.extract.stage.tool_skill_stats.duration_ms", 4.5)
-        telemetry.set("memory.extract.stage.profile_create.duration_ms", 7.0)
-        telemetry.set("memory.extract.stage.tool_skill_merge.duration_ms", 15.0)
-        telemetry.set("memory.extract.stage.dedup.duration_ms", 55.0)
-        telemetry.set("memory.extract.stage.create_memory.duration_ms", 12.0)
-        telemetry.set("memory.extract.stage.merge_existing.duration_ms", 9.0)
-        telemetry.set("memory.extract.stage.delete_existing.duration_ms", 0.0)
-        telemetry.set("memory.extract.stage.create_relations.duration_ms", 3.0)
-        telemetry.set("memory.extract.stage.flush_semantic.duration_ms", 1.0)
-        return {
-            "session_id": _session_id,
-            "status": "committed",
-            "memories_extracted": 2,
-            "active_count_updated": 0,
-            "archived": True,
-            "stats": None,
-        }
-
-    monkeypatch.setattr(service.sessions, "commit_async", fake_commit_async)
-
-    resp = await client.post(
-        f"/api/v1/sessions/{session_id}/commit",
-        json={"telemetry": True},
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    extract = body["telemetry"]["summary"]["memory"]["extract"]
-    assert extract["duration_ms"] == 321.5
-    assert extract["candidates"] == {"total": 4, "standard": 3, "tool_skill": 1}
-    assert extract["actions"] == {"created": 1, "merged": 1, "deleted": 0, "skipped": 2}
-    assert extract["stages"]["llm_extract_ms"] == 200.0
-    assert extract["stages"]["flush_semantic_ms"] == 1.0
-
-
-async def test_compress_session_with_summary_only_telemetry(client: httpx.AsyncClient):
-    create_resp = await client.post("/api/v1/sessions", json={})
-    session_id = create_resp.json()["result"]["session_id"]
-    await client.post(
-        f"/api/v1/sessions/{session_id}/messages",
-        json={"role": "user", "content": "Summary only telemetry"},
-    )
-
-    resp = await client.post(
-        f"/api/v1/sessions/{session_id}/commit",
-        json={"telemetry": {"summary": True}},
-    )
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-    assert body["telemetry"]["summary"]["operation"] == "session.commit"
-    assert "usage" not in body
-    assert "events" not in body["telemetry"]
-    assert "truncated" not in body["telemetry"]
-    assert "dropped" not in body["telemetry"]
 
 
 async def test_extract_session_jsonable_regression(client: httpx.AsyncClient, service, monkeypatch):
@@ -274,3 +217,50 @@ async def test_extract_session_jsonable_regression(client: httpx.AsyncClient, se
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"] == [{"uri": "viking://user/memories/mock.md"}]
+
+
+async def test_get_context_for_assemble_endpoint_returns_trimmed_context(client: httpx.AsyncClient):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={"role": "user", "content": "archived message"},
+    )
+    await client.post(f"/api/v1/sessions/{session_id}/commit")
+
+    await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={
+            "role": "assistant",
+            "parts": [
+                {"type": "text", "text": "Running tool"},
+                {
+                    "type": "tool",
+                    "tool_id": "tool_123",
+                    "tool_name": "demo_tool",
+                    "tool_uri": f"viking://session/{session_id}/tools/tool_123",
+                    "tool_input": {"x": 1},
+                    "tool_status": "running",
+                },
+            ],
+        },
+    )
+
+    resp = await client.get(f"/api/v1/sessions/{session_id}/context-for-assemble?token_budget=1")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+
+    result = body["result"]
+    assert result["archives"] == []
+    assert len(result["messages"]) == 1
+    assert result["messages"][0]["role"] == "assistant"
+    assert any(
+        part["type"] == "tool" and part["tool_id"] == "tool_123"
+        for part in result["messages"][0]["parts"]
+    )
+    assert result["stats"]["totalArchives"] == 1
+    assert result["stats"]["includedArchives"] == 0
+    assert result["stats"]["droppedArchives"] == 1
+    assert result["stats"]["failedArchives"] == 0

@@ -138,10 +138,10 @@ class AsyncOpenViking:
         await self._ensure_initialized()
         return await self._client.list_sessions()
 
-    async def get_session(self, session_id: str) -> Dict[str, Any]:
+    async def get_session(self, session_id: str, *, auto_create: bool = False) -> Dict[str, Any]:
         """Get session details."""
         await self._ensure_initialized()
-        return await self._client.get_session(session_id)
+        return await self._client.get_session(session_id, auto_create=auto_create)
 
     async def delete_session(self, session_id: str) -> None:
         """Delete a session."""
@@ -176,6 +176,11 @@ class AsyncOpenViking:
         """Commit a session (archive and extract memories)."""
         await self._ensure_initialized()
         return await self._client.commit_session(session_id, telemetry=telemetry)
+
+    async def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Query background task status."""
+        await self._ensure_initialized()
+        return await self._client.get_task(task_id)
 
     # ============= Resource methods =============
 

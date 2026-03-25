@@ -31,8 +31,12 @@ class VLMResponse:
     content: Optional[str] = None
     tool_calls: List[ToolCall] = field(default_factory=list)
     finish_reason: str = "stop"  # stop, tool_calls, length, error
-    usage: Dict[str, int] = field(default_factory=dict)  # prompt_tokens, completion_tokens, total_tokens
-    reasoning_content: Optional[str] = None  # For thinking process (doubao thinking, deepseek r1, etc.)
+    usage: Dict[str, int] = field(
+        default_factory=dict
+    )  # prompt_tokens, completion_tokens, total_tokens
+    reasoning_content: Optional[str] = (
+        None  # For thinking process (doubao thinking, deepseek r1, etc.)
+    )
 
     @property
     def has_tool_calls(self) -> bool:
@@ -170,7 +174,11 @@ class VLMBase(ABC):
 
     # Token usage tracking methods
     def update_token_usage(
-        self, model_name: str, provider: str, prompt_tokens: int, completion_tokens: int,
+        self,
+        model_name: str,
+        provider: str,
+        prompt_tokens: int,
+        completion_tokens: int,
         duration_seconds: float = 0.0,
     ) -> None:
         """Update token usage
@@ -238,6 +246,7 @@ class VLMBase(ABC):
             return response
         return response.choices[0].message.content or ""
 
+
 class VLMFactory:
     """VLM factory class, creates corresponding VLM instance based on config"""
 
@@ -267,10 +276,14 @@ class VLMFactory:
 
             return OpenAIVLM(config)
 
-        else:
-            from .backends.litellm_vlm import LiteLLMVLMProvider
+        if provider == "litellm":
+            raise ValueError(
+                "VLM provider 'litellm' has been temporarily disabled for security reasons"
+            )
 
-            return LiteLLMVLMProvider(config)
+        raise ValueError(
+            f"Unsupported VLM provider: '{provider}'. Supported providers: volcengine, openai, azure"
+        )
 
     @staticmethod
     def get_available_providers() -> List[str]:

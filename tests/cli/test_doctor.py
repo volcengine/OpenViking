@@ -145,6 +145,27 @@ class TestCheckEmbedding:
         assert ok
         assert "openai" in detail
 
+    def test_pass_with_api_key_from_environment_variable(self, tmp_path: Path):
+        config = tmp_path / "ov.conf"
+        config.write_text(
+            json.dumps(
+                {
+                    "embedding": {
+                        "dense": {
+                            "provider": "openai",
+                            "model": "text-embedding-3-small",
+                            "api_key": "${OPENAI_API_KEY}",
+                        }
+                    }
+                }
+            )
+        )
+        with patch("openviking_cli.doctor._find_config", return_value=config):
+            with patch.dict(os.environ, {"OPENAI_API_KEY": "sk-env-123"}, clear=False):
+                ok, detail, fix = check_embedding()
+        assert ok
+        assert "openai" in detail
+
     def test_fail_no_api_key(self, tmp_path: Path):
         config = tmp_path / "ov.conf"
         config.write_text(

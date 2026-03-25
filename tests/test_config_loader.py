@@ -84,6 +84,15 @@ class TestLoadJsonConfig:
         with pytest.raises(ValueError, match="Invalid JSON"):
             load_json_config(conf)
 
+    def test_expands_environment_variables(self, tmp_path, monkeypatch):
+        conf = tmp_path / "env.conf"
+        conf.write_text('{"api_key": "${TEST_API_KEY}"}')
+        monkeypatch.setenv("TEST_API_KEY", "sk-test-123")
+
+        data = load_json_config(conf)
+
+        assert data == {"api_key": "sk-test-123"}
+
 
 class TestRequireConfig:
     """Tests for require_config."""
