@@ -105,9 +105,11 @@ async def test_semantic_queue_coalesces_changed_memory_updates(monkeypatch):
     first_id = await queue.enqueue(first)
     second_id = await queue.enqueue(second)
     third_id = await queue.enqueue(second)
+    fourth_id = await queue.enqueue(first)
 
     assert first_id == second_id
     assert second_id == third_id
+    assert third_id == fourth_id
     assert await queue.size() == 1
 
     raw = await queue.dequeue_raw()

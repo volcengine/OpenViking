@@ -134,12 +134,19 @@ class SemanticQueue(NamedQueue):
                 merged_fingerprint = self._request_fingerprint(merged_msg)
                 should_preserve_retry = msg.id == tracked.msg.id
                 if should_preserve_retry:
-                    tracked.follow_up_msg = SemanticMsg.from_dict(msg.to_dict())
-                    logger.info(
-                        "Preserved semantic re-enqueue for active request: uri=%s context=%s",
-                        msg.uri,
-                        msg.context_type,
-                    )
+                    if tracked.follow_up_msg is None:
+                        tracked.follow_up_msg = SemanticMsg.from_dict(msg.to_dict())
+                        logger.info(
+                            "Preserved semantic re-enqueue for active request: uri=%s context=%s",
+                            msg.uri,
+                            msg.context_type,
+                        )
+                    else:
+                        logger.info(
+                            "Kept existing coalesced follow-up for active retry: uri=%s context=%s",
+                            msg.uri,
+                            msg.context_type,
+                        )
                 elif baseline_fingerprint != merged_fingerprint:
                     tracked.follow_up_msg = merged_msg
                     logger.info(
