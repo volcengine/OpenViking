@@ -216,7 +216,7 @@ def _make_provider(config, langfuse_client: None = None):
     provider_name = p.provider if p else None
     extra_headers = p.extra_headers if p else {}
 
-    if not api_key and not model.startswith("bedrock/"):
+    if not api_key and (not provider_name or not provider_name.startswith("bedrock")):
         raise RuntimeError(
             "No LLM provider configured. Please set your API key in ~/.openviking/ov.conf"
         )
