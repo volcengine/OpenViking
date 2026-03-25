@@ -436,21 +436,20 @@ When generating overview content for edit_overview_uris, you MUST follow this st
    - Include core keywords for easy searching
 3. **Quick Navigation (H2)**: Decision Tree style
    - Use "What do you want to learn?" or "What do you want to do?"
-   - Use → arrow to point to specific files
-   - Use file number references like [1], [2], [3]
+   - Use markdown links with relative paths: [description](./filename.md)
 4. **Detailed Description (H2)**: One H3 subsection for each file
 
 Example:
 # skills
 
-Python async programming, Go concurrency, and System design skills. 适用于需要提升后端开发技能的工程师。
+Python async programming, Go concurrency, and System design skills for backend developers.
 
 ## Quick Navigation
-- 想学异步编程 → [1]
-- 想学并发 → [2]
+- Want to learn async programming → [Python Async](./python_async.md)
+- Want to learn concurrency → [Go Concurrency](./go_concurrency.md)
 
 ## Detailed Description
-### [1] Python Async Programming
+### Python Async
 ...
 
 Total length: 400-800 words
