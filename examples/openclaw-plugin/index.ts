@@ -29,6 +29,10 @@ import {
 import { createMemoryOpenVikingContextEngine } from "./context-engine.js";
 import type { ContextEngineWithSessionMapping } from "./context-engine.js";
 
+// Module-level guard to prevent duplicate plugin registrations within the same process.
+// This addresses issue #948 where the plugin registers repeatedly every minute.
+let hasPluginBeenRegistered = false;
+
 type PluginLogger = {
   debug?: (message: string) => void;
   info: (message: string) => void;
@@ -80,6 +84,13 @@ const contextEnginePlugin = {
   configSchema: memoryOpenVikingConfigSchema,
 
   register(api: OpenClawPluginApi) {
+    // Guard against duplicate plugin registration (issue #948)
+    if (hasPluginBeenRegistered) {
+      api.logger.info("openviking: plugin already registered, skipping duplicate registration");
+      return;
+    }
+    hasPluginBeenRegistered = true;
+
     const cfg = memoryOpenVikingConfigSchema.parse(api.pluginConfig);
     const localCacheKey = `${cfg.mode}:${cfg.baseUrl}:${cfg.configPath}:${cfg.apiKey}`;
 
@@ -720,6 +731,8 @@ const contextEnginePlugin = {
         } else {
           api.logger.info("openviking: stopped");
         }
+        // Reset the registration guard to allow clean re-registration after stop
+        hasPluginBeenRegistered = false;
       },
     });
   },
