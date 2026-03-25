@@ -460,7 +460,6 @@ export function createMemoryOpenVikingContextEngine(params: {
         }
 
         // Always store messages into OV session so assemble can retrieve them.
-        // Capture decision only controls whether we trigger commit (archive+extract).
         const client = await getClient();
         const turnText = newTexts.join("\n");
         const sanitized = turnText.replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>/gi, " ").replace(/\s+/g, " ").trim();
@@ -472,17 +471,6 @@ export function createMemoryOpenVikingContextEngine(params: {
           );
         } else {
           logger.info("openviking: afterTurn skipped store (sanitized text empty)");
-          return;
-        }
-
-        // Capture decision: controls commit (archive + memory extraction)
-        const decision = getCaptureDecision(turnText, cfg.captureMode, cfg.captureMaxLength);
-        logger.info(
-          `openviking: capture-check shouldCapture=${String(decision.shouldCapture)} reason=${decision.reason}`,
-        );
-
-        if (!decision.shouldCapture) {
-          logger.info("openviking: afterTurn skipped commit (capture decision rejected)");
           return;
         }
 
