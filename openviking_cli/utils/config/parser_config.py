@@ -554,6 +554,9 @@ class SemanticConfig:
     memory_chunk_overlap: int = 200
     """Character overlap between adjacent memory chunks for context continuity."""
 
+    summary_enqueue_cooldown_seconds: int = 300
+    """Minimum interval before re-enqueuing the same semantic summary request after completion."""
+
 
 # Configuration registry for dynamic loading
 PARSER_CONFIG_REGISTRY = {
