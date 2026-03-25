@@ -38,7 +38,6 @@ from .parser_config import (
 from .rerank_config import RerankConfig
 from .storage_config import StorageConfig
 from .vlm_config import VLMConfig
-from .memory_config import MemoryConfig
 
 
 class OpenVikingConfig(BaseModel):
