@@ -138,22 +138,6 @@ async def get_session(
         )
     result = session.meta.to_dict()
     result["user"] = session.user.to_dict()
-    pending_tokens = sum(len(m.content) // 4 for m in session.messages)
-    result["pending_tokens"] = pending_tokens
-    return Response(status="ok", result=result)
-
-
-@router.get("/{session_id}/context-for-assemble")
-async def get_context_for_assemble(
-    session_id: str = Path(..., description="Session ID"),
-    token_budget: int = Query(128_000, description="Token budget for context assembly"),
-    _ctx: RequestContext = Depends(get_request_context),
-):
-    """Get trimmed context (archive summaries + active messages) for assemble."""
-    service = get_service()
-    session = service.sessions.session(_ctx, session_id)
-    await session.load()
-    result = await session.get_context_for_assemble(token_budget)
     return Response(status="ok", result=result)
 
 
