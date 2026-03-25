@@ -17,7 +17,7 @@ from typing import Any, Dict, List, Optional, Union
 import litellm
 from litellm import acompletion, completion
 
-from ..base import VLMBase, VLMResponse, ToolCall
+from ..base import ToolCall, VLMBase, VLMResponse
 
 logger = logging.getLogger(__name__)
 
@@ -196,7 +196,14 @@ class LiteLLMVLMProvider(VLMBase):
         else:
             return {"type": "image_url", "image_url": {"url": image}}
 
-    def _build_kwargs(self, model: str, messages: list, tools: Optional[List[Dict[str, Any]]] = None, tool_choice: Optional[str] = None) -> dict[str, Any]:
+    def _build_kwargs(
+        self,
+        model: str,
+        messages: list,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+        thinking: bool = False,
+    ) -> dict[str, Any]:
         """Build kwargs for LiteLLM call."""
         kwargs: dict[str, Any] = {
             "model": model,
@@ -205,6 +212,10 @@ class LiteLLMVLMProvider(VLMBase):
         }
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
+        if not thinking:
+            extra = kwargs.get("extra_body", {})
+            extra["enable_thinking"] = False
+            kwargs["extra_body"] = extra
 
         if self.api_key:
             kwargs["api_key"] = self.api_key
@@ -236,11 +247,7 @@ class LiteLLMVLMProvider(VLMBase):
                         args = json.loads(args)
                     except json.JSONDecodeError:
                         args = {"raw": args}
-                tool_calls.append(ToolCall(
-                    id=tc.id,
-                    name=tc.function.name,
-                    arguments=args
-                ))
+                tool_calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=args))
         return tool_calls
 
     def _build_vlm_response(self, response, has_tools: bool) -> Union[str, VLMResponse]:
@@ -282,7 +289,7 @@ class LiteLLMVLMProvider(VLMBase):
         else:
             kwargs_messages = [{"role": "user", "content": prompt}]
 
-        kwargs = self._build_kwargs(model, kwargs_messages, tools, tool_choice)
+        kwargs = self._build_kwargs(model, kwargs_messages, tools, tool_choice, thinking=thinking)
 
         t0 = time.perf_counter()
         response = completion(**kwargs)
@@ -306,7 +313,7 @@ class LiteLLMVLMProvider(VLMBase):
         else:
             kwargs_messages = [{"role": "user", "content": prompt}]
 
-        kwargs = self._build_kwargs(model, kwargs_messages, tools, tool_choice)
+        kwargs = self._build_kwargs(model, kwargs_messages, tools, tool_choice, thinking=thinking)
 
         last_error = None
         for attempt in range(max_retries + 1):
@@ -315,7 +322,8 @@ class LiteLLMVLMProvider(VLMBase):
                 response = await acompletion(**kwargs)
                 elapsed = time.perf_counter() - t0
                 self._update_token_usage_from_response(
-                    response, duration_seconds=elapsed,
+                    response,
+                    duration_seconds=elapsed,
                 )
                 return self._build_vlm_response(response, has_tools=bool(tools))
             except Exception as e:
@@ -349,7 +357,7 @@ class LiteLLMVLMProvider(VLMBase):
                 content.append({"type": "text", "text": prompt})
             kwargs_messages = [{"role": "user", "content": content}]
 
-        kwargs = self._build_kwargs(model, kwargs_messages, tools)
+        kwargs = self._build_kwargs(model, kwargs_messages, tools, thinking=thinking)
 
         t0 = time.perf_counter()
         response = completion(**kwargs)
@@ -379,7 +387,7 @@ class LiteLLMVLMProvider(VLMBase):
                 content.append({"type": "text", "text": prompt})
             kwargs_messages = [{"role": "user", "content": content}]
 
-        kwargs = self._build_kwargs(model, kwargs_messages, tools)
+        kwargs = self._build_kwargs(model, kwargs_messages, tools, thinking=thinking)
 
         t0 = time.perf_counter()
         response = await acompletion(**kwargs)
@@ -388,7 +396,9 @@ class LiteLLMVLMProvider(VLMBase):
         return self._build_vlm_response(response, has_tools=bool(tools))
 
     def _update_token_usage_from_response(
-        self, response, duration_seconds: float = 0.0,
+        self,
+        response,
+        duration_seconds: float = 0.0,
     ) -> None:
         """Update token usage from response."""
         if hasattr(response, "usage") and response.usage:
