@@ -227,7 +227,6 @@ def _make_provider(config, langfuse_client: None = None):
         api_base=api_base,
         default_model=model,
         extra_headers=extra_headers,
-        provider_name=provider_name,
         langfuse_client=langfuse_client,
     )
 

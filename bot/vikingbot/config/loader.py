@@ -128,7 +128,6 @@ def _merge_vlm_model_config(bot_data: dict, vlm_data: dict) -> None:
     if vlm_data.get("model"):
         if "agents" not in bot_data:
             bot_data["agents"] = {}
-        # Prepend provider prefix if provider is specified
         model = vlm_data["model"]
         provider = vlm_data.get("provider")
         bot_data["agents"]["model"] = model
