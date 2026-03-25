@@ -44,24 +44,13 @@ class VikingStoreWrapper:
             }
         
         if ingest_mode == "directory":
-            def find_common_ancestor(paths):
-                if not paths:
-                    return None
-                path_components = [p.split(os.sep) for p in paths]
-                min_length = min(len(components) for components in path_components)
-                common = []
-                for i in range(min_length):
-                    current_component = path_components[0][i]
-                    if all(components[i] == current_component for components in path_components):
-                        common.append(current_component)
-                    else:
-                        break
-                if common:
-                    return os.sep.join(common)
-                return None
-            
             doc_paths = [os.path.abspath(s.doc_path) for s in samples]
-            common_ancestor = find_common_ancestor(doc_paths)
+            common_ancestor = None
+            if doc_paths:
+                try:
+                    common_ancestor = os.path.commonpath(doc_paths)
+                except ValueError:
+                    common_ancestor = None
             
             if common_ancestor:
                 result = self.client.add_resource(common_ancestor, wait=True, telemetry=True)
