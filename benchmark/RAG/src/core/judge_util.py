@@ -65,7 +65,7 @@ Scoring rule:
 
 Now it's time for the real question:
 Question: {question}
-Gold answer: {gold_answer}
+Gold answer: {gold_answer_str}
 Generated answer: {response}
 
 First, provide a short (one sentence) explanation of your reasoning.
