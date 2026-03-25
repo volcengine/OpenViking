@@ -261,9 +261,9 @@ class BenchmarkPipeline:
                 "llm": {"final_answer": ans},
                 "metrics": {"Recall": recall}, "token_usage": {"total_input_tokens": in_tokens, "llm_output_tokens": out_tokens}
             }
-        except Exception as e:
+        except Exception:
             self.monitor.worker_end(success=False)
-            raise e
+            raise
 
     def _process_evaluation_task(self, item):
         """
