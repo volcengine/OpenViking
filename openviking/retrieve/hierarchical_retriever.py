@@ -295,7 +295,10 @@ class HierarchicalRetriever:
         global_results = [r for r in global_results if r.get("level", 2) != 2]
 
         # Results from global search
-        default_scores = [r.get("_score", 0.0) for r in global_results]
+        default_scores = [
+            s if math.isfinite(s) else 0.0
+            for s in (r.get("_score", 0.0) for r in global_results)
+        ]
         if self._rerank_client and mode == RetrieverMode.THINKING:
             docs = [str(r.get("abstract", "")) for r in global_results]
             query_scores = self._rerank_scores(query, docs, default_scores)
@@ -330,7 +333,10 @@ class HierarchicalRetriever:
         if not initial_candidates:
             return []
 
-        default_scores = [r.get("_score", 0.0) for r in initial_candidates]
+        default_scores = [
+            s if math.isfinite(s) else 0.0
+            for s in (r.get("_score", 0.0) for r in initial_candidates)
+        ]
         if self._rerank_client and mode == RetrieverMode.THINKING:
             docs = [str(r.get("abstract", "")) for r in initial_candidates]
             query_scores = self._rerank_scores(query, docs, default_scores)
@@ -431,7 +437,10 @@ class HierarchicalRetriever:
             if not results:
                 continue
 
-            query_scores = [r.get("_score", 0.0) for r in results]
+            query_scores = [
+                s if math.isfinite(s) else 0.0
+                for s in (r.get("_score", 0.0) for r in results)
+            ]
             if self._rerank_client and mode == RetrieverMode.THINKING:
                 documents = [str(r.get("abstract", "")) for r in results]
                 query_scores = self._rerank_scores(query, documents, query_scores)

@@ -10,6 +10,7 @@ Provides multiple key management methods:
 """
 
 import abc
+import asyncio
 import os
 import secrets
 from abc import ABC
@@ -48,17 +49,103 @@ class RootKeyProvider(ABC):
         pass
 
     @abc.abstractmethod
-    async def encrypt_file_key(self, plaintext_key: bytes, account_id: str) -> Any:
+    async def encrypt_file_key(self, plaintext_key: bytes, account_id: str) -> Tuple[bytes, bytes]:
         """Encrypt File Key."""
         pass
 
     @abc.abstractmethod
-    async def decrypt_file_key(self, encrypted_key: Any, account_id: str) -> bytes:
+    async def decrypt_file_key(self, encrypted_key: bytes, iv: bytes, account_id: str) -> bytes:
         """Decrypt File Key."""
         pass
 
+    async def _hkdf_derive(
+        self, root_key: bytes, account_id: str, salt: bytes, info_prefix: bytes
+    ) -> bytes:
+        """
+        Derive key using HKDF.
 
-class LocalFileProvider(RootKeyProvider):
+        Args:
+            root_key: Root key
+            account_id: Account ID
+            salt: HKDF salt
+            info_prefix: HKDF info prefix
+
+        Returns:
+            Derived key
+        """
+        try:
+            from cryptography.hazmat.primitives import hashes
+            from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+
+            hkdf = HKDF(
+                algorithm=hashes.SHA256(),
+                length=32,
+                salt=salt,
+                info=info_prefix + account_id.encode(),
+            )
+            return hkdf.derive(root_key)
+        except ImportError:
+            raise ConfigError("cryptography library is required for encryption")
+
+
+class BaseProvider(RootKeyProvider):
+    """Base provider with common encryption functionality."""
+
+    async def _aes_gcm_encrypt(self, key: bytes, iv: bytes, plaintext: bytes) -> bytes:
+        """AES-GCM encryption."""
+        try:
+            from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+            aesgcm = AESGCM(key)
+            return aesgcm.encrypt(iv, plaintext, associated_data=None)
+        except ImportError:
+            raise ConfigError("cryptography library is required for encryption")
+
+    async def _aes_gcm_decrypt(self, key: bytes, iv: bytes, ciphertext: bytes) -> bytes:
+        """AES-GCM decryption."""
+        try:
+            from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+
+            aesgcm = AESGCM(key)
+            return aesgcm.decrypt(iv, ciphertext, associated_data=None)
+        except ImportError:
+            raise ConfigError("cryptography library is required for encryption")
+        except Exception as e:
+            raise AuthenticationFailedError(f"Decryption failed: {e}")
+
+    async def encrypt_file_key(self, plaintext_key: bytes, account_id: str) -> Tuple[bytes, bytes]:
+        """
+        Encrypt File Key with Account Key.
+
+        Args:
+            plaintext_key: Plaintext File Key
+            account_id: Account ID
+
+        Returns:
+            (encrypted_key, iv)
+        """
+        account_key = await self.derive_account_key(account_id)
+        iv = secrets.token_bytes(12)
+        encrypted_key = await self._aes_gcm_encrypt(account_key, iv, plaintext_key)
+        return encrypted_key, iv
+
+    async def decrypt_file_key(self, encrypted_key: bytes, iv: bytes, account_id: str) -> bytes:
+        """
+        Decrypt File Key with Account Key.
+
+        Args:
+            encrypted_key: Encrypted File Key
+            iv: Initialization vector
+            account_id: Account ID
+
+        Returns:
+            Decrypted File Key
+        """
+        account_key = await self.derive_account_key(account_id)
+        return await self._aes_gcm_decrypt(account_key, iv, encrypted_key)
+
+
+class LocalFileProvider(BaseProvider):
     """Local file Root Key Provider."""
 
     def __init__(self, key_file: str):
@@ -68,7 +155,7 @@ class LocalFileProvider(RootKeyProvider):
         Args:
             key_file: Root Key file path
         """
-        self.key_file = Path(key_file)
+        self.key_file = Path(key_file).expanduser()
         self._root_key: Optional[bytes] = None
 
     async def get_root_key(self) -> bytes:
@@ -103,79 +190,29 @@ class LocalFileProvider(RootKeyProvider):
     async def derive_account_key(self, account_id: str) -> bytes:
         """Derive Account Key from Root Key."""
         root_key = await self.get_root_key()
-        return await self._hkdf_derive(root_key, account_id)
-
-    async def _hkdf_derive(self, root_key: bytes, account_id: str) -> bytes:
-        """Derive key using HKDF."""
-        try:
-            from cryptography.hazmat.primitives import hashes
-            from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-
-            hkdf = HKDF(
-                algorithm=hashes.SHA256(),
-                length=32,
-                salt=HKDF_SALT,
-                info=HKDF_INFO_PREFIX + account_id.encode(),
-            )
-            return hkdf.derive(root_key)
-        except ImportError:
-            raise ConfigError("cryptography library is required for encryption")
-
-    async def encrypt_file_key(self, plaintext_key: bytes, account_id: str) -> Tuple[bytes, bytes]:
-        """
-        Encrypt File Key.
-
-        Returns:
-            (encrypted_key, iv)
-        """
-        account_key = await self.derive_account_key(account_id)
-        iv = secrets.token_bytes(12)
-        encrypted_key = await self._aes_gcm_encrypt(account_key, iv, plaintext_key)
-        return encrypted_key, iv
-
-    async def decrypt_file_key(self, encrypted_key: bytes, iv: bytes, account_id: str) -> bytes:
-        """Decrypt File Key."""
-        account_key = await self.derive_account_key(account_id)
-        return await self._aes_gcm_decrypt(account_key, iv, encrypted_key)
-
-    async def _aes_gcm_encrypt(self, key: bytes, iv: bytes, plaintext: bytes) -> bytes:
-        """AES-GCM encryption."""
-        try:
-            from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-
-            aesgcm = AESGCM(key)
-            return aesgcm.encrypt(iv, plaintext, associated_data=None)
-        except ImportError:
-            raise ConfigError("cryptography library is required for encryption")
-
-    async def _aes_gcm_decrypt(self, key: bytes, iv: bytes, ciphertext: bytes) -> bytes:
-        """AES-GCM decryption."""
-        try:
-            from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-
-            aesgcm = AESGCM(key)
-            return aesgcm.decrypt(iv, ciphertext, associated_data=None)
-        except ImportError:
-            raise ConfigError("cryptography library is required for encryption")
-        except Exception as e:
-            raise AuthenticationFailedError(f"Decryption failed: {e}")
+        return await self._hkdf_derive(root_key, account_id, HKDF_SALT, HKDF_INFO_PREFIX)
 
 
-class VaultProvider(RootKeyProvider):
+class VaultProvider(BaseProvider):
     """HashiCorp Vault Key Provider.
 
     Uses HashiCorp Vault's transit secrets engine for key management.
     Core features:
-    - Root key management: Vault transit secrets engine
+    - Root key management: Vault transit secrets engine (encrypted)
     - Account Key derivation: HKDF-SHA256 (from root key)
-    - File Key encryption: Vault transit encryption API
+    - File Key encryption: AES-256-GCM (with Account Key)
     """
 
-    SALT = b"OpenViking_KDF_Salt"
-    INFO_PREFIX = b"OpenViking_Account_"
-    ROOT_KEY_NAME = "openviking-root-key"
-
-    def __init__(self, addr: str, token: str, mount_path: str = "transit"):
+    def __init__(
+        self,
+        addr: str,
+        token: str,
+        mount_path: str = "transit",
+        kv_mount_path: str = "secret",
+        kv_version: int = 1,
+        root_key_name: str = "openviking-root-key",
+        encrypted_root_key_key: str = "openviking-encrypted-root-key",
+    ):
         """
         Initialize VaultProvider.
 
@@ -183,10 +220,18 @@ class VaultProvider(RootKeyProvider):
             addr: Vault server address (e.g., "http://127.0.0.1:8200")
             token: Vault authentication token
             mount_path: Transit secrets engine mount path (default: "transit")
+            kv_mount_path: KV secrets engine mount path (default: "secret")
+            kv_version: KV secrets engine version (1 or 2, default: 1)
+            root_key_name: Transit engine key name (default: "openviking-root-key")
+            encrypted_root_key_key: KV engine key path (default: "openviking-encrypted-root-key")
         """
         self.addr = addr
         self.token = token
         self.mount_path = mount_path
+        self.kv_mount_path = kv_mount_path
+        self.kv_version = kv_version
+        self.root_key_name = root_key_name
+        self.encrypted_root_key_key = encrypted_root_key_key
         self._client = None
         self._root_key: Optional[bytes] = None
 
@@ -208,7 +253,8 @@ class VaultProvider(RootKeyProvider):
             self._client = hvac.Client(url=self.addr, token=self.token)
 
             # Verify Vault is accessible
-            if not self._client.is_authenticated():
+            is_auth = await asyncio.to_thread(self._client.is_authenticated)
+            if not is_auth:
                 raise AuthenticationFailedError("Failed to authenticate with Vault")
 
             # Ensure transit engine is enabled
@@ -223,9 +269,13 @@ class VaultProvider(RootKeyProvider):
         """Ensure transit secrets engine is enabled."""
         try:
             # Check if transit engine is already enabled
-            self._client.sys.list_mounted_secrets_engines()
-            if f"{self.mount_path}/" not in self._client.sys.list_mounted_secrets_engines()["data"]:
-                self._client.sys.enable_secrets_engine(backend_type="transit", path=self.mount_path)
+            engines = await asyncio.to_thread(self._client.sys.list_mounted_secrets_engines)
+            if f"{self.mount_path}/" not in engines["data"]:
+                await asyncio.to_thread(
+                    self._client.sys.enable_secrets_engine,
+                    backend_type="transit",
+                    path=self.mount_path,
+                )
                 logger.info(f"Enabled transit secrets engine at {self.mount_path}")
         except Exception as e:
             logger.warning(f"Failed to check/enable transit engine: {e}")
@@ -234,30 +284,147 @@ class VaultProvider(RootKeyProvider):
         """Ensure root key exists in Vault transit engine."""
         try:
             # Try to read the key
-            self._client.secrets.transit.read_key(
-                name=self.ROOT_KEY_NAME, mount_point=self.mount_path
+            await asyncio.to_thread(
+                self._client.secrets.transit.read_key,
+                name=self.root_key_name,
+                mount_point=self.mount_path,
             )
         except Exception:
             # Key doesn't exist, create it
-            self._client.secrets.transit.create_key(
-                name=self.ROOT_KEY_NAME, key_type="aes256-gcm96", mount_point=self.mount_path
+            await asyncio.to_thread(
+                self._client.secrets.transit.create_key,
+                name=self.root_key_name,
+                key_type="aes256-gcm96",
+                mount_point=self.mount_path,
             )
-            logger.info(f"Created root key {self.ROOT_KEY_NAME} in Vault")
+            logger.info(f"Created root key {self.root_key_name} in Vault")
+
+    async def _encrypt_with_vault(self, plaintext: bytes) -> bytes:
+        """
+        Encrypt data with Vault transit.
+
+        Args:
+            plaintext: Plaintext data
+
+        Returns:
+            Encrypted data
+        """
+        client = await self._get_client()
+        import base64
+
+        plaintext_b64 = base64.b64encode(plaintext).decode("utf-8")
+        response = await asyncio.to_thread(
+            client.secrets.transit.encrypt_data,
+            name=self.root_key_name,
+            plaintext=plaintext_b64,
+            mount_point=self.mount_path,
+        )
+        ciphertext_str = response["data"]["ciphertext"]
+        return ciphertext_str.encode("utf-8")
+
+    async def _decrypt_with_vault(self, ciphertext: bytes) -> bytes:
+        """
+        Decrypt data with Vault transit.
+
+        Args:
+            ciphertext: Encrypted data
+
+        Returns:
+            Decrypted data
+        """
+        client = await self._get_client()
+        import base64
+
+        ciphertext_str = ciphertext.decode("utf-8")
+        response = await asyncio.to_thread(
+            client.secrets.transit.decrypt_data,
+            name=self.root_key_name,
+            ciphertext=ciphertext_str,
+            mount_point=self.mount_path,
+        )
+        return base64.b64decode(response["data"]["plaintext"])
+
+    async def _get_or_create_root_key(self) -> bytes:
+        """
+        Get or create root key.
+
+        Returns:
+            Root key bytes
+        """
+        if self._root_key is not None:
+            return self._root_key
+
+        client = await self._get_client()
+        import base64
+
+        try:
+            # Try to read encrypted root key from Vault kv
+            if self.kv_version == 2:
+                response = await asyncio.to_thread(
+                    client.secrets.kv.v2.read_secret_version,
+                    path=self.encrypted_root_key_key,
+                    mount_point=self.kv_mount_path,
+                )
+                encrypted_root_key_b64 = response["data"]["data"]["encrypted_root_key"]
+            else:
+                response = await asyncio.to_thread(
+                    client.secrets.kv.v1.read_secret,
+                    path=self.encrypted_root_key_key,
+                    mount_point=self.kv_mount_path,
+                )
+                encrypted_root_key_b64 = response["data"]["encrypted_root_key"]
+
+            encrypted_root_key = base64.b64decode(encrypted_root_key_b64)
+            self._root_key = await self._decrypt_with_vault(encrypted_root_key)
+            logger.info("Loaded existing root key from Vault")
+        except Exception:
+            # Generate new root key
+            import secrets
+
+            self._root_key = secrets.token_bytes(32)
+
+            # Encrypt and store root key in Vault kv
+            encrypted_root_key = await self._encrypt_with_vault(self._root_key)
+            try:
+                if self.kv_version == 2:
+                    await asyncio.to_thread(
+                        client.secrets.kv.v2.create_or_update_secret,
+                        path=self.encrypted_root_key_key,
+                        mount_point=self.kv_mount_path,
+                        secret={
+                            "encrypted_root_key": base64.b64encode(encrypted_root_key).decode(
+                                "utf-8"
+                            )
+                        },
+                    )
+                else:
+                    await asyncio.to_thread(
+                        client.secrets.kv.v1.create_or_update_secret,
+                        path=self.encrypted_root_key_key,
+                        mount_point=self.kv_mount_path,
+                        secret={
+                            "encrypted_root_key": base64.b64encode(encrypted_root_key).decode(
+                                "utf-8"
+                            )
+                        },
+                    )
+                logger.info("Created and stored new root key in Vault")
+            except Exception as e:
+                raise ConfigError(
+                    f"Failed to persist root key to Vault. "
+                    f"Refusing to start with ephemeral key (data loss risk): {e}"
+                )
+
+        return self._root_key
 
     async def get_root_key(self) -> bytes:
         """
-        Get root key from Vault.
-
-        Note: Since we can't export the key directly from Vault transit,
-        we use a fixed seed and derive the root key.
+        Get root key.
 
         Returns:
             Root key
         """
-        if self._root_key is None:
-            # Use a fixed seed for root key derivation
-            self._root_key = b"OpenViking_Vault_Root_Seed_Key_v1"
-        return self._root_key
+        return await self._get_or_create_root_key()
 
     async def derive_account_key(self, account_id: str) -> bytes:
         """
@@ -270,93 +437,20 @@ class VaultProvider(RootKeyProvider):
             Derived Account Key
         """
         root_key = await self.get_root_key()
-        return await self._hkdf_derive(root_key, account_id)
-
-    async def _hkdf_derive(self, root_key: bytes, account_id: str) -> bytes:
-        """
-        Derive key using HKDF.
-
-        Args:
-            root_key: Root key
-            account_id: Account ID
-
-        Returns:
-            Derived key
-        """
-        try:
-            from cryptography.hazmat.primitives import hashes
-            from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-
-            hkdf = HKDF(
-                algorithm=hashes.SHA256(),
-                length=32,
-                salt=self.SALT,
-                info=self.INFO_PREFIX + account_id.encode(),
-            )
-            return hkdf.derive(root_key)
-        except ImportError:
-            raise ConfigError("cryptography library is required for encryption")
-
-    async def encrypt_file_key(self, plaintext_key: bytes, account_id: str) -> bytes:
-        """
-        Encrypt File Key using Vault transit.
-
-        Args:
-            plaintext_key: Plaintext File Key
-            account_id: Account ID (not used in Vault mode)
-
-        Returns:
-            Encrypted File Key as bytes
-        """
-        client = await self._get_client()
-
-        import base64
-
-        plaintext_b64 = base64.b64encode(plaintext_key).decode("utf-8")
-
-        response = client.secrets.transit.encrypt_data(
-            name=self.ROOT_KEY_NAME, plaintext=plaintext_b64, mount_point=self.mount_path
-        )
-
-        ciphertext_str = response["data"]["ciphertext"]
-        return ciphertext_str.encode("utf-8")
-
-    async def decrypt_file_key(self, encrypted_key: bytes, account_id: str) -> bytes:
-        """
-        Decrypt File Key using Vault transit.
-
-        Args:
-            encrypted_key: Encrypted File Key (ciphertext bytes from Vault)
-            account_id: Account ID (not used in Vault mode)
-
-        Returns:
-            Decrypted File Key
-        """
-        client = await self._get_client()
-
-        ciphertext_str = encrypted_key.decode("utf-8")
-
-        response = client.secrets.transit.decrypt_data(
-            name=self.ROOT_KEY_NAME, ciphertext=ciphertext_str, mount_point=self.mount_path
-        )
-
-        import base64
-
-        return base64.b64decode(response["data"]["plaintext"])
+        return await self._hkdf_derive(root_key, account_id, HKDF_SALT, HKDF_INFO_PREFIX)
 
 
-class VolcengineKMSProvider(RootKeyProvider):
+class VolcengineKMSProvider(BaseProvider):
     """Volcengine KMS Key Provider.
 
     Suitable for production environments, using Volcengine KMS service for key management.
     Core features:
-    - Root key storage: Volcengine KMS
+    - Root key storage: Volcengine KMS (encrypted)
     - Account Key derivation: HKDF-SHA256
-    - File Key encryption: Volcengine KMS encryption API
+    - File Key encryption: AES-256-GCM (with Account Key)
     """
 
-    SALT = b"OpenViking_KDF_Salt"
-    INFO_PREFIX = b"OpenViking_Account_"
+    ROOT_KEY_FILENAME = "openviking-volcengine-root-key.enc"
 
     def __init__(
         self,
@@ -365,6 +459,7 @@ class VolcengineKMSProvider(RootKeyProvider):
         secret_access_key: str,
         key_id: str,
         endpoint: Optional[str] = None,
+        key_file: Optional[str] = None,
     ):
         """
         Initialize Volcengine KMS Provider.
@@ -375,13 +470,19 @@ class VolcengineKMSProvider(RootKeyProvider):
             secret_access_key: Volcengine Secret Access Key
             key_id: Volcengine KMS Key ID (immutable system-generated identifier)
             endpoint: Custom KMS service endpoint (optional)
+            key_file: Path to encrypted root key file (default: ~/.openviking/openviking-volcengine-root-key.enc)
         """
         self.region = region
         self.access_key_id = access_key_id
         self.secret_access_key = secret_access_key
         self.key_id = key_id
         self.endpoint = endpoint or f"kms.{region}.volcengineapi.com"
+        if key_file:
+            self.key_file = Path(key_file).expanduser()
+        else:
+            self.key_file = Path.home() / ".openviking" / self.ROOT_KEY_FILENAME
         self._kms_client = None
+        self._root_key: Optional[bytes] = None
 
     async def _get_kms_client(self):
         """
@@ -433,11 +534,13 @@ class VolcengineKMSProvider(RootKeyProvider):
                     }
                     return api_info
 
-                def encrypt(self, key_id, plaintext):
+                def encrypt(self, key_id, plaintext, encryption_context=None):
                     body = {
                         "KeyID": key_id,
                         "Plaintext": base64.b64encode(plaintext).decode("utf-8"),
                     }
+                    if encryption_context:
+                        body["EncryptionContext"] = encryption_context
 
                     res = self.json("Encrypt", {}, json.dumps(body))
                     if res == "":
@@ -449,11 +552,13 @@ class VolcengineKMSProvider(RootKeyProvider):
                         return base64.b64decode(res_json["Result"]["CiphertextBlob"])
                     raise Exception(f"Unexpected response: {res_json}")
 
-                def decrypt(self, ciphertext_blob, key_id):
+                def decrypt(self, ciphertext_blob, key_id, encryption_context=None):
                     body = {
                         "KeyID": key_id,
                         "CiphertextBlob": base64.b64encode(ciphertext_blob).decode("utf-8"),
                     }
+                    if encryption_context:
+                        body["EncryptionContext"] = encryption_context
 
                     res = self.json("Decrypt", {}, json.dumps(body))
                     if res == "":
@@ -470,17 +575,83 @@ class VolcengineKMSProvider(RootKeyProvider):
             )
         return self._kms_client
 
-    async def get_root_key(self) -> bytes:
+    async def _encrypt_with_kms(self, plaintext: bytes) -> bytes:
         """
-        Get root key (only used for deriving Account Key).
+        Encrypt data with Volcengine KMS.
 
-        Note: In Volcengine KMS, the root key is managed by KMS service.
-        Here we return the base key used for deriving Account Key.
+        Args:
+            plaintext: Plaintext data
 
         Returns:
-            Base key
+            Encrypted data
         """
-        return b"OpenViking_Volcengine_KMS_Root_Seed"
+        client = await self._get_kms_client()
+        return await asyncio.to_thread(client.encrypt, self.key_id, plaintext)
+
+    async def _decrypt_with_kms(self, ciphertext: bytes) -> bytes:
+        """
+        Decrypt data with Volcengine KMS.
+
+        Args:
+            ciphertext: Encrypted data
+
+        Returns:
+            Decrypted data
+        """
+        client = await self._get_kms_client()
+        return await asyncio.to_thread(client.decrypt, ciphertext, self.key_id)
+
+    async def _get_or_create_root_key(self) -> bytes:
+        """
+        Get or create root key.
+
+        Returns:
+            Root key bytes
+        """
+        if self._root_key is not None:
+            return self._root_key
+
+        try:
+            # Try to read encrypted root key from file
+            if self.key_file.exists():
+                with open(self.key_file, "rb") as f:
+                    encrypted_root_key = f.read()
+                self._root_key = await self._decrypt_with_kms(encrypted_root_key)
+                logger.info(f"Loaded existing root key from {self.key_file}")
+                return self._root_key
+        except Exception as e:
+            raise ConfigError(
+                f"Failed to load existing root key from {self.key_file}. Cannot continue: {e}"
+            )
+
+        # Generate new root key
+        import secrets
+
+        self._root_key = secrets.token_bytes(32)
+
+        # Encrypt and store root key
+        try:
+            encrypted_root_key = await self._encrypt_with_kms(self._root_key)
+            self.key_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(self.key_file, "wb") as f:
+                f.write(encrypted_root_key)
+            logger.info(f"Created and stored new root key at {self.key_file}")
+        except Exception as e:
+            raise ConfigError(
+                f"Failed to persist root key to file. "
+                f"Refusing to start with ephemeral key (data loss risk): {e}"
+            )
+
+        return self._root_key
+
+    async def get_root_key(self) -> bytes:
+        """
+        Get root key.
+
+        Returns:
+            Root key
+        """
+        return await self._get_or_create_root_key()
 
     async def derive_account_key(self, account_id: str) -> bytes:
         """
@@ -493,60 +664,7 @@ class VolcengineKMSProvider(RootKeyProvider):
             Derived Account Key
         """
         root_key = await self.get_root_key()
-        return await self._hkdf_derive(root_key, account_id)
-
-    async def _hkdf_derive(self, root_key: bytes, account_id: str) -> bytes:
-        """
-        Derive key using HKDF.
-
-        Args:
-            root_key: Root key
-            account_id: Account ID
-
-        Returns:
-            Derived key
-        """
-        try:
-            from cryptography.hazmat.primitives import hashes
-            from cryptography.hazmat.primitives.kdf.hkdf import HKDF
-
-            hkdf = HKDF(
-                algorithm=hashes.SHA256(),
-                length=32,
-                salt=self.SALT,
-                info=self.INFO_PREFIX + account_id.encode(),
-            )
-            return hkdf.derive(root_key)
-        except ImportError:
-            raise ConfigError("cryptography library is required for encryption")
-
-    async def encrypt_file_key(self, plaintext_key: bytes, account_id: str) -> bytes:
-        """
-        Encrypt File Key using Volcengine KMS.
-
-        Args:
-            plaintext_key: Plaintext File Key
-            account_id: Account ID (not used in Volcengine KMS mode)
-
-        Returns:
-            Encrypted File Key
-        """
-        client = await self._get_kms_client()
-        return client.encrypt(self.key_id, plaintext_key)
-
-    async def decrypt_file_key(self, encrypted_key: bytes, account_id: str) -> bytes:
-        """
-        Decrypt File Key using Volcengine KMS.
-
-        Args:
-            encrypted_key: Encrypted File Key
-            account_id: Account ID (not used in Volcengine KMS mode)
-
-        Returns:
-            Decrypted File Key
-        """
-        client = await self._get_kms_client()
-        return client.decrypt(encrypted_key, self.key_id)
+        return await self._hkdf_derive(root_key, account_id, HKDF_SALT, HKDF_INFO_PREFIX)
 
 
 def create_root_key_provider(
@@ -576,10 +694,24 @@ def create_root_key_provider(
         address = vault_config.get("address")
         token = vault_config.get("token")
         mount_point = vault_config.get("mount_point", "transit")
+        kv_mount_point = vault_config.get("kv_mount_point", "secret")
+        kv_version = vault_config.get("kv_version", 1)
+        root_key_name = vault_config.get("root_key_name", "openviking-root-key")
+        encrypted_root_key_key = vault_config.get(
+            "encrypted_root_key_key", "openviking-encrypted-root-key"
+        )
 
         if not address or not token:
             raise ConfigError("vault.address and vault.token are required")
-        return VaultProvider(address, token, mount_point)
+        return VaultProvider(
+            address,
+            token,
+            mount_point,
+            kv_mount_point,
+            kv_version,
+            root_key_name,
+            encrypted_root_key_key,
+        )
 
     elif provider_type == "volcengine_kms":
         volc_config = config.get("volcengine_kms", {})
@@ -587,10 +719,14 @@ def create_root_key_provider(
         access_key = volc_config.get("access_key")
         secret_key = volc_config.get("secret_key")
         key_id = volc_config.get("key_id")
+        endpoint = volc_config.get("endpoint")
+        key_file = volc_config.get("key_file")
 
         if not all([region, access_key, secret_key, key_id]):
             raise ConfigError("volcengine_kms region, access_key, secret_key, key_id are required")
-        return VolcengineKMSProvider(region, access_key, secret_key, key_id)
+        return VolcengineKMSProvider(
+            region, access_key, secret_key, key_id, endpoint=endpoint, key_file=key_file
+        )
 
     else:
         raise ConfigError(f"Unsupported provider type: {provider_type}")

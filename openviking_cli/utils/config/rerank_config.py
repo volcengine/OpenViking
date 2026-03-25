@@ -36,6 +36,11 @@ class RerankConfig(BaseModel):
 
     @model_validator(mode="after")
     def validate_provider_fields(self) -> "RerankConfig":
+        if self.provider == "litellm":
+            raise ValueError(
+                "Rerank provider 'litellm' has been temporarily disabled for security reasons"
+            )
+
         allowed = ["vikingdb", "openai"]
         if self.provider not in allowed:
             raise ValueError(f"Rerank provider must be one of {allowed}, got '{self.provider}'")

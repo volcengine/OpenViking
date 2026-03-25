@@ -163,7 +163,7 @@ openviking/
 │       ├── src/          # CLI 源码
 │       └── install.sh    # 一键安装脚本
 │
-├── src/                  # C++ 扩展 (pybind11)
+├── src/                  # C++ 扩展源码（Python abi3）
 │
 ├── tests/                # 测试套件
 │   ├── client/           # 客户端测试

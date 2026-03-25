@@ -95,10 +95,13 @@ class SingleTurnChannel(BaseChannel):
         """Send a message - store final response for later retrieval."""
         if msg.is_normal_message:
             if self._eval:
+                content = msg.content.replace('"', "'") if msg.content else ""
                 output = {
-                    "text": msg.content,
+                    "text": content,
                     "token_usage": msg.token_usage,
                     "time_cost": msg.time_cost,
+                    "iteration": msg.iteration,
+                    "tools_used_names": msg.tools_used_names,
                 }
                 msg.content = json.dumps(output, ensure_ascii=False)
             self._last_response = msg.content

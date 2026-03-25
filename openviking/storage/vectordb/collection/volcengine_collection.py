@@ -117,7 +117,7 @@ class VolcengineCollection(ICollection):
 
     @staticmethod
     def _sanitize_uri_value(v: Any) -> Any:
-        """Remove viking:// prefix and normalize to /.../ format; return None for empty values"""
+        """Remove viking:// prefix and normalize to /... format; return None for empty values"""
         if not isinstance(v, str):
             return v
         s = v.strip()
@@ -128,7 +128,7 @@ class VolcengineCollection(ICollection):
         s = s.strip("/")
         if not s:
             return None
-        return f"/{s}/"
+        return f"/{s}"
 
     @classmethod
     def _sanitize_payload(cls, obj: Any) -> Any:

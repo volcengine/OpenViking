@@ -8,7 +8,7 @@ Provides unified structured output handling with response_format support.
 
 import json
 import re
-from typing import Any, Dict, Optional, Type, TypeVar
+from typing import Any, Dict, List, Optional, Type, TypeVar, Union
 
 import json_repair
 from pydantic import BaseModel
@@ -20,18 +20,25 @@ logger = get_logger(__name__)
 T = TypeVar("T", bound=BaseModel)
 
 
-def parse_json_from_response(response: str) -> Optional[Any]:
+def parse_json_from_response(response: Union[str, Any]) -> Optional[Any]:
     """
     Parse JSON object from LLM text response.
 
     Handles code blocks and plain JSON strings, including fixing common format issues.
 
     Args:
-        response (str): LLM text response or JSON string
+        response: LLM text response, JSON string, or VLMResponse object
 
     Returns:
         Optional[Any]: Parsed JSON object, None if parsing fails
     """
+    # Handle VLMResponse - extract content
+    if hasattr(response, 'content'):
+        response = response.content
+
+    if response is None:
+        return None
+
     if not isinstance(response, str):
         return None
 
@@ -166,29 +173,33 @@ class StructuredVLM:
 
     def complete_json(
         self,
-        prompt: str,
+        prompt: str = "",
         schema: Optional[Dict[str, Any]] = None,
         thinking: bool = False,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Get JSON completion from VLM."""
-        if schema:
+        if schema and not messages:
             prompt = f"{prompt}\n\n{get_json_schema_prompt(schema)}"
 
-        response = self._get_vlm().get_completion(prompt, thinking)
+        response = self._get_vlm().get_completion(prompt, thinking, tools, messages)
         return parse_json_from_response(response)
 
     async def complete_json_async(
         self,
-        prompt: str,
+        prompt: str = "",
         schema: Optional[Dict[str, Any]] = None,
         thinking: bool = False,
         max_retries: int = 0,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Optional[Dict[str, Any]]:
         """Async version of complete_json."""
-        if schema:
+        if schema and not messages:
             prompt = f"{prompt}\n\n{get_json_schema_prompt(schema)}"
 
-        response = await self._get_vlm().get_completion_async(prompt, thinking, max_retries)
+        response = await self._get_vlm().get_completion_async(prompt, thinking, max_retries, tools, messages)
         return parse_json_from_response(response)
 
     def complete_model(
@@ -232,18 +243,22 @@ class StructuredVLM:
 
     def get_vision_completion(
         self,
-        prompt: str,
-        images: list,
+        prompt: str = "",
+        images: Optional[list] = None,
         thinking: bool = False,
-    ) -> str:
+        tools: Optional[List[Dict[str, Any]]] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[str, Any]:
         """Get vision completion."""
-        return self._get_vlm().get_vision_completion(prompt, images, thinking)
+        return self._get_vlm().get_vision_completion(prompt, images, thinking, tools, messages)
 
     async def get_vision_completion_async(
         self,
-        prompt: str,
-        images: list,
+        prompt: str = "",
+        images: Optional[list] = None,
         thinking: bool = False,
-    ) -> str:
+        tools: Optional[List[Dict[str, Any]]] = None,
+        messages: Optional[List[Dict[str, Any]]] = None,
+    ) -> Union[str, Any]:
         """Async vision completion."""
-        return await self._get_vlm().get_vision_completion_async(prompt, images, thinking)
+        return await self._get_vlm().get_vision_completion_async(prompt, images, thinking, tools, messages)

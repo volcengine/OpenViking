@@ -8,7 +8,11 @@ import importlib
 import importlib.util
 import os
 import platform
+import sys
+from pathlib import Path
 from types import ModuleType
+
+from ._python_api import build_abi3_exports
 
 _BACKEND_MODULES = {
     "x86_sse3": "_x86_sse3",
@@ -115,10 +119,37 @@ def _select_variant() -> tuple[str | None, tuple[str, ...], str | None]:
 
 
 def _load_backend(variant: str) -> ModuleType:
-    return importlib.import_module(f".{_BACKEND_MODULES[variant]}", __name__)
+    module_name = _BACKEND_MODULES[variant]
+    module_path = Path(__file__).resolve().parent
+    qualified_name = f"{__name__}.{module_name}"
+
+    if qualified_name in sys.modules:
+        return sys.modules[qualified_name]
+
+    for suffix in importlib.machinery.EXTENSION_SUFFIXES:
+        if "abi3" not in suffix:
+            continue
+        candidate = module_path / f"{module_name}{suffix}"
+        if not candidate.exists():
+            continue
+        spec = importlib.util.spec_from_file_location(qualified_name, candidate)
+        if spec is None or spec.loader is None:
+            continue
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[qualified_name] = module
+        spec.loader.exec_module(module)
+        return module
+
+    return importlib.import_module(f".{module_name}", __name__)
 
 
 def _export_backend(module: ModuleType) -> tuple[str, ...]:
+    if getattr(module, "_ENGINE_BACKEND_API", None) == "abi3-v1":
+        exports = build_abi3_exports(module)
+        for name, value in exports.items():
+            globals()[name] = value
+        return tuple(exports)
+
     names = getattr(module, "__all__", None)
     if names is None:
         names = tuple(name for name in dir(module) if not name.startswith("_"))

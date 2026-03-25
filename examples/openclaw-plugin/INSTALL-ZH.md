@@ -405,7 +405,6 @@ openclaw config set plugins.slots.contextEngine openviking
 
 ```bash
 lsof -ti tcp:1933 tcp:1833 tcp:18789 | xargs kill -9
-npm uninstall -g openclaw && rm -rf ~/.openclaw
 python3 -m pip uninstall openviking -y && rm -rf ~/.openviking
 ```
 

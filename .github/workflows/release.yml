@@ -34,7 +34,7 @@ on:
         description: 'JSON string of Python versions (Manual only)'
         required: false
         type: string
-        default: '["3.10", "3.11", "3.12", "3.13", "3.14"]'
+        default: '["3.10"]'
 
 permissions:
   contents: write
@@ -48,7 +48,7 @@ jobs:
     uses: ./.github/workflows/_build.yml
     with:
       os_json: ${{ inputs.os_json || '["ubuntu-24.04", "ubuntu-24.04-arm", "macos-14", "macos-15-intel", "windows-latest"]' }}
-      python_json: ${{ inputs.python_json || '["3.10", "3.11", "3.12", "3.13", "3.14"]' }}
+      python_json: ${{ inputs.python_json || '["3.10"]' }}
       build_sdist: ${{ github.event_name == 'release' || inputs.build_sdist != false }}
       build_wheels: ${{ github.event_name == 'release' || inputs.build_wheels != false }}
 

@@ -165,7 +165,7 @@ openviking/
 │       ├── src/          # CLIソースコード
 │       └── install.sh    # クイックインストールスクリプト
 │
-├── src/                  # C++拡張（pybind11）
+├── src/                  # C++拡張ソース（Python abi3）
 │
 ├── tests/                # テストスイート
 │   ├── client/           # クライアントテスト

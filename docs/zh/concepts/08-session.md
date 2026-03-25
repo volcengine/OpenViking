@@ -6,6 +6,8 @@ Session 负责管理对话消息、记录上下文使用、提取长期记忆。
 
 **生命周期**：创建 → 交互 → 提交
 
+通过 session_id 获取会话时，如果会话不存在将自动创建。
+
 ```python
 session = client.session(session_id="chat_001")
 session.add_message("user", [TextPart("...")])
@@ -18,7 +20,8 @@ session.commit()
 |------|------|
 | `add_message(role, parts)` | 添加消息 |
 | `used(contexts, skill)` | 记录使用的上下文/技能 |
-| `commit()` | 提交：归档 + 记忆提取 |
+| `commit()` | 提交：归档（同步） + 摘要生成和记忆提取（异步后台） |
+| `get_task(task_id)` | 查询后台任务状态 |
 
 ### add_message
 
@@ -57,11 +60,15 @@ session.used(skill={
 ```python
 result = session.commit()
 # {
-#   "status": "committed",
-#   "memories_extracted": 5,
-#   "active_count_updated": 2,
+#   "status": "accepted",
+#   "task_id": "uuid-xxx",
+#   "archive_uri": "viking://session/.../history/archive_001",
 #   "archived": True
 # }
+
+# 查询后台任务进度
+task = client.get_task(result["task_id"])
+# task["status"]: "pending" | "running" | "completed" | "failed"
 ```
 
 ## 消息结构
@@ -89,12 +96,19 @@ class Message:
 
 ### 归档流程
 
-commit() 时自动归档：
+commit() 分两阶段执行：
 
+**Phase 1（同步，立即完成）**：
 1. 递增 compression_index
-2. 复制当前消息到归档目录
-3. 生成结构化摘要（LLM）
-4. 清空当前消息列表
+2. 写入消息到归档目录（`messages.jsonl`）
+3. 清空当前消息列表
+4. 返回 `task_id`
+
+**Phase 2（异步后台）**：
+5. 生成结构化摘要（LLM）→ 写入 `.abstract.md` 和 `.overview.md`
+6. 提取长期记忆
+7. 更新 active_count
+8. 写入 `.done` 完成标记
 
 ### 摘要格式
 
@@ -159,9 +173,10 @@ viking://session/{session_id}/
 ├── .overview.md              # 当前概览
 ├── history/
 │   ├── archive_001/
-│   │   ├── messages.jsonl
-│   │   ├── .abstract.md
-│   │   └── .overview.md
+│   │   ├── messages.jsonl    # Phase 1 写入
+│   │   ├── .abstract.md      # Phase 2 写入（后台）
+│   │   ├── .overview.md      # Phase 2 写入（后台）
+│   │   └── .done             # Phase 2 完成标记
 │   └── archive_NNN/
 └── tools/
     └── {tool_id}/tool.json

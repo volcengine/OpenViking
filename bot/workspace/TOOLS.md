@@ -24,11 +24,6 @@ openviking_list(uri: str, recursive: bool = False) -> str
 ```
 List all resources at a specified path.
 
-### Search User Memories
-```
-user_memory_search(query: str) -> str
-```
-Search for user-related memories and events.
 
 ### ⚠️ CRITICAL: Commit Memories and Events
 ```

@@ -28,10 +28,12 @@ class MemoryStore:
             user_memories = []
             for idx, memory in enumerate(result, start=1):
                 user_memories.append(
-                    f"{idx}. {getattr(memory, 'abstract', '')}; "
-                    f"uri: {getattr(memory, 'uri', '')}; "
-                    f"isDir: {getattr(memory, 'is_leaf', False)}; "
-                    f"related score: {getattr(memory, 'score', 0.0)}"
+                    f"<memory index=\"{idx}\">\n"
+                    f"  <abstract>{getattr(memory, 'abstract', '')}</abstract>\n"
+                    f"  <uri>{getattr(memory, 'uri', '')}</uri>\n"
+                    f"  <is_leaf>{getattr(memory, 'is_leaf', False)}</is_leaf>\n"
+                    f"  <score>{getattr(memory, 'score', 0.0)}</score>\n"
+                    f"</memory>"
                 )
             return "\n".join(user_memories)
         return ""
@@ -47,11 +49,13 @@ class MemoryStore:
         long_term = self.read_long_term()
         return f"## Long-term Memory\n{long_term}" if long_term else ""
 
-    async def get_viking_memory_context(self, current_message: str, workspace_id: str) -> str:
+    async def get_viking_memory_context(self, current_message: str, workspace_id: str, sender_id: str) -> str:
         try:
+            config = load_config().ov_server
+            admin_user_id = config.admin_user_id
+            user_id = sender_id if config.mode == "remote" else admin_user_id
             client = await VikingClient.create(agent_id=workspace_id)
-            admin_user_id = load_config().ov_server.admin_user_id
-            result = await client.search_memory(current_message, user_id=admin_user_id, limit=3)
+            result = await client.search_memory(query=current_message, user_id=user_id, agent_user_id=admin_user_id, limit=5)
             if not result:
                 return ""
             user_memory = self._parse_viking_memory(result["user_memory"])

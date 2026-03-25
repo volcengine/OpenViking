@@ -12,7 +12,7 @@ on:
         description: 'JSON string of Python versions'
         required: false
         type: string
-        default: '["3.10", "3.11", "3.12", "3.13", "3.14"]'
+        default: '["3.10"]'
       build_sdist:
         description: 'Whether to build source distribution'
         required: false
@@ -42,7 +42,7 @@ on:
       python_json:
         description: 'JSON string of Python versions'
         required: false
-        default: '["3.10", "3.11", "3.12", "3.13", "3.14"]'
+        default: '["3.10"]'
 
 jobs:
   build-sdist:
@@ -218,7 +218,7 @@ jobs:
       run: uv sync --frozen
 
     - name: Install build dependencies
-      run: uv pip install setuptools setuptools_scm pybind11 cmake wheel build
+      run: uv pip install setuptools setuptools_scm cmake wheel build
 
     - name: Resolve OpenViking version for Rust CLI (Linux)
       shell: bash
@@ -375,7 +375,7 @@ jobs:
       run: uv sync --frozen
 
     - name: Install build dependencies
-      run: uv pip install setuptools setuptools_scm pybind11 cmake wheel build
+      run: uv pip install setuptools setuptools_scm cmake wheel build
 
     - name: Resolve OpenViking version for Rust CLI (macOS/Windows)
       shell: bash
@@ -442,53 +442,3 @@ jobs:
         VERSION=$(ls dist/*.whl | head -n 1 | xargs basename | cut -d- -f2)
         echo "Build Version: $VERSION"
         echo "::notice::Build Wheel Version (${{ matrix.os == 'macos-14' && 'macOS arm64 (macos-14)' || matrix.os == 'macos-15-intel' && 'macOS x86_64 (macos-15-intel)' || matrix.os == 'windows-latest' && 'Windows x86_64 (windows-latest)' || matrix.os }} py${{ matrix.python-version }}): $VERSION"
-
-  verify-macos-14-wheel-on-macos-15:
-    name: Verify macOS 14 arm64 wheel installs on macOS 15
-    needs: [build-other]
-    if: >-
-      inputs.build_wheels &&
-      contains(inputs.os_json, 'macos-14') &&
-      contains(inputs.python_json, '3.12')
-    runs-on: macos-15
-    steps:
-    - name: Set up Python 3.12
-      uses: actions/setup-python@v6
-      with:
-        python-version: '3.12'
-
-    - name: Download macOS arm64 wheel artifact
-      uses: actions/download-artifact@v8
-      with:
-        name: python-package-distributions-macos-arm64-3.12
-        path: dist/
-
-    - name: Install built wheel
-      shell: bash
-      run: |
-        python -m pip install --upgrade pip
-        python -m pip install dist/*.whl
-
-    - name: Smoke test native extension loading
-      shell: bash
-      run: |
-        python - <<'PY'
-        import importlib
-        import importlib.util
-
-        import openviking.storage.vectordb.engine as engine
-
-        native_spec = importlib.util.find_spec("openviking.storage.vectordb.engine._native")
-        if native_spec is None or native_spec.origin is None:
-            raise SystemExit("openviking storage native backend extension was not installed")
-
-        native_module = importlib.import_module("openviking.storage.vectordb.engine._native")
-        if engine.ENGINE_VARIANT != "native":
-            raise SystemExit(
-                f"expected native engine variant on macOS arm64 wheel, got {engine.ENGINE_VARIANT}"
-            )
-
-        print(f"Loaded runtime engine variant {engine.ENGINE_VARIANT}")
-        print(f"Loaded native extension from {native_spec.origin}")
-        print(f"Imported backend module {native_module.__name__}")
-        PY

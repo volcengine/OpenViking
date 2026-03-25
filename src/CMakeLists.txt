@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.12)
+cmake_minimum_required(VERSION 3.15)
 
 project(openviking_cpp)
 
@@ -48,7 +48,6 @@ if(UNIX AND NOT APPLE)
     set(Python3_LIBRARIES "")
 endif()
 
-find_package(pybind11 REQUIRED)
 find_package(Threads REQUIRED)
 
 set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
@@ -190,13 +189,14 @@ function(ov_add_python_backend backend_suffix module_name)
     cmake_parse_arguments(OV_BACKEND "" "${oneValueArgs}" "${multiValueArgs}" ${ARGN})
 
     set(MODULE_TARGET "engine_module_${backend_suffix}")
-    pybind11_add_module(${MODULE_TARGET} MODULE pybind11_interface.cpp)
+    add_library(${MODULE_TARGET} MODULE abi3_engine_backend.cpp)
 
     target_include_directories(${MODULE_TARGET} PRIVATE ${Python3_INCLUDE_DIRS})
     target_compile_options(${MODULE_TARGET} PRIVATE -fPIC ${OV_BACKEND_COMPILE_OPTIONS})
     target_compile_definitions(
         ${MODULE_TARGET}
         PRIVATE
+            Py_LIMITED_API=0x030A0000
             OV_PY_MODULE_NAME=${module_name}
             ${OV_BACKEND_COMPILE_DEFINITIONS}
     )
@@ -207,6 +207,9 @@ function(ov_add_python_backend backend_suffix module_name)
             ${OV_BACKEND_INDEX_LIBRARY}
             Threads::Threads
     )
+    if(WIN32 AND TARGET Python3::Python)
+        target_link_libraries(${MODULE_TARGET} PRIVATE Python3::Python)
+    endif()
     ov_link_filesystem_libs(${MODULE_TARGET})
 
     if(MINGW)
@@ -225,9 +228,14 @@ function(ov_add_python_backend backend_suffix module_name)
         PROPERTIES
             LIBRARY_OUTPUT_DIRECTORY "${OV_PY_OUTPUT_DIR}"
             RUNTIME_OUTPUT_DIRECTORY "${OV_PY_OUTPUT_DIR}"
+            PREFIX ""
             OUTPUT_NAME "${module_name}"
             SUFFIX "${OV_PY_EXT_SUFFIX}"
     )
+
+    if(APPLE)
+        target_link_options(${MODULE_TARGET} PRIVATE "-undefined" "dynamic_lookup")
+    endif()
 endfunction()
 
 set(OV_ENGINE_IMPL_TARGET "")
@@ -259,16 +267,24 @@ if(OV_PLATFORM_X86)
         list(APPEND OV_BUILT_X86_VARIANTS "${OV_VARIANT}")
     endforeach()
 
-    pybind11_add_module(engine_module_x86_caps MODULE cpu_feature_probe.cpp)
+    add_library(engine_module_x86_caps MODULE abi3_x86_caps.cpp)
     target_include_directories(engine_module_x86_caps PRIVATE ${Python3_INCLUDE_DIRS})
+    target_compile_definitions(engine_module_x86_caps PRIVATE Py_LIMITED_API=0x030A0000)
+    if(WIN32 AND TARGET Python3::Python)
+        target_link_libraries(engine_module_x86_caps PRIVATE Python3::Python)
+    endif()
     set_target_properties(
         engine_module_x86_caps
         PROPERTIES
             LIBRARY_OUTPUT_DIRECTORY "${OV_PY_OUTPUT_DIR}"
             RUNTIME_OUTPUT_DIRECTORY "${OV_PY_OUTPUT_DIR}"
+            PREFIX ""
             OUTPUT_NAME "_x86_caps"
             SUFFIX "${OV_PY_EXT_SUFFIX}"
     )
+    if(APPLE)
+        target_link_options(engine_module_x86_caps PRIVATE "-undefined" "dynamic_lookup")
+    endif()
 
     if(TARGET engine_index_sse3)
         add_library(engine_impl INTERFACE)

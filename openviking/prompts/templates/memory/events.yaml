@@ -1,0 +1,30 @@
+memory_type: events
+description: |
+  Event memory - captures "what happened, what decision was made, and why".
+  Extract notable events, decisions, milestones, and turning points from the conversation.
+  Events should be things worth remembering for future context: decisions made, agreements reached, milestones achieved, problems solved, etc.
+  Each event should include: what happened, why it happened, what the outcome was, and any relevant context/timeline.
+  Use absolute dates for event_time, not relative time like "today" or "recently".
+directory: "viking://user/{user_space}/memories/events"
+filename_template: "{event_time}_{event_name}.md"
+enabled: true
+fields:
+  - name: event_name
+    type: string
+    description: |
+      Event name in Chinese or English. If English, use lowercase with underscores, max 3 words.
+    merge_op: immutable
+
+  - name: event_time
+    type: string
+    description: |
+      Time when the event occurred, format “2026-03-17”. If unknown, use current time.
+    merge_op: immutable
+
+  - name: content
+    type: string
+    description: |
+      Event content in Markdown format, describing “what happened”.
+      Includes: decision content, reasons, outcomes, context, timeline, etc.
+      Example: “In memory system design discussion, found original 6 category boundaries were unclear. Especially status, lessons learned, and insights often overlapped, making them difficult to distinguish. Decided to refactor to 5 categories, removing these three to make boundaries clearer.”
+    merge_op: patch
