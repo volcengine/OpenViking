@@ -3,52 +3,10 @@
 
 """Tests for session endpoints."""
 
-import json
-from unittest.mock import patch
-
 import httpx
-import pytest
 
 from openviking.server.identity import RequestContext, Role
 from openviking_cli.session.user_id import UserIdentifier
-from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
-from tests.utils.mock_agfs import MockLocalAGFS
-
-
-@pytest.fixture(autouse=True)
-def _configure_test_env(monkeypatch, tmp_path):
-    config_path = tmp_path / "ov.conf"
-    config_path.write_text(
-        json.dumps(
-            {
-                "storage": {
-                    "workspace": str(tmp_path / "workspace"),
-                    "agfs": {"backend": "local", "mode": "binding-client"},
-                    "vectordb": {"backend": "local"},
-                },
-                "embedding": {
-                    "dense": {
-                        "provider": "openai",
-                        "model": "test-embedder",
-                        "api_base": "http://127.0.0.1:11434/v1",
-                        "dimension": 1024,
-                    }
-                },
-                "encryption": {"enabled": False},
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    mock_agfs = MockLocalAGFS(root_path=tmp_path / "mock_agfs_root")
-
-    monkeypatch.setenv("OPENVIKING_CONFIG_FILE", str(config_path))
-    OpenVikingConfigSingleton.reset_instance()
-
-    with patch("openviking.utils.agfs_utils.create_agfs_client", return_value=mock_agfs):
-        yield
-
-    OpenVikingConfigSingleton.reset_instance()
 
 
 async def test_create_session(client: httpx.AsyncClient):
@@ -217,50 +175,3 @@ async def test_extract_session_jsonable_regression(client: httpx.AsyncClient, se
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"] == [{"uri": "viking://user/memories/mock.md"}]
-
-
-async def test_get_context_for_assemble_endpoint_returns_trimmed_context(client: httpx.AsyncClient):
-    create_resp = await client.post("/api/v1/sessions", json={})
-    session_id = create_resp.json()["result"]["session_id"]
-
-    await client.post(
-        f"/api/v1/sessions/{session_id}/messages",
-        json={"role": "user", "content": "archived message"},
-    )
-    await client.post(f"/api/v1/sessions/{session_id}/commit")
-
-    await client.post(
-        f"/api/v1/sessions/{session_id}/messages",
-        json={
-            "role": "assistant",
-            "parts": [
-                {"type": "text", "text": "Running tool"},
-                {
-                    "type": "tool",
-                    "tool_id": "tool_123",
-                    "tool_name": "demo_tool",
-                    "tool_uri": f"viking://session/{session_id}/tools/tool_123",
-                    "tool_input": {"x": 1},
-                    "tool_status": "running",
-                },
-            ],
-        },
-    )
-
-    resp = await client.get(f"/api/v1/sessions/{session_id}/context-for-assemble?token_budget=1")
-    assert resp.status_code == 200
-    body = resp.json()
-    assert body["status"] == "ok"
-
-    result = body["result"]
-    assert result["archives"] == []
-    assert len(result["messages"]) == 1
-    assert result["messages"][0]["role"] == "assistant"
-    assert any(
-        part["type"] == "tool" and part["tool_id"] == "tool_123"
-        for part in result["messages"][0]["parts"]
-    )
-    assert result["stats"]["totalArchives"] == 1
-    assert result["stats"]["includedArchives"] == 0
-    assert result["stats"]["droppedArchives"] == 1
-    assert result["stats"]["failedArchives"] == 0

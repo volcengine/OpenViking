@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """Tests for VLM extra_headers support."""
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
@@ -98,6 +98,110 @@ class TestVLMExtraHeaders:
         call_kwargs = mock_openai_class.call_args[1]
         # Empty dict is falsy, so default_headers should not be set
         assert "default_headers" not in call_kwargs
+
+    @patch("openviking.models.vlm.backends.openai_vlm.openai.OpenAI")
+    def test_dashscope_text_completion_passes_enable_thinking_in_extra_body(
+        self, mock_openai_class
+    ):
+        """DashScope-compatible OpenAI backends should pass thinking via extra_body."""
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock(message=MagicMock(content="ok"), finish_reason="stop")]
+        mock_response.usage = None
+        mock_client.chat.completions.create.return_value = mock_response
+
+        vlm = OpenAIVLM(
+            {
+                "api_key": "sk-test",
+                "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "model": "dashscope/qwen3.5-plus",
+            }
+        )
+
+        vlm.get_completion("hello", thinking=False)
+
+        call_kwargs = mock_client.chat.completions.create.call_args.kwargs
+        assert call_kwargs["extra_body"] == {"enable_thinking": False}
+
+    @patch("openviking.models.vlm.backends.openai_vlm.openai.AsyncOpenAI")
+    async def test_dashscope_async_vision_completion_passes_enable_thinking_in_extra_body(
+        self, mock_async_openai_class
+    ):
+        """DashScope-compatible async vision calls should pass thinking via extra_body."""
+        mock_client = MagicMock()
+        mock_async_openai_class.return_value = mock_client
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock(message=MagicMock(content="ok"), finish_reason="stop")]
+        mock_response.usage = None
+        mock_client.chat.completions.create = AsyncMock(return_value=mock_response)
+
+        vlm = OpenAIVLM(
+            {
+                "api_key": "sk-test",
+                "api_base": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
+                "model": "qwen3.5-flash",
+            }
+        )
+
+        await vlm.get_vision_completion_async(
+            prompt="describe",
+            images=[b"\x89PNG\r\n\x1a\n0000"],
+            thinking=True,
+        )
+
+        call_kwargs = mock_client.chat.completions.create.call_args.kwargs
+        assert call_kwargs["extra_body"] == {"enable_thinking": True}
+
+    @patch("openviking.models.vlm.backends.openai_vlm.openai.OpenAI")
+    def test_official_openai_text_completion_does_not_set_enable_thinking(
+        self, mock_openai_class
+    ):
+        """Official OpenAI API should not receive DashScope-specific extra_body flags."""
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock(message=MagicMock(content="ok"), finish_reason="stop")]
+        mock_response.usage = None
+        mock_client.chat.completions.create.return_value = mock_response
+
+        vlm = OpenAIVLM(
+            {
+                "api_key": "sk-test",
+                "api_base": "https://api.openai.com/v1",
+                "model": "gpt-4o-mini",
+            }
+        )
+
+        vlm.get_completion("hello", thinking=False)
+
+        call_kwargs = mock_client.chat.completions.create.call_args.kwargs
+        assert "extra_body" not in call_kwargs
+
+    @patch("openviking.models.vlm.backends.openai_vlm.openai.AzureOpenAI")
+    def test_azure_text_completion_does_not_set_enable_thinking(self, mock_azure_openai_class):
+        """Azure OpenAI should not receive DashScope-specific extra_body flags."""
+        mock_client = MagicMock()
+        mock_azure_openai_class.return_value = mock_client
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock(message=MagicMock(content="ok"), finish_reason="stop")]
+        mock_response.usage = None
+        mock_client.chat.completions.create.return_value = mock_response
+
+        vlm = OpenAIVLM(
+            {
+                "provider": "azure",
+                "api_key": "sk-test",
+                "api_base": "https://example-resource.openai.azure.com",
+                "api_version": "2025-01-01-preview",
+                "model": "gpt-4o-mini",
+            }
+        )
+
+        vlm.get_completion("hello", thinking=False)
+
+        call_kwargs = mock_client.chat.completions.create.call_args.kwargs
+        assert "extra_body" not in call_kwargs
 
 
 class TestVLMBaseExtraHeaders:
