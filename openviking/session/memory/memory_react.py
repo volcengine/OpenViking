@@ -341,17 +341,22 @@ class MemoryReAct:
             {
                 "role": "system",
                 "content": system_prompt,
+                # Mark system prompt with cache_control - this will be the caching breakpoint
+                "cache_control": {"type": "ephemeral"},
             }
         ]
 
         # Add pre-fetched context as tool calls
         messages.extend(tool_call_messages)
+
         messages.append({
                 "role": "user",
                 "content": f"""## Conversation History
 {conversation}
 
 After exploring, analyze the conversation and output ALL memory write/edit/delete operations in a single response. Do not output operations one at a time - gather all changes first, then return them together.""",
+                # Mark user message with cache_control to enable continuation
+                "cache_control": {"type": "ephemeral"},
         })
         # Print messages in a readable format
         pretty_print_messages(messages)

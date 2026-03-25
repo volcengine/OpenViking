@@ -503,7 +503,7 @@ class VolcEngineVLM(OpenAIVLM):
         tools: Optional[List[Dict[str, Any]]] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
-        """Get vision completion asynchronously"""
+        """Get vision completion asynchronously with prompt caching support."""
         client = self.get_async_client()
 
         if messages:
@@ -516,6 +516,9 @@ class VolcEngineVLM(OpenAIVLM):
             if prompt:
                 content.append({"type": "text", "text": prompt})
             kwargs_messages = [{"role": "user", "content": content}]
+
+        # Check for cached response_id
+        previous_response_id = self._get_cached_response_id(kwargs_messages)
 
         kwargs = {
             "model": self.model or "doubao-seed-2-0-pro-260215",
@@ -530,8 +533,19 @@ class VolcEngineVLM(OpenAIVLM):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
 
+        # Use previous_response_id for prompt caching if available
+        if previous_response_id:
+            kwargs["previous_response_id"] = previous_response_id
+            logger.info(f"[VolcEngineVLM] Using cached response_id: {previous_response_id}")
+
         t0 = time.perf_counter()
         response = await client.chat.completions.create(**kwargs)
         elapsed = time.perf_counter() - t0
         self._update_token_usage_from_response(response, duration_seconds=elapsed)
+
+        # Cache the response_id for future requests
+        if hasattr(response, 'id') and response.id:
+            self._cache_response_id(kwargs_messages, response.id)
+            logger.info(f"[VolcEngineVLM] Cached response_id: {response.id}")
+
         return self._build_vlm_response(response, has_tools=bool(tools))
