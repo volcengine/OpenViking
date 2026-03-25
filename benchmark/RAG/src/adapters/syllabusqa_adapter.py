@@ -165,7 +165,7 @@ class SyllabusQAAdapter(BaseAdapter):
 
     def _get_required_syllabi(self) -> set:
         """
-        Get list of syllabus_name mentioned in CSV.
+        Get list of syllabus_name mentioned in CSV or JSON.
         
         Returns:
             set: syllabus_name set
@@ -173,7 +173,18 @@ class SyllabusQAAdapter(BaseAdapter):
         required = set()
         
         # Determine data source type
-        if self.raw_file_path.endswith('.csv'):
+        if self.raw_file_path.endswith('.json'):
+            # Load from JSON
+            if not os.path.exists(self.raw_file_path):
+                return required
+            
+            with open(self.raw_file_path, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+            
+            for syllabus_name in data.keys():
+                if syllabus_name:
+                    required.add(syllabus_name)
+        elif self.raw_file_path.endswith('.csv'):
             csv_files = [self.raw_file_path]
         elif os.path.isdir(self.raw_file_path):
             csv_files = [os.path.join(self.raw_file_path, f) 
@@ -182,16 +193,18 @@ class SyllabusQAAdapter(BaseAdapter):
         else:
             return required
         
-        for csv_file in csv_files:
-            if not os.path.exists(csv_file):
-                continue
-            with open(csv_file, 'r', encoding='utf-8') as f:
-                import csv
-                reader = csv.DictReader(f)
-                for row in reader:
-                    syllabus_name = row.get('syllabus_name', '')
-                    if syllabus_name:
-                        required.add(syllabus_name)
+        # Process CSV files if any
+        if 'csv_files' in locals():
+            for csv_file in csv_files:
+                if not os.path.exists(csv_file):
+                    continue
+                with open(csv_file, 'r', encoding='utf-8') as f:
+                    import csv
+                    reader = csv.DictReader(f)
+                    for row in reader:
+                        syllabus_name = row.get('syllabus_name', '')
+                        if syllabus_name:
+                            required.add(syllabus_name)
         
         return required
 
