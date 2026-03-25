@@ -84,11 +84,15 @@ async def test_memory_empty_dir_still_reports_success():
 
 @pytest.mark.asyncio
 async def test_memory_ls_error_reports_error():
-    """When viking_fs.ls raises, report_error() must be called (not stuck)."""
+    """When viking_fs.ls raises a filesystem error, report_error() must be called.
+
+    Uses a real classify_api_error (no mock) — FileNotFoundError is classified
+    as permanent by the real classifier, so the processor calls report_error().
+    """
     processor = SemanticProcessor()
 
     fake_fs = MagicMock()
-    fake_fs.ls = AsyncMock(side_effect=OSError("disk read failed"))
+    fake_fs.ls = AsyncMock(side_effect=FileNotFoundError("/memories not found"))
 
     msg = _make_msg()
     data = _build_data(msg)
@@ -118,13 +122,69 @@ async def test_memory_ls_error_reports_error():
             "openviking.storage.queuefs.semantic_processor.resolve_telemetry",
             return_value=None,
         ),
-        patch(
-            "openviking.storage.queuefs.semantic_processor.classify_api_error",
-            return_value="permanent",
-        ),
     ):
         await processor.on_dequeue(data)
 
     assert error_called, "report_error() was not called when ls() raised an exception"
     assert not success_called, "report_success() should not be called on ls() error"
-    assert "disk read failed" in error_info["msg"]
+    assert "/memories not found" in error_info["msg"]
+
+
+@pytest.mark.asyncio
+async def test_memory_write_error_reports_error():
+    """When abstract/overview write raises PermissionError, report_error() is called.
+
+    Exercises the write failure path with real classify_api_error — PermissionError
+    is classified as permanent, so the processor calls report_error().
+    """
+    processor = SemanticProcessor()
+
+    fake_fs = MagicMock()
+    fake_fs.ls = AsyncMock(return_value=[{"name": "file1.md", "isDir": False}])
+    fake_fs.read_file = AsyncMock(return_value="some content")
+    fake_fs.write_file = AsyncMock(side_effect=PermissionError("Permission denied"))
+
+    msg = _make_msg()
+    data = _build_data(msg)
+
+    success_called = False
+
+    def on_success():
+        nonlocal success_called
+        success_called = True
+
+    error_called = False
+    error_info = {}
+
+    def on_error(error_msg, error_data=None):
+        nonlocal error_called, error_info
+        error_called = True
+        error_info["msg"] = error_msg
+
+    processor.set_callbacks(on_success, on_error)
+
+    with (
+        patch(
+            "openviking.storage.queuefs.semantic_processor.get_viking_fs",
+            return_value=fake_fs,
+        ),
+        patch(
+            "openviking.storage.queuefs.semantic_processor.resolve_telemetry",
+            return_value=None,
+        ),
+        patch.object(
+            processor,
+            "_generate_single_file_summary",
+            new=AsyncMock(return_value={"name": "file1.md", "summary": "test summary"}),
+        ),
+        patch.object(
+            processor,
+            "_generate_overview",
+            new=AsyncMock(return_value="# Overview\ntest overview"),
+        ),
+    ):
+        await processor.on_dequeue(data)
+
+    assert error_called, "report_error() was not called when write() raised PermissionError"
+    assert not success_called, "report_success() should not be called on write error"
+    assert "Permission denied" in error_info["msg"]
