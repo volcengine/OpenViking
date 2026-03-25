@@ -116,6 +116,22 @@ class HealthResponse(BaseModel):
     timestamp: datetime = Field(default_factory=datetime.now, description="Check timestamp")
 
 
+class ChannelStatusInfo(BaseModel):
+    """Status of a single channel."""
+
+    enabled: bool = Field(..., description="Whether the channel is enabled")
+    running: bool = Field(..., description="Whether the channel is currently running")
+
+
+class ChannelsStatusResponse(BaseModel):
+    """Response for channels status endpoint."""
+
+    status: str = Field(default="ok")
+    result: Dict[str, ChannelStatusInfo] = Field(
+        ..., description="Per-channel status keyed by channel name"
+    )
+
+
 class ErrorResponse(BaseModel):
     """Error response."""
 

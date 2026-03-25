@@ -5,7 +5,7 @@ import secrets
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException
 from fastapi.responses import StreamingResponse
@@ -15,6 +15,7 @@ from vikingbot.bus.events import InboundMessage, OutboundEventType, OutboundMess
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.base import BaseChannel
 from vikingbot.channels.openapi_models import (
+    ChannelsStatusResponse,
     ChatRequest,
     ChatResponse,
     ChatStreamEvent,
@@ -83,6 +84,7 @@ class OpenAPIChannel(BaseChannel):
         bus: MessageBus,
         workspace_path: Path | None = None,
         app: "FastAPI | None" = None,
+        status_provider: "Callable[[], Dict[str, Any]] | None" = None,
     ):
         super().__init__(config, bus, workspace_path)
         self.config = config
@@ -91,6 +93,7 @@ class OpenAPIChannel(BaseChannel):
         self._router: Optional[APIRouter] = None
         self._app = app  # External FastAPI app to register routes on
         self._server: Optional[asyncio.Task] = None  # Server task
+        self._status_provider = status_provider
 
     async def start(self) -> None:
         """Start the channel - register routes to external FastAPI app if provided."""
@@ -165,6 +168,15 @@ class OpenAPIChannel(BaseChannel):
                 status="healthy" if channel._running else "unhealthy",
                 version=__version__,
             )
+
+        @router.get("/channels/status", response_model=ChannelsStatusResponse)
+        async def channels_status(
+            authorized: bool = Depends(verify_api_key),
+        ):
+            """Get running status of all registered channels."""
+            if channel._status_provider is None:
+                raise HTTPException(status_code=503, detail="Channel status provider not available")
+            return ChannelsStatusResponse(status="ok", result=channel._status_provider())
 
         @router.post("/chat", response_model=ChatResponse)
         async def chat(
