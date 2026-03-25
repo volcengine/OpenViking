@@ -17,7 +17,7 @@ async def feishu_channel():
         .log_level(lark.LogLevel.INFO)
         .build()
     )
-    chat_id = "oc_656f04c0485140eeb60414f6bcf56927"
+    chat_id = ""
     # 构造请求对象
     request: GetChatRequest = GetChatRequest.builder() \
         .chat_id(chat_id) \
