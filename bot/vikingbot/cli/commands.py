@@ -30,7 +30,6 @@ from vikingbot.cron.service import CronService
 from vikingbot.cron.types import CronJob
 from vikingbot.heartbeat.service import HeartbeatService
 from vikingbot.integrations.langfuse import LangfuseClient
-
 # Create sandbox manager
 from vikingbot.sandbox.manager import SandboxManager
 from vikingbot.session.manager import SessionManager
@@ -202,9 +201,34 @@ def main(
 
 
 def _make_provider(config, langfuse_client: None = None):
-    """LiteLLM-backed bot provider is temporarily disabled."""
-    raise RuntimeError(
-        "vikingbot is temporarily unavailable because its LiteLLM backend has been disabled for security reasons"
+    """Create LLM provider instance based on configuration.
+
+    Uses OpenAI-compatible provider that supports all OpenAI API conformant
+    services, including all major LLM providers and local deployments.
+    """
+    from vikingbot.providers.openai_compatible_provider import OpenAICompatibleProvider
+
+    p = config.agents
+
+    model = p.model
+    api_key = p.api_key if p else None
+    api_base = p.api_base if p else None
+    provider_name = p.provider if p else None
+    extra_headers = p.extra_headers if p else {}
+
+    if not api_key and not model.startswith("bedrock/"):
+        raise RuntimeError(
+            "No LLM provider configured. Please set your API key in ~/.openviking/ov.conf"
+        )
+
+
+    return OpenAICompatibleProvider(
+        api_key=api_key,
+        api_base=api_base,
+        default_model=model,
+        extra_headers=extra_headers,
+        provider_name=provider_name,
+        langfuse_client=langfuse_client,
     )
 
 
