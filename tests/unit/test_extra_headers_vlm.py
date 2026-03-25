@@ -4,9 +4,7 @@
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-import pytest
-
-from openviking.models.vlm import VLMFactory, get_all_provider_names
+from openviking.models.vlm.backends.litellm_vlm import LiteLLMVLMProvider
 from openviking.models.vlm.backends.openai_vlm import OpenAIVLM
 
 
@@ -154,9 +152,7 @@ class TestVLMExtraHeaders:
         assert call_kwargs["extra_body"] == {"enable_thinking": True}
 
     @patch("openviking.models.vlm.backends.openai_vlm.openai.OpenAI")
-    def test_official_openai_text_completion_does_not_set_enable_thinking(
-        self, mock_openai_class
-    ):
+    def test_official_openai_text_completion_does_not_set_enable_thinking(self, mock_openai_class):
         """Official OpenAI API should not receive DashScope-specific extra_body flags."""
         mock_client = MagicMock()
         mock_openai_class.return_value = mock_client
@@ -328,14 +324,28 @@ class TestVLMConfigExtraHeaders:
         }
 
 
-class TestLiteLLMDisabled:
-    """Tests for temporary LiteLLM hard-disable behavior."""
+class TestLiteLLMVLMModelResolution:
+    """Regression tests for LiteLLM model prefix resolution."""
 
-    def test_factory_rejects_litellm_provider(self):
-        """VLMFactory should fail fast when LiteLLM is selected."""
-        with pytest.raises(ValueError, match="temporarily disabled"):
-            VLMFactory.create({"provider": "litellm", "model": "claude-3-7-sonnet"})
+    def test_zhipu_zai_model_keeps_existing_zai_prefix(self):
+        """Zhipu GLM models already using LiteLLM's zai/ prefix must not be double-prefixed."""
+        vlm = LiteLLMVLMProvider(
+            {
+                "model": "zai/glm-4.5",
+                "provider": "litellm",
+            }
+        )
 
-    def test_registry_no_longer_exposes_litellm(self):
-        """Provider registry should not advertise LiteLLM while disabled."""
-        assert "litellm" not in get_all_provider_names()
+        assert vlm._resolve_model("zai/glm-4.5") == "zai/glm-4.5"
+
+    def test_non_zhipu_provider_still_applies_prefix(self):
+        """The zai/ exception should not affect other providers."""
+        vlm = LiteLLMVLMProvider(
+            {
+                "model": "zai/custom-model",
+                "provider": "gemini",
+                "api_key": "sk-test",
+            }
+        )
+
+        assert vlm._resolve_model("zai/custom-model") == "gemini/zai/custom-model"
