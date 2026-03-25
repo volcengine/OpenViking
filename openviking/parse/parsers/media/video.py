@@ -24,13 +24,17 @@ Example workflow:
 Supported formats: MP4, AVI, MOV, MKV, WEBM
 """
 
+import asyncio
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import Dict, List, Optional, Tuple, Union
 
 from openviking.parse.base import NodeType, ParseResult, ResourceNode
 from openviking.parse.parsers.base_parser import BaseParser
 from openviking.parse.parsers.media.constants import VIDEO_EXTENSIONS
 from openviking_cli.utils.config.parser_config import VideoConfig
+from openviking_cli.utils.logger import get_logger
+
+logger = get_logger(__name__)
 
 
 class VideoParser(BaseParser):
@@ -122,11 +126,12 @@ class VideoParser(BaseParser):
                 f"Invalid video file: {file_path}. File signature does not match expected format {ext_lower}"
             )
 
-        # Extract video metadata (placeholder)
-        duration = 0
-        width = 0
-        height = 0
-        fps = 0
+        # Extract video metadata via cv2 if available, else fallback to zeros
+        meta = await self._extract_metadata(file_path)
+        duration = meta.get("duration", 0)
+        width = meta.get("width", 0)
+        height = meta.get("height", 0)
+        fps = meta.get("fps", 0)
         format_str = ext[1:].upper()
 
         # Create ResourceNode - metadata only, no content understanding yet
@@ -160,9 +165,94 @@ class VideoParser(BaseParser):
             meta={"content_type": "video", "format": format_str.lower()},
         )
 
+    async def _extract_metadata(self, file_path: Path) -> Dict:
+        """
+        Extract video metadata (duration, resolution, fps) using OpenCV.
+
+        Returns a dict with keys: duration, width, height, fps, frame_count.
+        Returns zeros if opencv-python-headless is not installed.
+        """
+        try:
+            import cv2
+        except ImportError:
+            logger.warning(
+                "opencv-python-headless not installed. Install with: pip install openviking[video]"
+            )
+            return {"duration": 0, "width": 0, "height": 0, "fps": 0, "frame_count": 0}
+
+        def _sync_metadata() -> Dict:
+            cap = cv2.VideoCapture(str(file_path))
+            try:
+                fps = cap.get(cv2.CAP_PROP_FPS) or 0
+                frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+                width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+                height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+                duration = frame_count / fps if fps > 0 else 0
+                return {
+                    "duration": round(duration, 1),
+                    "width": width,
+                    "height": height,
+                    "fps": round(fps, 1),
+                    "frame_count": frame_count,
+                }
+            finally:
+                cap.release()
+
+        try:
+            return await asyncio.get_event_loop().run_in_executor(None, _sync_metadata)
+        except Exception as e:
+            logger.error(f"[VideoParser._extract_metadata] Failed: {e}", exc_info=True)
+            return {"duration": 0, "width": 0, "height": 0, "fps": 0, "frame_count": 0}
+
+    async def _extract_keyframes(
+        self, file_path: Path, interval: float, max_frames: int = 30
+    ) -> List[Tuple[float, bytes]]:
+        """
+        Extract key frames at regular intervals using OpenCV.
+
+        Args:
+            file_path: Video file path
+            interval: Seconds between frame extractions
+            max_frames: Maximum number of frames to extract
+
+        Returns:
+            List of (timestamp_seconds, jpeg_bytes) tuples
+        """
+        try:
+            import cv2
+        except ImportError:
+            return []
+
+        def _sync_extract() -> List[Tuple[float, bytes]]:
+            cap = cv2.VideoCapture(str(file_path))
+            try:
+                fps = cap.get(cv2.CAP_PROP_FPS) or 0
+                if fps <= 0:
+                    return []
+                interval_frames = max(1, int(fps * interval))
+                keyframes = []
+                frame_idx = 0
+                while cap.isOpened() and len(keyframes) < max_frames:
+                    ret, frame = cap.read()
+                    if not ret:
+                        break
+                    if frame_idx % interval_frames == 0:
+                        _, buf = cv2.imencode(".jpg", frame)
+                        keyframes.append((round(frame_idx / fps, 1), buf.tobytes()))
+                    frame_idx += 1
+                return keyframes
+            finally:
+                cap.release()
+
+        try:
+            return await asyncio.get_event_loop().run_in_executor(None, _sync_extract)
+        except Exception as e:
+            logger.error(f"[VideoParser._extract_keyframes] Failed: {e}", exc_info=True)
+            return []
+
     async def _generate_video_description(self, file_path: Path, config: VideoConfig) -> str:
         """
-        Generate video description using key frames and audio transcription.
+        Generate video description using key frames and metadata.
 
         Args:
             file_path: Video file path
@@ -170,11 +260,33 @@ class VideoParser(BaseParser):
 
         Returns:
             Video description in markdown format
-
-        TODO: Integrate with actual video processing libraries
         """
-        # Fallback implementation - returns basic placeholder
-        return "Video description (video processing integration pending)\n\nThis is a video. Video processing feature has not yet integrated external libraries."
+        meta = await self._extract_metadata(file_path)
+        if meta["duration"] == 0 and meta["width"] == 0:
+            return (
+                "Video description unavailable: opencv-python-headless not installed.\n\n"
+                "Install with: pip install openviking[video]"
+            )
+
+        parts = [
+            "## Video Metadata\n",
+            f"- Duration: {meta['duration']}s\n",
+            f"- Resolution: {meta['width']}x{meta['height']}\n",
+            f"- FPS: {meta['fps']}\n",
+            f"- Frames: {meta['frame_count']}\n",
+        ]
+
+        # Extract keyframes if enabled
+        if config.extract_frames and meta["duration"] > 0:
+            keyframes = await self._extract_keyframes(file_path, config.frame_interval)
+            if keyframes:
+                parts.append(f"\n## Key Frames ({len(keyframes)} extracted)\n")
+                for ts, _ in keyframes:
+                    minutes = int(ts // 60)
+                    seconds = int(ts % 60)
+                    parts.append(f"- [{minutes:02d}:{seconds:02d}] Frame at {ts}s\n")
+
+        return "".join(parts)
 
     async def _generate_semantic_info(
         self, node: ResourceNode, description: str, viking_fs, has_key_frames: bool

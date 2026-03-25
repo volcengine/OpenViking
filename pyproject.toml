@@ -108,6 +108,9 @@ gemini-async = [
     "google-genai>=1.0.0",
     "anyio>=4.0.0",
 ]
+video = [
+    "opencv-python-headless>=4.8.0",
+]
 build = [
     "setuptools>=61.0",
     "setuptools-scm>=8.0",
