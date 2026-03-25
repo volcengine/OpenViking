@@ -12,8 +12,8 @@ async def feishu_channel():
     print("Testing feishu channel")
     client = (
         lark.Client.builder()
-        .app_id("cli_a9004efb34b8dcd2")
-        .app_secret("j4oFbtfzg2nFFoYmpxJkwy36QdmVXlYl")
+        .app_id("")
+        .app_secret("")
         .log_level(lark.LogLevel.INFO)
         .build()
     )
