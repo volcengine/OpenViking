@@ -217,12 +217,12 @@ python run.py --config config/locomo_config.yaml --step del
 
 ### 支持的数据集
 
-| 数据集        | 类型       | 文档数 | 问题数 | 特点                                                                                                 |
-| -------------- | ---------- | ------ | ------ | ---------------------------------------------------------------------------------------------------- |
-| **Locomo**     | 多轮对话   | 10     | 1540   | 长对话理解，4 种问题类型（事实性、时间性、推理、理解）                                               |
-| **SyllabusQA** | 教学大纲   | 39     | 5078   | 教育领域，6 种问题类型（单一事实、多事实、单一推理、多推理、总结、是/否）                           |
-| **Qasper**     | 学术论文   | 1585   | 5049   | 研究领域，1585 篇 NLP 论文，3 种答案类型（抽取式、自由形式、是/否）                                  |
-| **FinanceBench** | 金融领域   | 84     | 150    | 金融领域，开源子集包含 150 个 QA 对，3 种问题类型（领域相关、指标生成、新颖生成）                   |
+| 数据集              | 类型   | 文档数  | 问题数  | 特点                                             |
+| ---------------- | ---- | ---- | ---- | ---------------------------------------------- |
+| **Locomo**       | 多轮对话 | 10   | 1540 | 长对话理解，4 种问题类型（事实性、时间性、推理、理解）                   |
+| **SyllabusQA**   | 教学大纲 | 39   | 5078 | 教育领域，6 种问题类型（单一事实、多事实、单一推理、多推理、总结、是/否）         |
+| **Qasper**       | 学术论文 | 1585 | 5049 | 研究领域，1585 篇 NLP 论文，3 种答案类型（抽取式、自由形式、是/否）       |
+| **FinanceBench** | 金融领域 | 84   | 150  | 金融领域，开源子集包含 150 个 QA 对，3 种问题类型（领域相关、指标生成、新颖生成） |
 
 ### 如何使用不同的数据集
 
@@ -272,7 +272,7 @@ RAG 使用 YAML 配置文件来控制评估过程。每个数据集在 `config/`
    - `retrieval_topk`：要检索的文档数
    - `max_queries`：限制要处理的查询数（null = 全部）
    - `skip_ingestion`：跳过文档摄取（使用现有索引）
-   - `ingest_mode`：文档摄取模式（"directory" 或 "per_file"）
+   - `ingest_mode`：文档摄取模式（"directory" 或 "per\_file"）
    - `retrieval_instruction`：检索的自定义指令（默认为空）
 4. **路径配置**：
    - `dataset_dir`：数据集文件或目录的路径
@@ -468,6 +468,67 @@ datasets/{dataset_name}/viking_store_index_dir
 - **包含内容**：Markdown 格式的处理文档（如果 `skip_ingestion=false`）
 - **如何查看**：在任何 Markdown 查看器或文本编辑器中直接打开 `.md` 文件
 
+### 基准测试结果参考
+
+以下是基准测试结果（top-5 检索），仅供参考：
+
+| 数据集              | 评估查询数 | 平均 F1 分数 | 平均召回率 | 平均准确率（0-4）| 标准化准确率 |
+| ---------------- | ------ | -------- | ----- | ------------ | ------- |
+| **FinanceBench** | 12     | 0.224    | 0.694 | 2.5          | 0.625   |
+| **Locomo**       | 80     | 0.254    | 0.592 | 2.4          | 0.600   |
+| **Qasper**       | 60     | 0.293    | 0.614 | 2.12         | 0.529   |
+| **SyllabusQA**   | 90     | 0.344    | 0.675 | 2.54         | 0.636   |
+
+**测试配置详情：**
+
+- **LLM 模型：** `doubao-seed-2-0-pro-260215`
+- **API 基础地址：** `https://ark.cn-beijing.volces.com/api/v3`
+- **温度参数：** 0（确定性输出）
+- **检索 Top-K：** 5
+- **最大工作线程数：** 8
+- **摄取工作线程数：** 8
+- **摄取模式：** directory
+- **检索指令：** （空）
+- **评估指标：** Recall、F1 分数、Accuracy（0-4 分制）
+
+所有数据集使用相同的 LLM 和执行配置，特定于数据集的适配器和路径在各自的 YAML 文件中配置。
+
+### 复现实验
+
+要复现基准测试结果，请按照以下步骤操作：
+
+```bash
+cd OpenViking/benchmark/RAG
+
+# 1. 安装依赖（如果尚未安装）
+uv pip install -e ".[benchmark]"
+source .venv/bin/activate
+
+# 2. 下载所有数据集
+python scripts/download_dataset.py
+
+# 3. 对所有数据集运行一键抽样，使用与基准测试相同的参数
+python scripts/run_sampling.py
+
+# 4. 配置您的 LLM API 密钥
+# 编辑 config/ 目录下的配置文件，在 llm.api_key 字段中设置您的 API 密钥
+
+# 5. 为每个数据集运行评估
+python run.py --config config/locomo_config.yaml
+python run.py --config config/syllabusqa_config.yaml
+python run.py --config config/qasper_config.yaml
+python run.py --config config/financebench_config.yaml
+
+# 6. 在 Output/{dataset_name}/experiment_test_top_5/ 中查看结果
+```
+
+**注意：** `run_sampling.py` 脚本将进行以下抽样：
+- Locomo：3 个文档，80 个 QA
+- SyllabusQA：7 个文档，90 个 QA
+- Qasper：8 个文档，60 个 QA
+- FinanceBench：3 个文档，12 个 QA
+所有抽样使用 seed=42 以确保可重现性。
+
 ### 高级配置
 
 #### 检索指令配置
@@ -495,7 +556,7 @@ retrieval_instruction: "Target_modality: text.\nInstruction:Locate the part of t
 
 RAG 使用特定于数据集和问题类型的提示来指导 LLM 答案生成。您可以在 `src/adapters/` 下的适配器文件中自定义这些提示，以提高评估结果。
 
-##### Locomo 数据集提示（src/adapters/locomo_adapter.py）
+##### Locomo 数据集提示（src/adapters/locomo\_adapter.py）
 
 Locomo 有 4 个问题类别，每个类别都有特定的指令：
 
@@ -529,7 +590,7 @@ Locomo 有 4 个问题类别，每个类别都有特定的指令：
   - 尽可能使用上下文中的措辞
   ```
 
-##### SyllabusQA 数据集提示（src/adapters/syllabusqa_adapter.py）
+##### SyllabusQA 数据集提示（src/adapters/syllabusqa\_adapter.py）
 
 SyllabusQA 有 6 种问题类型：
 
@@ -540,15 +601,15 @@ SyllabusQA 有 6 种问题类型：
 - **summarization**：总结相关信息
 - **yes/no**：是/否问题
 
-##### Qasper 数据集提示（src/adapters/qasper_adapter.py）
+##### Qasper 数据集提示（src/adapters/qasper\_adapter.py）
 
 Qasper 有 3 种答案类型：
 
 - **extractive**：从论文中提取准确答案
-- **free_form**：用自己的话自由回答
-- **yes_no**：是/否问题
+- **free\_form**：用自己的话自由回答
+- **yes\_no**：是/否问题
 
-##### FinanceBench 数据集提示（src/adapters/financebench_adapter.py）
+##### FinanceBench 数据集提示（src/adapters/financebench\_adapter.py）
 
 FinanceBench 有 3 种问题类型：
 
@@ -595,11 +656,11 @@ FinanceBench 有 3 种问题类型：
 **问：如何限制测试处理的查询数量？**
 答：在配置文件中设置 `max_queries` 为您想要处理的查询数量（例如，`max_queries: 10`）。
 
-**问："directory" 和 "per_file" 摄取模式有什么区别？**
+**问："directory" 和 "per\_file" 摄取模式有什么区别？**
 答：
 
 - "directory"：将整个目录视为一个文档
-- "per_file"：将每个文件视为一个单独的文档
+- "per\_file"：将每个文件视为一个单独的文档
 
 **问：如何自定义检索指令？**
 答：在配置文件中设置 `retrieval_instruction`。推荐格式为：

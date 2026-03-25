@@ -468,6 +468,67 @@ Example (single result):
 - **What it contains**: Processed documents in Markdown format (if `skip_ingestion=false`)
 - **How to view**: Open `.md` files directly in any Markdown viewer or text editor
 
+### Benchmark Results Reference
+
+Below are the benchmark results (top-5 retrieval) for reference:
+
+| Dataset          | Queries Evaluated | Average F1 Score | Average Recall | Average Accuracy (0-4) | Normalized Accuracy |
+| ---------------- | ----------------- | ---------------- | -------------- | ---------------------- | ------------------- |
+| **FinanceBench** | 12                | 0.224            | 0.694          | 2.5                    | 0.625               |
+| **Locomo**       | 80                | 0.254            | 0.592          | 2.4                    | 0.600               |
+| **Qasper**       | 60                | 0.293            | 0.614          | 2.12                   | 0.529               |
+| **SyllabusQA**   | 90                | 0.344            | 0.675          | 2.54                   | 0.636               |
+
+**Test Configuration Details:**
+
+- **LLM Model:** `doubao-seed-2-0-pro-260215`
+- **API Base URL:** `https://ark.cn-beijing.volces.com/api/v3`
+- **Temperature:** 0 (deterministic)
+- **Retrieval Top-K:** 5
+- **Max Workers:** 8
+- **Ingest Workers:** 8
+- **Ingest Mode:** directory
+- **Retrieval Instruction:** (empty)
+- **Evaluation Metrics:** Recall, F1 Score, Accuracy (0-4 scale)
+
+All datasets used the same LLM and execution configuration, with dataset-specific adapters and paths configured in their respective YAML files.
+
+### Reproducing the Experiment
+
+To reproduce the benchmark results, follow these steps:
+
+```bash
+cd OpenViking/benchmark/RAG
+
+# 1. Install dependencies (if not already installed)
+uv pip install -e ".[benchmark]"
+source .venv/bin/activate
+
+# 2. Download all datasets
+python scripts/download_dataset.py
+
+# 3. Run one-click sampling for all datasets with the same parameters as the benchmark
+python scripts/run_sampling.py
+
+# 4. Configure your LLM API key
+# Edit the configuration files in config/ and set your API key in the llm.api_key field
+
+# 5. Run evaluation for each dataset
+python run.py --config config/locomo_config.yaml
+python run.py --config config/syllabusqa_config.yaml
+python run.py --config config/qasper_config.yaml
+python run.py --config config/financebench_config.yaml
+
+# 6. Check results in Output/{dataset_name}/experiment_test_top_5/
+```
+
+**Note:** The `run_sampling.py` script will sample the following:
+- Locomo: 3 documents, 80 QAs
+- SyllabusQA: 7 documents, 90 QAs
+- Qasper: 8 documents, 60 QAs
+- FinanceBench: 3 documents, 12 QAs
+All with seed=42 for reproducibility.
+
 ### Advanced Configuration
 
 #### Retrieval Instruction Configuration
