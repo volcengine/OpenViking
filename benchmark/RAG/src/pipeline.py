@@ -107,7 +107,6 @@ class BenchmarkPipeline:
                     results_map[res['_global_index']] = res
                 except Exception as e:
                     self.logger.error(f"Generation failed for task {task['id']}: {e}")
-                    self.monitor.worker_end(success=False)
                 pbar.set_postfix(self.monitor.get_status_dict())
                 pbar.update(1)
             pbar.close()
