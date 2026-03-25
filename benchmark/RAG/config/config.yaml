@@ -3,34 +3,35 @@ project_name: "RAG_Benchmark"
 
 # ===========Basic Configuration============
 # Dataset name to identify the current dataset being evaluated
-# Supported datasets: NarrativeQA, Qasper, Locomo, SyllabusQA, etc.
-dataset_name: "SyllabusQA" 
+# Supported datasets: FinanceBench, Qasper, Locomo, SyllabusQA, etc.
+dataset_name: "choose_your_dataset_here" 
 
 # ===========Adapter Configuration============
 # Dataset adapter configuration for loading and processing dataset-specific formats
 adapter:
   # Adapter module path (Python import path)
-  module: "src.adapters.syllabusqa_adapter"  
+  module: "src.adapters.your_dataset_adapter"  
   # Adapter class name
-  class_name: "SyllabusQAAdapter"     
+  class_name: "your_dataset_Adapter"     
 
 # ===========Execution Configuration============
-# Maximum number of concurrent worker threads for parallel QA task processing
-max_workers: 10
-# Number of concurrent worker threads for document ingestion
-ingest_workers: 10
-# Number of documents to retrieve (top-k)
-retrieval_topk: 5
-# Limit the maximum number of queries to process, null means process all queries
-max_queries: null
-# Whether to skip document ingestion phase (true means use existing vector index)
-skip_ingestion: false
-# Document ingestion mode
-# - "directory": Unified directory ingestion mode, treats the entire directory as one document
-# - "per_file": Per-file ingestion mode, each file is treated as a separate document
-ingest_mode: "per_file"
-# Instruction for retrieval, empty by default
-retrieval_instruction: ""  
+execution:
+  # Maximum number of concurrent worker threads for parallel QA task processing
+  max_workers: 10
+  # Number of concurrent worker threads for document ingestion
+  ingest_workers: 10
+  # Number of documents to retrieve (top-k)
+  retrieval_topk: 5
+  # Limit the maximum number of queries to process, null means process all queries
+  max_queries: null
+  # Whether to skip document ingestion phase (true means use existing vector index)
+  skip_ingestion: false
+  # Document ingestion mode
+  # - "directory": Unified directory ingestion mode, treats the entire directory as one document
+  # - "per_file": Per-file ingestion mode, each file is treated as a separate document
+  ingest_mode: "per_file"
+  # Instruction for retrieval, empty by default
+  retrieval_instruction: ""  
 
 # ===========Path Configuration============
 # All paths support {dataset_name} placeholder, which will be automatically replaced with the current dataset name
