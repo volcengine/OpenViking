@@ -156,6 +156,11 @@ class RerankClient:
         if not config or not config.is_available():
             return None
 
+        if config.provider == "litellm":
+            from openviking_cli.utils.rerank_litellm import LiteLLMRerankClient
+
+            return LiteLLMRerankClient.from_config(config)
+
         if config.provider == "openai":
             from openviking_cli.utils.rerank_openai import OpenAIRerankClient
 
