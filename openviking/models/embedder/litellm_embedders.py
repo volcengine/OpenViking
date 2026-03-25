@@ -8,6 +8,7 @@ Uses litellm to provide a unified embedding interface across many providers
 
 import logging
 import os
+from openviking.server.enduser_context import get_enduser_extra_headers  # liclaw: enduser tag 透传
 from typing import Any, Dict, List, Optional
 
 import litellm
@@ -93,8 +94,11 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
             kwargs["api_key"] = self.api_key
         if self.api_base:
             kwargs["api_base"] = self.api_base
-        if self.extra_headers:
-            kwargs["extra_headers"] = self.extra_headers
+        # liclaw: 合并静态 extra_headers 与动态 enduser tag
+        merged_headers = dict(self.extra_headers) if self.extra_headers else {}
+        merged_headers.update(get_enduser_extra_headers())
+        if merged_headers:
+            kwargs["extra_headers"] = merged_headers
         if self.dimension:
             kwargs["dimensions"] = self.dimension
 

@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 import openai
 
 from openviking.models.vlm.registry import DEFAULT_AZURE_API_VERSION
+from openviking.server.enduser_context import get_enduser_extra_headers  # liclaw: enduser tag 透传
 from openviking.models.embedder.base import (
     DenseEmbedderBase,
     EmbedResult,
@@ -242,6 +243,11 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             if extra_body:
                 kwargs["extra_body"] = extra_body
 
+            # liclaw: 注入 enduser tag 到 Embedding 请求头
+            enduser_headers = get_enduser_extra_headers()
+            if enduser_headers:
+                kwargs["extra_headers"] = enduser_headers
+
             response = self.client.embeddings.create(**kwargs)
             self._update_telemetry_token_usage(response)
             vector = response.data[0].embedding
@@ -276,6 +282,11 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             extra_body = self._build_extra_body(is_query=is_query)
             if extra_body:
                 kwargs["extra_body"] = extra_body
+
+            # liclaw: 注入 enduser tag 到 Embedding 请求头
+            enduser_headers = get_enduser_extra_headers()
+            if enduser_headers:
+                kwargs["extra_headers"] = enduser_headers
 
             response = self.client.embeddings.create(**kwargs)
             self._update_telemetry_token_usage(response)

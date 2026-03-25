@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Union
 
 from .openai_vlm import OpenAIVLM
 from ..base import VLMResponse, ToolCall
+from openviking.server.enduser_context import get_enduser_extra_headers  # liclaw: enduser tag 透传
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +133,11 @@ class VolcEngineVLM(OpenAIVLM):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
 
+        # liclaw: 注入 enduser tag 到 LLM 请求头
+        enduser_headers = get_enduser_extra_headers()
+        if enduser_headers:
+            kwargs["extra_headers"] = enduser_headers
+
         t0 = time.perf_counter()
         response = client.chat.completions.create(**kwargs)
         elapsed = time.perf_counter() - t0
@@ -166,6 +172,11 @@ class VolcEngineVLM(OpenAIVLM):
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
+
+        # liclaw: 注入 enduser tag 到 LLM 请求头
+        enduser_headers = get_enduser_extra_headers()
+        if enduser_headers:
+            kwargs["extra_headers"] = enduser_headers
 
         last_error = None
         for attempt in range(max_retries + 1):
@@ -336,6 +347,11 @@ class VolcEngineVLM(OpenAIVLM):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
 
+        # liclaw: 注入 enduser tag 到 LLM 请求头
+        enduser_headers = get_enduser_extra_headers()
+        if enduser_headers:
+            kwargs["extra_headers"] = enduser_headers
+
         t0 = time.perf_counter()
         response = client.chat.completions.create(**kwargs)
         elapsed = time.perf_counter() - t0
@@ -376,6 +392,11 @@ class VolcEngineVLM(OpenAIVLM):
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
+
+        # liclaw: 注入 enduser tag 到 LLM 请求头
+        enduser_headers = get_enduser_extra_headers()
+        if enduser_headers:
+            kwargs["extra_headers"] = enduser_headers
 
         t0 = time.perf_counter()
         response = await client.chat.completions.create(**kwargs)

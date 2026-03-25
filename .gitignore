@@ -109,6 +109,9 @@ CLAUDE.md
 *.so
 AGENTS.md
 
+# liclaw 内部文档
+lidocs/
+
 # Git worktrees
 .worktrees/
 

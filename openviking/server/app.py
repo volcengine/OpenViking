@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 
 from openviking.server.api_keys import APIKeyManager
 from openviking.server.config import ServerConfig, load_server_config, validate_server_config
+from openviking.server.enduser_context import bind_enduser_tag  # liclaw: enduser tag 透传
 from openviking.server.dependencies import set_service
 from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
 from openviking.server.routers import (
@@ -145,6 +146,14 @@ def create_app(
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # liclaw: enduser tag 透传中间件 (X-EndUser-Tag → ContextVar → LLM/Embedding API)
+    @app.middleware("http")
+    async def enduser_tag_middleware(request: Request, call_next: Callable):
+        tag = request.headers.get("X-EndUser-Tag")
+        with bind_enduser_tag(tag):
+            response = await call_next(request)
+        return response
 
     # Add request timing middleware
     @app.middleware("http")
