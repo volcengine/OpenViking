@@ -99,7 +99,7 @@ jobs:
         if [ -f openviking/_version.py ]; then cat openviking/_version.py; else echo "Not found"; fi
 
     - name: Build sdist
-      run: uv run --frozen python -m build --sdist
+      run: uv build --sdist
 
     - name: Store the distribution packages
       uses: actions/upload-artifact@v7
@@ -259,7 +259,7 @@ jobs:
         if [ -f openviking/_version.py ]; then cat openviking/_version.py; else echo "Not found"; fi
 
     - name: Build package (Wheel Only)
-      run: uv run --frozen python -m build --wheel
+      run: uv build --wheel
 
     - name: Install patchelf (Linux)
       run: |
@@ -427,7 +427,7 @@ jobs:
         if [ -f openviking/_version.py ]; then cat openviking/_version.py; else echo "Not found"; fi
 
     - name: Build package (Wheel Only)
-      run: uv run --frozen python -m build --wheel
+      run: uv build --wheel
 
     - name: Store the distribution packages
       uses: actions/upload-artifact@v7
