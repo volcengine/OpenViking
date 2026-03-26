@@ -139,20 +139,22 @@ class VolcEngineVLM(OpenAIVLM):
 
         Logic:
         - Find the last cache_control breakpoint
-        - If breakpoint is at index 0: use "current" as cache key (the breakpoint message itself)
-        - Otherwise: use "prefix" (messages before the breakpoint) as cache key
+        - Always use "current" (messages including breakpoint) as cache key for consistency
+        - This matches what _cache_response_id uses
         """
         breakpoints = self._find_cache_breakpoints(messages)
         if not breakpoints:
+            logger.info("[VolcEngineVLM] Cache: no breakpoints found")
             return None
 
-        # Use appropriate key based on breakpoint position
-        if breakpoints.get("use_current_as_key"):
-            cache_key = self._serialize_messages(breakpoints["current"])
-        else:
-            cache_key = self._serialize_messages(breakpoints["prefix"])
+        # Always use "current" as cache key - matches what we store
+        cache_key = self._serialize_messages(breakpoints["current"])
+        logger.info(f"[VolcEngineVLM] Cache: looking up key={cache_key[:100]}...")
+        logger.info(f"[VolcEngineVLM] Cache: current messages count={len(breakpoints['current'])}")
 
-        return self._response_cache.get(cache_key)
+        result = self._response_cache.get(cache_key)
+        logger.info(f"[VolcEngineVLM] Cache: lookup result={result}")
+        return result
 
     def _cache_response_id(self, messages: List[Dict[str, Any]], response_id: str) -> None:
         """Cache response_id for the given messages.
@@ -162,9 +164,12 @@ class VolcEngineVLM(OpenAIVLM):
         """
         breakpoints = self._find_cache_breakpoints(messages)
         if not breakpoints:
+            logger.info("[VolcEngineVLM] Cache: no breakpoints, not caching")
             return
 
         cache_key = self._serialize_messages(breakpoints["current"])
+        logger.info(f"[VolcEngineVLM] Cache: storing key={cache_key[:100]}..., response_id={response_id}")
+        logger.info(f"[VolcEngineVLM] Cache: current messages count={len(breakpoints['current'])}")
         self._response_cache.set(cache_key, response_id)
 
     def get_client(self):
@@ -202,18 +207,43 @@ class VolcEngineVLM(OpenAIVLM):
         tool_calls = []
         if hasattr(message, "tool_calls") and message.tool_calls:
             for tc in message.tool_calls:
-                args = tc.function.arguments
+                args = tc.arguments
                 if isinstance(args, str):
                     try:
                         args = json.loads(args)
                     except json.JSONDecodeError:
                         args = {"raw": args}
+                # Handle both tc.name and tc.function.name (Responses API vs Chat API)
+                try:
+                    tool_name = tc.name
+                    if not tool_name:
+                        tool_name = tc.function.name
+                except AttributeError:
+                    tool_name = tc.function.name if hasattr(tc, 'function') else ""
                 tool_calls.append(ToolCall(
-                    id=tc.id,
-                    name=tc.function.name,
+                    id=tc.id or "",
+                    name=tool_name or "",
                     arguments=args
                 ))
         return tool_calls
+
+    def _update_token_usage_from_response(
+        self, response, duration_seconds: float = 0.0,
+    ) -> None:
+        """Update token usage from VolcEngine Responses API response."""
+        if hasattr(response, "usage") and response.usage:
+            u = response.usage
+            # Responses API uses input_tokens/output_tokens instead of prompt_tokens/completion_tokens
+            prompt_tokens = getattr(u, 'input_tokens', 0) or 0
+            completion_tokens = getattr(u, 'output_tokens', 0) or 0
+            self.update_token_usage(
+                model_name=self.model or "unknown",
+                provider=self.provider,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                duration_seconds=duration_seconds,
+            )
+        return
 
     def _build_vlm_response(self, response, has_tools: bool) -> Union[str, VLMResponse]:
         """Build response from VolcEngine Responses API response.
@@ -223,6 +253,16 @@ class VolcEngineVLM(OpenAIVLM):
         - response.id: response ID
         - response.usage: token usage
         """
+        # Debug: print response structure
+        logger.debug(f"[VolcEngineVLM] Response type: {type(response)}")
+        logger.info(f"[VolcEngineVLM] Full response: {response}")
+        if hasattr(response, 'output'):
+            logger.debug(f"[VolcEngineVLM] Output items: {len(response.output)}")
+            for i, item in enumerate(response.output):
+                logger.debug(f"[VolcEngineVLM]   Item {i}: type={getattr(item, 'type', 'unknown')}")
+                # Print full item for debugging
+                logger.info(f"[VolcEngineVLM]   Item {i} full: {item}")
+
         # Extract content from Responses API format
         content = ""
         tool_calls = []
@@ -230,37 +270,60 @@ class VolcEngineVLM(OpenAIVLM):
 
         if hasattr(response, 'output') and response.output:
             for item in response.output:
-                # Check if it's a message item
-                if hasattr(item, 'type'):
-                    if item.type == 'message':
-                        message = item
-                        if hasattr(message, 'content'):
-                            # Content can be a list or string
-                            if isinstance(message.content, list):
-                                for block in message.content:
-                                    if hasattr(block, 'type') and block.type == 'output_text':
-                                        content = block.text or ""
-                                    elif hasattr(block, 'text'):
-                                        content = block.text or ""
-                            else:
-                                content = message.content or ""
+                item_type = getattr(item, 'type', None)
+                # Check if it's a function_call item (Responses API format)
+                if item_type == 'function_call':
+                    logger.debug(f"[VolcEngineVLM] Found function_call tool call")
+                    args = item.arguments
+                    if isinstance(args, str):
+                        try:
+                            args = json.loads(args)
+                        except json.JSONDecodeError:
+                            args = {"raw": args}
+                    tool_calls.append(ToolCall(
+                        id=item.call_id or "",
+                        name=item.name or "",
+                        arguments=args
+                    ))
+                    finish_reason = "tool_calls"
+                # Check if it's a message item (Chat API compatibility)
+                elif item_type == 'message':
+                    message = item
+                    if hasattr(message, 'content'):
+                        # Content can be a list or string
+                        if isinstance(message.content, list):
+                            for block in message.content:
+                                if hasattr(block, 'type') and block.type == 'output_text':
+                                    content = block.text or ""
+                                elif hasattr(block, 'text'):
+                                    content = block.text or ""
+                        else:
+                            content = message.content or ""
 
-                        # Parse tool calls
-                        if hasattr(message, 'tool_calls') and message.tool_calls:
-                            for tc in message.tool_calls:
-                                args = tc.arguments
-                                if isinstance(args, str):
-                                    try:
-                                        args = json.loads(args)
-                                    except json.JSONDecodeError:
-                                        args = {"raw": args}
-                                tool_calls.append(ToolCall(
-                                    id=tc.id or "",
-                                    name=tc.name or tc.function.name,
-                                    arguments=args
-                                ))
+                    # Parse tool calls from message
+                    if hasattr(message, 'tool_calls') and message.tool_calls:
+                        logger.debug(f"[VolcEngineVLM] Found {len(message.tool_calls)} tool calls in message")
+                        for tc in message.tool_calls:
+                            args = tc.arguments
+                            if isinstance(args, str):
+                                try:
+                                    args = json.loads(args)
+                                except json.JSONDecodeError:
+                                    args = {"raw": args}
+                            # Handle both tc.name and tc.function.name (Responses API vs Chat API)
+                            try:
+                                tool_name = tc.name
+                                if not tool_name:
+                                    tool_name = tc.function.name
+                            except AttributeError:
+                                tool_name = tc.function.name if hasattr(tc, 'function') else ""
+                            tool_calls.append(ToolCall(
+                                id=tc.id or "",
+                                name=tool_name or "",
+                                arguments=args
+                            ))
 
-                        finish_reason = getattr(message, 'finish_reason', 'stop') or 'stop'
+                    finish_reason = getattr(message, 'finish_reason', 'stop') or 'stop'
 
         # Extract usage
         usage = {}
@@ -321,17 +384,33 @@ class VolcEngineVLM(OpenAIVLM):
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
 
-        if tools:
-            kwargs["tools"] = tools
+        # VolcEngine limitation: cannot use tools with previous_response_id
+        # Solution: First call creates cache with tools, subsequent calls use previous_response_id
+        # (server will automatically include tools from cache)
+        logger.info(f"[VolcEngineVLM] Request: tools={bool(tools)}, previous_response_id={previous_response_id}")
+        if tools and previous_response_id:
+            # Both tools and previous_response_id - use previous_response_id for caching
+            # (server will include tools from cached context)
+            kwargs["previous_response_id"] = previous_response_id
+            kwargs["caching"] = {"type": "enabled"}
+            logger.info(f"[VolcEngineVLM] Using cached response_id with tools: {previous_response_id}")
+        elif tools:
+            # First call with tools: enable caching (will create cache with tools)
+            converted_tools = self._convert_tools(tools)
+            kwargs["tools"] = converted_tools
+            logger.debug(f"[VolcEngineVLM] Converted tools: {converted_tools}")
             kwargs["tool_choice"] = tool_choice or "auto"
-
-        # Enable caching
-        if previous_response_id:
+            kwargs["caching"] = {"type": "enabled"}
+        elif previous_response_id:
+            # Use cached response (tools are in the cached context)
             kwargs["previous_response_id"] = previous_response_id
             kwargs["caching"] = {"type": "enabled"}
             logger.info(f"[VolcEngineVLM] Using cached response_id: {previous_response_id}")
         else:
+            # Enable caching by default for prompt caching support
             kwargs["caching"] = {"type": "enabled"}
+
+        logger.info(f"[VolcEngineVLM] Request kwargs: caching={kwargs.get('caching')}, previous_response_id={kwargs.get('previous_response_id')}")
 
         t0 = time.perf_counter()
         # Use Responses API instead of Chat API
@@ -349,51 +428,125 @@ class VolcEngineVLM(OpenAIVLM):
     def _convert_messages_to_input(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Convert OpenAI-style messages to VolcEngine Responses API input format.
 
-        Note: VolcEngine Responses API doesn't support 'tool' role.
-        Tool results are converted to user messages.
+        VolcEngine Responses API format (no "type" field needed):
+        [
+            {"role": "system", "content": "..."},
+            {"role": "user", "content": "..."},
+        ]
+
+        Note: Responses API doesn't support 'tool' role, so we convert tool results
+        to user messages with a prefix indicating it's a tool result.
         """
         input_messages = []
         for msg in messages:
             role = msg.get("role", "user")
             content = msg.get("content", "")
 
-            # Map 'tool' role to 'user' since Responses API doesn't support tool role
-            if role == "tool":
-                role = "user"
-
-            # Handle content as list (Claude-style)
+            # Handle content - check if it contains images
+            has_images = False
             if isinstance(content, list):
-                # Convert content blocks
-                blocks = []
+                text_parts = []
+                image_urls = []
                 for block in content:
                     if isinstance(block, dict):
-                        block_type = block.get("type")
-                        if block_type == "text":
-                            blocks.append({
-                                "type": "input_text",
-                                "text": block.get("text", ""),
-                            })
-                        elif block_type == "image_url":
+                        block_type = block.get("type", "")
+                        # Handle text blocks
+                        if block_type == "text" or "text" in block:
+                            text = block.get("text", "")
+                            if text:
+                                text_parts.append(text)
+                        # Handle image_url blocks
+                        elif block_type == "image_url" or "image_url" in block:
                             image_url = block.get("image_url", {})
-                            url = image_url.get("url", "")
-                            blocks.append({
-                                "type": "input_image",
-                                "image_url": url,
-                            })
-                if blocks:
-                    input_messages.append({
-                        "role": role,
-                        "content": blocks,
-                    })
-                    continue
+                            if isinstance(image_url, dict):
+                                url = image_url.get("url", "")
+                                if url:
+                                    image_urls.append(url)
+                            has_images = True
+                        # Handle other block types
+                        else:
+                            # Try to extract text from any dict block
+                            text = block.get("text", "")
+                            if text:
+                                text_parts.append(text)
+                content = " ".join(text_parts)
+                # If there were images, include them as base64 data URLs in content
+                if image_urls:
+                    # Filter out non-data URLs (keep only data: URLs)
+                    data_urls = [u for u in image_urls if u.startswith("data:")]
+                    if data_urls:
+                        # Append image references to content
+                        content = content + "\n[Images: " + ", ".join([f"data URL ({i+1})" for i in range(len(data_urls))]) + "]"
 
-            # Simple text message
+            # Ensure content is a string, use placeholder if empty
+            content_str = str(content) if content else "[empty]"
+            # Skip messages with empty content (API requirement)
+            if not content_str or content_str == "[empty]":
+                continue
+
+            # Handle role conversion
+            # Responses API supports: system, user, assistant
+            # Convert 'tool' role to user with prefix (preserve the tool result context)
+            if role == "tool":
+                # Prefix with tool result indicator
+                content_str = f"[Tool Result]\n{content_str}"
+                role = "user"
+
+            # Simple format: role + content (no type field)
             input_messages.append({
                 "role": role,
-                "content": [{"type": "input_text", "text": str(content)}] if content else [],
+                "content": content_str,
             })
 
         return input_messages
+
+    def _convert_tools(self, tools: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Convert OpenAI-style tool format to VolcEngine Responses API format.
+
+        OpenAI format: {"type": "function", "function": {"name": ..., "parameters": ...}}
+        VolcEngine format: {"type": "function", "name": ..., "description": ..., "parameters": ...}
+
+        Note: VolcEngine Responses API requires "type": "function" and name at top level.
+        """
+        converted = []
+        for tool in tools:
+            if not isinstance(tool, dict):
+                converted.append(tool)
+                continue
+
+            # Check if it's OpenAI format: {"type": "function", "function": {...}}
+            if tool.get("type") == "function" and "function" in tool:
+                func = tool["function"]
+                converted.append({
+                    "type": "function",  # Keep the type field
+                    "name": func.get("name", ""),
+                    "description": func.get("description", ""),
+                    "parameters": func.get("parameters", {}),
+                })
+            elif "function" in tool:
+                # Has function but no type
+                func = tool["function"]
+                converted.append({
+                    "type": "function",
+                    "name": func.get("name", ""),
+                    "description": func.get("description", ""),
+                    "parameters": func.get("parameters", {}),
+                })
+            else:
+                # Already in correct format or other format
+                # Ensure it has type: function
+                if tool.get("type") != "function":
+                    converted.append({
+                        "type": "function",
+                        "name": tool.get("name", ""),
+                        "description": tool.get("description", ""),
+                        "parameters": tool.get("parameters", {}),
+                    })
+                else:
+                    # Keep as is
+                    converted.append(tool)
+
+        return converted
 
     async def get_completion_async(
         self,
@@ -431,19 +584,33 @@ class VolcEngineVLM(OpenAIVLM):
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
 
-        if tools:
-            kwargs["tools"] = tools
+        # VolcEngine limitation: cannot use tools with previous_response_id
+        # Solution: First call creates cache with tools, subsequent calls use previous_response_id
+        # (server will automatically include tools from cache)
+        logger.info(f"[VolcEngineVLM] Request: tools={bool(tools)}, previous_response_id={previous_response_id}")
+        if tools and previous_response_id:
+            # Both tools and previous_response_id - use previous_response_id for caching
+            # (server will include tools from cached context)
+            kwargs["previous_response_id"] = previous_response_id
+            kwargs["caching"] = {"type": "enabled"}
+            logger.info(f"[VolcEngineVLM] Using cached response_id with tools: {previous_response_id}")
+        elif tools:
+            # First call with tools: enable caching (will create cache with tools)
+            converted_tools = self._convert_tools(tools)
+            kwargs["tools"] = converted_tools
+            logger.debug(f"[VolcEngineVLM] Converted tools: {converted_tools}")
             kwargs["tool_choice"] = tool_choice or "auto"
-
-        # Enable caching when there's a previous_response_id
-        # This ensures the current response can be cached for future calls
-        if previous_response_id:
+            kwargs["caching"] = {"type": "enabled"}
+        elif previous_response_id:
+            # Use cached response (tools are in the cached context)
             kwargs["previous_response_id"] = previous_response_id
             kwargs["caching"] = {"type": "enabled"}
             logger.info(f"[VolcEngineVLM] Using cached response_id: {previous_response_id}")
         else:
             # Enable caching by default for prompt caching support
             kwargs["caching"] = {"type": "enabled"}
+
+        logger.info(f"[VolcEngineVLM] Request kwargs: caching={kwargs.get('caching')}, previous_response_id={kwargs.get('previous_response_id')}")
 
         last_error = None
         for attempt in range(max_retries + 1):
@@ -626,16 +793,26 @@ class VolcEngineVLM(OpenAIVLM):
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
 
+        # VolcEngine limitation: cannot use tools with previous_response_id
+        # Solution: First call creates cache with tools, subsequent calls use previous_response_id
+        # (server will automatically include tools from cache)
         if tools:
-            kwargs["tools"] = tools
+            # Convert tools to VolcEngine format
+            converted_tools = self._convert_tools(tools)
+            kwargs["tools"] = converted_tools
+            logger.debug(f"[VolcEngineVLM] Converted tools: {converted_tools}")
             kwargs["tool_choice"] = "auto"
-
-        # Enable caching
-        if previous_response_id:
+            # First call: enable caching (will create cache with tools)
+            # Subsequent calls: use previous_response_id (no tools needed, server has them in cache)
+            if not previous_response_id:
+                kwargs["caching"] = {"type": "enabled"}
+        elif previous_response_id:
+            # Use cached response (tools are in the cached context)
             kwargs["previous_response_id"] = previous_response_id
             kwargs["caching"] = {"type": "enabled"}
             logger.info(f"[VolcEngineVLM] Using cached response_id: {previous_response_id}")
         else:
+            # Enable caching by default for prompt caching support
             kwargs["caching"] = {"type": "enabled"}
 
         t0 = time.perf_counter()
@@ -691,16 +868,26 @@ class VolcEngineVLM(OpenAIVLM):
         if self.max_tokens is not None:
             kwargs["max_tokens"] = self.max_tokens
 
+        # VolcEngine limitation: cannot use tools with previous_response_id
+        # Solution: First call creates cache with tools, subsequent calls use previous_response_id
+        # (server will automatically include tools from cache)
         if tools:
-            kwargs["tools"] = tools
+            # Convert tools to VolcEngine format
+            converted_tools = self._convert_tools(tools)
+            kwargs["tools"] = converted_tools
+            logger.debug(f"[VolcEngineVLM] Converted tools: {converted_tools}")
             kwargs["tool_choice"] = "auto"
-
-        # Enable caching
-        if previous_response_id:
+            # First call: enable caching (will create cache with tools)
+            # Subsequent calls: use previous_response_id (no tools needed, server has them in cache)
+            if not previous_response_id:
+                kwargs["caching"] = {"type": "enabled"}
+        elif previous_response_id:
+            # Use cached response (tools are in the cached context)
             kwargs["previous_response_id"] = previous_response_id
             kwargs["caching"] = {"type": "enabled"}
             logger.info(f"[VolcEngineVLM] Using cached response_id: {previous_response_id}")
         else:
+            # Enable caching by default for prompt caching support
             kwargs["caching"] = {"type": "enabled"}
 
         t0 = time.perf_counter()
