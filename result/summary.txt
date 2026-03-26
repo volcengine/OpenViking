@@ -1,0 +1,15 @@
+=== Judge Result Statistics ===
+Total rows: 1528
+Graded rows: 1528
+Correct: 687
+Wrong: 841
+Accuracy: 44.96%
+
+Average time cost: 17.72s
+
+Average iteration: 1.37
+
+Token usage:
+  Total prompt tokens: 16857093
+  Total completion tokens: 668286
+  Total tokens: 17525379

@@ -28,3 +28,17 @@ fields:
       Includes: decision content, reasons, outcomes, context, timeline, etc.
       Example: “In memory system design discussion, found original 6 category boundaries were unclear. Especially status, lessons learned, and insights often overlapped, making them difficult to distinguish. Decided to refactor to 5 categories, removing these three to make boundaries clearer.”
     merge_op: patch
+
+  - name: start_index
+    type: int64
+    description: |
+      Start index in original messages where this event occurred.
+      Indicates the position of the first message related to this event.
+    merge_op: immutable
+
+  - name: end_index
+    type: int64
+    description: |
+      End index in original messages where this event occurred.
+      Indicates the position of the last message related to this event.
+    merge_op: immutable

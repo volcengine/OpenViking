@@ -67,9 +67,13 @@ class VolcEngineVLM(OpenAIVLM):
             {
                 "prefix": [...],  # messages before the last breakpoint
                 "breakpoint_index": 2,  # index of last breakpoint message
-                "current": [...]  # all messages including last breakpoint
+                "current": [...],  # all messages including last breakpoint
+                "use_current_as_key": True/False,  # if True, use "current" for cache key
             }
             or None if no breakpoints found.
+
+        When the breakpoint is at index 0 (first message), we use "current" as the
+        cache key since there's nothing before it to cache.
         """
         breakpoint_indices = []
 
@@ -97,10 +101,15 @@ class VolcEngineVLM(OpenAIVLM):
         # Use the last breakpoint
         last_breakpoint_idx = breakpoint_indices[-1]
 
+        # If breakpoint is at index 0, there's nothing before it
+        # So we use "current" (including the breakpoint message) as the cache key
+        use_current_as_key = (last_breakpoint_idx == 0)
+
         return {
             "prefix": messages[:last_breakpoint_idx],
             "breakpoint_index": last_breakpoint_idx,
             "current": messages[:last_breakpoint_idx + 1],
+            "use_current_as_key": use_current_as_key,
         }
 
     def _serialize_messages(self, messages: List[Dict[str, Any]]) -> str:
@@ -126,16 +135,31 @@ class VolcEngineVLM(OpenAIVLM):
         return "|".join(key_parts)
 
     def _get_cached_response_id(self, messages: List[Dict[str, Any]]) -> Optional[str]:
-        """Get cached response_id for the given messages."""
+        """Get cached response_id for the given messages.
+
+        Logic:
+        - Find the last cache_control breakpoint
+        - If breakpoint is at index 0: use "current" as cache key (the breakpoint message itself)
+        - Otherwise: use "prefix" (messages before the breakpoint) as cache key
+        """
         breakpoints = self._find_cache_breakpoints(messages)
         if not breakpoints:
             return None
 
-        cache_key = self._serialize_messages(breakpoints["prefix"])
+        # Use appropriate key based on breakpoint position
+        if breakpoints.get("use_current_as_key"):
+            cache_key = self._serialize_messages(breakpoints["current"])
+        else:
+            cache_key = self._serialize_messages(breakpoints["prefix"])
+
         return self._response_cache.get(cache_key)
 
     def _cache_response_id(self, messages: List[Dict[str, Any]], response_id: str) -> None:
-        """Cache response_id for the given messages."""
+        """Cache response_id for the given messages.
+
+        The cache key uses "current" (breakpoint message + everything before it).
+        This way, subsequent calls with the same prefix can find the cached response.
+        """
         breakpoints = self._find_cache_breakpoints(messages)
         if not breakpoints:
             return
@@ -192,28 +216,77 @@ class VolcEngineVLM(OpenAIVLM):
         return tool_calls
 
     def _build_vlm_response(self, response, has_tools: bool) -> Union[str, VLMResponse]:
-        """Build response from VolcEngine response. Returns str or VLMResponse based on has_tools."""
-        choice = response.choices[0]
-        message = choice.message
+        """Build response from VolcEngine Responses API response.
 
-        if has_tools:
-            usage = {}
-            if hasattr(response, "usage") and response.usage:
-                usage = {
-                    "prompt_tokens": response.usage.prompt_tokens,
-                    "completion_tokens": response.usage.completion_tokens,
-                    "total_tokens": response.usage.total_tokens,
-                    "prompt_tokens_details": getattr(response.usage, "prompt_tokens_details", None),
+        Responses API returns:
+        - response.output: list of output items
+        - response.id: response ID
+        - response.usage: token usage
+        """
+        # Extract content from Responses API format
+        content = ""
+        tool_calls = []
+        finish_reason = "stop"
+
+        if hasattr(response, 'output') and response.output:
+            for item in response.output:
+                # Check if it's a message item
+                if hasattr(item, 'type'):
+                    if item.type == 'message':
+                        message = item
+                        if hasattr(message, 'content'):
+                            # Content can be a list or string
+                            if isinstance(message.content, list):
+                                for block in message.content:
+                                    if hasattr(block, 'type') and block.type == 'output_text':
+                                        content = block.text or ""
+                                    elif hasattr(block, 'text'):
+                                        content = block.text or ""
+                            else:
+                                content = message.content or ""
+
+                        # Parse tool calls
+                        if hasattr(message, 'tool_calls') and message.tool_calls:
+                            for tc in message.tool_calls:
+                                args = tc.arguments
+                                if isinstance(args, str):
+                                    try:
+                                        args = json.loads(args)
+                                    except json.JSONDecodeError:
+                                        args = {"raw": args}
+                                tool_calls.append(ToolCall(
+                                    id=tc.id or "",
+                                    name=tc.name or tc.function.name,
+                                    arguments=args
+                                ))
+
+                        finish_reason = getattr(message, 'finish_reason', 'stop') or 'stop'
+
+        # Extract usage
+        usage = {}
+        if hasattr(response, 'usage') and response.usage:
+            u = response.usage
+            usage = {
+                "prompt_tokens": getattr(u, 'input_tokens', 0),
+                "completion_tokens": getattr(u, 'output_tokens', 0),
+                "total_tokens": getattr(u, 'total_tokens', 0),
+            }
+            # Handle cached tokens
+            input_details = getattr(u, 'input_tokens_details', None)
+            if input_details:
+                usage["prompt_tokens_details"] = {
+                    "cached_tokens": getattr(input_details, 'cached_tokens', 0),
                 }
 
+        if has_tools:
             return VLMResponse(
-                content=message.content,
-                tool_calls=self._parse_tool_calls(message),
-                finish_reason=choice.finish_reason or "stop",
+                content=content,
+                tool_calls=tool_calls,
+                finish_reason=finish_reason,
                 usage=usage,
             )
         else:
-            return message.content or ""
+            return content
 
     def get_completion(
         self,
@@ -223,7 +296,10 @@ class VolcEngineVLM(OpenAIVLM):
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
-        """Get text completion with prompt caching support."""
+        """Get text completion with prompt caching support.
+
+        Uses VolcEngine Responses API for caching support.
+        """
         client = self.get_client()
         if messages:
             kwargs_messages = messages
@@ -233,9 +309,12 @@ class VolcEngineVLM(OpenAIVLM):
         # Check for cached response_id
         previous_response_id = self._get_cached_response_id(kwargs_messages)
 
+        # Use Responses API for prompt caching
+        input_data = self._convert_messages_to_input(kwargs_messages)
+
         kwargs = {
             "model": self.model or "doubao-seed-2-0-pro-260215",
-            "messages": kwargs_messages,
+            "input": input_data,
             "temperature": self.temperature,
             "thinking": {"type": "disabled" if not thinking else "enabled"},
         }
@@ -246,13 +325,17 @@ class VolcEngineVLM(OpenAIVLM):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
 
-        # Use previous_response_id for prompt caching if available
+        # Enable caching
         if previous_response_id:
             kwargs["previous_response_id"] = previous_response_id
+            kwargs["caching"] = {"type": "enabled"}
             logger.info(f"[VolcEngineVLM] Using cached response_id: {previous_response_id}")
+        else:
+            kwargs["caching"] = {"type": "enabled"}
 
         t0 = time.perf_counter()
-        response = client.chat.completions.create(**kwargs)
+        # Use Responses API instead of Chat API
+        response = client.responses.create(**kwargs)
         elapsed = time.perf_counter() - t0
         self._update_token_usage_from_response(response, duration_seconds=elapsed)
 
@@ -263,6 +346,55 @@ class VolcEngineVLM(OpenAIVLM):
 
         return self._build_vlm_response(response, has_tools=bool(tools))
 
+    def _convert_messages_to_input(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Convert OpenAI-style messages to VolcEngine Responses API input format.
+
+        Note: VolcEngine Responses API doesn't support 'tool' role.
+        Tool results are converted to user messages.
+        """
+        input_messages = []
+        for msg in messages:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+
+            # Map 'tool' role to 'user' since Responses API doesn't support tool role
+            if role == "tool":
+                role = "user"
+
+            # Handle content as list (Claude-style)
+            if isinstance(content, list):
+                # Convert content blocks
+                blocks = []
+                for block in content:
+                    if isinstance(block, dict):
+                        block_type = block.get("type")
+                        if block_type == "text":
+                            blocks.append({
+                                "type": "input_text",
+                                "text": block.get("text", ""),
+                            })
+                        elif block_type == "image_url":
+                            image_url = block.get("image_url", {})
+                            url = image_url.get("url", "")
+                            blocks.append({
+                                "type": "input_image",
+                                "image_url": url,
+                            })
+                if blocks:
+                    input_messages.append({
+                        "role": role,
+                        "content": blocks,
+                    })
+                    continue
+
+            # Simple text message
+            input_messages.append({
+                "role": role,
+                "content": [{"type": "input_text", "text": str(content)}] if content else [],
+            })
+
+        return input_messages
+
     async def get_completion_async(
         self,
         prompt: str = "",
@@ -272,7 +404,10 @@ class VolcEngineVLM(OpenAIVLM):
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
-        """Get text completion asynchronously with prompt caching support."""
+        """Get text completion asynchronously with prompt caching support.
+
+        Uses VolcEngine Responses API for caching support.
+        """
         client = self.get_async_client()
         if messages:
             kwargs_messages = messages
@@ -282,9 +417,14 @@ class VolcEngineVLM(OpenAIVLM):
         # Check for cached response_id
         previous_response_id = self._get_cached_response_id(kwargs_messages)
 
+        # Use Responses API for prompt caching
+        # Convert messages to input format
+        input_data = self._convert_messages_to_input(kwargs_messages)
+
+        # Build kwargs for Responses API
         kwargs = {
             "model": self.model or "doubao-seed-2-0-pro-260215",
-            "messages": kwargs_messages,
+            "input": input_data,
             "temperature": self.temperature,
             "thinking": {"type": "disabled" if not thinking else "enabled"},
         }
@@ -295,16 +435,22 @@ class VolcEngineVLM(OpenAIVLM):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
 
-        # Use previous_response_id for prompt caching if available
+        # Enable caching when there's a previous_response_id
+        # This ensures the current response can be cached for future calls
         if previous_response_id:
             kwargs["previous_response_id"] = previous_response_id
+            kwargs["caching"] = {"type": "enabled"}
             logger.info(f"[VolcEngineVLM] Using cached response_id: {previous_response_id}")
+        else:
+            # Enable caching by default for prompt caching support
+            kwargs["caching"] = {"type": "enabled"}
 
         last_error = None
         for attempt in range(max_retries + 1):
             try:
                 t0 = time.perf_counter()
-                response = await client.chat.completions.create(**kwargs)
+                # Use Responses API instead of Chat API
+                response = await client.responses.create(**kwargs)
                 elapsed = time.perf_counter() - t0
                 self._update_token_usage_from_response(
                     response, duration_seconds=elapsed,
@@ -448,7 +594,10 @@ class VolcEngineVLM(OpenAIVLM):
         tools: Optional[List[Dict[str, Any]]] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
-        """Get vision completion with prompt caching support."""
+        """Get vision completion with prompt caching support.
+
+        Uses VolcEngine Responses API for caching support.
+        """
         client = self.get_client()
 
         if messages:
@@ -465,9 +614,12 @@ class VolcEngineVLM(OpenAIVLM):
         # Check for cached response_id
         previous_response_id = self._get_cached_response_id(kwargs_messages)
 
+        # Use Responses API
+        input_data = self._convert_messages_to_input(kwargs_messages)
+
         kwargs = {
             "model": self.model or "doubao-seed-2-0-pro-260215",
-            "messages": kwargs_messages,
+            "input": input_data,
             "temperature": self.temperature,
             "thinking": {"type": "disabled" if not thinking else "enabled"},
         }
@@ -478,13 +630,17 @@ class VolcEngineVLM(OpenAIVLM):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
 
-        # Use previous_response_id for prompt caching if available
+        # Enable caching
         if previous_response_id:
             kwargs["previous_response_id"] = previous_response_id
+            kwargs["caching"] = {"type": "enabled"}
             logger.info(f"[VolcEngineVLM] Using cached response_id: {previous_response_id}")
+        else:
+            kwargs["caching"] = {"type": "enabled"}
 
         t0 = time.perf_counter()
-        response = client.chat.completions.create(**kwargs)
+        # Use Responses API
+        response = client.responses.create(**kwargs)
         elapsed = time.perf_counter() - t0
         self._update_token_usage_from_response(response, duration_seconds=elapsed)
 
@@ -503,7 +659,10 @@ class VolcEngineVLM(OpenAIVLM):
         tools: Optional[List[Dict[str, Any]]] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
-        """Get vision completion asynchronously with prompt caching support."""
+        """Get vision completion asynchronously with prompt caching support.
+
+        Uses VolcEngine Responses API for caching support.
+        """
         client = self.get_async_client()
 
         if messages:
@@ -520,9 +679,12 @@ class VolcEngineVLM(OpenAIVLM):
         # Check for cached response_id
         previous_response_id = self._get_cached_response_id(kwargs_messages)
 
+        # Use Responses API
+        input_data = self._convert_messages_to_input(kwargs_messages)
+
         kwargs = {
             "model": self.model or "doubao-seed-2-0-pro-260215",
-            "messages": kwargs_messages,
+            "input": input_data,
             "temperature": self.temperature,
             "thinking": {"type": "disabled" if not thinking else "enabled"},
         }
@@ -533,13 +695,17 @@ class VolcEngineVLM(OpenAIVLM):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
 
-        # Use previous_response_id for prompt caching if available
+        # Enable caching
         if previous_response_id:
             kwargs["previous_response_id"] = previous_response_id
+            kwargs["caching"] = {"type": "enabled"}
             logger.info(f"[VolcEngineVLM] Using cached response_id: {previous_response_id}")
+        else:
+            kwargs["caching"] = {"type": "enabled"}
 
         t0 = time.perf_counter()
-        response = await client.chat.completions.create(**kwargs)
+        # Use Responses API
+        response = await client.responses.create(**kwargs)
         elapsed = time.perf_counter() - t0
         self._update_token_usage_from_response(response, duration_seconds=elapsed)
 

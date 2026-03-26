@@ -88,7 +88,7 @@ def load_json_config(path: Path) -> Dict[str, Any]:
     raw = os.path.expandvars(raw)
 
     try:
-        print(f"Loading config file: {path}")
+        # print(f"Loading config file: {path}")
         return json.loads(raw)
     except json.JSONDecodeError as e:
         raise ValueError(f"Invalid JSON in config file {path}: {e}") from e

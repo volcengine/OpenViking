@@ -130,6 +130,8 @@ def _merge_vlm_model_config(bot_data: dict, vlm_data: dict) -> None:
             bot_data["agents"] = {}
         model = vlm_data["model"]
         provider = vlm_data.get("provider")
+        if provider and "/" not in model:
+            model = f"{provider}/{model}"
         bot_data["agents"]["model"] = model
         bot_data["agents"]["provider"] = provider if provider else ""
         bot_data["agents"]["api_base"] = vlm_data.get("api_base", "")

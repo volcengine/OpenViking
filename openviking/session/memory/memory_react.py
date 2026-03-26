@@ -335,13 +335,18 @@ class MemoryReAct:
         tool_call_messages: List,
         output_language: str,
     ) -> List[Dict[str, Any]]:
-        """Build initial messages from conversation and pre-fetched context."""
+        """Build initial messages from conversation and pre-fetched context.
+
+        Prompt caching strategy:
+        - The system prompt is cached (static across all calls)
+        - Each ReAct iteration continues from the previous cached state
+        """
         system_prompt = self._get_system_prompt(output_language)
         messages = [
             {
                 "role": "system",
                 "content": system_prompt,
-                # Mark system prompt with cache_control - this will be the caching breakpoint
+                # Cache the system prompt - it's constant and will be reused
                 "cache_control": {"type": "ephemeral"},
             }
         ]
@@ -355,8 +360,6 @@ class MemoryReAct:
 {conversation}
 
 After exploring, analyze the conversation and output ALL memory write/edit/delete operations in a single response. Do not output operations one at a time - gather all changes first, then return them together.""",
-                # Mark user message with cache_control to enable continuation
-                "cache_control": {"type": "ephemeral"},
         })
         # Print messages in a readable format
         pretty_print_messages(messages)

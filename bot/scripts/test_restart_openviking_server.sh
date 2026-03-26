@@ -49,7 +49,7 @@ echo ""
 # Step 0: Clean up test data directory
 echo "Step 0: Cleaning up test data directory..."
 if [ -d "$TEST_DATA_DIR" ]; then
-    rm -rf "$TEST_DATA_DIR"
+    # rm -rf "$TEST_DATA_DIR"
     echo "  ✓ Removed $TEST_DATA_DIR"
 fi
 mkdir -p "$TEST_DATA_DIR"
