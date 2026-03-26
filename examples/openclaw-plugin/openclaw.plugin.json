@@ -90,6 +90,12 @@
       "advanced": true,
       "help": "Maximum estimated tokens for auto-recall memory injection"
     },
+    "commitTokenThreshold": {
+      "label": "Commit Token Threshold",
+      "placeholder": "2000",
+      "advanced": true,
+      "help": "Minimum estimated pending tokens before auto-commit triggers. Set to 0 to commit every turn."
+    },
     "ingestReplyAssist": {
       "label": "Ingest Reply Assist",
       "help": "When transcript-like memory ingestion is detected, add a lightweight reply instruction to reduce NO_REPLY.",
@@ -166,6 +172,9 @@
         "type": "boolean"
       },
       "recallTokenBudget": {
+        "type": "number"
+      },
+      "commitTokenThreshold": {
         "type": "number"
       },
       "ingestReplyAssist": {
