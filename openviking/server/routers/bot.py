@@ -52,6 +52,20 @@ async def verify_auth(request: Request) -> Optional[str]:
     return None
 
 
+async def require_auth_token(request: Request) -> str:
+    """Require API token for bot proxy endpoints.
+
+    Raises 401 when no token is provided via X-API-Key or Bearer Authorization.
+    """
+    token = await verify_auth(request)
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing API Key",
+        )
+    return token
+
+
 @router.get("/health")
 async def health_check(request: Request):
     """Health check endpoint for Bot API.
@@ -91,8 +105,8 @@ async def chat(request: Request):
 
     Proxies the request to Vikingbot OpenAPIChannel.
     """
+    auth_token = await require_auth_token(request)
     bot_url = get_bot_url()
-    auth_token = await verify_auth(request)
 
     # Read request body
     try:
@@ -145,8 +159,8 @@ async def chat_stream(request: Request):
 
     Proxies the request to Vikingbot OpenAPIChannel with SSE streaming.
     """
+    auth_token = await require_auth_token(request)
     bot_url = get_bot_url()
-    auth_token = await verify_auth(request)
 
     # Read request body
     try:
