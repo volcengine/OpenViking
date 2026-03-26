@@ -52,6 +52,16 @@ async def verify_auth(request: Request) -> Optional[str]:
     return None
 
 
+def require_auth_token(auth_token: Optional[str]) -> str:
+    """Enforce auth token presence for bot proxy endpoints."""
+    if not auth_token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Missing authentication token",
+        )
+    return auth_token
+
+
 @router.get("/health")
 async def health_check(request: Request):
     """Health check endpoint for Bot API.
@@ -92,7 +102,7 @@ async def chat(request: Request):
     Proxies the request to Vikingbot OpenAPIChannel.
     """
     bot_url = get_bot_url()
-    auth_token = await verify_auth(request)
+    auth_token = require_auth_token(await verify_auth(request))
 
     # Read request body
     try:
@@ -107,8 +117,7 @@ async def chat(request: Request):
         async with httpx.AsyncClient() as client:
             # Build headers
             headers = {"Content-Type": "application/json"}
-            if auth_token:
-                headers["X-API-Key"] = auth_token
+            headers["X-API-Key"] = auth_token
 
             # Forward to Vikingbot OpenAPIChannel chat endpoint
             response = await client.post(
@@ -146,7 +155,7 @@ async def chat_stream(request: Request):
     Proxies the request to Vikingbot OpenAPIChannel with SSE streaming.
     """
     bot_url = get_bot_url()
-    auth_token = await verify_auth(request)
+    auth_token = require_auth_token(await verify_auth(request))
 
     # Read request body
     try:
@@ -163,8 +172,7 @@ async def chat_stream(request: Request):
             async with httpx.AsyncClient() as client:
                 # Build headers
                 headers = {"Content-Type": "application/json"}
-                if auth_token:
-                    headers["X-API-Key"] = auth_token
+                headers["X-API-Key"] = auth_token
 
                 # Forward to Vikingbot OpenAPIChannel stream endpoint
                 async with client.stream(
