@@ -129,7 +129,8 @@ function messageDigest(messages: AgentMessage[], maxCharsPerMsg = 2000): Array<{
   });
 }
 
-function emitDiag(log: typeof logger, stage: string, sessionId: string, data: Record<string, unknown>): void {
+function emitDiag(log: typeof logger, stage: string, sessionId: string, data: Record<string, unknown>, enabled = true): void {
+  if (!enabled) return;
   log.info(`openviking: diag ${JSON.stringify({ ts: Date.now(), stage, sessionId, data })}`);
 }
 
@@ -417,6 +418,10 @@ export function createMemoryOpenVikingContextEngine(params: {
     resolveAgentId,
   } = params;
 
+  const diagEnabled = cfg.emitStandardDiagnostics;
+  const diag = (stage: string, sessionId: string, data: Record<string, unknown>) =>
+    emitDiag(logger, stage, sessionId, data, diagEnabled);
+
   async function doCommitOVSession(sessionId: string): Promise<boolean> {
     try {
       const client = await getClient();
@@ -468,7 +473,7 @@ export function createMemoryOpenVikingContextEngine(params: {
       logger.info(`openviking: assemble input msgs=${messages.length} ~${originalTokens} tokens, budget=${validTokenBudget(assembleParams.tokenBudget) ?? 128_000}`);
 
       const OVSessionId = assembleParams.sessionId;
-      emitDiag(logger, "assemble_entry", OVSessionId, {
+      diag("assemble_entry", OVSessionId, {
         messagesCount: messages.length,
         inputTokenEstimate: originalTokens,
         tokenBudget,
@@ -493,7 +498,7 @@ export function createMemoryOpenVikingContextEngine(params: {
 
         if (!ctx || (!hasArchives && activeCount === 0)) {
           logger.info("openviking: assemble passthrough (no OV data)");
-          emitDiag(logger, "assemble_result", OVSessionId, {
+          diag("assemble_result", OVSessionId, {
             passthrough: true, reason: "no_ov_data",
             archiveCount: 0, activeCount: 0,
             outputMessagesCount: messages.length,
@@ -506,7 +511,7 @@ export function createMemoryOpenVikingContextEngine(params: {
 
         if (!hasArchives && ctx.messages.length < messages.length) {
           logger.info(`openviking: assemble passthrough (OV msgs=${ctx.messages.length} < input msgs=${messages.length})`);
-          emitDiag(logger, "assemble_result", OVSessionId, {
+          diag("assemble_result", OVSessionId, {
             passthrough: true, reason: "ov_msgs_fewer_than_input",
             archiveCount: 0, activeCount,
             outputMessagesCount: messages.length,
@@ -548,7 +553,7 @@ export function createMemoryOpenVikingContextEngine(params: {
 
         if (sanitized.length === 0 && messages.length > 0) {
           logger.info("openviking: assemble passthrough (sanitized=0, falling back to original)");
-          emitDiag(logger, "assemble_result", OVSessionId, {
+          diag("assemble_result", OVSessionId, {
             passthrough: true, reason: "sanitized_empty",
             archiveCount: preAbstracts.length + (ctx.latest_archive_id ? 1 : 0),
             activeCount,
@@ -566,7 +571,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         const tokensSaved = originalTokens - assembledTokens;
         const savingPct = originalTokens > 0 ? Math.round((tokensSaved / originalTokens) * 100) : 0;
 
-        emitDiag(logger, "assemble_result", OVSessionId, {
+        diag("assemble_result", OVSessionId, {
           passthrough: false,
           archiveCount,
           activeCount,
@@ -587,7 +592,7 @@ export function createMemoryOpenVikingContextEngine(params: {
             : {}),
         };
       } catch (err) {
-        emitDiag(logger, "assemble_error", OVSessionId, {
+        diag("assemble_error", OVSessionId, {
           error: String(err),
         });
         return { messages, estimatedTokens: roughEstimate(messages) };
@@ -606,7 +611,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         const messages = afterTurnParams.messages ?? [];
         if (messages.length === 0) {
           logger.info("openviking: afterTurn skipped (messages=0)");
-          emitDiag(logger, "afterTurn_skip", OVSessionId, {
+          diag("afterTurn_skip", OVSessionId, {
             reason: "no_messages",
             totalMessages: 0,
           });
@@ -623,7 +628,7 @@ export function createMemoryOpenVikingContextEngine(params: {
 
         if (newTexts.length === 0) {
           logger.info("openviking: afterTurn skipped (no new user/assistant messages)");
-          emitDiag(logger, "afterTurn_skip", OVSessionId, {
+          diag("afterTurn_skip", OVSessionId, {
             reason: "no_new_turn_messages",
             totalMessages: messages.length,
             prePromptMessageCount: start,
@@ -638,7 +643,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         const newMsgFull = messageDigest(newMessages);
         const newTurnTokens = newMsgFull.reduce((s, d) => s + d.tokens, 0);
 
-        emitDiag(logger, "afterTurn_entry", OVSessionId, {
+        diag("afterTurn_entry", OVSessionId, {
           totalMessages: messages.length,
           newMessageCount: newCount,
           prePromptMessageCount: start,
@@ -657,7 +662,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           );
         } else {
           logger.info("openviking: afterTurn skipped store (sanitized text empty)");
-          emitDiag(logger, "afterTurn_skip", OVSessionId, {
+          diag("afterTurn_skip", OVSessionId, {
             reason: "sanitized_empty",
           });
           return;
@@ -670,7 +675,7 @@ export function createMemoryOpenVikingContextEngine(params: {
           logger.info(
             `openviking: pending_tokens=${pendingTokens}/${cfg.commitTokenThreshold} in session=${OVSessionId}, deferring commit`,
           );
-          emitDiag(logger, "afterTurn_skip", OVSessionId, {
+          diag("afterTurn_skip", OVSessionId, {
             reason: "below_threshold",
             pendingTokens,
             commitTokenThreshold: cfg.commitTokenThreshold,
@@ -688,7 +693,7 @@ export function createMemoryOpenVikingContextEngine(params: {
             `task_id=${commitResult.task_id ?? "none"} ${toJsonLog({ captured: [trimForLog(turnText, 260)] })}`,
         );
 
-        emitDiag(logger, "afterTurn_commit", OVSessionId, {
+        diag("afterTurn_commit", OVSessionId, {
           pendingTokens,
           commitTokenThreshold: cfg.commitTokenThreshold,
           status: commitResult.status,
@@ -698,7 +703,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         });
       } catch (err) {
         warnOrInfo(logger, `openviking: afterTurn failed: ${String(err)}`);
-        emitDiag(logger, "afterTurn_error", OVSessionId, {
+        diag("afterTurn_error", OVSessionId, {
           error: String(err),
         });
       }

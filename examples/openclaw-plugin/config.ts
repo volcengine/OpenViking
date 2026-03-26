@@ -27,6 +27,11 @@ export type MemoryOpenVikingConfig = {
   ingestReplyAssist?: boolean;
   ingestReplyAssistMinSpeakerTurns?: number;
   ingestReplyAssistMinChars?: number;
+  /**
+   * When true (default), emit structured `openviking: diag {...}` lines (and any future
+   * standard-diagnostics file writes) for assemble/afterTurn. Set false to disable.
+   */
+  emitStandardDiagnostics?: boolean;
 };
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:1933";
@@ -44,6 +49,7 @@ const DEFAULT_COMMIT_TOKEN_THRESHOLD = 2000;
 const DEFAULT_INGEST_REPLY_ASSIST = true;
 const DEFAULT_INGEST_REPLY_ASSIST_MIN_SPEAKER_TURNS = 2;
 const DEFAULT_INGEST_REPLY_ASSIST_MIN_CHARS = 120;
+const DEFAULT_EMIT_STANDARD_DIAGNOSTICS = true;
 const DEFAULT_LOCAL_CONFIG_PATH = join(homedir(), ".openviking", "ov.conf");
 
 const DEFAULT_AGENT_ID = "default";
@@ -124,6 +130,7 @@ export const memoryOpenVikingConfigSchema = {
         "ingestReplyAssist",
         "ingestReplyAssistMinSpeakerTurns",
         "ingestReplyAssistMinChars",
+        "emitStandardDiagnostics",
       ],
       "openviking config",
     );
@@ -208,6 +215,10 @@ export const memoryOpenVikingConfigSchema = {
           Math.floor(toNumber(cfg.ingestReplyAssistMinChars, DEFAULT_INGEST_REPLY_ASSIST_MIN_CHARS)),
         ),
       ),
+      emitStandardDiagnostics:
+        typeof cfg.emitStandardDiagnostics === "boolean"
+          ? cfg.emitStandardDiagnostics
+          : DEFAULT_EMIT_STANDARD_DIAGNOSTICS,
     };
   },
   uiHints: {
@@ -321,6 +332,11 @@ export const memoryOpenVikingConfigSchema = {
       placeholder: String(DEFAULT_INGEST_REPLY_ASSIST_MIN_CHARS),
       help: "Minimum sanitized text length required before ingest reply assist can trigger.",
       advanced: true,
+    },
+    emitStandardDiagnostics: {
+      label: "Standard diagnostics (diag JSON lines)",
+      advanced: true,
+      help: "When enabled, emit structured openviking: diag {...} lines for assemble and afterTurn. Disable to reduce log noise.",
     },
   },
 };

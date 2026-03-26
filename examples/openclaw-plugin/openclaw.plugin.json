@@ -106,6 +106,11 @@
       "placeholder": "120",
       "help": "Minimum sanitized text length required before ingest reply assist can trigger.",
       "advanced": true
+    },
+    "emitStandardDiagnostics": {
+      "label": "Standard diagnostics (diag JSON lines)",
+      "advanced": true,
+      "help": "Emit structured openviking: diag {...} for assemble/afterTurn. Set false to disable."
     }
   },
   "configSchema": {
@@ -171,6 +176,9 @@
       },
       "ingestReplyAssistMinChars": {
         "type": "number"
+      },
+      "emitStandardDiagnostics": {
+        "type": "boolean"
       }
     }
   }
