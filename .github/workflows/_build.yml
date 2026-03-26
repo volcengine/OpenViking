@@ -429,6 +429,31 @@ jobs:
     - name: Build package (Wheel Only)
       run: uv build --wheel
 
+    - name: Smoke test built wheel (Windows)
+      if: runner.os == 'Windows'
+      shell: bash
+      run: |
+        python -m pip install --upgrade pip
+        python -m pip install --force-reinstall dist/*.whl
+
+        cd "$RUNNER_TEMP"
+        python - <<'PY'
+        import importlib.util
+
+        import openviking.storage.vectordb.engine as engine
+
+        print(f"Loaded runtime engine variant {engine.ENGINE_VARIANT}")
+        print(f"Available engine variants {engine.AVAILABLE_ENGINE_VARIANTS}")
+
+        module_name = f"openviking.storage.vectordb.engine._{engine.ENGINE_VARIANT}"
+        backend_spec = importlib.util.find_spec(module_name)
+        if backend_spec is None or backend_spec.origin is None:
+            raise SystemExit(f"backend module {module_name} was not installed")
+
+        print(f"Imported backend module {module_name}")
+        print(f"Backend module origin {backend_spec.origin}")
+        PY
+
     - name: Store the distribution packages
       uses: actions/upload-artifact@v7
       with:

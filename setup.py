@@ -34,6 +34,41 @@ ENGINE_SOURCE_DIR = "src/"
 ENGINE_BUILD_CONFIG = get_host_engine_build_config(platform.machine())
 
 
+def _get_windows_python_sabi_library() -> Path:
+    """Return the stable-ABI Python library path for Windows abi3 extensions."""
+    candidate_roots = []
+    for raw_root in (
+        sys.base_prefix,
+        sys.base_exec_prefix,
+        sysconfig.get_config_var("installed_base"),
+        sysconfig.get_config_var("base"),
+    ):
+        if not raw_root:
+            continue
+        candidate_root = Path(raw_root).resolve()
+        if candidate_root not in candidate_roots:
+            candidate_roots.append(candidate_root)
+
+    candidate_paths = []
+    for root in candidate_roots:
+        candidate_paths.extend(
+            [
+                root / "libs" / "python3.lib",
+                root / "python3.dll",
+            ]
+        )
+
+    for candidate_path in candidate_paths:
+        if candidate_path.exists():
+            return candidate_path
+
+    searched = ", ".join(str(path) for path in candidate_paths) or "<none>"
+    raise RuntimeError(
+        "Could not locate the Windows stable-ABI Python library for abi3 engine modules. "
+        f"Searched: {searched}"
+    )
+
+
 class OpenVikingBuildExt(build_ext):
     """Build OpenViking runtime artifacts and Python native extensions."""
 
@@ -397,6 +432,8 @@ class OpenVikingBuildExt(build_ext):
             if target_arch:
                 cmake_args.append(f"-DCMAKE_OSX_ARCHITECTURES={target_arch}")
         elif sys.platform == "win32":
+            windows_python_sabi_library = _get_windows_python_sabi_library()
+            cmake_args.append(f"-DOV_PYTHON_SABI_LIBRARY={windows_python_sabi_library}")
             cmake_args.extend(["-G", "MinGW Makefiles"])
 
         self.spawn([self.cmake_executable] + cmake_args)
