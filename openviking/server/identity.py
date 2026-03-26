@@ -4,7 +4,7 @@
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Optional
+from typing import List, Optional, Any
 
 from openviking_cli.session.user_id import UserIdentifier
 
@@ -31,8 +31,28 @@ class RequestContext:
 
     user: UserIdentifier
     role: Role
-    default_search_uris: List[str] = field(default_factory=list)
 
     @property
     def account_id(self) -> str:
         return self.user.account_id
+
+
+@dataclass
+class ToolContext:
+    """Tool-level context, containing request context and additional tool-specific information."""
+
+    request_ctx: RequestContext
+    default_search_uris: List[str] = field(default_factory=list)
+    transaction_handle: Optional[Any] = None
+
+    @property
+    def user(self):
+        return self.request_ctx.user
+
+    @property
+    def role(self):
+        return self.request_ctx.role
+
+    @property
+    def account_id(self) -> str:
+        return self.request_ctx.user.account_id

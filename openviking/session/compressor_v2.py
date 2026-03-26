@@ -46,10 +46,24 @@ class SessionCompressorV2:
         self.vikingdb = vikingdb
         # Initialize registry once - used by both MemoryReAct and MemoryUpdater
         self._registry = MemoryTypeRegistry()
-        schemas_dir = os.path.join(
+
+        # Load built-in templates
+        builtin_templates_dir = os.path.join(
             os.path.dirname(__file__), "..", "prompts", "templates", "memory"
         )
-        self._registry.load_from_directory(schemas_dir)
+        self._registry.load_from_directory(builtin_templates_dir)
+
+        # Load custom templates from config if specified
+        config = get_openviking_config()
+        custom_templates_dir = config.memory.custom_templates_dir
+        if custom_templates_dir:
+            custom_dir = os.path.expanduser(custom_templates_dir)
+            if os.path.exists(custom_dir):
+                loaded = self._registry.load_from_directory(custom_dir)
+                logger.info(f"Loaded {loaded} custom memory templates from {custom_dir}")
+            else:
+                logger.warning(f"Custom templates directory not found: {custom_dir}")
+
         # Lazy initialize MemoryReAct - we need vlm and ctx
         self._react_orchestrator: Optional[MemoryReAct] = None
         self._memory_updater: Optional[MemoryUpdater] = None
@@ -71,12 +85,18 @@ class SessionCompressorV2:
             registry=self._registry,
         )
 
-    def _get_or_create_updater(self) -> MemoryUpdater:
+    def _get_or_create_updater(self, transaction_handle=None) -> MemoryUpdater:
         """Get or create MemoryUpdater instance."""
         if self._memory_updater is not None:
+            # 更新现有实例的 transaction_handle
+            self._memory_updater._transaction_handle = transaction_handle
             return self._memory_updater
 
-        self._memory_updater = MemoryUpdater(registry=self._registry, vikingdb=self.vikingdb)
+        self._memory_updater = MemoryUpdater(
+            registry=self._registry,
+            vikingdb=self.vikingdb,
+            transaction_handle=transaction_handle
+        )
         return self._memory_updater
 
     async def extract_long_term_memories(
@@ -112,10 +132,41 @@ class SessionCompressorV2:
 
         logger.info("Starting v2 memory extraction from conversation")
 
+        from openviking.storage.transaction import init_lock_manager, get_lock_manager
+        from openviking.storage.viking_fs import get_viking_fs
+
+        # 初始化锁管理器（仅在有 AGFS 时使用锁机制）
+        viking_fs = get_viking_fs()
+        lock_manager = None
+        transaction_handle = None
+        if viking_fs and hasattr(viking_fs, 'agfs') and viking_fs.agfs:
+            init_lock_manager(viking_fs.agfs)
+            lock_manager = get_lock_manager()
+            transaction_handle = lock_manager.create_handle()
+        else:
+            logger.warning("VikingFS or AGFS not available, running without lock mechanism")
+
+
         try:
-            # Initialize orchestrator
+            # 获取所有记忆 schema 目录并加锁（仅在有锁管理器时）
             orchestrator = self._get_or_create_react(ctx=ctx)
-            updater = self._get_or_create_updater()
+            if lock_manager:
+                memory_schema_dirs = orchestrator._get_all_memory_schema_dirs()
+                logger.debug(f"Memory schema directories to lock: {memory_schema_dirs}")
+
+                # 使用 batch 加锁获取所有目录的子树锁，防止死锁
+                lock_acquired = await lock_manager.acquire_subtree_batch(
+                    transaction_handle,
+                    memory_schema_dirs,
+                    timeout=None,
+                )
+
+                if not lock_acquired:
+                    logger.error("Failed to acquire memory schema directory locks")
+                    return []
+
+            orchestrator._transaction_handle = transaction_handle  # 传递给 MemoryReAct
+            updater = self._get_or_create_updater(transaction_handle)
 
             # Run ReAct orchestrator
             operations, tools_used = await orchestrator.run(conversation=conversation_str)
@@ -151,3 +202,10 @@ class SessionCompressorV2:
             if strict_extract_errors:
                 raise
             return []
+        finally:
+            # 确保释放所有锁（仅在有锁管理器时）
+            if lock_manager and transaction_handle:
+                try:
+                    await lock_manager.release(transaction_handle)
+                except Exception as e:
+                    logger.warning(f"Failed to release transaction lock: {e}")

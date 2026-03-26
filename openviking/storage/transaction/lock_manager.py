@@ -5,7 +5,7 @@
 import asyncio
 import json
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, List
 
 from openviking.pyagfs import AGFSClient
 from openviking.storage.transaction.lock_handle import LockHandle
@@ -79,6 +79,60 @@ class LockManager:
         return await self._path_lock.acquire_subtree(
             path, handle, timeout=timeout if timeout is not None else self._lock_timeout
         )
+
+    async def acquire_subtree_batch(
+        self,
+        handle: LockHandle,
+        paths: List[str],
+        timeout: Optional[float] = None,
+    ) -> bool:
+        """
+        一次性对多个路径进行子树加锁，使用有序加锁法防止死锁
+
+        核心思想：
+        1. 对路径按照固定的顺序进行排序，确保所有进程获取锁的顺序一致
+        2. 防止循环等待条件，从而避免死锁
+
+        排序规则：
+        1. 路径长度升序
+        2. 长度相同的路径按照字典序升序
+
+        Args:
+            handle: 锁句柄
+            paths: 需要加锁的路径列表
+            timeout: 超时时间，None表示无限等待
+
+        Returns:
+            是否成功获取所有锁
+        """
+        if not paths:
+            return True
+
+        # 对路径进行排序，确保加锁顺序一致
+        sorted_paths = sorted(paths, key=lambda x: (len(x), x))
+        acquired = []
+
+        try:
+            for path in sorted_paths:
+                success = await self._path_lock.acquire_subtree(
+                    path,
+                    handle,
+                    timeout=timeout if timeout is not None else self._lock_timeout,
+                )
+                if not success:
+                    # 释放已获得的锁
+                    for p in acquired:
+                        await self._path_lock.release_subtree(p, handle)
+                    return False
+                acquired.append(path)
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to acquire subtree batch lock: {e}")
+            for p in acquired:
+                await self._path_lock.release_subtree(p, handle)
+            return False
 
     async def acquire_mv(
         self,

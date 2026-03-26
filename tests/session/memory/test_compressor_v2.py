@@ -35,6 +35,11 @@ class MockVikingFS:
         self._store: Dict[str, Dict[str, Any]] = {}
         self._snapshot: Dict[str, str] = {}
 
+    def _uri_to_path(self, uri: str, ctx=None) -> str:
+        """Mock _uri_to_path method for testing."""
+        # For testing purposes, we'll just return the URI as-is
+        return uri
+
     def _get_parent_uri(self, uri: str) -> str:
         """Get parent directory URI."""
         # Handle URIs like "viking://agent/default/memories/cards/file.md"
@@ -153,6 +158,10 @@ class MockVikingFS:
             "resources": [],
             "skills": [],
         }
+
+    async def search(self, query: str, **kwargs) -> Any:
+        """Mock search."""
+        return {"memories": [], "resources": [], "skills": []}
 
     async def tree(self, uri: str, **kwargs) -> Dict[str, Any]:
         """Mock tree."""
@@ -278,6 +287,9 @@ class TestCompressorV2:
         class DummyOrchestrator:
             registry = object()
 
+            def _get_all_memory_schema_dirs(self):
+                return []
+
             async def run(self, conversation: str):
                 captured["conversation"] = conversation
                 return (
@@ -300,7 +312,7 @@ class TestCompressorV2:
                 )
 
         compressor._get_or_create_react = lambda ctx=None: DummyOrchestrator()
-        compressor._get_or_create_updater = lambda: DummyUpdater()
+        compressor._get_or_create_updater = lambda transaction_handle=None: DummyUpdater()
 
         result = await compressor.extract_long_term_memories(
             messages=messages,

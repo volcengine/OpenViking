@@ -13,6 +13,11 @@ class MemoryConfig(BaseModel):
         description="Memory implementation version: 'v1' (legacy) or 'v2' (new templating system)",
     )
 
+    custom_templates_dir: str = Field(
+        default="",
+        description="Custom memory templates directory. If set, templates from this directory will be loaded in addition to built-in templates",
+    )
+
     model_config = {"extra": "forbid"}
 
     @classmethod

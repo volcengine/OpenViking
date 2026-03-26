@@ -98,6 +98,36 @@ class MemoryReAct:
         # Track files read during ReAct for refetch detection
         self._read_files: Set[str] = set()
         self._output_language: str = "en"
+        # Transaction handle for file locking
+        self._transaction_handle = None
+
+    def _get_all_memory_schema_dirs(self) -> List[str]:
+        """
+        Get all memory schema directories
+
+        Returns:
+            List of all memory schema directories
+        """
+        dirs = []
+
+        for schema in self.registry.list_all(include_disabled=False):
+            if not schema.directory:
+                continue
+
+            # Replace variables in directory path with actual user/agent space
+            user_space = self.ctx.user.user_space_name() if self.ctx and self.ctx.user else "default"
+            agent_space = self.ctx.user.agent_space_name() if self.ctx and self.ctx.user else "default"
+            dir_path = schema.directory.replace("{user_space}", user_space).replace("{agent_space}", agent_space)
+
+            # Convert Viking URI to AGFS path using VikingFS's internal path conversion
+            # This is necessary because LockManager/PathLock work directly with AGFSClient
+            # which expects /local/{account_id}/ format paths
+            dir_path = self.viking_fs._uri_to_path(dir_path, self.ctx)
+
+            if dir_path not in dirs:
+                dirs.append(dir_path)
+
+        return dirs
 
     async def _pre_fetch_context(self, conversation: str) -> Dict[str, Any]:
         """
@@ -147,10 +177,12 @@ class MemoryReAct:
         # Step 2: Execute ls for multi-file schema directories in parallel
         ls_tool = get_tool("ls")
         read_tool = get_tool("read")
+        from openviking.server.identity import ToolContext
+        tool_ctx = ToolContext(request_ctx=self.ctx, transaction_handle=self._transaction_handle)
         if ls_tool and self.viking_fs and ls_dirs:
             for dir_uri in ls_dirs:
                 try:
-                    result_str = await ls_tool.execute(self.viking_fs, self.ctx, uri=dir_uri)
+                    result_str = await ls_tool.execute(self.viking_fs, tool_ctx, uri=dir_uri)
                     add_tool_call_pair_to_messages(
                         messages=messages,
                         call_id=call_id_seq,
@@ -162,7 +194,7 @@ class MemoryReAct:
                     )
                     call_id_seq += 1
 
-                    result_str = await read_tool.execute(self.viking_fs, self.ctx, uri=f'{dir_uri}/.overview.md')
+                    result_str = await read_tool.execute(self.viking_fs, tool_ctx, uri=f'{dir_uri}/.overview.md')
 
                     add_tool_call_pair_to_messages(
                         messages=messages,
@@ -192,7 +224,7 @@ class MemoryReAct:
                 if user_query:
                     search_result = await search_tool.execute(
                         viking_fs=self.viking_fs,
-                        ctx=self.ctx,
+                        ctx=tool_ctx,
                         query=user_query,
                     )
                     if search_result and not search_result.get("error"):
@@ -522,7 +554,7 @@ JSON schema:
             tool_choice=tool_choice,
             max_retries=self.vlm.max_retries,
         )
-
+        print(f'response={response}')
         # Log cache hit info
         if hasattr(response, 'usage') and response.usage:
             usage = response.usage
@@ -546,6 +578,7 @@ JSON schema:
         content = response.content or ""
         if content:
             try:
+                print(f'LLM response content: {content}')
                 logger.debug(f"[assistant]\n{content}")
                 # Get the dynamically generated operations model for better type safety
                 operations_model = self.schema_model_generator.create_structured_operations_model()
@@ -558,6 +591,7 @@ JSON schema:
                 )
 
                 if error is not None:
+                    print(f'content={content}')
                     logger.warning(f"Failed to parse memory operations (stable parse): {error}")
                     # Fallback: try with base MemoryOperations
                     content_no_md = extract_json_from_markdown(content)
@@ -572,11 +606,14 @@ JSON schema:
 
                 # Validate that all URIs are allowed
                 self._validate_operations(operations)
+                print(f'Parsed operations: {operations}')
                 return (None, operations)
             except Exception as e:
+                print(f'Error parsing operations: {e}')
                 logger.warning(f"Unexpected error parsing memory operations: {e}")
 
         # Case 3: No tool calls and no parsable operations
+        print('No tool calls or operations parsed')
         return (None, None)
 
     async def _execute_tool(
@@ -591,8 +628,15 @@ JSON schema:
         if not tool:
             return {"error": f"Unknown tool: {tool_call.name}"}
 
+        # 创建 ToolContext
+        from openviking.server.identity import ToolContext
+        tool_ctx = ToolContext(
+            request_ctx=self.ctx,
+            transaction_handle=self._transaction_handle
+        )
+
         try:
-            result = await tool.execute(self.viking_fs, self.ctx, **tool_call.arguments)
+            result = await tool.execute(self.viking_fs, tool_ctx, **tool_call.arguments)
             return result
         except Exception as e:
             logger.error(f"Failed to execute {tool_call.name}: {e}")

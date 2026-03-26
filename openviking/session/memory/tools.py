@@ -137,7 +137,7 @@ class MemoryTool(ABC):
     async def execute(
         self,
         viking_fs: VikingFS,
-        ctx: Optional[RequestContext],
+        ctx: Optional["ToolContext"],
         **kwargs: Any,
     ) -> Any:
         """
@@ -145,7 +145,7 @@ class MemoryTool(ABC):
 
         Args:
             viking_fs: VikingFS instance
-            ctx: Request context
+            ctx: Tool context
             **kwargs: Tool-specific parameters
 
         Returns:
@@ -192,14 +192,14 @@ class MemoryReadTool(MemoryTool):
     async def execute(
         self,
         viking_fs: VikingFS,
-        ctx: Optional[RequestContext],
+        ctx: Optional["ToolContext"],
         **kwargs: Any,
     ) -> Any:
         try:
             uri = kwargs.get("uri", "")
             content = await viking_fs.read_file(
                 uri,
-                ctx=ctx,
+                ctx=ctx.request_ctx,
             )
             # Parse MEMORY_FIELDS from comment and return dict directly
             parsed = parse_memory_file_with_fields(content)
@@ -258,7 +258,7 @@ class MemorySearchTool(MemoryTool):
     async def execute(
         self,
         viking_fs: VikingFS,
-        ctx: Optional[RequestContext],
+        ctx: Optional["ToolContext"],
         **kwargs: Any,
     ) -> Any:
         try:
@@ -328,7 +328,7 @@ class MemoryLsTool(MemoryTool):
     async def execute(
         self,
         viking_fs: VikingFS,
-        ctx: Optional[RequestContext],
+        ctx: Optional["ToolContext"],
         **kwargs: Any,
     ) -> Any:
         try:
@@ -339,7 +339,7 @@ class MemoryLsTool(MemoryTool):
                 abs_limit=256,
                 show_all_hidden=False,
                 node_limit=1000,
-                ctx=ctx,
+                ctx=ctx.request_ctx,
             )
             # Format: filename size (e.g., "file.md 1.2K")
             result_lines = []

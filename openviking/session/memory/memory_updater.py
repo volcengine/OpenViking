@@ -75,10 +75,11 @@ class MemoryUpdater:
     No function calls are used for write/edit/delete - these are executed directly.
     """
 
-    def __init__(self, registry: Optional[MemoryTypeRegistry] = None, vikingdb=None):
+    def __init__(self, registry: Optional[MemoryTypeRegistry] = None, vikingdb=None, transaction_handle=None):
         self._viking_fs = None
         self._registry = registry
         self._vikingdb = vikingdb
+        self._transaction_handle = transaction_handle
 
     def set_registry(self, registry: MemoryTypeRegistry) -> None:
         """Set the memory type registry for URI resolution."""
@@ -209,6 +210,17 @@ class MemoryUpdater:
                     if field_name in model_dict:
                         business_fields[field_name] = model_dict[field_name]
 
+                # 添加模板渲染逻辑
+                if schema.content_template:
+                    try:
+                        rendered_content = self._render_content_template(schema.content_template, business_fields)
+                        if rendered_content:
+                            content = rendered_content
+                        logger.debug(f"Successfully rendered content template for memory type: {memory_type_str}")
+                    except Exception as e:
+                        logger.warning(f"Failed to render content template for memory type {memory_type_str}: {e}")
+                        # 渲染失败时保留原始 content，确保写入操作继续进行
+
         # Collect metadata - only include business fields (from schema, except content)
         metadata = business_fields.copy()
 
@@ -219,6 +231,30 @@ class MemoryUpdater:
         # VikingFS automatically handles L0/L1/L2 and vector index updates
         await viking_fs.write_file(uri, full_content, ctx=ctx)
         logger.debug(f"Written memory: {uri}")
+
+    def _render_content_template(self, template: str, fields: Dict[str, Any]) -> str:
+        """
+        Render content template using field values.
+
+        Args:
+            template: The content template string with placeholders
+            fields: Dictionary of field values to use for substitution
+
+        Returns:
+            Rendered template string
+
+        Raises:
+            Exception: If template rendering fails
+        """
+        try:
+            rendered = template
+            for field_name, value in fields.items():
+                safe_value = str(value) if value is not None else ""
+                rendered = rendered.replace(f"{{{field_name}}}", safe_value)
+            return rendered.strip()
+        except Exception as e:
+            logger.error(f"Template rendering failed: {e}")
+            raise
 
     async def _apply_edit(self, flat_model: Any, uri: str, ctx: RequestContext) -> None:
         """Apply edit operation from a flat model."""
