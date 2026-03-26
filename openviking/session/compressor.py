@@ -7,6 +7,7 @@ Handles extraction of long-term memories from session conversations.
 Uses MemoryExtractor for 6-category extraction and MemoryDeduplicator for LLM-based dedup.
 """
 
+import hashlib
 from dataclasses import dataclass
 from typing import Dict, List, Optional
 
@@ -238,6 +239,16 @@ class SessionCompressor:
                 output_language=candidate.language,
             )
             if not payload:
+                return False
+
+            # Skip write + reindex if merge produced identical content
+            existing_hash = hashlib.md5((existing_content or "").encode()).hexdigest()
+            merged_hash = hashlib.md5((payload.content or "").encode()).hexdigest()
+            if existing_hash == merged_hash:
+                logger.info(
+                    "Merge produced identical content for %s, skipping write",
+                    target_memory.uri,
+                )
                 return False
 
             await viking_fs.write_file(target_memory.uri, payload.content, ctx=ctx)

@@ -8,6 +8,7 @@ Extracts 6 categories of memories from session:
 - AgentMemory: cases, patterns
 """
 
+import hashlib
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -553,6 +554,14 @@ class MemoryExtractor:
             if not payload:
                 logger.warning("Profile merge bundle failed; keeping existing profile unchanged")
                 return None
+
+            # Skip write if profile content unchanged (prevents reprocessing loop)
+            existing_hash = hashlib.md5(existing.encode()).hexdigest()
+            merged_hash = hashlib.md5((payload.content or "").encode()).hexdigest()
+            if existing_hash == merged_hash:
+                logger.info("Profile merge produced identical content for %s, skipping", uri)
+                return None
+
             await viking_fs.write_file(uri=uri, content=payload.content, ctx=ctx)
             logger.info(f"Merged profile info to {uri}")
             return payload
