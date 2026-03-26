@@ -196,7 +196,30 @@ class LiteLLMVLMProvider(VLMBase):
         else:
             return {"type": "image_url", "image_url": {"url": image}}
 
-    def _build_kwargs(self, model: str, messages: list, tools: Optional[List[Dict[str, Any]]] = None, tool_choice: Optional[str] = None) -> dict[str, Any]:
+    _THINKING_PROVIDERS = frozenset({"dashscope", "zhipu"})
+
+    def _apply_provider_specific_extra_body(
+        self, kwargs: dict[str, Any], thinking: bool | None = None,
+    ) -> None:
+        """Attach enable_thinking for providers that support it (DashScope, ZhiPu).
+
+        Args:
+            kwargs: The kwargs dict to mutate.
+            thinking: Call-site override; falls back to ``self._thinking`` from config.
+        """
+        provider = self._detected_provider or detect_provider_by_model(self.model or "")
+        if provider in self._THINKING_PROVIDERS:
+            value = thinking if thinking is not None else self._thinking
+            kwargs["enable_thinking"] = bool(value)
+
+    def _build_kwargs(
+        self,
+        model: str,
+        messages: list,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+        thinking: bool | None = None,
+    ) -> dict[str, Any]:
         """Build kwargs for LiteLLM call."""
         kwargs: dict[str, Any] = {
             "model": model,
@@ -223,6 +246,7 @@ class LiteLLMVLMProvider(VLMBase):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
 
+        self._apply_provider_specific_extra_body(kwargs, thinking)
         return kwargs
 
     def _parse_tool_calls(self, message) -> List[ToolCall]:
@@ -282,7 +306,7 @@ class LiteLLMVLMProvider(VLMBase):
         else:
             kwargs_messages = [{"role": "user", "content": prompt}]
 
-        kwargs = self._build_kwargs(model, kwargs_messages, tools, tool_choice)
+        kwargs = self._build_kwargs(model, kwargs_messages, tools, tool_choice, thinking=thinking)
 
         t0 = time.perf_counter()
         response = completion(**kwargs)
@@ -306,7 +330,7 @@ class LiteLLMVLMProvider(VLMBase):
         else:
             kwargs_messages = [{"role": "user", "content": prompt}]
 
-        kwargs = self._build_kwargs(model, kwargs_messages, tools, tool_choice)
+        kwargs = self._build_kwargs(model, kwargs_messages, tools, tool_choice, thinking=thinking)
 
         last_error = None
         for attempt in range(max_retries + 1):
@@ -349,7 +373,7 @@ class LiteLLMVLMProvider(VLMBase):
                 content.append({"type": "text", "text": prompt})
             kwargs_messages = [{"role": "user", "content": content}]
 
-        kwargs = self._build_kwargs(model, kwargs_messages, tools)
+        kwargs = self._build_kwargs(model, kwargs_messages, tools, thinking=thinking)
 
         t0 = time.perf_counter()
         response = completion(**kwargs)
@@ -379,7 +403,7 @@ class LiteLLMVLMProvider(VLMBase):
                 content.append({"type": "text", "text": prompt})
             kwargs_messages = [{"role": "user", "content": content}]
 
-        kwargs = self._build_kwargs(model, kwargs_messages, tools)
+        kwargs = self._build_kwargs(model, kwargs_messages, tools, thinking=thinking)
 
         t0 = time.perf_counter()
         response = await acompletion(**kwargs)

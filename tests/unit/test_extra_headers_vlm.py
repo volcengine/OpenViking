@@ -349,3 +349,153 @@ class TestLiteLLMVLMModelResolution:
         )
 
         assert vlm._resolve_model("zai/custom-model") == "gemini/zai/custom-model"
+
+
+class TestOpenAIVLMEnableThinkingZhiPu:
+    """Test enable_thinking support for ZhiPu/GLM providers in OpenAI backend."""
+
+    def test_supports_enable_thinking_zhipu_host(self):
+        """ZhiPu open.bigmodel.cn host should be recognised as thinking-capable."""
+        vlm = OpenAIVLM(
+            {
+                "api_key": "sk-test",
+                "api_base": "https://open.bigmodel.cn/api/coding/paas/v4",
+                "model": "glm-5",
+            }
+        )
+        assert vlm._supports_enable_thinking() is True
+
+    def test_supports_enable_thinking_zhipu_model_prefix(self):
+        """Model names starting with 'zhipu/' should be recognised as thinking-capable."""
+        vlm = OpenAIVLM(
+            {
+                "api_key": "sk-test",
+                "model": "zhipu/glm-5",
+            }
+        )
+        assert vlm._supports_enable_thinking() is True
+
+    def test_dashscope_host_still_supported(self):
+        """DashScope hosts must continue to be recognised (regression guard)."""
+        vlm = OpenAIVLM(
+            {
+                "api_key": "sk-test",
+                "api_base": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+                "model": "qwen3.5-plus",
+            }
+        )
+        assert vlm._supports_enable_thinking() is True
+
+    def test_dashscope_model_prefix_still_supported(self):
+        """Model names starting with 'dashscope/' must continue to work."""
+        vlm = OpenAIVLM(
+            {
+                "api_key": "sk-test",
+                "model": "dashscope/qwen3.5-plus",
+            }
+        )
+        assert vlm._supports_enable_thinking() is True
+
+    def test_generic_openai_host_not_thinking(self):
+        """Standard OpenAI API should not be flagged as thinking-capable."""
+        vlm = OpenAIVLM(
+            {
+                "api_key": "sk-test",
+                "api_base": "https://api.openai.com/v1",
+                "model": "gpt-4o-mini",
+            }
+        )
+        assert vlm._supports_enable_thinking() is False
+
+    @patch("openviking.models.vlm.backends.openai_vlm.openai.OpenAI")
+    def test_zhipu_completion_passes_enable_thinking_in_extra_body(
+        self, mock_openai_class
+    ):
+        """ZhiPu GLM via OpenAI backend should send enable_thinking in extra_body."""
+        mock_client = MagicMock()
+        mock_openai_class.return_value = mock_client
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock(message=MagicMock(content="ok"), finish_reason="stop")]
+        mock_response.usage = None
+        mock_client.chat.completions.create.return_value = mock_response
+
+        vlm = OpenAIVLM(
+            {
+                "api_key": "sk-test",
+                "api_base": "https://open.bigmodel.cn/api/coding/paas/v4",
+                "model": "glm-5",
+            }
+        )
+
+        vlm.get_completion("hello", thinking=False)
+
+        call_kwargs = mock_client.chat.completions.create.call_args.kwargs
+        assert call_kwargs["extra_body"] == {"enable_thinking": False}
+
+
+class TestLiteLLMVLMEnableThinking:
+    """Test enable_thinking support for DashScope and ZhiPu providers in LiteLLM backend."""
+
+    def test_dashscope_provider_gets_enable_thinking(self):
+        """DashScope provider should have enable_thinking in built kwargs."""
+        vlm = LiteLLMVLMProvider(
+            {
+                "model": "qwen3.5-plus",
+                "provider": "litellm",
+                "api_key": "sk-test",
+                "thinking": False,
+            }
+        )
+        kwargs = vlm._build_kwargs(
+            "dashscope/qwen3.5-plus",
+            [{"role": "user", "content": "hi"}],
+        )
+        assert kwargs["enable_thinking"] is False
+
+    def test_zhipu_provider_gets_enable_thinking(self):
+        """ZhiPu provider should have enable_thinking in built kwargs."""
+        vlm = LiteLLMVLMProvider(
+            {
+                "model": "glm-5",
+                "provider": "litellm",
+                "api_key": "sk-test",
+                "thinking": True,
+            }
+        )
+        kwargs = vlm._build_kwargs(
+            "zhipu/glm-5",
+            [{"role": "user", "content": "hi"}],
+        )
+        assert kwargs["enable_thinking"] is True
+
+    def test_openai_provider_no_enable_thinking(self):
+        """Standard OpenAI provider should NOT have enable_thinking in kwargs."""
+        vlm = LiteLLMVLMProvider(
+            {
+                "model": "gpt-4o-mini",
+                "provider": "openai",
+                "api_key": "sk-test",
+            }
+        )
+        kwargs = vlm._build_kwargs(
+            "gpt-4o-mini",
+            [{"role": "user", "content": "hi"}],
+        )
+        assert "enable_thinking" not in kwargs
+
+    def test_call_site_thinking_overrides_config(self):
+        """The thinking param from the call site should override config-level _thinking."""
+        vlm = LiteLLMVLMProvider(
+            {
+                "model": "qwen3.5-plus",
+                "provider": "litellm",
+                "api_key": "sk-test",
+                "thinking": False,
+            }
+        )
+        kwargs = vlm._build_kwargs(
+            "dashscope/qwen3.5-plus",
+            [{"role": "user", "content": "hi"}],
+            thinking=True,
+        )
+        assert kwargs["enable_thinking"] is True

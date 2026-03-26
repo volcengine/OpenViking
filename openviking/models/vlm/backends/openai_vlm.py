@@ -17,9 +17,10 @@ from ..registry import DEFAULT_AZURE_API_VERSION
 logger = logging.getLogger(__name__)
 
 
-_DASHSCOPE_HOSTS = {
+_THINKING_HOSTS = {
     "dashscope.aliyuncs.com",
     "dashscope-intl.aliyuncs.com",
+    "open.bigmodel.cn",
 }
 
 def _build_openai_client_kwargs(
@@ -88,12 +89,19 @@ class OpenAIVLM(VLMBase):
                 self._async_client = openai.AsyncOpenAI(**kwargs)
         return self._async_client
 
+    _THINKING_MODEL_PREFIXES = ("dashscope/", "zhipu/")
+
     def _supports_enable_thinking(self) -> bool:
-        """Return True for OpenAI-compatible DashScope endpoints that accept enable_thinking."""
+        """Return True for OpenAI-compatible endpoints that accept enable_thinking.
+
+        Recognized providers: DashScope (Alibaba Cloud) and ZhiPu (GLM).
+        """
         if self.provider != "openai":
             return False
 
-        if isinstance(self.model, str) and self.model.lower().startswith("dashscope/"):
+        if isinstance(self.model, str) and self.model.lower().startswith(
+            self._THINKING_MODEL_PREFIXES
+        ):
             return True
 
         if not self.api_base:
@@ -104,7 +112,7 @@ class OpenAIVLM(VLMBase):
         except ValueError:
             return False
 
-        return host.lower() in _DASHSCOPE_HOSTS
+        return host.lower() in _THINKING_HOSTS
 
     def _apply_provider_specific_extra_body(
         self, kwargs: Dict[str, Any], thinking: bool
