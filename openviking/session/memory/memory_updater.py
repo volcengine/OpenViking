@@ -75,9 +75,10 @@ class MemoryUpdater:
     No function calls are used for write/edit/delete - these are executed directly.
     """
 
-    def __init__(self, registry: Optional[MemoryTypeRegistry] = None):
+    def __init__(self, registry: Optional[MemoryTypeRegistry] = None, vikingdb=None):
         self._viking_fs = None
         self._registry = registry
+        self._vikingdb = vikingdb
 
     def set_registry(self, registry: MemoryTypeRegistry) -> None:
         """Set the memory type registry for URI resolution."""
@@ -172,6 +173,9 @@ class MemoryUpdater:
             except Exception as e:
                 logger.error(f"Failed to delete memory {uri}: {e}")
                 result.add_error(uri, e)
+
+        # Vectorize written and edited memories
+        await self._vectorize_memories(result, ctx)
 
         logger.info(f"Memory operations applied: {result.summary()}")
         return result
@@ -358,6 +362,50 @@ class MemoryUpdater:
         await viking_fs.write_file(uri, new_overview, ctx=ctx)
         logger.debug(f"Edited overview: {uri}")
 
+        # Extract and write .abstract.md
+        await self._write_abstract_from_overview(uri, new_overview, ctx)
+
+    def _extract_abstract_from_overview(self, overview_content: str) -> str:
+        """Extract abstract from overview.md - same logic as SemanticProcessor."""
+        lines = overview_content.split("\n")
+
+        # Skip header lines (starting with #)
+        content_lines = []
+        in_header = True
+
+        for line in lines:
+            if in_header and line.startswith("#"):
+                continue
+            elif in_header and line.strip():
+                in_header = False
+
+            if not in_header:
+                # Stop at first ##
+                if line.startswith("##"):
+                    break
+                if line.strip():
+                    content_lines.append(line.strip())
+
+        return "\n".join(content_lines).strip()
+
+    async def _write_abstract_from_overview(
+        self, overview_uri: str, overview_content: str, ctx: RequestContext
+    ) -> None:
+        """Extract abstract from overview and write to .abstract.md."""
+        viking_fs = self._get_viking_fs()
+
+        # Extract abstract from overview
+        abstract = self._extract_abstract_from_overview(overview_content)
+
+        # Convert overview_uri (e.g., skills/.overview.md) to abstract path
+        abstract_uri = overview_uri.replace("/.overview.md", "/.abstract.md")
+
+        try:
+            await viking_fs.write_file(abstract_uri, abstract, ctx=ctx)
+            logger.debug(f"Wrote abstract: {abstract_uri}")
+        except Exception as e:
+            logger.warning(f"Failed to write abstract {abstract_uri}: {e}")
+
     def _print_diff(self, uri: str, old_content: str, new_content: str) -> None:
         """Print a diff of the memory edit using diff_match_patch."""
         try:
@@ -396,3 +444,68 @@ class MemoryUpdater:
             logger.debug(f"diff_match_patch not available, skipping diff for {uri}")
         except Exception as e:
             logger.debug(f"Failed to print diff for {uri}: {e}")
+
+    async def _vectorize_memories(
+        self,
+        result: MemoryUpdateResult,
+        ctx: RequestContext,
+    ) -> None:
+        """Vectorize written and edited memory files.
+
+        Args:
+            result: MemoryUpdateResult with written_uris and edited_uris
+            ctx: Request context
+        """
+        if not self._vikingdb:
+            logger.debug("VikingDB not available, skipping vectorization")
+            return
+
+        viking_fs = self._get_viking_fs()
+
+        # Collect all URIs to vectorize (skip .overview.md and .abstract.md - they are handled separately)
+        uris_to_vectorize = []
+        for uri in result.written_uris + result.edited_uris:
+            if not uri.endswith("/.overview.md") and not uri.endswith("/.abstract.md"):
+                uris_to_vectorize.append(uri)
+
+        if not uris_to_vectorize:
+            logger.debug("No memory files to vectorize")
+            return
+
+        for uri in uris_to_vectorize:
+            try:
+                # Read the memory file to get content
+                content = await viking_fs.read_file(uri, ctx=ctx) or ""
+
+                # Extract abstract (first 200 chars or first paragraph)
+                abstract = content[:200].split("\n\n")[0] if content else ""
+
+                # Get parent URI
+                from openviking_cli.utils.uri import VikingURI
+
+                parent_uri = VikingURI(uri).parent.uri
+
+                # Create Context for vectorization
+                from openviking.core.context import Context, ContextLevel, Vectorize
+                from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
+
+                memory_context = Context(
+                    uri=uri,
+                    parent_uri=parent_uri,
+                    is_leaf=True,
+                    abstract=abstract,
+                    context_type="memory",
+                    level=ContextLevel.DETAIL,
+                    user=ctx.user,
+                    account_id=ctx.account_id,
+                )
+                memory_context.set_vectorize(Vectorize(text=content))
+
+                # Convert to embedding msg and enqueue
+                embedding_msg = EmbeddingMsgConverter.from_context(memory_context)
+                if embedding_msg:
+                    await self._vikingdb.enqueue_embedding_msg(embedding_msg)
+                    logger.debug(f"Enqueued memory for vectorization: {uri}")
+
+            except Exception as e:
+                logger.warning(f"Failed to vectorize memory {uri}: {e}")

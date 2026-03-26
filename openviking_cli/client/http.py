@@ -282,14 +282,6 @@ class AsyncHTTPClient(BaseClient):
         else:
             raise exc_class(message)
 
-    def _is_local_server(self) -> bool:
-        """Check if the server URL is localhost or 127.0.0.1."""
-        from urllib.parse import urlparse
-
-        parsed_url = urlparse(self._url)
-        hostname = parsed_url.hostname
-        return hostname in ("localhost", "127.0.0.1")
-
     def _zip_directory(self, dir_path: str) -> str:
         """Create a temporary zip file from a directory."""
         dir_path = Path(dir_path)
@@ -361,7 +353,7 @@ class AsyncHTTPClient(BaseClient):
             request_data["preserve_structure"] = preserve_structure
 
         path_obj = Path(path)
-        if path_obj.exists() and not self._is_local_server():
+        if path_obj.exists():
             if path_obj.is_dir():
                 zip_path = self._zip_directory(path)
                 try:
@@ -400,7 +392,7 @@ class AsyncHTTPClient(BaseClient):
 
         if isinstance(data, str):
             path_obj = Path(data)
-            if path_obj.exists() and not self._is_local_server():
+            if path_obj.exists():
                 if path_obj.is_dir():
                     zip_path = self._zip_directory(data)
                     try:
@@ -801,7 +793,7 @@ class AsyncHTTPClient(BaseClient):
         }
 
         file_path_obj = Path(file_path)
-        if file_path_obj.exists() and file_path_obj.is_file() and not self._is_local_server():
+        if file_path_obj.exists() and file_path_obj.is_file():
             temp_path = await self._upload_temp_file(file_path)
             request_data["temp_path"] = temp_path
         else:

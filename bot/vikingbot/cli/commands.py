@@ -202,9 +202,30 @@ def main(
 
 
 def _make_provider(config, langfuse_client: None = None):
-    """LiteLLM-backed bot provider is temporarily disabled."""
-    raise RuntimeError(
-        "vikingbot is temporarily unavailable because its LiteLLM backend has been disabled for security reasons"
+    """Create LiteLLM provider from configuration."""
+    from vikingbot.providers.litellm_provider import LiteLLMProvider
+
+    p = config.agents
+    model = p.model if p else None
+    api_key = p.api_key if p else None
+    api_base = p.api_base if p else None
+    provider_name = p.provider if p else None
+    extra_headers = p.extra_headers if p else {}
+
+    if not model:
+        raise RuntimeError("No LLM model configured. Please set it in ~/.openviking/ov.conf")
+
+    if not api_key and not model.startswith("bedrock/"):
+        console.print("[yellow]Warning: No API key configured.[/yellow]")
+        console.print("You can configure providers later in the Console UI.")
+
+    return LiteLLMProvider(
+        api_key=api_key,
+        api_base=api_base,
+        default_model=model,
+        extra_headers=extra_headers,
+        provider_name=provider_name,
+        langfuse_client=langfuse_client,
     )
 
 

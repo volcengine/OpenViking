@@ -301,7 +301,7 @@ class Session:
         # Update statistics
         if role == "user":
             self._stats.total_turns += 1
-        self._stats.total_tokens += msg.estimated_tokens
+        self._stats.total_tokens += len(msg.content) // 4
 
         self._append_to_jsonl(msg)
 
@@ -500,16 +500,6 @@ class Session:
                         content=summary,
                         ctx=self.ctx,
                     )
-                    await self._viking_fs.write_file(
-                        uri=f"{archive_uri}/.meta.json",
-                        content=json.dumps(
-                            {
-                                "overview_tokens": -(-len(summary) // 4),
-                                "abstract_tokens": -(-len(abstract) // 4),
-                            }
-                        ),
-                        ctx=self.ctx,
-                    )
 
                 # Memory extraction
                 if self._session_compressor:
@@ -663,147 +653,6 @@ class Session:
         return {
             "latest_archive_overview": latest_archive_overview,
             "current_messages": current_messages,
-        }
-
-    async def get_context_for_assemble(self, token_budget: int = 128_000) -> Dict[str, Any]:
-        """Get context for assemble: trimmed archive summaries + all active messages.
-
-        Performs token-budget-aware trimming server-side so the caller
-        (OpenClaw plugin assemble()) doesn't need to do budget math.
-
-        Archives are read lazily from newest to oldest.  When a .meta.json
-        exists (written by commit), only its token count is checked before
-        deciding whether to read the full overview/abstract — once the
-        remaining budget is exhausted, older archives are skipped entirely
-        (no I/O).  Old archives without .meta.json fall back to reading
-        the overview to calculate tokens on the spot.
-
-        Args:
-            token_budget: Token budget (default 128k)
-
-        Returns:
-            {
-                "archives": [{"index": N, "overview": "...", "abstract": "..."}],
-                "messages": [Message.to_dict(), ...],
-                "estimatedTokens": int,
-                "stats": {
-                    "totalArchives": int,
-                    "includedArchives": int,
-                    "droppedArchives": int,
-                    "activeTokens": int,
-                    "archiveTokens": int,
-                }
-            }
-        """
-        active_messages = list(self._messages) if self._messages else []
-        active_tokens = sum(m.estimated_tokens for m in active_messages)
-
-        included: List[Dict[str, Any]] = []
-        discovered_archives = 0
-        failed_archives = 0
-        budget_used = 0
-        remaining_budget = max(0, token_budget - active_tokens)
-
-        if self.compression.compression_index > 0:
-            try:
-                history_items = await self._viking_fs.ls(
-                    f"{self._session_uri}/history", ctx=self.ctx
-                )
-                archive_entries: List[tuple] = []
-                for item in history_items:
-                    name = item.get("name") if isinstance(item, dict) else item
-                    if not (name and name.startswith("archive_")):
-                        continue
-                    try:
-                        archive_num = int(name.split("_")[1])
-                    except (IndexError, ValueError):
-                        continue
-                    archive_entries.append((archive_num, name))
-
-                archive_entries.sort(key=lambda e: e[0], reverse=True)
-                discovered_archives = len(archive_entries)
-
-                for archive_num, name in archive_entries:
-                    base_uri = f"{self._session_uri}/history/{name}"
-
-                    overview_tokens = None
-                    overview = None
-                    try:
-                        meta_content = await self._viking_fs.read_file(
-                            f"{base_uri}/.meta.json", ctx=self.ctx
-                        )
-                        overview_tokens = json.loads(meta_content).get("overview_tokens", 0)
-                    except Exception:
-                        pass
-
-                    if overview_tokens is None:
-                        try:
-                            overview = await self._viking_fs.read_file(
-                                f"{base_uri}/.overview.md", ctx=self.ctx
-                            )
-                            overview_tokens = -(-len(overview) // 4)
-                        except Exception:
-                            failed_archives += 1
-                            logger.warning(
-                                f"Failed to read overview for {name} in session {self.session_id}"
-                            )
-                            continue
-
-                    if budget_used + overview_tokens > remaining_budget:
-                        break
-
-                    if overview is None:
-                        try:
-                            overview = await self._viking_fs.read_file(
-                                f"{base_uri}/.overview.md", ctx=self.ctx
-                            )
-                        except Exception:
-                            failed_archives += 1
-                            logger.warning(
-                                f"Failed to read overview for {name} in session {self.session_id}"
-                            )
-                            continue
-
-                    if not overview:
-                        continue
-
-                    abstract = ""
-                    try:
-                        abstract = await self._viking_fs.read_file(
-                            f"{base_uri}/.abstract.md", ctx=self.ctx
-                        )
-                    except Exception:
-                        pass
-
-                    included.append(
-                        {
-                            "index": archive_num,
-                            "overview": overview,
-                            "abstract": abstract,
-                        }
-                    )
-                    budget_used += overview_tokens
-            except Exception:
-                logger.warning(f"Failed to list history directory for session {self.session_id}")
-                discovered_archives = -1
-
-        included.reverse()
-
-        return {
-            "archives": [
-                {"index": a["index"], "overview": a["overview"], "abstract": a["abstract"]}
-                for a in included
-            ],
-            "messages": [m.to_dict() for m in active_messages],
-            "estimatedTokens": active_tokens + budget_used,
-            "stats": {
-                "totalArchives": discovered_archives,
-                "includedArchives": len(included),
-                "droppedArchives": discovered_archives - len(included) - failed_archives,
-                "failedArchives": failed_archives,
-                "activeTokens": active_tokens,
-                "archiveTokens": budget_used,
-            },
         }
 
     # ============= Internal methods =============

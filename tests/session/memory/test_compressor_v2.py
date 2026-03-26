@@ -10,7 +10,6 @@ import logging
 from types import SimpleNamespace
 from typing import Any, Dict, List
 from unittest.mock import patch
-
 import pytest
 
 from openviking.message import Message, TextPart
@@ -266,6 +265,7 @@ def create_test_conversation() -> List[Message]:
 class TestCompressorV2:
     """Tests for SessionCompressorV2."""
 
+
     @pytest.mark.asyncio
     async def test_extract_long_term_memories_includes_latest_archive_overview(self):
         """Latest archive overview should be prepended to the v2 conversation context."""
@@ -314,6 +314,7 @@ class TestCompressorV2:
         assert "## Previous Archive Overview" in captured["conversation"]
         assert "LATEST OVERVIEW" in captured["conversation"]
         assert "[user]: Current task" in captured["conversation"]
+
 
     @pytest.mark.integration
     @pytest.mark.asyncio

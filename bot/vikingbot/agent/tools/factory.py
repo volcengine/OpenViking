@@ -4,6 +4,7 @@ from typing import TYPE_CHECKING, Callable
 
 from vikingbot.agent.tools.cron import CronTool
 from vikingbot.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
+from vikingbot.agent.tools.image import ImageGenerationTool
 from vikingbot.agent.tools.message import MessageTool
 from vikingbot.agent.tools.ov_file import (
     VikingAddResourceTool,
@@ -18,12 +19,13 @@ from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.agent.tools.shell import ExecTool
 from vikingbot.agent.tools.web import WebFetchTool
 from vikingbot.agent.tools.websearch import WebSearchTool
+from vikingbot.config.loader import load_config
 
 if TYPE_CHECKING:
+    from vikingbot.agent.subagent import SubagentManager
     from vikingbot.bus.events import OutboundMessage
     from vikingbot.config.schema import Config
     from vikingbot.cron.service import CronService
-    from vikingbot.subagent.manager import SubagentManager
 
 
 def register_default_tools(
@@ -59,6 +61,12 @@ def register_default_tools(
     exa_api_key = None  # TODO: Add to config if needed
     tavily_api_key = config.tools.web.search.tavily_api_key if config.tools.web.search else None
 
+    # Get provider API key and base from config
+
+    agent_config = load_config().agents
+    provider_api_key = agent_config.api_key if agent_config else None
+    provider_api_base = agent_config.api_base if agent_config else None
+    gen_image_model = agent_config.gen_image_model
     # File tools
     registry.register(ReadFileTool())
     registry.register(WriteFileTool())
@@ -94,9 +102,16 @@ def register_default_tools(
         if not config.read_only:
             registry.register(VikingAddResourceTool())
 
-    # Image generation is temporarily disabled because it depends on LiteLLM.
+    # Image generation tool
     if include_image_tool:
-        pass
+        registry.register(
+            ImageGenerationTool(
+                gen_image_model=gen_image_model,
+                api_key=provider_api_key,
+                api_base=provider_api_base,
+                send_callback=send_callback,
+            )
+        )
 
     # Message tool
     if include_message_tool and send_callback:

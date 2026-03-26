@@ -200,14 +200,28 @@ class FeishuChannel(BaseChannel):
             return "group"  # 默认普通群
 
         try:
-            request = GetChatRequest.builder().chat_id(chat_id).build()
+            request: GetChatRequest = GetChatRequest.builder() \
+                .chat_id(chat_id) \
+                .user_id_type("open_id") \
+                .build()
             response = await self._client.im.v1.chat.aget(request)
-            if response.success():
-                chat_mode = getattr(response.data, "chat_mode", "group")
-                mode = "thread" if chat_mode == "topic" else "group"
-                self._chat_mode_cache[chat_id] = mode
-                return mode
-            logger.warning(f"Failed to get chat mode for {chat_id}: {response.msg}")
+            # 处理失败返回
+            if not response.success():
+                logger.warning(f"client.im.v1.chat.get failed, code: {response.code}, msg: {response.msg}, log_id: {response.get_log_id()}")
+                return "group"
+
+            # 处理业务结果
+            data = response.data
+            mode = "group"
+            group_message_type = getattr(data, "group_message_type", "")
+            if group_message_type and group_message_type == "thread":
+                mode = "thread"
+            else:
+                chat_mode = getattr(data, "chat_mode", "")
+                if chat_mode and chat_mode == "topic":
+                    mode = "thread"
+            self._chat_mode_cache[chat_id] = mode
+            return mode
         except Exception as e:
             logger.warning(f"Error getting chat mode: {e}")
 

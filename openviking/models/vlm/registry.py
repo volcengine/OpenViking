@@ -3,12 +3,12 @@
 """
 Provider Registry — single source of truth for LLM provider metadata.
 
-Supported providers: volcengine, openai, azure
+Supported providers: volcengine, openai, litellm
 """
 
 from __future__ import annotations
 
-VALID_PROVIDERS: tuple[str, ...] = ("volcengine", "openai", "azure")
+VALID_PROVIDERS: tuple[str, ...] = ("volcengine", "openai", "azure", "litellm")
 
 DEFAULT_AZURE_API_VERSION: str = "2025-01-01-preview"
 

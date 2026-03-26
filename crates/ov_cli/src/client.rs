@@ -4,7 +4,6 @@ use serde_json::Value;
 use std::fs::File;
 use std::path::Path;
 use tempfile::NamedTempFile;
-use url::Url;
 use zip::write::FileOptions;
 use zip::CompressionMethod;
 
@@ -38,16 +37,6 @@ impl HttpClient {
             api_key,
             agent_id,
         }
-    }
-
-    /// Check if the server is localhost or 127.0.0.1
-    fn is_local_server(&self) -> bool {
-        if let Ok(url) = Url::parse(&self.base_url) {
-            if let Some(host) = url.host_str() {
-                return host == "localhost" || host == "127.0.0.1";
-            }
-        }
-        false
     }
 
     /// Zip a directory to a temporary file
@@ -493,7 +482,7 @@ impl HttpClient {
     ) -> Result<serde_json::Value> {
         let path_obj = Path::new(path);
 
-        if path_obj.exists() && !self.is_local_server() {
+        if path_obj.exists() {
             if path_obj.is_dir() {
                 let zip_file = self.zip_directory(path_obj)?;
                 let temp_path = self.upload_temp_file(zip_file.path()).await?;
@@ -583,7 +572,7 @@ impl HttpClient {
     ) -> Result<serde_json::Value> {
         let path_obj = Path::new(data);
 
-        if path_obj.exists() && !self.is_local_server() {
+        if path_obj.exists() {
             if path_obj.is_dir() {
                 let zip_file = self.zip_directory(path_obj)?;
                 let temp_path = self.upload_temp_file(zip_file.path()).await?;

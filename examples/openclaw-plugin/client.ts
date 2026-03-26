@@ -35,33 +35,6 @@ export type PendingClientEntry = {
   reject: (err: unknown) => void;
 };
 
-export type CommitSessionResult = {
-  session_id: string;
-  /** "accepted" (async), "completed", "failed", or "timeout" (wait mode). */
-  status: string;
-  task_id?: string;
-  archive_uri?: string;
-  archived?: boolean;
-  /** Present when wait=true and extraction completed. Keyed by category. */
-  memories_extracted?: Record<string, number>;
-  error?: string;
-};
-
-export type TaskResult = {
-  task_id: string;
-  task_type: string;
-  status: string;
-  created_at: number;
-  updated_at: number;
-  resource_id?: string;
-  result?: Record<string, unknown>;
-  error?: string;
-};
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
 export const localClientCache = new Map<string, LocalClientCacheEntry>();
 
 // Module-level pending promise map: shared across all plugin registrations so
@@ -287,21 +260,9 @@ export class OpenVikingClient {
     );
   }
 
-  /** GET session — server auto-creates if absent; returns session meta including message stats and token usage. */
-  async getSession(sessionId: string, agentId?: string): Promise<{
-    message_count?: number;
-    commit_count?: number;
-    last_commit_at?: string;
-    pending_tokens?: number;
-    llm_token_usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
-  }> {
-    return this.request<{
-      message_count?: number;
-      commit_count?: number;
-      last_commit_at?: string;
-      pending_tokens?: number;
-      llm_token_usage?: { prompt_tokens: number; completion_tokens: number; total_tokens: number };
-    }>(
+  /** GET session — server auto-creates if absent; also loads messages from storage before extract. */
+  async getSession(sessionId: string, agentId?: string): Promise<{ message_count?: number }> {
+    return this.request<{ message_count?: number }>(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}`,
       { method: "GET" },
       agentId,
@@ -310,84 +271,38 @@ export class OpenVikingClient {
 
   /**
    * Commit a session: archive (Phase 1) and extract memories (Phase 2).
-   *
-   * wait=false (default): returns immediately after Phase 1 with task_id.
-   * wait=true: after Phase 1, polls GET /tasks/{task_id} until Phase 2
-   *   completes (or times out), then returns the merged result.
+   * wait=false (default): Phase 2 runs in background, returns task_id for polling.
+   * wait=true: blocks until Phase 2 completes, returns memories_extracted count.
    */
   async commitSession(
     sessionId: string,
-    options?: { wait?: boolean; timeoutMs?: number; agentId?: string },
-  ): Promise<CommitSessionResult> {
-    const result = await this.request<CommitSessionResult>(
-      `/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`,
-      { method: "POST", body: JSON.stringify({}) },
-      options?.agentId,
-    );
-
-    if (!options?.wait || !result.task_id) {
-      return result;
-    }
-
-    // Client-side poll until Phase 2 finishes
-    const deadline = Date.now() + (options.timeoutMs ?? 120_000);
-    const pollInterval = 500;
-    while (Date.now() < deadline) {
-      await sleep(pollInterval);
-      const task = await this.getTask(result.task_id, options.agentId).catch(() => null);
-      if (!task) break;
-      if (task.status === "completed") {
-        const taskResult = (task.result ?? {}) as Record<string, unknown>;
-        result.status = "completed";
-        result.memories_extracted = (taskResult.memories_extracted ?? {}) as Record<string, number>;
-        return result;
-      }
-      if (task.status === "failed") {
-        result.status = "failed";
-        result.error = task.error;
-        return result;
-      }
-    }
-    result.status = "timeout";
-    return result;
-  }
-
-  /** Poll a background task by ID. */
-  async getTask(taskId: string, agentId?: string): Promise<TaskResult> {
-    return this.request<TaskResult>(
-      `/api/v1/tasks/${encodeURIComponent(taskId)}`,
-      { method: "GET" },
-      agentId,
-    );
-  }
-
-  async getContextForAssemble(
-    sessionId: string,
-    tokenBudget: number = 128_000,
-    agentId?: string,
+    options?: { wait?: boolean; agentId?: string },
   ): Promise<{
-    archives: Array<{ index: number; overview: string; abstract: string }>;
-    messages: Array<{ id: string; role: string; parts: unknown[]; created_at: string }>;
-    estimatedTokens: number;
-    stats: {
-      totalArchives: number;
-      includedArchives: number;
-      droppedArchives: number;
-      failedArchives: number;
-      activeTokens: number;
-      archiveTokens: number;
-    };
+    session_id: string;
+    status: string;
+    task_id?: string;
+    archive_uri?: string;
+    archived?: boolean;
+    memories_extracted?: number;
   }> {
-    return this.request(
-      `/api/v1/sessions/${encodeURIComponent(sessionId)}/context-for-assemble?token_budget=${tokenBudget}`,
-      { method: "GET" },
-      agentId,
-    );
+    const wait = options?.wait ?? false;
+    return this.request<{
+      session_id: string;
+      status: string;
+      task_id?: string;
+      archive_uri?: string;
+      archived?: boolean;
+      memories_extracted?: number;
+    }>(`/api/v1/sessions/${encodeURIComponent(sessionId)}/commit?wait=${wait}`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    }, options?.agentId);
   }
 
   async deleteSession(sessionId: string, agentId?: string): Promise<void> {
     await this.request(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" }, agentId);
   }
+
   async deleteUri(uri: string, agentId?: string): Promise<void> {
     await this.request(`/api/v1/fs?uri=${encodeURIComponent(uri)}&recursive=false`, {
       method: "DELETE",
