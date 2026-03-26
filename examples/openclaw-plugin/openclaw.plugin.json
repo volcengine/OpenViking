@@ -106,6 +106,46 @@
       "placeholder": "120",
       "help": "Minimum sanitized text length required before ingest reply assist can trigger.",
       "advanced": true
+    },
+    "compressToolContext": {
+      "label": "Compress Tool Context",
+      "help": "Compress oversized tool results before they are assembled into the next model run.",
+      "advanced": true
+    },
+    "compressReadToolContext": {
+      "label": "Compress Read Tool Context",
+      "help": "Also compress oversized read tool results. Off by default to avoid hiding useful file content.",
+      "advanced": true
+    },
+    "compressToolContextAboveChars": {
+      "label": "Compress Tool Context Above Chars",
+      "placeholder": "1200",
+      "advanced": true,
+      "help": "Only tool results longer than this are compressed during context assembly."
+    },
+    "compressToolContextMaxChars": {
+      "label": "Compress Tool Context Max Chars",
+      "placeholder": "1600",
+      "advanced": true,
+      "help": "Maximum chars kept for a compressed tool result in assembled context."
+    },
+    "compressToolContextHeadChars": {
+      "label": "Compress Tool Context Head Chars",
+      "placeholder": "600",
+      "advanced": true,
+      "help": "Chars to preserve from the start of oversized tool results when no strong key lines are found."
+    },
+    "compressToolContextTailChars": {
+      "label": "Compress Tool Context Tail Chars",
+      "placeholder": "400",
+      "advanced": true,
+      "help": "Chars to preserve from the end of oversized tool results."
+    },
+    "compressToolContextMaxImportantLines": {
+      "label": "Compress Tool Context Max Important Lines",
+      "placeholder": "12",
+      "advanced": true,
+      "help": "Maximum number of error/warn/key lines preserved from oversized tool results."
     }
   },
   "configSchema": {
@@ -170,6 +210,27 @@
         "type": "number"
       },
       "ingestReplyAssistMinChars": {
+        "type": "number"
+      },
+      "compressToolContext": {
+        "type": "boolean"
+      },
+      "compressReadToolContext": {
+        "type": "boolean"
+      },
+      "compressToolContextAboveChars": {
+        "type": "number"
+      },
+      "compressToolContextMaxChars": {
+        "type": "number"
+      },
+      "compressToolContextHeadChars": {
+        "type": "number"
+      },
+      "compressToolContextTailChars": {
+        "type": "number"
+      },
+      "compressToolContextMaxImportantLines": {
         "type": "number"
       }
     }
