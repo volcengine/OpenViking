@@ -5,6 +5,7 @@ import math
 import os
 import shutil
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
@@ -13,6 +14,7 @@ from openviking.storage.vectordb.index.index import IIndex
 from openviking.storage.vectordb.store.data import CandidateData, DeltaRecord
 from openviking.storage.vectordb.utils.constants import IndexFileMarkers
 from openviking.storage.vectordb.utils.data_processor import DataProcessor
+from openviking.storage.vectordb.utils.query_cache import QueryCache
 from openviking_cli.utils.logger import default_logger as logger
 
 
@@ -190,6 +192,8 @@ class LocalIndex(IIndex):
     - Metadata management and updates
     - Search operations with filtering and aggregation
     - Data lifecycle (upsert, delete, close, drop)
+    - Query result caching for improved performance
+    - Batch search support for multiple queries
 
     This class serves as the base for both VolatileIndex (in-memory) and
     PersistentIndex (disk-backed with versioning).
@@ -197,14 +201,24 @@ class LocalIndex(IIndex):
     Attributes:
         engine_proxy (IndexEngineProxy): Proxy to the underlying index engine
         meta: Index metadata including configuration and schema
+        query_cache: Optional LRU cache for query results
     """
 
-    def __init__(self, index_path_or_json: str, meta: Any):
+    # Default cache configuration
+    DEFAULT_CACHE_MAX_SIZE = 1000
+    DEFAULT_CACHE_TTL_SECONDS = 300.0  # 5 minutes
+    DEFAULT_BATCH_SEARCH_THREADS = 4
+
+    def __init__(self, index_path_or_json: str, meta: Any, cache_config: Optional[Dict[str, Any]] = None):
         """Initialize a local index instance.
 
         Args:
             index_path_or_json (str): Path to index files or JSON configuration
             meta: Index metadata object containing configuration
+            cache_config: Optional cache configuration with keys:
+                - max_size: Maximum number of cache entries (default: 1000)
+                - ttl_seconds: Time-to-live for cache entries (default: 300)
+                - enabled: Whether caching is enabled (default: True)
         """
         # Get the vector normalization flag from meta
         normalize_vector_flag = meta.inner_meta.get("VectorIndex", {}).get("NormalizeVector", False)
@@ -213,7 +227,14 @@ class LocalIndex(IIndex):
         )
         self.meta = meta
         self.field_type_converter = DataProcessor(self.meta.collection_meta.fields_dict)
-        pass
+        
+        # Initialize query cache
+        cache_config = cache_config or {}
+        self.query_cache = QueryCache(
+            max_size=cache_config.get("max_size", self.DEFAULT_CACHE_MAX_SIZE),
+            ttl_seconds=cache_config.get("ttl_seconds", self.DEFAULT_CACHE_TTL_SECONDS),
+            enabled=cache_config.get("enabled", True),
+        )
 
     def update(
         self,
@@ -235,10 +256,14 @@ class LocalIndex(IIndex):
     def upsert_data(self, delta_list: List[DeltaRecord]):
         if self.engine_proxy:
             self.engine_proxy.upsert_data(self._convert_delta_list_for_index(delta_list))
+            # Invalidate cache when data is modified
+            self.invalidate_cache()
 
     def delete_data(self, delta_list: List[DeltaRecord]):
         if self.engine_proxy:
             self.engine_proxy.delete_data(self._convert_delta_list_for_index(delta_list))
+            # Invalidate cache when data is modified
+            self.invalidate_cache()
 
     def search(
         self,
@@ -257,12 +282,154 @@ class LocalIndex(IIndex):
             if sparse_values is None:
                 sparse_values = []
 
-            if self.field_type_converter and filters is not None:
-                filters = self.field_type_converter.convert_filter_for_index(filters)
-            return self.engine_proxy.search(
+            # Try to get from cache first
+            cached_result = self.query_cache.get(
                 query_vector, limit, filters, sparse_raw_terms, sparse_values
             )
+            if cached_result is not None:
+                return cached_result
+
+            # Convert filters for index
+            if self.field_type_converter and filters is not None:
+                filters = self.field_type_converter.convert_filter_for_index(filters)
+            
+            result = self.engine_proxy.search(
+                query_vector, limit, filters, sparse_raw_terms, sparse_values
+            )
+            
+            # Cache the result
+            self.query_cache.put(
+                query_vector, limit, filters, sparse_raw_terms, sparse_values,
+                result[0], result[1]
+            )
+            
+            return result
         return [], []
+
+    def batch_search(
+        self,
+        query_vectors: List[List[float]],
+        limit: int = 10,
+        filters: Optional[Dict[str, Any]] = None,
+        sparse_raw_terms_list: Optional[List[List[str]]] = None,
+        sparse_values_list: Optional[List[List[float]]] = None,
+        num_threads: Optional[int] = None,
+    ) -> List[Tuple[List[int], List[float]]]:
+        """Perform batch vector similarity search with parallel processing.
+
+        This method processes multiple query vectors in parallel using a thread pool,
+        providing significant performance improvements when searching with many queries.
+
+        Args:
+            query_vectors: List of dense query vectors for similarity matching.
+            limit: Maximum number of results to return per query. Defaults to 10.
+            filters: Query DSL for filtering results by scalar fields.
+            sparse_raw_terms_list: List of term token lists for sparse vector search.
+            sparse_values_list: List of weight lists for sparse vector search.
+            num_threads: Number of threads for parallel search. Defaults to 4.
+
+        Returns:
+            List of tuples, one per query vector, each containing:
+                - List of labels (record identifiers) sorted by similarity
+                - List of similarity scores corresponding to each label
+
+        Note:
+            Results are returned in the same order as input query_vectors.
+            Queries with cache hits are served from cache without threading.
+        """
+        if not query_vectors:
+            return []
+
+        if not self.engine_proxy:
+            return [([], []) for _ in query_vectors]
+
+        # Handle defaults
+        if filters is None:
+            filters = {}
+        if sparse_raw_terms_list is None:
+            sparse_raw_terms_list = [None] * len(query_vectors)
+        if sparse_values_list is None:
+            sparse_values_list = [None] * len(query_vectors)
+        
+        if num_threads is None:
+            num_threads = self.DEFAULT_BATCH_SEARCH_THREADS
+
+        results: List[Optional[Tuple[List[int], List[float]]]] = [None] * len(query_vectors)
+        uncached_indices: List[int] = []
+        uncached_queries: List[Tuple[int, List[float], Optional[List[str]], Optional[List[float]]]] = []
+
+        # Check cache for all queries
+        for i, query_vector in enumerate(query_vectors):
+            sparse_terms = sparse_raw_terms_list[i]
+            sparse_values = sparse_values_list[i]
+            
+            cached_result = self.query_cache.get(
+                query_vector, limit, filters, sparse_terms, sparse_values
+            )
+            if cached_result is not None:
+                results[i] = cached_result
+            else:
+                uncached_indices.append(i)
+                uncached_queries.append((i, query_vector, sparse_terms, sparse_values))
+
+        # If all results are from cache, return early
+        if not uncached_queries:
+            return [r if r is not None else ([], []) for r in results]
+
+        # Convert filters once for all queries
+        converted_filters = filters
+        if self.field_type_converter and filters is not None:
+            converted_filters = self.field_type_converter.convert_filter_for_index(filters)
+
+        # Execute uncached queries in parallel
+        def search_single(args: Tuple[int, List[float], Optional[List[str]], Optional[List[float]]]) -> Tuple[int, Tuple[List[int], List[float]]]:
+            idx, query_vector, sparse_terms, sparse_values = args
+            if sparse_terms is None:
+                sparse_terms = []
+            if sparse_values is None:
+                sparse_values = []
+            result = self.engine_proxy.search(
+                query_vector, limit, converted_filters, sparse_terms, sparse_values
+            )
+            return idx, result
+
+        # Use thread pool for parallel execution
+        with ThreadPoolExecutor(max_workers=min(num_threads, len(uncached_queries))) as executor:
+            futures = [executor.submit(search_single, args) for args in uncached_queries]
+            
+            for future in as_completed(futures):
+                try:
+                    idx, result = future.result()
+                    results[idx] = result
+                    
+                    # Cache the result
+                    query_vector = query_vectors[idx]
+                    sparse_terms = sparse_raw_terms_list[idx]
+                    sparse_values = sparse_values_list[idx]
+                    self.query_cache.put(
+                        query_vector, limit, filters, sparse_terms, sparse_values,
+                        result[0], result[1]
+                    )
+                except Exception as e:
+                    logger.error(f"Batch search error for query: {e}")
+
+        # Fill in any remaining None results with empty tuples
+        return [r if r is not None else ([], []) for r in results]
+
+    def get_cache_stats(self) -> Optional[Dict[str, Any]]:
+        """Get cache statistics for this index.
+
+        Returns:
+            Dictionary containing cache statistics if caching is enabled.
+        """
+        return self.query_cache.get_stats()
+
+    def invalidate_cache(self) -> None:
+        """Invalidate the query cache for this index.
+        
+        Should be called when the underlying data is modified.
+        """
+        self.query_cache.invalidate()
 
     def aggregate(
         self,
@@ -306,12 +473,14 @@ class LocalIndex(IIndex):
         return agg_data
 
     def close(self):
+        self.invalidate_cache()
         pass
 
     def drop(self):
         if self.engine_proxy:
             self.engine_proxy.drop()
         self.meta = None
+        self.invalidate_cache()
 
     def get_newest_version(self) -> Union[int, str, Any]:
         return 0
@@ -389,6 +558,7 @@ class VolatileIndex(LocalIndex):
     - Data lost on process restart
     - Always requires rebuild from scratch on startup
     - Suitable for temporary indexes, testing, or when persistence is handled externally
+    - Supports query result caching for frequently repeated queries
 
     The index is created from an initial dataset and can be updated incrementally,
     but all changes exist only in memory.
@@ -396,9 +566,16 @@ class VolatileIndex(LocalIndex):
     Attributes:
         engine_proxy (IndexEngineProxy): Proxy to the in-memory index engine
         meta: Index metadata and configuration
+        query_cache: LRU cache for query results
     """
 
-    def __init__(self, name: str, meta: Any, cands_list: Optional[List[CandidateData]] = None):
+    def __init__(
+        self,
+        name: str,
+        meta: Any,
+        cands_list: Optional[List[CandidateData]] = None,
+        cache_config: Optional[Dict[str, Any]] = None,
+    ):
         """Initialize a volatile (in-memory) index.
 
         Creates a new in-memory index and populates it with the initial dataset.
@@ -408,6 +585,10 @@ class VolatileIndex(LocalIndex):
             meta: Index metadata containing configuration (dimensions, distance metric, etc.)
             cands_list (list): Initial list of CandidateData records to populate the index.
                 Defaults to None (empty index).
+            cache_config: Optional cache configuration with keys:
+                - max_size: Maximum number of cache entries (default: 1000)
+                - ttl_seconds: Time-to-live for cache entries (default: 300)
+                - enabled: Whether caching is enabled (default: True)
 
         Note:
             The index is immediately built in memory with the provided data.
@@ -431,6 +612,14 @@ class VolatileIndex(LocalIndex):
         self.meta = meta
         self.field_type_converter = DataProcessor(self.meta.collection_meta.fields_dict)
         self.engine_proxy.add_data(self._convert_candidate_list_for_index(cands_list))
+        
+        # Initialize query cache
+        cache_config = cache_config or {}
+        self.query_cache = QueryCache(
+            max_size=cache_config.get("max_size", self.DEFAULT_CACHE_MAX_SIZE),
+            ttl_seconds=cache_config.get("ttl_seconds", self.DEFAULT_CACHE_TTL_SECONDS),
+            enabled=cache_config.get("enabled", True),
+        )
 
     def need_rebuild(self) -> bool:
         """Determine if rebuild is needed.
@@ -466,6 +655,7 @@ class PersistentIndex(LocalIndex):
     - Crash recovery through versioned checkpoints
     - Background persistence without blocking operations
     - Old version cleanup to manage disk space
+    - Query result caching for improved performance
 
     The index maintains multiple versions on disk, each identified by a timestamp.
     New versions are created during persist() operations when the index has been modified.
@@ -485,6 +675,7 @@ class PersistentIndex(LocalIndex):
         now_version (str): Current active version identifier
         engine_proxy (IndexEngineProxy): Proxy to the persistent index engine
         meta: Index metadata and configuration
+        query_cache: LRU cache for query results
     """
 
     def __init__(
@@ -495,6 +686,7 @@ class PersistentIndex(LocalIndex):
         cands_list: Optional[List[CandidateData]] = None,
         force_rebuild: bool = False,
         initial_timestamp: Optional[int] = None,
+        cache_config: Optional[Dict[str, Any]] = None,
     ):
         """Initialize a persistent index with versioning support.
 
@@ -510,6 +702,10 @@ class PersistentIndex(LocalIndex):
                 Defaults to False.
             initial_timestamp (Optional[int]): Timestamp to use if creating a new index
                 from scratch. If None, uses current time. Useful for recovery scenarios.
+            cache_config: Optional cache configuration with keys:
+                - max_size: Maximum number of cache entries (default: 1000)
+                - ttl_seconds: Time-to-live for cache entries (default: 300)
+                - enabled: Whether caching is enabled (default: True)
 
         Process:
             1. Create directory structure if not exists
@@ -538,7 +734,7 @@ class PersistentIndex(LocalIndex):
             self.now_version = str(newest_version)
 
         index_path = os.path.join(self.version_dir, self.now_version)
-        super().__init__(index_path, meta)
+        super().__init__(index_path, meta, cache_config)
         # Remove scheduling logic, unified scheduling by collection layer
 
     def _create_new_index(
@@ -582,6 +778,7 @@ class PersistentIndex(LocalIndex):
         1. Persists any uncommitted changes to disk
         2. Releases the index engine resources
         3. Cleans up old version files, keeping only the latest
+        4. Invalidates the query cache
 
         This ensures data durability and proper resource cleanup.
         After close(), the index cannot be used for further operations.
@@ -601,6 +798,9 @@ class PersistentIndex(LocalIndex):
                 self._clean_index([str(newest_version)])
         except Exception as e:
             logger.error(f"Failed to clean index files during close: {e}")
+
+        # 4. Invalidate cache
+        self.invalidate_cache()
 
         super().close()
 
@@ -625,6 +825,7 @@ class PersistentIndex(LocalIndex):
                - Dump index to new timestamped directory
                - Mark snapshot as complete with .write_done file
                - Clean up old versions (keeps current and new)
+               - Invalidate cache to ensure fresh results
             3. If not modified, return 0 (no-op)
 
         Note:
@@ -647,6 +848,8 @@ class PersistentIndex(LocalIndex):
             shutil.move(index_path, dump_index_path)
             Path(dump_index_path + ".write_done").touch()
             self._clean_index([self.now_version, str(dump_version)])
+            # Invalidate cache after persist to ensure fresh results
+            self.invalidate_cache()
             return dump_version
         return 0
 
