@@ -1,6 +1,6 @@
 # Authentication
 
-OpenViking Server supports multi-tenant API key authentication with role-based access control.
+OpenViking Server supports two authentication modes with role-based access control: `api_key` and `trusted`.
 
 ## Overview
 
@@ -13,13 +13,21 @@ OpenViking uses a two-layer API key system:
 
 All API keys are plain random tokens with no embedded identity. The server resolves identity by first comparing against the root key, then looking up the user key index.
 
+## Authentication Modes
+
+| Mode | `server.auth_mode` | Identity Source | Typical Use |
+|------|--------------------|-----------------|-------------|
+| API key mode | `"api_key"` | API key, with optional tenant headers for root requests | Standard multi-tenant deployment |
+| Trusted mode | `"trusted"` | `X-OpenViking-Account` / `X-OpenViking-User` / optional `X-OpenViking-Agent` headers | Behind a trusted gateway or internal network boundary |
+
 ## Setting Up (Server Side)
 
-Configure the root API key in the `server` section of `ov.conf`:
+Configure the authentication mode in the `server` section of `ov.conf`:
 
 ```json
 {
   "server": {
+    "auth_mode": "api_key",
     "root_api_key": "your-secret-root-key"
   }
 }
@@ -87,8 +95,18 @@ client = ov.SyncHTTPClient(
 {
   "url": "http://localhost:1933",
   "api_key": "<user-key>",
+  "account": "acme",
+  "user": "alice",
   "agent_id": "my-agent"
 }
+```
+
+When you use a regular user key, `account` and `user` are optional because the server can derive them from the key. They are recommended when you use `trusted` mode or a root key against tenant-scoped APIs.
+
+**CLI override flags**
+
+```bash
+openviking --account acme --user alice --agent-id my-agent ls viking://
 ```
 
 ### Accessing Tenant Data with Root Key
@@ -124,8 +142,51 @@ client = ov.SyncHTTPClient(
   "url": "http://localhost:1933",
   "api_key": "your-secret-root-key",
   "account": "acme",
-  "user": "alice"
+  "user": "alice",
+  "agent_id": "my-agent"
 }
+```
+
+## Trusted Mode
+
+Trusted mode skips user-key lookup and instead trusts explicit identity headers on each request:
+
+```json
+{
+  "server": {
+    "auth_mode": "trusted",
+    "host": "127.0.0.1"
+  }
+}
+```
+
+Rules in trusted mode:
+
+- `X-OpenViking-Account` and `X-OpenViking-User` are required on tenant-scoped requests.
+- `X-OpenViking-Agent` is optional and defaults to `default`.
+- If `root_api_key` is also configured, every request must still provide a matching API key.
+- Only expose this mode behind a trusted network boundary or an identity-injecting gateway.
+
+**curl**
+
+```bash
+curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
+  -H "X-OpenViking-Account: acme" \
+  -H "X-OpenViking-User: alice" \
+  -H "X-OpenViking-Agent: my-agent"
+```
+
+**Python SDK**
+
+```python
+import openviking as ov
+
+client = ov.SyncHTTPClient(
+    url="http://localhost:1933",
+    account="acme",
+    user="alice",
+    agent_id="my-agent",
+)
 ```
 
 ## Roles and Permissions
@@ -138,7 +199,7 @@ client = ov.SyncHTTPClient(
 
 ## Development Mode
 
-When no `root_api_key` is configured, authentication is disabled. All requests are accepted as ROOT with the default account. **This is only allowed when the server binds to localhost** (`127.0.0.1`, `localhost`, or `::1`). If `host` is set to a non-loopback address (e.g. `0.0.0.0`) without a `root_api_key`, the server will refuse to start.
+When `auth_mode = "api_key"` and no `root_api_key` is configured, authentication is disabled. All requests are accepted as ROOT with the default account. **This is only allowed when the server binds to localhost** (`127.0.0.1`, `localhost`, or `::1`). If `host` is set to a non-loopback address (e.g. `0.0.0.0`) without a `root_api_key`, the server will refuse to start.
 
 ```json
 {

@@ -10,6 +10,8 @@ pub struct Config {
     #[serde(default = "default_url")]
     pub url: String,
     pub api_key: Option<String>,
+    pub account: Option<String>,
+    pub user: Option<String>,
     pub agent_id: Option<String>,
     #[serde(default = "default_timeout")]
     pub timeout: f64,
@@ -40,6 +42,8 @@ impl Default for Config {
         Self {
             url: "http://localhost:1933".to_string(),
             api_key: None,
+            account: None,
+            user: None,
             agent_id: None,
             timeout: 60.0,
             output: "table".to_string(),
@@ -106,5 +110,28 @@ pub fn get_or_create_machine_id() -> Result<String> {
     match machine_uid::get() {
         Ok(id) => Ok(id),
         Err(_) => Ok("default".to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Config;
+
+    #[test]
+    fn config_deserializes_account_and_user_fields() {
+        let config: Config = serde_json::from_str(
+            r#"{
+                "url": "http://localhost:1933",
+                "api_key": "test-key",
+                "account": "acme",
+                "user": "alice",
+                "agent_id": "assistant-1"
+            }"#,
+        )
+        .expect("config should deserialize");
+
+        assert_eq!(config.account.as_deref(), Some("acme"));
+        assert_eq!(config.user.as_deref(), Some("alice"));
+        assert_eq!(config.agent_id.as_deref(), Some("assistant-1"));
     }
 }

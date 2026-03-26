@@ -766,6 +766,8 @@ Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI t
 {
   "url": "http://localhost:1933",
   "api_key": "your-secret-key",
+  "account": "acme",
+  "user": "alice",
   "agent_id": "my-agent",
   "output": "table"
 }
@@ -775,8 +777,16 @@ Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI t
 |-------|-------------|---------|
 | `url` | Server address | (required) |
 | `api_key` | API key for authentication (root key or user key) | `null` (no auth) |
+| `account` | Default account sent as `X-OpenViking-Account` | `null` |
+| `user` | Default user sent as `X-OpenViking-User` | `null` |
 | `agent_id` | Agent identifier for agent space isolation | `null` |
 | `output` | Default output format: `"table"` or `"json"` | `"table"` |
+
+CLI flags can override these identity fields per command:
+
+```bash
+openviking --account acme --user alice --agent-id assistant-2 ls viking://
+```
 
 See [Deployment](./03-deployment.md) for details.
 
@@ -789,6 +799,7 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
   "server": {
     "host": "0.0.0.0",
     "port": 1933,
+    "auth_mode": "api_key",
     "root_api_key": "your-secret-root-key",
     "cors_origins": ["*"]
   }
@@ -799,10 +810,13 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 |-------|------|-------------|---------|
 | `host` | str | Bind address | `0.0.0.0` |
 | `port` | int | Bind port | `1933` |
-| `root_api_key` | str | Root API key for multi-tenant auth, disabled if not set | `null` |
+| `auth_mode` | str | Authentication mode: `"api_key"` or `"trusted"` | `"api_key"` |
+| `root_api_key` | str | Root API key for multi-tenant auth in `api_key` mode | `null` |
 | `cors_origins` | list | Allowed CORS origins | `["*"]` |
 
-When `root_api_key` is configured, the server enables multi-tenant authentication. Use the Admin API to create accounts and user keys. When not set, the server runs in dev mode with no authentication.
+`api_key` mode uses API keys. `trusted` mode trusts `X-OpenViking-Account` / `X-OpenViking-User` headers from a trusted gateway or internal caller.
+
+When `root_api_key` is configured, the server enables multi-tenant authentication. Use the Admin API to create accounts and user keys. Development mode only applies when `auth_mode = "api_key"` and `root_api_key` is not set.
 
 For startup and deployment details see [Deployment](./03-deployment.md), for authentication see [Authentication](./04-authentication.md).
 
