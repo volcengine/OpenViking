@@ -68,49 +68,9 @@ type OpenClawPluginApi = {
   ) => void;
 };
 
-type PluginRegistrationState = "idle" | "registering" | "registered";
-
 const MAX_OPENVIKING_STDERR_LINES = 200;
 const MAX_OPENVIKING_STDERR_CHARS = 256_000;
 const AUTO_RECALL_TIMEOUT_MS = 5_000;
-const DUPLICATE_REGISTRATION_LOG =
-  "openviking: plugin registration already active, skipping duplicate registration";
-
-let pluginRegistrationState: PluginRegistrationState = "idle";
-let activeRegistrationToken: number | null = null;
-let nextRegistrationToken = 0;
-
-function beginPluginRegistration(api: OpenClawPluginApi): number | null {
-  if (pluginRegistrationState !== "idle") {
-    api.logger.info(DUPLICATE_REGISTRATION_LOG);
-    return null;
-  }
-
-  pluginRegistrationState = "registering";
-  const token = ++nextRegistrationToken;
-  activeRegistrationToken = token;
-  return token;
-}
-
-function commitPluginRegistration(token: number) {
-  if (activeRegistrationToken === token && pluginRegistrationState === "registering") {
-    pluginRegistrationState = "registered";
-  }
-}
-
-function rollbackPluginRegistration(token: number) {
-  if (activeRegistrationToken === token && pluginRegistrationState === "registering") {
-    pluginRegistrationState = "idle";
-    activeRegistrationToken = null;
-  }
-}
-
-function resetPluginRegistration(token: number) {
-  if (activeRegistrationToken === token) {
-    pluginRegistrationState = "idle";
-    activeRegistrationToken = null;
-  }
-}
 
 const contextEnginePlugin = {
   id: "openviking",
@@ -120,66 +80,54 @@ const contextEnginePlugin = {
   configSchema: memoryOpenVikingConfigSchema,
 
   register(api: OpenClawPluginApi) {
-    const registrationToken = beginPluginRegistration(api);
-    if (registrationToken == null) {
-      return;
-    }
+    const cfg = memoryOpenVikingConfigSchema.parse(api.pluginConfig);
+    const localCacheKey = `${cfg.mode}:${cfg.baseUrl}:${cfg.configPath}:${cfg.apiKey}`;
 
-    let localCacheKey = "";
-    let createdPendingClientEntry = false;
-
-    try {
-      const cfg = memoryOpenVikingConfigSchema.parse(api.pluginConfig);
-      localCacheKey = `${cfg.mode}:${cfg.baseUrl}:${cfg.configPath}:${cfg.apiKey}`;
-
-      let clientPromise: Promise<OpenVikingClient>;
-      let localProcess: ReturnType<typeof spawn> | null = null;
-      let resolveLocalClient: ((c: OpenVikingClient) => void) | null = null;
-      let rejectLocalClient: ((err: unknown) => void) | null = null;
-      let localUnavailableReason: string | null = null;
-      const markLocalUnavailable = (reason: string, err?: unknown) => {
-        if (!localUnavailableReason) {
-          localUnavailableReason = reason;
-          api.logger.warn(
-            `openviking: local mode marked unavailable (${reason})${err ? `: ${String(err)}` : ""}`,
-          );
-        }
-        if (rejectLocalClient) {
-          rejectLocalClient(
-            err instanceof Error ? err : new Error(`openviking unavailable: ${reason}`),
-          );
-          rejectLocalClient = null;
-        }
-        resolveLocalClient = null;
-      };
-
-      if (cfg.mode === "local") {
-        const cached = localClientCache.get(localCacheKey);
-        if (cached) {
-          localProcess = cached.process;
-          clientPromise = Promise.resolve(cached.client);
-        } else {
-          const existingPending = localClientPendingPromises.get(localCacheKey);
-          if (existingPending) {
-            clientPromise = existingPending.promise;
-          } else {
-            const entry = {} as PendingClientEntry;
-            entry.promise = new Promise<OpenVikingClient>((resolve, reject) => {
-              entry.resolve = resolve;
-              entry.reject = reject;
-            });
-            clientPromise = entry.promise;
-            localClientPendingPromises.set(localCacheKey, entry);
-            createdPendingClientEntry = true;
-          }
-        }
-      } else {
-        clientPromise = Promise.resolve(
-          new OpenVikingClient(cfg.baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs),
+    let clientPromise: Promise<OpenVikingClient>;
+    let localProcess: ReturnType<typeof spawn> | null = null;
+    let resolveLocalClient: ((c: OpenVikingClient) => void) | null = null;
+    let rejectLocalClient: ((err: unknown) => void) | null = null;
+    let localUnavailableReason: string | null = null;
+    const markLocalUnavailable = (reason: string, err?: unknown) => {
+      if (!localUnavailableReason) {
+        localUnavailableReason = reason;
+        api.logger.warn(
+          `openviking: local mode marked unavailable (${reason})${err ? `: ${String(err)}` : ""}`,
         );
       }
+      if (rejectLocalClient) {
+        rejectLocalClient(
+          err instanceof Error ? err : new Error(`openviking unavailable: ${reason}`),
+        );
+        rejectLocalClient = null;
+      }
+      resolveLocalClient = null;
+    };
 
-      const getClient = (): Promise<OpenVikingClient> => clientPromise;
+    if (cfg.mode === "local") {
+      const cached = localClientCache.get(localCacheKey);
+      if (cached) {
+        localProcess = cached.process;
+        clientPromise = Promise.resolve(cached.client);
+      } else {
+        const existingPending = localClientPendingPromises.get(localCacheKey);
+        if (existingPending) {
+          clientPromise = existingPending.promise;
+        } else {
+          const entry = {} as PendingClientEntry;
+          entry.promise = new Promise<OpenVikingClient>((resolve, reject) => {
+            entry.resolve = resolve;
+            entry.reject = reject;
+          });
+          clientPromise = entry.promise;
+          localClientPendingPromises.set(localCacheKey, entry);
+        }
+      }
+    } else {
+      clientPromise = Promise.resolve(new OpenVikingClient(cfg.baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs));
+    }
+
+    const getClient = (): Promise<OpenVikingClient> => clientPromise;
 
     api.registerTool(
       {
@@ -649,9 +597,9 @@ const contextEnginePlugin = {
       );
     }
 
-      api.registerService({
-        id: "openviking",
-        start: async () => {
+    api.registerService({
+      id: "openviking",
+      start: async () => {
         // Claim the pending entry — only the first start() call to claim it spawns the process.
         // Subsequent start() calls (from other registrations sharing the same promise) fall through.
         const pendingEntry = localClientPendingPromises.get(localCacheKey);
@@ -673,7 +621,7 @@ const contextEnginePlugin = {
 
           // Inherit system environment; optionally override Go/Python paths via env vars
           const pathSep = IS_WIN ? ";" : ":";
-          const { ALL_PROXY, all_proxy, HTTP_PROXY, http_proxy, HTTPS_PROXY, https_proxy, ...filteredEnv } = process.env;
+	  const { ALL_PROXY, all_proxy, HTTP_PROXY, http_proxy, HTTPS_PROXY, https_proxy, ...filteredEnv } = process.env;
           const env = {
             ...filteredEnv,
             PYTHONUNBUFFERED: "1",
@@ -762,32 +710,19 @@ const contextEnginePlugin = {
             `openviking: initialized (url: ${cfg.baseUrl}, targetUri: ${cfg.targetUri}, search: hybrid endpoint)`,
           );
         }
-        },
-        stop: () => {
-          try {
-            if (localProcess) {
-              localProcess.kill("SIGTERM");
-              localClientCache.delete(localCacheKey);
-              localClientPendingPromises.delete(localCacheKey);
-              localProcess = null;
-              api.logger.info("openviking: local server stopped");
-            } else {
-              api.logger.info("openviking: stopped");
-            }
-          } finally {
-            resetPluginRegistration(registrationToken);
-          }
-        },
-      });
-
-      commitPluginRegistration(registrationToken);
-    } catch (err) {
-      if (createdPendingClientEntry && localCacheKey) {
-        localClientPendingPromises.delete(localCacheKey);
-      }
-      rollbackPluginRegistration(registrationToken);
-      throw err;
-    }
+      },
+      stop: () => {
+        if (localProcess) {
+          localProcess.kill("SIGTERM");
+          localClientCache.delete(localCacheKey);
+          localClientPendingPromises.delete(localCacheKey);
+          localProcess = null;
+          api.logger.info("openviking: local server stopped");
+        } else {
+          api.logger.info("openviking: stopped");
+        }
+      },
+    });
   },
 };
 
