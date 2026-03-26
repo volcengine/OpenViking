@@ -68,7 +68,7 @@ impl HttpClient {
         Ok(temp_file)
     }
 
-    /// Upload a temporary file and return the temp_path
+    /// Upload a temporary file and return the temp_file_id
     async fn upload_temp_file(&self, file_path: &Path) -> Result<String> {
         let url = format!("{}/api/v1/resources/temp_upload", self.base_url);
         let file_name = file_path
@@ -104,10 +104,10 @@ impl HttpClient {
 
         let result: Value = self.handle_response(response).await?;
         result
-            .get("temp_path")
+            .get("temp_file_id")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
-            .ok_or_else(|| Error::Parse("Missing temp_path in response".to_string()))
+            .ok_or_else(|| Error::Parse("Missing temp_file_id in response".to_string()))
     }
 
     fn build_headers(&self) -> reqwest::header::HeaderMap {
@@ -485,10 +485,10 @@ impl HttpClient {
         if path_obj.exists() {
             if path_obj.is_dir() {
                 let zip_file = self.zip_directory(path_obj)?;
-                let temp_path = self.upload_temp_file(zip_file.path()).await?;
+                let temp_file_id = self.upload_temp_file(zip_file.path()).await?;
 
                 let body = serde_json::json!({
-                    "temp_path": temp_path,
+                    "temp_file_id": temp_file_id,
                     "to": to,
                     "parent": parent,
                     "reason": reason,
@@ -505,10 +505,10 @@ impl HttpClient {
 
                 self.post("/api/v1/resources", &body).await
             } else if path_obj.is_file() {
-                let temp_path = self.upload_temp_file(path_obj).await?;
+                let temp_file_id = self.upload_temp_file(path_obj).await?;
 
                 let body = serde_json::json!({
-                    "temp_path": temp_path,
+                    "temp_file_id": temp_file_id,
                     "to": to,
                     "parent": parent,
                     "reason": reason,
@@ -575,19 +575,19 @@ impl HttpClient {
         if path_obj.exists() {
             if path_obj.is_dir() {
                 let zip_file = self.zip_directory(path_obj)?;
-                let temp_path = self.upload_temp_file(zip_file.path()).await?;
+                let temp_file_id = self.upload_temp_file(zip_file.path()).await?;
 
                 let body = serde_json::json!({
-                    "temp_path": temp_path,
+                    "temp_file_id": temp_file_id,
                     "wait": wait,
                     "timeout": timeout,
                 });
                 self.post("/api/v1/skills", &body).await
             } else if path_obj.is_file() {
-                let temp_path = self.upload_temp_file(path_obj).await?;
+                let temp_file_id = self.upload_temp_file(path_obj).await?;
 
                 let body = serde_json::json!({
-                    "temp_path": temp_path,
+                    "temp_file_id": temp_file_id,
                     "wait": wait,
                     "timeout": timeout,
                 });

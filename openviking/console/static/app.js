@@ -1719,16 +1719,16 @@ function bindAddResource() {
         method: "POST",
         body: formData,
       });
-      const tempPath = uploadPayload.result?.temp_path;
-      if (!tempPath) {
-        throw new Error("Temp upload did not return temp_path.");
+      const tempFileId = uploadPayload.result?.temp_file_id;
+      if (!tempFileId) {
+        throw new Error("Temp upload did not return temp_file_id.");
       }
 
       const addPayload = await callConsole("/ov/resources", {
         method: "POST",
         body: JSON.stringify({
           ...buildAddResourcePayload(),
-          temp_path: tempPath,
+          temp_file_id: tempFileId,
         }),
       });
 
