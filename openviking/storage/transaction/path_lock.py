@@ -174,10 +174,15 @@ class PathLock:
             logger.warning(f"Failed to scan descendants of {path}: {e}")
         return None
 
-    async def acquire_point(self, path: str, owner: LockOwner, timeout: float = 0.0) -> bool:
+    async def acquire_point(self, path: str, owner: LockOwner, timeout: Optional[float] = 0.0) -> bool:
         owner_id = owner.id
         lock_path = self._get_lock_path(path)
-        deadline = asyncio.get_running_loop().time() + timeout
+        if timeout is None:
+            # 无限等待
+            deadline = float('inf')
+        else:
+            # 有限超时
+            deadline = asyncio.get_running_loop().time() + timeout
 
         # 确保目录存在
         if not self._ensure_directory_exists(path):
@@ -250,10 +255,15 @@ class PathLock:
             logger.debug(f"[POINT] Lock acquired: {lock_path}")
             return True
 
-    async def acquire_subtree(self, path: str, owner: LockOwner, timeout: float = 0.0) -> bool:
+    async def acquire_subtree(self, path: str, owner: LockOwner, timeout: Optional[float] = 0.0) -> bool:
         owner_id = owner.id
         lock_path = self._get_lock_path(path)
-        deadline = asyncio.get_running_loop().time() + timeout
+        if timeout is None:
+            # 无限等待
+            deadline = float('inf')
+        else:
+            # 有限超时
+            deadline = asyncio.get_running_loop().time() + timeout
 
         # 确保目录存在
         if not self._ensure_directory_exists(path):
@@ -348,7 +358,7 @@ class PathLock:
         src_path: str,
         dst_parent_path: str,
         owner: LockOwner,
-        timeout: float = 0.0,
+        timeout: Optional[float] = 0.0,
         src_is_dir: bool = True,
     ) -> bool:
         """Acquire locks for a move operation.

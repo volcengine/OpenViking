@@ -144,16 +144,16 @@ class VolcEngineVLM(OpenAIVLM):
         """
         breakpoints = self._find_cache_breakpoints(messages)
         if not breakpoints:
-            logger.info("[VolcEngineVLM] Cache: no breakpoints found")
+            # logger.info("[VolcEngineVLM] Cache: no breakpoints found")
             return None
 
         # Always use "current" as cache key - matches what we store
         cache_key = self._serialize_messages(breakpoints["current"])
-        logger.info(f"[VolcEngineVLM] Cache: looking up key={cache_key[:100]}...")
-        logger.info(f"[VolcEngineVLM] Cache: current messages count={len(breakpoints['current'])}")
+        # logger.info(f"[VolcEngineVLM] Cache: looking up key={cache_key[:100]}...")
+        # logger.info(f"[VolcEngineVLM] Cache: current messages count={len(breakpoints['current'])}")
 
         result = self._response_cache.get(cache_key)
-        logger.info(f"[VolcEngineVLM] Cache: lookup result={result}")
+        # logger.info(f"[VolcEngineVLM] Cache: lookup result={result}")
         return result
 
     def _cache_response_id(self, messages: List[Dict[str, Any]], response_id: str) -> None:
@@ -164,12 +164,12 @@ class VolcEngineVLM(OpenAIVLM):
         """
         breakpoints = self._find_cache_breakpoints(messages)
         if not breakpoints:
-            logger.info("[VolcEngineVLM] Cache: no breakpoints, not caching")
+            # logger.info("[VolcEngineVLM] Cache: no breakpoints, not caching")
             return
 
         cache_key = self._serialize_messages(breakpoints["current"])
-        logger.info(f"[VolcEngineVLM] Cache: storing key={cache_key[:100]}..., response_id={response_id}")
-        logger.info(f"[VolcEngineVLM] Cache: current messages count={len(breakpoints['current'])}")
+        # logger.info(f"[VolcEngineVLM] Cache: storing key={cache_key[:100]}..., response_id={response_id}")
+        # logger.info(f"[VolcEngineVLM] Cache: current messages count={len(breakpoints['current'])}")
         self._response_cache.set(cache_key, response_id)
 
     def get_client(self):
@@ -254,14 +254,15 @@ class VolcEngineVLM(OpenAIVLM):
         - response.usage: token usage
         """
         # Debug: print response structure
-        logger.debug(f"[VolcEngineVLM] Response type: {type(response)}")
-        logger.info(f"[VolcEngineVLM] Full response: {response}")
+        #logger.debug(f"[VolcEngineVLM] Response type: {type(response)}")
+        # logger.info(f"[VolcEngineVLM] Full response: {response}")
         if hasattr(response, 'output'):
-            logger.debug(f"[VolcEngineVLM] Output items: {len(response.output)}")
+            # logger.debug(f"[VolcEngineVLM] Output items: {len(response.output)}")
             for i, item in enumerate(response.output):
-                logger.debug(f"[VolcEngineVLM]   Item {i}: type={getattr(item, 'type', 'unknown')}")
+                # logger.debug(f"[VolcEngineVLM]   Item {i}: type={getattr(item, 'type', 'unknown')}")
                 # Print full item for debugging
-                logger.info(f"[VolcEngineVLM]   Item {i} full: {item}")
+                # logger.info(f"[VolcEngineVLM]   Item {i} full: {item}")
+                pass
 
         # Extract content from Responses API format
         content = ""
@@ -273,7 +274,7 @@ class VolcEngineVLM(OpenAIVLM):
                 item_type = getattr(item, 'type', None)
                 # Check if it's a function_call item (Responses API format)
                 if item_type == 'function_call':
-                    logger.debug(f"[VolcEngineVLM] Found function_call tool call")
+                    # logger.debug(f"[VolcEngineVLM] Found function_call tool call")
                     args = item.arguments
                     if isinstance(args, str):
                         try:
@@ -302,7 +303,7 @@ class VolcEngineVLM(OpenAIVLM):
 
                     # Parse tool calls from message
                     if hasattr(message, 'tool_calls') and message.tool_calls:
-                        logger.debug(f"[VolcEngineVLM] Found {len(message.tool_calls)} tool calls in message")
+                        # logger.debug(f"[VolcEngineVLM] Found {len(message.tool_calls)} tool calls in message")
                         for tc in message.tool_calls:
                             args = tc.arguments
                             if isinstance(args, str):
@@ -387,30 +388,30 @@ class VolcEngineVLM(OpenAIVLM):
         # VolcEngine limitation: cannot use tools with previous_response_id
         # Solution: First call creates cache with tools, subsequent calls use previous_response_id
         # (server will automatically include tools from cache)
-        logger.info(f"[VolcEngineVLM] Request: tools={bool(tools)}, previous_response_id={previous_response_id}")
+        # logger.info(f"[VolcEngineVLM] Request: tools={bool(tools)}, previous_response_id={previous_response_id}")
         if tools and previous_response_id:
             # Both tools and previous_response_id - use previous_response_id for caching
             # (server will include tools from cached context)
             kwargs["previous_response_id"] = previous_response_id
             kwargs["caching"] = {"type": "enabled"}
-            logger.info(f"[VolcEngineVLM] Using cached response_id with tools: {previous_response_id}")
+            # logger.info(f"[VolcEngineVLM] Using cached response_id with tools: {previous_response_id}")
         elif tools:
             # First call with tools: enable caching (will create cache with tools)
             converted_tools = self._convert_tools(tools)
             kwargs["tools"] = converted_tools
-            logger.debug(f"[VolcEngineVLM] Converted tools: {converted_tools}")
+            # logger.debug(f"[VolcEngineVLM] Converted tools: {converted_tools}")
             kwargs["tool_choice"] = tool_choice or "auto"
             kwargs["caching"] = {"type": "enabled"}
         elif previous_response_id:
             # Use cached response (tools are in the cached context)
             kwargs["previous_response_id"] = previous_response_id
             kwargs["caching"] = {"type": "enabled"}
-            logger.info(f"[VolcEngineVLM] Using cached response_id: {previous_response_id}")
+            # logger.info(f"[VolcEngineVLM] Using cached response_id: {previous_response_id}")
         else:
             # Enable caching by default for prompt caching support
             kwargs["caching"] = {"type": "enabled"}
 
-        logger.info(f"[VolcEngineVLM] Request kwargs: caching={kwargs.get('caching')}, previous_response_id={kwargs.get('previous_response_id')}")
+        # logger.info(f"[VolcEngineVLM] Request kwargs: caching={kwargs.get('caching')}, previous_response_id={kwargs.get('previous_response_id')}")
 
         t0 = time.perf_counter()
         # Use Responses API instead of Chat API
@@ -421,7 +422,7 @@ class VolcEngineVLM(OpenAIVLM):
         # Cache the response_id for future requests
         if hasattr(response, 'id') and response.id:
             self._cache_response_id(kwargs_messages, response.id)
-            logger.info(f"[VolcEngineVLM] Cached response_id: {response.id}")
+            # logger.info(f"[VolcEngineVLM] Cached response_id: {response.id}")
 
         return self._build_vlm_response(response, has_tools=bool(tools))
 
@@ -587,30 +588,30 @@ class VolcEngineVLM(OpenAIVLM):
         # VolcEngine limitation: cannot use tools with previous_response_id
         # Solution: First call creates cache with tools, subsequent calls use previous_response_id
         # (server will automatically include tools from cache)
-        logger.info(f"[VolcEngineVLM] Request: tools={bool(tools)}, previous_response_id={previous_response_id}")
+        # logger.info(f"[VolcEngineVLM] Request: tools={bool(tools)}, previous_response_id={previous_response_id}")
         if tools and previous_response_id:
             # Both tools and previous_response_id - use previous_response_id for caching
             # (server will include tools from cached context)
             kwargs["previous_response_id"] = previous_response_id
             kwargs["caching"] = {"type": "enabled"}
-            logger.info(f"[VolcEngineVLM] Using cached response_id with tools: {previous_response_id}")
+            # logger.info(f"[VolcEngineVLM] Using cached response_id with tools: {previous_response_id}")
         elif tools:
             # First call with tools: enable caching (will create cache with tools)
             converted_tools = self._convert_tools(tools)
             kwargs["tools"] = converted_tools
-            logger.debug(f"[VolcEngineVLM] Converted tools: {converted_tools}")
+            # logger.debug(f"[VolcEngineVLM] Converted tools: {converted_tools}")
             kwargs["tool_choice"] = tool_choice or "auto"
             kwargs["caching"] = {"type": "enabled"}
         elif previous_response_id:
             # Use cached response (tools are in the cached context)
             kwargs["previous_response_id"] = previous_response_id
             kwargs["caching"] = {"type": "enabled"}
-            logger.info(f"[VolcEngineVLM] Using cached response_id: {previous_response_id}")
+            # logger.info(f"[VolcEngineVLM] Using cached response_id: {previous_response_id}")
         else:
             # Enable caching by default for prompt caching support
             kwargs["caching"] = {"type": "enabled"}
 
-        logger.info(f"[VolcEngineVLM] Request kwargs: caching={kwargs.get('caching')}, previous_response_id={kwargs.get('previous_response_id')}")
+        # logger.info(f"[VolcEngineVLM] Request kwargs: caching={kwargs.get('caching')}, previous_response_id={kwargs.get('previous_response_id')}")
 
         last_error = None
         for attempt in range(max_retries + 1):
@@ -626,7 +627,7 @@ class VolcEngineVLM(OpenAIVLM):
                 # Cache the response_id for future requests
                 if hasattr(response, 'id') and response.id:
                     self._cache_response_id(kwargs_messages, response.id)
-                    logger.info(f"[VolcEngineVLM] Cached response_id: {response.id}")
+                    # logger.info(f"[VolcEngineVLM] Cached response_id: {response.id}")
 
                 return self._build_vlm_response(response, has_tools=bool(tools))
             except Exception as e:
@@ -649,7 +650,7 @@ class VolcEngineVLM(OpenAIVLM):
         - JPEG, PNG, GIF, WEBP, BMP, TIFF, ICO, DIB, ICNS, SGI, JPEG2000, HEIC, HEIF
         """
         if len(data) < 12:
-            logger.warning(f"[VolcEngineVLM] Image data too small: {len(data)} bytes")
+            # logger.warning(f"[VolcEngineVLM] Image data too small: {len(data)} bytes")
             return "image/png"
 
         # PNG: 89 50 4E 47 0D 0A 1A 0A
@@ -702,7 +703,7 @@ class VolcEngineVLM(OpenAIVLM):
             )
 
         # Unknown format - log and default to PNG
-        logger.warning(f"[VolcEngineVLM] Unknown image format, magic bytes: {data[:16].hex()}")
+        # logger.warning(f"[VolcEngineVLM] Unknown image format, magic bytes: {data[:16].hex()}")
         return "image/png"
 
     def _prepare_image(self, image: Union[str, Path, bytes]) -> Dict[str, Any]:
@@ -710,9 +711,9 @@ class VolcEngineVLM(OpenAIVLM):
         if isinstance(image, bytes):
             b64 = base64.b64encode(image).decode("utf-8")
             mime_type = self._detect_image_format(image)
-            logger.info(
-                f"[VolcEngineVLM] Preparing image from bytes, size={len(image)}, detected mime={mime_type}"
-            )
+            # logger.info(
+                # f"[VolcEngineVLM] Preparing image from bytes, size={len(image)}, detected mime={mime_type}"
+            # )
             return {
                 "type": "image_url",
                 "image_url": {"url": f"data:{mime_type};base64,{b64}"},
@@ -800,7 +801,7 @@ class VolcEngineVLM(OpenAIVLM):
             # Convert tools to VolcEngine format
             converted_tools = self._convert_tools(tools)
             kwargs["tools"] = converted_tools
-            logger.debug(f"[VolcEngineVLM] Converted tools: {converted_tools}")
+            # logger.debug(f"[VolcEngineVLM] Converted tools: {converted_tools}")
             kwargs["tool_choice"] = "auto"
             # First call: enable caching (will create cache with tools)
             # Subsequent calls: use previous_response_id (no tools needed, server has them in cache)
@@ -810,7 +811,7 @@ class VolcEngineVLM(OpenAIVLM):
             # Use cached response (tools are in the cached context)
             kwargs["previous_response_id"] = previous_response_id
             kwargs["caching"] = {"type": "enabled"}
-            logger.info(f"[VolcEngineVLM] Using cached response_id: {previous_response_id}")
+            # logger.info(f"[VolcEngineVLM] Using cached response_id: {previous_response_id}")
         else:
             # Enable caching by default for prompt caching support
             kwargs["caching"] = {"type": "enabled"}
@@ -824,7 +825,7 @@ class VolcEngineVLM(OpenAIVLM):
         # Cache the response_id for future requests
         if hasattr(response, 'id') and response.id:
             self._cache_response_id(kwargs_messages, response.id)
-            logger.info(f"[VolcEngineVLM] Cached response_id: {response.id}")
+            # logger.info(f"[VolcEngineVLM] Cached response_id: {response.id}")
 
         return self._build_vlm_response(response, has_tools=bool(tools))
 
@@ -875,7 +876,7 @@ class VolcEngineVLM(OpenAIVLM):
             # Convert tools to VolcEngine format
             converted_tools = self._convert_tools(tools)
             kwargs["tools"] = converted_tools
-            logger.debug(f"[VolcEngineVLM] Converted tools: {converted_tools}")
+            # logger.debug(f"[VolcEngineVLM] Converted tools: {converted_tools}")
             kwargs["tool_choice"] = "auto"
             # First call: enable caching (will create cache with tools)
             # Subsequent calls: use previous_response_id (no tools needed, server has them in cache)
@@ -885,7 +886,7 @@ class VolcEngineVLM(OpenAIVLM):
             # Use cached response (tools are in the cached context)
             kwargs["previous_response_id"] = previous_response_id
             kwargs["caching"] = {"type": "enabled"}
-            logger.info(f"[VolcEngineVLM] Using cached response_id: {previous_response_id}")
+            # logger.info(f"[VolcEngineVLM] Using cached response_id: {previous_response_id}")
         else:
             # Enable caching by default for prompt caching support
             kwargs["caching"] = {"type": "enabled"}
@@ -899,6 +900,6 @@ class VolcEngineVLM(OpenAIVLM):
         # Cache the response_id for future requests
         if hasattr(response, 'id') and response.id:
             self._cache_response_id(kwargs_messages, response.id)
-            logger.info(f"[VolcEngineVLM] Cached response_id: {response.id}")
+            # logger.info(f"[VolcEngineVLM] Cached response_id: {response.id}")
 
         return self._build_vlm_response(response, has_tools=bool(tools))

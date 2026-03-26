@@ -117,7 +117,7 @@ class LockManager:
                 success = await self._path_lock.acquire_subtree(
                     path,
                     handle,
-                    timeout=timeout if timeout is not None else self._lock_timeout,
+                    timeout=timeout,
                 )
                 if not success:
                     # 释放已获得的锁
