@@ -91,20 +91,46 @@ function estimateTokens(messages: AgentMessage[]): number {
   return Math.max(1, messages.length * 80);
 }
 
-async function tryLegacyCompact(params: {
-  sessionId: string;
-  sessionFile: string;
-  tokenBudget?: number;
-  force?: boolean;
-  currentTokenCount?: number;
-  compactionTarget?: "budget" | "threshold";
-  customInstructions?: string;
-  runtimeContext?: Record<string, unknown>;
-}): Promise<CompactResult | null> {
+function describeError(err: unknown): string {
+  if (err instanceof Error) {
+    return err.message || err.name || String(err);
+  }
+  return String(err);
+}
+
+function isModuleResolutionError(err: unknown): boolean {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  const message = `${err.name}: ${err.message}`.toLowerCase();
+  return (
+    message.includes("cannot find module") ||
+    message.includes("module not found") ||
+    message.includes("package path not exported") ||
+    message.includes("is not defined by 'exports'") ||
+    message.includes("unsupported dir import") ||
+    message.includes("failed to resolve module specifier")
+  );
+}
+
+async function tryLegacyCompact(
+  params: {
+    sessionId: string;
+    sessionFile: string;
+    tokenBudget?: number;
+    force?: boolean;
+    currentTokenCount?: number;
+    compactionTarget?: "budget" | "threshold";
+    customInstructions?: string;
+    runtimeContext?: Record<string, unknown>;
+  },
+  logger: Logger,
+): Promise<CompactResult | null> {
   const candidates = [
     "openclaw/context-engine/legacy",
     "openclaw/dist/context-engine/legacy.js",
   ];
+  const importErrors: string[] = [];
 
   for (const path of candidates) {
     try {
@@ -114,13 +140,39 @@ async function tryLegacyCompact(params: {
         };
       };
       if (!mod?.LegacyContextEngine) {
+        importErrors.push(`${path}: LegacyContextEngine export missing`);
         continue;
       }
       const legacy = new mod.LegacyContextEngine();
-      return legacy.compact(params);
-    } catch {
-      // continue
+      try {
+        return await legacy.compact(params);
+      } catch (err) {
+        warnOrInfo(
+          logger,
+          `openviking: delegated legacy compact failed via ${path}: ${describeError(err)}`,
+        );
+        return {
+          ok: false,
+          compacted: false,
+          reason: `legacy_compact_failed:${path}`,
+        };
+      }
+    } catch (err) {
+      const detail = `${path}: ${describeError(err)}`;
+      importErrors.push(detail);
+      if (!isModuleResolutionError(err)) {
+        warnOrInfo(logger, `openviking: legacy compact import failed: ${detail}`);
+        return {
+          ok: false,
+          compacted: false,
+          reason: `legacy_compact_import_failed:${path}`,
+        };
+      }
     }
+  }
+
+  if (importErrors.length > 0) {
+    warnOrInfo(logger, `openviking: legacy compact unavailable (${importErrors.join("; ")})`);
   }
 
   return null;
@@ -266,7 +318,7 @@ export function createMemoryOpenVikingContextEngine(params: {
     },
 
     async compact(compactParams): Promise<CompactResult> {
-      const delegated = await tryLegacyCompact(compactParams);
+      const delegated = await tryLegacyCompact(compactParams, logger);
       if (delegated) {
         return delegated;
       }
