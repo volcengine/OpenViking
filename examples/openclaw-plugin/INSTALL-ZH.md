@@ -66,7 +66,9 @@ mv ~/.openclaw/extensions/memory-openviking ~/.openclaw/disabled-extensions/memo
 
 ### 正式安装
 
-#### 方式 A：npm 安装（推荐，全平台）
+#### 方式 A：npm 安装（推荐，含 Windows）
+
+**Windows** 与 macOS / Linux 相同：在 **PowerShell** 或 **cmd** 中执行下面的 `npm`、`npx`、`ov-install` 即可（需已安装 Node.js ≥ 22）。指定其它 OpenClaw 数据目录时，把 `--workdir` 换成本机路径（例如 `%USERPROFILE%\.openclaw-second`）。
 
 ```bash
 npm install -g openclaw-openviking-setup-helper
@@ -84,6 +86,87 @@ ov-install -y
 ```bash
 ov-install --workdir ~/.openclaw-second
 ```
+
+#### 指定版本（npm / `ov-install`）
+
+npm 上的安装助手包名为 [`openclaw-openviking-setup-helper`](https://www.npmjs.com/package/openclaw-openviking-setup-helper)。默认安装最新版；若需固定 **npm 上某一发布版本**，在包名后追加 `@VERSION`（VERSION 为 npm 上可见的 dist-tag 或版本号）：
+
+```bash
+npm install -g openclaw-openviking-setup-helper
+ov-install -y
+```
+
+不全局安装、用 npx 直接跑（同样可在包名后加 `@VERSION` 固定安装助手版本）：
+
+```bash
+npx -y -p openclaw-openviking-setup-helper ov-install -y
+```
+
+使用 **`ov-install`** 可指定 **插件代码对应的 Git 引用** 以及 **PyPI 上的 OpenViking 版本**：
+
+| 参数 | 含义 |
+| --- | --- |
+| `--github-repo owner/repo` | 从哪个 GitHub 仓库拉取插件文件（默认：`volcengine/OpenViking`） |
+| `--plugin-version REF` | 分支、tag 或 commit，用于拉取插件（默认：`main`） |
+| `--openviking-version VER` | 固定为 `pip install openviking==VER`（不写则安装 PyPI 最新版） |
+
+示例：
+
+```bash
+# 安装指定 tag 版本的插件（例如 v0.2.9）
+ov-install -y --plugin-version v0.2.9
+
+# 固定 PyPI 上的 OpenViking 版本，插件仍从 main 拉取
+ov-install -y --openviking-version 0.2.9
+
+# 同时指定插件 tag 和 OpenViking PyPI 版本
+ov-install -y --plugin-version v0.2.9 --openviking-version 0.2.9
+
+# 安装旧版插件链路（如需使用旧插件，请在 v0.2.3-v0.2.6 范围内选择版本）
+ov-install -y --plugin-version <legacy-version>
+```
+
+等价环境变量：`REPO`（同 `--github-repo`）、`PLUGIN_VERSION` / `BRANCH`、`OPENVIKING_VERSION`。
+
+#### 升级与回滚（`ov-install`）
+
+使用 `--update` / `--upgrade-plugin` 时，只会升级**插件本身**到指定 `--plugin-version`，不会升级 OpenViking 服务版本。该模式会：
+
+- 保留现有的 OpenViking 服务版本
+- 保留现有的 `~/.openviking/ov.conf`
+- 保留当前插件运行配置
+- 本地模式下保留 `configPath` 和 `port`
+- 远端模式下保留 `baseUrl`、`apiKey`、`agentId`
+- 只清理 `openclaw.json` 中 OpenViking 自己的插件配置，不影响其它插件
+- 在替换插件前备份 `openclaw.json` 和上一版插件目录
+- 在命令输出中记录升级路径和回滚审计文件位置
+
+不要把 `--update` 和 `--openviking-version` 一起使用；如果需要修改 OpenViking 服务版本，请走完整安装流程。
+
+```bash
+# 只升级插件到指定 tag
+ov-install --update --plugin-version v0.2.9
+
+# 只升级插件到指定分支
+ov-install --update --plugin-version dev-branch
+
+# 从指定 GitHub 仓库 + 分支升级插件
+ov-install --update --github-repo yourname/OpenViking --plugin-version dev-branch
+
+# 回滚最近一次插件升级
+ov-install --rollback
+```
+
+升级备份默认保存在：
+
+- `~/.openclaw/.openviking-upgrade-backup/openclaw.json.bak`
+- `~/.openclaw/.openviking-upgrade-backup/last-upgrade.json`
+- `~/.openclaw/disabled-extensions/<pluginId>-upgrade-backup-*`
+
+`--rollback` 会恢复最近一次 `--update` 生成的 `openclaw.json` 备份和插件目录备份。
+
+**Windows：** 升级与回滚命令与上表相同，在 PowerShell / cmd 中执行即可。
+
 备注：在运行 `npm install -g openclaw-openviking-setup-helper` 命令时，可能会出现没有安装创建虚拟环境的工具的报错提示，可以直接复制报错提示中的解决方案执行：
 
 ```bash
@@ -105,6 +188,8 @@ ov-install
 
 #### 方式 B（可选）：curl 一键安装（Linux / macOS）
 
+**Windows** 请优先使用上文 **方式 A（`npm` / `ov-install`）**。`curl | bash` 需要 Bash 环境；若已在 **Git Bash** 或 **WSL** 中操作，可执行本节命令。
+
 ```bash
 curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash
 ```
@@ -112,18 +197,73 @@ curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples
 非交互模式：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash -s -y
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash -s -- -y
 ```
 
 安装到指定 OpenClaw 实例：
 
 ```bash
-curl -fsSL ... | bash -s -- --workdir ~/.openclaw-openclaw-second
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash -s -- --workdir ~/.openclaw-second -y
 ```
 
-脚本会自动检测多个 OpenClaw 实例并让你选择。还会提示选择 local/remote 模式——remote 模式连接远端 OpenViking 服务，不需要安装 Python。
+#### 指定版本（`install.sh`）
 
-出现`installation completed`即代表安装成功。
+| 参数 / 环境变量 | 含义 |
+| --- | --- |
+| `--repo owner/repo`、`REPO` | 从哪个 GitHub 仓库拉取插件文件（默认：`volcengine/OpenViking`） |
+| `--plugin-version REF`、`PLUGIN_VERSION` | 分支、tag 或 commit（默认：`main`；兼容旧变量 `BRANCH`） |
+| `--openviking-version VER`、`OPENVIKING_VERSION` | `pip install openviking==VER`（不写则安装 PyPI 最新版） |
+
+示例：
+
+```bash
+# 安装指定 tag 版本的插件（例如 v0.2.9）
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash -s -- \
+  --plugin-version v0.2.9 -y
+
+# 固定 PyPI 上的 OpenViking 版本
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash -s -- \
+  --openviking-version 0.2.9 -y
+
+# 同时指定插件 tag 和 OpenViking PyPI 版本
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash -s -- \
+  --plugin-version v0.2.9 --openviking-version 0.2.9 -y
+```
+
+#### 升级与回滚（`install.sh`）
+
+`curl | bash` 入口现在直接由 `install.sh` 原生执行升级和回滚逻辑，不依赖机器上预先安装全局安装助手，也支持“只升级插件”和“回滚最近一次插件升级”：
+
+```bash
+# 只升级插件到指定 tag
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash -s -- \
+  --update --plugin-version v0.2.9
+
+# 只升级插件到指定分支
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash -s -- \
+  --update --plugin-version dev-branch
+
+# 从指定 GitHub 仓库 + 分支升级插件
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash -s -- \
+  --update --repo yourname/OpenViking --plugin-version dev-branch
+
+# 回滚最近一次插件升级
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash -s -- \
+  --rollback
+```
+
+`--update` 模式只改插件，不改 OpenViking 服务版本，因此不要搭配 `--openviking-version`。
+
+Shell 原生升级行为：
+
+- 保留当前 local / remote 模式下的插件配置
+- 不会重写 `~/.openviking/ov.conf`
+- 会把 `openclaw.json` 备份到 `~/.openclaw/.openviking-upgrade-backup/openclaw.json.bak`
+- 会把回滚审计写到 `~/.openclaw/.openviking-upgrade-backup/last-upgrade.json`
+- 每个插件只保留一份最新的目录备份，位置在 `~/.openclaw/disabled-extensions/`
+- 升级成功后会打印 `Upgrade path: <from> -> <to>`
+
+`install.sh` 会检测本机多个 OpenClaw 实例并供选择；首次安装会询问 local/remote；仅升级插件时会复用现有模式与配置。
 
 ### 启动OpenClaw + OpenViking
 
@@ -131,6 +271,13 @@ curl -fsSL ... | bash -s -- --workdir ~/.openclaw-openclaw-second
 
 ```bash
 source ~/.openclaw/openviking.env && openclaw gateway restart
+```
+
+Windows PowerShell 可使用：
+
+```powershell
+. "$HOME/.openclaw/openviking.env.ps1"
+openclaw gateway restart
 ```
 出现 `openviking: registered context-engine` 代表拉取成功。
 
@@ -362,11 +509,13 @@ openclaw config set plugins.entries.openviking.config.agentId "my-agent"
 
 ### `~/.openclaw/openviking.env`
 
-由安装助手自动生成，记录 Python 路径等环境变量：
+由安装器自动生成，记录 Python 路径等环境变量：
 
 ```bash
 export OPENVIKING_PYTHON='/usr/local/bin/python3'
 ```
+
+在 Windows PowerShell 下，安装器会生成 `~/.openclaw/openviking.env.ps1`。
 
 ---
 
