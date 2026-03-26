@@ -590,9 +590,8 @@ class MarkdownParser(BaseParser):
 
         Strategy:
         - Single section: Use directly (truncated with hash if needed)
-        - Multiple sections: {first_section}_{count}more (e.g., Intro_3more)
+        - Multiple sections: {first_section}_{count}more_{hash} (e.g., Intro_3more_a1b2c3d4)
         - Total length strictly limited: MAX_MERGED_FILENAME_LENGTH characters
-        - Hash suffix ensures uniqueness when truncation occurs
         """
         if not sections:
             return "merged"
@@ -604,7 +603,9 @@ class MarkdownParser(BaseParser):
         if count == 1:
             name = names[0]
         else:
-            suffix = f"_{count}more"
+            merged_content = "\n\n".join(c for _, c, _ in sections)
+            hash_suffix = hashlib.sha256(merged_content.encode("utf-8")).hexdigest()[:8]
+            suffix = f"_{count}more_{hash_suffix}"
             max_first_len = max_len - len(suffix)
             first_name = names[0][: max(max_first_len, 1)]
             name = f"{first_name}{suffix}"
