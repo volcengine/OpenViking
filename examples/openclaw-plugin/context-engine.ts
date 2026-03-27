@@ -307,12 +307,51 @@ export function createMemoryOpenVikingContextEngine(params: {
 
     // --- standard ContextEngine methods ---
 
-    async ingest(): Promise<IngestResult> {
-      return { ingested: false };
+    async ingest(params: { sessionId: string; message: AgentMessage; isHeartbeat?: boolean }): Promise<IngestResult> {
+      if (params.isHeartbeat || !cfg.autoCapture) {
+        return { ingested: false };
+      }
+      const role = params.message.role ?? "user";
+      if (role !== "user" && role !== "assistant") {
+        return { ingested: false };
+      }
+      const content = typeof params.message.content === "string"
+        ? params.message.content
+        : Array.isArray(params.message.content)
+          ? (params.message.content as Array<{ type?: string; text?: string }>)
+              .filter((b) => b?.type === "text" && typeof b.text === "string")
+              .map((b) => b.text)
+              .join("\n")
+          : "";
+      if (!content.trim()) {
+        return { ingested: false };
+      }
+      try {
+        const client = await getClient();
+        const ovSessionId = mapSessionKeyToOVSessionId(params.sessionId);
+        const agentId = resolveAgentId(params.sessionId);
+        await client.addSessionMessage(ovSessionId, role, content.trim(), agentId);
+        return { ingested: true };
+      } catch (err) {
+        warnOrInfo(logger, `openviking: ingest failed: ${describeError(err)}`);
+        return { ingested: false };
+      }
     },
 
-    async ingestBatch(): Promise<IngestBatchResult> {
-      return { ingestedCount: 0 };
+    async ingestBatch(params: {
+      sessionId: string;
+      messages: AgentMessage[];
+      isHeartbeat?: boolean;
+    }): Promise<IngestBatchResult> {
+      if (params.isHeartbeat || !cfg.autoCapture) {
+        return { ingestedCount: 0 };
+      }
+      let count = 0;
+      for (const message of params.messages) {
+        const result = await this.ingest({ sessionId: params.sessionId, message, isHeartbeat: false });
+        if (result.ingested) count++;
+      }
+      return { ingestedCount: count };
     },
 
     async assemble(assembleParams): Promise<AssembleResult> {
@@ -386,10 +425,27 @@ export function createMemoryOpenVikingContextEngine(params: {
         return delegated;
       }
 
-      warnOrInfo(
-        logger,
-        "openviking: delegated compaction unavailable; skipping compact",
-      );
+      // Delegated compaction unavailable — commit the OV session so memories
+      // are at least extracted, even though we cannot compact the context window.
+      const sessionKey = extractSessionKey(compactParams.runtimeContext);
+      if (sessionKey) {
+        try {
+          await doCommitOVSession(sessionKey);
+          logger.info(
+            `openviking: compact fallback — committed OV session for sessionKey=${sessionKey}`,
+          );
+          return {
+            ok: true,
+            compacted: false,
+            reason: "delegate_compact_unavailable_session_committed",
+          };
+        } catch (err) {
+          warnOrInfo(
+            logger,
+            `openviking: compact fallback commit failed: ${describeError(err)}`,
+          );
+        }
+      }
 
       return {
         ok: true,
