@@ -26,7 +26,7 @@ import {
   resolvePythonCommand,
   prepareLocalPort,
 } from "./process-manager.js";
-import { createMemoryOpenVikingContextEngine } from "./context-engine.js";
+import { createMemoryOpenVikingContextEngine, mapSessionKeyToOVSessionId } from "./context-engine.js";
 import type { ContextEngineWithSessionMapping } from "./context-engine.js";
 
 type PluginLogger = {
@@ -261,6 +261,12 @@ const contextEnginePlugin = {
             const c = await getClient();
             if (!sessionId && sessionKeyIn && contextEngineRef) {
               sessionId = await contextEngineRef.resolveOVSession(sessionKeyIn);
+              usedMappedSession = true;
+            }
+            if (!sessionId && sessionKeyIn) {
+              // Fallback: resolve directly without contextEngineRef (covers cases
+              // where registerContextEngine is unavailable or factory not yet called)
+              sessionId = mapSessionKeyToOVSessionId(sessionKeyIn);
               usedMappedSession = true;
             }
             if (!sessionId) {
