@@ -32,6 +32,8 @@ export type MemoryOpenVikingConfig = {
    * standard-diagnostics file writes) for assemble/afterTurn. Set false to disable.
    */
   emitStandardDiagnostics?: boolean;
+  /** When true, log tenant routing for semantic find and session writes (messages/commit) to the plugin logger. */
+  logFindRequests?: boolean;
 };
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:1933";
@@ -84,6 +86,16 @@ function toNumber(value: unknown, fallback: number): number {
   return fallback;
 }
 
+/** True when env is 1 / true / yes (case-insensitive). Used for debug flags without editing plugin JSON. */
+function envFlag(name: string): boolean {
+  const v = process.env[name];
+  if (v == null || v === "") {
+    return false;
+  }
+  const t = String(v).trim().toLowerCase();
+  return t === "1" || t === "true" || t === "yes";
+}
+
 function assertAllowedKeys(value: Record<string, unknown>, allowed: string[], label: string) {
   const unknown = Object.keys(value).filter((key) => !allowed.includes(key));
   if (unknown.length === 0) {
@@ -131,6 +143,7 @@ export const memoryOpenVikingConfigSchema = {
         "ingestReplyAssistMinSpeakerTurns",
         "ingestReplyAssistMinChars",
         "emitStandardDiagnostics",
+        "logFindRequests",
       ],
       "openviking config",
     );
@@ -219,6 +232,10 @@ export const memoryOpenVikingConfigSchema = {
         typeof cfg.emitStandardDiagnostics === "boolean"
           ? cfg.emitStandardDiagnostics
           : DEFAULT_EMIT_STANDARD_DIAGNOSTICS,
+      logFindRequests:
+        cfg.logFindRequests === true ||
+        envFlag("OPENVIKING_LOG_ROUTING") ||
+        envFlag("OPENVIKING_DEBUG"),
     };
   },
   uiHints: {
@@ -245,7 +262,7 @@ export const memoryOpenVikingConfigSchema = {
     agentId: {
       label: "Agent ID",
       placeholder: "auto-generated",
-      help: "Identifies this agent to OpenViking (sent as X-OpenViking-Agent header). Defaults to \"default\" if not set.",
+      help: 'OpenViking X-OpenViking-Agent: non-default values combine with OpenClaw ctx.agentId as "<config>_<sessionAgent>" (then sanitized to [a-zA-Z0-9_-]). Use "default" to send only ctx.agentId.',
     },
     apiKey: {
       label: "OpenViking API Key",
@@ -337,6 +354,13 @@ export const memoryOpenVikingConfigSchema = {
       label: "Standard diagnostics (diag JSON lines)",
       advanced: true,
       help: "When enabled, emit structured openviking: diag {...} lines for assemble and afterTurn. Disable to reduce log noise.",
+    },
+    logFindRequests: {
+      label: "Log find requests",
+      help:
+        "Log tenant routing: POST /api/v1/search/find (query, target_uri) and session POST .../messages + .../commit (sessionId, X-OpenViking-*). Never logs apiKey. " +
+        "Or set env OPENVIKING_LOG_ROUTING=1 or OPENVIKING_DEBUG=1 (no JSON edit). When on, local-mode OpenViking subprocess stderr is also logged at info.",
+      advanced: true,
     },
   },
 };

@@ -25,7 +25,7 @@
     "agentId": {
       "label": "Agent ID",
       "placeholder": "random unique ID",
-      "help": "Identifies this agent to OpenViking. A random unique ID is generated if not set."
+      "help": "Instance prefix for X-OpenViking-Agent. Non-default: `<this>_<OpenClaw ctx.agentId>` (sanitized to letters/digits/_/-). default: use OpenClaw session agent only."
     },
     "apiKey": {
       "label": "OpenViking API Key",
@@ -117,6 +117,11 @@
       "label": "Standard diagnostics (diag JSON lines)",
       "advanced": true,
       "help": "Emit structured openviking: diag {...} for assemble/afterTurn. Set false to disable."
+    },
+    "logFindRequests": {
+      "label": "Log find requests",
+      "help": "Log tenant routing: /search/find + session messages/commit (X-OpenViking-*; not apiKey). Or set env OPENVIKING_LOG_ROUTING=1 or OPENVIKING_DEBUG=1. Local mode: subprocess stderr at info when enabled.",
+      "advanced": true
     }
   },
   "configSchema": {
@@ -187,6 +192,9 @@
         "type": "number"
       },
       "emitStandardDiagnostics": {
+        "type": "boolean"
+      },
+      "logFindRequests": {
         "type": "boolean"
       }
     }
