@@ -43,6 +43,17 @@ type CompactResult = {
   result?: unknown;
 };
 
+type CompactDelegate = (arg: {
+  sessionId: string;
+  sessionFile: string;
+  tokenBudget?: number;
+  force?: boolean;
+  currentTokenCount?: number;
+  compactionTarget?: "budget" | "threshold";
+  customInstructions?: string;
+  runtimeContext?: Record<string, unknown>;
+}) => Promise<CompactResult>;
+
 type ContextEngine = {
   info: ContextEngineInfo;
   ingest: (params: { sessionId: string; message: AgentMessage; isHeartbeat?: boolean }) => Promise<IngestResult>;
@@ -93,38 +104,113 @@ function estimateTokens(messages: AgentMessage[]): number {
   return Math.max(1, messages.length * 80);
 }
 
-async function tryLegacyCompact(params: {
-  sessionId: string;
-  sessionFile: string;
-  tokenBudget?: number;
-  force?: boolean;
-  currentTokenCount?: number;
-  compactionTarget?: "budget" | "threshold";
-  customInstructions?: string;
-  runtimeContext?: Record<string, unknown>;
-}): Promise<CompactResult | null> {
+function describeError(err: unknown): string {
+  if (err instanceof Error) {
+    return err.message || err.name || String(err);
+  }
+  return String(err);
+}
+
+function isModuleResolutionError(err: unknown): boolean {
+  if (!(err instanceof Error)) {
+    return false;
+  }
+  const message = `${err.name}: ${err.message}`.toLowerCase();
+  return (
+    message.includes("cannot find module") ||
+    message.includes("module not found") ||
+    message.includes("package path not exported") ||
+    message.includes("is not defined by 'exports'") ||
+    message.includes("unsupported dir import") ||
+    message.includes("failed to resolve module specifier")
+  );
+}
+
+async function tryDelegatedCompact(
+  params: {
+    sessionId: string;
+    sessionFile: string;
+    tokenBudget?: number;
+    force?: boolean;
+    currentTokenCount?: number;
+    compactionTarget?: "budget" | "threshold";
+    customInstructions?: string;
+    runtimeContext?: Record<string, unknown>;
+  },
+  logger: Logger,
+): Promise<CompactResult | null> {
+  let delegateCompactionToRuntime: CompactDelegate | null;
+  try {
+    delegateCompactionToRuntime = await loadCompactDelegate(logger);
+  } catch (err) {
+    return {
+      ok: false,
+      compacted: false,
+      reason: `delegate_compact_import_failed:${describeError(err)}`,
+    };
+  }
+
+  if (!delegateCompactionToRuntime) {
+    if (cachedCompactUnavailableReason) {
+      warnOrInfo(
+        logger,
+        `openviking: delegated compaction unavailable (${cachedCompactUnavailableReason})`,
+      );
+    }
+    return null;
+  }
+
+  try {
+    return await delegateCompactionToRuntime(params);
+  } catch (err) {
+    logger.error(`openviking: delegated compaction failed: ${describeError(err)}`);
+    return {
+      ok: false,
+      compacted: false,
+      reason: `delegate_compact_failed:${describeError(err)}`,
+    };
+  }
+}
+
+let cachedCompactDelegate: CompactDelegate | null | undefined;
+let cachedCompactUnavailableReason: string | undefined;
+
+async function loadCompactDelegate(logger: Logger): Promise<CompactDelegate | null> {
+  if (cachedCompactDelegate !== undefined) {
+    return cachedCompactDelegate;
+  }
+
   const candidates = [
-    "openclaw/context-engine/legacy",
-    "openclaw/dist/context-engine/legacy.js",
+    "openclaw/plugin-sdk/core",
+    "openclaw/plugin-sdk",
   ];
+  const importErrors: string[] = [];
 
   for (const path of candidates) {
     try {
       const mod = (await import(path)) as {
-        LegacyContextEngine?: new () => {
-          compact: (arg: typeof params) => Promise<CompactResult>;
-        };
+        delegateCompactionToRuntime?: CompactDelegate;
       };
-      if (!mod?.LegacyContextEngine) {
+      if (!mod?.delegateCompactionToRuntime) {
+        importErrors.push(`${path}: delegateCompactionToRuntime export missing`);
         continue;
       }
-      const legacy = new mod.LegacyContextEngine();
-      return legacy.compact(params);
-    } catch {
-      // continue
+      cachedCompactDelegate = mod.delegateCompactionToRuntime;
+      cachedCompactUnavailableReason = undefined;
+      return cachedCompactDelegate;
+    } catch (err) {
+      const detail = `${path}: ${describeError(err)}`;
+      importErrors.push(detail);
+      if (!isModuleResolutionError(err)) {
+        logger.error(`openviking: delegated compaction import failed: ${detail}`);
+        throw err;
+      }
     }
   }
 
+  cachedCompactUnavailableReason =
+    `failed to load compact delegate from candidates: ${importErrors.join(" | ")}`;
+  cachedCompactDelegate = null;
   return null;
 }
 
@@ -295,20 +381,20 @@ export function createMemoryOpenVikingContextEngine(params: {
     },
 
     async compact(compactParams): Promise<CompactResult> {
-      const delegated = await tryLegacyCompact(compactParams);
+      const delegated = await tryDelegatedCompact(compactParams, logger);
       if (delegated) {
         return delegated;
       }
 
       warnOrInfo(
         logger,
-        "openviking: legacy compaction delegation unavailable; skipping compact",
+        "openviking: delegated compaction unavailable; skipping compact",
       );
 
       return {
         ok: true,
         compacted: false,
-        reason: "legacy_compact_unavailable",
+        reason: "delegate_compact_unavailable",
       };
     },
   };

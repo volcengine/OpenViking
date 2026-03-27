@@ -55,7 +55,7 @@ jobs:
           python-version: '3.10'
 
       - name: Cache Go modules
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/go/pkg/mod
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
@@ -63,7 +63,7 @@ jobs:
             ${{ runner.os }}-go-
 
       - name: Cache C++ extensions
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: openviking/pyagfs
           key: ${{ runner.os }}-cpp-${{ hashFiles('**/CMakeLists.txt', '**/*.cpp', '**/*.h') }}
@@ -71,7 +71,7 @@ jobs:
             ${{ runner.os }}-cpp-
 
       - name: Cache Python dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/pip
           key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt', '**/pyproject.toml') }}

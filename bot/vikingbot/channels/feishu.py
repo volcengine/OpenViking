@@ -647,177 +647,190 @@ class FeishuChannel(BaseChannel):
         if self._loop and self._loop.is_running():
             asyncio.run_coroutine_threadsafe(self._on_message(data), self._loop)
 
+    async def _download_and_save_image(self, image_key: str, message_id: str) -> str | None:
+        """Download single Feishu image and save to local, return file path or None if failed."""
+        try:
+            logger.info(f"Downloading Feishu image with image_key: {image_key}, message_id: {message_id}")
+            image_bytes = await self._download_feishu_image(image_key, message_id)
+            if not image_bytes:
+                logger.warning(f"Could not download image for image_key: {image_key}")
+                return None
+
+            media_dir = get_data_path() / "received"
+            media_dir.mkdir(parents=True, exist_ok=True)
+
+            import uuid
+            file_path = media_dir / f"feishu_{uuid.uuid4().hex[:16]}.png"
+            file_path.write_bytes(image_bytes)
+
+            logger.info(f"Feishu image saved to: {file_path}")
+            return str(file_path)
+        except Exception as e:
+            logger.warning(f"Failed to download Feishu image {image_key}: {e}")
+            import traceback
+            logger.debug(f"Stack trace: {traceback.format_exc()}")
+            return None
+
+    async def _parse_message_content(self, message: Any, msg_type: str, message_id: str) -> tuple[str, list[str]]:
+        """Parse message content and extract media files."""
+        content = ""
+        media = []
+
+        if msg_type == "text":
+            try:
+                content = json.loads(message.content).get("text", "")
+            except json.JSONDecodeError:
+                content = message.content or ""
+        elif msg_type in ("image", "post"):
+            content = MSG_TYPE_MAP.get(msg_type, f"[{msg_type}]")
+            text_content = ""
+            image_keys = []
+
+            try:
+                msg_content = json.loads(message.content)
+
+                if msg_type == "image":
+                    image_key = msg_content.get("image_key")
+                    if image_key:
+                        image_keys.append(image_key)
+                elif msg_type == "post":
+                    # Extract all images and text from post content
+                    post_content = msg_content.get("content", [])
+                    text_parts = []
+
+                    for block in post_content:
+                        for element in block:
+                            tag = element.get("tag")
+                            if tag == "img":
+                                img_key = element.get("image_key")
+                                if img_key:
+                                    image_keys.append(img_key)
+                            elif tag == "text":
+                                text_parts.append(element.get("text", ""))
+
+                    text_content = " ".join(text_parts).strip()
+                    if text_content:
+                        content = text_content
+
+                # Download images in parallel
+                if image_keys:
+                    download_tasks = [
+                        self._download_and_save_image(img_key, message_id)
+                        for img_key in image_keys
+                    ]
+                    results = await asyncio.gather(*download_tasks)
+                    media = [path for path in results if path is not None]
+
+            except Exception as e:
+                logger.warning(f"Failed to process {msg_type} message: {e}")
+        else:
+            content = MSG_TYPE_MAP.get(msg_type, f"[{msg_type}]")
+
+        return content, media
+
+    async def _check_should_process(self, chat_type: str, chat_id: str, message: Any, is_mentioned: bool) -> bool:
+        """Check if message should be processed based on group/thread rules."""
+        if chat_type != "group":
+            return True
+
+        chat_mode = await self._get_chat_mode(chat_id)
+        if chat_mode != "thread":
+            return True
+
+        # 话题群处理逻辑
+        is_topic_starter = message.root_id == message.message_id or not message.root_id
+
+        if self.config.thread_require_mention:
+            # 模式1：所有消息都需要@才处理
+            if not is_mentioned:
+                logger.info(f"Skipping thread message: thread_require_mention is True and not mentioned")
+                return False
+        else:
+            # 模式2：仅话题首条消息不需要@，后续回复需要@（DEBUG模式除外）
+            config = load_config()
+            if not is_topic_starter and not is_mentioned and config.mode != BotMode.DEBUG:
+                logger.info(f"Skipping thread message: not topic starter and not mentioned")
+                return False
+
+        return True
+
     async def _on_message(self, data: "P2ImMessageReceiveV1") -> None:
         """Handle incoming message from Feishu."""
         try:
             event = data.event
             message = event.message
             sender = event.sender
-
-            # Deduplication check
             message_id = message.message_id
+
+            # 1. 消息去重
             if message_id in self._processed_message_ids:
                 return
             self._processed_message_ids[message_id] = None
 
-            # Trim cache: keep most recent 500 when exceeds 1000
-            while len(self._processed_message_ids) > 1000:
-                self._processed_message_ids.popitem(last=False)
+            # 定期清理去重缓存（每100条清理一次，减少开销）
+            if len(self._processed_message_ids) % 100 == 0 and len(self._processed_message_ids) > 1000:
+                while len(self._processed_message_ids) > 500:
+                    self._processed_message_ids.popitem(last=False)
 
-            # Skip bot messages
-            sender_type = sender.sender_type
-            if sender_type == "bot":
+            # 2. 跳过机器人自身消息
+            if sender.sender_type == "bot":
                 return
 
+            # 3. 基础信息提取
             sender_id = sender.sender_id.open_id if sender.sender_id else "unknown"
+            if sender_id == "unknown":
+                logger.warning(f"Received message from unknown sender: {message_id}")
+                return
+
             chat_id = message.chat_id
             chat_type = message.chat_type  # "p2p" or "group"
             msg_type = message.message_type
 
-            # Parse message content and media first to check mentions
-            content = ""
-            media = []
-
-            if msg_type == "text":
-                try:
-                    content = json.loads(message.content).get("text", "")
-                except json.JSONDecodeError:
-                    content = message.content or ""
-            elif msg_type == "image" or msg_type == "post":
-                # Handle both image and post types
-                content = MSG_TYPE_MAP.get(msg_type, f"[{msg_type}]")
-                text_content = ""
-                try:
-                    # Parse message content to get image_key
-                    msg_content = json.loads(message.content)
-                    image_keys = []
-
-                    # Try to get image_key from different possible locations
-                    if msg_type == "image":
-                        image_key = msg_content.get("image_key")
-                        if image_key:
-                            image_keys.append(image_key)
-                    elif msg_type == "post":
-                        # For post messages, extract content and all images
-                        # Post structure: {"title": "", "content": [[{"tag": "img", "image_key": "..."}], [{"tag": "text", "text": "..."}]]}
-                        post_content = msg_content.get("content", [])
-
-                        # Extract all images by tag, regardless of position
-                        for block in post_content:
-                            for element in block:
-                                if element.get("tag") == "img":
-                                    img_key = element.get("image_key")
-                                    if img_key:
-                                        image_keys.append(img_key)
-
-                        # Extract text content from the post
-                        text_parts = []
-                        for block in post_content:
-                            for element in block:
-                                if element.get("tag") == "text":
-                                    text_parts.append(element.get("text", ""))
-                        text_content = " ".join(text_parts).strip()
-                        if text_content:
-                            content = text_content
-
-                    # Process each image key
-                    if image_keys:
-                        for image_key in image_keys:
-                            # Download image using the SDK client
-                            logger.info(
-                                f"Downloading Feishu image with image_key: {image_key}, message_id: {message_id}"
-                            )
-                            image_bytes = await self._download_feishu_image(image_key, message_id)
-                            if image_bytes:
-                                # Save to workspace/media directory
-
-                                media_dir = get_data_path() / "received"
-
-                                media_dir.mkdir(parents=True, exist_ok=True)
-
-                                import uuid
-
-                                file_path = media_dir / f"feishu_{uuid.uuid4().hex[:16]}.png"
-                                file_path.write_bytes(image_bytes)
-
-                                media.append(str(file_path))
-                                logger.info(f"Feishu image saved to: {file_path}")
-                            else:
-                                logger.warning(
-                                    f"Could not download image for image_key: {image_key}"
-                                )
-                except Exception as e:
-                    logger.warning(f"Failed to download Feishu image: {e}")
-                    import traceback
-
-                    logger.debug(f"Stack trace: {traceback.format_exc()}")
-            else:
-                content = MSG_TYPE_MAP.get(msg_type, f"[{msg_type}]")
-
+            # 4. 解析消息内容和媒体
+            content, media = await self._parse_message_content(message, msg_type, message_id)
             if not content:
                 return
 
-            import re
-
-            # 检查是否@了机器人
+            # 5. 检查是否被@
             is_mentioned = False
-            mention_pattern = re.compile(r"@_user_\d+")
             bot_name = self.config.bot_name
-
-            # 优先从message的mentions字段提取@信息（text和post类型都适用）
             if hasattr(message, 'mentions') and message.mentions and bot_name:
                 for mention in message.mentions:
-                    if hasattr(mention, 'name'):
-                        at_name = mention.name
-                        if at_name == self.config.bot_name:
-                            is_mentioned = True
-                            break
-                        continue
-            # 话题群@检查逻辑
-            config = load_config()
-            should_process = True
-            if chat_type == "group":
-                chat_mode = await self._get_chat_mode(chat_id)
-                if chat_mode == "thread":
-                    # 判断是否是话题的首条消息（root_id等于message_id说明是话题发起消息）
-                    is_topic_starter = message.root_id == message.message_id or not message.root_id
+                    if hasattr(mention, 'name') and mention.name == bot_name:
+                        is_mentioned = True
+                        break
 
-                    if self.config.thread_require_mention:
-                        # 模式1：默认True，所有消息都需要@才处理
-                        if not is_mentioned:
-                            logger.info(f"Skipping thread message: thread_require_mention is True and not mentioned")
-                            should_process = False
-                    else:
-                        # 模式2：False，仅话题首条消息不需要@，后续回复需要@
-                        if not is_topic_starter and not is_mentioned and config.mode != BotMode.DEBUG:
-                            logger.info(f"Skipping thread message: not topic starter and not mentioned")
-                            should_process = False
-
-            # 不需要处理的消息直接跳过
+            # 6. 检查是否需要处理该消息
+            should_process = await self._check_should_process(chat_type, chat_id, message, is_mentioned)
             if not should_process:
                 return
 
-            # 确认需要处理后再添加"已读"表情
-            if config and config.mode != BotMode.DEBUG:
+            # 7. 添加已读表情
+            config = load_config()
+            if config.mode != BotMode.DEBUG:
                 await self._add_reaction(message_id, "MeMeMe")
 
-            # 替换所有@占位符
+            # 8. 处理@占位符
+            mention_pattern = re.compile(r"@_user_\d+")
             content = mention_pattern.sub(f"@{sender_id}", content)
 
-            # Forward to message bus
+            # 9. 构建会话ID（处理话题群）
             reply_to = chat_id if chat_type == "group" else sender_id
-            logger.info(f"Received message from Feishu: {content}")
+            final_chat_id = chat_id
 
-            # 话题群处理：如果是话题群，首次消息root_id为空时，将当前消息id设为root_id
             if chat_type == "group":
                 chat_mode = await self._get_chat_mode(chat_id)
-                if chat_mode == "thread" and not message.root_id:
-                    message.root_id = message.message_id
-                if chat_mode == "thread" and message.root_id:
-                    chat_id = f"{reply_to}#{message.root_id}"
+                if chat_mode == "thread":
+                    # 话题首条消息设置root_id
+                    if not message.root_id:
+                        message.root_id = message.message_id
+                    final_chat_id = f"{reply_to}#{message.root_id}"
+
+            # 10. 转发到消息总线
+            logger.info(f"Received message from Feishu: {content}")
             await self._handle_message(
                 sender_id=sender_id,
-                chat_id=chat_id,
+                chat_id=final_chat_id,
                 content=content,
                 media=media if media else None,
                 metadata={
@@ -825,8 +838,8 @@ class FeishuChannel(BaseChannel):
                     "chat_type": chat_type,
                     "reply_to": reply_to,
                     "msg_type": msg_type,
-                    "root_id": message.root_id,  # Topic/thread ID for topic groups
-                    "sender_id": sender_id,  # Original message sender ID for @mention in replies
+                    "root_id": message.root_id,
+                    "sender_id": sender_id,
                 },
             )
 

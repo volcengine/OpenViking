@@ -73,6 +73,8 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 {
   "url": "http://localhost:1933",
   "api_key": "your-key",
+  "account": "acme",
+  "user": "alice",
   "agent_id": "my-agent"
 }
 ```
@@ -81,6 +83,8 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 |------|------|--------|
 | `url` | 服务端地址 | （必填） |
 | `api_key` | API Key | `null`（无认证） |
+| `account` | 面向租户请求的默认 account 请求头 | `null` |
+| `user` | 面向租户请求的默认 user 请求头 | `null` |
 | `agent_id` | Agent 标识符 | `null` |
 | `timeout` | HTTP 请求超时时间（秒） | `60.0` |
 | `output` | 默认输出格式：`"table"` 或 `"json"` | `"table"` |
