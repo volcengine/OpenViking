@@ -4,6 +4,7 @@
 import asyncio
 import concurrent.futures
 import threading
+import time
 
 import pytest
 
@@ -11,9 +12,10 @@ from openviking.storage.queuefs.embedding_tracker import EmbeddingTaskTracker
 
 
 class _LoopThread:
-    def __init__(self) -> None:
+    def __init__(self, close_delay: float = 0) -> None:
         self.loop = asyncio.new_event_loop()
         self._ready = threading.Event()
+        self._close_delay = close_delay
         self.thread = threading.Thread(target=self._run, daemon=True)
         self.thread.start()
         self._ready.wait(timeout=2)
@@ -22,6 +24,8 @@ class _LoopThread:
         asyncio.set_event_loop(self.loop)
         self._ready.set()
         self.loop.run_forever()
+        if self._close_delay:
+            time.sleep(self._close_delay)
         pending = asyncio.all_tasks(self.loop)
         for task in pending:
             task.cancel()
@@ -36,6 +40,14 @@ class _LoopThread:
         if self.loop.is_closed():
             return
         self.loop.call_soon_threadsafe(self.loop.stop)
+        self.thread.join(timeout=3)
+
+    def stop_without_join(self) -> None:
+        if self.loop.is_closed():
+            return
+        self.loop.call_soon_threadsafe(self.loop.stop)
+
+    def join(self) -> None:
         self.thread.join(timeout=3)
 
 
@@ -102,6 +114,37 @@ def test_tracker_falls_back_to_current_loop_when_owner_loop_is_closed():
         callback_thread_id, callback_loop = callback_info.result(timeout=2)
     finally:
         worker.stop()
+
+    assert remaining == 0
+    assert callback_thread_id == worker.thread.ident
+    assert callback_loop is worker.loop
+
+
+def test_tracker_falls_back_to_current_loop_when_owner_loop_is_stopped():
+    tracker = EmbeddingTaskTracker.get_instance()
+    owner = _LoopThread(close_delay=1)
+    worker = _LoopThread()
+    callback_info = concurrent.futures.Future()
+
+    async def on_complete():
+        callback_info.set_result((threading.get_ident(), asyncio.get_running_loop()))
+
+    async def register():
+        await tracker.register("semantic-msg", 1, on_complete=on_complete)
+
+    async def decrement():
+        return await tracker.decrement("semantic-msg")
+
+    try:
+        owner.submit(register()).result(timeout=2)
+        owner.stop_without_join()
+        time.sleep(0.1)
+
+        remaining = worker.submit(decrement()).result(timeout=2)
+        callback_thread_id, callback_loop = callback_info.result(timeout=2)
+    finally:
+        worker.stop()
+        owner.join()
 
     assert remaining == 0
     assert callback_thread_id == worker.thread.ident

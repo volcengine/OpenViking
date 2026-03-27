@@ -77,21 +77,34 @@ class EmbeddingTaskTracker:
         except RuntimeError:
             current_loop = None
 
+        owner_loop_running = bool(owner_loop and owner_loop.is_running())
+        owner_loop_available = bool(
+            owner_loop and not owner_loop.is_closed() and owner_loop_running
+        )
+
         try:
             if owner_loop and owner_loop is not current_loop:
-                if owner_loop.is_closed():
+                if not owner_loop_available:
                     logger.warning(
-                        "Owner loop closed before completion callback for %s; "
+                        "Owner loop unavailable before completion callback for %s; "
                         "running callback in current loop",
                         semantic_msg_id,
                     )
                 else:
-                    fut = asyncio.run_coroutine_threadsafe(
-                        self._execute_callback(on_complete),
-                        owner_loop,
-                    )
-                    await asyncio.wrap_future(fut)
-                    return
+                    try:
+                        fut = asyncio.run_coroutine_threadsafe(
+                            self._execute_callback(on_complete),
+                            owner_loop,
+                        )
+                    except RuntimeError:
+                        logger.warning(
+                            "Owner loop stopped before completion callback for %s; "
+                            "running callback in current loop",
+                            semantic_msg_id,
+                        )
+                    else:
+                        await asyncio.wrap_future(fut)
+                        return
 
             await self._execute_callback(on_complete)
         except Exception as e:
