@@ -8,6 +8,7 @@ import socket
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -105,6 +106,23 @@ def sample_markdown_file(temp_dir: Path) -> Path:
     f = temp_dir / "sample.md"
     f.write_text(SAMPLE_MD_CONTENT)
     return f
+
+
+@pytest.fixture(scope="function")
+def upload_temp_dir(temp_dir: Path, monkeypatch) -> Path:
+    """Use the per-test temp directory as the HTTP upload temp dir."""
+    config = SimpleNamespace(
+        storage=SimpleNamespace(get_upload_temp_dir=lambda: temp_dir),
+    )
+    monkeypatch.setattr(
+        "openviking.server.routers.resources.get_openviking_config",
+        lambda: config,
+    )
+    monkeypatch.setattr(
+        "openviking.server.routers.pack.get_openviking_config",
+        lambda: config,
+    )
+    return temp_dir
 
 
 @pytest_asyncio.fixture(scope="function")

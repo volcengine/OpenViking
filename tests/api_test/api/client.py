@@ -1,5 +1,9 @@
 import json
+import os
+import tempfile
 import time
+import zipfile
+from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import urlencode
 
@@ -113,6 +117,39 @@ class OpenVikingAPIClient:
             url = f"{url}?{urlencode(params)}"
         return url
 
+    def _upload_temp_file(self, file_path: str) -> str:
+        endpoint = "/api/v1/resources/temp_upload"
+        url = self._build_url(self.server_url, endpoint)
+        original_content_type = self.session.headers.pop("Content-Type", None)
+        try:
+            with open(file_path, "rb") as file_obj:
+                response = self._request_with_retry(
+                    "POST",
+                    url,
+                    files={"file": (Path(file_path).name, file_obj)},
+                )
+        finally:
+            if original_content_type is not None:
+                self.session.headers["Content-Type"] = original_content_type
+
+        response.raise_for_status()
+        data = response.json()
+        return data["result"]["temp_file_id"]
+
+    def _zip_directory_for_upload(self, directory_path: str) -> str:
+        with tempfile.NamedTemporaryFile(suffix=".zip", delete=False) as tmp_file:
+            temp_zip_path = tmp_file.name
+        try:
+            with zipfile.ZipFile(temp_zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                base_path = Path(directory_path)
+                for file_path in base_path.rglob("*"):
+                    if file_path.is_file():
+                        zf.write(file_path, arcname=file_path.relative_to(base_path))
+            return temp_zip_path
+        except Exception:
+            Path(temp_zip_path).unlink(missing_ok=True)
+            raise
+
     def find(
         self,
         query: str,
@@ -207,14 +244,26 @@ class OpenVikingAPIClient:
     ) -> requests.Response:
         endpoint = "/api/v1/resources"
         url = self._build_url(self.server_url, endpoint)
-        payload = {"path": path}
+        payload = {}
+        cleanup_path = None
+        if os.path.isfile(path):
+            payload["temp_file_id"] = self._upload_temp_file(path)
+        elif os.path.isdir(path):
+            cleanup_path = self._zip_directory_for_upload(path)
+            payload["temp_file_id"] = self._upload_temp_file(cleanup_path)
+        else:
+            payload["path"] = path
         if to:
             payload["to"] = to
         if reason:
             payload["reason"] = reason
         if wait:
             payload["wait"] = wait
-        return self._request_with_retry("POST", url, json=payload)
+        try:
+            return self._request_with_retry("POST", url, json=payload)
+        finally:
+            if cleanup_path is not None:
+                Path(cleanup_path).unlink(missing_ok=True)
 
     def wait_processed(self) -> requests.Response:
         endpoint = "/api/v1/system/wait"
@@ -311,9 +360,14 @@ class OpenVikingAPIClient:
     ) -> requests.Response:
         endpoint = "/api/v1/pack/import"
         url = self._build_url(self.server_url, endpoint)
-        return self.session.post(
+        if not os.path.isfile(file_path):
+            raise FileNotFoundError(f"Local ovpack file not found: {file_path}")
+        payload = {"parent": parent, "force": force, "vectorize": vectorize}
+        payload["temp_file_id"] = self._upload_temp_file(file_path)
+        return self._request_with_retry(
+            "POST",
             url,
-            json={"file_path": file_path, "parent": parent, "force": force, "vectorize": vectorize},
+            json=payload,
         )
 
     def fs_mv(self, from_uri: str, to_uri: str) -> requests.Response:

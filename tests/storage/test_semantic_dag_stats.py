@@ -49,7 +49,14 @@ class _FakeProcessor:
         self.vectorized_dirs.append(uri)
 
     async def _vectorize_single_file(
-        self, parent_uri, context_type, file_path, summary_dict, ctx=None, semantic_msg_id=None
+        self,
+        parent_uri,
+        context_type,
+        file_path,
+        summary_dict,
+        ctx=None,
+        semantic_msg_id=None,
+        use_summary=False,
     ):
         self.vectorized_files.append(file_path)
 

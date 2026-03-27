@@ -16,11 +16,12 @@ from openviking.core.context import Context, ContextType, Vectorize
 from openviking.core.mcp_converter import is_mcp_format, mcp_to_skill
 from openviking.core.skill_loader import SkillLoader
 from openviking.server.identity import RequestContext
+from openviking.server.local_input_guard import deny_direct_local_skill_input
 from openviking.storage import VikingDBManager
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
 from openviking.storage.viking_fs import VikingFS
-from openviking.utils.zip_safe import safe_extract_zip
 from openviking.telemetry import get_current_telemetry
+from openviking.utils.zip_safe import safe_extract_zip
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
@@ -48,6 +49,7 @@ class SkillProcessor:
         data: Any,
         viking_fs: VikingFS,
         ctx: RequestContext,
+        allow_local_path_resolution: bool = True,
     ) -> Dict[str, Any]:
         """
         Process and store a skill.
@@ -68,7 +70,10 @@ class SkillProcessor:
         telemetry = get_current_telemetry()
 
         parse_start = time.perf_counter()
-        skill_dict, auxiliary_files, base_path = self._parse_skill(data)
+        skill_dict, auxiliary_files, base_path = self._parse_skill(
+            data,
+            allow_local_path_resolution=allow_local_path_resolution,
+        )
         telemetry.set(
             "skill.parse.duration_ms", round((time.perf_counter() - parse_start) * 1000, 3)
         )
@@ -136,7 +141,11 @@ class SkillProcessor:
             "auxiliary_files": len(auxiliary_files),
         }
 
-    def _parse_skill(self, data: Any) -> tuple[Dict[str, Any], List[Path], Optional[Path]]:
+    def _parse_skill(
+        self,
+        data: Any,
+        allow_local_path_resolution: bool = True,
+    ) -> tuple[Dict[str, Any], List[Path], Optional[Path]]:
         """Parse skill data from various formats."""
         if data is None:
             raise ValueError("Skill data cannot be None")
@@ -145,15 +154,18 @@ class SkillProcessor:
         base_path = None
 
         if isinstance(data, str):
-            path_obj = Path(data)
-            if path_obj.exists():
-                if zipfile.is_zipfile(path_obj):
-                    temp_dir = Path(tempfile.mkdtemp())
-                    with zipfile.ZipFile(path_obj, "r") as zipf:
-                        safe_extract_zip(zipf, temp_dir)
-                    data = temp_dir
-                else:
-                    data = path_obj
+            if allow_local_path_resolution:
+                path_obj = Path(data)
+                if path_obj.exists():
+                    if zipfile.is_zipfile(path_obj):
+                        temp_dir = Path(tempfile.mkdtemp())
+                        with zipfile.ZipFile(path_obj, "r") as zipf:
+                            safe_extract_zip(zipf, temp_dir)
+                        data = temp_dir
+                    else:
+                        data = path_obj
+            else:
+                deny_direct_local_skill_input(data)
 
         if isinstance(data, Path):
             if data.is_dir():

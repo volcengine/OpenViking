@@ -64,7 +64,9 @@ If the legacy plugin was using `plugins.entries.memory-openviking.config`, migra
 
 Run the prerequisite steps above only if they apply to your environment. Once finished, continue with the Plugin 2.0 installation flow. For now, we do not recommend direct natural-language installation; the npm one-click installer is the preferred path.
 
-### Method A: npm Installation (Recommended, Cross-platform)
+### Method A: npm Installation (Recommended, Including Windows)
+
+**Windows:** use the same `npm`, `npx`, and `ov-install` commands in **PowerShell** or **cmd** (Node.js ≥ 22 required). For a non-default OpenClaw state directory, pass a real path to `--workdir` (e.g. `%USERPROFILE%\.openclaw-second`).
 
 ```bash
 npm install -g openclaw-openviking-setup-helper
@@ -96,7 +98,89 @@ ov-install --workdir ~/.openclaw-second
 
 ```
 
+#### Pinning versions (npm / `ov-install`)
+
+The published helper package is [`openclaw-openviking-setup-helper`](https://www.npmjs.com/package/openclaw-openviking-setup-helper). Install globally (latest by default), or append `@VERSION` with a published dist-tag or version from npm when you need to pin the installer:
+
+```bash
+npm install -g openclaw-openviking-setup-helper
+ov-install -y
+```
+
+Run **without** global install (same optional `@VERSION` pin):
+
+```bash
+npx -y -p openclaw-openviking-setup-helper ov-install -y
+```
+
+Use **`ov-install`** to install a **specific archived plugin version** or pin the **OpenViking PyPI version**:
+
+| Flag | Meaning |
+| --- | --- |
+| `--github-repo owner/repo` | GitHub repo for plugin raw downloads (default: `volcengine/OpenViking`) |
+| `--plugin-version REF` | Git branch, tag, or commit for plugin files (default: `main`) |
+| `--openviking-version VER` | Pin `pip install openviking==VER` (omit for latest PyPI release) |
+
+Examples:
+
+```bash
+# Install a specific tagged plugin version (e.g. v0.2.9)
+ov-install -y --plugin-version v0.2.9
+
+# Pin OpenViking on PyPI, plugin from main
+ov-install -y --openviking-version 0.2.9
+
+# Pin both plugin tag and OpenViking PyPI version
+ov-install -y --plugin-version v0.2.9 --openviking-version 0.2.9
+
+# Legacy plugin line (use a release in the v0.2.3-v0.2.6 range if you need the old plugin line)
+ov-install -y --plugin-version <legacy-version>
+```
+
+Environment variables (same semantics): `REPO` (same as `--github-repo`), `PLUGIN_VERSION` / `BRANCH`, `OPENVIKING_VERSION`.
+
+#### Upgrade and rollback (`ov-install`)
+
+Use `--update` / `--upgrade-plugin` to upgrade **only the plugin** to a specific plugin ref. This mode:
+
+- keeps the existing OpenViking service version
+- keeps the existing `~/.openviking/ov.conf`
+- preserves the current plugin runtime settings
+- for local mode, keeps `configPath` and `port`
+- for remote mode, keeps `baseUrl`, `apiKey`, and `agentId`
+- cleans only the OpenViking plugin entries from `openclaw.json`, without touching unrelated plugins
+- backs up `openclaw.json` and the previous plugin directory before replacing the plugin
+- records the upgrade path and rollback audit file in the command output
+
+Do **not** combine `--update` with `--openviking-version`; changing the OpenViking service version still requires a full install flow.
+
+```bash
+# Upgrade only the plugin to a tagged release
+ov-install --update --plugin-version v0.2.9
+
+# Upgrade only the plugin to a branch
+ov-install --update --plugin-version dev-branch
+
+# Upgrade only the plugin from a specific GitHub repo + branch
+ov-install --update --github-repo yourname/OpenViking --plugin-version dev-branch
+
+# Roll back the last plugin upgrade
+ov-install --rollback
+```
+
+Upgrade backups are stored under:
+
+- `~/.openclaw/.openviking-upgrade-backup/openclaw.json.bak`
+- `~/.openclaw/.openviking-upgrade-backup/last-upgrade.json`
+- `~/.openclaw/disabled-extensions/<pluginId>-upgrade-backup-*`
+
+`--rollback` restores the latest saved `openclaw.json` snapshot and the previous plugin directory created by the last `--update`.
+
+**Windows:** the same `ov-install` upgrade and rollback commands work in PowerShell or cmd.
+
 ### Method B: curl One-Click Installation (Linux / macOS)
+
+On **Windows**, prefer **Method A** (`npm` / `ov-install`). `curl | bash` needs a Bash environment (**Git Bash** or **WSL**) if you use this section.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash
@@ -106,23 +190,87 @@ curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples
 Non-interactive mode:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash -s -y
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash -s -- -y
 
 ```
 
 Install to a specific OpenClaw instance:
 
 ```bash
-curl -fsSL ... | bash -s -- --workdir ~/.openclaw-openclaw-second
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash -s -- --workdir ~/.openclaw-second -y
 
 ```
 
-The script will automatically detect multiple OpenClaw instances and let you choose. It will also prompt you to select local/remote mode—remote mode connects to a remote OpenViking service and does not require installing Python.
+#### Pinning versions (`install.sh`)
+
+| Flag / env | Meaning |
+| --- | --- |
+| `--repo owner/repo` / `REPO` | GitHub repo for plugin raw files (default: `volcengine/OpenViking`) |
+| `--plugin-version REF` / `PLUGIN_VERSION` | Git branch, tag, or commit (default: `main`; legacy: `BRANCH`) |
+| `--openviking-version VER` / `OPENVIKING_VERSION` | `pip install openviking==VER` (omit for latest) |
+
+Examples:
+
+```bash
+# Install a specific tagged plugin version (e.g. v0.2.9)
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash -s -- \
+  --plugin-version v0.2.9 -y
+
+# Pin OpenViking on PyPI
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash -s -- \
+  --openviking-version 0.2.9 -y
+
+# Pin both plugin tag and OpenViking PyPI version
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash -s -- \
+  --plugin-version v0.2.9 --openviking-version 0.2.9 -y
+```
+
+#### Upgrade and rollback (`install.sh`)
+
+The `curl | bash` entry point now runs the same upgrade and rollback logic natively in `install.sh`. The target machine does not need a preinstalled global installer helper for plugin-only upgrade or rollback.
+
+```bash
+# Upgrade only the plugin to a tagged release
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash -s -- \
+  --update --plugin-version v0.2.9
+
+# Upgrade only the plugin to a branch
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash -s -- \
+  --update --plugin-version dev-branch
+
+# Upgrade only the plugin from a specific GitHub repo + branch
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash -s -- \
+  --update --repo yourname/OpenViking --plugin-version dev-branch
+
+# Roll back the last plugin upgrade
+curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples/openclaw-plugin/install.sh | bash -s -- \
+  --rollback
+```
+
+`--update` only changes the plugin release. Do not pass `--openviking-version` in upgrade mode.
+
+Native shell upgrade behavior:
+
+- keeps the current local or remote plugin settings
+- does not rewrite `~/.openviking/ov.conf`
+- backs up `openclaw.json` to `~/.openclaw/.openviking-upgrade-backup/openclaw.json.bak`
+- writes rollback audit data to `~/.openclaw/.openviking-upgrade-backup/last-upgrade.json`
+- keeps only the latest plugin directory backup per plugin under `~/.openclaw/disabled-extensions/`
+- prints `Upgrade path: <from> -> <to>` after a successful upgrade
+
+The script will automatically detect multiple OpenClaw instances and let you choose. During a fresh install it also prompts you to select local or remote mode. During plugin-only upgrade it reuses the existing mode and config instead of prompting again.
 
 ### Start OpenClaw + OpenViking
 
 ```bash
 source ~/.openclaw/openviking.env && openclaw gateway restart
+```
+
+On Windows PowerShell:
+
+```powershell
+. "$HOME/.openclaw/openviking.env.ps1"
+openclaw gateway restart
 ```
 
 Seeing `openviking: registered context-engine` indicates the plugin was loaded.
@@ -393,12 +541,14 @@ If not configured, the plugin auto-generates a unique ID in the format `openclaw
 
 ### `~/.openclaw/openviking.env`
 
-Automatically generated by the setup helper, recording environment variables such as the Python path:
+Automatically generated by the installer, recording environment variables such as the Python path:
 
 ```bash
 export OPENVIKING_PYTHON='/usr/local/bin/python3'
 
 ```
+
+On Windows PowerShell, the installer writes `~/.openclaw/openviking.env.ps1` instead.
 
 ---
 
