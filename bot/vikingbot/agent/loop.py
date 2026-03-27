@@ -351,7 +351,7 @@ class AgentLoop:
                     tools_used.append(tool_used_dict)
 
                 messages.append(
-                    {"role": "system", "content": "Reflect on the results and decide next steps."}
+                    {"role": "user", "content": "Reflect on the results and decide next steps."}
                 )
             else:
                 final_content = response.content
