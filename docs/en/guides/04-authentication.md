@@ -235,6 +235,7 @@ curl http://localhost:1933/health
 
 ## Related Documentation
 
+- [Multi-Tenant](../concepts/11-multi-tenant.md) - Capabilities, sharing boundaries, and integration patterns
 - [Configuration](01-configuration.md) - Config file reference
 - [Deployment](03-deployment.md) - Server setup
 - [API Overview](../api/01-overview.md) - API reference

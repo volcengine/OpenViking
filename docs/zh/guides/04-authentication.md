@@ -235,6 +235,7 @@ curl http://localhost:1933/health
 
 ## 相关文档
 
+- [多租户](../concepts/11-multi-tenant.md) - 多租户能力、共享边界与接入实践
 - [配置](01-configuration.md) - 配置文件说明
 - [服务部署](03-deployment.md) - 服务部署
 - [API 概览](../api/01-overview.md) - API 参考
