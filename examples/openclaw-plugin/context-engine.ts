@@ -19,6 +19,7 @@ type ContextEngineInfo = {
   id: string;
   name: string;
   version?: string;
+  ownsCompaction: true;
 };
 
 type AssembleResult = {
@@ -328,41 +329,6 @@ function buildSystemPromptAddition(): string {
   ].join("\n");
 }
 
-async function tryLegacyCompact(params: {
-  sessionId: string;
-  sessionFile: string;
-  tokenBudget?: number;
-  force?: boolean;
-  currentTokenCount?: number;
-  compactionTarget?: "budget" | "threshold";
-  customInstructions?: string;
-  runtimeContext?: Record<string, unknown>;
-}): Promise<CompactResult | null> {
-  const candidates = [
-    "openclaw/context-engine/legacy",
-    "openclaw/dist/context-engine/legacy.js",
-  ];
-
-  for (const path of candidates) {
-    try {
-      const mod = (await import(path)) as {
-        LegacyContextEngine?: new () => {
-          compact: (arg: typeof params) => Promise<CompactResult>;
-        };
-      };
-      if (!mod?.LegacyContextEngine) {
-        continue;
-      }
-      const legacy = new mod.LegacyContextEngine();
-      return legacy.compact(params);
-    } catch {
-      // continue
-    }
-  }
-
-  return null;
-}
-
 function warnOrInfo(logger: Logger, message: string): void {
   if (typeof logger.warn === "function") {
     logger.warn(message);
@@ -451,6 +417,7 @@ export function createMemoryOpenVikingContextEngine(params: {
       id,
       name,
       version,
+      ownsCompaction: true,
     },
 
     commitOVSession: doCommitOVSession,
@@ -471,7 +438,7 @@ export function createMemoryOpenVikingContextEngine(params: {
 
       const originalTokens = roughEstimate(messages);
       logger.info(`openviking: assemble input msgs=${messages.length} ~${originalTokens} tokens, budget=${validTokenBudget(assembleParams.tokenBudget) ?? 128_000}`);
-
+      
       const OVSessionId = assembleParams.sessionId;
       diag("assemble_entry", OVSessionId, {
         messagesCount: messages.length,
@@ -710,21 +677,119 @@ export function createMemoryOpenVikingContextEngine(params: {
     },
 
     async compact(compactParams): Promise<CompactResult> {
-      const delegated = await tryLegacyCompact(compactParams);
-      if (delegated) {
-        return delegated;
+      const OVSessionId = compactParams.sessionId;
+      diag("compact_entry", OVSessionId, {
+        tokenBudget: compactParams.tokenBudget ?? null,
+        force: compactParams.force ?? false,
+        currentTokenCount: compactParams.currentTokenCount ?? null,
+        compactionTarget: compactParams.compactionTarget ?? null,
+        hasCustomInstructions: typeof compactParams.customInstructions === "string" &&
+          compactParams.customInstructions.trim().length > 0,
+      });
+
+      try {
+        const client = await getClient();
+        const agentId = resolveAgentId(OVSessionId);
+        logger.info(
+          `openviking: compact committing session=${OVSessionId} (wait=true)`,
+        );
+        const commitResult = await client.commitSession(OVSessionId, { wait: true, agentId });
+        const memCount = totalExtractedMemories(commitResult.memories_extracted);
+
+        if (commitResult.status === "failed") {
+          warnOrInfo(
+            logger,
+            `openviking: compact commit Phase 2 failed for session=${OVSessionId}: ${commitResult.error ?? "unknown"}`,
+          );
+          diag("compact_result", OVSessionId, {
+            ok: false,
+            compacted: false,
+            reason: "commit_failed",
+            status: commitResult.status,
+            archived: commitResult.archived ?? false,
+            taskId: commitResult.task_id ?? null,
+            error: commitResult.error ?? null,
+          });
+          return {
+            ok: false,
+            compacted: false,
+            reason: "commit_failed",
+            result: commitResult,
+          };
+        }
+
+        if (commitResult.status === "timeout") {
+          warnOrInfo(
+            logger,
+            `openviking: compact commit Phase 2 timed out for session=${OVSessionId}, task_id=${commitResult.task_id ?? "none"}`,
+          );
+          diag("compact_result", OVSessionId, {
+            ok: false,
+            compacted: false,
+            reason: "commit_timeout",
+            status: commitResult.status,
+            archived: commitResult.archived ?? false,
+            taskId: commitResult.task_id ?? null,
+          });
+          return {
+            ok: false,
+            compacted: false,
+            reason: "commit_timeout",
+            result: commitResult,
+          };
+        }
+
+        logger.info(
+          `openviking: compact committed session=${OVSessionId}, archived=${commitResult.archived ?? false}, memories=${memCount}, task_id=${commitResult.task_id ?? "none"}`,
+        );
+
+        if (!commitResult.archived) {
+          diag("compact_result", OVSessionId, {
+            ok: true,
+            compacted: false,
+            reason: "commit_no_archive",
+            status: commitResult.status,
+            archived: commitResult.archived ?? false,
+            taskId: commitResult.task_id ?? null,
+            memories: memCount,
+          });
+          return {
+            ok: true,
+            compacted: false,
+            reason: "commit_no_archive",
+            result: commitResult,
+          };
+        }
+
+        diag("compact_result", OVSessionId, {
+          ok: true,
+          compacted: true,
+          reason: "commit_completed",
+          status: commitResult.status,
+          archived: commitResult.archived ?? false,
+          taskId: commitResult.task_id ?? null,
+          memories: memCount,
+        });
+        return {
+          ok: true,
+          compacted: true,
+          reason: "commit_completed",
+          result: commitResult,
+        };
+      } catch (err) {
+        warnOrInfo(logger, `openviking: compact commit failed for session=${OVSessionId}: ${String(err)}`);
+        diag("compact_error", OVSessionId, {
+          error: String(err),
+        });
+        return {
+          ok: false,
+          compacted: false,
+          reason: "commit_error",
+          result: {
+            error: String(err),
+          },
+        };
       }
-
-      warnOrInfo(
-        logger,
-        "openviking: legacy compaction delegation unavailable; skipping compact",
-      );
-
-      return {
-        ok: true,
-        compacted: false,
-        reason: "legacy_compact_unavailable",
-      };
     },
   };
 }
