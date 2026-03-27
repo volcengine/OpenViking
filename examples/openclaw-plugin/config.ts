@@ -26,6 +26,13 @@ export type MemoryOpenVikingConfig = {
   ingestReplyAssist?: boolean;
   ingestReplyAssistMinSpeakerTurns?: number;
   ingestReplyAssistMinChars?: number;
+  compressToolContext?: boolean;
+  compressReadToolContext?: boolean;
+  compressToolContextAboveChars?: number;
+  compressToolContextMaxChars?: number;
+  compressToolContextHeadChars?: number;
+  compressToolContextTailChars?: number;
+  compressToolContextMaxImportantLines?: number;
 };
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:1933";
@@ -42,6 +49,13 @@ const DEFAULT_RECALL_TOKEN_BUDGET = 2000;
 const DEFAULT_INGEST_REPLY_ASSIST = true;
 const DEFAULT_INGEST_REPLY_ASSIST_MIN_SPEAKER_TURNS = 2;
 const DEFAULT_INGEST_REPLY_ASSIST_MIN_CHARS = 120;
+const DEFAULT_COMPRESS_TOOL_CONTEXT = true;
+const DEFAULT_COMPRESS_READ_TOOL_CONTEXT = false;
+const DEFAULT_COMPRESS_TOOL_CONTEXT_ABOVE_CHARS = 1200;
+const DEFAULT_COMPRESS_TOOL_CONTEXT_MAX_CHARS = 1600;
+const DEFAULT_COMPRESS_TOOL_CONTEXT_HEAD_CHARS = 600;
+const DEFAULT_COMPRESS_TOOL_CONTEXT_TAIL_CHARS = 400;
+const DEFAULT_COMPRESS_TOOL_CONTEXT_MAX_IMPORTANT_LINES = 12;
 const DEFAULT_LOCAL_CONFIG_PATH = join(homedir(), ".openviking", "ov.conf");
 
 const DEFAULT_AGENT_ID = "default";
@@ -121,6 +135,13 @@ export const memoryOpenVikingConfigSchema = {
         "ingestReplyAssist",
         "ingestReplyAssistMinSpeakerTurns",
         "ingestReplyAssistMinChars",
+        "compressToolContext",
+        "compressReadToolContext",
+        "compressToolContextAboveChars",
+        "compressToolContextMaxChars",
+        "compressToolContextHeadChars",
+        "compressToolContextTailChars",
+        "compressToolContextMaxImportantLines",
       ],
       "openviking config",
     );
@@ -200,6 +221,28 @@ export const memoryOpenVikingConfigSchema = {
           10000,
           Math.floor(toNumber(cfg.ingestReplyAssistMinChars, DEFAULT_INGEST_REPLY_ASSIST_MIN_CHARS)),
         ),
+      ),
+      compressToolContext: cfg.compressToolContext !== false,
+      compressReadToolContext: cfg.compressReadToolContext === true,
+      compressToolContextAboveChars: Math.max(
+        100,
+        Math.min(100000, Math.floor(toNumber(cfg.compressToolContextAboveChars, DEFAULT_COMPRESS_TOOL_CONTEXT_ABOVE_CHARS))),
+      ),
+      compressToolContextMaxChars: Math.max(
+        200,
+        Math.min(100000, Math.floor(toNumber(cfg.compressToolContextMaxChars, DEFAULT_COMPRESS_TOOL_CONTEXT_MAX_CHARS))),
+      ),
+      compressToolContextHeadChars: Math.max(
+        80,
+        Math.min(50000, Math.floor(toNumber(cfg.compressToolContextHeadChars, DEFAULT_COMPRESS_TOOL_CONTEXT_HEAD_CHARS))),
+      ),
+      compressToolContextTailChars: Math.max(
+        80,
+        Math.min(50000, Math.floor(toNumber(cfg.compressToolContextTailChars, DEFAULT_COMPRESS_TOOL_CONTEXT_TAIL_CHARS))),
+      ),
+      compressToolContextMaxImportantLines: Math.max(
+        1,
+        Math.min(200, Math.floor(toNumber(cfg.compressToolContextMaxImportantLines, DEFAULT_COMPRESS_TOOL_CONTEXT_MAX_IMPORTANT_LINES))),
       ),
     };
   },
@@ -308,6 +351,46 @@ export const memoryOpenVikingConfigSchema = {
       placeholder: String(DEFAULT_INGEST_REPLY_ASSIST_MIN_CHARS),
       help: "Minimum sanitized text length required before ingest reply assist can trigger.",
       advanced: true,
+    },
+    compressToolContext: {
+      label: "Compress Tool Context",
+      help: "Compress oversized tool results before they are assembled into the next model run.",
+      advanced: true,
+    },
+    compressReadToolContext: {
+      label: "Compress Read Tool Context",
+      help: "Also compress oversized read tool results. Off by default to avoid hiding useful file content.",
+      advanced: true,
+    },
+    compressToolContextAboveChars: {
+      label: "Compress Tool Context Above Chars",
+      placeholder: String(DEFAULT_COMPRESS_TOOL_CONTEXT_ABOVE_CHARS),
+      advanced: true,
+      help: "Only tool results longer than this are compressed during context assembly.",
+    },
+    compressToolContextMaxChars: {
+      label: "Compress Tool Context Max Chars",
+      placeholder: String(DEFAULT_COMPRESS_TOOL_CONTEXT_MAX_CHARS),
+      advanced: true,
+      help: "Maximum chars kept for a compressed tool result in assembled context.",
+    },
+    compressToolContextHeadChars: {
+      label: "Compress Tool Context Head Chars",
+      placeholder: String(DEFAULT_COMPRESS_TOOL_CONTEXT_HEAD_CHARS),
+      advanced: true,
+      help: "Chars to preserve from the start of oversized tool results when no strong key lines are found.",
+    },
+    compressToolContextTailChars: {
+      label: "Compress Tool Context Tail Chars",
+      placeholder: String(DEFAULT_COMPRESS_TOOL_CONTEXT_TAIL_CHARS),
+      advanced: true,
+      help: "Chars to preserve from the end of oversized tool results.",
+    },
+    compressToolContextMaxImportantLines: {
+      label: "Compress Tool Context Max Important Lines",
+      placeholder: String(DEFAULT_COMPRESS_TOOL_CONTEXT_MAX_IMPORTANT_LINES),
+      advanced: true,
+      help: "Maximum number of error/warn/key lines preserved from oversized tool results.",
     },
   },
 };
