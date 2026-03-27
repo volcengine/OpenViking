@@ -23,6 +23,7 @@ from datetime import datetime
 from pathlib import PurePath
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 
+from openviking.pyagfs.exceptions import AGFSClientError, AGFSHTTPError
 from openviking.server.identity import RequestContext, Role
 from openviking.telemetry import get_current_telemetry
 from openviking.utils.time_utils import format_simplified, get_current_timestamp, parse_iso_datetime
@@ -1667,8 +1668,11 @@ class VikingFS:
                 existing_bytes = self._handle_agfs_read(self.agfs.read(path))
                 existing_bytes = await self._decrypt_content(existing_bytes, ctx=ctx)
                 existing = self._decode_bytes(existing_bytes)
-            except Exception:
-                pass
+            except AGFSHTTPError as e:
+                if e.status_code != 404:
+                    raise
+            except AGFSClientError:
+                raise
 
             await self._ensure_parent_dirs(path)
             final_content = (existing + content).encode("utf-8")
