@@ -31,6 +31,7 @@ from openviking.session.memory.utils import (
     parse_json_with_stability,
     parse_memory_file_with_fields,
     pretty_print_messages,
+    truncate_content,
     validate_operations_uris,
 )
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
@@ -57,7 +58,7 @@ class MemoryReAct:
         vlm: VLMBase,
         viking_fs: Optional[VikingFS] = None,
         model: Optional[str] = None,
-        max_iterations: int = 5,
+        max_iterations: int = 3,
         ctx: Optional[RequestContext] = None,
         registry: Optional[MemoryTypeRegistry] = None,
     ):
@@ -127,7 +128,62 @@ class MemoryReAct:
 
         return dirs
 
-    async def _pre_fetch_context(self, conversation: str) -> Dict[str, Any]:
+    def _assemble_conversation(self, messages: List[Message], latest_archive_overview: str = "") -> str:
+        """Assemble conversation string from messages.
+
+        This method converts a list of Message objects into a formatted string
+        that can be used by the ReAct loop.
+
+        Args:
+            messages: List of Message objects
+            latest_archive_overview: Optional overview from previous archive for context
+
+        Returns:
+            Formatted conversation string
+        """
+        import json
+        from openviking.message.part import ToolPart
+
+        conversation_sections: List[str] = []
+
+        # Add previous archive overview if provided
+        # if latest_archive_overview:
+        #     conversation_sections.append(f"## Previous Archive Overview\n{latest_archive_overview}")
+
+        def format_message_with_parts(msg: Message) -> str:
+            """Format message with text and tool parts."""
+            parts = getattr(msg, "parts", [])
+            has_tool_parts = any(isinstance(p, ToolPart) for p in parts)
+
+            if not has_tool_parts:
+                return msg.content
+
+            tool_lines = []
+            text_lines = []
+            for part in parts:
+                if hasattr(part, "text") and part.text:
+                    text_lines.append(part.text)
+                elif isinstance(part, ToolPart):
+                    tool_info = {
+                        "type": "tool_call",
+                        "tool_name": part.tool_name,
+                        "tool_input": part.tool_input,
+                        "tool_status": part.tool_status,
+                    }
+                    if part.skill_uri:
+                        tool_info["skill_name"] = part.skill_uri.rstrip("/").split("/")[-1]
+                    tool_lines.append(f"[ToolCall] {json.dumps(tool_info, ensure_ascii=False)}")
+
+            all_lines = tool_lines + text_lines
+            return "\n".join(all_lines) if all_lines else msg.content
+
+        conversation_sections.append(
+            "\n".join([f"[{idx}][{msg.role}]: {format_message_with_parts(msg)}" for idx, msg in enumerate(messages)])
+        )
+
+        return "\n\n".join(section for section in conversation_sections if section)
+
+    async def _pre_fetch_context(self, messages: List[Message]) -> Dict[str, Any]:
         """
         Pre-fetch context based on activated schemas.
 
@@ -138,11 +194,13 @@ class MemoryReAct:
         - For operation_mode = "add_only": skip ls and search, only read .overview.md
 
         Args:
-            conversation: Conversation history for search query
+            messages: List of Message objects for extracting user query
 
         Returns:
             Pre-fetched context with directories, summaries, and search_results
         """
+        import uuid
+
         from openviking.session.memory.tools import get_tool
         messages = []
 
@@ -198,7 +256,7 @@ class MemoryReAct:
             default_search_uris=search_uris
         )
 
-        # 首先读取所有 .overview.md 文件
+        # 首先读取所有 .overview.md 文件（截断以避免窗口过大）
         for overview_uri in overview_files:
             try:
                 result_str = await read_tool.execute(self.viking_fs, tool_ctx, uri=overview_uri)
@@ -253,60 +311,107 @@ class MemoryReAct:
         # Step 3: Search for relevant memories based on user messages in conversation
         # 只对非 add_only 模式执行搜索
         search_tool = get_tool("search")
+        logger.debug(f"Search tool available: {search_tool is not None}")
+        logger.debug(f"VikingFS available: {self.viking_fs is not None}")
+        logger.debug(f"Context available: {self.ctx is not None}")
+
         if search_tool and self.viking_fs and self.ctx:
             # 检查是否有非 add_only 模式的 schema 需要搜索
             has_non_add_only_schemas = any(
                 schema.operation_mode != "add_only"
                 for schema in self.registry.list_all(include_disabled=False)
             )
+            logger.info(f"  Has non add-only schemas: {has_non_add_only_schemas}")
+
+            # 打印所有启用的记忆类型及其 operation_mode
+            enabled_schemas = self.registry.list_all(include_disabled=False)
+            logger.info(f"  Enabled schemas ({len(enabled_schemas)}):")
+            for schema in enabled_schemas:
+                logger.info(f"    - {schema.memory_type}: operation_mode={schema.operation_mode}, enabled={schema.enabled}")
 
             if has_non_add_only_schemas:
                 try:
-                    # Extract only user messages from conversation
-                    user_messages = []
-                    for line in conversation.split("\n"):
-                        if line.startswith("[user]:"):
-                            user_messages.append(line[len("[user]:"):].strip())
-                    user_query = " ".join(user_messages)
+                    # 添加唯一调用ID用于追踪
+                    import uuid
+                    call_id_str = str(uuid.uuid4())[:8]
+                    logger.info(f"  [SEARCH_CALL_ID={call_id_str}] Starting search (track this ID to find duplicates)")
 
-                    if user_query:
+                    # Extract only user messages from messages (List[Message])
+                    user_messages = []
+                    logger.info(f"  [SEARCH_CALL_ID={call_id_str}] Total messages in prefetch: {len(messages)}")
+                    for idx, msg in enumerate(messages):
+                        msg_role = getattr(msg, 'role', None)
+                        logger.info(f"    msg[{idx}] role={msg_role}, type={type(msg).__name__}")
+                        if msg_role == 'user':
+                            user_messages.append(msg.content)
+                            logger.info(f"      -> Added user content: {msg.content[:50]}...")
+                    user_query = " ".join(user_messages)
+                    logger.info(f"  [SEARCH_CALL_ID={call_id_str}] Extracted user query: '{user_query}'")
+
+                    # 执行搜索并记录结果（无论成功/失败/无结果都记录）
+                    search_result = None
+                    search_error = None
+                    try:
+                        logger.info(f"  [SEARCH_CALL_ID={call_id_str}] Executing search with query: '{user_query}'")
                         search_result = await search_tool.execute(
                             viking_fs=self.viking_fs,
                             ctx=tool_ctx,
-                            query=user_query,
+                            query=user_query or "",
                         )
-                        if search_result and not search_result.get("error"):
-                            # 简化搜索结果为 URI 列表（prefetch 只需要 memories）
-                            simplified = [m["uri"] for m in search_result.get("memories", [])]
-                            add_tool_call_pair_to_messages(
-                                messages=messages,
-                                call_id=call_id_seq,
-                                tool_name='search',
-                                params={"query": "[keyword from conversation]"},
-                                result=str(simplified)
-                            )
-                            call_id_seq += 1
-                except Exception as e:
-                    logger.warning(f"Pre-fetch search failed: {e}")
+                        logger.info(f"  [SEARCH_CALL_ID={call_id_str}] Raw search result: {search_result}")
+                    except Exception as e:
+                        search_error = str(e)
+                        logger.warning(f"  [SEARCH_CALL_ID={call_id_str}] Search execution failed: {e}")
 
+                    # 根据搜索结果确定记录内容
+                    if search_error:
+                        result_value = f"Error: {search_error}"
+                    elif search_result and not search_result.get("error"):
+                        result_value = [m["uri"] for m in search_result.get("memories", [])]
+                        logger.info(f"  [SEARCH_CALL_ID={call_id_str}] Simplified search results: {result_value}")
+                    else:
+                        result_value = []
+
+                    add_tool_call_pair_to_messages(
+                        messages=messages,
+                        call_id=call_id_seq,
+                        tool_name='search',
+                        params={"query": user_query or ""},
+                        result=result_value
+                    )
+                    call_id_seq += 1
+                except Exception as e:
+                    logger.exception("Search exception details:")
+
+        # Count tool calls by type for debugging
+        tool_call_counts = {}
+        for msg in messages:
+            if msg.get("role") == "tool_call":
+                tool_name = msg.get("name", "unknown")
+                tool_call_counts[tool_name] = tool_call_counts.get(tool_name, 0) + 1
         return messages
 
 
     async def run(
         self,
-        conversation: str,
-        messages: Optional[List[Message]] = None,
+        messages: List[Message],
+        latest_archive_overview: str = "",
     ) -> Tuple[Optional[MemoryOperations], List[Dict[str, Any]]]:
         """
         Run the simplified ReAct loop for memory updates.
 
         Args:
-            conversation: Conversation history
+            messages: List of Message objects from the conversation
+            latest_archive_overview: Optional overview from previous archive for context
 
         Returns:
             Tuple of (final MemoryOperations, tools_used list)
         """
+        # Assemble conversation from messages
+        conversation = self._assemble_conversation(messages, latest_archive_overview)
+
         iteration = 0
+        max_iterations = self.max_iterations
         final_operations = None
         tools_used: List[Dict[str, Any]] = []
 
@@ -319,19 +424,19 @@ class MemoryReAct:
         logger.info(f"Detected output language for memory ReAct: {self._output_language}")
 
         # Pre-fetch context internally
-        tool_call_messages = await self._pre_fetch_context(conversation)
+        tool_call_messages = await self._pre_fetch_context(messages)
 
         # Reset read files tracking for this run
         self._read_files.clear()
 
         messages = self._build_initial_messages(conversation, tool_call_messages, self._output_language)
 
-        while iteration < self.max_iterations:
+        while iteration < max_iterations:
             iteration += 1
-            logger.debug(f"ReAct iteration {iteration}/{self.max_iterations}")
+            logger.debug(f"ReAct iteration {iteration}/{max_iterations}")
 
             # Check if this is the last iteration - force final result
-            is_last_iteration = iteration >= self.max_iterations
+            is_last_iteration = iteration >= max_iterations
 
             # If last iteration, add a message telling the model to return result directly
             if is_last_iteration:
@@ -351,6 +456,10 @@ class MemoryReAct:
                     logger.info(f"Found unread existing files: {refetch_uris}, refetching...")
                     # Add refetch results to messages and continue loop
                     await self._add_refetch_results_to_messages(messages, refetch_uris)
+                    # Allow one extra iteration for refetch
+                    if iteration >= max_iterations:
+                        max_iterations += 1
+                        logger.info(f"Extended max_iterations to {max_iterations} for refetch")
                     # Clear operations to force another iteration
                     operations = None
                     # Continue to next iteration
@@ -361,7 +470,7 @@ class MemoryReAct:
 
             # If no tool calls either, continue to next iteration (don't break!)
             if not tool_calls:
-                logger.warning(f"LLM returned neither tool calls nor operations (iteration {iteration}/{self.max_iterations})")
+                logger.warning(f"LLM returned neither tool calls nor operations (iteration {iteration}/{max_iterations})")
                 # If it's the last iteration, use empty operations
                 if is_last_iteration:
                     final_operations = MemoryOperations()
@@ -403,8 +512,8 @@ class MemoryReAct:
             # Print updated messages with tool results
             pretty_print_messages(messages)
         if final_operations is None:
-            if iteration >= self.max_iterations:
-                raise RuntimeError(f"Reached {self.max_iterations} iterations without completion")
+            if iteration >= max_iterations:
+                raise RuntimeError(f"Reached {max_iterations} iterations without completion")
             else:
                 raise RuntimeError("ReAct loop completed but no operations generated")
 
@@ -437,9 +546,17 @@ class MemoryReAct:
         # Add pre-fetched context as tool calls
         messages.extend(tool_call_messages)
 
+        # Get current date and day of week
+        from datetime import datetime
+        now = datetime.now()
+        current_time = now.strftime("%Y-%m-%d %H:%M:%S")
+        day_of_week = now.strftime("%A")
+
         messages.append({
                 "role": "user",
                 "content": f"""## Conversation History
+**Current Time:** {current_time} ({day_of_week})
+
 {conversation}
 
 After exploring, analyze the conversation and output ALL memory write/edit/delete operations in a single response. Do not output operations one at a time - gather all changes first, then return them together.""",
@@ -475,88 +592,30 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
 2. If you need more information, use the available tools (read/search)
 3. When you have enough information, output ONLY a JSON object (no extra text before or after)
 
-## CRITICAL: Available Tools
-- ONLY read and search tools are available
-- DO NOT use write tool - just output the JSON result, the system will handle writing
-- ls tool is NOT available
-
-## Critical: Read Before Edit
-IMPORTANT: Before you edit or update ANY existing memory file, you MUST first use the read tool to read its complete content.
-
-- The pre-fetched .overview.md files are only partial information - they are NOT the complete memory content
-- You MUST use the read tool to get the actual content of any file you want to edit
-- Without reading the actual file first, your edit operations will fail because the search string won't match
+## Critical
+- ONLY read and search tools are available - DO NOT use write tool
+- Before editing ANY existing memory file, you MUST first read its complete content
+- ONLY read URIs that are explicitly listed in ls tool results or returned by previous tool calls
 
 ## Target Output Language
-All memory content (abstract, overview, content fields) MUST be written in {output_language}.
+All memory content MUST be written in {output_language}.
 
-## URI Handling (Automatic)
-IMPORTANT: You do NOT need to construct URIs manually. The system will automatically generate URIs based on:
-- For write_uris: Using memory_type and fields
-- For edit_uris: Using memory_type and fields to identify the target
-- For edit_overview_uris: Using memory_type to identify the directory, then updates the .overview.md file in that directory
-- For delete_uris: Using memory_type and fields to identify the target
+## URI Handling
+The system automatically generates URIs based on memory_type and fields. Just provide correct memory_type and fields.
 
-Just provide the correct memory_type and fields, and the system will handle the rest.
-
-## Edit Overview Files (IMPORTANT - Don't Forget!)
-You MUST use edit_overview_uris to update the .overview.md file whenever you write new memories.
-
-This is a REQUIRED step after writing memories:
-1. After adding new entries via write_uris, ALWAYS also update the corresponding .overview.md
-2. The .overview.md provides a high-level summary for that memory type directory
-3. Without updating overview, new memories won't be visible in high-level summaries
-
-Example workflow:
-- write_uris: Add new skill "Python async programming" → writes to skills/python_async.md
-- edit_overview_uris: {{"memory_type": "skills", "overview": "Python async programming, Go concurrency, System design..."}}
-
-How to use edit_overview_uris:
+## Edit Overview Files
+After writing new memories, you MUST also update the corresponding .overview.md file.
 - Provide memory_type to identify which directory's overview to update
-- Provide overview field with the new content (string or patch format)
 - Example: {{"memory_type": "profile", "overview": "User profile overview..."}}
 
-## Overview Format Requirements (IMPORTANT)
-When generating overview content for edit_overview_uris, you MUST follow this structure:
+## Overview Format
+See GenericOverviewEdit in the JSON Schema below.
 
-1. **Title (H1)**: Directory name (e.g., "# skills")
-2. **Brief Description (plain text paragraph, 50-150 words)**:
-   - Immediately following the title, without any H2 heading
-   - Explain what this directory is about
-   - Include core keywords for easy searching
-3. **Quick Navigation (H2)**: Decision Tree style
-   - Use "What do you want to learn?" or "What do you want to do?"
-   - Use markdown links with relative paths: [description](./filename.md)
-4. **Detailed Description (H2)**: One H3 subsection for each file
-
-Example:
-# skills
-
-Python async programming, Go concurrency, and System design skills for backend developers.
-
-## Quick Navigation
-- Want to learn async programming → [Python Async](./python_async.md)
-- Want to learn concurrency → [Go Concurrency](./go_concurrency.md)
-
-## Detailed Description
-### Python Async
-...
-
-Total length: 400-800 words
-
-## Final Output Format
-Outputs will be a complete JSON object with the following fields (Don't have '```json' appear and do not use '//' to omit content)
-
-JSON schema:
+## Output Format
+See the complete JSON Schema below:
 ```json
 {schema_str}
 ```
-
-## Important Notes
-- DO NOT use write tool - the system will write memories based on your JSON output
-- Only read and search tools are available for you to use
-- Output ONLY the JSON object - no extra text before or after
-- Put your thinking and reasoning in the `reasonning` field of the JSON
 """
 
     def _validate_operations(self, operations: MemoryOperations) -> None:
