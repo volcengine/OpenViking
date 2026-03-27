@@ -28,6 +28,22 @@ const QUESTION_CUE_RE =
   /[?？]|\b(?:what|when|where|who|why|how|which|can|could|would|did|does|is|are)\b|^(?:请问|能否|可否|怎么|如何|什么时候|谁|什么|哪|是否)/i;
 const SPEAKER_TAG_RE = /(?:^|\s)([A-Za-z\u4e00-\u9fa5][A-Za-z0-9_\u4e00-\u9fa5-]{1,30}):\s/g;
 
+/** Patterns that indicate cron/maintenance/scheduled tasks — these should never
+ *  receive ingest-reply-assist because they are control/maintenance prompts,
+ *  not memory-ingestion transcripts. See issue #982. */
+const CRON_MAINTENANCE_RE = new RegExp(
+  [
+    /\b(?:daily|weekly|monthly)\s+(?:memory\s+)?(?:maintenance|distillation|synthesis|cleanup|review)/i,
+    /\b(?:distillation|synthesis)\.md\b/i,
+    /\bread\s+skills\//i,
+    /\b(?:cron|scheduled)\s+(?:task|job|run|prompt)/i,
+    /\bworkspace:\s*\/[\w/.]/,
+    /\bopenclaw\s+(?:cron|workspace)/i,
+  ]
+    .map((r) => r.source)
+    .join("|"),
+);
+
 export const CAPTURE_LIMIT = 3;
 
 function resolveCaptureMinLength(text: string): number {
@@ -140,6 +156,19 @@ export function isTranscriptLikeIngest(
     return {
       shouldAssist: false,
       reason: "question_text",
+      normalizedText,
+      speakerTurns: 0,
+      chars: normalizedText.length,
+    };
+  }
+
+  // Exclude cron / maintenance / scheduled task prompts from ingest-reply-assist.
+  // These are control/maintenance instructions, not memory-ingestion transcripts.
+  // See https://github.com/volcengine/OpenViking/issues/982
+  if (CRON_MAINTENANCE_RE.test(normalizedText)) {
+    return {
+      shouldAssist: false,
+      reason: "cron_maintenance_task",
       normalizedText,
       speakerTurns: 0,
       chars: normalizedText.length,
