@@ -2,15 +2,15 @@
 # SPDX-License-Identifier: Apache-2.0
 """Pack endpoints for OpenViking HTTP Server."""
 
-from typing import Optional
-
 from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
+from openviking.server.local_input_guard import resolve_uploaded_temp_file_id
 from openviking.server.models import Response
+from openviking_cli.utils.config.open_viking_config import get_openviking_config
 
 router = APIRouter(prefix="/api/v1/pack", tags=["pack"])
 
@@ -23,10 +23,18 @@ class ExportRequest(BaseModel):
 
 
 class ImportRequest(BaseModel):
-    """Request model for import."""
+    """Request model for import.
 
-    file_path: Optional[str] = None
-    temp_path: Optional[str] = None
+    Attributes:
+        temp_file_id: Temporary upload id returned by /api/v1/resources/temp_upload.
+        parent: Parent URI under which the imported pack will be placed.
+        force: Whether to overwrite existing content if needed.
+        vectorize: Whether to build vectors for imported content.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    temp_file_id: str
     parent: str
     force: bool = False
     vectorize: bool = True
@@ -51,9 +59,8 @@ async def import_ovpack(
     """Import .ovpack file."""
     service = get_service()
 
-    file_path = request.file_path
-    if request.temp_path:
-        file_path = request.temp_path
+    upload_temp_dir = get_openviking_config().storage.get_upload_temp_dir()
+    file_path = resolve_uploaded_temp_file_id(request.temp_file_id, upload_temp_dir)
 
     result = await service.pack.import_ovpack(
         file_path,

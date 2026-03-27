@@ -279,12 +279,16 @@ class SessionCompressor:
         session_id: Optional[str] = None,
         ctx: Optional[RequestContext] = None,
         strict_extract_errors: bool = False,
+        latest_archive_overview: str = "",
     ) -> List[Context]:
         """Extract long-term memories from messages."""
         if not messages:
             return []
 
-        context = {"messages": messages}
+        context = {
+            "messages": messages,
+            "summary": latest_archive_overview or "",
+        }
         if not ctx:
             return []
 

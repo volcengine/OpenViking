@@ -69,7 +69,14 @@ class _FakeProcessor:
         await self._vectorize_directory(uri, context_type, abstract, overview, ctx=ctx)
 
     async def _vectorize_single_file(
-        self, parent_uri, context_type, file_path, summary_dict, ctx=None, semantic_msg_id=None
+        self,
+        parent_uri,
+        context_type,
+        file_path,
+        summary_dict,
+        ctx=None,
+        semantic_msg_id=None,
+        use_summary=False,
     ):
         self.vectorized_files.append(file_path)
 

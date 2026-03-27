@@ -115,6 +115,8 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 
 ## Connect with curl
 
+Use direct `path` for remote URLs. For local files, upload first with `POST /api/v1/resources/temp_upload`, then call the target API with the returned `temp_file_id`. For local directories in raw HTTP mode, zip the directory first and upload the `.zip` file.
+
 ```bash
 # Add a resource
 curl -X POST http://localhost:1933/api/v1/resources \

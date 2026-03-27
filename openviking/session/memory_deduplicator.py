@@ -7,6 +7,7 @@ LLM-assisted deduplication with candidate-level skip/create/none decisions and
 per-existing merge/delete actions.
 """
 
+import asyncio
 import copy
 import re
 from dataclasses import dataclass
@@ -89,6 +90,10 @@ class MemoryDeduplicator:
         self.vikingdb = vikingdb
         config = get_openviking_config()
         self.embedder = config.embedding.get_embedder()
+
+    def _is_shutdown_in_progress(self) -> bool:
+        """Whether dedup is running during storage shutdown."""
+        return bool(getattr(self.vikingdb, "is_closing", False))
 
     async def deduplicate(
         self,
@@ -221,6 +226,11 @@ class MemoryDeduplicator:
 
             return similar, query_vector
 
+        except asyncio.CancelledError as e:
+            if not self._is_shutdown_in_progress():
+                raise
+            logger.warning(f"Vector search cancelled during dedup prefilter: {e}")
+            return [], query_vector
         except Exception as e:
             logger.warning(f"Vector search failed: {e}")
             return [], query_vector
@@ -289,6 +299,11 @@ class MemoryDeduplicator:
             logger.debug("Dedup LLM parsed payload: %s", data)
             return self._parse_decision_payload(data, similar_memories, candidate)
 
+        except asyncio.CancelledError as e:
+            if not self._is_shutdown_in_progress():
+                raise
+            logger.warning(f"LLM dedup decision cancelled: {e}")
+            return DedupDecision.CREATE, f"LLM cancelled: {e}", []
         except Exception as e:
             logger.warning(f"LLM dedup decision failed: {e}")
             return DedupDecision.CREATE, f"LLM failed: {e}", []

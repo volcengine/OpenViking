@@ -11,7 +11,7 @@ from loguru import logger
 
 from vikingbot.config.schema import SessionKey
 from vikingbot.sandbox.manager import SandboxManager
-from vikingbot.utils.helpers import ensure_dir
+from vikingbot.utils.helpers import ensure_dir, ensure_non_empty_assistant_content
 
 
 @dataclass
@@ -56,7 +56,14 @@ class Session:
         )
 
         # Convert to LLM format (just role and content)
-        return [{"role": m["role"], "content": m["content"]} for m in recent]
+        out: list[dict[str, Any]] = []
+        for m in recent:
+            role = m["role"]
+            content: Any = m.get("content", "")
+            if role == "assistant" and isinstance(content, str):
+                content = ensure_non_empty_assistant_content(content)
+            out.append({"role": role, "content": content})
+        return out
 
     def clear(self) -> None:
         """Clear all messages in the session."""

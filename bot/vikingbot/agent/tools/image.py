@@ -5,12 +5,13 @@ import logging
 import mimetypes
 import uuid
 from io import BytesIO
-from typing import Any, Callable, Awaitable
 from pathlib import Path
+from typing import Any, Awaitable, Callable
+
 import httpx
 import litellm
 
-from vikingbot.agent.tools.base import Tool
+from vikingbot.agent.tools.base import Tool, ToolContext
 from vikingbot.bus.events import OutboundMessage
 from vikingbot.utils import get_data_path
 

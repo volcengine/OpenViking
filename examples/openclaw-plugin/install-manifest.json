@@ -1,0 +1,37 @@
+{
+  "manifestVersion": "1.0",
+  "pluginVersion": "2026.3.25",
+  "plugin": {
+    "id": "openviking",
+    "kind": "context-engine",
+    "slot": "contextEngine"
+  },
+  "files": {
+    "required": [
+      "index.ts",
+      "config.ts",
+      "package.json"
+    ],
+    "optional": [
+      "context-engine.ts",
+      "client.ts",
+      "process-manager.ts",
+      "memory-ranking.ts",
+      "text-utils.ts",
+      "tool-call-id.ts",
+      "session-transcript-repair.ts",
+      "openclaw.plugin.json",
+      "tsconfig.json",
+      "package-lock.json",
+      ".gitignore"
+    ]
+  },
+  "npm": {
+    "install": true,
+    "omitDev": true
+  },
+  "compatibility": {
+    "minOpenclawVersion": "2026.3.7",
+    "minOpenvikingVersion": "0.2.9"
+  }
+}

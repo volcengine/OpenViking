@@ -14,6 +14,7 @@ from vikingbot.agent.memory import MemoryStore
 from vikingbot.agent.skills import SkillsLoader
 from vikingbot.config.schema import SessionKey
 from vikingbot.sandbox import SandboxManager
+from vikingbot.utils.helpers import ensure_non_empty_assistant_content
 
 
 class ContextBuilder:
@@ -341,8 +342,8 @@ Always be helpful, accurate, and concise. When using tools, think step by step: 
         """
         msg: dict[str, Any] = {"role": "assistant"}
 
-        if content:
-            msg["content"] = content
+        # Moonshot rejects empty/whitespace assistant content (incl. tool-only turns).
+        msg["content"] = ensure_non_empty_assistant_content(content)
 
         if tool_calls:
             msg["tool_calls"] = tool_calls

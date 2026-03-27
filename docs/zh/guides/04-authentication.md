@@ -1,6 +1,6 @@
 # 认证
 
-OpenViking Server 支持多租户 API Key 认证和基于角色的访问控制。
+OpenViking Server 支持两种认证模式，并带有基于角色的访问控制：`api_key` 和 `trusted`。
 
 ## 概述
 
@@ -13,13 +13,21 @@ OpenViking 使用两层 API Key 体系：
 
 所有 API Key 均为纯随机 token，不携带身份信息。服务端通过先比对 root key、再查 user key 索引的方式确定身份。
 
+## 认证模式
+
+| 模式 | `server.auth_mode` | 身份来源 | 典型使用场景 |
+|------|--------------------|----------|--------------|
+| API Key 模式 | `"api_key"` | API Key，root 请求可附带租户请求头 | 标准多租户部署 |
+| Trusted 模式 | `"trusted"` | `X-OpenViking-Account` / `X-OpenViking-User` / 可选 `X-OpenViking-Agent` 请求头 | 部署在受信网关或内网边界之后 |
+
 ## 服务端配置
 
-在 `ov.conf` 的 `server` 段配置 root API key：
+在 `ov.conf` 的 `server` 段配置认证模式：
 
 ```json
 {
   "server": {
+    "auth_mode": "api_key",
     "root_api_key": "your-secret-root-key"
   }
 }
@@ -87,8 +95,18 @@ client = ov.SyncHTTPClient(
 {
   "url": "http://localhost:1933",
   "api_key": "<user-key>",
+  "account": "acme",
+  "user": "alice",
   "agent_id": "my-agent"
 }
+```
+
+如果使用普通 `user key`，`account` 和 `user` 可以省略，因为服务端可以从 key 反查出来；如果使用 `trusted` 模式，或者用 `root key` 访问租户级 API，则建议明确配置。
+
+**CLI 覆盖参数**
+
+```bash
+openviking --account acme --user alice --agent-id my-agent ls viking://
 ```
 
 ### 使用 Root Key 访问租户数据
@@ -124,8 +142,51 @@ client = ov.SyncHTTPClient(
   "url": "http://localhost:1933",
   "api_key": "your-secret-root-key",
   "account": "acme",
-  "user": "alice"
+  "user": "alice",
+  "agent_id": "my-agent"
 }
+```
+
+## Trusted 模式
+
+Trusted 模式不会查 user key，而是直接信任每个请求显式携带的身份请求头：
+
+```json
+{
+  "server": {
+    "auth_mode": "trusted",
+    "host": "127.0.0.1"
+  }
+}
+```
+
+Trusted 模式规则：
+
+- 租户级请求必须包含 `X-OpenViking-Account` 和 `X-OpenViking-User`
+- `X-OpenViking-Agent` 可选，缺省为 `default`
+- 如果同时配置了 `root_api_key`，每个请求仍然必须带匹配的 API Key
+- 只应部署在受信网络边界之后，或由身份注入网关统一转发
+
+**curl**
+
+```bash
+curl http://localhost:1933/api/v1/fs/ls?uri=viking:// \
+  -H "X-OpenViking-Account: acme" \
+  -H "X-OpenViking-User: alice" \
+  -H "X-OpenViking-Agent: my-agent"
+```
+
+**Python SDK**
+
+```python
+import openviking as ov
+
+client = ov.SyncHTTPClient(
+    url="http://localhost:1933",
+    account="acme",
+    user="alice",
+    agent_id="my-agent",
+)
 ```
 
 ## 角色与权限
@@ -138,7 +199,7 @@ client = ov.SyncHTTPClient(
 
 ## 开发模式
 
-不配置 `root_api_key` 时，认证禁用，所有请求以 ROOT 身份访问 default account。**此模式仅允许在服务器绑定 localhost 时使用**（`127.0.0.1`、`localhost` 或 `::1`）。如果 `host` 设置为非回环地址（如 `0.0.0.0`）且未配置 `root_api_key`，服务器将拒绝启动。
+当 `auth_mode = "api_key"` 且未配置 `root_api_key` 时，认证禁用，所有请求以 ROOT 身份访问 default account。**此模式仅允许在服务器绑定 localhost 时使用**（`127.0.0.1`、`localhost` 或 `::1`）。如果 `host` 设置为非回环地址（如 `0.0.0.0`）且未配置 `root_api_key`，服务器将拒绝启动。
 
 ```json
 {

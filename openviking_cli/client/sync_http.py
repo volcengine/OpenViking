@@ -86,9 +86,9 @@ class SyncHTTPClient:
         """List all sessions."""
         return run_async(self._async_client.list_sessions())
 
-    def get_session(self, session_id: str) -> Dict[str, Any]:
+    def get_session(self, session_id: str, *, auto_create: bool = False) -> Dict[str, Any]:
         """Get session details."""
-        return run_async(self._async_client.get_session(session_id))
+        return run_async(self._async_client.get_session(session_id, auto_create=auto_create))
 
     def delete_session(self, session_id: str) -> None:
         """Delete a session."""
@@ -112,6 +112,10 @@ class SyncHTTPClient:
         If both content and parts are provided, parts takes precedence.
         """
         return run_async(self._async_client.add_message(session_id, role, content, parts))
+
+    def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Query background task status."""
+        return run_async(self._async_client.get_task(task_id))
 
     def commit_session(
         self, session_id: str, telemetry: TelemetryRequest = False

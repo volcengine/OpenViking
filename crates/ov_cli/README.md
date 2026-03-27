@@ -25,9 +25,14 @@ Create `~/.openviking/ovcli.conf`:
 ```json
 {
   "url": "http://localhost:1933",
-  "api_key": "your-api-key"
+  "api_key": "your-api-key",
+  "account": "acme",
+  "user": "alice",
+  "agent_id": "assistant-1"
 }
 ```
+
+`account` and `user` are optional with a regular user key because the server can derive them from the key. They are recommended when you use `trusted` auth mode or a root key against tenant-scoped APIs.
 
 ## Quick Start
 
@@ -125,6 +130,9 @@ ov find "API authentication" --threshold 0.7 --limit 5
 
 # Recursive list
 ov ls viking://resources --recursive
+
+# Temporarily override identity from CLI flags
+ov --account acme --user alice --agent-id assistant-2 ls viking://
 
 # Glob search
 ov glob "**/*.md" --uri viking://resources

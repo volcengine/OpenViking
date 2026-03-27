@@ -27,7 +27,7 @@ from openviking.session.memory_extractor import (
     MemoryExtractor,
     ToolSkillCandidateMemory,
 )
-from openviking.session.session import Session, SessionCompression, SessionStats
+from openviking.session.session import Session, SessionCompression, SessionMeta, SessionStats
 
 logger = get_logger(__name__)
 
@@ -74,6 +74,7 @@ __all__ = [
     # Session
     "Session",
     "SessionCompression",
+    "SessionMeta",
     "SessionStats",
     # Compressor
     "SessionCompressor",

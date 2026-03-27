@@ -131,6 +131,17 @@ async def main():
 
     # 并发处理
     semaphore = asyncio.Semaphore(args.parallel)
+    file_lock = asyncio.Lock()  # 用于同步文件写入
+
+    async def save_results():
+        """保存当前所有结果到CSV文件，使用临时文件+原子替换避免文件损坏"""
+        async with file_lock:
+            temp_file = f"{args.input}.tmp"
+            with open(temp_file, "w", encoding="utf-8", newline="") as f:
+                writer = csv.DictWriter(f, fieldnames=fieldnames)
+                writer.writeheader()
+                writer.writerows(rows)
+            os.replace(temp_file, args.input)
 
     async def process_row(idx):
         async with semaphore:
@@ -142,6 +153,11 @@ async def main():
             is_correct, reasoning = await grade_answer(client, args.model, question, gold, response)
             row["result"] = "CORRECT" if is_correct else "WRONG"
             row["reasoning"] = reasoning
+
+            # 处理完一条就立即保存结果
+            await save_results()
+            print(f"Saved result for {idx + 1}/{total}: {row['result']}")
+
             return idx, row
 
     tasks = [process_row(idx) for idx in ungraded]
@@ -152,13 +168,7 @@ async def main():
     total_graded = sum(1 for row in rows if row.get("result"))
     accuracy = correct / total_graded if total_graded > 0 else 0.0
     print(f"\nGrading completed: {correct}/{total_graded} correct, accuracy: {accuracy:.2%}")
-
-    # 写回CSV
-    with open(args.input, "w", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(rows)
-    print(f"Results saved to {args.input}")
+    print(f"All results saved to {args.input}")
 
 
 if __name__ == "__main__":

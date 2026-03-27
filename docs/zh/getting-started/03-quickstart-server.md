@@ -114,6 +114,8 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 
 ## 使用 curl 连接
 
+远端 URL 可以直接放在 `path` 里。本地文件需要先调用 `POST /api/v1/resources/temp_upload` 上传，再用返回的 `temp_file_id` 调目标 API。裸 HTTP 如果导入本地目录，需要先把目录打成 `.zip` 再上传。
+
 ```bash
 # Add a resource
 curl -X POST http://localhost:1933/api/v1/resources \

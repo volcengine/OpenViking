@@ -601,17 +601,22 @@ class MarkdownParser(BaseParser):
         count = len(names)
         max_len = self.MAX_MERGED_FILENAME_LENGTH
 
+        # Build a content-aware hash from ALL section names AND indices to guarantee
+        # uniqueness even when different merge groups share the same heading names.
+        full_key = "_".join(f"{n}:{i}" for n, _, i in sections)
+        hash_suffix = hashlib.sha256(full_key.encode()).hexdigest()[:8]
+
         if count == 1:
-            name = names[0]
+            base = names[0]
         else:
             suffix = f"_{count}more"
-            max_first_len = max_len - len(suffix)
+            max_first_len = max_len - len(suffix) - 9  # reserve space for _hash
             first_name = names[0][: max(max_first_len, 1)]
-            name = f"{first_name}{suffix}"
+            base = f"{first_name}{suffix}"
+
+        name = f"{base}_{hash_suffix}"
 
         if len(name) > max_len:
-            full_key = "_".join(names)
-            hash_suffix = hashlib.sha256(full_key.encode()).hexdigest()[:8]
             name = f"{name[: max_len - 9]}_{hash_suffix}"
 
         name = name.strip("_")

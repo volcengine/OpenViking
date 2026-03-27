@@ -1,0 +1,283 @@
+name: 03. API Integration Tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'api_test'
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - 'LICENSE'
+      - 'CONTRIBUTING.md'
+      - '**.png'
+      - '**.jpg'
+      - '**.jpeg'
+      - '**.gif'
+      - '**.svg'
+      - '.gitignore'
+      - '.editorconfig'
+  pull_request:
+    branches:
+      - 'main'
+      - 'develop'
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
+      - 'LICENSE'
+      - 'CONTRIBUTING.md'
+      - '**.png'
+      - '**.jpg'
+      - '**.jpeg'
+      - '**.gif'
+      - '**.svg'
+      - '.gitignore'
+      - '.editorconfig'
+
+# 同一 PR 只运行最新的一次，取消之前的运行
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  api-tests:
+    name: API Integration Tests
+    runs-on: ubuntu-24.04
+    
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.10'
+
+      - name: Cache Go modules
+        uses: actions/cache@v5
+        with:
+          path: ~/go/pkg/mod
+          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-go-
+
+      - name: Cache C++ extensions
+        uses: actions/cache@v5
+        with:
+          path: openviking/pyagfs
+          key: ${{ runner.os }}-cpp-${{ hashFiles('**/CMakeLists.txt', '**/*.cpp', '**/*.h') }}
+          restore-keys: |
+            ${{ runner.os }}-cpp-
+
+      - name: Cache Python dependencies
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt', '**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.25.1'
+
+      - name: Install system dependencies (Ubuntu)
+        run: |
+          sudo apt-get update -y && sudo apt-get install -y cmake build-essential --no-install-recommends
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Install build dependencies (system pip)
+        run: |
+          python -m pip install --upgrade pip
+          pip install "setuptools>=70.1" setuptools_scm cmake wheel
+          echo "---"
+          python -c "import setuptools; print(f'setuptools version: {setuptools.__version__}')"
+
+      - name: Install dependencies using uv sync
+        run: |
+          echo "Installing dependencies using uv sync..."
+          uv sync --frozen
+
+      - name: Install build dependencies (uv pip)
+        run: |
+          echo "Installing build dependencies to uv environment..."
+          uv pip install setuptools setuptools_scm cmake wheel
+
+      - name: Build C++ extensions
+        run: |
+          uv run python setup.py build_ext --inplace
+
+      - name: Install API test dependencies
+        run: |
+          cd tests/api_test
+          uv pip install -r requirements.txt
+
+      - name: Create OpenViking config file
+        id: create-config
+        env:
+          VLM_API_KEY: ${{ secrets.VLM_API_KEY }}
+          EMBEDDING_API_KEY: ${{ secrets.EMBEDDING_API_KEY }}
+        run: |
+          # 创建配置目录
+          mkdir -p /home/runner/.openviking
+          
+          # 检查是否有有效的 API keys
+          HAS_SECRETS=false
+          if [ -n "$VLM_API_KEY" ] && [ -n "$EMBEDDING_API_KEY" ]; then
+            HAS_SECRETS=true
+            echo "Using full configuration with VLM and Embedding"
+          else
+            echo "Using minimal configuration (no VLM/Embedding)"
+          fi
+          
+          echo "HAS_SECRETS=$HAS_SECRETS" >> $GITHUB_ENV
+          
+          if [ "$HAS_SECRETS" = "true" ]; then
+            # 完整配置（含 VLM 和 Embedding
+            cat > /home/runner/.openviking/ov.conf << EOF
+          {
+            "server": {
+              "root_api_key": "test-root-api-key"
+            },
+            "vlm": {
+              "provider": "volcengine",
+              "api_key": "$VLM_API_KEY",
+              "model": "doubao-seed-2-0-mini-260215",
+              "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+              "temperature": 0.1,
+              "max_retries": 3
+            },
+            "embedding": {
+              "dense": {
+                "provider": "volcengine",
+                "api_key": "$EMBEDDING_API_KEY",
+                "model": "doubao-embedding-vision-251215",
+                "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+                "dimension": 1024,
+                "input": "multimodal"
+              }
+            }
+          }
+          EOF
+          else
+            # 最小配置（使用 dummy API keys，不会实际调用）
+            cat > /home/runner/.openviking/ov.conf << EOF
+          {
+            "server": {
+              "root_api_key": "test-root-api-key"
+            },
+            "vlm": {
+              "provider": "volcengine",
+              "api_key": "dummy-vlm-api-key",
+              "model": "doubao-seed-2-0-mini-260215",
+              "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+              "temperature": 0.1,
+              "max_retries": 3
+            },
+            "embedding": {
+              "dense": {
+                "provider": "volcengine",
+                "api_key": "dummy-embedding-api-key",
+                "model": "doubao-embedding-vision-251215",
+                "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+                "dimension": 1024,
+                "input": "multimodal"
+              }
+            }
+          }
+          EOF
+          fi
+          
+          echo "Config file created at /home/runner/.openviking/ov.conf"
+
+      - name: Find available port and start OpenViking Server
+        id: start-server
+        run: |
+          # 找到可用的随机端口
+          find_available_port() {
+            local port=1933
+            while true; do
+              if ! lsof -Pi :$port -sTCP:LISTEN -t >/dev/null 2>&1; then
+                echo $port
+                return
+              fi
+              port=$((port + 1))
+            done
+          }
+          
+          SERVER_PORT=$(find_available_port)
+          echo "Using port: $SERVER_PORT"
+          echo "SERVER_PORT=$SERVER_PORT" >> $GITHUB_ENV
+          
+          echo "Starting OpenViking Server on port $SERVER_PORT..."
+          export ROOT_API_KEY=test-root-api-key
+          export SERVER_PORT=$SERVER_PORT
+          nohup uv run python -m openviking.server.bootstrap > openviking-server.log 2>&1 &
+          echo $! > openviking-server.pid
+          echo "SERVER_PID=$(cat openviking-server.pid)" >> $GITHUB_ENV
+          
+          echo "Waiting for server to start..."
+          for i in {1..30}; do
+            if curl -s http://127.0.0.1:$SERVER_PORT/health | grep -q '"healthy":true'; then
+              echo "Server is ready!"
+              break
+            fi
+            echo "Waiting... ($i/30)"
+            sleep 2
+          done
+          
+          # Check if server started successfully
+          if ! curl -s http://127.0.0.1:$SERVER_PORT/health | grep -q '"healthy":true'; then
+            echo "Server failed to start!"
+            echo "Server logs:"
+            cat openviking-server.log
+            exit 1
+          fi
+
+      - name: Run API Tests
+        id: run-tests
+        run: |
+          cd tests/api_test
+          export OPENVIKING_API_KEY=test-root-api-key
+          export SERVER_URL=http://127.0.0.1:${{ env.SERVER_PORT }}
+          
+          if [ "${{ env.HAS_SECRETS }}" = "true" ]; then
+            echo "Running full test suite with VLM/Embedding"
+            uv run python -m pytest . -v --html=api-test-report.html --self-contained-html
+          else
+            echo "Running basic tests only (no VLM/Embedding)"
+            uv run python -m pytest . -v --html=api-test-report.html --self-contained-html \
+              --ignore=retrieval/ --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py \
+              --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py -k "not test_observer"
+          fi
+        continue-on-error: true
+
+      - name: Upload test reports
+        uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: api-test-reports-${{ github.run_id }}
+          path: |
+            tests/api_test/api-test-report.html
+            openviking-server.log
+
+      - name: Stop OpenViking Server
+        if: always()
+        run: |
+          if [ -f openviking-server.pid ]; then
+            kill $(cat openviking-server.pid) 2>/dev/null || true
+            # 确保完全清理
+            pkill -f "openviking.server.bootstrap" 2>/dev/null || true
+          fi
+
+      - name: Check test results
+        if: steps.run-tests.outcome != 'success'
+        run: |
+          echo "API tests failed!"
+          exit 1

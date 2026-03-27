@@ -49,6 +49,22 @@ def get_history_path() -> Path:
     return ensure_dir(get_bot_data_path() / "history")
 
 
+# Moonshot and similar APIs reject assistant turns with empty or whitespace-only content
+# (common on tool-only model replies where `content` is null or "").
+_ASSISTANT_NON_EMPTY_PLACEHOLDER = " "
+
+
+def ensure_non_empty_assistant_content(content: str | None) -> str:
+    """
+    Normalize text for an OpenAI-style `assistant` message `content` field.
+
+    Some providers return 400 if content is missing, null, or empty after stripping.
+    """
+    if content is None or (isinstance(content, str) and not content.strip()):
+        return _ASSISTANT_NON_EMPTY_PLACEHOLDER
+    return content
+
+
 def get_bridge_path() -> Path:
     """Get the bridge directory."""
     return ensure_dir(get_bot_data_path() / "bridge")

@@ -8,11 +8,15 @@ from pathlib import Path
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, File, Form, UploadFile
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
+from openviking.server.local_input_guard import (
+    require_remote_resource_source,
+    resolve_uploaded_temp_file_id,
+)
 from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
@@ -26,8 +30,10 @@ class AddResourceRequest(BaseModel):
     """Request model for add_resource.
 
     Attributes:
-        path: Resource path (local file path or URL). Either path or temp_path must be provided.
-        temp_path: Temporary file path for uploaded files. Either path or temp_path must be provided.
+        path: Remote resource source such as an HTTP(S) URL or repository URL.
+            Either path or temp_file_id must be provided.
+        temp_file_id: Temporary upload id returned by /api/v1/resources/temp_upload.
+            Either path or temp_file_id must be provided.
         to: Target URI for the resource (e.g., "viking://resources/my_resource").
             If not specified, an auto-generated URI will be used.
         parent: Parent URI under which the resource will be stored.
@@ -57,8 +63,10 @@ class AddResourceRequest(BaseModel):
             creating a new one.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     path: Optional[str] = None
-    temp_path: Optional[str] = None
+    temp_file_id: Optional[str] = None
     to: Optional[str] = None
     parent: Optional[str] = None
     reason: str = ""
@@ -75,20 +83,36 @@ class AddResourceRequest(BaseModel):
     watch_interval: float = 0
 
     @model_validator(mode="after")
-    def check_path_or_temp_path(self):
-        if not self.path and not self.temp_path:
-            raise ValueError("Either 'path' or 'temp_path' must be provided")
+    def check_path_or_temp_file_id(self):
+        if not self.path and not self.temp_file_id:
+            raise ValueError("Either 'path' or 'temp_file_id' must be provided")
         return self
 
 
 class AddSkillRequest(BaseModel):
-    """Request model for add_skill."""
+    """Request model for add_skill.
+
+    Attributes:
+        data: Inline skill content or structured skill data. HTTP requests do not treat
+            string values as host filesystem paths.
+        temp_file_id: Temporary upload id returned by /api/v1/resources/temp_upload.
+        wait: Whether to wait for skill processing to complete.
+        timeout: Timeout in seconds when wait=True.
+    """
+
+    model_config = ConfigDict(extra="forbid")
 
     data: Any = None
-    temp_path: Optional[str] = None
+    temp_file_id: Optional[str] = None
     wait: bool = False
     timeout: Optional[float] = None
     telemetry: TelemetryRequest = False
+
+    @model_validator(mode="after")
+    def check_data_or_temp_file_id(self):
+        if self.data is None and not self.temp_file_id:
+            raise ValueError("Either 'data' or 'temp_file_id' must be provided")
+        return self
 
 
 def _cleanup_temp_files(temp_dir: Path, max_age_hours: int = 1):
@@ -129,7 +153,7 @@ async def temp_upload(
         with open(temp_file_path, "wb") as f:
             f.write(await file.read())
 
-        return {"temp_path": str(temp_file_path)}
+        return {"temp_file_id": temp_filename}
 
     execution = await run_operation(
         operation="resources.temp_upload",
@@ -153,11 +177,16 @@ async def add_resource(
     if request.to and request.parent:
         raise InvalidArgumentError("Cannot specify both 'to' and 'parent' at the same time.")
 
+    upload_temp_dir = get_openviking_config().storage.get_upload_temp_dir()
     path = request.path
-    if request.temp_path:
-        path = request.temp_path
+    allow_local_path_resolution = False
+    if request.temp_file_id:
+        path = resolve_uploaded_temp_file_id(request.temp_file_id, upload_temp_dir)
+        allow_local_path_resolution = True
+    elif path is not None:
+        path = require_remote_resource_source(path)
     if path is None:
-        raise InvalidArgumentError("Either 'path' or 'temp_path' must be provided.")
+        raise InvalidArgumentError("Either 'path' or 'temp_file_id' must be provided.")
 
     kwargs = {
         "strict": request.strict,
@@ -182,6 +211,7 @@ async def add_resource(
             instruction=request.instruction,
             wait=request.wait,
             timeout=request.timeout,
+            allow_local_path_resolution=allow_local_path_resolution,
             **kwargs,
         ),
     )
@@ -199,9 +229,12 @@ async def add_skill(
 ):
     """Add skill to OpenViking."""
     service = get_service()
+    upload_temp_dir = get_openviking_config().storage.get_upload_temp_dir()
     data = request.data
-    if request.temp_path:
-        data = request.temp_path
+    allow_local_path_resolution = False
+    if request.temp_file_id:
+        data = resolve_uploaded_temp_file_id(request.temp_file_id, upload_temp_dir)
+        allow_local_path_resolution = True
 
     execution = await run_operation(
         operation="resources.add_skill",
@@ -211,6 +244,7 @@ async def add_skill(
             ctx=_ctx,
             wait=request.wait,
             timeout=request.timeout,
+            allow_local_path_resolution=allow_local_path_resolution,
         ),
     )
     return Response(

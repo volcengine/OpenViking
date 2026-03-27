@@ -101,27 +101,30 @@ openviking session list
 
 ### get_session()
 
-获取会话详情。
+获取会话详情。默认当会话不存在时返回 NOT_FOUND 错误，可通过 `auto_create=True` 自动创建。
 
 **参数**
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
 | session_id | str | 是 | - | 会话 ID |
+| auto_create | bool | 否 | False | 会话不存在时是否自动创建 |
 
 **Python SDK (Embedded / HTTP)**
 
 ```python
-# 加载已有会话
-session = client.session(session_id="a1b2c3d4")
-session.load()
-print(f"Loaded {len(session.messages)} messages")
+# 获取已有会话（不存在时抛 NotFoundError）
+info = client.get_session("a1b2c3d4")
+print(f"Messages: {info['message_count']}, Commits: {info['commit_count']}")
+
+# 获取或创建会话
+info = client.get_session("a1b2c3d4", auto_create=True)
 ```
 
 **HTTP API**
 
 ```
-GET /api/v1/sessions/{session_id}
+GET /api/v1/sessions/{session_id}?auto_create=false
 ```
 
 ```bash
@@ -142,10 +145,32 @@ openviking session get a1b2c3d4
   "status": "ok",
   "result": {
     "session_id": "a1b2c3d4",
-    "user": "alice",
-    "message_count": 5
-  },
-  "time": 0.1
+    "created_at": "2026-03-23T10:00:00+08:00",
+    "updated_at": "2026-03-23T11:30:00+08:00",
+    "message_count": 5,
+    "commit_count": 3,
+    "memories_extracted": {
+      "profile": 1,
+      "preferences": 2,
+      "entities": 3,
+      "events": 1,
+      "cases": 2,
+      "patterns": 1,
+      "tools": 0,
+      "skills": 0,
+      "total": 10
+    },
+    "last_commit_at": "2026-03-23T11:00:00+08:00",
+    "llm_token_usage": {
+      "prompt_tokens": 5200,
+      "completion_tokens": 1800,
+      "total_tokens": 7000
+    },
+    "user": {
+      "user_id": "alice",
+      "agent_id": "default"
+    }
+  }
 }
 ```
 
@@ -395,7 +420,7 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
 
 ### commit()
 
-提交会话，归档消息并提取记忆。
+提交会话。归档消息（Phase 1）立即完成，摘要生成和记忆提取（Phase 2）在后台异步执行。返回 `task_id` 用于查询后台任务进度。
 
 **参数**
 
@@ -409,10 +434,15 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
 session = client.session(session_id="a1b2c3d4")
 session.load()
 
-# commit 会归档消息并提取记忆
+# commit 立即返回 task_id，后台异步执行摘要生成和记忆提取
 result = session.commit()
-print(f"Status: {result['status']}")
-print(f"Memories extracted: {result['memories_extracted']}")
+print(f"Status: {result['status']}")       # "accepted"
+print(f"Task ID: {result['task_id']}")
+
+# 查询后台任务进度
+task = client.get_task(result["task_id"])
+if task["status"] == "completed":
+    print(f"Memories extracted: {task['result']['memories_extracted']}")
 ```
 
 **HTTP API**
@@ -422,8 +452,13 @@ POST /api/v1/sessions/{session_id}/commit
 ```
 
 ```bash
+# 提交会话（立即返回）
 curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/commit \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key"
+
+# 查询任务状态
+curl -X GET http://localhost:1933/api/v1/tasks/{task_id} \
   -H "X-API-Key: your-key"
 ```
 
@@ -440,10 +475,73 @@ openviking session commit a1b2c3d4
   "status": "ok",
   "result": {
     "session_id": "a1b2c3d4",
-    "status": "committed",
+    "status": "accepted",
+    "task_id": "uuid-xxx",
+    "archive_uri": "viking://session/a1b2c3d4/history/archive_001",
     "archived": true
-  },
-  "time": 0.1
+  }
+}
+```
+
+---
+
+### get_task()
+
+查询后台任务状态（如 commit 的摘要生成和记忆提取进度）。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| task_id | str | 是 | - | 任务 ID（由 commit 返回） |
+
+**Python SDK (Embedded / HTTP)**
+
+```python
+task = client.get_task(task_id)
+print(f"Status: {task['status']}")  # "pending" | "running" | "completed" | "failed"
+```
+
+**HTTP API**
+
+```
+GET /api/v1/tasks/{task_id}
+```
+
+```bash
+curl -X GET http://localhost:1933/api/v1/tasks/uuid-xxx \
+  -H "X-API-Key: your-key"
+```
+
+**响应（进行中）**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "task_id": "uuid-xxx",
+    "task_type": "session_commit",
+    "status": "running"
+  }
+}
+```
+
+**响应（完成）**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "task_id": "uuid-xxx",
+    "task_type": "session_commit",
+    "status": "completed",
+    "result": {
+      "session_id": "a1b2c3d4",
+      "archive_uri": "viking://session/a1b2c3d4/history/archive_001",
+      "memories_extracted": 5,
+      "active_count_updated": 2
+    }
+  }
 }
 ```
 
@@ -475,9 +573,10 @@ viking://session/{session_id}/
 +-- .relations.json           # 关联上下文
 +-- history/                  # 归档历史
     +-- archive_001/
-    |   +-- messages.jsonl
-    |   +-- .abstract.md
-    |   +-- .overview.md
+    |   +-- messages.jsonl    # Phase 1 写入
+    |   +-- .abstract.md      # Phase 2 写入（后台）
+    |   +-- .overview.md      # Phase 2 写入（后台）
+    |   +-- .done             # Phase 2 完成标记
     +-- archive_002/
 ```
 
@@ -532,9 +631,14 @@ session.add_message("assistant", [
 # 跟踪实际使用的上下文
 session.used(contexts=[results.resources[0].uri])
 
-# 提交会话（归档消息、提取记忆）
+# 提交会话（立即返回，后台执行摘要生成和记忆提取）
 result = session.commit()
-print(f"Memories extracted: {result['memories_extracted']}")
+print(f"Task ID: {result['task_id']}")
+
+# 可选：等待后台任务完成
+task = client.get_task(result["task_id"])
+if task and task["status"] == "completed":
+    print(f"Memories extracted: {task['result']['memories_extracted']}")
 
 client.close()
 ```
@@ -572,9 +676,14 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
   -H "X-API-Key: your-key" \
   -d '{"contexts": ["viking://resources/docs/embedding/"]}'
 
-# 步骤 6：提交会话
+# 步骤 6：提交会话（立即返回 task_id）
 curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/commit \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key"
+# 返回：{"status": "ok", "result": {"status": "accepted", "task_id": "uuid-xxx", ...}}
+
+# 步骤 7：查询后台任务进度（可选）
+curl -X GET http://localhost:1933/api/v1/tasks/uuid-xxx \
   -H "X-API-Key: your-key"
 ```
 
