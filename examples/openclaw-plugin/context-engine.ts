@@ -19,6 +19,7 @@ type ContextEngineInfo = {
   id: string;
   name: string;
   version?: string;
+  ownsCompaction: true;
 };
 
 type AssembleResult = {
@@ -416,6 +417,7 @@ export function createMemoryOpenVikingContextEngine(params: {
       id,
       name,
       version,
+      ownsCompaction: true,
     },
 
     commitOVSession: doCommitOVSession,
@@ -436,7 +438,7 @@ export function createMemoryOpenVikingContextEngine(params: {
 
       const originalTokens = roughEstimate(messages);
       logger.info(`openviking: assemble input msgs=${messages.length} ~${originalTokens} tokens, budget=${validTokenBudget(assembleParams.tokenBudget) ?? 128_000}`);
-
+      
       const OVSessionId = assembleParams.sessionId;
       diag("assemble_entry", OVSessionId, {
         messagesCount: messages.length,
