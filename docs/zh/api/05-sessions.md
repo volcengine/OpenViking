@@ -607,6 +607,11 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
 
 提交会话。归档消息（Phase 1）立即完成，摘要生成和记忆提取（Phase 2）在后台异步执行。返回 `task_id` 用于查询后台任务进度。
 
+说明：
+- 同一 session 的多次快速连续 commit 会被接受；每次请求都会拿到独立的 `task_id`。
+- 后台 Phase 2 会按 archive 顺序串行推进：`archive N+1` 会等待 `archive N` 写出 `.done` 后再继续。
+- 如果更早的 archive 已失败且没有 `.done`，后续 commit 会直接返回 `FAILED_PRECONDITION`，直到该失败被处理。
+
 **参数**
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |

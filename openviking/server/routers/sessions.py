@@ -13,7 +13,6 @@ from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import ErrorInfo, Response
-from openviking.service.task_tracker import get_task_tracker
 
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
 logger = logging.getLogger(__name__)
@@ -202,18 +201,6 @@ async def commit_session(
     polling progress via ``GET /tasks/{task_id}``.
     """
     service = get_service()
-    tracker = get_task_tracker()
-
-    # Reject if same session already has a commit in progress
-    if tracker.has_running("session_commit", session_id):
-        return Response(
-            status="error",
-            error=ErrorInfo(
-                code="CONFLICT",
-                message=f"Session {session_id} already has a commit in progress",
-            ),
-        )
-
     result = await service.sessions.commit_async(session_id, _ctx)
     return Response(status="ok", result=result).model_dump(exclude_none=True)
 

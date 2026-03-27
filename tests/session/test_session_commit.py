@@ -4,11 +4,15 @@
 """Commit tests"""
 
 import asyncio
+import json
+
+import pytest
 
 from openviking import AsyncOpenViking
 from openviking.message import TextPart
 from openviking.service.task_tracker import get_task_tracker
 from openviking.session import Session
+from openviking_cli.exceptions import FailedPreconditionError
 
 
 async def _wait_for_task(task_id: str, timeout: float = 30.0) -> dict:
@@ -201,3 +205,31 @@ class TestCommit:
         assert count_after == count_before + 1, (
             f"active_count not incremented: before={count_before}, after={count_after}"
         )
+
+    async def test_commit_blocks_after_failed_archive(self, client: AsyncOpenViking):
+        """A failed archive should block the next commit until it is resolved."""
+        session = client.session(session_id="failed_archive_blocks_new_commit")
+
+        async def failing_extract(*args, **kwargs):
+            del args, kwargs
+            raise RuntimeError("synthetic extraction failure")
+
+        session._session_compressor.extract_long_term_memories = failing_extract
+
+        session.add_message("user", [TextPart("First round message")])
+        result = await session.commit_async()
+        task_result = await _wait_for_task(result["task_id"])
+
+        assert task_result["status"] == "failed"
+
+        failed_marker = await session._viking_fs.read_file(
+            f"{result['archive_uri']}/.failed.json",
+            ctx=session.ctx,
+        )
+        failed_payload = json.loads(failed_marker)
+        assert failed_payload["stage"] == "memory_extraction"
+        assert "synthetic extraction failure" in failed_payload["error"]
+
+        session.add_message("user", [TextPart("Second round message")])
+        with pytest.raises(FailedPreconditionError, match="unresolved failed archive"):
+            await session.commit_async()

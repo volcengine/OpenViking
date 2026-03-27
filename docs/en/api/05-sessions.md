@@ -607,6 +607,11 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
 
 Commit a session. Message archiving (Phase 1) completes immediately. Summary generation and memory extraction (Phase 2) run asynchronously in the background. Returns a `task_id` for polling progress.
 
+Notes:
+- Rapid consecutive commits on the same session are accepted; each request gets its own `task_id`.
+- Background Phase 2 work is serialized by archive order: archive `N+1` waits until archive `N` writes `.done`.
+- If an earlier archive failed and left no `.done`, later commit requests fail with `FAILED_PRECONDITION` until that failure is resolved.
+
 **Parameters**
 
 | Parameter | Type | Required | Default | Description |

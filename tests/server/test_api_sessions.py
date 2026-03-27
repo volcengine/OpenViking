@@ -372,3 +372,38 @@ async def test_get_session_archive_endpoint_returns_archive_details(client: http
         "archived question",
         "archived answer",
     ]
+
+
+async def test_commit_endpoint_rejects_after_failed_archive(
+    client: httpx.AsyncClient,
+    service,
+):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    async def failing_extract(*args, **kwargs):
+        del args, kwargs
+        raise RuntimeError("synthetic extraction failure")
+
+    service.sessions._session_compressor.extract_long_term_memories = failing_extract
+
+    await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={"role": "user", "content": "first round"},
+    )
+    commit_resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
+    task_id = commit_resp.json()["result"]["task_id"]
+    task = await _wait_for_task(client, task_id)
+    assert task["status"] == "failed"
+
+    await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={"role": "user", "content": "second round"},
+    )
+    resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
+
+    assert resp.status_code == 412
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "FAILED_PRECONDITION"
+    assert "unresolved failed archive" in body["error"]["message"]

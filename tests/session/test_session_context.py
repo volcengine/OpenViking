@@ -262,6 +262,70 @@ class TestGetContextForSearch:
         assert context["latest_archive_overview"]
         assert len(context["current_messages"]) == 1
 
+    async def test_get_context_tracks_multiple_rapid_commits_by_done_boundary(
+        self, client: AsyncOpenViking
+    ):
+        """Context should only advance latest overview when the earlier archive is .done."""
+        session = client.session(session_id="archive_context_done_boundary_test")
+        first_gate = asyncio.Event()
+        second_gate = asyncio.Event()
+        second_started = asyncio.Event()
+
+        async def gated_extract(messages, **kwargs):
+            del kwargs
+            contents = " ".join(m.content for m in messages)
+            if "First round" in contents:
+                await first_gate.wait()
+                return []
+            second_started.set()
+            await second_gate.wait()
+            return []
+
+        session._session_compressor.extract_long_term_memories = gated_extract
+
+        session.add_message("user", [TextPart("First round user")])
+        session.add_message("assistant", [TextPart("First round assistant")])
+        result1 = await session.commit_async()
+
+        session.add_message("user", [TextPart("Second round user")])
+        session.add_message("assistant", [TextPart("Second round assistant")])
+        result2 = await session.commit_async()
+
+        context = await session.get_context_for_search(query="test")
+        assert context["latest_archive_overview"] == ""
+        assert [m.content for m in context["current_messages"]] == [
+            "First round user",
+            "First round assistant",
+            "Second round user",
+            "Second round assistant",
+        ]
+
+        first_gate.set()
+        await asyncio.wait_for(second_started.wait(), timeout=5.0)
+
+        first_overview = await session._viking_fs.read_file(
+            f"{result1['archive_uri']}/.overview.md",
+            ctx=session.ctx,
+        )
+        context = await session.get_context_for_search(query="test")
+        assert context["latest_archive_overview"] == first_overview
+        assert [m.content for m in context["current_messages"]] == [
+            "Second round user",
+            "Second round assistant",
+        ]
+
+        second_gate.set()
+        await _wait_for_task(result1["task_id"])
+        await _wait_for_task(result2["task_id"])
+
+        second_overview = await session._viking_fs.read_file(
+            f"{result2['archive_uri']}/.overview.md",
+            ctx=session.ctx,
+        )
+        context = await session.get_context_for_search(query="test")
+        assert context["latest_archive_overview"] == second_overview
+        assert context["current_messages"] == []
+
 
 class TestGetSessionContext:
     """Test get_session_context"""

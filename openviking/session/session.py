@@ -28,6 +28,8 @@ if TYPE_CHECKING:
 
 logger = get_logger(__name__)
 
+_ARCHIVE_WAIT_POLL_SECONDS = 0.1
+
 
 @dataclass
 class SessionCompression:
@@ -347,6 +349,7 @@ class Session:
         """
         from openviking.service.task_tracker import get_task_tracker
         from openviking.storage.transaction import LockContext, get_lock_manager
+        from openviking_cli.exceptions import FailedPreconditionError
 
         # ===== Phase 1: Snapshot + clear (PathLock-protected) =====
         # Fast pre-check: skip lock entirely if no messages (common case avoids
@@ -360,6 +363,14 @@ class Session:
                 "archive_uri": None,
                 "archived": False,
             }
+
+        blocking_archive = await self._get_blocking_failed_archive_ref()
+        if blocking_archive:
+            raise FailedPreconditionError(
+                f"Session {self.session_id} has unresolved failed archive "
+                f"{blocking_archive['archive_id']}; fix it before committing again.",
+                details={"archive_id": blocking_archive["archive_id"]},
+            )
 
         # Use filesystem-based distributed lock so this works across workers/processes.
         session_path = self._viking_fs._uri_to_path(self._session_uri, ctx=self.ctx)
@@ -456,13 +467,32 @@ class Session:
         from openviking.telemetry import OperationTelemetry, bind_telemetry
 
         tracker = get_task_tracker()
-        tracker.start(task_id)
 
         memories_extracted: Dict[str, int] = {}
         active_count_updated = 0
         telemetry = OperationTelemetry(operation="session_commit_phase2", enabled=True)
+        archive_index = self._archive_index_from_uri(archive_uri)
+        redo_task_id: Optional[str] = None
 
         try:
+            if not await self._wait_for_previous_archive_done(archive_index):
+                await self._write_failed_marker(
+                    archive_uri,
+                    stage="waiting_previous_done",
+                    error=(
+                        f"Previous archive archive_{archive_index - 1:03d} failed; "
+                        "this archive cannot proceed"
+                    ),
+                    blocked_by=f"archive_{archive_index - 1:03d}",
+                )
+                tracker.fail(
+                    task_id,
+                    f"Previous archive archive_{archive_index - 1:03d} failed; "
+                    "cannot continue session commit",
+                )
+                return
+
+            tracker.start(task_id)
             with bind_telemetry(telemetry):
                 # redo-log protection
                 redo_task_id = str(uuid.uuid4())
@@ -556,22 +586,11 @@ class Session:
 
             # Phase 2 complete — update meta with telemetry and commit info
             snapshot = telemetry.finish("ok")
-            if snapshot:
-                llm = snapshot.summary.get("tokens", {}).get("llm", {})
-                self._meta.llm_token_usage["prompt_tokens"] += llm.get("input", 0)
-                self._meta.llm_token_usage["completion_tokens"] += llm.get("output", 0)
-                self._meta.llm_token_usage["total_tokens"] += llm.get("total", 0)
-            self._meta.commit_count = self._compression.compression_index
-            for cat, count in memories_extracted.items():
-                self._meta.memories_extracted[cat] = (
-                    self._meta.memories_extracted.get(cat, 0) + count
-                )
-                self._meta.memories_extracted["total"] = (
-                    self._meta.memories_extracted.get("total", 0) + count
-                )
-            self._meta.last_commit_at = get_current_timestamp()
-            self._meta.message_count = len(self._messages)
-            await self._save_meta()
+            await self._merge_and_save_commit_meta(
+                archive_index=archive_index,
+                memories_extracted=memories_extracted,
+                telemetry_snapshot=snapshot,
+            )
 
             # Write .done file last — signals that all state is finalized
             await self._write_done_file(archive_uri, first_message_id, last_message_id)
@@ -587,6 +606,13 @@ class Session:
             )
             logger.info(f"Session {self.session_id} memory extraction completed")
         except Exception as e:
+            if redo_task_id:
+                get_lock_manager().redo_log.mark_done(redo_task_id)
+            await self._write_failed_marker(
+                archive_uri,
+                stage="memory_extraction",
+                error=str(e),
+            )
             tracker.fail(task_id, str(e))
             logger.exception(f"Memory extraction failed for session {self.session_id}")
 
@@ -609,6 +635,29 @@ class Session:
         await self._viking_fs.write_file(
             uri=f"{archive_uri}/.done",
             content=content,
+            ctx=self.ctx,
+        )
+
+    async def _write_failed_marker(
+        self,
+        archive_uri: str,
+        stage: str,
+        error: str,
+        blocked_by: str = "",
+    ) -> None:
+        """Persist a terminal failure marker for the archive."""
+        if not self._viking_fs:
+            return
+        payload = {
+            "stage": stage,
+            "error": error,
+            "failed_at": get_current_timestamp(),
+        }
+        if blocked_by:
+            payload["blocked_by"] = blocked_by
+        await self._viking_fs.write_file(
+            uri=f"{archive_uri}/.failed.json",
+            content=json.dumps(payload, ensure_ascii=False),
             ctx=self.ctx,
         )
 
@@ -837,6 +886,24 @@ class Session:
 
         return completed
 
+    async def _get_blocking_failed_archive_ref(self) -> Optional[Dict[str, Any]]:
+        """Return the earliest unresolved failed archive, if any."""
+        for archive in sorted(await self._list_archive_refs(), key=lambda item: item["index"]):
+            try:
+                await self._viking_fs.read_file(f"{archive['archive_uri']}/.done", ctx=self.ctx)
+                continue
+            except Exception:
+                pass
+            try:
+                await self._viking_fs.read_file(
+                    f"{archive['archive_uri']}/.failed.json",
+                    ctx=self.ctx,
+                )
+            except Exception:
+                continue
+            return archive
+        return None
+
     async def _read_archive_overview(self, archive_uri: str) -> str:
         """Read archive overview text."""
         try:
@@ -937,6 +1004,89 @@ class Session:
             pending_messages.extend(await self._read_archive_messages(archive["archive_uri"]))
 
         return pending_messages
+
+    @staticmethod
+    def _archive_index_from_uri(archive_uri: str) -> int:
+        """Parse archive_NNN suffix into an integer index."""
+        match = re.search(r"archive_(\d+)$", archive_uri.rstrip("/"))
+        if not match:
+            raise ValueError(f"Invalid archive URI: {archive_uri}")
+        return int(match.group(1))
+
+    async def _wait_for_previous_archive_done(self, archive_index: int) -> bool:
+        """Wait until the previous archive is done, or report dependency failure."""
+        if archive_index <= 1 or not self._viking_fs:
+            return True
+
+        previous_archive_uri = (
+            f"{self._session_uri}/history/archive_{archive_index - 1:03d}"
+        )
+        while True:
+            try:
+                await self._viking_fs.read_file(f"{previous_archive_uri}/.done", ctx=self.ctx)
+                return True
+            except Exception:
+                pass
+
+            try:
+                await self._viking_fs.read_file(
+                    f"{previous_archive_uri}/.failed.json",
+                    ctx=self.ctx,
+                )
+                return False
+            except Exception:
+                pass
+
+            await asyncio.sleep(_ARCHIVE_WAIT_POLL_SECONDS)
+
+    async def _merge_and_save_commit_meta(
+        self,
+        archive_index: int,
+        memories_extracted: Dict[str, int],
+        telemetry_snapshot: Any,
+    ) -> None:
+        """Reload and merge latest meta state before persisting commit results."""
+        latest_meta = self._meta
+        try:
+            meta_content = await self._viking_fs.read_file(
+                f"{self._session_uri}/.meta.json",
+                ctx=self.ctx,
+            )
+            latest_meta = SessionMeta.from_dict(json.loads(meta_content))
+        except Exception:
+            latest_meta = self._meta
+
+        if telemetry_snapshot:
+            llm = telemetry_snapshot.summary.get("tokens", {}).get("llm", {})
+            latest_meta.llm_token_usage["prompt_tokens"] += llm.get("input", 0)
+            latest_meta.llm_token_usage["completion_tokens"] += llm.get("output", 0)
+            latest_meta.llm_token_usage["total_tokens"] += llm.get("total", 0)
+
+        latest_meta.commit_count = max(latest_meta.commit_count, archive_index)
+        for cat, count in memories_extracted.items():
+            latest_meta.memories_extracted[cat] = (
+                latest_meta.memories_extracted.get(cat, 0) + count
+            )
+            latest_meta.memories_extracted["total"] = (
+                latest_meta.memories_extracted.get("total", 0) + count
+            )
+        latest_meta.last_commit_at = get_current_timestamp()
+        latest_meta.message_count = await self._read_live_message_count()
+        self._meta = latest_meta
+        await self._save_meta()
+
+    async def _read_live_message_count(self) -> int:
+        """Count current live session messages from persisted storage."""
+        if not self._viking_fs:
+            return len(self._messages)
+        try:
+            content = await self._viking_fs.read_file(
+                f"{self._session_uri}/messages.jsonl",
+                ctx=self.ctx,
+            )
+        except Exception:
+            return len(self._messages)
+        return len([line for line in content.strip().split("\n") if line.strip()])
 
     def _extract_abstract_from_summary(self, summary: str) -> str:
         """Extract one-sentence overview from structured summary."""
