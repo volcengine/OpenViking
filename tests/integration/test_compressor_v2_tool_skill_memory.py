@@ -173,14 +173,17 @@ def run_ingest(client: ov.SyncHTTPClient, session_id: str, wait_seconds: float):
         # 添加 assistant 消息，包含 tool_calls
         assistant_parts = [{"type": "text", "text": turn["assistant"]}]
         for tc in tool_calls:
-            assistant_parts.append({
-                "type": "tool_call",
+            tool_part = {
+                "type": "tool",
                 "tool_name": tc["tool_name"],
                 "tool_uri": tc.get("tool_uri", f"tools:{tc['tool_name']}"),
-                "input": tc.get("input", {}),
-                "status": "completed",
-            })
-        client.add_message(session_id, role="assistant", parts=assistant_parts)
+                "tool_input": tc.get("input", {}),
+                "tool_status": "completed",
+            }
+            assistant_parts.append(tool_part)
+            print(f"  [DEBUG] Adding tool part: {tool_part}")
+        result = client.add_message(session_id, role="assistant", parts=assistant_parts)
+        print(f"  [DEBUG] add_message result: {result}")
 
     console.print()
     console.print(f"  共添加 [bold]{total * 2}[/bold] 条消息")
@@ -270,9 +273,19 @@ def run_verify(client: ov.SyncHTTPClient):
 
             all_text = " ".join(recall_texts)
             hits = [kw for kw in expected if kw in all_text]
-            hit_str = ", ".join(hits) if hits else "[dim]无[/dim]"
+            misses = [kw for kw in expected if kw not in all_text]
 
-            results_table.add_row(str(i), query, str(count), hit_str)
+            # 格式化关键词，命中的绿色，未命中的红色
+            formatted_keywords = []
+            for kw in expected:
+                if kw in hits:
+                    formatted_keywords.append(f"[green]{kw}[/green]")
+                else:
+                    formatted_keywords.append(f"[red]{kw}[/red]")
+
+            keyword_str = ", ".join(formatted_keywords)
+
+            results_table.add_row(str(i), query, str(count), keyword_str)
 
         except Exception as e:
             console.print(f"    [red]ERROR: {e}[/red]")

@@ -318,6 +318,7 @@ class OpenAIVLM(VLMBase):
         else:
             kwargs_messages = [{"role": "user", "content": prompt}]
 
+
         kwargs = {
             "model": self.model or "gpt-4o-mini",
             "messages": kwargs_messages,
