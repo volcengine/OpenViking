@@ -83,6 +83,11 @@ class SessionMeta:
             "total_tokens": 0,
         }
     )
+    embedding_token_usage: Dict[str, int] = field(
+        default_factory=lambda: {
+            "total_tokens": 0,
+        }
+    )
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -94,12 +99,15 @@ class SessionMeta:
             "memories_extracted": dict(self.memories_extracted),
             "last_commit_at": self.last_commit_at,
             "llm_token_usage": dict(self.llm_token_usage),
+            "embedding_token_usage": dict(self.embedding_token_usage),
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "SessionMeta":
-        token_usage = data.get("llm_token_usage", {})
+        llm_token_usage = data.get("llm_token_usage", {})
+        embedding_token_usage = data.get("embedding_token_usage", {})
         memories = data.get("memories_extracted", {})
+
         return cls(
             session_id=data.get("session_id", ""),
             created_at=data.get("created_at", ""),
@@ -119,9 +127,12 @@ class SessionMeta:
             },
             last_commit_at=data.get("last_commit_at", ""),
             llm_token_usage={
-                "prompt_tokens": token_usage.get("prompt_tokens", 0),
-                "completion_tokens": token_usage.get("completion_tokens", 0),
-                "total_tokens": token_usage.get("total_tokens", 0),
+                "prompt_tokens": llm_token_usage.get("prompt_tokens", 0),
+                "completion_tokens": llm_token_usage.get("completion_tokens", 0),
+                "total_tokens": llm_token_usage.get("total_tokens", 0),
+            },
+            embedding_token_usage={
+                "total_tokens": embedding_token_usage.get("total_tokens", 0),
             },
         )
 
@@ -602,6 +613,14 @@ class Session:
                     "archive_uri": archive_uri,
                     "memories_extracted": memories_extracted,
                     "active_count_updated": active_count_updated,
+                    "token_usage": {
+                        "llm": dict(self._meta.llm_token_usage),
+                        "embedding": dict(self._meta.embedding_token_usage),
+                        "total": {
+                            "total_tokens": self._meta.llm_token_usage["total_tokens"]
+                            + self._meta.embedding_token_usage["total_tokens"]
+                        },
+                    },
                 },
             )
             logger.info(f"Session {self.session_id} memory extraction completed")
@@ -1018,9 +1037,7 @@ class Session:
         if archive_index <= 1 or not self._viking_fs:
             return True
 
-        previous_archive_uri = (
-            f"{self._session_uri}/history/archive_{archive_index - 1:03d}"
-        )
+        previous_archive_uri = f"{self._session_uri}/history/archive_{archive_index - 1:03d}"
         while True:
             try:
                 await self._viking_fs.read_file(f"{previous_archive_uri}/.done", ctx=self.ctx)
@@ -1061,12 +1078,12 @@ class Session:
             latest_meta.llm_token_usage["prompt_tokens"] += llm.get("input", 0)
             latest_meta.llm_token_usage["completion_tokens"] += llm.get("output", 0)
             latest_meta.llm_token_usage["total_tokens"] += llm.get("total", 0)
+            embedding = telemetry_snapshot.summary.get("tokens", {}).get("embedding", {})
+            latest_meta.embedding_token_usage["total_tokens"] += embedding.get("total", 0)
 
         latest_meta.commit_count = max(latest_meta.commit_count, archive_index)
         for cat, count in memories_extracted.items():
-            latest_meta.memories_extracted[cat] = (
-                latest_meta.memories_extracted.get(cat, 0) + count
-            )
+            latest_meta.memories_extracted[cat] = latest_meta.memories_extracted.get(cat, 0) + count
             latest_meta.memories_extracted["total"] = (
                 latest_meta.memories_extracted.get("total", 0) + count
             )

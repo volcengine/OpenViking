@@ -1001,8 +1001,6 @@ async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()> {
         SessionCommands::Get { session_id } => {
             commands::session::get_session(&client, &session_id, ctx.output_format, ctx.compact)
                 .await
-<<<<<<< HEAD
-=======
         }
         SessionCommands::GetSessionContext {
             session_id,
@@ -1029,7 +1027,6 @@ async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()> {
                 ctx.compact,
             )
             .await
->>>>>>> 9aa1d06 (feat(openviking-server): unify session context and commit APIs)
         }
         SessionCommands::Delete { session_id } => {
             commands::session::delete_session(&client, &session_id, ctx.output_format, ctx.compact)
