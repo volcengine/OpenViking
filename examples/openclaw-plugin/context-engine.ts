@@ -1,5 +1,4 @@
-import { createHash } from "node:crypto";
-
+import { md5Short } from "./client.js";
 import type { OpenVikingClient } from "./client.js";
 import type { MemoryOpenVikingConfig } from "./config.js";
 import {
@@ -222,9 +221,6 @@ function warnOrInfo(logger: Logger, message: string): void {
   logger.info(message);
 }
 
-function md5Short(input: string): string {
-  return createHash("md5").update(input).digest("hex").slice(0, 12);
-}
 
 const SAFE_SESSION_KEY_RE = /^[A-Za-z0-9_-]+$/;
 

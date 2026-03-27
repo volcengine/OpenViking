@@ -256,7 +256,7 @@ const contextEnginePlugin = {
 
           let sessionId = sessionIdIn;
           let usedMappedSession = false;
-          const storeAgentId = sessionKeyIn ? resolveAgentId(sessionKeyIn) : undefined;
+          const storeAgentId = sessionKeyIn ? resolveSessionAgentId(sessionKeyIn) : undefined;
           try {
             const c = await getClient();
             if (!sessionId && sessionKeyIn && contextEngineRef) {
@@ -418,7 +418,7 @@ const contextEnginePlugin = {
         sessionAgentIds.set(ctx.sessionKey, ctx.agentId);
       }
     };
-    const resolveAgentId = (sessionId: string): string =>
+    const resolveSessionAgentId = (sessionId: string): string =>
       sessionAgentIds.get(sessionId) ?? cfg.agentId;
 
     api.on("session_start", async (_event: unknown, ctx?: HookAgentContext) => {
@@ -431,7 +431,7 @@ const contextEnginePlugin = {
       rememberSessionAgentId(ctx ?? {});
 
       const hookSessionId = ctx?.sessionId ?? ctx?.sessionKey ?? "";
-      const agentId = resolveAgentId(hookSessionId);
+      const agentId = resolveSessionAgentId(hookSessionId);
       let client: OpenVikingClient;
       try {
         client = await withTimeout(
@@ -584,7 +584,7 @@ const contextEnginePlugin = {
           cfg,
           logger: api.logger,
           getClient,
-          resolveAgentId,
+          resolveAgentId: resolveSessionAgentId,
         });
         return contextEngineRef;
       });

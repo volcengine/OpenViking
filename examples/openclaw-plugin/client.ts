@@ -49,7 +49,7 @@ const MEMORY_URI_PATTERNS = [
 const USER_STRUCTURE_DIRS = new Set(["memories"]);
 const AGENT_STRUCTURE_DIRS = new Set(["memories", "skills", "instructions", "workspaces"]);
 
-function md5Short(input: string): string {
+export function md5Short(input: string): string {
   return createHash("md5").update(input).digest("hex").slice(0, 12);
 }
 

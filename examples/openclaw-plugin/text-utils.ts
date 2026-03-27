@@ -177,7 +177,7 @@ export function isTranscriptLikeIngest(
   };
 }
 
-function normalizeDedupeText(text: string): string {
+export function normalizeDedupeText(text: string): string {
   return text.toLowerCase().replace(/\s+/g, " ").trim();
 }
 

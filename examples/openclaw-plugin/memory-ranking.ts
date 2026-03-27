@@ -1,4 +1,5 @@
 import type { FindResultItem } from "./client.js";
+import { normalizeDedupeText } from "./text-utils.js";
 
 export function clampScore(value: number | undefined): number {
   if (typeof value !== "number" || Number.isNaN(value)) {
@@ -7,9 +8,6 @@ export function clampScore(value: number | undefined): number {
   return Math.max(0, Math.min(1, value));
 }
 
-function normalizeDedupeText(text: string): string {
-  return text.toLowerCase().replace(/\s+/g, " ").trim();
-}
 
 function isEventOrCaseMemory(item: FindResultItem): boolean {
   const category = (item.category ?? "").toLowerCase();

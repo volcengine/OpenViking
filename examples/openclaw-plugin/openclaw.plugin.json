@@ -24,8 +24,8 @@
     },
     "agentId": {
       "label": "Agent ID",
-      "placeholder": "random unique ID",
-      "help": "Identifies this agent to OpenViking. A random unique ID is generated if not set."
+      "placeholder": "default",
+      "help": "Identifies this agent to OpenViking (sent as X-OpenViking-Agent header). Defaults to \"default\" if not set."
     },
     "apiKey": {
       "label": "OpenViking API Key",
