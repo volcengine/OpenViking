@@ -532,22 +532,39 @@ const contextEnginePlugin = {
       }
 
       if (cfg.ingestReplyAssist) {
-        const decision = isTranscriptLikeIngest(queryText, {
-          minSpeakerTurns: cfg.ingestReplyAssistMinSpeakerTurns,
-          minChars: cfg.ingestReplyAssistMinChars,
-        });
-        if (decision.shouldAssist) {
+        // Skip ingest-reply-assist for cron maintenance tasks
+        // These tasks have their own prompts and should not be treated as transcripts
+        const cronMaintenancePatterns = [
+          /^\[cron:/,                                    // [cron:xxx] prefix
+          /Daily memory maintenance/i,                   // Distillation task
+          /Weekly synthesis/i,                           // Weekly synthesis task
+          /Read .*references\/(distillation|weekly-synthesis)\.md/i,  // Task instruction
+          /^Workspace:\s*\//m,                           // Workspace line
+        ];
+        const isCronMaintenance = cronMaintenancePatterns.some(p => p.test(queryText));
+        
+        if (isCronMaintenance) {
           api.logger.info(
-            `openviking: ingest-reply-assist applied (reason=${decision.reason}, speakerTurns=${decision.speakerTurns}, chars=${decision.chars})`,
+            `openviking: skipping ingest-reply-assist for cron maintenance task`,
           );
-          prependContextParts.push(
-            "<ingest-reply-assist>\n" +
-              "The latest user input looks like a multi-speaker transcript used for memory ingestion.\n" +
-              "Reply with 1-2 concise sentences to acknowledge or summarize key points.\n" +
-              "Do not output NO_REPLY or an empty reply.\n" +
-              "Do not fabricate facts beyond the provided transcript and recalled memories.\n" +
-              "</ingest-reply-assist>",
-          );
+        } else {
+          const decision = isTranscriptLikeIngest(queryText, {
+            minSpeakerTurns: cfg.ingestReplyAssistMinSpeakerTurns,
+            minChars: cfg.ingestReplyAssistMinChars,
+          });
+          if (decision.shouldAssist) {
+            api.logger.info(
+              `openviking: ingest-reply-assist applied (reason=${decision.reason}, speakerTurns=${decision.speakerTurns}, chars=${decision.chars})`,
+            );
+            prependContextParts.push(
+              "<ingest-reply-assist>\n" +
+                "The latest user input looks like a multi-speaker transcript used for memory ingestion.\n" +
+                "Reply with 1-2 concise sentences to acknowledge or summarize key points.\n" +
+                "Do not output NO_REPLY or an empty reply.\n" +
+                "Do not fabricate facts beyond the provided transcript and recalled memories.\n" +
+                "</ingest-reply-assist>",
+            );
+          }
         }
       }
 
