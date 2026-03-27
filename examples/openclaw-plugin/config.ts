@@ -23,6 +23,7 @@ export type MemoryOpenVikingConfig = {
   recallMaxContentChars?: number;
   recallPreferAbstract?: boolean;
   recallTokenBudget?: number;
+  autoRecallTimeoutMs?: number;
   ingestReplyAssist?: boolean;
   ingestReplyAssistMinSpeakerTurns?: number;
   ingestReplyAssistMinChars?: number;
@@ -42,6 +43,7 @@ const DEFAULT_RECALL_TOKEN_BUDGET = 2000;
 const DEFAULT_INGEST_REPLY_ASSIST = true;
 const DEFAULT_INGEST_REPLY_ASSIST_MIN_SPEAKER_TURNS = 2;
 const DEFAULT_INGEST_REPLY_ASSIST_MIN_CHARS = 120;
+const DEFAULT_AUTO_RECALL_TIMEOUT_MS = 5000;
 const DEFAULT_LOCAL_CONFIG_PATH = join(homedir(), ".openviking", "ov.conf");
 
 const DEFAULT_AGENT_ID = "default";
@@ -118,6 +120,7 @@ export const memoryOpenVikingConfigSchema = {
         "recallMaxContentChars",
         "recallPreferAbstract",
         "recallTokenBudget",
+        "autoRecallTimeoutMs",
         "ingestReplyAssist",
         "ingestReplyAssistMinSpeakerTurns",
         "ingestReplyAssistMinChars",
@@ -181,6 +184,7 @@ export const memoryOpenVikingConfigSchema = {
         100,
         Math.min(50000, Math.floor(toNumber(cfg.recallTokenBudget, DEFAULT_RECALL_TOKEN_BUDGET))),
       ),
+      autoRecallTimeoutMs: Math.max(1000, Math.min(30000, Math.floor(toNumber(cfg.autoRecallTimeoutMs, DEFAULT_AUTO_RECALL_TIMEOUT_MS)))),
       ingestReplyAssist: cfg.ingestReplyAssist !== false,
       ingestReplyAssistMinSpeakerTurns: Math.max(
         1,
@@ -291,6 +295,12 @@ export const memoryOpenVikingConfigSchema = {
       placeholder: String(DEFAULT_RECALL_TOKEN_BUDGET),
       advanced: true,
       help: "Maximum estimated tokens for auto-recall memory injection. Injection stops when budget is exhausted.",
+    },
+    autoRecallTimeoutMs: {
+      label: "Auto-Recall Timeout (ms)",
+      placeholder: String(DEFAULT_AUTO_RECALL_TIMEOUT_MS),
+      advanced: true,
+      help: "Timeout in milliseconds for auto-recall memory search. Clamped to 1000–30000.",
     },
     ingestReplyAssist: {
       label: "Ingest Reply Assist",

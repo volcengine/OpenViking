@@ -225,10 +225,20 @@ async function killProcessOnPortUnix(port: number, logger: ProcessLogger): Promi
       } catch { /* ss not available */ }
     }
     for (const pid of pids) {
-      logger.info?.(`openviking: killing pid ${pid} on port ${port}`);
-      try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+      logger.info?.(`openviking: sending SIGTERM to pid ${pid} on port ${port}`);
+      try { process.kill(pid, "SIGTERM"); } catch { /* already gone */ }
     }
-    if (pids.length) await new Promise((r) => setTimeout(r, 500));
+    if (pids.length) {
+      await new Promise((r) => setTimeout(r, 1000));
+      for (const pid of pids) {
+        try {
+          process.kill(pid, 0); // check if still alive
+          logger.info?.(`openviking: pid ${pid} still alive, sending SIGKILL`);
+          try { process.kill(pid, "SIGKILL"); } catch { /* already gone */ }
+        } catch { /* already exited from SIGTERM */ }
+      }
+      await new Promise((r) => setTimeout(r, 500));
+    }
   } catch { /* port check failed */ }
 }
 

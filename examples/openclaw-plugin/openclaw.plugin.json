@@ -90,6 +90,12 @@
       "advanced": true,
       "help": "Maximum estimated tokens for auto-recall memory injection"
     },
+    "autoRecallTimeoutMs": {
+      "label": "Auto-Recall Timeout (ms)",
+      "placeholder": "5000",
+      "advanced": true,
+      "help": "Timeout in milliseconds for auto-recall memory search. Clamped to 1000-30000."
+    },
     "ingestReplyAssist": {
       "label": "Ingest Reply Assist",
       "help": "When transcript-like memory ingestion is detected, add a lightweight reply instruction to reduce NO_REPLY.",
@@ -161,6 +167,9 @@
         "type": "boolean"
       },
       "recallTokenBudget": {
+        "type": "number"
+      },
+      "autoRecallTimeoutMs": {
         "type": "number"
       },
       "ingestReplyAssist": {

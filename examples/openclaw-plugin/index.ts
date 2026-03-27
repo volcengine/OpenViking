@@ -70,7 +70,6 @@ type OpenClawPluginApi = {
 
 const MAX_OPENVIKING_STDERR_LINES = 200;
 const MAX_OPENVIKING_STDERR_CHARS = 256_000;
-const AUTO_RECALL_TIMEOUT_MS = 5_000;
 
 const contextEnginePlugin = {
   id: "openviking",
@@ -522,7 +521,7 @@ const contextEnginePlugin = {
                   );
                 }
               })(),
-              AUTO_RECALL_TIMEOUT_MS,
+              cfg.autoRecallTimeoutMs,
               "openviking: auto-recall search timeout",
             );
           } catch (err) {
@@ -622,6 +621,16 @@ const contextEnginePlugin = {
           // Inherit system environment; optionally override Go/Python paths via env vars
           const pathSep = IS_WIN ? ";" : ":";
 	  const { ALL_PROXY, all_proxy, HTTP_PROXY, http_proxy, HTTPS_PROXY, https_proxy, ...filteredEnv } = process.env;
+          const strippedProxies = [
+            ALL_PROXY && "ALL_PROXY", all_proxy && "all_proxy",
+            HTTP_PROXY && "HTTP_PROXY", http_proxy && "http_proxy",
+            HTTPS_PROXY && "HTTPS_PROXY", https_proxy && "https_proxy",
+          ].filter(Boolean);
+          if (strippedProxies.length > 0) {
+            api.logger.info(
+              `openviking: stripped proxy env vars for local server: ${strippedProxies.join(", ")} (local server connects to 127.0.0.1 only)`,
+            );
+          }
           const env = {
             ...filteredEnv,
             PYTHONUNBUFFERED: "1",
