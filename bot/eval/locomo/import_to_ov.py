@@ -13,10 +13,11 @@ Usage:
 
 import argparse
 import json
-import subprocess
 import sys
 import time
 from datetime import datetime
+
+import openviking as ov
 
 
 def parse_test_file(path: str) -> list[dict]:
@@ -47,30 +48,17 @@ def parse_test_file(path: str) -> list[dict]:
     return sessions
 
 
-def format_locomo_message(msg: dict) -> str:
-    """Format a single LoCoMo message into a natural chat-style string.
+def format_locomo_message(msg: dict, index: int | None = None) -> str:
+    """Format a single LoCoMo message into chat-style string.
 
     Output format:
-        Speaker: text here
-        image_url: caption
+        [index][Speaker]: text here
     """
     speaker = msg.get("speaker", "unknown")
     text = msg.get("text", "")
-    line = f"{speaker}: {text}"
-
-    img_urls = msg.get("img_url", [])
-    if isinstance(img_urls, str):
-        img_urls = [img_urls]
-    blip = msg.get("blip_caption", "")
-
-    if img_urls:
-        for url in img_urls:
-            caption = f": {blip}" if blip else ""
-            line += f"\n{url}{caption}"
-    elif blip:
-        line += f"\n({blip})"
-
-    return line
+    if index is not None:
+        return f"[{index}][{speaker}]: {text}"
+    return f"[{speaker}]: {text}"
 
 
 def load_locomo_data(
@@ -93,9 +81,10 @@ def build_session_messages(
     item: dict,
     session_range: tuple[int, int] | None = None,
 ) -> list[dict]:
-    """Build bundled session messages for one LoCoMo sample.
+    """Build session messages for one LoCoMo sample.
 
-    Returns list of dicts with keys: message, meta.
+    Returns list of dicts with keys: messages, meta.
+    Each dict represents a session with multiple messages (user/assistant role).
     """
     conv = item["conversation"]
     speakers = f"{conv['speaker_a']} & {conv['speaker_b']}"
@@ -116,13 +105,20 @@ def build_session_messages(
         dt_key = f"{sk}_date_time"
         date_time = conv.get(dt_key, "")
 
-        parts = [f"[group chat conversation: {date_time}]"]
-        for msg in conv[sk]:
-            parts.append(format_locomo_message(msg))
-        combined = "\n\n".join(parts)
+        # Extract messages with all as user role, including speaker in content
+        messages = []
+        for idx, msg in enumerate(conv[sk]):
+            speaker = msg.get("speaker", "unknown")
+            text = msg.get("text", "")
+            messages.append({
+                "role": "user",
+                "text": f"[{speaker}]: {text}",
+                "speaker": speaker,
+                "index": idx
+            })
 
         sessions.append({
-            "message": combined,
+            "messages": messages,
             "meta": {
                 "sample_id": item["sample_id"],
                 "session_key": sk,
@@ -137,6 +133,7 @@ def build_session_messages(
 # ---------------------------------------------------------------------------
 # Ingest record helpers (avoid duplicate ingestion)
 # ---------------------------------------------------------------------------
+
 
 def load_ingest_record(record_path: str = ".ingest_record.json") -> dict:
     """Load existing ingest record file, return empty dict if not exists."""
@@ -182,20 +179,42 @@ def mark_ingested(
 # OpenViking import
 # ---------------------------------------------------------------------------
 
-def viking_ingest(msg: str) -> None:
-    """Save a message to OpenViking via `ov add-memory`."""
-    result = subprocess.run(
-        ["ov", "add-memory", msg],
-        capture_output=True,
-        text=True,
-    )
-    if result.returncode != 0:
-        raise RuntimeError(result.stderr.strip() or f"ov exited with code {result.returncode}")
+
+def viking_ingest(messages: list[dict]) -> None:
+    """Save messages to OpenViking via SyncHTTPClient (add messages + commit session)."""
+    client = ov.SyncHTTPClient()
+    client.initialize()
+
+    # Create new session
+    session_result = client.create_session()
+    session_id = session_result.get('session_id')
+
+    # Add messages one by one
+    for msg in messages:
+        client.add_message(session_id, role=msg["role"], content=msg["text"])
+
+    # Commit session to trigger memory extraction
+    commit_result = client.commit_session(session_id)
+    task_id = commit_result.get("task_id")
+
+    # Wait for commit task to complete
+    if task_id:
+        now = time.time()
+        while True:
+            task = client.get_task(task_id)
+            if not task or task.get("status") in ("completed", "failed"):
+                break
+            time.sleep(1)
+        elapsed = time.time() - now
+        status = task.get("status", "unknown") if task else "not found"
+
+    client.close()
 
 
 # ---------------------------------------------------------------------------
 # Main import logic
 # ---------------------------------------------------------------------------
+
 
 def parse_session_range(s: str) -> tuple[int, int]:
     """Parse '1-4' or '3' into (lo, hi) inclusive tuple."""
@@ -243,7 +262,7 @@ def run_import(args: argparse.Namespace) -> None:
 
             for sess in sessions:
                 meta = sess["meta"]
-                msg = sess["message"]
+                messages = sess["messages"]
                 label = f"{meta['session_key']} ({meta['date_time']})"
 
                 # Skip already ingested sessions unless force-ingest is enabled
@@ -265,11 +284,12 @@ def run_import(args: argparse.Namespace) -> None:
                     jsonl_output.flush()
                     continue
 
-                preview = msg.replace("\n", " | ")[:80]
-                print(f"  [{label}] {preview}...", file=sys.stderr)
+                # Preview messages
+                preview = " | ".join([f"{msg['role']}: {msg['text'][:30]}..." for msg in messages[:3]])
+                print(f"  [{label}] {preview}", file=sys.stderr)
 
                 try:
-                    viking_ingest(msg)
+                    viking_ingest(messages)
                     print(f"    -> [SUCCESS] imported to OpenViking", file=sys.stderr)
                     success_count += 1
 
@@ -338,12 +358,21 @@ def run_import(args: argparse.Namespace) -> None:
                 jsonl_output.flush()
                 continue
 
-            combined_msg = "\n\n".join(session["messages"])
-            preview = combined_msg.replace("\n", " | ")[:80]
-            print(f"  {preview}...", file=sys.stderr)
+            # For plain text, all messages as user role
+            messages = []
+            for i, text in enumerate(session["messages"]):
+                messages.append({
+                    "role": "user",
+                    "text": text.strip(),
+                    "speaker": "user",
+                    "index": i
+                })
+
+            preview = " | ".join([f"{msg['role']}: {msg['text'][:30]}..." for msg in messages[:3]])
+            print(f"  {preview}", file=sys.stderr)
 
             try:
-                viking_ingest(combined_msg)
+                viking_ingest(messages)
                 print(f"    -> [SUCCESS] imported to OpenViking", file=sys.stderr)
                 success_count += 1
 
@@ -399,6 +428,7 @@ def run_import(args: argparse.Namespace) -> None:
 # ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
+
 
 def main():
     parser = argparse.ArgumentParser(description="Import conversations into OpenViking")

@@ -16,7 +16,7 @@ content_template: |
 
   Tool Memory Context:
   Based on {{ total_calls }} historical calls:
-  - Success rate: {{ success_rate }}% ({{ success_count }} successful, {{ fail_count }} failed)
+  - Success rate: {{ ((success_count/ (success_count + fail_count + 0.000001)) * 100)|round(1) }}% ({{ success_count }} successful, {{ fail_count }} failed)
   - Avg time: {{ total_time_ms/total_calls }}, Avg tokens: {{ total_tokens/total_calls }}
   - Best for: {{ best_for }}
   - Optimal params: {{ optimal_params }}

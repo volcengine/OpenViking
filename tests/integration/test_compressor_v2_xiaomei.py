@@ -16,7 +16,7 @@ import openviking as ov
 # ── 常量 ───────────────────────────────────────────────────────────────────
 
 DISPLAY_NAME = "小美"
-DEFAULT_URL = "http://localhost:1933"
+DEFAULT_URL = "http://localhost:1934"
 PANEL_WIDTH = 78
 DEFAULT_API_KEY = "1cf407c39990e5dc874ccc697942da4892208a86a44c4781396dfdc57aa5c98d"
 DEFAULT_AGENT_ID = "test"

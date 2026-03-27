@@ -13,7 +13,7 @@ content_template: |
 
   Skill Memory Context:
   Based on {{ total_executions }} historical executions:
-  - Success rate: {{ success_rate }}% ({{ success_count }} successful, {{ fail_count }} failed)
+  - Success rate: {{ ((success_count/ (success_count + fail_count + 0.000001)) * 100)|round(1) }}% ({{ success_count }} successful, {{ fail_count }} failed)
   - Best for: {{ best_for }}
   - Recommended flow: {{ recommended_flow }}
   - Key dependencies: {{ key_dependencies }}
