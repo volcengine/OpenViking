@@ -499,7 +499,13 @@ class FeishuChannel(BaseChannel):
 
         # Add image elements
         for img in images:
-            elements.append({"tag": "img", "img_key": img["img_key"]})
+            elements.append(
+                {
+                    "tag": "img",
+                    "img_key": img["img_key"],
+                    "alt": {"tag": "plain_text", "content": ""},
+                }
+            )
 
         if not elements:
             elements = [{"tag": "markdown", "content": content_no_images}]
@@ -552,7 +558,7 @@ class FeishuChannel(BaseChannel):
             # @mention prefix only when replying in group chats
             mention_prefix = ""
             if reply_to_message_id and original_sender_id and chat_type == "group":
-                mention_prefix = f"<at id={original_sender_id}></at>"
+                mention_prefix = f'<at id="{original_sender_id}"></at>'
 
             if content_with_mentions.strip():
                 md_content = (
@@ -566,13 +572,23 @@ class FeishuChannel(BaseChannel):
 
             # Add images
             for img in images:
-                card_elements.append({"tag": "img", "img_key": img["image_key"]})
+                card_elements.append(
+                    {
+                        "tag": "img",
+                        "img_key": img["image_key"],
+                        "alt": {"tag": "plain_text", "content": ""},
+                    }
+                )
 
             if not card_elements:
                 card_elements.append({"tag": "markdown", "content": " "})
 
-            # Build interactive card message (no extra {"card": ...} wrapper)
-            card_content = json.dumps({"elements": card_elements}, ensure_ascii=False)
+            # Build interactive card message
+            card_payload = {
+                "config": {"wide_screen_mode": True},
+                "elements": card_elements,
+            }
+            card_content = json.dumps(card_payload, ensure_ascii=False)
 
             if reply_to_message_id:
                 # Reply to existing message (quotes the original)
