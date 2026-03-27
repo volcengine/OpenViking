@@ -400,11 +400,20 @@ openviking export viking://resources/my-project/ ./exports/my-project.ovpack
 
 导入 `.ovpack` 文件。
 
-**参数**
+**SDK / CLI 参数**
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| file_path | str | 是 | - | 本地 `.ovpack` 文件路径（仅 SDK / CLI） |
+| file_path | str | 是 | - | 本地 `.ovpack` 文件路径 |
+| parent | str | 是 | - | 目标父级 URI |
+| force | bool | 否 | False | 覆盖已有资源 |
+| vectorize | bool | 否 | True | 导入后触发向量化 |
+
+**裸 HTTP 请求体**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| temp_file_id | str | 是 | - | `POST /api/v1/resources/temp_upload` 返回的上传 ID |
 | parent | str | 是 | - | 目标父级 URI |
 | force | bool | 否 | False | 覆盖已有资源 |
 | vectorize | bool | 否 | True | 导入后触发向量化 |

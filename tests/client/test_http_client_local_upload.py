@@ -86,3 +86,32 @@ async def test_import_ovpack_uploads_local_file_even_when_url_is_localhost(tmp_p
     assert call["path"] == "/api/v1/pack/import"
     assert call["json"]["temp_file_id"] == "upload_pack.ovpack"
     assert "file_path" not in call["json"]
+
+
+@pytest.mark.asyncio
+async def test_import_ovpack_fails_fast_when_local_file_is_missing(tmp_path):
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = _FakeHTTPClient()
+    client._http = fake_http
+
+    missing_path = tmp_path / "missing.ovpack"
+
+    with pytest.raises(FileNotFoundError, match="Local ovpack file not found"):
+        await client.import_ovpack(str(missing_path), parent="viking://resources/")
+
+    assert fake_http.calls == []
+
+
+@pytest.mark.asyncio
+async def test_import_ovpack_fails_fast_when_path_is_directory(tmp_path):
+    client = AsyncHTTPClient(url="http://localhost:1933")
+    fake_http = _FakeHTTPClient()
+    client._http = fake_http
+
+    pack_dir = tmp_path / "pack_dir"
+    pack_dir.mkdir()
+
+    with pytest.raises(ValueError, match="is not a file"):
+        await client.import_ovpack(str(pack_dir), parent="viking://resources/")
+
+    assert fake_http.calls == []

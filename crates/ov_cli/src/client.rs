@@ -709,24 +709,27 @@ impl HttpClient {
     ) -> Result<serde_json::Value> {
         let file_path_obj = Path::new(file_path);
 
-        if file_path_obj.exists() && file_path_obj.is_file() {
-            let temp_file_id = self.upload_temp_file(file_path_obj).await?;
-            let body = serde_json::json!({
-                "temp_file_id": temp_file_id,
-                "parent": parent,
-                "force": force,
-                "vectorize": vectorize,
-            });
-            self.post("/api/v1/pack/import", &body).await
-        } else {
-            let body = serde_json::json!({
-                "file_path": file_path,
-                "parent": parent,
-                "force": force,
-                "vectorize": vectorize,
-            });
-            self.post("/api/v1/pack/import", &body).await
+        if !file_path_obj.exists() {
+            return Err(Error::Client(format!(
+                "Local ovpack file not found: {}",
+                file_path
+            )));
         }
+        if !file_path_obj.is_file() {
+            return Err(Error::Client(format!(
+                "Path is not a file: {}",
+                file_path
+            )));
+        }
+
+        let temp_file_id = self.upload_temp_file(file_path_obj).await?;
+        let body = serde_json::json!({
+            "temp_file_id": temp_file_id,
+            "parent": parent,
+            "force": force,
+            "vectorize": vectorize,
+        });
+        self.post("/api/v1/pack/import", &body).await
     }
 
     // ============ Admin Methods ============

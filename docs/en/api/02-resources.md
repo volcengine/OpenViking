@@ -400,11 +400,20 @@ openviking export viking://resources/my-project/ ./exports/my-project.ovpack
 
 Import a `.ovpack` file.
 
-**Parameters**
+**SDK / CLI parameters**
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| file_path | str | Yes | - | Local `.ovpack` file path (SDK / CLI only) |
+| file_path | str | Yes | - | Local `.ovpack` file path |
+| parent | str | Yes | - | Target parent URI |
+| force | bool | No | False | Overwrite existing resources |
+| vectorize | bool | No | True | Trigger vectorization after import |
+
+**Raw HTTP request body**
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| temp_file_id | str | Yes | - | Upload ID returned by `POST /api/v1/resources/temp_upload` |
 | parent | str | Yes | - | Target parent URI |
 | force | bool | No | False | Overwrite existing resources |
 | vectorize | bool | No | True | Trigger vectorization after import |

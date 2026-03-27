@@ -793,11 +793,13 @@ class AsyncHTTPClient(BaseClient):
         }
 
         file_path_obj = Path(file_path)
-        if file_path_obj.exists() and file_path_obj.is_file():
-            temp_file_id = await self._upload_temp_file(file_path)
-            request_data["temp_file_id"] = temp_file_id
-        else:
-            request_data["file_path"] = file_path
+        if not file_path_obj.exists():
+            raise FileNotFoundError(f"Local ovpack file not found: {file_path}")
+        if not file_path_obj.is_file():
+            raise ValueError(f"Path {file_path} is not a file")
+
+        temp_file_id = await self._upload_temp_file(file_path)
+        request_data["temp_file_id"] = temp_file_id
 
         response = await self._http.post(
             "/api/v1/pack/import",
