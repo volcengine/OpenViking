@@ -135,6 +135,7 @@ class MemoryReAct:
         - For multi-file schemas (filename_template has variables): ls the directory
         - For single-file schemas (filename_template no variables): directly read the file
         - No longer ls the root memories directory
+        - For operation_mode = "add_only": skip ls and search, only read .overview.md
 
         Args:
             conversation: Conversation history for search query
@@ -148,6 +149,7 @@ class MemoryReAct:
         # Step 1: Separate schemas into multi-file (ls) and single-file (direct read)
         ls_dirs = set()  # directories to ls (for multi-file schemas)
         read_files = set()  # files to read directly (for single-file schemas)
+        overview_files = set()  # .overview.md files to read
 
         for schema in self.registry.list_all(include_disabled=False):
             if not schema.directory:
@@ -157,6 +159,14 @@ class MemoryReAct:
             user_space = self.ctx.user.user_space_name() if self.ctx and self.ctx.user else "default"
             agent_space = self.ctx.user.agent_space_name() if self.ctx and self.ctx.user else "default"
             dir_path = schema.directory.replace("{user_space}", user_space).replace("{agent_space}", agent_space)
+
+            # Always add .overview.md to read list
+            overview_files.add(f"{dir_path}/.overview.md")
+
+            # 根据 operation_mode 决定是否需要 ls 和读取其他文件
+            if schema.operation_mode == "add_only":
+                # 只新增，不需要查看之前的记忆列表，只需要读取 .overview.md
+                continue
 
             # Check if filename_template has variables (contains {xxx})
             has_variables = False
@@ -176,7 +186,36 @@ class MemoryReAct:
         ls_tool = get_tool("ls")
         read_tool = get_tool("read")
         from openviking.server.identity import ToolContext
-        tool_ctx = ToolContext(request_ctx=self.ctx, transaction_handle=self._transaction_handle)
+
+        # 获取 search URIs
+        user_space = self.ctx.user.user_space_name() if self.ctx and self.ctx.user else "default"
+        agent_space = self.ctx.user.agent_space_name() if self.ctx and self.ctx.user else "default"
+        search_uris = self.registry.list_search_uris(user_space, agent_space)
+
+        tool_ctx = ToolContext(
+            request_ctx=self.ctx,
+            transaction_handle=self._transaction_handle,
+            default_search_uris=search_uris
+        )
+
+        # 首先读取所有 .overview.md 文件
+        for overview_uri in overview_files:
+            try:
+                result_str = await read_tool.execute(self.viking_fs, tool_ctx, uri=overview_uri)
+                add_tool_call_pair_to_messages(
+                    messages=messages,
+                    call_id=call_id_seq,
+                    tool_name='read',
+                    params={
+                        "uri": overview_uri
+                    },
+                    result=result_str
+                )
+                call_id_seq += 1
+            except Exception as e:
+                logger.warning(f"Failed to read .overview.md: {e}")
+
+        # 然后执行 ls 操作（只对非 add_only 模式）
         if ls_tool and self.viking_fs and ls_dirs:
             for dir_uri in ls_dirs:
                 try:
@@ -191,53 +230,64 @@ class MemoryReAct:
                         result=result_str
                     )
                     call_id_seq += 1
-
-                    result_str = await read_tool.execute(self.viking_fs, tool_ctx, uri=f'{dir_uri}/.overview.md')
-
-                    add_tool_call_pair_to_messages(
-                        messages=messages,
-                        call_id=call_id_seq,
-                        tool_name='read',
-                        params={
-                            "uri": f'{dir_uri}/.overview.md'
-                        },
-                        result=result_str
-                    )
-                    call_id_seq += 1
-
                 except Exception as e:
                     logger.warning(f"Failed to ls {dir_uri}: {e}")
 
+        # 读取单文件 schema 的文件（只对非 add_only 模式）
+        for file_uri in read_files:
+            try:
+                result_str = await read_tool.execute(self.viking_fs, tool_ctx, uri=file_uri)
+                add_tool_call_pair_to_messages(
+                    messages=messages,
+                    call_id=call_id_seq,
+                    tool_name='read',
+                    params={
+                        "uri": file_uri
+                    },
+                    result=result_str
+                )
+                call_id_seq += 1
+            except Exception as e:
+                logger.warning(f"Failed to read {file_uri}: {e}")
+
         # Step 3: Search for relevant memories based on user messages in conversation
+        # 只对非 add_only 模式执行搜索
         search_tool = get_tool("search")
         if search_tool and self.viking_fs and self.ctx:
-            try:
-                # Extract only user messages from conversation
-                user_messages = []
-                for line in conversation.split("\n"):
-                    if line.startswith("[user]:"):
-                        user_messages.append(line[len("[user]:"):].strip())
-                user_query = " ".join(user_messages)
+            # 检查是否有非 add_only 模式的 schema 需要搜索
+            has_non_add_only_schemas = any(
+                schema.operation_mode != "add_only"
+                for schema in self.registry.list_all(include_disabled=False)
+            )
 
-                if user_query:
-                    search_result = await search_tool.execute(
-                        viking_fs=self.viking_fs,
-                        ctx=tool_ctx,
-                        query=user_query,
-                    )
-                    if search_result and not search_result.get("error"):
-                        # 简化搜索结果为 URI 列表（prefetch 只需要 memories）
-                        simplified = [m["uri"] for m in search_result.get("memories", [])]
-                        add_tool_call_pair_to_messages(
-                            messages=messages,
-                            call_id=call_id_seq,
-                            tool_name='search',
-                            params={"query": "[keyword from conversation]"},
-                            result=str(simplified)
+            if has_non_add_only_schemas:
+                try:
+                    # Extract only user messages from conversation
+                    user_messages = []
+                    for line in conversation.split("\n"):
+                        if line.startswith("[user]:"):
+                            user_messages.append(line[len("[user]:"):].strip())
+                    user_query = " ".join(user_messages)
+
+                    if user_query:
+                        search_result = await search_tool.execute(
+                            viking_fs=self.viking_fs,
+                            ctx=tool_ctx,
+                            query=user_query,
                         )
-                        call_id_seq += 1
-            except Exception as e:
-                logger.warning(f"Pre-fetch search failed: {e}")
+                        if search_result and not search_result.get("error"):
+                            # 简化搜索结果为 URI 列表（prefetch 只需要 memories）
+                            simplified = [m["uri"] for m in search_result.get("memories", [])]
+                            add_tool_call_pair_to_messages(
+                                messages=messages,
+                                call_id=call_id_seq,
+                                tool_name='search',
+                                params={"query": "[keyword from conversation]"},
+                                result=str(simplified)
+                            )
+                            call_id_seq += 1
+                except Exception as e:
+                    logger.warning(f"Pre-fetch search failed: {e}")
 
         return messages
 
