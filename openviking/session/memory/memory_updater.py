@@ -7,25 +7,50 @@ This is the system executor that applies LLM's final output (MemoryOperations)
 to the storage system.
 """
 
-from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
+from openviking.message import Message
 from openviking.server.identity import RequestContext
-from openviking.session.memory.utils import (
-    deserialize_full,
-    serialize_with_metadata,
-    resolve_all_operations,
-    flat_model_to_dict,
-)
 from openviking.session.memory.dataclass import MemoryField
+from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.merge_op import MergeOpFactory, PatchOp
 from openviking.session.memory.merge_op.base import FieldType, SearchReplaceBlock, StrPatch
-from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+from openviking.session.memory.utils import (
+    deserialize_full,
+    flat_model_to_dict,
+    resolve_all_operations,
+    serialize_with_metadata,
+)
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+
+class ExtractContext:
+    """Extract context for template rendering."""
+    def __init__(self, messages: List[Message]):
+        self.messages = messages
+
+    def read_messages(self, start_index: int, end_index: int):
+        """Read messages from start_index to end_index (inclusive)."""
+        if start_index < 0 or end_index >= len(self.messages):
+            return MessageRange([])
+        return MessageRange(self.messages[start_index:end_index+1])
+
+
+class MessageRange:
+    """Represents a range of messages for formatting."""
+    def __init__(self, messages: List[Message]):
+        self.messages = messages
+
+    def pretty_print(self) -> str:
+        """Pretty print the message range."""
+        result = []
+        for msg in self.messages:
+            result.append(f"[{msg.role}]: {msg.content}")
+        return "\n".join(result)
 
 
 class MemoryUpdateResult:
@@ -96,6 +121,7 @@ class MemoryUpdater:
         operations: Any,
         ctx: RequestContext,
         registry: Optional[MemoryTypeRegistry] = None,
+        extract_context: Any = None,
     ) -> MemoryUpdateResult:
         """
         Apply MemoryOperations directly using the flat model format.
@@ -142,7 +168,7 @@ class MemoryUpdater:
         # Apply write operations
         for op, uri in resolved_ops.write_operations:
             try:
-                await self._apply_write(op, uri, ctx)
+                await self._apply_write(op, uri, ctx, extract_context=extract_context)
                 result.add_written(uri)
             except Exception as e:
                 logger.error(f"Failed to write memory: {e}")
@@ -181,17 +207,13 @@ class MemoryUpdater:
         logger.info(f"Memory operations applied: {result.summary()}")
         return result
 
-    async def _apply_write(self, flat_model: Any, uri: str, ctx: RequestContext) -> None:
+    async def _apply_write(self, flat_model: Any, uri: str, ctx: RequestContext, extract_context: Any = None) -> None:
         """Apply write operation from a flat model."""
         viking_fs = self._get_viking_fs()
 
         # Convert model to dict
         model_dict = flat_model_to_dict(flat_model)
 
-        # Set timestamps if not provided
-        now = datetime.utcnow()
-        created_at = model_dict.get("created_at", now)
-        updated_at = model_dict.get("updated_at", now)
 
         # Extract content - priority: model_dict["content"]
         content = model_dict.pop("content", None) or ""
@@ -213,7 +235,7 @@ class MemoryUpdater:
                 # 添加模板渲染逻辑
                 if schema.content_template:
                     try:
-                        rendered_content = self._render_content_template(schema.content_template, business_fields)
+                        rendered_content = self._render_content_template(schema.content_template, business_fields, extract_context=extract_context)
                         if rendered_content:
                             content = rendered_content
                         logger.debug(f"Successfully rendered content template for memory type: {memory_type_str}")
@@ -232,13 +254,14 @@ class MemoryUpdater:
         await viking_fs.write_file(uri, full_content, ctx=ctx)
         logger.debug(f"Written memory: {uri}")
 
-    def _render_content_template(self, template: str, fields: Dict[str, Any]) -> str:
+    def _render_content_template(self, template: str, fields: Dict[str, Any], extract_context: Any = None) -> str:
         """
-        Render content template using field values.
+        Render content template using Jinja2 template engine.
 
         Args:
             template: The content template string with placeholders
             fields: Dictionary of field values to use for substitution
+            extract_context: Extract context for message extraction
 
         Returns:
             Rendered template string
@@ -247,11 +270,20 @@ class MemoryUpdater:
             Exception: If template rendering fails
         """
         try:
-            rendered = template
-            for field_name, value in fields.items():
-                safe_value = str(value) if value is not None else ""
-                rendered = rendered.replace(f"{{{field_name}}}", safe_value)
-            return rendered.strip()
+            # 导入 Jinja2（延迟导入以避免循环依赖）
+            from jinja2 import Environment
+
+            # 创建 Jinja2 环境
+            env = Environment(autoescape=False)
+
+            # 创建模板变量
+            template_vars = fields.copy()
+            if extract_context:
+                template_vars["extract_context"] = extract_context
+
+            # 渲染模板
+            jinja_template = env.from_string(template)
+            return jinja_template.render(**template_vars).strip()
         except Exception as e:
             logger.error(f"Template rendering failed: {e}")
             raise
@@ -368,7 +400,7 @@ class MemoryUpdater:
         new_overview = current_overview
         if overview_value is None:
             # No overview provided, nothing to do
-            logger.debug(f"No overview value provided, skipping edit")
+            logger.debug("No overview value provided, skipping edit")
             return
         elif isinstance(overview_value, str):
             # Direct string - replace

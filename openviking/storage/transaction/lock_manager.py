@@ -194,7 +194,6 @@ class LockManager:
         """
         from openviking.message import Message
         from openviking.server.identity import RequestContext, Role
-        from openviking.session.compressor import SessionCompressor
         from openviking.storage.viking_fs import get_viking_fs
         from openviking_cli.session.user_id import UserIdentifier
 
@@ -234,7 +233,9 @@ class LockManager:
         if messages:
             session_id = session_uri.rstrip("/").rsplit("/", 1)[-1]
             try:
-                compressor = SessionCompressor(vikingdb=None)
+                from openviking.session import create_session_compressor
+
+                compressor = create_session_compressor(vikingdb=None)
                 memories = await compressor.extract_long_term_memories(
                     messages=messages,
                     user=user,

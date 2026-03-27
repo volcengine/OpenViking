@@ -8,31 +8,20 @@ Maintains the same interface as compressor.py for backward compatibility.
 """
 
 import os
-from dataclasses import dataclass
 from typing import List, Optional
 
 from openviking.core.context import Context
 from openviking.message import Message
 from openviking.server.identity import RequestContext
+from openviking.session.memory import MemoryReAct, MemoryTypeRegistry, MemoryUpdater
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import get_viking_fs
+from openviking.telemetry import get_current_telemetry
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
 
-from openviking.session.memory import MemoryReAct, MemoryUpdater, MemoryTypeRegistry
-
 logger = get_logger(__name__)
-
-
-@dataclass
-class ExtractionStats:
-    """Statistics for memory extraction."""
-
-    created: int = 0
-    merged: int = 0
-    deleted: int = 0
-    skipped: int = 0
 
 
 class SessionCompressorV2:
@@ -132,7 +121,17 @@ class SessionCompressorV2:
 
         logger.info("Starting v2 memory extraction from conversation")
 
-        from openviking.storage.transaction import init_lock_manager, get_lock_manager
+        # Initialize telemetry to 0 (matching v1 pattern)
+        telemetry = get_current_telemetry()
+        telemetry.set("memory.extract.candidates.total", 0)
+        telemetry.set("memory.extract.candidates.standard", 0)
+        telemetry.set("memory.extract.candidates.tool_skill", 0)
+        telemetry.set("memory.extract.created", 0)
+        telemetry.set("memory.extract.merged", 0)
+        telemetry.set("memory.extract.deleted", 0)
+        telemetry.set("memory.extract.skipped", 0)
+
+        from openviking.storage.transaction import get_lock_manager, init_lock_manager
         from openviking.storage.viking_fs import get_viking_fs
 
         # 初始化锁管理器（仅在有 AGFS 时使用锁机制）
@@ -154,22 +153,23 @@ class SessionCompressorV2:
                 memory_schema_dirs = orchestrator._get_all_memory_schema_dirs()
                 logger.debug(f"Memory schema directories to lock: {memory_schema_dirs}")
 
-                # 使用 batch 加锁获取所有目录的子树锁，防止死锁
-                lock_acquired = await lock_manager.acquire_subtree_batch(
-                    transaction_handle,
-                    memory_schema_dirs,
-                    timeout=None,
-                )
-
-                if not lock_acquired:
-                    logger.error("Failed to acquire memory schema directory locks")
-                    return []
+                # 循环等待获取锁（机制确保不会死锁）
+                # 由于使用有序加锁法，可以安全地无限等待
+                while True:
+                    lock_acquired = await lock_manager.acquire_subtree_batch(
+                        transaction_handle,
+                        memory_schema_dirs,
+                        timeout=None,
+                    )
+                    if lock_acquired:
+                        break
+                    logger.warning("Failed to acquire memory locks, retrying...")
 
             orchestrator._transaction_handle = transaction_handle  # 传递给 MemoryReAct
             updater = self._get_or_create_updater(transaction_handle)
 
             # Run ReAct orchestrator
-            operations, tools_used = await orchestrator.run(conversation=conversation_str)
+            operations, tools_used = await orchestrator.run(conversation=conversation_str, messages=messages)
 
             if operations is None:
                 logger.info("No memory operations generated")
@@ -181,8 +181,12 @@ class SessionCompressorV2:
                 f"delete={len(operations.delete_uris)}"
             )
 
+            # Create extract context from messages
+            from openviking.session.memory.memory_updater import ExtractContext
+            extract_context = ExtractContext(messages)
+
             # Apply operations
-            result = await updater.apply_operations(operations, ctx, registry=orchestrator.registry)
+            result = await updater.apply_operations(operations, ctx, registry=orchestrator.registry, extract_context=extract_context)
 
             logger.info(
                 f"Applied memory operations: written={len(result.written_uris)}, "
@@ -190,12 +194,42 @@ class SessionCompressorV2:
                 f"errors={len(result.errors)}"
             )
 
-            # Return list with dummy values to preserve count for stats in session.py
-            # v2 directly writes to storage, so we return None objects to maintain len() accuracy
-            total_changes = (
-                len(result.written_uris) + len(result.edited_uris) + len(result.deleted_uris)
-            )
-            return [None] * total_changes
+            # Report telemetry stats (matching v1 pattern)
+            telemetry = get_current_telemetry()
+            telemetry.set("memory.extract.candidates.total", len(result.written_uris) + len(result.edited_uris))
+            telemetry.set("memory.extract.created", len(result.written_uris))
+            telemetry.set("memory.extract.merged", len(result.edited_uris))
+            telemetry.set("memory.extract.deleted", len(result.deleted_uris))
+            telemetry.set("memory.extract.skipped", len(result.errors))
+
+            # Build Context objects for stats in session.py
+            contexts: List[Context] = []
+
+            # Written memories
+            for uri in result.written_uris:
+                contexts.append(Context(
+                    uri=uri,
+                    category="memory_write",
+                    context_type="memory",
+                ))
+
+            # Edited memories
+            for uri in result.edited_uris:
+                contexts.append(Context(
+                    uri=uri,
+                    category="memory_edit",
+                    context_type="memory",
+                ))
+
+            # Deleted memories
+            for uri in result.deleted_uris:
+                contexts.append(Context(
+                    uri=uri,
+                    category="memory_delete",
+                    context_type="memory",
+                ))
+
+            return contexts
 
         except Exception as e:
             logger.error(f"Failed to extract memories with v2: {e}", exc_info=True)

@@ -8,13 +8,22 @@ Reference: bot/vikingbot/agent/loop.py AgentLoop structure
 
 import asyncio
 import json
-from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from pydantic import BaseModel, Field
-
-from openviking.models.vlm.base import VLMBase, VLMResponse
+from openviking.message import Message
+from openviking.models.vlm.base import VLMBase
 from openviking.server.identity import RequestContext
+from openviking.session.memory.dataclass import MemoryOperations
+from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
+from openviking.session.memory.schema_model_generator import (
+    SchemaModelGenerator,
+    SchemaPromptGenerator,
+)
+from openviking.session.memory.tools import (
+    add_tool_call_pair_to_messages,
+    get_tool,
+    get_tool_schemas,
+)
 from openviking.session.memory.utils import (
     collect_allowed_directories,
     detect_language_from_conversation,
@@ -23,17 +32,6 @@ from openviking.session.memory.utils import (
     parse_memory_file_with_fields,
     pretty_print_messages,
     validate_operations_uris,
-)
-from openviking.session.memory.dataclass import MemoryOperations
-from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
-from openviking.session.memory.schema_model_generator import (
-    SchemaModelGenerator,
-    SchemaPromptGenerator,
-)
-from openviking.session.memory.tools import (
-    get_tool,
-    get_tool_schemas,
-    add_tool_call_pair_to_messages,
 )
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
 from openviking_cli.utils import get_logger
@@ -228,12 +226,14 @@ class MemoryReAct:
                         query=user_query,
                     )
                     if search_result and not search_result.get("error"):
+                        # 简化搜索结果为 URI 列表（prefetch 只需要 memories）
+                        simplified = [m["uri"] for m in search_result.get("memories", [])]
                         add_tool_call_pair_to_messages(
                             messages=messages,
                             call_id=call_id_seq,
                             tool_name='search',
-                            params={"query": user_query},
-                            result=str(search_result)
+                            params={"query": "[keyword from conversation]"},
+                            result=str(simplified)
                         )
                         call_id_seq += 1
             except Exception as e:
@@ -245,6 +245,7 @@ class MemoryReAct:
     async def run(
         self,
         conversation: str,
+        messages: Optional[List[Message]] = None,
     ) -> Tuple[Optional[MemoryOperations], List[Dict[str, Any]]]:
         """
         Run the simplified ReAct loop for memory updates.
@@ -416,7 +417,6 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         """Get the simplified system prompt."""
         import json
         schema_str = json.dumps(self._json_schema, ensure_ascii=False)
-        allowed_dirs_list = self._get_allowed_directories_list()
 
         return f"""You are a memory extraction agent. Your task is to analyze conversations and update memories.
 
@@ -554,7 +554,7 @@ JSON schema:
             tool_choice=tool_choice,
             max_retries=self.vlm.max_retries,
         )
-        print(f'response={response}')
+        # print(f'response={response}')
         # Log cache hit info
         if hasattr(response, 'usage') and response.usage:
             usage = response.usage
@@ -578,7 +578,7 @@ JSON schema:
         content = response.content or ""
         if content:
             try:
-                print(f'LLM response content: {content}')
+                # print(f'LLM response content: {content}')
                 logger.debug(f"[assistant]\n{content}")
                 # Get the dynamically generated operations model for better type safety
                 operations_model = self.schema_model_generator.create_structured_operations_model()
@@ -606,7 +606,7 @@ JSON schema:
 
                 # Validate that all URIs are allowed
                 self._validate_operations(operations)
-                print(f'Parsed operations: {operations}')
+                # print(f'Parsed operations: {operations}')
                 return (None, operations)
             except Exception as e:
                 print(f'Error parsing operations: {e}')

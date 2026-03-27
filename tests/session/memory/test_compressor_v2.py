@@ -8,8 +8,9 @@ Uses MockVikingFS and real VLM (from config).
 
 import logging
 from types import SimpleNamespace
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 from unittest.mock import patch
+
 import pytest
 
 from openviking.message import Message, TextPart
@@ -290,7 +291,7 @@ class TestCompressorV2:
             def _get_all_memory_schema_dirs(self):
                 return []
 
-            async def run(self, conversation: str):
+            async def run(self, conversation: str, messages: Optional[List[Message]] = None):
                 captured["conversation"] = conversation
                 return (
                     SimpleNamespace(
