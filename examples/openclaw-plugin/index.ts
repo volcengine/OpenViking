@@ -239,7 +239,7 @@ const contextEnginePlugin = {
           text: Type.String({ description: "Information to store as memory source text" }),
           role: Type.Optional(Type.String({ description: "Session role, default user" })),
           sessionId: Type.Optional(Type.String({ description: "Existing OpenViking session ID" })),
-          sessionKey: Type.Optional(Type.String({ description: "OpenClaw sessionKey — uses the persistent 1:1 mapped OV session" })),
+          sessionKey: Type.Optional(Type.String({ description: "OpenClaw sessionKey — uses the persistent mapped OV session" })),
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
           const { text } = params as { text: string };
@@ -589,7 +589,7 @@ const contextEnginePlugin = {
         return contextEngineRef;
       });
       api.logger.info(
-        "openviking: registered context-engine (before_prompt_build=auto-recall, afterTurn=auto-capture, sessionKey=1:1 mapping)",
+        "openviking: registered context-engine (before_prompt_build=auto-recall, afterTurn=auto-capture, sessionKey=stable mapped session)",
       );
     } else {
       api.logger.warn(

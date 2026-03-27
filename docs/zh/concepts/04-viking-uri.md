@@ -120,7 +120,7 @@ viking://
 │       ├── entities/             # 每条独立
 │       └── events/               # 每条独立
 │
-├── agent/
+├── agent/{agent_space}/          # agent_space 由 memory.agent_scope_mode 决定
 │   ├── skills/                   # 技能定义
 │   ├── memories/
 │   │   ├── cases/
@@ -132,6 +132,11 @@ viking://
     ├── tools/
     └── history/
 ```
+
+其中 `agent_space` 的计算方式取决于 `memory.agent_scope_mode`：
+
+- `user+agent`（默认）：`agent_space = md5(f"{user_id}:{agent_id}")[:12]`
+- `agent`：`agent_space = md5(agent_id)[:12]`
 
 ## URI 操作
 

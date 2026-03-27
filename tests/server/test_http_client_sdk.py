@@ -3,6 +3,9 @@
 
 """SDK tests using AsyncHTTPClient against a real uvicorn server."""
 
+import io
+import zipfile
+
 import pytest_asyncio
 
 from openviking_cli.client.http import AsyncHTTPClient
@@ -66,6 +69,29 @@ description: SDK localhost upload test
     result = await client.add_skill(data=str(f), wait=True)
     assert "uri" in result
     assert result["uri"].startswith("viking://agent/skills/")
+
+
+def _build_ovpack_bytes() -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as zf:
+        zf.writestr("pkg/_._meta.json", '{"uri": "viking://resources/pkg"}')
+        zf.writestr("pkg/content.md", "# Demo\n")
+    return buffer.getvalue()
+
+
+async def test_sdk_import_ovpack_from_local_file(http_client):
+    client, _ = http_client
+    f = TEST_TMP_DIR / "sdk_import.ovpack"
+    f.parent.mkdir(parents=True, exist_ok=True)
+    f.write_bytes(_build_ovpack_bytes())
+
+    uri = await client.import_ovpack(
+        str(f),
+        parent="viking://resources/imported/",
+        force=True,
+        vectorize=False,
+    )
+    assert uri.startswith("viking://resources/imported/")
 
 
 async def test_sdk_wait_processed(http_client):

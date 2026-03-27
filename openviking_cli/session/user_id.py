@@ -49,9 +49,24 @@ class UserIdentifier(object):
         """User-level space name."""
         return self._user_id
 
+    def _agent_space_source(self) -> str:
+        """Return the source string used to derive the agent-level space."""
+        scope_mode = "user+agent"
+        try:
+            from openviking_cli.utils.config import get_openviking_config
+
+            scope_mode = get_openviking_config().memory.agent_scope_mode
+        except Exception:
+            # Fall back to the legacy, fully isolated behavior when config is unavailable.
+            scope_mode = "user+agent"
+
+        if scope_mode == "agent":
+            return self._agent_id
+        return f"{self._user_id}:{self._agent_id}"
+
     def agent_space_name(self) -> str:
-        """Agent-level space name (user + agent)."""
-        return hashlib.md5(f"{self._user_id}:{self._agent_id}".encode()).hexdigest()[:12]
+        """Agent-level space name derived from memory.agent_scope_mode."""
+        return hashlib.md5(self._agent_space_source().encode()).hexdigest()[:12]
 
     def memory_space_uri(self) -> str:
         return f"viking://agent/{self.agent_space_name()}/memories"

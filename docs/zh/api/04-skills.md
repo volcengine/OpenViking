@@ -12,9 +12,20 @@
 
 | 参数 | 类型 | 必填 | 默认值 | 说明 |
 |------|------|------|--------|------|
-| data | Any | 是 | - | 技能数据（字典、字符串或路径） |
+| data | Any | 是 | - | 技能数据。裸 HTTP 支持结构化数据或原始 `SKILL.md` 内容，不支持直接传宿主机路径 |
+| temp_file_id | str | 否 | None | `POST /api/v1/resources/temp_upload` 返回的上传 ID，用于裸 HTTP 导入本地文件 |
 | wait | bool | 否 | False | 等待向量化完成 |
 | timeout | float | 否 | None | 超时时间（秒） |
+
+**本地技能文件如何处理**
+
+- Python SDK 和 CLI 可以直接接收本地 `SKILL.md` 文件或目录。处于 HTTP 模式时，它们会先自动上传，再调用服务端 API。
+- 裸 HTTP 调用有三种推荐方式：
+  - 在 `data` 中直接传结构化 skill 数据
+  - 在 `data` 中直接传原始 `SKILL.md` 内容
+  - 先调用 `POST /api/v1/resources/temp_upload` 上传本地 `SKILL.md` 文件，再调用 `POST /api/v1/skills` 并传入 `temp_file_id`
+  - 先把本地 skill 目录打成 `.zip`，上传该压缩包，再调用 `POST /api/v1/skills` 并传入 `temp_file_id`
+- `POST /api/v1/skills` 不接受在 `data` 中直接传宿主机本地路径。
 
 **支持的数据格式**
 
@@ -185,13 +196,24 @@ print(f"Auxiliary files: {result['auxiliary_files']}")
 **HTTP API**
 
 ```bash
+# 第一步：上传本地 SKILL.md 文件
+TEMP_FILE_ID=$(
+  curl -sS -X POST http://localhost:1933/api/v1/resources/temp_upload \
+    -H "X-API-Key: your-key" \
+    -F 'file=@./skills/search-web/SKILL.md' \
+  | jq -r '.result.temp_file_id'
+)
+
+# 第二步：添加上传后的技能文件
 curl -X POST http://localhost:1933/api/v1/skills \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
-  -d '{
-    "data": "./skills/search-web/SKILL.md"
-  }'
+  -d "{
+    \"temp_file_id\": \"$TEMP_FILE_ID\"
+  }"
 ```
+
+如果是本地 skill 目录，先把目录打成 `.zip`，上传该压缩包，再用返回的 `temp_file_id` 调用同一个 `POST /api/v1/skills` 请求即可。
 
 ---
 

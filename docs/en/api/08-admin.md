@@ -443,6 +443,7 @@ curl -X DELETE http://localhost:1933/api/v1/admin/accounts/acme \
 
 ## Related Documentation
 
+- [Multi-Tenant](../concepts/11-multi-tenant.md) - Tenant model, roles, and sharing boundaries
 - [API Overview](01-overview.md) - Authentication and response format
 - [Sessions](05-sessions.md) - Session management
 - [System](07-system.md) - System and monitoring API

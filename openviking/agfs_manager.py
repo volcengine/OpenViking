@@ -166,19 +166,22 @@ class AGFSManager:
             # AGFS S3 backend configuration (s3fs plugin)
             # This enables AGFS to mount an S3 bucket as a local filesystem.
             # Implementation details: third_party/agfs/agfs-server/pkg/plugins/s3fs/s3fs.go
+            s3_plugin_config = {
+                "bucket": self.s3_config.bucket,
+                "region": self.s3_config.region,
+                "access_key_id": self.s3_config.access_key,
+                "secret_access_key": self.s3_config.secret_key,
+                "endpoint": self.s3_config.endpoint,
+                "prefix": self.s3_config.prefix,
+                "disable_ssl": not self.s3_config.use_ssl,
+                "use_path_style": self.s3_config.use_path_style,
+                "directory_marker_mode": self.s3_config.directory_marker_mode.value,
+            }
+
             config["plugins"]["s3fs"] = {
                 "enabled": True,
                 "path": "/local",
-                "config": {
-                    "bucket": self.s3_config.bucket,
-                    "region": self.s3_config.region,
-                    "access_key_id": self.s3_config.access_key,
-                    "secret_access_key": self.s3_config.secret_key,
-                    "endpoint": self.s3_config.endpoint,
-                    "prefix": self.s3_config.prefix,
-                    "disable_ssl": not self.s3_config.use_ssl,
-                    "use_path_style": self.s3_config.use_path_style,
-                },
+                "config": s3_plugin_config,
             }
         elif self.backend == "memory":
             config["plugins"]["memfs"] = {

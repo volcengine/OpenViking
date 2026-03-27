@@ -73,6 +73,8 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 {
   "url": "http://localhost:1933",
   "api_key": "your-key",
+  "account": "acme",
+  "user": "alice",
   "agent_id": "my-agent"
 }
 ```
@@ -81,10 +83,20 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 |-------|-------------|---------|
 | `url` | Server address | (required) |
 | `api_key` | API key | `null` (no auth) |
+| `account` | Default account header for tenant-scoped requests | `null` |
+| `user` | Default user header for tenant-scoped requests | `null` |
+| `agent_id` | Agent identifier header | `null` |
 | `timeout` | HTTP request timeout in seconds | `60.0` |
 | `output` | Default output format: `"table"` or `"json"` | `"table"` |
 
 See the [Configuration Guide](../guides/01-configuration.md#ovcliconf) for details.
+
+**Local files in HTTP mode**
+
+- CLI, `SyncHTTPClient`, and `AsyncHTTPClient` automatically upload local files and directories before calling the server API.
+- Raw HTTP callers do not get this convenience layer. When using `curl` or another HTTP client, upload the file with `POST /api/v1/resources/temp_upload` first, then call the target API with the returned `temp_file_id`.
+- For local directories in raw HTTP mode, zip the directory first and upload the `.zip` file; the server does not accept direct host directory paths.
+- `POST /api/v1/resources` accepts remote URLs directly, but does not accept direct host filesystem paths such as `./doc.md` or `/tmp/doc.md`.
 
 ### Direct HTTP (curl)
 
