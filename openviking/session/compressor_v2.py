@@ -53,10 +53,6 @@ class SessionCompressorV2:
             else:
                 logger.warning(f"Custom templates directory not found: {custom_dir}")
 
-        # Lazy initialize MemoryReAct - we need vlm and ctx
-        self._react_orchestrator: Optional[MemoryReAct] = None
-        self._memory_updater: Optional[MemoryUpdater] = None
-
     def _get_or_create_react(self, ctx: Optional[RequestContext] = None) -> MemoryReAct:
         """Create new MemoryReAct instance with current ctx.
 
@@ -75,18 +71,15 @@ class SessionCompressorV2:
         )
 
     def _get_or_create_updater(self, transaction_handle=None) -> MemoryUpdater:
-        """Get or create MemoryUpdater instance."""
-        if self._memory_updater is not None:
-            # 更新现有实例的 transaction_handle
-            self._memory_updater._transaction_handle = transaction_handle
-            return self._memory_updater
+        """Create new MemoryUpdater instance for each request.
 
-        self._memory_updater = MemoryUpdater(
+        Always create new instance to avoid cross-request state pollution.
+        """
+        return MemoryUpdater(
             registry=self._registry,
             vikingdb=self.vikingdb,
             transaction_handle=transaction_handle
         )
-        return self._memory_updater
 
     async def extract_long_term_memories(
         self,
@@ -115,7 +108,7 @@ class SessionCompressorV2:
             conversation_sections.append(f"## Previous Archive Overview\n{latest_archive_overview}")
 
         conversation_sections.append(
-            "\n".join([f"[{msg.role}]: {msg.content}" for msg in messages])
+            "\n".join([f"[{idx}][{msg.role}]: {msg.content}" for idx, msg in enumerate(messages)])
         )
         conversation_str = "\n\n".join(section for section in conversation_sections if section)
 

@@ -28,13 +28,15 @@ fields:
   - name: start_index
     type: int64
     description: |
-      Start index in original messages where this event occurred.
+      Start index in original messages where this event occurred (turn-level index).
+      Messages are numbered from 0 to N-1, where each number corresponds to a full conversation turn.
       Indicates the position of the first message related to this event.
     merge_op: immutable
 
   - name: end_index
     type: int64
     description: |
-      End index in original messages where this event occurred.
+      End index in original messages where this event occurred (turn-level index).
+      Messages are numbered from 0 to N-1, where each number corresponds to a full conversation turn.
       Indicates the position of the last message related to this event.
     merge_op: immutable
