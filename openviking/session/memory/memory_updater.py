@@ -271,10 +271,11 @@ class MemoryUpdater:
         """
         try:
             # 导入 Jinja2（延迟导入以避免循环依赖）
+            import jinja2
             from jinja2 import Environment
 
-            # 创建 Jinja2 环境
-            env = Environment(autoescape=False)
+            # 创建 Jinja2 环境，undefined 变量渲染为空字符串而非报错
+            env = Environment(autoescape=False, undefined=jinja2.Undefined)
 
             # 创建模板变量
             template_vars = fields.copy()
@@ -288,22 +289,35 @@ class MemoryUpdater:
             logger.error(f"Template rendering failed: {e}")
             raise
 
+    def _is_patch_format(self, content: Any) -> bool:
+        """Check if content is a patch format (StrPatch), not a complete replacement."""
+        from openviking.session.memory.merge_op.patch import StrPatch
+        return isinstance(content, StrPatch)
+
     async def _apply_edit(self, flat_model: Any, uri: str, ctx: RequestContext) -> None:
         """Apply edit operation from a flat model."""
         viking_fs = self._get_viking_fs()
+
+        # Convert flat model to dict first (needed for checking content type)
+        model_dict = flat_model_to_dict(flat_model)
 
         # Read current memory
         try:
             current_full_content = await viking_fs.read_file(uri, ctx=ctx) or ""
         except NotFoundError:
+            # If memory doesn't exist, check if any field is a StrPatch
+            # If no StrPatch fields, treat as write operation
+            has_str_patch = any(self._is_patch_format(v) for v in model_dict.values())
+            if not has_str_patch:
+                logger.debug(f"Memory not found for edit, treating as write: {uri}")
+                await self._apply_write(flat_model, uri, ctx)
+                return
+            # Has StrPatch field but file doesn't exist - cannot apply
             logger.warning(f"Memory not found for edit: {uri}")
             return
 
         # Deserialize content and metadata
         current_plain_content, current_metadata = deserialize_full(current_full_content)
-
-        # Convert flat model to dict
-        model_dict = flat_model_to_dict(flat_model)
 
         # Get memory type schema
         memory_type_str = model_dict.get("memory_type") or current_metadata.get("memory_type")

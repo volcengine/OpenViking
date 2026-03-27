@@ -157,3 +157,30 @@ def deserialize_full(full_content: str) -> Tuple[str, Optional[Dict[str, Any]]]:
     content = deserialize_content(full_content)
     metadata = deserialize_metadata(full_content)
     return content, metadata
+
+
+# 默认截断配置
+DEFAULT_TRUNCATE_MAX_CHARS = 1000
+
+
+def truncate_content(content: str, max_chars: int = DEFAULT_TRUNCATE_MAX_CHARS) -> str:
+    """
+    Truncate content to max_chars while keeping complete lines.
+
+    Args:
+        content: Content to truncate
+        max_chars: Maximum number of characters to keep (default: 1000)
+
+    Returns:
+        Truncated content with truncation note appended
+    """
+    if len(content) <= max_chars:
+        return content
+
+    # 从 max_chars 位置向前找最近的换行符，保持完整行
+    truncated = content[:max_chars]
+    last_newline = truncated.rfind('\n')
+    if last_newline > 0:
+        truncated = truncated[:last_newline]
+
+    return truncated + f"\n... [truncated {len(content) - len(truncated)} chars]"

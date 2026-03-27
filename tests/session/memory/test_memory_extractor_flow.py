@@ -535,7 +535,7 @@ class TestMemoryExtractorFlow:
 
         # Actually run the orchestrator with real LLM calls!
         operations, tools_used = await orchestrator.run(
-            conversation=conversation_str,
+            messages=messages,
         )
 
         # Verify results
@@ -627,7 +627,7 @@ class TestMemoryExtractorFlow:
 
         # Actually run the orchestrator with real LLM calls!
         operations, tools_used = await orchestrator.run(
-            conversation=conversation_str,
+            messages=messages,
         )
 
         # Verify results

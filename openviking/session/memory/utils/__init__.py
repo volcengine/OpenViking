@@ -9,6 +9,7 @@ from openviking.session.memory.utils.content import (
     deserialize_full,
     deserialize_metadata,
     serialize_with_metadata,
+    truncate_content,
 )
 from openviking.session.memory.utils.language import (
     detect_language_from_conversation,
@@ -52,6 +53,7 @@ __all__ = [
     "deserialize_content",
     "deserialize_metadata",
     "deserialize_full",
+    "truncate_content",
     # Language
     "detect_language_from_conversation",
     # Messages

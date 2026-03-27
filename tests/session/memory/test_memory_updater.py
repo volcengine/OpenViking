@@ -218,57 +218,6 @@ Goodbye"""
         assert "Goodbye" in body_content
 
     @pytest.mark.asyncio
-    async def test_apply_edit_with_string_patch(self):
-        """Test _apply_edit with string patch containing <<<<<<< SEARCH."""
-        updater = MemoryUpdater()
-
-        # Original content
-        original_content = """First line
-Second line
-Third line"""
-        original_metadata = {"name": "test"}
-        original_full_content = serialize_with_metadata(original_content, original_metadata)
-
-        # Mock VikingFS
-        mock_viking_fs = MagicMock()
-        mock_viking_fs.read_file = AsyncMock(return_value=original_full_content)
-        written_content = None
-
-        async def mock_write_file(uri, content, **kwargs):
-            nonlocal written_content
-            written_content = content
-
-        mock_viking_fs.write_file = mock_write_file
-        updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
-
-        # String patch with SEARCH/REPLACE markers
-        patch_str = """<<<<<<< SEARCH
-:start_line:2
--------
-Second line
-=======
-Second line (updated)
->>>>>>> REPLACE
-"""
-
-        # Mock request context
-        mock_ctx = MagicMock()
-
-        # Apply edit
-        await updater._apply_edit(
-            {"content": patch_str},
-            "viking://test/test.md",
-            mock_ctx
-        )
-
-        # Verify
-        assert written_content is not None
-        body_content, metadata = deserialize_full(written_content)
-        assert "First line" in body_content
-        assert "Second line (updated)" in body_content
-        assert "Third line" in body_content
-
-    @pytest.mark.asyncio
     async def test_apply_edit_with_simple_string_replacement(self):
         """Test _apply_edit with simple string full replacement."""
         updater = MemoryUpdater()

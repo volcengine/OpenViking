@@ -199,10 +199,8 @@ class MemoryReAct:
         Returns:
             Pre-fetched context with directories, summaries, and search_results
         """
-        import uuid
-
         from openviking.session.memory.tools import get_tool
-        messages = []
+        pre_fetch_messages = []
 
         # Step 1: Separate schemas into multi-file (ls) and single-file (direct read)
         ls_dirs = set()  # directories to ls (for multi-file schemas)
@@ -261,7 +259,7 @@ class MemoryReAct:
             try:
                 result_str = await read_tool.execute(self.viking_fs, tool_ctx, uri=overview_uri)
                 add_tool_call_pair_to_messages(
-                    messages=messages,
+                    messages=pre_fetch_messages,
                     call_id=call_id_seq,
                     tool_name='read',
                     params={
@@ -279,7 +277,7 @@ class MemoryReAct:
                 try:
                     result_str = await ls_tool.execute(self.viking_fs, tool_ctx, uri=dir_uri)
                     add_tool_call_pair_to_messages(
-                        messages=messages,
+                        messages=pre_fetch_messages,
                         call_id=call_id_seq,
                         tool_name='ls',
                         params={
@@ -296,7 +294,7 @@ class MemoryReAct:
             try:
                 result_str = await read_tool.execute(self.viking_fs, tool_ctx, uri=file_uri)
                 add_tool_call_pair_to_messages(
-                    messages=messages,
+                    messages=pre_fetch_messages,
                     call_id=call_id_seq,
                     tool_name='read',
                     params={
@@ -331,65 +329,51 @@ class MemoryReAct:
 
             if has_non_add_only_schemas:
                 try:
-                    # 添加唯一调用ID用于追踪
-                    import uuid
-                    call_id_str = str(uuid.uuid4())[:8]
-                    logger.info(f"  [SEARCH_CALL_ID={call_id_str}] Starting search (track this ID to find duplicates)")
-
-                    # Extract only user messages from messages (List[Message])
+                    # Extract only user messages from messages (List[Dict])
                     user_messages = []
-                    logger.info(f"  [SEARCH_CALL_ID={call_id_str}] Total messages in prefetch: {len(messages)}")
-                    for idx, msg in enumerate(messages):
-                        msg_role = getattr(msg, 'role', None)
-                        logger.info(f"    msg[{idx}] role={msg_role}, type={type(msg).__name__}")
-                        if msg_role == 'user':
+                    for msg in messages:
+                        if msg.role == "user":
                             user_messages.append(msg.content)
-                            logger.info(f"      -> Added user content: {msg.content[:50]}...")
                     user_query = " ".join(user_messages)
-                    logger.info(f"  [SEARCH_CALL_ID={call_id_str}] Extracted user query: '{user_query}'")
 
-                    # 执行搜索并记录结果（无论成功/失败/无结果都记录）
+                    # 执行搜索
                     search_result = None
                     search_error = None
                     try:
-                        logger.info(f"  [SEARCH_CALL_ID={call_id_str}] Executing search with query: '{user_query}'")
                         search_result = await search_tool.execute(
                             viking_fs=self.viking_fs,
                             ctx=tool_ctx,
                             query=user_query or "",
                         )
-                        logger.info(f"  [SEARCH_CALL_ID={call_id_str}] Raw search result: {search_result}")
                     except Exception as e:
                         search_error = str(e)
-                        logger.warning(f"  [SEARCH_CALL_ID={call_id_str}] Search execution failed: {e}")
+                        logger.warning(f"Search execution failed: {e}")
 
                     # 根据搜索结果确定记录内容
                     if search_error:
                         result_value = f"Error: {search_error}"
-                    elif search_result and not search_result.get("error"):
-                        result_value = [m["uri"] for m in search_result.get("memories", [])]
-                        logger.info(f"  [SEARCH_CALL_ID={call_id_str}] Simplified search results: {result_value}")
+                    elif isinstance(search_result, list):
+                        result_value = [m.get("uri", "") for m in search_result]
+                    elif isinstance(search_result, dict):
+                        if "error" in search_result:
+                            result_value = f"Error: {search_result.get('error')}"
+                        else:
+                            result_value = [m.get("uri", "") for m in search_result.get("memories", [])]
                     else:
                         result_value = []
 
                     add_tool_call_pair_to_messages(
-                        messages=messages,
+                        messages=pre_fetch_messages,
                         call_id=call_id_seq,
                         tool_name='search',
-                        params={"query": user_query or ""},
+                        params={"query": "[Keywords from Conversation]"},
                         result=result_value
                     )
                     call_id_seq += 1
                 except Exception as e:
-                    logger.exception("Search exception details:")
+                    logger.warning(f"Pre-fetch search failed: {e}")
 
-        # Count tool calls by type for debugging
-        tool_call_counts = {}
-        for msg in messages:
-            if msg.get("role") == "tool_call":
-                tool_name = msg.get("name", "unknown")
-                tool_call_counts[tool_name] = tool_call_counts.get(tool_name, 0) + 1
-        return messages
+        return pre_fetch_messages
 
 
     async def run(
@@ -433,7 +417,7 @@ class MemoryReAct:
 
         while iteration < max_iterations:
             iteration += 1
-            logger.debug(f"ReAct iteration {iteration}/{max_iterations}")
+            logger.info(f"ReAct iteration {iteration}/{max_iterations}")
 
             # Check if this is the last iteration - force final result
             is_last_iteration = iteration >= max_iterations
@@ -447,7 +431,6 @@ class MemoryReAct:
 
             # Call LLM with tools - model decides: tool calls OR final operations
             tool_calls, operations = await self._call_llm(messages, force_final=is_last_iteration)
-
             # If model returned final operations, check if refetch is needed
             if operations is not None:
                 # Check if any write_uris target existing files that weren't read

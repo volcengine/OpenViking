@@ -102,51 +102,6 @@ class SessionCompressorV2:
             logger.warning("No RequestContext provided, skipping memory extraction")
             return []
 
-        # Provide the latest completed archive overview as non-actionable history context.
-        conversation_sections: List[str] = []
-        if latest_archive_overview:
-            conversation_sections.append(f"## Previous Archive Overview\n{latest_archive_overview}")
-
-        # Format messages including tool calls (if any)
-        def format_message_with_parts(msg: Message) -> str:
-            """Format message with text and tool parts."""
-            import json
-            from openviking.message.part import ToolPart
-
-            parts = getattr(msg, "parts", [])
-            # Check if there are any tool parts
-            has_tool_parts = any(isinstance(p, ToolPart) for p in parts)
-
-            if not has_tool_parts:
-                # No tool parts, use simple content
-                return msg.content
-
-            # Has tool parts, format with them (tool calls first, then text)
-            tool_lines = []
-            text_lines = []
-            for part in parts:
-                if hasattr(part, "text") and part.text:
-                    text_lines.append(part.text)
-                elif isinstance(part, ToolPart):
-                    tool_info = {
-                        "type": "tool_call",
-                        "tool_name": part.tool_name,
-                        "tool_input": part.tool_input,
-                        "tool_status": part.tool_status,
-                    }
-                    if part.skill_uri:
-                        tool_info["skill_name"] = part.skill_uri.rstrip("/").split("/")[-1]
-                    tool_lines.append(f"[ToolCall] {json.dumps(tool_info, ensure_ascii=False)}")
-
-            # Combine: tool calls first, then text
-            all_lines = tool_lines + text_lines
-            return "\n".join(all_lines) if all_lines else msg.content
-
-        conversation_sections.append(
-            "\n".join([f"[{idx}][{msg.role}]: {format_message_with_parts(msg)}" for idx, msg in enumerate(messages)])
-        )
-        conversation_str = "\n\n".join(section for section in conversation_sections if section)
-
         logger.info("Starting v2 memory extraction from conversation")
 
         # Initialize telemetry to 0 (matching v1 pattern)
@@ -197,7 +152,7 @@ class SessionCompressorV2:
             updater = self._get_or_create_updater(transaction_handle)
 
             # Run ReAct orchestrator
-            operations, tools_used = await orchestrator.run(conversation=conversation_str, messages=messages)
+            operations, tools_used = await orchestrator.run(messages=messages, latest_archive_overview=latest_archive_overview)
 
             if operations is None:
                 logger.info("No memory operations generated")

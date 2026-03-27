@@ -40,8 +40,6 @@ from openviking.session.memory.tools import (
     MemoryTool,
     add_tool_call_items_to_messages,
     add_tool_call_pair_to_messages,
-    create_tool_call_message,
-    create_tool_result_message,
     get_tool,
     get_tool_schemas,
     list_tools,
@@ -79,8 +77,6 @@ __all__ = [
     "get_tool",
     "list_tools",
     "get_tool_schemas",
-    "create_tool_call_message",
-    "create_tool_result_message",
     "add_tool_call_pair_to_messages",
     "add_tool_call_items_to_messages",
     # Language utilities and helpers
