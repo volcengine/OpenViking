@@ -9,21 +9,21 @@ directory: "viking://agent/{agent_space}/memories/tools"
 filename_template: "{tool_name}.md"
 enabled: true
 content_template: |
-  Tool: {tool_name}
+  Tool: {{ tool_name }}
 
   Static Description:
-  "{static_desc}"
+  "{{ static_desc }}"
 
   Tool Memory Context:
-  Based on {total_calls} historical calls:
-  - Success rate: {success_rate}% ({success_count} successful, {fail_count} failed)
-  - Avg time: {total_time_ms/total_calls}, Avg tokens: {total_tokens/total_calls}
-  - Best for: {best_for}
-  - Optimal params: {optimal_params}
-  - Common failures: {common_failures}
-  - Recommendation: {recommendation}
+  Based on {{ total_calls }} historical calls:
+  - Success rate: {{ success_rate }}% ({{ success_count }} successful, {{ fail_count }} failed)
+  - Avg time: {{ total_time_ms/total_calls }}, Avg tokens: {{ total_tokens/total_calls }}
+  - Best for: {{ best_for }}
+  - Optimal params: {{ optimal_params }}
+  - Common failures: {{ common_failures }}
+  - Recommendation: {{ recommendation }}
 
-  {guidelines}
+  {{ guidelines }}
 
 fields:
   - name: tool_name

@@ -9,18 +9,18 @@ directory: "viking://agent/{agent_space}/memories/skills"
 filename_template: "{skill_name}.md"
 
 content_template: |
-  Skill: {skill_name}
+  Skill: {{ skill_name }}
 
   Skill Memory Context:
-  Based on {total_executions} historical executions:
-  - Success rate: {success_rate}% ({success_count} successful, {fail_count} failed)
-  - Best for: {best_for}
-  - Recommended flow: {recommended_flow}
-  - Key dependencies: {key_dependencies}
-  - Common failures: {common_failures}
-  - Recommendation: {recommendation}
+  Based on {{ total_executions }} historical executions:
+  - Success rate: {{ success_rate }}% ({{ success_count }} successful, {{ fail_count }} failed)
+  - Best for: {{ best_for }}
+  - Recommended flow: {{ recommended_flow }}
+  - Key dependencies: {{ key_dependencies }}
+  - Common failures: {{ common_failures }}
+  - Recommendation: {{ recommendation }}
 
-  {guidelines}
+  {{ guidelines }}
 
 enabled: true
 fields:
