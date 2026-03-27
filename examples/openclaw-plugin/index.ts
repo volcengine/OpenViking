@@ -9,6 +9,7 @@ import type { FindResultItem, PendingClientEntry } from "./client.js";
 import {
   isTranscriptLikeIngest,
   extractLatestUserText,
+  sanitizeUserTextForCapture,
 } from "./text-utils.js";
 import {
   clampScore,
@@ -243,6 +244,13 @@ const contextEnginePlugin = {
         }),
         async execute(_toolCallId: string, params: Record<string, unknown>) {
           const { text } = params as { text: string };
+          const sanitizedText = sanitizeUserTextForCapture(text);
+          if (!sanitizedText) {
+            return {
+              content: [{ type: "text", text: "Nothing to store after sanitizing input (metadata-only content was stripped)." }],
+              details: { action: "rejected", reason: "empty_after_sanitize" },
+            };
+          }
           const role =
             typeof (params as { role?: string }).role === "string"
               ? (params as { role: string }).role
@@ -251,7 +259,7 @@ const contextEnginePlugin = {
           const sessionKeyIn = (params as { sessionKey?: string }).sessionKey;
 
           api.logger.info?.(
-            `openviking: memory_store invoked (textLength=${text?.length ?? 0}, sessionId=${sessionIdIn ?? "auto"}, sessionKey=${sessionKeyIn ?? "none"})`,
+            `openviking: memory_store invoked (textLength=${sanitizedText.length}, sessionId=${sessionIdIn ?? "auto"}, sessionKey=${sessionKeyIn ?? "none"})`,
           );
 
           let sessionId = sessionIdIn;
@@ -269,7 +277,7 @@ const contextEnginePlugin = {
                 details: { action: "rejected", reason: "missing_session_identifier" },
               };
             }
-            await c.addSessionMessage(sessionId, role, text, storeAgentId);
+            await c.addSessionMessage(sessionId, role, sanitizedText, storeAgentId);
             const commitResult = await c.commitSession(sessionId, { wait: true, agentId: storeAgentId });
             const memoriesCount = commitResult.memories_extracted ?? 0;
             if (memoriesCount === 0) {
