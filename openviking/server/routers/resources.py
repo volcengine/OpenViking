@@ -30,8 +30,10 @@ class AddResourceRequest(BaseModel):
     """Request model for add_resource.
 
     Attributes:
-        path: Resource path (local file path or URL). Either path or temp_file_id must be provided.
-        temp_file_id: Temporary upload id for uploaded files. Either path or temp_file_id must be provided.
+        path: Remote resource source such as an HTTP(S) URL or repository URL.
+            Either path or temp_file_id must be provided.
+        temp_file_id: Temporary upload id returned by /api/v1/resources/temp_upload.
+            Either path or temp_file_id must be provided.
         to: Target URI for the resource (e.g., "viking://resources/my_resource").
             If not specified, an auto-generated URI will be used.
         parent: Parent URI under which the resource will be stored.
@@ -88,7 +90,15 @@ class AddResourceRequest(BaseModel):
 
 
 class AddSkillRequest(BaseModel):
-    """Request model for add_skill."""
+    """Request model for add_skill.
+
+    Attributes:
+        data: Inline skill content or structured skill data. HTTP requests do not treat
+            string values as host filesystem paths.
+        temp_file_id: Temporary upload id returned by /api/v1/resources/temp_upload.
+        wait: Whether to wait for skill processing to complete.
+        timeout: Timeout in seconds when wait=True.
+    """
 
     model_config = ConfigDict(extra="forbid")
 

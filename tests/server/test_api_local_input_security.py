@@ -101,7 +101,7 @@ async def test_import_ovpack_accepts_temp_uploaded_file(
     assert body["result"]["uri"].startswith("viking://resources/imported/")
 
 
-async def test_import_ovpack_rejects_direct_file_path(client: httpx.AsyncClient):
+async def test_import_ovpack_rejects_direct_file_path_field(client: httpx.AsyncClient):
     resp = await client.post(
         "/api/v1/pack/import",
         json={
@@ -110,10 +110,7 @@ async def test_import_ovpack_rejects_direct_file_path(client: httpx.AsyncClient)
             "vectorize": False,
         },
     )
-    assert resp.status_code == 403
-    body = resp.json()
-    assert body["status"] == "error"
-    assert body["error"]["code"] == "PERMISSION_DENIED"
+    assert resp.status_code == 422
 
 
 async def test_import_ovpack_rejects_legacy_temp_path_field(client: httpx.AsyncClient):
