@@ -18,6 +18,7 @@ from openviking.session.memory.merge_op.base import FieldType, SearchReplaceBloc
 from openviking.session.memory.utils import (
     deserialize_full,
     flat_model_to_dict,
+    parse_memory_file_with_fields,
     resolve_all_operations,
     serialize_with_metadata,
 )
@@ -33,23 +34,58 @@ class ExtractContext:
     def __init__(self, messages: List[Message]):
         self.messages = messages
 
-    def read_messages(self, start_index: int, end_index: int):
-        """Read messages from start_index to end_index (inclusive)."""
-        if start_index < 0 or end_index >= len(self.messages):
+    def read_message_ranges(self, ranges_str: str) -> "MessageRange":
+        """Parse ranges string like "0-10,50-60" and return combined MessageRange.
+
+        If there's a gap between ranges (e.g., 0-10 and 50-60), add "..." as separator.
+        """
+        if not ranges_str:
             return MessageRange([])
-        return MessageRange(self.messages[start_index:end_index+1])
+
+        # 解析所有范围
+        ranges = []
+        for part in ranges_str.split(','):
+            part = part.strip()
+            if '-' in part:
+                start, end = part.split('-')
+                ranges.append((int(start), int(end)))
+
+        if not ranges:
+            return MessageRange([])
+
+        # 按 start 排序
+        ranges.sort(key=lambda x: x[0])
+
+        # elements 可以是 Message 或 str ("...")
+        elements: List[Message | str] = []
+        for i, (start, end) in enumerate(ranges):
+            if start < 0 or end >= len(self.messages):
+                continue
+            range_msgs = self.messages[start:end + 1]
+
+            if i > 0:
+                prev_end = ranges[i - 1][1]
+                # 如果有间隔，加 ...
+                if start > prev_end + 1:
+                    elements.append("...")
+            elements.extend(range_msgs)
+
+        return MessageRange(elements)
 
 
 class MessageRange:
     """Represents a range of messages for formatting."""
-    def __init__(self, messages: List[Message]):
-        self.messages = messages
+    def __init__(self, elements: List[Message | str]):
+        self.elements = elements
 
     def pretty_print(self) -> str:
         """Pretty print the message range."""
         result = []
-        for msg in self.messages:
-            result.append(f"[{msg.role}]: {msg.content}")
+        for elem in self.elements:
+            if isinstance(elem, str):
+                result.append(elem)
+            else:
+                result.append(f"[{elem.role}]: {elem.content}")
         return "\n".join(result)
 
 
@@ -171,7 +207,9 @@ class MemoryUpdater:
                 await self._apply_write(op, uri, ctx, extract_context=extract_context)
                 result.add_written(uri)
             except Exception as e:
-                logger.error(f"Failed to write memory: {e}")
+                logger.info(f"Failed to write memory: {e}, op={op}, op type={type(op)}")
+                if hasattr(op, 'model_dump'):
+                    logger.info(f"Op dump: {op.model_dump()}")
                 result.add_error(uri, e)
 
         # Apply edit operations
@@ -417,8 +455,11 @@ class MemoryUpdater:
             logger.debug("No overview value provided, skipping edit")
             return
         elif isinstance(overview_value, str):
-            # Direct string - replace
-            new_overview = overview_value
+            # 空字符串保持原值
+            if overview_value == "":
+                new_overview = current_overview
+            else:
+                new_overview = overview_value
         elif isinstance(overview_value, dict):
             # Dict format - convert to StrPatch if needed
             if 'blocks' in overview_value:
@@ -449,7 +490,12 @@ class MemoryUpdater:
 
     def _extract_abstract_from_overview(self, overview_content: str) -> str:
         """Extract abstract from overview.md - same logic as SemanticProcessor."""
-        lines = overview_content.split("\n")
+        # Use parse_memory_file_with_fields to strip MEMORY_FIELDS comment
+        parsed = parse_memory_file_with_fields(overview_content)
+        content = parsed.get("content", "")
+
+        # Then extract abstract from the cleaned content
+        lines = content.split("\n")
 
         # Skip header lines (starting with #)
         content_lines = []
@@ -560,7 +606,7 @@ class MemoryUpdater:
                 content = await viking_fs.read_file(uri, ctx=ctx) or ""
 
                 # Extract abstract (first 200 chars or first paragraph)
-                abstract = content[:200].split("\n\n")[0] if content else ""
+                abstract = content if content else ""
 
                 # Get parent URI
                 from openviking_cli.utils.uri import VikingURI

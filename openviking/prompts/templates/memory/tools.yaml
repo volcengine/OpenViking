@@ -13,8 +13,7 @@ content_template: |
 
   Static Description:
   "{{ static_desc|default('N/A') }}"
-
-  Tool Memory Context:
+  
   Based on {{ call_count|default(0) }} historical calls.
   - Success count: {{ success_time|default(0) }}
   - Failed count: {{ (call_count|default(0) - success_time|default(0)) if call_count|default(0) > 0 else 0 }}

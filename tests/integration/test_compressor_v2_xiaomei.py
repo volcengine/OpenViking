@@ -196,6 +196,7 @@ def run_verify(client: ov.SyncHTTPClient):
             if hasattr(results, "memories") and results.memories:
                 for m in results.memories:
                     text = getattr(m, "content", "") or getattr(m, "text", "") or str(m)
+                    print(f"  [DEBUG] memory text: {repr(text)}")
                     recall_texts.append(text)
                     uri = getattr(m, "uri", "")
                     score = getattr(m, "score", 0)
@@ -206,6 +207,7 @@ def run_verify(client: ov.SyncHTTPClient):
             if hasattr(results, "resources") and results.resources:
                 for r in results.resources:
                     text = getattr(r, "content", "") or getattr(r, "text", "") or str(r)
+                    print(f"  [DEBUG] resource text: {repr(text)}")
                     recall_texts.append(text)
                     console.print(
                         f"    [blue]Resource:[/blue] {r.uri} (score: {r.score:.4f})"

@@ -14,7 +14,7 @@ operation_mode: "add_only"
 content_template: |
   time: {{event_time|default('N/A')}}
   {% if extract_context %}
-  {{ extract_context.read_messages(start_index|default(0), end_index|default(0)).pretty_print() }}
+  {{ extract_context.read_message_ranges(ranges|default('')).pretty_print() }}
   {% endif %}
 
 
@@ -31,18 +31,9 @@ fields:
       Time when the event occurred, format “2026-03-17” / “2026-03” / “2026”. If unknown, use current time.
     merge_op: immutable
 
-  - name: start_index
-    type: int64
+  - name: ranges
+    type: string
     description: |
-      Start index in original messages where this event occurred (turn-level index).
-      Messages are numbered from 0 to N-1, where each number corresponds to a full conversation turn.
-      Indicates the position of the first message related to this event.
-    merge_op: immutable
-
-  - name: end_index
-    type: int64
-    description: |
-      End index in original messages where this event occurred (turn-level index).
-      Messages are numbered from 0 to N-1, where each number corresponds to a full conversation turn.
-      Indicates the position of the last message related to this event.
+      Conversation message index ranges to extract, format: "start-end,start-end,..."
+      Example: "0-10,50-60" means extract messages 0-10 and 50-60.
     merge_op: immutable

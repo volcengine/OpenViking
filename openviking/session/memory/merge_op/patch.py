@@ -79,4 +79,7 @@ class PatchOp(MergeOpBase):
                 return str(patch_value) if patch_value is not None else ""
 
         # Case 3: Simple full replacement
-        return patch_value if patch_value is not None else ""
+        # 空字符串和 None 都保持原值
+        if patch_value is None or patch_value == "":
+            return current_value
+        return patch_value

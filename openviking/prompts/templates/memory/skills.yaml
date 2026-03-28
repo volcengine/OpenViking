@@ -11,7 +11,6 @@ filename_template: "{skill_name}.md"
 content_template: |
   Skill: {{ skill_name }}
 
-  Skill Memory Context:
   Based on {{ total_executions|default(0) }} historical executions.
   - Success count: {{ success_count|default(0) }}
   - Failed count: {{ fail_count|default(0) }}
