@@ -10,6 +10,9 @@ import {
 } from "./memory-ranking.js";
 import { sanitizeToolUseResultPairing } from "./session-transcript-repair.js";
 
+
+// Simple in-memory lock to prevent concurrent commits
+const commitLocks = new Set<string>();
 type AgentMessage = {
   role?: string;
   content?: unknown;
@@ -572,6 +575,17 @@ export function createMemoryOpenVikingContextEngine(params: {
       }
 
       const OVSessionId = afterTurnParams.sessionId;
+      
+      // Skip if a commit is already in progress for this session
+      if (commitLocks.has(OVSessionId)) {
+        logger.info(`openviking: afterTurn skipped (commit in progress for ${OVSessionId})`);
+        diag("afterTurn_skip", OVSessionId, {
+          reason: "commit_lock_contention",
+        });
+        return;
+      }
+      commitLocks.add(OVSessionId);
+
       try {
         const agentId = resolveAgentId(OVSessionId);
 
@@ -673,6 +687,8 @@ export function createMemoryOpenVikingContextEngine(params: {
         diag("afterTurn_error", OVSessionId, {
           error: String(err),
         });
+      } finally {
+        commitLocks.delete(OVSessionId);
       }
     },
 
