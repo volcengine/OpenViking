@@ -22,6 +22,7 @@ from openviking.models.retry import is_transient_error, transient_retry, transie
 # Helper fake HTTP error with status_code attribute
 # ---------------------------------------------------------------------------
 
+
 class _HttpError(Exception):
     """Fake HTTP error carrying a numeric status code for testing."""
 
@@ -65,14 +66,20 @@ _PERMANENT_CASES = [
     pytest.param(ValueError("bad value"), False, id="ValueError"),
     pytest.param(TypeError("wrong type"), False, id="TypeError"),
     # String-pattern permanent errors
-    pytest.param(Exception("InvalidRequestError: field missing"), False, id="str_InvalidRequestError"),
-    pytest.param(Exception("AuthenticationError: invalid key"), False, id="str_AuthenticationError"),
+    pytest.param(
+        Exception("InvalidRequestError: field missing"), False, id="str_InvalidRequestError"
+    ),
+    pytest.param(
+        Exception("AuthenticationError: invalid key"), False, id="str_AuthenticationError"
+    ),
     # Unknown errors — conservative default False
     pytest.param(Exception("some unknown error"), False, id="unknown_generic"),
     pytest.param(RuntimeError("unexpected state"), False, id="RuntimeError_unknown"),
     pytest.param(KeyError("missing key"), False, id="KeyError"),
     pytest.param(AttributeError("no attr"), False, id="AttributeError"),
-    pytest.param(Exception("config_value_out_of_range"), False, id="str_unknown_no_transient_keyword"),
+    pytest.param(
+        Exception("config_value_out_of_range"), False, id="str_unknown_no_transient_keyword"
+    ),
 ]
 
 
@@ -91,6 +98,7 @@ def test_is_transient_error_permanent(exc, expected):
 # ---------------------------------------------------------------------------
 # transient_retry (sync)
 # ---------------------------------------------------------------------------
+
 
 class TestTransientRetrySync:
     """Sync retry behaviour tests."""
@@ -219,9 +227,7 @@ class TestTransientRetrySync:
 
         with patch("time.sleep", side_effect=lambda d: sleep_calls.append(d)):
             with pytest.raises(_HttpError):
-                transient_retry(
-                    fn, max_retries=10, base_delay=1.0, max_delay=8.0, jitter=False
-                )
+                transient_retry(fn, max_retries=10, base_delay=1.0, max_delay=8.0, jitter=False)
 
         assert all(d <= 8.0 for d in sleep_calls), f"Some delays exceed max_delay: {sleep_calls}"
 
@@ -229,6 +235,7 @@ class TestTransientRetrySync:
 # ---------------------------------------------------------------------------
 # transient_retry_async (async)
 # ---------------------------------------------------------------------------
+
 
 class TestTransientRetryAsync:
     """Async retry behaviour tests — mirrors sync suite."""
@@ -375,6 +382,7 @@ class TestTransientRetryAsync:
 # ---------------------------------------------------------------------------
 # Additional edge-case tests
 # ---------------------------------------------------------------------------
+
 
 class TestIsTransientErrorEdgeCases:
     """Edge cases for is_transient_error."""

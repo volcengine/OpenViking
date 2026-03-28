@@ -24,6 +24,7 @@ import pytest
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 class _HttpError(Exception):
     """Fake HTTP error carrying a numeric status code."""
 
@@ -44,17 +45,20 @@ def _make_fake_response(content: str = "ok") -> SimpleNamespace:
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture()
 def openai_vlm():
     """Create an OpenAIVLM instance with mocked clients."""
     from openviking.models.vlm.backends.openai_vlm import OpenAIVLM
 
-    vlm = OpenAIVLM({
-        "api_key": "sk-test",
-        "model": "gpt-4o-mini",
-        "provider": "openai",
-        "max_retries": 2,
-    })
+    vlm = OpenAIVLM(
+        {
+            "api_key": "sk-test",
+            "model": "gpt-4o-mini",
+            "provider": "openai",
+            "max_retries": 2,
+        }
+    )
 
     # Mock sync client
     mock_sync = MagicMock()
@@ -71,8 +75,8 @@ def openai_vlm():
 # Tests: get_completion_async retries on 429
 # ---------------------------------------------------------------------------
 
-class TestCompletionAsyncRetries:
 
+class TestCompletionAsyncRetries:
     async def test_retries_on_429(self, openai_vlm):
         """get_completion_async should retry on 429 (transient) and succeed."""
         errors = [_HttpError(429), _HttpError(429)]
@@ -114,20 +118,24 @@ class TestCompletionAsyncRetries:
         """Backend should use self.max_retries from config, not a param."""
         from openviking.models.vlm.backends.openai_vlm import OpenAIVLM
 
-        vlm = OpenAIVLM({
-            "api_key": "sk-test",
-            "model": "gpt-4o-mini",
-            "provider": "openai",
-            "max_retries": 5,
-        })
+        vlm = OpenAIVLM(
+            {
+                "api_key": "sk-test",
+                "model": "gpt-4o-mini",
+                "provider": "openai",
+                "max_retries": 5,
+            }
+        )
         assert vlm.max_retries == 5
 
         # Config default is now 3
-        vlm2 = OpenAIVLM({
-            "api_key": "sk-test",
-            "model": "gpt-4o-mini",
-            "provider": "openai",
-        })
+        vlm2 = OpenAIVLM(
+            {
+                "api_key": "sk-test",
+                "model": "gpt-4o-mini",
+                "provider": "openai",
+            }
+        )
         assert vlm2.max_retries == 3
 
 
@@ -135,8 +143,8 @@ class TestCompletionAsyncRetries:
 # Tests: get_vision_completion_async now retries
 # ---------------------------------------------------------------------------
 
-class TestVisionCompletionAsyncRetries:
 
+class TestVisionCompletionAsyncRetries:
     async def test_vision_retries_on_429(self, openai_vlm):
         """get_vision_completion_async should retry on 429 (was zero retry before)."""
         errors = [_HttpError(429)]
@@ -153,7 +161,8 @@ class TestVisionCompletionAsyncRetries:
 
         with patch("asyncio.sleep", new_callable=AsyncMock):
             result = await openai_vlm.get_vision_completion_async(
-                prompt="describe", images=["http://example.com/img.png"],
+                prompt="describe",
+                images=["http://example.com/img.png"],
             )
 
         assert result == "vision ok"
@@ -164,8 +173,8 @@ class TestVisionCompletionAsyncRetries:
 # Tests: sync completion retries
 # ---------------------------------------------------------------------------
 
-class TestCompletionSyncRetries:
 
+class TestCompletionSyncRetries:
     def test_sync_retries_on_429(self, openai_vlm):
         """get_completion should retry on 429."""
         errors = [_HttpError(429)]
@@ -202,7 +211,8 @@ class TestCompletionSyncRetries:
 
         with patch("time.sleep"):
             result = openai_vlm.get_vision_completion(
-                prompt="describe", images=["http://example.com/img.png"],
+                prompt="describe",
+                images=["http://example.com/img.png"],
             )
 
         assert result == "vision sync ok"
@@ -213,8 +223,8 @@ class TestCompletionSyncRetries:
 # Tests: signature change verification
 # ---------------------------------------------------------------------------
 
-class TestSignatureChange:
 
+class TestSignatureChange:
     def test_no_max_retries_in_get_completion_async(self):
         """get_completion_async should no longer accept max_retries parameter."""
         from openviking.models.vlm.backends.openai_vlm import OpenAIVLM
@@ -260,40 +270,46 @@ class TestSignatureChange:
 # Tests: OpenAI SDK retry disabled
 # ---------------------------------------------------------------------------
 
-class TestOpenAISDKRetryDisabled:
 
+class TestOpenAISDKRetryDisabled:
     def test_sync_client_max_retries_zero(self):
         """OpenAI sync client should be created with max_retries=0."""
         from openviking.models.vlm.backends.openai_vlm import OpenAIVLM
 
-        vlm = OpenAIVLM({
-            "api_key": "sk-test",
-            "model": "gpt-4o-mini",
-            "provider": "openai",
-        })
+        vlm = OpenAIVLM(
+            {
+                "api_key": "sk-test",
+                "model": "gpt-4o-mini",
+                "provider": "openai",
+            }
+        )
 
         with patch("openai.OpenAI") as mock_openai:
             mock_openai.return_value = MagicMock()
             vlm._sync_client = None  # force re-creation
             vlm.get_client()
             call_kwargs = mock_openai.call_args
-            assert call_kwargs[1].get("max_retries") == 0 or \
-                   (len(call_kwargs[0]) == 0 and call_kwargs.kwargs.get("max_retries") == 0)
+            assert call_kwargs[1].get("max_retries") == 0 or (
+                len(call_kwargs[0]) == 0 and call_kwargs.kwargs.get("max_retries") == 0
+            )
 
     def test_async_client_max_retries_zero(self):
         """OpenAI async client should be created with max_retries=0."""
         from openviking.models.vlm.backends.openai_vlm import OpenAIVLM
 
-        vlm = OpenAIVLM({
-            "api_key": "sk-test",
-            "model": "gpt-4o-mini",
-            "provider": "openai",
-        })
+        vlm = OpenAIVLM(
+            {
+                "api_key": "sk-test",
+                "model": "gpt-4o-mini",
+                "provider": "openai",
+            }
+        )
 
         with patch("openai.AsyncOpenAI") as mock_async_openai:
             mock_async_openai.return_value = MagicMock()
             vlm._async_client = None  # force re-creation
             vlm.get_async_client()
             call_kwargs = mock_async_openai.call_args
-            assert call_kwargs[1].get("max_retries") == 0 or \
-                   (len(call_kwargs[0]) == 0 and call_kwargs.kwargs.get("max_retries") == 0)
+            assert call_kwargs[1].get("max_retries") == 0 or (
+                len(call_kwargs[0]) == 0 and call_kwargs.kwargs.get("max_retries") == 0
+            )

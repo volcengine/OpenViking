@@ -182,7 +182,10 @@ class VLMConfig(BaseModel):
     ) -> Union[str, Any]:
         """Get LLM completion."""
         return self.get_vlm_instance().get_completion(
-            prompt=prompt, thinking=thinking, tools=tools, messages=messages,
+            prompt=prompt,
+            thinking=thinking,
+            tools=tools,
+            messages=messages,
         )
 
     async def get_completion_async(
@@ -194,7 +197,10 @@ class VLMConfig(BaseModel):
     ) -> Union[str, Any]:
         """Get LLM completion asynchronously."""
         return await self.get_vlm_instance().get_completion_async(
-            prompt=prompt, thinking=thinking, tools=tools, messages=messages,
+            prompt=prompt,
+            thinking=thinking,
+            tools=tools,
+            messages=messages,
         )
 
     def is_available(self) -> bool:
@@ -211,7 +217,11 @@ class VLMConfig(BaseModel):
     ) -> Union[str, Any]:
         """Get LLM completion with images."""
         return self.get_vlm_instance().get_vision_completion(
-            prompt=prompt, images=images, thinking=thinking, tools=tools, messages=messages,
+            prompt=prompt,
+            images=images,
+            thinking=thinking,
+            tools=tools,
+            messages=messages,
         )
 
     async def get_vision_completion_async(
@@ -224,5 +234,9 @@ class VLMConfig(BaseModel):
     ) -> Union[str, Any]:
         """Get LLM completion with images asynchronously."""
         return await self.get_vlm_instance().get_vision_completion_async(
-            prompt=prompt, images=images, thinking=thinking, tools=tools, messages=messages,
+            prompt=prompt,
+            images=images,
+            thinking=thinking,
+            tools=tools,
+            messages=messages,
         )

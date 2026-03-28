@@ -15,7 +15,6 @@ import pytest
 
 
 class TestVLMConfigMaxRetries:
-
     def test_default_max_retries(self):
         """VLMConfig should default max_retries to 3."""
         from openviking_cli.utils.config.vlm_config import VLMConfig
@@ -41,7 +40,6 @@ class TestVLMConfigMaxRetries:
 
 
 class TestEmbeddingConfigMaxRetries:
-
     def test_has_max_retries_field(self):
         """EmbeddingConfig should have a max_retries field."""
         from openviking_cli.utils.config.embedding_config import EmbeddingConfig

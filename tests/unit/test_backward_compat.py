@@ -28,7 +28,6 @@ class _HttpError(Exception):
 
 
 class TestExponentialBackoffRetryImportable:
-
     def test_importable_from_old_location(self):
         """exponential_backoff_retry should still be importable from base.py."""
         from openviking.models.embedder.base import exponential_backoff_retry
@@ -37,7 +36,6 @@ class TestExponentialBackoffRetryImportable:
 
 
 class TestExponentialBackoffRetrySignature:
-
     def test_signature_unchanged(self):
         """exponential_backoff_retry should retain its original signature."""
         from openviking.models.embedder.base import exponential_backoff_retry
@@ -77,7 +75,6 @@ class TestExponentialBackoffRetrySignature:
 
 
 class TestExponentialBackoffRetryBehavior:
-
     def test_success_first_try(self):
         """Function succeeds on first attempt."""
         from openviking.models.embedder.base import exponential_backoff_retry
@@ -144,7 +141,6 @@ class TestExponentialBackoffRetryBehavior:
 
 
 class TestTransientRetryIsCountBased:
-
     def test_is_count_based(self):
         """transient_retry should be count-based (uses max_retries, not max_wait)."""
         from openviking.models.retry import transient_retry

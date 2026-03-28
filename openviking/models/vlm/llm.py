@@ -184,7 +184,10 @@ class StructuredVLM:
             prompt = f"{prompt}\n\n{get_json_schema_prompt(schema)}"
 
         response = self._get_vlm().get_completion(
-            prompt=prompt, thinking=thinking, tools=tools, messages=messages,
+            prompt=prompt,
+            thinking=thinking,
+            tools=tools,
+            messages=messages,
         )
         return parse_json_from_response(response)
 
@@ -201,7 +204,10 @@ class StructuredVLM:
             prompt = f"{prompt}\n\n{get_json_schema_prompt(schema)}"
 
         response = await self._get_vlm().get_completion_async(
-            prompt=prompt, thinking=thinking, tools=tools, messages=messages,
+            prompt=prompt,
+            thinking=thinking,
+            tools=tools,
+            messages=messages,
         )
         return parse_json_from_response(response)
 
@@ -232,7 +238,9 @@ class StructuredVLM:
         """Async version of complete_model."""
         schema = model_class.model_json_schema()
         response = await self.complete_json_async(
-            prompt=prompt, schema=schema, thinking=thinking,
+            prompt=prompt,
+            schema=schema,
+            thinking=thinking,
         )
         if response is None:
             return None
@@ -253,7 +261,11 @@ class StructuredVLM:
     ) -> Union[str, Any]:
         """Get vision completion."""
         return self._get_vlm().get_vision_completion(
-            prompt=prompt, images=images, thinking=thinking, tools=tools, messages=messages,
+            prompt=prompt,
+            images=images,
+            thinking=thinking,
+            tools=tools,
+            messages=messages,
         )
 
     async def get_vision_completion_async(
@@ -266,5 +278,9 @@ class StructuredVLM:
     ) -> Union[str, Any]:
         """Async vision completion."""
         return await self._get_vlm().get_vision_completion_async(
-            prompt=prompt, images=images, thinking=thinking, tools=tools, messages=messages,
+            prompt=prompt,
+            images=images,
+            thinking=thinking,
+            tools=tools,
+            messages=messages,
         )

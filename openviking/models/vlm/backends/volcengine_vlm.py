@@ -267,6 +267,20 @@ class VolcEngineVLM(OpenAIVLM):
             )
         return
 
+    def _parse_tool_calls(self, message) -> List[ToolCall]:
+        """Parse tool calls from VolcEngine response message."""
+        tool_calls = []
+        if hasattr(message, "tool_calls") and message.tool_calls:
+            for tc in message.tool_calls:
+                args = tc.function.arguments
+                if isinstance(args, str):
+                    try:
+                        args = json.loads(args)
+                    except json.JSONDecodeError:
+                        args = {"raw": args}
+                tool_calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=args))
+        return tool_calls
+
     def _build_vlm_response(self, response, has_tools: bool) -> Union[str, VLMResponse]:
         """Build response from VolcEngine Responses API response.
 

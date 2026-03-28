@@ -127,7 +127,9 @@ def is_transient_error(exc: Exception) -> bool:
             return False
 
         # Transient openai errors
-        if isinstance(exc, (openai.RateLimitError, openai.APITimeoutError, openai.APIConnectionError)):
+        if isinstance(
+            exc, (openai.RateLimitError, openai.APITimeoutError, openai.APIConnectionError)
+        ):
             return True
     except ImportError:
         pass

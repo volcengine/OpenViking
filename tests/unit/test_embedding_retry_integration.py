@@ -22,6 +22,7 @@ import pytest
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 class _HttpError(Exception):
     """Fake HTTP error carrying a numeric status code."""
 
@@ -43,8 +44,8 @@ def _make_fake_embedding_response(vector=None):
 # OpenAI Embedder Tests
 # ---------------------------------------------------------------------------
 
-class TestOpenAIEmbedderRetry:
 
+class TestOpenAIEmbedderRetry:
     @pytest.fixture()
     def openai_embedder(self):
         """Create an OpenAIDenseEmbedder with mocked client."""
@@ -137,16 +138,14 @@ class TestOpenAIEmbedderRetry:
 # VikingDB Embedder Tests
 # ---------------------------------------------------------------------------
 
-class TestVikingDBEmbedderRetry:
 
+class TestVikingDBEmbedderRetry:
     @pytest.fixture()
     def vikingdb_embedder(self):
         """Create a VikingDBDenseEmbedder with mocked client."""
         from openviking.models.embedder.vikingdb_embedders import VikingDBDenseEmbedder
 
-        with patch(
-            "openviking.storage.vectordb.collection.volcengine_clients.ClientForDataApi"
-        ):
+        with patch("openviking.storage.vectordb.collection.volcengine_clients.ClientForDataApi"):
             embedder = VikingDBDenseEmbedder(
                 model_name="test-model",
                 model_version="1.0",
@@ -201,9 +200,7 @@ class TestVikingDBEmbedderRetry:
         """VikingDB embedder should use self.max_retries from config."""
         from openviking.models.embedder.vikingdb_embedders import VikingDBDenseEmbedder
 
-        with patch(
-            "openviking.storage.vectordb.collection.volcengine_clients.ClientForDataApi"
-        ):
+        with patch("openviking.storage.vectordb.collection.volcengine_clients.ClientForDataApi"):
             embedder = VikingDBDenseEmbedder(
                 model_name="test-model",
                 model_version="1.0",

@@ -262,9 +262,7 @@ class EmbeddingConfig(BaseModel):
     sparse: Optional[EmbeddingModelConfig] = Field(default=None)
     hybrid: Optional[EmbeddingModelConfig] = Field(default=None)
 
-    max_retries: int = Field(
-        default=3, description="Maximum retry attempts for transient errors"
-    )
+    max_retries: int = Field(default=3, description="Maximum retry attempts for transient errors")
     max_concurrent: int = Field(
         default=10, description="Maximum number of concurrent embedding requests"
     )

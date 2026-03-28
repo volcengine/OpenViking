@@ -354,7 +354,8 @@ class OpenAIVLM(VLMBase):
             content = await self._process_streaming_response_async(response)
         else:
             self._update_token_usage_from_response(
-                response, duration_seconds=elapsed,
+                response,
+                duration_seconds=elapsed,
             )
             content = self._extract_content_from_response(response)
 
