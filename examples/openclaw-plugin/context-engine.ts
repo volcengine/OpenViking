@@ -40,7 +40,13 @@ type CompactResult = {
   ok: boolean;
   compacted: boolean;
   reason?: string;
-  result?: unknown;
+  result?: {
+    summary?: string;
+    firstKeptEntryId?: string;
+    tokensBefore: number;
+    tokensAfter?: number;
+    details?: unknown;
+  };
 };
 
 type ContextEngine = {
@@ -559,8 +565,15 @@ export function createMemoryOpenVikingContextEngine(params: {
             : {}),
         };
       } catch (err) {
+        warnOrInfo(
+          logger,
+          `openviking: assemble failed for session=${OVSessionId}, ` +
+            `tokenBudget=${tokenBudget}, agentId=${resolveAgentId(OVSessionId)}: ${String(err)}`,
+        );
         diag("assemble_error", OVSessionId, {
           error: String(err),
+          tokenBudget,
+          agentId: resolveAgentId(OVSessionId),
         });
         return { messages, estimatedTokens: roughEstimate(messages) };
       }
@@ -678,8 +691,9 @@ export function createMemoryOpenVikingContextEngine(params: {
 
     async compact(compactParams): Promise<CompactResult> {
       const OVSessionId = compactParams.sessionId;
+      const tokenBudget = validTokenBudget(compactParams.tokenBudget) ?? 128_000;
       diag("compact_entry", OVSessionId, {
-        tokenBudget: compactParams.tokenBudget ?? null,
+        tokenBudget,
         force: compactParams.force ?? false,
         currentTokenCount: compactParams.currentTokenCount ?? null,
         compactionTarget: compactParams.compactionTarget ?? null,
@@ -690,8 +704,29 @@ export function createMemoryOpenVikingContextEngine(params: {
       try {
         const client = await getClient();
         const agentId = resolveAgentId(OVSessionId);
+        const tokensBefore = validTokenBudget(compactParams.currentTokenCount);
+        let preCommitEstimatedTokens: number | undefined;
+        if (typeof tokensBefore !== "number") {
+          try {
+            const preCtx = await client.getSessionContext(OVSessionId, tokenBudget, agentId);
+            if (
+              typeof preCtx.estimatedTokens === "number" &&
+              Number.isFinite(preCtx.estimatedTokens)
+            ) {
+              preCommitEstimatedTokens = preCtx.estimatedTokens;
+            }
+          } catch (preCtxErr) {
+            logger.info(
+              `openviking: compact pre-ctx fetch failed for session=${OVSessionId}, ` +
+                `tokenBudget=${tokenBudget}, agentId=${agentId}: ${String(preCtxErr)}`,
+            );
+          }
+        }
+        
+        const tokensBeforeValue = tokensBefore ?? preCommitEstimatedTokens ?? 0;
+
         logger.info(
-          `openviking: compact committing session=${OVSessionId} (wait=true)`,
+          `openviking: compact committing session=${OVSessionId} (wait=true, tokenBudget=${tokenBudget})`,
         );
         const commitResult = await client.commitSession(OVSessionId, { wait: true, agentId });
         const memCount = totalExtractedMemories(commitResult.memories_extracted);
@@ -714,7 +749,12 @@ export function createMemoryOpenVikingContextEngine(params: {
             ok: false,
             compacted: false,
             reason: "commit_failed",
-            result: commitResult,
+            result: {
+              tokensBefore: tokensBeforeValue,
+              details: {
+                commit: commitResult,
+              },
+            },
           };
         }
 
@@ -735,7 +775,12 @@ export function createMemoryOpenVikingContextEngine(params: {
             ok: false,
             compacted: false,
             reason: "commit_timeout",
-            result: commitResult,
+            result: {
+              tokensBefore: tokensBeforeValue,
+              details: {
+                commit: commitResult,
+              },
+            },
           };
         }
 
@@ -744,6 +789,10 @@ export function createMemoryOpenVikingContextEngine(params: {
         );
 
         if (!commitResult.archived) {
+          logger.info(
+            `openviking: compact no archive for session=${OVSessionId}, ` +
+              `tokensBefore=${tokensBefore ?? "unknown"}, tokensAfter=${tokensBefore ?? "unknown"}`,
+          );
           diag("compact_result", OVSessionId, {
             ok: true,
             compacted: false,
@@ -752,14 +801,50 @@ export function createMemoryOpenVikingContextEngine(params: {
             archived: commitResult.archived ?? false,
             taskId: commitResult.task_id ?? null,
             memories: memCount,
+            tokensBefore: tokensBefore ?? null,
           });
           return {
             ok: true,
             compacted: false,
             reason: "commit_no_archive",
-            result: commitResult,
+            result: {
+              summary: "",
+              tokensBefore: tokensBeforeValue,
+              tokensAfter: tokensBeforeValue,
+              details: {
+                commit: commitResult,
+              },
+            },
           };
         }
+
+        let summary = "";
+        let firstKeptEntryId = commitResult.archive_uri?.split("/").pop() ?? "";
+        let tokensAfter: number | undefined = memCount;
+
+        try {
+          const ctx = await client.getSessionContext(OVSessionId, tokenBudget, agentId);
+          if (typeof ctx.latest_archive_overview === "string") {
+            summary = ctx.latest_archive_overview.trim();
+          }
+          if (
+            typeof ctx.estimatedTokens === "number" &&
+            Number.isFinite(ctx.estimatedTokens)
+          ) {
+            tokensAfter = ctx.estimatedTokens;
+          }
+        } catch (ctxErr) {
+          logger.info(
+            `openviking: compact context fetch failed for session=${OVSessionId}, ` +
+              `tokenBudget=${tokenBudget}, agentId=${agentId}: ${String(ctxErr)}`,
+          );
+        }
+
+        logger.info(
+          `openviking: compact tokens session=${OVSessionId}, ` +
+            `tokensBefore=${tokensBeforeValue}, tokensAfter=${tokensAfter ?? "unknown"}, ` +
+            `latestArchiveId=${firstKeptEntryId || "none"}`,
+        );
 
         diag("compact_result", OVSessionId, {
           ok: true,
@@ -769,12 +854,24 @@ export function createMemoryOpenVikingContextEngine(params: {
           archived: commitResult.archived ?? false,
           taskId: commitResult.task_id ?? null,
           memories: memCount,
+          tokensBefore: tokensBefore ?? null,
+          tokensAfter: tokensAfter ?? null,
+          latestArchiveId: firstKeptEntryId || null,
+          summaryPresent: summary.length > 0,
         });
         return {
           ok: true,
           compacted: true,
           reason: "commit_completed",
-          result: commitResult,
+          result: {
+            summary,
+            firstKeptEntryId,
+            tokensBefore: tokensBeforeValue,
+            tokensAfter,
+            details: {
+              commit: commitResult,
+            },
+          },
         };
       } catch (err) {
         warnOrInfo(logger, `openviking: compact commit failed for session=${OVSessionId}: ${String(err)}`);
@@ -786,7 +883,9 @@ export function createMemoryOpenVikingContextEngine(params: {
           compacted: false,
           reason: "commit_error",
           result: {
-            error: String(err),
+            details: {
+              error: String(err),
+            },
           },
         };
       }
