@@ -117,6 +117,16 @@
       "label": "Standard diagnostics (diag JSON lines)",
       "advanced": true,
       "help": "Emit structured openviking: diag {...} for assemble/afterTurn. Set false to disable."
+    },
+    "accountId": {
+      "label": "Account ID",
+      "help": "Account ID for root API key. Required for agent scope access.",
+      "advanced": true
+    },
+    "userId": {
+      "label": "User ID",
+      "help": "User ID for root API key. Required for agent scope access.",
+      "advanced": true
     }
   },
   "configSchema": {
