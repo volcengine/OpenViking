@@ -719,7 +719,6 @@ const contextEnginePlugin = {
           };
         }
 
-        const sessionId = ctx.sessionId ?? "";
         const sessionKey = ctx.sessionKey ?? "";
         if (!sessionId && !sessionKey) {
           return {
