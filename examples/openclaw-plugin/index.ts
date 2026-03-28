@@ -22,6 +22,7 @@ import {
 import {
   IS_WIN,
   waitForHealth,
+  quickHealthCheck,
   quickRecallPrecheck,
   withTimeout,
   resolvePythonCommand,
@@ -460,14 +461,17 @@ const contextEnginePlugin = {
       }),
       async execute(_toolCallId: string, params: Record<string, unknown>) {
         const archiveId = String((params as { archiveId?: string }).archiveId ?? "").trim();
+        const sessionId = ctx.sessionId ?? "";
+        api.logger.info?.(`openviking: ov_archive_expand invoked (archiveId=${archiveId || "(empty)"}, sessionId=${sessionId || "(empty)"})`);
+
         if (!archiveId) {
+          api.logger.warn?.(`openviking: ov_archive_expand missing archiveId`);
           return {
             content: [{ type: "text", text: "Error: archiveId is required." }],
             details: { error: "missing_param", param: "archiveId" },
           };
         }
 
-        const sessionId = ctx.sessionId ?? "";
         if (!sessionId) {
           return {
             content: [{ type: "text", text: "Error: no active session." }],
@@ -495,6 +499,7 @@ const contextEnginePlugin = {
             .map((m: OVMessage) => formatMessageFaithful(m))
             .join("\n\n");
 
+          api.logger.info?.(`openviking: ov_archive_expand expanded ${detail.archive_id}, messages=${detail.messages.length}, chars=${body.length}, sessionId=${sessionId}`);
           return {
             content: [{ type: "text", text: `${header}\n${body}` }],
             details: {
@@ -506,6 +511,7 @@ const contextEnginePlugin = {
           };
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
+          api.logger.warn?.(`openviking: ov_archive_expand failed (archiveId=${archiveId}, sessionId=${sessionId}): ${msg}`);
           return {
             content: [{ type: "text", text: `Failed to expand ${archiveId}: ${msg}` }],
             details: { error: msg, archiveId, sessionId },
@@ -705,7 +711,7 @@ const contextEnginePlugin = {
         return contextEngineRef;
       });
       api.logger.info(
-        "openviking: registered context-engine (before_prompt_build=auto-recall, afterTurn=auto-capture, assemble=archive+active, sessionId=1:1 mapping)",
+        "openviking: registered context-engine (before_prompt_build=auto-recall, afterTurn=auto-capture, assemble=archive+active)",
       );
     } else {
       api.logger.warn(
@@ -794,10 +800,8 @@ const contextEnginePlugin = {
               localProcess = null;
               localClientCache.delete(localCacheKey);
             }
-            if (code != null && code !== 0 || signal) {
-              const out = formatStderrOutput();
-              api.logger.warn(`openviking: subprocess exited (code=${code}, signal=${signal})${out}`);
-            }
+            const out = formatStderrOutput();
+            api.logger.warn(`openviking: subprocess exited (code=${code}, signal=${signal})${out}`);
           });
           try {
             await waitForHealth(baseUrl, timeoutMs, intervalMs);
@@ -818,6 +822,82 @@ const contextEnginePlugin = {
               );
             }
             throw err;
+          }
+        } else if (cfg.mode === "local") {
+          // Defensive re-spawn: if we're not the designated spawner but there's
+          // no valid local process, trigger a fresh spawn to recover from
+          // scenarios like Gateway force-restart where the child process was
+          // orphaned or exited silently.
+          const cached = localClientCache.get(localCacheKey);
+          const processAlive = cached?.process && cached.process.exitCode === null && !cached.process.killed;
+          if (!processAlive) {
+            const healthOk = await quickHealthCheck(`http://127.0.0.1:${cfg.port}`, 2000);
+            if (!healthOk) {
+              api.logger.warn(
+                `openviking: no valid local process detected (isSpawner=false), triggering defensive re-spawn`,
+              );
+              const timeoutMs = 60_000;
+              const intervalMs = 500;
+              const actualPort = await prepareLocalPort(cfg.port, api.logger);
+              const baseUrl = `http://127.0.0.1:${actualPort}`;
+              const pythonCmd = resolvePythonCommand(api.logger);
+              const pathSep = IS_WIN ? ";" : ":";
+              const env = {
+                ...process.env,
+                PYTHONUNBUFFERED: "1",
+                PYTHONWARNINGS: "ignore::RuntimeWarning",
+                OPENVIKING_CONFIG_FILE: cfg.configPath,
+                OPENVIKING_START_CONFIG: cfg.configPath,
+                OPENVIKING_START_HOST: "127.0.0.1",
+                OPENVIKING_START_PORT: String(actualPort),
+                ...(process.env.OPENVIKING_GO_PATH && { PATH: `${process.env.OPENVIKING_GO_PATH}${pathSep}${process.env.PATH || ""}` }),
+                ...(process.env.OPENVIKING_GOPATH && { GOPATH: process.env.OPENVIKING_GOPATH }),
+                ...(process.env.OPENVIKING_GOPROXY && { GOPROXY: process.env.OPENVIKING_GOPROXY }),
+              };
+              const runpyCode = `import sys,os,warnings; warnings.filterwarnings('ignore', category=RuntimeWarning, message='.*sys.modules.*'); sys.argv=['openviking.server.bootstrap','--config',os.environ['OPENVIKING_START_CONFIG'],'--host',os.environ.get('OPENVIKING_START_HOST','127.0.0.1'),'--port',os.environ['OPENVIKING_START_PORT']]; import runpy, importlib.util; spec=importlib.util.find_spec('openviking.server.bootstrap'); (runpy.run_path(spec.origin, run_name='__main__') if spec and getattr(spec,'origin',None) else runpy.run_module('openviking.server.bootstrap', run_name='__main__', alter_sys=True))`;
+              const child = spawn(
+                pythonCmd,
+                ["-c", runpyCode],
+                { env, cwd: IS_WIN ? tmpdir() : "/tmp", stdio: ["ignore", "pipe", "pipe"] },
+              );
+              localProcess = child;
+              child.on("error", (err: Error) => api.logger.warn(`openviking: local server error (re-spawn): ${String(err)}`));
+              child.stderr?.on("data", (chunk: Buffer) => {
+                api.logger.debug?.(`[openviking-respawn] ${String(chunk).trim()}`);
+              });
+              child.on("exit", (code: number | null, signal: string | null) => {
+                if (localProcess === child) {
+                  localProcess = null;
+                  localClientCache.delete(localCacheKey);
+                }
+                api.logger.warn(`openviking: re-spawned subprocess exited (code=${code}, signal=${signal})`);
+              });
+              try {
+                await waitForHealth(baseUrl, timeoutMs, intervalMs);
+                const client = new OpenVikingClient(baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs);
+                localClientCache.set(localCacheKey, { client, process: child });
+                if (resolveLocalClient) {
+                  resolveLocalClient(client);
+                  rejectLocalClient = null;
+                }
+                api.logger.info(
+                  `openviking: local server re-spawned successfully (${baseUrl}, config: ${cfg.configPath})`,
+                );
+              } catch (err) {
+                localProcess = null;
+                child.kill("SIGTERM");
+                markLocalUnavailable("re-spawn failed", err);
+                api.logger.warn(`openviking: defensive re-spawn failed: ${String(err)}`);
+                throw err;
+              }
+            } else {
+              api.logger.info(`openviking: local process healthy on port ${cfg.port} (isSpawner=false)`);
+            }
+          } else {
+            await (await getClient()).healthCheck().catch(() => {});
+            api.logger.info(
+              `openviking: initialized via cache (url: ${cfg.baseUrl}, targetUri: ${cfg.targetUri})`,
+            );
           }
         } else {
           await (await getClient()).healthCheck().catch(() => {});
