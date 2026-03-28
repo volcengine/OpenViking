@@ -142,6 +142,8 @@ export class OpenVikingClient {
     private readonly apiKey: string,
     private readonly defaultAgentId: string,
     private readonly timeoutMs: number,
+    private readonly accountId?: string,
+    private readonly userId?: string,
   ) {}
 
   getDefaultAgentId(): string {
@@ -159,6 +161,13 @@ export class OpenVikingClient {
       }
       if (effectiveAgentId) {
         headers.set("X-OpenViking-Agent", effectiveAgentId);
+      }
+      // For root API key: send account and user headers to enable agent scope access
+      if (this.accountId) {
+        headers.set("X-OpenViking-Account", this.accountId);
+      }
+      if (this.userId) {
+        headers.set("X-OpenViking-User", this.userId);
       }
       if (init.body && !headers.has("Content-Type")) {
         headers.set("Content-Type", "application/json");

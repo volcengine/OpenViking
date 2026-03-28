@@ -140,7 +140,7 @@ const contextEnginePlugin = {
         }
       }
     } else {
-      clientPromise = Promise.resolve(new OpenVikingClient(cfg.baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs));
+      clientPromise = Promise.resolve(new OpenVikingClient(cfg.baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs, cfg.accountId, cfg.userId));
     }
 
     const getClient = (): Promise<OpenVikingClient> => clientPromise;
@@ -805,7 +805,7 @@ const contextEnginePlugin = {
           });
           try {
             await waitForHealth(baseUrl, timeoutMs, intervalMs);
-            const client = new OpenVikingClient(baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs);
+            const client = new OpenVikingClient(baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs, cfg.accountId, cfg.userId);
             localClientCache.set(localCacheKey, { client, process: child });
             resolveLocalClient!(client);
             rejectLocalClient = null;
@@ -874,7 +874,7 @@ const contextEnginePlugin = {
               });
               try {
                 await waitForHealth(baseUrl, timeoutMs, intervalMs);
-                const client = new OpenVikingClient(baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs);
+                const client = new OpenVikingClient(baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs, cfg.accountId, cfg.userId);
                 localClientCache.set(localCacheKey, { client, process: child });
                 if (resolveLocalClient) {
                   resolveLocalClient(client);

@@ -12,6 +12,10 @@ export type MemoryOpenVikingConfig = {
   baseUrl?: string;
   agentId?: string;
   apiKey?: string;
+  /** Account ID for root API key. Required for agent scope access when using root API key. */
+  accountId?: string;
+  /** User ID for root API key. Required for agent scope access when using root API key. */
+  userId?: string;
   targetUri?: string;
   timeoutMs?: number;
   autoCapture?: boolean;
@@ -168,6 +172,8 @@ export const memoryOpenVikingConfigSchema = {
       baseUrl: resolvedBaseUrl,
       agentId: resolveAgentId(cfg.agentId),
       apiKey: rawApiKey ? resolveEnvVars(rawApiKey) : "",
+      accountId: typeof cfg.accountId === "string" ? cfg.accountId : undefined,
+      userId: typeof cfg.userId === "string" ? cfg.userId : undefined,
       targetUri: typeof cfg.targetUri === "string" ? cfg.targetUri : DEFAULT_TARGET_URI,
       timeoutMs: Math.max(1000, Math.floor(toNumber(cfg.timeoutMs, DEFAULT_TIMEOUT_MS))),
       autoCapture: cfg.autoCapture !== false,
