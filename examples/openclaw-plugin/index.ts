@@ -28,7 +28,7 @@ import {
   resolvePythonCommand,
   prepareLocalPort,
 } from "./process-manager.js";
-import { createMemoryOpenVikingContextEngine } from "./context-engine.js";
+import { createMemoryOpenVikingContextEngine, commitLocks } from "./context-engine.js";
 import type { ContextEngineWithCommit } from "./context-engine.js";
 
 type PluginLogger = {
@@ -80,7 +80,7 @@ type OpenClawPluginApi = {
 
 const MAX_OPENVIKING_STDERR_LINES = 200;
 const MAX_OPENVIKING_STDERR_CHARS = 256_000;
-const AUTO_RECALL_TIMEOUT_MS = 5_000;
+const AUTO_RECALL_TIMEOUT_MS = 15_000;
 
 function totalCommitMemories(r: CommitSessionResult): number {
   const m = r.memories_extracted;
@@ -278,6 +278,14 @@ const contextEnginePlugin = {
               usedTempSession = true;
             }
             await c.addSessionMessage(sessionId, role, text, storeAgentId);
+            
+            // Wait if another commit is in progress
+            let waitCount = 0;
+            while (commitLocks.has(sessionId) && waitCount < 50) {
+              await new Promise(r => setTimeout(r, 100));
+              waitCount++;
+            }
+            
             const commitResult = await c.commitSession(sessionId, { wait: true, agentId: storeAgentId });
             const memoriesCount = totalCommitMemories(commitResult);
             if (commitResult.status === "failed") {
@@ -585,17 +593,14 @@ const contextEnginePlugin = {
             await withTimeout(
               (async () => {
                 const candidateLimit = Math.max(cfg.recallLimit * 4, 20);
+                // Skip agent scope search - requires different permissions in OpenViking
                 const [userSettled, agentSettled] = await Promise.allSettled([
                   client.find(queryText, {
                     targetUri: "viking://user/memories",
                     limit: candidateLimit,
                     scoreThreshold: 0,
                   }, agentId),
-                  client.find(queryText, {
-                    targetUri: "viking://agent/memories",
-                    limit: candidateLimit,
-                    scoreThreshold: 0,
-                  }, agentId),
+                  Promise.resolve({ memories: [] }), // agent scope disabled
                 ]);
 
                 const userResult = userSettled.status === "fulfilled" ? userSettled.value : { memories: [] };
@@ -805,7 +810,7 @@ const contextEnginePlugin = {
           });
           try {
             await waitForHealth(baseUrl, timeoutMs, intervalMs);
-            const client = new OpenVikingClient(baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs, cfg.accountId, cfg.userId);
+            const client = new OpenVikingClient(baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs);
             localClientCache.set(localCacheKey, { client, process: child });
             resolveLocalClient!(client);
             rejectLocalClient = null;
@@ -874,7 +879,7 @@ const contextEnginePlugin = {
               });
               try {
                 await waitForHealth(baseUrl, timeoutMs, intervalMs);
-                const client = new OpenVikingClient(baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs, cfg.accountId, cfg.userId);
+                const client = new OpenVikingClient(baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs);
                 localClientCache.set(localCacheKey, { client, process: child });
                 if (resolveLocalClient) {
                   resolveLocalClient(client);
