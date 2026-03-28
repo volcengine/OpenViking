@@ -13,6 +13,9 @@ enabled: true
 operation_mode: "add_only"
 content_template: |
   time: {{event_time|default('N/A')}}
+  {% if extract_context %}
+  {{ extract_context.read_messages(start_index|default(0), end_index|default(0)).pretty_print() }}
+  {% endif %}
 
 
 fields:
