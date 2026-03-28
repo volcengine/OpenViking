@@ -279,8 +279,8 @@ class MemoryUpdater:
 
             # 创建模板变量
             template_vars = fields.copy()
-            if extract_context:
-                template_vars["extract_context"] = extract_context
+            # 始终传入 extract_context，即使是 None，避免模板中访问时 undefined
+            template_vars["extract_context"] = extract_context
 
             # 渲染模板
             jinja_template = env.from_string(template)
