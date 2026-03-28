@@ -209,6 +209,27 @@ openviking-server
 
 #### Step 2: Create Team & Users
 
+> **⚠️ Important: Create User Matching Your OpenClaw agentId**
+>
+> OpenClaw defaults to using `main` as the `agentId`. The plugin will create a user-specific memory space based on `userId:agentId`. If you see `Access denied` errors, ensure the user exists in OpenViking:
+>
+> ```bash
+> # Check your OpenClaw agentId (default is "main")
+> openclaw config get plugins.entries.openviking.config.agentId
+>
+> # Create user matching your agentId (replace "main" with your agentId)
+> curl -X POST http://localhost:1933/api/v1/admin/accounts/default/users \
+>   -H "Content-Type: application/json" \
+>   -H "X-API-Key: <root-api-key>" \
+>   -d '{"user_id": "main", "role": "user"}'
+>
+> # Generate API key for this user
+> curl -X POST http://localhost:1933/api/v1/admin/accounts/default/users/main/key \
+>   -H "X-API-Key: <root-api-key>"
+> ```
+>
+> The returned `user_key` should be used as `plugins.entries.openviking.config.apiKey` in OpenClaw config.
+
 ```bash
 # Create team + admin
 curl -X POST http://localhost:1933/api/v1/admin/accounts \
@@ -416,6 +437,8 @@ Open http://127.0.0.1:8020 in your browser.
 | `registerContextEngine is unavailable` in logs | OpenClaw version is too old and does not expose the context-engine API required by Plugin 2.0 | Upgrade OpenClaw to a current release, then restart the gateway and verify `openclaw status` shows `openviking` as the ContextEngine |
 | Agent hangs silently, no output | auto-recall missing timeout protection | Disable auto-recall temporarily: `openclaw config set plugins.entries.openviking.config.autoRecall false --json`, or apply the patch in [#673](https://github.com/volcengine/OpenViking/issues/673) |
 | ContextEngine is not `openviking` | Plugin slot not configured | `openclaw config set plugins.slots.contextEngine openviking` |
+| `Access denied for viking://agent/xxx/memories` | User does not exist in OpenViking | Create user matching your agentId: see Step 2 above |
+| `INVALID_ARGUMENT: ROOT requests to tenant-scoped APIs must include X-OpenViking-Account and X-OpenViking-User headers` | Using root API key instead of user API key | Generate a user API key and use it in `plugins.entries.openviking.config.apiKey` |
 | `memory_store failed: fetch failed` | OpenViking not running | Check `ov.conf` and Python path; verify service is up |
 | `health check timeout` | Port held by stale process | `lsof -ti tcp:1933 \| xargs kill -9`, then restart |
 | `extracted 0 memories` | Wrong API Key or model name | Check `api_key` and `model` in `ov.conf` |
