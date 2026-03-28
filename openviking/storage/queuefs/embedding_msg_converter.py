@@ -10,7 +10,6 @@ to EmbeddingMsg objects for asynchronous vector processing.
 from openviking.core.context import Context, ContextLevel
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 from openviking.telemetry import get_current_telemetry
-from openviking.utils.source_utils import infer_source
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -49,9 +48,6 @@ class EmbeddingMsgConverter:
                 context_data["owner_space"] = owner_user.user_space_name()
             else:
                 context_data["owner_space"] = ""
-
-        if not context_data.get("source"):
-            context_data["source"] = infer_source(uri, context_data.get("context_type"))
 
         # Derive level field for hierarchical retrieval.
         context_level = getattr(context, "level", None)

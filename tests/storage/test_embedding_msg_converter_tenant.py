@@ -7,7 +7,6 @@ import pytest
 
 from openviking.core.context import Context
 from openviking.storage.queuefs.embedding_msg_converter import EmbeddingMsgConverter
-from openviking.utils.source_utils import infer_source
 from openviking_cli.session.user_id import UserIdentifier
 
 
@@ -41,4 +40,3 @@ def test_embedding_msg_converter_backfills_account_and_owner_space(uri, expected
     assert msg is not None
     assert msg.context_data["account_id"] == "acme"
     assert msg.context_data["owner_space"] == expected_space(user)
-    assert msg.context_data["source"] == infer_source(uri, context.context_type)

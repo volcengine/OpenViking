@@ -6,17 +6,21 @@
 import asyncio
 import io
 import zipfile
+<<<<<<< HEAD
 from datetime import datetime, timezone
 
+||||||| parent of 9aabed3 (feat(ov): cut over retrieval filters)
+import asyncio
+from datetime import datetime, timezone
+import pytest_asyncio
+=======
+>>>>>>> 9aabed3 (feat(ov): cut over retrieval filters)
 import pytest
 import pytest_asyncio
 
 from openviking_cli.client.http import AsyncHTTPClient
 from openviking_cli.exceptions import FailedPreconditionError
 from tests.server.conftest import SAMPLE_MD_CONTENT, TEST_TMP_DIR
-from openviking.server.identity import RequestContext, Role
-from openviking.utils.time_utils import format_iso8601
-from openviking_cli.session.user_id import UserIdentifier
 
 
 @pytest_asyncio.fixture()
@@ -228,91 +232,6 @@ async def test_sdk_find(http_client):
     result = await client.find(query="sample document", limit=5)
     assert hasattr(result, "resources")
     assert hasattr(result, "total")
-
-
-async def _seed_source_filter_records(svc, query: str) -> dict[str, str]:
-    embedder = svc.vikingdb_manager.get_embedder()
-    vector = embedder.embed(query).dense_vector
-    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
-    now = format_iso8601(datetime.now(timezone.utc))
-
-    records = {
-        "documents": {
-            "uri": "viking://resources/sources/documents/acme/fork-qa.md",
-            "parent_uri": "viking://resources/sources/documents/acme",
-            "abstract": "Shared phrase for documents source QA",
-            "source": "documents",
-        },
-        "manual": {
-            "uri": "viking://resources/manual/fork-qa.md",
-            "parent_uri": "viking://resources/manual",
-            "abstract": "Shared phrase for manual resource QA",
-            "source": "resource",
-        },
-        "sessions": {
-            "uri": "viking://session/default__default__default/session-qa-note",
-            "parent_uri": "viking://session/default__default__default",
-            "abstract": "Shared phrase for session source QA",
-            "source": "sessions",
-        },
-    }
-
-    for record in records.values():
-        await svc.vikingdb_manager.upsert(
-            {
-                "uri": record["uri"],
-                "parent_uri": record["parent_uri"],
-                "is_leaf": True,
-                "abstract": record["abstract"],
-                "context_type": "resource",
-                "source": record["source"],
-                "category": "",
-                "created_at": now,
-                "updated_at": now,
-                "active_count": 0,
-                "vector": vector,
-                "meta": {},
-                "related_uri": [],
-                "account_id": "default",
-                "owner_space": "",
-                "level": 2,
-            },
-            ctx=ctx,
-        )
-
-    return {name: record["uri"] for name, record in records.items()}
-
-
-async def test_sdk_find_source_filter(http_client):
-    client, svc = http_client
-    uris = await _seed_source_filter_records(svc, "shared phrase for source qa")
-
-    result = await client.find(
-        query="shared phrase for source qa",
-        source="documents",
-        limit=10,
-    )
-
-    found_uris = {item.uri for item in result.resources}
-    assert uris["documents"] in found_uris
-    assert uris["manual"] not in found_uris
-    assert uris["sessions"] not in found_uris
-
-
-async def test_sdk_search_sessions_source_filter(http_client):
-    client, svc = http_client
-    uris = await _seed_source_filter_records(svc, "shared phrase for source qa")
-
-    result = await client.search(
-        query="shared phrase for source qa",
-        source="sessions",
-        limit=10,
-    )
-
-    found_uris = {item.uri for item in result.resources}
-    assert uris["sessions"] in found_uris
-    assert uris["documents"] not in found_uris
-    assert uris["manual"] not in found_uris
 
 
 async def test_sdk_find_telemetry(http_client):

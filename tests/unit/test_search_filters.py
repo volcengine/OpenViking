@@ -2,7 +2,7 @@ from datetime import datetime, timezone
 
 import pytest
 
-from openviking.utils.search_filters import merge_source_filter, merge_time_filter
+from openviking.utils.search_filters import merge_time_filter
 from openviking.utils.time_utils import parse_iso_datetime
 
 
@@ -15,34 +15,6 @@ def test_merge_time_filter_builds_relative_range():
         "op": "time_range",
         "field": "updated_at",
         "gte": "2026-03-11T16:00:00.000Z",
-    }
-
-
-def test_merge_source_filter_builds_canonical_source_match():
-    result = merge_source_filter(None, source="Documents")
-
-    assert result == {
-        "op": "must",
-        "field": "source",
-        "conds": ["documents"],
-    }
-
-
-def test_merge_source_filter_merges_with_existing_filter():
-    existing_filter = {"op": "must", "field": "kind", "conds": ["email"]}
-
-    result = merge_source_filter(existing_filter, source="session")
-
-    assert result == {
-        "op": "and",
-        "conds": [
-            existing_filter,
-            {
-                "op": "must",
-                "field": "source",
-                "conds": ["sessions"],
-            },
-        ],
     }
 
 

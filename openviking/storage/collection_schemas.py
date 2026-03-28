@@ -73,11 +73,6 @@ class CollectionSchemas:
             #   - URI 包含 "memories" → "memory"
             #   - 其他情况 → "resource"
             {"FieldName": "context_type", "FieldType": "string"},
-            # source 字段：显式记录资源来源，供 source-aware retrieval 使用。
-            # 典型取值：
-            #   - "sessions", "calendar", "contacts", "documents" ...
-            #   - "skill", "memory", "resource" 用于非 source-ingested 内容
-            {"FieldName": "source", "FieldType": "string"},
             {"FieldName": "vector", "FieldType": "vector", "Dim": vector_dim},
             {"FieldName": "sparse_vector", "FieldType": "sparse_vector"},
             {"FieldName": "created_at", "FieldType": "date_time"},
@@ -109,7 +104,6 @@ class CollectionSchemas:
             "uri",
             "type",
             "context_type",
-            "source",
             "created_at",
             "updated_at",
             "active_count",

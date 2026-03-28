@@ -1,8 +1,13 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 
+import json
+
+import pytest
+
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig
 from openviking_cli.utils.config.open_viking_config import OpenVikingConfig
+from openviking_cli.utils.config.ovcli_config import load_ovcli_config
 from openviking_cli.utils.config.vlm_config import VLMConfig
 
 
@@ -60,3 +65,23 @@ def test_openviking_config_accepts_sources_section(monkeypatch):
     )
 
     assert config.sources["sessions"][0]["name"] == "codex"
+
+
+def test_ovcli_config_rejects_legacy_account_id_and_user_id(tmp_path, monkeypatch):
+    config_path = tmp_path / "ovcli.conf"
+    config_path.write_text(
+        json.dumps(
+            {
+                "url": "http://127.0.0.1:1933",
+                "timeout": 120.0,
+                "account_id": "legacy-account",
+                "user_id": "legacy-user",
+                "agent_id": "main",
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("OPENVIKING_CLI_CONFIG_FILE", str(config_path))
+
+    with pytest.raises(ValueError, match="Unknown config field 'ovcli.account_id'"):
+        load_ovcli_config()

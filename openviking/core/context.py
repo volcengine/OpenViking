@@ -7,7 +7,6 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from openviking.utils.source_utils import infer_source, normalize_source_name
 from openviking.utils.time_utils import format_iso8601, parse_iso_datetime
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.uri import VikingURI
@@ -69,7 +68,6 @@ class Context:
         related_uri: Optional[List[str]] = None,
         meta: Optional[Dict[str, Any]] = None,
         level: int | ContextLevel | None = None,
-        source: Optional[str] = None,
         session_id: Optional[str] = None,
         user: Optional[UserIdentifier] = None,
         account_id: Optional[str] = None,
@@ -96,7 +94,6 @@ class Context:
             self.level = int(level) if level is not None else None
         except (TypeError, ValueError):
             self.level = None
-        self.source = normalize_source_name(source) or infer_source(uri, self.context_type)
         self.session_id = session_id
         self.user = user
         self.account_id = account_id or (user.account_id if user else "default")
@@ -169,7 +166,6 @@ class Context:
             "is_leaf": self.is_leaf,
             "abstract": self.abstract,
             "context_type": self.context_type,
-            "source": self.source,
             "category": self.category,
             "created_at": created_at_str,
             "updated_at": updated_at_str,
@@ -236,7 +232,6 @@ class Context:
                 if isinstance(data.get("meta"), dict)
                 else None
             ),
-            source=data.get("source"),
             session_id=data.get("session_id"),
             user=user_obj,
             account_id=data.get("account_id"),

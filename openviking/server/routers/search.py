@@ -14,10 +14,8 @@ from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
+from openviking.utils.search_filters import merge_time_filter
 
-
-
-from openviking.utils.search_filters import merge_source_filter, merge_time_filter
 
 def _sanitize_floats(obj: Any) -> Any:
     """Recursively replace inf/nan with 0.0 to ensure JSON compliance."""
@@ -46,7 +44,6 @@ class FindRequest(BaseModel):
     filter: Optional[Dict[str, Any]] = None
     include_provenance: bool = False
 
-    source: Optional[str] = None
     after: Optional[str] = None
     before: Optional[str] = None
     since: Optional[str] = None
@@ -67,7 +64,6 @@ class SearchRequest(BaseModel):
     filter: Optional[Dict[str, Any]] = None
     include_provenance: bool = False
 
-    source: Optional[str] = None
     after: Optional[str] = None
     before: Optional[str] = None
     since: Optional[str] = None
@@ -104,12 +100,8 @@ async def find(
     service = get_service()
     actual_limit = request.node_limit if request.node_limit is not None else request.limit
     try:
-        effective_filter = merge_source_filter(
-            request.filter,
-            source=request.source,
-        )
         effective_filter = merge_time_filter(
-            effective_filter,
+            request.filter,
             since=request.after or request.since,
             until=request.before or request.until,
             time_field=request.time_field,
@@ -147,12 +139,8 @@ async def search(
     """Semantic search with optional session context."""
     service = get_service()
     try:
-        effective_filter = merge_source_filter(
-            request.filter,
-            source=request.source,
-        )
         effective_filter = merge_time_filter(
-            effective_filter,
+            request.filter,
             since=request.after or request.since,
             until=request.before or request.until,
             time_field=request.time_field,

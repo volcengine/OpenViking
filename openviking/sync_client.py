@@ -168,7 +168,6 @@ class SyncOpenViking:
         since: Optional[str] = None,
         until: Optional[str] = None,
         time_field: Optional[str] = None,
-        source: Optional[str] = None,
     ):
         """Execute complex retrieval (intent analysis, hierarchical retrieval)."""
         return run_async(
@@ -184,7 +183,6 @@ class SyncOpenViking:
                 since=since,
                 until=until,
                 time_field=time_field,
-                source=source,
             )
         )
 
@@ -199,7 +197,6 @@ class SyncOpenViking:
         since: Optional[str] = None,
         until: Optional[str] = None,
         time_field: Optional[str] = None,
-        source: Optional[str] = None,
     ):
         """Quick retrieval"""
         return run_async(
@@ -213,7 +210,6 @@ class SyncOpenViking:
                 since,
                 until,
                 time_field,
-                source,
             )
         )
 

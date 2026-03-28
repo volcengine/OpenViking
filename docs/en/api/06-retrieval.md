@@ -64,7 +64,7 @@ results = client.find("how to authenticate users")
 
 recent_emails = client.find(
     "invoice",
-    target_uri="viking://resources/sources/email/",
+    target_uri="viking://resources/email/",
     since="7d",
     time_field="created_at",
 )
@@ -97,11 +97,8 @@ curl -X POST http://localhost:1933/api/v1/search/find \
 
 ```bash
 openviking find "how to authenticate users" [--uri viking://resources/] [--limit 10]
-openviking find "invoice" --source email --after 7d --time-field created_at
+openviking find "invoice" --last 7d
 ```
-
-`--since` and `--until` remain accepted as compatibility aliases for `--after`
-and `--before`.
 
 **Response**
 
@@ -250,7 +247,7 @@ curl -X POST http://localhost:1933/api/v1/search/search \
 
 ```bash
 openviking search "best practices" [--session-id abc123] [--limit 10]
-openviking search "watch vs scheduled" --source sessions --within 2h
+openviking search "watch vs scheduled" --last 2h
 ```
 
 **Response**

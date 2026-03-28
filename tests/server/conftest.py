@@ -121,6 +121,7 @@ class _DummyVLM:
 def test_openviking_config(temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
     """Provide an isolated ov.conf and dummy model backends for server tests."""
     config_path = temp_dir / "ov.conf"
+    ovcli_config_path = temp_dir / "ovcli.conf"
     config_path.write_text(
         json.dumps(
             {
@@ -137,8 +138,19 @@ def test_openviking_config(temp_dir: Path, monkeypatch: pytest.MonkeyPatch):
         ),
         encoding="utf-8",
     )
+    ovcli_config_path.write_text(
+        json.dumps(
+            {
+                "url": "http://127.0.0.1:1933",
+                "timeout": 120.0,
+                "agent_id": "test-agent",
+            }
+        ),
+        encoding="utf-8",
+    )
 
     monkeypatch.setenv("OPENVIKING_CONFIG_FILE", str(config_path))
+    monkeypatch.setenv("OPENVIKING_CLI_CONFIG_FILE", str(ovcli_config_path))
 
     from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
 

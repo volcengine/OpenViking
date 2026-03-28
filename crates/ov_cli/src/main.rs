@@ -366,9 +366,6 @@ enum Commands {
         /// Target URI
         #[arg(short, long, default_value = "")]
         uri: String,
-        /// Restrict retrieval to one canonical source family, e.g. sessions/documents/email
-        #[arg(long)]
-        source: Option<String>,
         /// Maximum number of results
         #[arg(
             short = 'n',
@@ -381,16 +378,16 @@ enum Commands {
         #[arg(short, long)]
         threshold: Option<f64>,
         /// Only include results updated after this time (e.g. 48h, 7d, 2026-03-10, ISO-8601)
-        #[arg(long, alias = "since")]
+        #[arg(long)]
         after: Option<String>,
         /// Only include results updated before this time (e.g. 24h, 2026-03-15, ISO-8601)
-        #[arg(long, alias = "until")]
+        #[arg(long)]
         before: Option<String>,
-        /// Results from within the last duration (e.g. 48h, 7d, 2w). Shorthand for --after
+        /// Only include results from the last duration (e.g. 48h, 7d, 2w)
         #[arg(long, conflicts_with = "after")]
-        within: Option<String>,
+        last: Option<String>,
         /// Results from a single day (e.g. 2026-03-15)
-        #[arg(long, conflicts_with_all = ["after", "before", "within"])]
+        #[arg(long, conflicts_with_all = ["after", "before", "last"])]
         on: Option<String>,
     },
     /// Run context-aware retrieval
@@ -400,9 +397,6 @@ enum Commands {
         /// Target URI
         #[arg(short, long, default_value = "")]
         uri: String,
-        /// Restrict retrieval to one canonical source family, e.g. sessions/documents/email
-        #[arg(long)]
-        source: Option<String>,
         /// Session ID for context-aware search
         #[arg(long)]
         session_id: Option<String>,
@@ -418,16 +412,16 @@ enum Commands {
         #[arg(short, long)]
         threshold: Option<f64>,
         /// Only include results updated after this time (e.g. 48h, 7d, 2026-03-10, ISO-8601)
-        #[arg(long, alias = "since")]
+        #[arg(long)]
         after: Option<String>,
         /// Only include results updated before this time (e.g. 24h, 2026-03-15, ISO-8601)
-        #[arg(long, alias = "until")]
+        #[arg(long)]
         before: Option<String>,
-        /// Results from within the last duration (e.g. 48h, 7d, 2w). Shorthand for --after
+        /// Only include results from the last duration (e.g. 48h, 7d, 2w)
         #[arg(long, conflicts_with = "after")]
-        within: Option<String>,
+        last: Option<String>,
         /// Results from a single day (e.g. 2026-03-15)
-        #[arg(long, conflicts_with_all = ["after", "before", "within"])]
+        #[arg(long, conflicts_with_all = ["after", "before", "last"])]
         on: Option<String>,
     },
     /// Run content pattern search
@@ -809,32 +803,31 @@ async fn main() {
         Commands::Find {
             query,
             uri,
-            source,
             node_limit,
             threshold,
             after,
             before,
-            within,
+            last,
             on,
         } => {
-            let (since, until) = resolve_time_flags(after, before, within, on);
-            handle_find(query, uri, source, node_limit, threshold, since, until, ctx).await
+            handle_find(
+                query, uri, node_limit, threshold, after, before, last, on, ctx,
+            )
+            .await
         }
         Commands::Search {
             query,
             uri,
-            source,
             session_id,
             node_limit,
             threshold,
             after,
             before,
-            within,
+            last,
             on,
         } => {
-            let (since, until) = resolve_time_flags(after, before, within, on);
             handle_search(
-                query, uri, source, session_id, node_limit, threshold, since, until, ctx,
+                query, uri, session_id, node_limit, threshold, after, before, last, on, ctx,
             )
             .await
         }
@@ -1300,28 +1293,33 @@ async fn handle_get(uri: String, local_path: String, ctx: CliContext) -> Result<
 async fn handle_find(
     query: String,
     uri: String,
-    source: Option<String>,
     node_limit: i32,
     threshold: Option<f64>,
-    since: Option<String>,
-    until: Option<String>,
+    after: Option<String>,
+    before: Option<String>,
+    last: Option<String>,
+    on: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
-    if let Some(s) = &source {
-        params.push(format!("--source {}", s));
-    }
     if let Some(t) = threshold {
         params.push(format!("--threshold {}", t));
     }
-    if let Some(s) = &since {
-        params.push(format!("--after {}", s));
-    }
-    if let Some(u) = &until {
-        params.push(format!("--before {}", u));
+    if let Some(day) = &on {
+        params.push(format!("--on {}", day));
+    } else {
+        if let Some(s) = &last {
+            params.push(format!("--last {}", s));
+        } else if let Some(s) = &after {
+            params.push(format!("--after {}", s));
+        }
+        if let Some(u) = &before {
+            params.push(format!("--before {}", u));
+        }
     }
     params.push(format!("\"{}\"", query));
     print_command_echo("ov find", &params.join(" "), ctx.config.echo_command);
+    let (since, until) = resolve_time_flags(after, before, last, on);
     let client = ctx.get_client();
     commands::search::find(
         &client,
@@ -1329,7 +1327,6 @@ async fn handle_find(
         &uri,
         node_limit,
         threshold,
-        source.as_deref(),
         since.as_deref(),
         until.as_deref(),
         ctx.output_format,
@@ -1341,32 +1338,37 @@ async fn handle_find(
 async fn handle_search(
     query: String,
     uri: String,
-    source: Option<String>,
     session_id: Option<String>,
     node_limit: i32,
     threshold: Option<f64>,
-    since: Option<String>,
-    until: Option<String>,
+    after: Option<String>,
+    before: Option<String>,
+    last: Option<String>,
+    on: Option<String>,
     ctx: CliContext,
 ) -> Result<()> {
     let mut params = vec![format!("--uri={}", uri), format!("-n {}", node_limit)];
-    if let Some(s) = &source {
-        params.push(format!("--source {}", s));
-    }
     if let Some(s) = &session_id {
         params.push(format!("--session-id {}", s));
     }
     if let Some(t) = threshold {
         params.push(format!("--threshold {}", t));
     }
-    if let Some(s) = &since {
-        params.push(format!("--after {}", s));
-    }
-    if let Some(u) = &until {
-        params.push(format!("--before {}", u));
+    if let Some(day) = &on {
+        params.push(format!("--on {}", day));
+    } else {
+        if let Some(s) = &last {
+            params.push(format!("--last {}", s));
+        } else if let Some(s) = &after {
+            params.push(format!("--after {}", s));
+        }
+        if let Some(u) = &before {
+            params.push(format!("--before {}", u));
+        }
     }
     params.push(format!("\"{}\"", query));
     print_command_echo("ov search", &params.join(" "), ctx.config.echo_command);
+    let (since, until) = resolve_time_flags(after, before, last, on);
     let client = ctx.get_client();
     commands::search::search(
         &client,
@@ -1375,7 +1377,6 @@ async fn handle_search(
         session_id,
         node_limit,
         threshold,
-        source.as_deref(),
         since.as_deref(),
         until.as_deref(),
         ctx.output_format,
@@ -1384,18 +1385,113 @@ async fn handle_search(
     .await
 }
 
-/// Resolve --after/--before/--within/--on into (since, until) for the API.
+/// Resolve --after/--before/--last/--on into (since, until) for the API.
 fn resolve_time_flags(
     after: Option<String>,
     before: Option<String>,
-    within: Option<String>,
+    last: Option<String>,
     on: Option<String>,
 ) -> (Option<String>, Option<String>) {
     if let Some(date) = on {
         return (Some(date.clone()), Some(date));
     }
-    let since = within.or(after);
+    let since = last.or(after);
     (since, before)
+}
+#[cfg(test)]
+mod tests {
+    use super::{resolve_time_flags, Cli, CliContext};
+    use crate::config::Config;
+    use crate::output::OutputFormat;
+    use clap::Parser;
+
+    #[test]
+    fn cli_parses_global_identity_override_flags() {
+        let cli = Cli::try_parse_from([
+            "ov",
+            "--account",
+            "acme",
+            "--user",
+            "alice",
+            "--agent-id",
+            "assistant-1",
+            "ls",
+        ])
+        .expect("cli should parse");
+
+        assert_eq!(cli.account.as_deref(), Some("acme"));
+        assert_eq!(cli.user.as_deref(), Some("alice"));
+        assert_eq!(cli.agent_id.as_deref(), Some("assistant-1"));
+    }
+
+    #[test]
+    fn cli_context_overrides_identity_from_cli_flags() {
+        let config = Config {
+            url: "http://localhost:1933".to_string(),
+            api_key: Some("test-key".to_string()),
+            account: Some("from-config-account".to_string()),
+            user: Some("from-config-user".to_string()),
+            agent_id: Some("from-config-agent".to_string()),
+            timeout: 60.0,
+            output: "table".to_string(),
+            echo_command: true,
+            upload: Default::default(),
+        };
+
+        let ctx = CliContext::from_config(
+            config,
+            OutputFormat::Json,
+            true,
+            Some("from-cli-account".to_string()),
+            Some("from-cli-user".to_string()),
+            Some("from-cli-agent".to_string()),
+        );
+
+        assert_eq!(ctx.config.account.as_deref(), Some("from-cli-account"));
+        assert_eq!(ctx.config.user.as_deref(), Some("from-cli-user"));
+        assert_eq!(ctx.config.agent_id.as_deref(), Some("from-cli-agent"));
+    }
+
+    #[test]
+    fn cli_write_rejects_removed_semantic_flags() {
+        let result = Cli::try_parse_from([
+            "ov",
+            "write",
+            "viking://resources/demo.md",
+            "--content",
+            "updated",
+            "--no-semantics",
+            "--no-vectorize",
+        ]);
+
+        assert!(result.is_err(), "removed write flags should not parse");
+    }
+
+    #[test]
+    fn resolve_time_flags_prefers_last_for_since() {
+        let (since, until) = resolve_time_flags(
+            Some("2026-03-10".to_string()),
+            Some("2026-03-12".to_string()),
+            Some("7d".to_string()),
+            None,
+        );
+
+        assert_eq!(since.as_deref(), Some("7d"));
+        assert_eq!(until.as_deref(), Some("2026-03-12"));
+    }
+
+    #[test]
+    fn resolve_time_flags_expands_on_to_both_bounds() {
+        let (since, until) = resolve_time_flags(
+            None,
+            None,
+            Some("7d".to_string()),
+            Some("2026-03-15".to_string()),
+        );
+
+        assert_eq!(since.as_deref(), Some("2026-03-15"));
+        assert_eq!(until.as_deref(), Some("2026-03-15"));
+    }
 }
 
 /// Print command with specified parameters for debugging
@@ -1584,73 +1680,4 @@ async fn handle_health(ctx: CliContext) -> Result<()> {
 async fn handle_tui(uri: String, ctx: CliContext) -> Result<()> {
     let client = ctx.get_client();
     tui::run_tui(client, &uri).await
-}
-#[cfg(test)]
-mod tests {
-    use super::{Cli, CliContext};
-    use crate::config::Config;
-    use crate::output::OutputFormat;
-    use clap::Parser;
-
-    #[test]
-    fn cli_parses_global_identity_override_flags() {
-        let cli = Cli::try_parse_from([
-            "ov",
-            "--account",
-            "acme",
-            "--user",
-            "alice",
-            "--agent-id",
-            "assistant-1",
-            "ls",
-        ])
-        .expect("cli should parse");
-
-        assert_eq!(cli.account.as_deref(), Some("acme"));
-        assert_eq!(cli.user.as_deref(), Some("alice"));
-        assert_eq!(cli.agent_id.as_deref(), Some("assistant-1"));
-    }
-
-    #[test]
-    fn cli_context_overrides_identity_from_cli_flags() {
-        let config = Config {
-            url: "http://localhost:1933".to_string(),
-            api_key: Some("test-key".to_string()),
-            account: Some("from-config-account".to_string()),
-            user: Some("from-config-user".to_string()),
-            agent_id: Some("from-config-agent".to_string()),
-            timeout: 60.0,
-            output: "table".to_string(),
-            echo_command: true,
-            upload: Default::default(),
-        };
-
-        let ctx = CliContext::from_config(
-            config,
-            OutputFormat::Json,
-            true,
-            Some("from-cli-account".to_string()),
-            Some("from-cli-user".to_string()),
-            Some("from-cli-agent".to_string()),
-        );
-
-        assert_eq!(ctx.config.account.as_deref(), Some("from-cli-account"));
-        assert_eq!(ctx.config.user.as_deref(), Some("from-cli-user"));
-        assert_eq!(ctx.config.agent_id.as_deref(), Some("from-cli-agent"));
-    }
-
-    #[test]
-    fn cli_write_rejects_removed_semantic_flags() {
-        let result = Cli::try_parse_from([
-            "ov",
-            "write",
-            "viking://resources/demo.md",
-            "--content",
-            "updated",
-            "--no-semantics",
-            "--no-vectorize",
-        ]);
-
-        assert!(result.is_err(), "removed write flags should not parse");
-    }
 }

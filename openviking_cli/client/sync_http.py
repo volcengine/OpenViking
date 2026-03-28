@@ -211,7 +211,6 @@ class SyncHTTPClient:
         since: Optional[str] = None,
         until: Optional[str] = None,
         time_field: Optional[str] = None,
-        source: Optional[str] = None,
     ):
         """Semantic search with optional session context."""
         return run_async(
@@ -228,7 +227,6 @@ class SyncHTTPClient:
                 since=since,
                 until=until,
                 time_field=time_field,
-                source=source,
             )
         )
 
@@ -244,7 +242,6 @@ class SyncHTTPClient:
         since: Optional[str] = None,
         until: Optional[str] = None,
         time_field: Optional[str] = None,
-        source: Optional[str] = None,
     ):
         """Semantic search without session context."""
         return run_async(
@@ -259,7 +256,6 @@ class SyncHTTPClient:
                 since=since,
                 until=until,
                 time_field=time_field,
-                source=source,
             )
         )
 

@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from openviking.models.embedder.base import EmbedResult
+from openviking.utils.time_utils import parse_iso_datetime
 
 
 @pytest.fixture(autouse=True)
@@ -18,8 +19,6 @@ def fake_query_embedder(service):
             return EmbedResult(dense_vector=[0.1, 0.2, 0.3])
 
     service.viking_fs.query_embedder = FakeEmbedder()
-
-from openviking.utils.time_utils import parse_iso_datetime
 
 
 async def test_find_basic(client_with_resource):
@@ -137,29 +136,6 @@ async def test_find_with_invalid_time_returns_422(client: httpx.AsyncClient):
 
     assert resp.status_code == 422
     assert resp.json()["detail"]
-
-
-async def test_find_with_source_compiles_source_filter(client: httpx.AsyncClient, service, monkeypatch):
-    captured = {}
-
-    async def fake_find(*, filter=None, **kwargs):
-        captured["filter"] = filter
-        return {"items": []}
-
-    monkeypatch.setattr(service.search, "find", fake_find)
-
-    resp = await client.post(
-        "/api/v1/search/find",
-        json={"query": "sample", "source": "Documents"},
-    )
-
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "ok"
-    assert captured["filter"] == {
-        "op": "must",
-        "field": "source",
-        "conds": ["documents"],
-    }
 
 
 async def test_find_with_inverted_mixed_time_range_returns_422(client: httpx.AsyncClient):
@@ -300,37 +276,6 @@ async def test_search_with_until_compiles_time_range(
         "op": "time_range",
         "field": "created_at",
         "lte": "2026-03-11T23:59:59.999",
-    }
-
-
-async def test_search_with_source_and_until_combines_filters(
-    client: httpx.AsyncClient, service, monkeypatch
-):
-    captured = {}
-
-    async def fake_search(*, filter=None, **kwargs):
-        captured["filter"] = filter
-        return {"items": []}
-
-    monkeypatch.setattr(service.search, "search", fake_search)
-
-    resp = await client.post(
-        "/api/v1/search/search",
-        json={"query": "sample", "source": "session", "until": "2026-03-11"},
-    )
-
-    assert resp.status_code == 200
-    assert resp.json()["status"] == "ok"
-    assert captured["filter"] == {
-        "op": "and",
-        "conds": [
-            {"op": "must", "field": "source", "conds": ["sessions"]},
-            {
-                "op": "time_range",
-                "field": "updated_at",
-                "lte": "2026-03-11T23:59:59.999",
-            },
-        ],
     }
 
 

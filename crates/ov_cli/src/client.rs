@@ -486,7 +486,6 @@ impl HttpClient {
         uri: String,
         node_limit: i32,
         threshold: Option<f64>,
-        filter: Option<serde_json::Value>,
         after: Option<String>,
         before: Option<String>,
     ) -> Result<serde_json::Value> {
@@ -495,7 +494,6 @@ impl HttpClient {
             "target_uri": uri,
             "limit": node_limit,
             "score_threshold": threshold,
-            "filter": filter,
             "after": after,
             "before": before,
         });
@@ -509,7 +507,6 @@ impl HttpClient {
         session_id: Option<String>,
         node_limit: i32,
         threshold: Option<f64>,
-        filter: Option<serde_json::Value>,
         after: Option<String>,
         before: Option<String>,
     ) -> Result<serde_json::Value> {
@@ -519,7 +516,6 @@ impl HttpClient {
             "session_id": session_id,
             "limit": node_limit,
             "score_threshold": threshold,
-            "filter": filter,
             "after": after,
             "before": before,
         });
