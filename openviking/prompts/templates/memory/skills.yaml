@@ -7,13 +7,12 @@ description: |
   Skill memories help the agent learn from experience and execute skills more effectively over time.
 directory: "viking://agent/{agent_space}/memories/skills"
 filename_template: "{skill_name}.md"
-
+enabled: true
 content_template: |
   Skill: {{ skill_name }}
 
   Based on {{ total_executions|default(0) }} historical executions.
-  - Success count: {{ success_count|default(0) }}
-  - Failed count: {{ fail_count|default(0) }}
+  - Success rate: {{ ((success_count|default(0) / (total_executions|default(1) if total_executions|default(0) > 0 else 1)) * 100)|round|int }}% ({{ success_count|default(0) }}/{{ total_executions|default(0) }})
   - Best for: {{ best_for|default('N/A') }}
   - Recommended flow: {{ recommended_flow|default('N/A') }}
   - Key dependencies: {{ key_dependencies|default('N/A') }}
@@ -22,7 +21,6 @@ content_template: |
 
   {{ guidelines|default('') }}
 
-enabled: true
 fields:
   - name: skill_name
     type: string

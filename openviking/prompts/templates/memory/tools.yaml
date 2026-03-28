@@ -13,10 +13,9 @@ content_template: |
 
   Static Description:
   "{{ static_desc|default('N/A') }}"
-  
+
   Based on {{ call_count|default(0) }} historical calls.
-  - Success count: {{ success_time|default(0) }}
-  - Failed count: {{ (call_count|default(0) - success_time|default(0)) if call_count|default(0) > 0 else 0 }}
+  - Success rate: {{ ((success_time|default(0) / (call_count|default(1) if call_count|default(0) > 0 else 1)) * 100)|round|int }}% ({{ success_time|default(0) }}/{{ call_count|default(0) }})
   - Best for: {{ best_for|default('N/A') }}
   - Optimal params: {{ optimal_params|default('N/A') }}
   - Common failures: {{ common_failures|default('N/A') }}

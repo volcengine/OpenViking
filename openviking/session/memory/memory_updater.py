@@ -605,8 +605,9 @@ class MemoryUpdater:
                 # Read the memory file to get content
                 content = await viking_fs.read_file(uri, ctx=ctx) or ""
 
-                # Extract abstract (first 200 chars or first paragraph)
-                abstract = content if content else ""
+                # Use parse_memory_file_with_fields to strip MEMORY_FIELDS comment
+                parsed = parse_memory_file_with_fields(content)
+                abstract = parsed.get("content", "")
 
                 # Get parent URI
                 from openviking_cli.utils.uri import VikingURI
