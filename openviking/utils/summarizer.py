@@ -57,10 +57,11 @@ class Summarizer:
         telemetry = get_current_telemetry()
         for uri, temp_uri in zip(resource_uris, temp_uris):
             # Determine context_type based on URI
+            # Use the same logic as core/directories.get_context_type_for_uri()
             context_type = "resource"
-            if uri.startswith("viking://memory/"):
+            if "/memories" in uri:
                 context_type = "memory"
-            elif uri.startswith("viking://agent/skills/"):
+            elif "/skills" in uri:
                 context_type = "skill"
 
             msg = SemanticMsg(
