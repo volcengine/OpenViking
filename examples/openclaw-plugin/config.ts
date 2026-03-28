@@ -119,6 +119,8 @@ export const memoryOpenVikingConfigSchema = {
         "baseUrl",
         "agentId",
         "apiKey",
+        "accountId",
+        "userId",
         "targetUri",
         "timeoutMs",
         "autoCapture",

@@ -198,6 +198,12 @@
       },
       "emitStandardDiagnostics": {
         "type": "boolean"
+      },
+      "accountId": {
+        "type": "string"
+      },
+      "userId": {
+        "type": "string"
       }
     }
   }
