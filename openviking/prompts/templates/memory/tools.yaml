@@ -12,17 +12,18 @@ content_template: |
   Tool: {{ tool_name }}
 
   Static Description:
-  "{{ static_desc }}"
+  "{{ static_desc|default('N/A') }}"
 
   Tool Memory Context:
-  Based on {{ call_count }} historical calls:
-  - Success rate: {{ ((success_time/ (success_time + (call_count - success_time) + 0.000001)) * 100)|round(1) }}% ({{ success_time }} successful, {{ call_count - success_time }} failed)
-  - Best for: {{ best_for }}
-  - Optimal params: {{ optimal_params }}
-  - Common failures: {{ common_failures }}
-  - Recommendation: {{ recommendation }}
+  Based on {{ call_count|default(0) }} historical calls.
+  - Success count: {{ success_time|default(0) }}
+  - Failed count: {{ (call_count|default(0) - success_time|default(0)) if call_count|default(0) > 0 else 0 }}
+  - Best for: {{ best_for|default('N/A') }}
+  - Optimal params: {{ optimal_params|default('N/A') }}
+  - Common failures: {{ common_failures|default('N/A') }}
+  - Recommendation: {{ recommendation|default('N/A') }}
 
-  {{ guidelines }}
+  {{ guidelines|default('') }}
 
 fields:
   - name: tool_name
