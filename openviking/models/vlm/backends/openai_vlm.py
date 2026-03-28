@@ -2,7 +2,6 @@
 # SPDX-License-Identifier: AGPL-3.0
 """OpenAI VLM backend implementation"""
 
-import asyncio
 import base64
 import json
 import logging
@@ -13,6 +12,7 @@ from urllib.parse import urlparse
 
 from ..base import ToolCall, VLMBase, VLMResponse
 from ..registry import DEFAULT_AZURE_API_VERSION
+from openviking.models.retry import transient_retry, transient_retry_async
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +69,7 @@ class OpenAIVLM(VLMBase):
                 self.api_version,
                 self.extra_headers,
             )
+            kwargs["max_retries"] = 0  # Disable SDK retry; we use transient_retry
             if self.provider == "azure":
                 self._sync_client = openai.AzureOpenAI(**kwargs)
             else:
@@ -89,6 +90,7 @@ class OpenAIVLM(VLMBase):
                 self.api_version,
                 self.extra_headers,
             )
+            kwargs["max_retries"] = 0  # Disable SDK retry; we use transient_retry_async
             if self.provider == "azure":
                 self._async_client = openai.AsyncAzureOpenAI(**kwargs)
             else:
@@ -289,8 +291,11 @@ class OpenAIVLM(VLMBase):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
 
+        def _call():
+            return client.chat.completions.create(**kwargs)
+
         t0 = time.perf_counter()
-        response = client.chat.completions.create(**kwargs)
+        response = transient_retry(_call, max_retries=self.max_retries)
         elapsed = time.perf_counter() - t0
 
         if tools:
@@ -309,7 +314,6 @@ class OpenAIVLM(VLMBase):
         self,
         prompt: str = "",
         thinking: bool = False,
-        max_retries: int = 0,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
@@ -335,36 +339,26 @@ class OpenAIVLM(VLMBase):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
 
-        last_error = None
-        for attempt in range(max_retries + 1):
-            try:
-                t0 = time.perf_counter()
-                response = await client.chat.completions.create(**kwargs)
-                elapsed = time.perf_counter() - t0
+        async def _call():
+            return await client.chat.completions.create(**kwargs)
 
-                if tools:
-                    self._update_token_usage_from_response(response)
-                    return self._build_vlm_response(response, has_tools=bool(tools))
+        t0 = time.perf_counter()
+        response = await transient_retry_async(_call, max_retries=self.max_retries)
+        elapsed = time.perf_counter() - t0
 
-                if self.stream:
-                    content = await self._process_streaming_response_async(response)
-                else:
-                    self._update_token_usage_from_response(
-                        response,
-                        duration_seconds=elapsed,
-                    )
-                    content = self._extract_content_from_response(response)
+        if tools:
+            self._update_token_usage_from_response(response)
+            return self._build_vlm_response(response, has_tools=bool(tools))
 
-                return self._clean_response(content)
-            except Exception as e:
-                last_error = e
-                if attempt < max_retries:
-                    await asyncio.sleep(2**attempt)
-
-        if last_error:
-            raise last_error
+        if self.stream:
+            content = await self._process_streaming_response_async(response)
         else:
-            raise RuntimeError("Unknown error in async completion")
+            self._update_token_usage_from_response(
+                response, duration_seconds=elapsed,
+            )
+            content = self._extract_content_from_response(response)
+
+        return self._clean_response(content)
 
     def _detect_image_format(self, data: bytes) -> str:
         """Detect image format from magic bytes.
@@ -454,8 +448,11 @@ class OpenAIVLM(VLMBase):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
 
+        def _call():
+            return client.chat.completions.create(**kwargs)
+
         t0 = time.perf_counter()
-        response = client.chat.completions.create(**kwargs)
+        response = transient_retry(_call, max_retries=self.max_retries)
         elapsed = time.perf_counter() - t0
 
         if tools:
@@ -506,8 +503,11 @@ class OpenAIVLM(VLMBase):
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
 
+        async def _call():
+            return await client.chat.completions.create(**kwargs)
+
         t0 = time.perf_counter()
-        response = await client.chat.completions.create(**kwargs)
+        response = await transient_retry_async(_call, max_retries=self.max_retries)
         elapsed = time.perf_counter() - t0
 
         if tools:

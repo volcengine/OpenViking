@@ -8,7 +8,6 @@ import os
 
 os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
 
-import asyncio
 import base64
 import time
 from pathlib import Path
@@ -18,6 +17,7 @@ import litellm
 from litellm import acompletion, completion
 
 from ..base import ToolCall, VLMBase, VLMResponse
+from openviking.models.retry import transient_retry, transient_retry_async
 
 logger = logging.getLogger(__name__)
 
@@ -294,8 +294,11 @@ class LiteLLMVLMProvider(VLMBase):
 
         kwargs = self._build_kwargs(model, kwargs_messages, tools, tool_choice, thinking=thinking)
 
+        def _call():
+            return completion(**kwargs)
+
         t0 = time.perf_counter()
-        response = completion(**kwargs)
+        response = transient_retry(_call, max_retries=self.max_retries)
         elapsed = time.perf_counter() - t0
         self._update_token_usage_from_response(response, duration_seconds=elapsed)
         return self._build_vlm_response(response, has_tools=bool(tools))
@@ -304,7 +307,6 @@ class LiteLLMVLMProvider(VLMBase):
         self,
         prompt: str = "",
         thinking: bool = False,
-        max_retries: int = 0,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
@@ -318,25 +320,17 @@ class LiteLLMVLMProvider(VLMBase):
 
         kwargs = self._build_kwargs(model, kwargs_messages, tools, tool_choice, thinking=thinking)
 
-        last_error = None
-        for attempt in range(max_retries + 1):
-            try:
-                t0 = time.perf_counter()
-                response = await acompletion(**kwargs)
-                elapsed = time.perf_counter() - t0
-                self._update_token_usage_from_response(
-                    response,
-                    duration_seconds=elapsed,
-                )
-                return self._build_vlm_response(response, has_tools=bool(tools))
-            except Exception as e:
-                last_error = e
-                if attempt < max_retries:
-                    await asyncio.sleep(2**attempt)
+        async def _call():
+            return await acompletion(**kwargs)
 
-        if last_error:
-            raise last_error
-        raise RuntimeError("Unknown error in async completion")
+        t0 = time.perf_counter()
+        response = await transient_retry_async(_call, max_retries=self.max_retries)
+        elapsed = time.perf_counter() - t0
+        self._update_token_usage_from_response(
+            response,
+            duration_seconds=elapsed,
+        )
+        return self._build_vlm_response(response, has_tools=bool(tools))
 
     def get_vision_completion(
         self,
@@ -362,8 +356,11 @@ class LiteLLMVLMProvider(VLMBase):
 
         kwargs = self._build_kwargs(model, kwargs_messages, tools, thinking=thinking)
 
+        def _call():
+            return completion(**kwargs)
+
         t0 = time.perf_counter()
-        response = completion(**kwargs)
+        response = transient_retry(_call, max_retries=self.max_retries)
         elapsed = time.perf_counter() - t0
         self._update_token_usage_from_response(response, duration_seconds=elapsed)
         return self._build_vlm_response(response, has_tools=bool(tools))
@@ -392,8 +389,11 @@ class LiteLLMVLMProvider(VLMBase):
 
         kwargs = self._build_kwargs(model, kwargs_messages, tools, thinking=thinking)
 
+        async def _call():
+            return await acompletion(**kwargs)
+
         t0 = time.perf_counter()
-        response = await acompletion(**kwargs)
+        response = await transient_retry_async(_call, max_retries=self.max_retries)
         elapsed = time.perf_counter() - t0
         self._update_token_usage_from_response(response, duration_seconds=elapsed)
         return self._build_vlm_response(response, has_tools=bool(tools))
