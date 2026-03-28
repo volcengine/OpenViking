@@ -10,9 +10,10 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlparse
 
+from openviking.models.retry import transient_retry, transient_retry_async
+
 from ..base import ToolCall, VLMBase, VLMResponse
 from ..registry import DEFAULT_AZURE_API_VERSION
-from openviking.models.retry import transient_retry, transient_retry_async
 
 logger = logging.getLogger(__name__)
 

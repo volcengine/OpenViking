@@ -9,11 +9,10 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-# Import run_async for sync-to-async calls
+from openviking.models.retry import transient_retry, transient_retry_async
 from openviking_cli.utils import run_async
 
 from ..base import ToolCall, VLMResponse
-from openviking.models.retry import transient_retry, transient_retry_async
 from .openai_vlm import OpenAIVLM
 
 logger = logging.getLogger(__name__)

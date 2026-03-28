@@ -16,8 +16,9 @@ from typing import Any, Dict, List, Optional, Union
 import litellm
 from litellm import acompletion, completion
 
-from ..base import ToolCall, VLMBase, VLMResponse
 from openviking.models.retry import transient_retry, transient_retry_async
+
+from ..base import ToolCall, VLMBase, VLMResponse
 
 logger = logging.getLogger(__name__)
 

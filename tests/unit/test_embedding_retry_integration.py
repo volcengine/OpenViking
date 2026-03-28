@@ -17,7 +17,6 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -162,7 +161,6 @@ class TestVikingDBEmbedderRetry:
         errors = [_HttpError(503)]
         call_count = 0
 
-        original_call_api = vikingdb_embedder._call_api
 
         def fake_call_api(*args, **kwargs):
             nonlocal call_count

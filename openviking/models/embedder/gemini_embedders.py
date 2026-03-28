@@ -237,7 +237,7 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
         if titles is not None:
             return [
                 self.embed(text, is_query=is_query, task_type=task_type, title=title)
-                for text, title in zip(texts, titles)
+                for text, title in zip(texts, titles, strict=False)
             ]
         # Resolve effective task_type from is_query when no explicit override
         if task_type is None:
@@ -268,7 +268,7 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
 
                 response = transient_retry(_batch_call, max_retries=self.max_retries)
                 batch_results = [None] * len(batch)
-                for j, emb in zip(non_empty_indices, response.embeddings):
+                for j, emb in zip(non_empty_indices, response.embeddings, strict=False):
                     batch_results[j] = EmbedResult(
                         dense_vector=truncate_and_normalize(list(emb.values), self._dimension)
                     )

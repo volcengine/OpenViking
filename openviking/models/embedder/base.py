@@ -256,7 +256,7 @@ class CompositeHybridEmbedder(HybridEmbedderBase):
 
         return [
             EmbedResult(dense_vector=d.dense_vector, sparse_vector=s.sparse_vector)
-            for d, s in zip(dense_results, sparse_results)
+            for d, s in zip(dense_results, sparse_results, strict=False)
         ]
 
     def get_dimension(self) -> int:

@@ -11,8 +11,6 @@ Verifies that:
 
 from __future__ import annotations
 
-import pytest
-
 
 class TestVLMConfigMaxRetries:
     def test_default_max_retries(self):
