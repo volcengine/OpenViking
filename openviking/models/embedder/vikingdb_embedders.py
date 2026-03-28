@@ -10,6 +10,7 @@ from openviking.models.embedder.base import (
     HybridEmbedderBase,
     SparseEmbedderBase,
 )
+from openviking.models.retry import transient_retry
 from openviking.storage.vectordb.collection.volcengine_clients import ClientForDataApi
 from openviking_cli.utils.logger import default_logger as logger
 
@@ -124,7 +125,10 @@ class VikingDBDenseEmbedder(DenseEmbedderBase, VikingDBClientMixin):
         self.dense_model = {"name": model_name, "version": model_version, "dim": dimension}
 
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
-        results = self._call_api([text], dense_model=self.dense_model)
+        results = transient_retry(
+            lambda: self._call_api([text], dense_model=self.dense_model),
+            max_retries=self.max_retries,
+        )
         if not results:
             return EmbedResult(dense_vector=[])
 
@@ -138,7 +142,10 @@ class VikingDBDenseEmbedder(DenseEmbedderBase, VikingDBClientMixin):
     def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
         if not texts:
             return []
-        raw_results = self._call_api(texts, dense_model=self.dense_model)
+        raw_results = transient_retry(
+            lambda: self._call_api(texts, dense_model=self.dense_model),
+            max_retries=self.max_retries,
+        )
         return [
             EmbedResult(
                 dense_vector=self._truncate_and_normalize(
@@ -174,7 +181,10 @@ class VikingDBSparseEmbedder(SparseEmbedderBase, VikingDBClientMixin):
         }
 
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
-        results = self._call_api([text], sparse_model=self.sparse_model)
+        results = transient_retry(
+            lambda: self._call_api([text], sparse_model=self.sparse_model),
+            max_retries=self.max_retries,
+        )
         if not results:
             return EmbedResult(sparse_vector={})
 
@@ -188,7 +198,10 @@ class VikingDBSparseEmbedder(SparseEmbedderBase, VikingDBClientMixin):
     def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
         if not texts:
             return []
-        raw_results = self._call_api(texts, sparse_model=self.sparse_model)
+        raw_results = transient_retry(
+            lambda: self._call_api(texts, sparse_model=self.sparse_model),
+            max_retries=self.max_retries,
+        )
         return [
             EmbedResult(
                 sparse_vector=self._process_sparse_embedding(item.get("sparse_embedding", {}))
@@ -224,8 +237,11 @@ class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
         }
 
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
-        results = self._call_api(
-            [text], dense_model=self.dense_model, sparse_model=self.sparse_model
+        results = transient_retry(
+            lambda: self._call_api(
+                [text], dense_model=self.dense_model, sparse_model=self.sparse_model
+            ),
+            max_retries=self.max_retries,
         )
         if not results:
             return EmbedResult(dense_vector=[], sparse_vector={})
@@ -244,8 +260,11 @@ class VikingDBHybridEmbedder(HybridEmbedderBase, VikingDBClientMixin):
     def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
         if not texts:
             return []
-        raw_results = self._call_api(
-            texts, dense_model=self.dense_model, sparse_model=self.sparse_model
+        raw_results = transient_retry(
+            lambda: self._call_api(
+                texts, dense_model=self.dense_model, sparse_model=self.sparse_model
+            ),
+            max_retries=self.max_retries,
         )
         results = []
         for item in raw_results:
