@@ -241,7 +241,7 @@ def create_test_conversation() -> List[Message]:
         role="user",
         parts=[
             TextPart(
-                "We've decided to use the MemoryReAct pattern, combined with LLMs to analyze conversations and generate memory operations. "
+                "We've decided to use the ExtractLoop pattern, combined with LLMs to analyze conversations and generate memory operations. "
                 "There are two main memory types: cards for knowledge cards (Zettelkasten note-taking method), and events for recording important events and decisions."
             )
         ],
@@ -380,7 +380,7 @@ class TestCompressorV2:
 
         # Patch get_viking_fs() to return our mock
         # Need to patch it in all the places it's used
-        with patch("openviking.session.memory.memory_react.get_viking_fs", return_value=viking_fs):
+        with patch("openviking.session.memory.extract_loop.get_viking_fs", return_value=viking_fs):
             with patch(
                 "openviking.session.memory.memory_updater.get_viking_fs", return_value=viking_fs
             ):

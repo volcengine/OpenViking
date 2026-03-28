@@ -31,7 +31,7 @@ from openviking.message import Message, TextPart
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory import (
     MemoryOperations,
-    MemoryReAct,
+    ExtractLoop,
     MemoryUpdater,
     MemoryUpdateResult,
 )
@@ -361,7 +361,7 @@ def create_test_conversation() -> List[Message]:
         id="msg3",
         role="user",
         parts=[TextPart(
-            "We've decided to use the MemoryReAct pattern, combined with LLMs to analyze conversations and generate memory operations. "
+            "We've decided to use the ExtractLoop pattern, combined with LLMs to analyze conversations and generate memory operations. "
             "There are two main memory types: cards for knowledge cards (Zettelkasten note-taking method), and events for recording important events and decisions."
         )],
     )
@@ -399,7 +399,7 @@ def create_existing_memories_content() -> Dict[str, str]:
 OpenViking is an Agent-native context database.
 
 ## Technical Approach
-- Uses MemoryReAct pattern
+- Uses ExtractLoop pattern
 - Combines LLM to analyze conversations and generate memory operations
 
 
@@ -408,10 +408,10 @@ OpenViking is an Agent-native context database.
   "name": "openviking_project"
 }
 -->""",
-        "viking://agent/default/memories/cards/memory_react.md": """# MemoryReAct Pattern
+        "viking://agent/default/memories/cards/extract_loop.md": """# ExtractLoop Pattern
 
 ## Overview
-MemoryReAct is an orchestrator pattern for memory extraction.
+ExtractLoop is an orchestrator pattern for memory extraction.
 
 ## Features
 - Analyze conversation content
@@ -420,7 +420,7 @@ MemoryReAct is an orchestrator pattern for memory extraction.
 
 <!-- MEMORY_FIELDS
 {
-  "name": "memory_react"
+  "name": "extract_loop"
 }
 -->""",
         "viking://user/default/memories/events/2026-03-20_Started_memory_extraction_feature_development.md": """# Event: Started memory extraction feature development
@@ -432,7 +432,7 @@ Started memory extraction feature development
 2026-03-20
 
 ## Content
-Today we started working on the memory extraction feature for the OpenViking project. Decided to use the MemoryReAct pattern.
+Today we started working on the memory extraction feature for the OpenViking project. Decided to use the ExtractLoop pattern.
 
 
 <!-- MEMORY_FIELDS
@@ -459,7 +459,7 @@ def create_update_conversation() -> List[Message]:
             "I just looked at our OpenViking project card and need to correct it: "
             "OpenViking is not just a context database, it's an Agent-native memory system, "
             "supporting multi-level memory (L0/L1/L2) and incremental updates. "
-            "Also, in the technical approach section, we not only use the MemoryReAct pattern, "
+            "Also, in the technical approach section, we not only use the ExtractLoop pattern, "
             "but also need to support schema-driven memory extraction."
         )],
     )
@@ -469,19 +469,19 @@ def create_update_conversation() -> List[Message]:
     msg2 = Message(
         id="msg2",
         role="assistant",
-        parts=[TextPart("Okay, I'll update the project card! Does the MemoryReAct pattern description need adjustment too?")],
+        parts=[TextPart("Okay, I'll update the project card! Does the ExtractLoop pattern description need adjustment too?")],
     )
     messages.append(msg2)
 
-    # Message 3: User updates MemoryReAct card and adds to event
+    # Message 3: User updates ExtractLoop card and adds to event
     msg3 = Message(
         id="msg3",
         role="user",
         parts=[TextPart(
-            "Yes, the MemoryReAct card also needs updating: MemoryReAct is not just about analyzing conversations and generating operations, "
+            "Yes, the ExtractLoop card also needs updating: ExtractLoop is not just about analyzing conversations and generating operations, "
             "it's a complete orchestrator responsible for tool calling, LLM reasoning, and memory operation integration. "
-            "Also, the event card that mentions 'Decided to use MemoryReAct pattern' "
-            "needs to add the reason: because the MemoryReAct pattern can handle uncertainty well, "
+            "Also, the event card that mentions 'Decided to use ExtractLoop pattern' "
+            "needs to add the reason: because the ExtractLoop pattern can handle uncertainty well, "
             "verifying the correctness of memory operations through the ReAct flow."
         )],
     )
@@ -524,7 +524,7 @@ class TestMemoryExtractorFlow:
         print("-" * 60)
 
         # Initialize orchestrator with real VLM!
-        orchestrator = MemoryReAct(
+        orchestrator = ExtractLoop(
             vlm=vlm,
             viking_fs=viking_fs,
             ctx=ctx,
@@ -616,7 +616,7 @@ class TestMemoryExtractorFlow:
         print("=" * 60)
 
         # Initialize orchestrator with real VLM!
-        orchestrator = MemoryReAct(
+        orchestrator = ExtractLoop(
             vlm=vlm,
             viking_fs=viking_fs,
             ctx=ctx,

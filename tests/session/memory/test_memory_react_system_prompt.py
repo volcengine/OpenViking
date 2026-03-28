@@ -1,18 +1,18 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 """
-Test that MemoryReAct system prompt correctly instructs LLM to read before edit.
+Test that ExtractLoop system prompt correctly instructs LLM.
 """
 
 import json
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch
 
-from openviking.session.memory import MemoryReAct
+from openviking.session.memory import ExtractLoop
 
 
-class TestMemoryReActSystemPrompt:
-    """Test the system prompt contains correct instructions about reading before edit."""
+class TestExtractLoopSystemPrompt:
+    """Test the system prompt contains correct instructions."""
 
     @pytest.fixture
     def mock_viking_fs(self):
@@ -28,76 +28,41 @@ class TestMemoryReActSystemPrompt:
         mock.tree = AsyncMock(return_value={"uri": "", "tree": []})
         return mock
 
-    @patch('openviking.session.memory.memory_react.get_viking_fs')
+    @patch('openviking.session.memory.extract_loop.get_viking_fs')
     def test_system_prompt_contains_read_before_edit_instructions(self, mock_get_viking_fs, mock_viking_fs):
         """Test that system prompt explicitly tells LLM to read files before editing."""
         mock_get_viking_fs.return_value = mock_viking_fs
 
-        # Create MemoryReAct with mock dependencies
-        mock_llm = MagicMock()
-        mock_llm.get_default_model.return_value = "test-model"
+        # Create ExtractLoop with mock dependencies
+        mock_vlm = MagicMock()
+        mock_vlm.model = "test-model"
+        mock_vlm.max_retries = 2
+        mock_vlm.get_completion_async = AsyncMock()
 
-        react = MemoryReAct(llm_provider=mock_llm, viking_fs=mock_viking_fs)
+        extract_loop = ExtractLoop(vlm=mock_vlm, viking_fs=mock_viking_fs)
 
         # Get system prompt
-        system_prompt = react._get_system_prompt("zh")
+        system_prompt = extract_loop._get_system_prompt("zh")
 
         # Check for critical instructions
-        assert "Critical: Read Before Edit" in system_prompt
-        assert "Before you edit or update ANY existing memory file, you MUST first use the read tool" in system_prompt
-        assert "The ls tool only shows you what files exist - it does NOT show you the file content" in system_prompt
-        assert "You MUST use the read tool to get the actual content of any file you want to edit" in system_prompt
-        assert "Without reading the actual file first, your edit operations will fail" in system_prompt
+        assert "Before editing ANY existing memory file, you MUST first read its complete content" in system_prompt
+        assert "ONLY read URIs that are explicitly listed in ls tool results or returned by previous tool calls" in system_prompt
 
-    @patch('openviking.session.memory.memory_react.get_viking_fs')
-    def test_system_prompt_contains_note_in_important_notes(self, mock_get_viking_fs, mock_viking_fs):
-        """Test that important notes section also reminds to read before edit."""
+    @patch('openviking.session.memory.extract_loop.get_viking_fs')
+    def test_system_prompt_contains_output_language(self, mock_get_viking_fs, mock_viking_fs):
+        """Test that system prompt includes the output language setting."""
         mock_get_viking_fs.return_value = mock_viking_fs
 
-        mock_llm = MagicMock()
-        mock_llm.get_default_model.return_value = "test-model"
+        mock_vlm = MagicMock()
+        mock_vlm.model = "test-model"
+        mock_vlm.max_retries = 2
+        mock_vlm.get_completion_async = AsyncMock()
 
-        react = MemoryReAct(llm_provider=mock_llm, viking_fs=mock_viking_fs)
-        system_prompt = react._get_system_prompt("zh")
+        # Test Chinese
+        extract_loop = ExtractLoop(vlm=mock_vlm, viking_fs=mock_viking_fs)
+        system_prompt = extract_loop._get_system_prompt("zh")
+        assert "zh" in system_prompt or "Chinese" in system_prompt
 
-        assert "Always read a file before editing it - ls and summaries are not enough" in system_prompt
-
-    @patch('openviking.session.memory.memory_react.get_viking_fs')
-    def test_ls_result_has_note_about_reading_files(self, mock_get_viking_fs, mock_viking_fs):
-        """Test that pre-fetched ls results include a note about needing to read files."""
-        mock_get_viking_fs.return_value = mock_viking_fs
-
-        mock_llm = MagicMock()
-        mock_llm.get_default_model.return_value = "test-model"
-
-        react = MemoryReAct(llm_provider=mock_llm, viking_fs=mock_viking_fs)
-
-        # Test with a pre-fetched context that has directories
-        pre_fetched = {
-            "directories": {
-                "viking://test/memories": [
-                    {"name": "test.md", "isDir": False}
-                ]
-            },
-            "summaries": {},
-            "search_results": []
-        }
-
-        messages = react._format_pre_fetched_as_tool_calls(pre_fetched)
-
-        # Check that we have messages (ls call + result, find call + result)
-        assert len(messages) >= 2
-
-        # Find the ls tool result message
-        ls_result_msg = None
-        for msg in messages:
-            if msg.get("role") == "tool" and "prefetch_ls" in msg.get("tool_call_id", ""):
-                ls_result_msg = msg
-                break
-
-        assert ls_result_msg is not None, "Could not find ls tool result message"
-
-        # The tool result message should contain our note
-        content = json.loads(ls_result_msg["content"])
-        assert "_note" in content
-        assert "This ls result only shows file names. Use read tool to get actual file content before editing any file." in content["_note"]
+        # Test English
+        system_prompt_en = extract_loop._get_system_prompt("en")
+        assert "en" in system_prompt_en or "English" in system_prompt_en

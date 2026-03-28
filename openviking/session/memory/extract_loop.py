@@ -42,7 +42,7 @@ logger = get_logger(__name__)
 
 
 
-class MemoryReAct:
+class ExtractLoop:
     """
     Simplified ReAct orchestrator for memory updates.
 
@@ -63,7 +63,7 @@ class MemoryReAct:
         registry: Optional[MemoryTypeRegistry] = None,
     ):
         """
-        Initialize the MemoryReAct.
+        Initialize the ExtractLoop.
 
         Args:
             vlm: VLM instance (from openviking.models.vlm.base)
@@ -675,7 +675,7 @@ See the complete JSON Schema below:
                 # Get the dynamically generated operations model for better type safety
                 operations_model = self.schema_model_generator.create_structured_operations_model()
 
-                # Use five-layer stable JSON parsing
+                # Use five-layer stable JSON parsing (FaultTolerantBaseModel handles type tolerance)
                 operations, error = parse_json_with_stability(
                     content=content,
                     model_class=operations_model,
@@ -684,21 +684,11 @@ See the complete JSON Schema below:
 
                 if error is not None:
                     print(f'content={content}')
-                    logger.warning(f"Failed to parse memory operations (stable parse): {error}")
-                    # Fallback: try with base MemoryOperations
-                    content_no_md = extract_json_from_markdown(content)
-                    operations, error_fallback = parse_json_with_stability(
-                        content=content_no_md,
-                        model_class=MemoryOperations,
-                        expected_fields=['reasoning', 'write_uris', 'edit_uris', 'edit_overview_uris', 'delete_uris'],
-                    )
-                    if error_fallback is not None:
-                        logger.warning(f"Fallback parse also failed: {error_fallback}")
-                        return (None, None)
+                    logger.warning(f"Failed to parse memory operations: {error}")
+                    return (None, None)
 
                 # Validate that all URIs are allowed
                 self._validate_operations(operations)
-                # print(f'Parsed operations: {operations}')
                 return (None, operations)
             except Exception as e:
                 print(f'Error parsing operations: {e}')

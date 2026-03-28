@@ -24,8 +24,8 @@ from openviking.session.memory.dataclass import (
     StructuredMemoryOperations,
 )
 from openviking.session.memory.merge_op import MergeOp, FieldType, MemoryPatchHandler
-from openviking.session.memory.memory_react import (
-    MemoryReAct,
+from openviking.session.memory.extract_loop import (
+    ExtractLoop,
 )
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.memory_updater import MemoryUpdater, MemoryUpdateResult
@@ -66,8 +66,8 @@ __all__ = [
     # Updater
     "MemoryUpdater",
     "MemoryUpdateResult",
-    # ReAct
-    "MemoryReAct",
+    # ExtractLoop
+    "ExtractLoop",
     # Tools (Tool implementations)
     "MemoryTool",
     "MemoryReadTool",

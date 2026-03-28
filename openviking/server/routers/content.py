@@ -41,6 +41,19 @@ async def read(
     """Read file content (L2)."""
     service = get_service()
     result = await service.fs.read(uri, ctx=_ctx, offset=offset, limit=limit)
+
+    # 清理MEMORY_FIELDS隐藏注释（v2记忆加工过程中的临时内部数据，不暴露给外部用户）
+    if isinstance(result, bytes):
+        text = result.decode("utf-8")
+    elif isinstance(result, str):
+        text = result
+    else:
+        text = None
+
+    if text:
+        from openviking.session.memory.utils.content import deserialize_content
+        result = deserialize_content(text)
+
     return Response(status="ok", result=result)
 
 

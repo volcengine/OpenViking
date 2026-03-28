@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field, create_model
 from pydantic.config import ConfigDict
 from typing_extensions import Annotated, Literal
 
-from openviking.session.memory.dataclass import MemoryTypeSchema
+from openviking.session.memory.dataclass import FaultTolerantBaseModel, MemoryTypeSchema
 from openviking.session.memory.merge_op import MergeOp, MergeOpFactory
 from openviking.session.memory.merge_op.base import FieldType, StrPatch, get_python_type_for_field
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
@@ -248,7 +248,7 @@ class SchemaModelGenerator:
         generic_overview_edit = self.create_overview_edit_model(enabled_memory_types[0] if enabled_memory_types else None)
 
         # Create structured operations
-        class StructuredMemoryOperations(BaseModel):
+        class StructuredMemoryOperations(FaultTolerantBaseModel):
             """Final memory operations output from LLM with type safety."""
 
             reasoning: str = Field(

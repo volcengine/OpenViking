@@ -13,7 +13,7 @@ from typing import List, Optional
 from openviking.core.context import Context
 from openviking.message import Message
 from openviking.server.identity import RequestContext
-from openviking.session.memory import MemoryReAct, MemoryTypeRegistry, MemoryUpdater
+from openviking.session.memory import ExtractLoop, MemoryTypeRegistry, MemoryUpdater
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
@@ -33,7 +33,7 @@ class SessionCompressorV2:
     ):
         """Initialize session compressor."""
         self.vikingdb = vikingdb
-        # Initialize registry once - used by both MemoryReAct and MemoryUpdater
+        # Initialize registry once - used by both ExtractLoop and MemoryUpdater
         self._registry = MemoryTypeRegistry()
 
         # Load built-in templates
@@ -53,8 +53,8 @@ class SessionCompressorV2:
             else:
                 logger.warning(f"Custom templates directory not found: {custom_dir}")
 
-    def _get_or_create_react(self, ctx: Optional[RequestContext] = None) -> MemoryReAct:
-        """Create new MemoryReAct instance with current ctx.
+    def _get_or_create_react(self, ctx: Optional[RequestContext] = None) -> ExtractLoop:
+        """Create new ExtractLoop instance with current ctx.
 
         Note: Always create new instance to avoid cross-session isolation issues.
         The ctx contains request-scoped state that must not be shared across requests.
@@ -63,7 +63,7 @@ class SessionCompressorV2:
         vlm = config.vlm.get_vlm_instance()
         viking_fs = get_viking_fs()
 
-        return MemoryReAct(
+        return ExtractLoop(
             vlm=vlm,
             viking_fs=viking_fs,
             ctx=ctx,
@@ -148,7 +148,7 @@ class SessionCompressorV2:
                         break
                     logger.warning("Failed to acquire memory locks, retrying...")
 
-            orchestrator._transaction_handle = transaction_handle  # 传递给 MemoryReAct
+            orchestrator._transaction_handle = transaction_handle  # 传递给 ExtractLoop
             updater = self._get_or_create_updater(transaction_handle)
 
             # Run ReAct orchestrator
