@@ -161,7 +161,6 @@ class TestVikingDBEmbedderRetry:
         errors = [_HttpError(503)]
         call_count = 0
 
-
         def fake_call_api(*args, **kwargs):
             nonlocal call_count
             call_count += 1
