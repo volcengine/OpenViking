@@ -274,8 +274,8 @@ class MemoryUpdater:
             import jinja2
             from jinja2 import Environment
 
-            # 创建 Jinja2 环境，undefined 变量渲染为空字符串而非报错
-            env = Environment(autoescape=False, undefined=jinja2.Undefined)
+            # 创建 Jinja2 环境，允许未定义的变量（打印警告但不报错）
+            env = Environment(autoescape=False, undefined=jinja2.DebugUndefined)
 
             # 创建模板变量
             template_vars = fields.copy()
