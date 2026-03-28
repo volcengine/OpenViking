@@ -35,20 +35,30 @@ class ExtractContext:
         self.messages = messages
 
     def read_message_ranges(self, ranges_str: str) -> "MessageRange":
-        """Parse ranges string like "0-10,50-60" and return combined MessageRange.
+        """Parse ranges string like "0-10,50-60" or "7,9,11,13" and return combined MessageRange.
 
         If there's a gap between ranges (e.g., 0-10 and 50-60), add "..." as separator.
+        Supports:
+        - "0-10,50-60" - ranges
+        - "7,9,11,13" - single indices
+        - "0-10,15,20-25" - mixed
         """
         if not ranges_str:
             return MessageRange([])
 
-        # 解析所有范围
+        # 解析所有范围/索引
         ranges = []
         for part in ranges_str.split(','):
             part = part.strip()
+            if not part:
+                continue
             if '-' in part:
                 start, end = part.split('-')
                 ranges.append((int(start), int(end)))
+            else:
+                # 单个索引转为相同起止范围
+                idx = int(part)
+                ranges.append((idx, idx))
 
         if not ranges:
             return MessageRange([])
