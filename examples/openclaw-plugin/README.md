@@ -477,3 +477,9 @@ python3 -m pip uninstall openviking -y && rm -rf ~/.openviking
 ---
 
 **See also:** [INSTALL-ZH.md](./INSTALL-ZH.md) (中文详细安装指南) · [INSTALL.md](./INSTALL.md) (English Install Guide) · [INSTALL-AGENT.md](./INSTALL-AGENT.md) (Agent Install Guide)
+
+> **Note: Agent Scope Limitation**
+>
+> The user API key can only access `viking://user/*` scope. If you see `Access denied for viking://agent/xxx/memories`, this is expected behavior. The plugin currently defaults to user scope only for memory search.
+>
+> If you need agent scope access, use the root API key with `X-OpenViking-Account` and `X-OpenViking-User` headers.
