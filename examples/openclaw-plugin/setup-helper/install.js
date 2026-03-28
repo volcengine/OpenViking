@@ -32,8 +32,10 @@ import { fileURLToPath } from "node:url";
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 let REPO = process.env.REPO || "volcengine/OpenViking";
-// PLUGIN_VERSION takes precedence over BRANCH (legacy)
-let PLUGIN_VERSION = process.env.PLUGIN_VERSION || process.env.BRANCH || "main";
+// PLUGIN_VERSION takes precedence over BRANCH (legacy). If omitted, resolve the latest tag from GitHub.
+const pluginVersionEnv = (process.env.PLUGIN_VERSION || process.env.BRANCH || "").trim();
+let PLUGIN_VERSION = pluginVersionEnv;
+let pluginVersionExplicit = Boolean(pluginVersionEnv);
 const NPM_REGISTRY = process.env.NPM_REGISTRY || "https://registry.npmmirror.com";
 const PIP_INDEX_URL = process.env.PIP_INDEX_URL || "https://mirrors.volces.com/pypi/simple/";
 
@@ -149,7 +151,13 @@ for (let i = 0; i < argv.length; i++) {
     continue;
   }
   if (arg.startsWith("--plugin-version=")) {
-    PLUGIN_VERSION = arg.slice("--plugin-version=".length).trim();
+    const version = arg.slice("--plugin-version=".length).trim();
+    if (!version) {
+      console.error("--plugin-version requires a value");
+      process.exit(1);
+    }
+    PLUGIN_VERSION = version;
+    pluginVersionExplicit = true;
     continue;
   }
   if (arg === "--plugin-version") {
@@ -159,6 +167,7 @@ for (let i = 0; i < argv.length; i++) {
       process.exit(1);
     }
     PLUGIN_VERSION = version;
+    pluginVersionExplicit = true;
     i += 1;
     continue;
   }
@@ -209,7 +218,7 @@ function printHelp() {
   console.log("");
   console.log("Options:");
   console.log("  --github-repo=OWNER/REPO GitHub repository (default: volcengine/OpenViking)");
-  console.log("  --plugin-version=TAG     Plugin version (Git tag, e.g. v0.2.9, default: main)");
+  console.log("  --plugin-version=TAG     Plugin version (Git tag, e.g. v0.2.9, default: latest tag)");
   console.log("  --openviking-version=V   OpenViking PyPI version (e.g. 0.2.9, default: latest)");
   console.log("  --workdir PATH           OpenClaw config directory (default: ~/.openclaw)");
   console.log("  --repo=PATH              Use local OpenViking repo at PATH (pip -e + local plugin)");
@@ -231,7 +240,7 @@ function printHelp() {
   console.log("  # Install specific plugin version");
   console.log("  node install.js --plugin-version=v0.2.8");
   console.log("");
-  console.log("  # Upgrade only the plugin files");
+  console.log("  # Upgrade only the plugin files from main branch");
   console.log("  node install.js --update --plugin-version=main");
   console.log("");
   console.log("  # Roll back the last plugin upgrade");
@@ -618,6 +627,120 @@ async function testRemoteFile(url) {
   return false;
 }
 
+function compareSemverDesc(a, b) {
+  if (versionGte(a, b) && versionGte(b, a)) {
+    return 0;
+  }
+  return versionGte(a, b) ? -1 : 1;
+}
+
+function pickLatestPluginTag(tagNames) {
+  const normalized = tagNames
+    .map((tag) => String(tag ?? "").trim())
+    .filter(Boolean);
+
+  const semverTags = normalized
+    .filter((tag) => isSemverLike(tag))
+    .sort(compareSemverDesc);
+
+  if (semverTags.length > 0) {
+    return semverTags[0];
+  }
+
+  return normalized[0] || "";
+}
+
+function parseGitLsRemoteTags(output) {
+  return String(output ?? "")
+    .split(/\r?\n/)
+    .map((line) => {
+      const match = line.match(/refs\/tags\/(.+)$/);
+      return match?.[1]?.trim() || "";
+    })
+    .filter(Boolean);
+}
+
+async function resolveDefaultPluginVersion() {
+  if (PLUGIN_VERSION) {
+    return;
+  }
+
+  info(tr(
+    `No plugin version specified; resolving latest tag from ${REPO}...`,
+    `未指定插件版本，正在解析 ${REPO} 的最新 tag...`,
+  ));
+
+  const failures = [];
+  const apiUrl = `https://api.github.com/repos/${REPO}/tags?per_page=100`;
+
+  try {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    const response = await fetch(apiUrl, {
+      headers: {
+        Accept: "application/vnd.github+json",
+        "User-Agent": "openviking-setup-helper",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+
+    if (response.ok) {
+      const payload = await response.json().catch(() => null);
+      if (Array.isArray(payload)) {
+        const latestTag = pickLatestPluginTag(payload.map((item) => item?.name || ""));
+        if (latestTag) {
+          PLUGIN_VERSION = latestTag;
+          info(tr(
+            `Resolved default plugin version to latest tag: ${PLUGIN_VERSION}`,
+            `已将默认插件版本解析为最新 tag: ${PLUGIN_VERSION}`,
+          ));
+          return;
+        }
+      } else {
+        failures.push("GitHub tags API returned an unexpected payload");
+      }
+    } else {
+      failures.push(`GitHub tags API returned HTTP ${response.status}`);
+    }
+  } catch (error) {
+    failures.push(`GitHub tags API failed: ${String(error)}`);
+  }
+
+  const gitRef = `https://github.com/${REPO}.git`;
+  const gitResult = await runCapture("git", ["ls-remote", "--tags", "--refs", gitRef], {
+    shell: IS_WIN,
+  });
+  if (gitResult.code === 0 && gitResult.out) {
+    const latestTag = pickLatestPluginTag(parseGitLsRemoteTags(gitResult.out));
+    if (latestTag) {
+      PLUGIN_VERSION = latestTag;
+      info(tr(
+        `Resolved default plugin version via git tags: ${PLUGIN_VERSION}`,
+        `已通过 git tag 解析默认插件版本: ${PLUGIN_VERSION}`,
+      ));
+      return;
+    }
+    failures.push("git ls-remote returned no usable tags");
+  } else {
+    failures.push(`git ls-remote failed${gitResult.err ? `: ${gitResult.err}` : ""}`);
+  }
+
+  err(tr(
+    `Could not resolve the latest tag for ${REPO}.`,
+    `无法解析 ${REPO} 的最新 tag。`,
+  ));
+  console.log(tr(
+    "Please rerun with --plugin-version <tag>, or use --plugin-version main to track the branch head explicitly.",
+    "请使用 --plugin-version <tag> 重新执行；如果需要显式跟踪分支头，请使用 --plugin-version main。",
+  ));
+  if (failures.length > 0) {
+    warn(failures.join(" | "));
+  }
+  process.exit(1);
+}
+
 // Resolve plugin configuration from manifest or fallback
 async function resolvePluginConfig() {
   const ghRaw = `https://raw.githubusercontent.com/${REPO}/${PLUGIN_VERSION}`;
@@ -741,7 +864,7 @@ async function checkOpenClawCompatibility() {
   }
 
   // If user explicitly requested an old version, pass
-  if (PLUGIN_VERSION !== "main" && isSemverLike(PLUGIN_VERSION) && !versionGte(PLUGIN_VERSION, "v0.2.8")) {
+  if (isSemverLike(PLUGIN_VERSION) && !versionGte(PLUGIN_VERSION, "v0.2.8")) {
     return;
   }
 
@@ -1949,12 +2072,13 @@ async function main() {
   await selectWorkdir();
   if (rollbackLastUpgrade) {
     info(tr("Mode: rollback last plugin upgrade", "模式: 回滚最近一次插件升级"));
-    if (PLUGIN_VERSION !== "main") {
+    if (pluginVersionExplicit) {
       warn("--plugin-version is ignored in --rollback mode.");
     }
     await rollbackLastUpgradeOperation();
     return;
   }
+  await resolveDefaultPluginVersion();
   validateRequestedPluginVersion();
   info(tr(`Target: ${OPENCLAW_DIR}`, `目标实例: ${OPENCLAW_DIR}`));
   info(tr(`Repository: ${REPO}`, `仓库: ${REPO}`));

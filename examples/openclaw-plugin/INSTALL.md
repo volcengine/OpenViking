@@ -118,7 +118,7 @@ Use **`ov-install`** to install a **specific archived plugin version** or pin th
 | Flag | Meaning |
 | --- | --- |
 | `--github-repo owner/repo` | GitHub repo for plugin raw downloads (default: `volcengine/OpenViking`) |
-| `--plugin-version REF` | Git branch, tag, or commit for plugin files (default: `main`) |
+| `--plugin-version REF` | Git branch, tag, or commit for plugin files (default: latest Git tag in `volcengine/OpenViking`) |
 | `--openviking-version VER` | Pin `pip install openviking==VER` (omit for latest PyPI release) |
 
 Examples:
@@ -127,7 +127,7 @@ Examples:
 # Install a specific tagged plugin version (e.g. v0.2.9)
 ov-install -y --plugin-version v0.2.9
 
-# Pin OpenViking on PyPI, plugin from main
+# Pin OpenViking on PyPI, plugin still follows the repo's latest tag by default
 ov-install -y --openviking-version 0.2.9
 
 # Pin both plugin tag and OpenViking PyPI version
@@ -206,7 +206,7 @@ curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples
 | Flag / env | Meaning |
 | --- | --- |
 | `--repo owner/repo` / `REPO` | GitHub repo for plugin raw files (default: `volcengine/OpenViking`) |
-| `--plugin-version REF` / `PLUGIN_VERSION` | Git branch, tag, or commit (default: `main`; legacy: `BRANCH`) |
+| `--plugin-version REF` / `PLUGIN_VERSION` | Git branch, tag, or commit (default: latest Git tag; legacy: `BRANCH`) |
 | `--openviking-version VER` / `OPENVIKING_VERSION` | `pip install openviking==VER` (omit for latest) |
 
 Examples:
