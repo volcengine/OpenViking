@@ -48,7 +48,11 @@ def pretty_print_messages(messages: List[Dict[str, Any]]) -> None:
         else:
             if content:
                 output.append(f"\n[{role}]")
-                output.append(content)
+                # Handle content as dict (e.g., tool_call format)
+                if isinstance(content, dict):
+                    output.append(json.dumps(content, ensure_ascii=False, indent=2))
+                else:
+                    output.append(content)
 
             if "tool_calls" in msg and msg["tool_calls"]:
                 # Legacy tool call format

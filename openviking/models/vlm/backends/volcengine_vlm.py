@@ -14,6 +14,9 @@ from typing import Any, Dict, List, Optional, Union
 from .openai_vlm import OpenAIVLM
 from ..base import VLMResponse, ToolCall
 
+# Import run_async for sync-to-async calls
+from openviking_cli.utils import run_async
+
 logger = logging.getLogger(__name__)
 
 
@@ -60,117 +63,136 @@ class VolcEngineVLM(OpenAIVLM):
         if not self.model:
             self.model = "doubao-seed-2-0-pro-260215"
 
-    def _find_cache_breakpoints(self, messages: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
-        """Find cache_control breakpoints in messages.
-
-        Returns:
-            {
-                "prefix": [...],  # messages before the last breakpoint
-                "breakpoint_index": 2,  # index of last breakpoint message
-                "current": [...],  # all messages including last breakpoint
-                "use_current_as_key": True/False,  # if True, use "current" for cache key
-            }
-            or None if no breakpoints found.
-
-        When the breakpoint is at index 0 (first message), we use "current" as the
-        cache key since there's nothing before it to cache.
-        """
-        breakpoint_indices = []
-
-        for i, msg in enumerate(messages):
-            role = msg.get("role")
-            content = msg.get("content", "")
-
-            # Check cache_control in message
-            cache_control = msg.get("cache_control")
-            if cache_control and isinstance(cache_control, dict):
-                breakpoint_indices.append(i)
-                continue
-
-            # Also check inside content blocks (for Claude-style content arrays)
-            if isinstance(content, list):
-                for block in content:
-                    if isinstance(block, dict) and block.get("cache_control"):
-                        if i not in breakpoint_indices:
-                            breakpoint_indices.append(i)
-                        break
-
-        if not breakpoint_indices:
-            return None
-
-        # Use the last breakpoint
-        last_breakpoint_idx = breakpoint_indices[-1]
-
-        # If breakpoint is at index 0, there's nothing before it
-        # So we use "current" (including the breakpoint message) as the cache key
-        use_current_as_key = (last_breakpoint_idx == 0)
-
-        return {
-            "prefix": messages[:last_breakpoint_idx],
-            "breakpoint_index": last_breakpoint_idx,
-            "current": messages[:last_breakpoint_idx + 1],
-            "use_current_as_key": use_current_as_key,
-        }
-
-    def _serialize_messages(self, messages: List[Dict[str, Any]]) -> str:
-        """Serialize messages to a string for use as cache key."""
-        # Extract role and content (skip cache_control in key)
-        key_parts = []
+    def _get_response_id_cache_key(self, messages: List[Dict[str, Any]]) -> str:
+        """Generate cache key for response_id using simple JSON serialization."""
+        # Filter out cache_control from messages for cache key
+        key_messages = []
         for msg in messages:
-            role = msg.get("role", "")
-            content = msg.get("content", "")
+            filtered = {k: v for k, v in msg.items() if k != "cache_control"}
+            key_messages.append(filtered)
+        return json.dumps(key_messages, ensure_ascii=False, sort_keys=True)
 
-            # Handle content as list (Claude-style)
-            if isinstance(content, list):
-                text_parts = []
-                for block in content:
-                    if isinstance(block, dict):
-                        text = block.get("text", "")
-                        if text:
-                            text_parts.append(text)
-                content = " ".join(text_parts)
+    async def get_response_id(self, static_messages: List[Dict[str, Any]]) -> Optional[str]:
+        """Create prefix cache and return response_id.
 
-            key_parts.append(f"{role}:{content}")
-
-        return "|".join(key_parts)
-
-    def _get_cached_response_id(self, messages: List[Dict[str, Any]]) -> Optional[str]:
-        """Get cached response_id for the given messages.
-
-        Logic:
-        - Find the last cache_control breakpoint
-        - Always use "current" (messages including breakpoint) as cache key for consistency
-        - This matches what _cache_response_id uses
+        Uses caching with prefix mode for prompt caching.
         """
-        breakpoints = self._find_cache_breakpoints(messages)
-        if not breakpoints:
-            # logger.info("[VolcEngineVLM] Cache: no breakpoints found")
+        if not static_messages:
             return None
 
-        # Always use "current" as cache key - matches what we store
-        cache_key = self._serialize_messages(breakpoints["current"])
-        # logger.info(f"[VolcEngineVLM] Cache: looking up key={cache_key[:100]}...")
-        # logger.info(f"[VolcEngineVLM] Cache: current messages count={len(breakpoints['current'])}")
+        # Check cache first
+        cache_key = self._get_response_id_cache_key(static_messages)
+        cached_id = self._response_cache.get(cache_key)
+        if cached_id:
+            logger.info(f"[VolcEngineVLM] Using cached response_id: {cached_id}")
+            return cached_id
 
-        result = self._response_cache.get(cache_key)
-        # logger.info(f"[VolcEngineVLM] Cache: lookup result={result}")
-        return result
+        client = self.get_async_client()
+        input_data = self._convert_messages_to_input(static_messages)
 
-    def _cache_response_id(self, messages: List[Dict[str, Any]], response_id: str) -> None:
-        """Cache response_id for the given messages.
+        try:
+            response = await client.responses.create(
+                model=self.model,
+                input=input_data,
+                caching={"type": "enabled", "prefix": True},
+                thinking={"type": "disabled"},
+            )
+            response_id = response.id if hasattr(response, 'id') else None
+            if response_id:
+                self._response_cache.set(cache_key, response_id)
+                logger.info(f"[VolcEngineVLM] Created new response_id: {response_id}")
+            return response_id
+        except Exception as e:
+            logger.warning(f"[VolcEngineVLM] Failed to create response_id: {e}")
+            return None
 
-        The cache key uses "current" (breakpoint message + everything before it).
-        This way, subsequent calls with the same prefix can find the cached response.
+    async def responseapi_prefixcache_completion(
+        self,
+        static_messages: List[Dict[str, Any]],
+        dynamic_messages: List[Dict[str, Any]],
+        response_format: Optional[Dict] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+    ) -> Any:
+        """Use cached response_id for completion with dynamic messages.
+
+        Args:
+            static_messages: Messages used to create the cache (shared context)
+            dynamic_messages: New messages for this request
+            response_format: Response format for structured output
+            tools: Tool definitions
+            tool_choice: Tool choice setting
         """
-        breakpoints = self._find_cache_breakpoints(messages)
-        if not breakpoints:
-            # logger.info("[VolcEngineVLM] Cache: no breakpoints, not caching")
-            return
+        response_id = await self.get_response_id(static_messages)
 
-        cache_key = self._serialize_messages(breakpoints["current"])
-        # logger.info(f"[VolcEngineVLM] Cache: storing key={cache_key[:100]}..., response_id={response_id}")
-        # logger.info(f"[VolcEngineVLM] Cache: current messages count={len(breakpoints['current'])}")
-        self._response_cache.set(cache_key, response_id)
+        client = self.get_async_client()
+        input_data = self._convert_messages_to_input(dynamic_messages)
+
+        kwargs = {
+            "model": self.model,
+            "input": input_data,
+            "temperature": self.temperature,
+            "thinking": {"type": "disabled"},
+        }
+        if self.max_tokens is not None:
+            kwargs["max_tokens"] = self.max_tokens
+        if response_format:
+            kwargs["text"] = {"format": response_format}
+
+        if response_id:
+            kwargs["previous_response_id"] = response_id
+            kwargs["caching"] = {"type": "enabled"}
+        elif tools:
+            # First call with tools: enable caching
+            converted_tools = self._convert_tools(tools)
+            kwargs["tools"] = converted_tools
+            kwargs["tool_choice"] = tool_choice or "auto"
+            kwargs["caching"] = {"type": "enabled"}
+        else:
+            # Enable caching by default
+            kwargs["caching"] = {"type": "enabled"}
+
+        response = await client.responses.create(**kwargs)
+        return response
+
+    async def responseapi_common_completion(
+        self,
+        static_messages: List[Dict[str, Any]],
+        dynamic_messages: List[Dict[str, Any]],
+        response_format: Optional[Dict] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[str] = None,
+    ) -> Any:
+        """Common completion without using cache.
+
+        Args:
+            static_messages: First part of messages
+            dynamic_messages: Second part of messages
+            response_format: Response format for structured output
+            tools: Tool definitions
+            tool_choice: Tool choice setting
+        """
+        client = self.get_async_client()
+        input_data = self._convert_messages_to_input(static_messages + dynamic_messages)
+
+        kwargs = {
+            "model": self.model,
+            "input": input_data,
+            "temperature": self.temperature,
+            "thinking": {"type": "disabled"},
+        }
+        if self.max_tokens is not None:
+            kwargs["max_tokens"] = self.max_tokens
+        if response_format:
+            kwargs["text"] = {"format": response_format}
+        if tools:
+            converted_tools = self._convert_tools(tools)
+            kwargs["tools"] = converted_tools
+            kwargs["tool_choice"] = tool_choice or "auto"
+        kwargs["caching"] = {"type": "enabled"}
+
+        response = await client.responses.create(**kwargs)
+        return response
 
     def get_client(self):
         """Get sync client"""
@@ -362,69 +384,16 @@ class VolcEngineVLM(OpenAIVLM):
     ) -> Union[str, VLMResponse]:
         """Get text completion with prompt caching support.
 
-        Uses VolcEngine Responses API for caching support.
+        Uses VolcEngine Responses API with prefix cache.
+        Delegates to async implementation.
         """
-        client = self.get_client()
-        if messages:
-            kwargs_messages = messages
-        else:
-            kwargs_messages = [{"role": "user", "content": prompt}]
-
-        # Check for cached response_id
-        previous_response_id = self._get_cached_response_id(kwargs_messages)
-
-        # Use Responses API for prompt caching
-        input_data = self._convert_messages_to_input(kwargs_messages)
-
-        kwargs = {
-            "model": self.model or "doubao-seed-2-0-pro-260215",
-            "input": input_data,
-            "temperature": self.temperature,
-            "thinking": {"type": "disabled" if not thinking else "enabled"},
-        }
-        if self.max_tokens is not None:
-            kwargs["max_tokens"] = self.max_tokens
-
-        # VolcEngine limitation: cannot use tools with previous_response_id
-        # Solution: First call creates cache with tools, subsequent calls use previous_response_id
-        # (server will automatically include tools from cache)
-        # logger.info(f"[VolcEngineVLM] Request: tools={bool(tools)}, previous_response_id={previous_response_id}")
-        if tools and previous_response_id:
-            # Both tools and previous_response_id - use previous_response_id for caching
-            # (server will include tools from cached context)
-            kwargs["previous_response_id"] = previous_response_id
-            kwargs["caching"] = {"type": "enabled"}
-            # logger.info(f"[VolcEngineVLM] Using cached response_id with tools: {previous_response_id}")
-        elif tools:
-            # First call with tools: enable caching (will create cache with tools)
-            converted_tools = self._convert_tools(tools)
-            kwargs["tools"] = converted_tools
-            # logger.debug(f"[VolcEngineVLM] Converted tools: {converted_tools}")
-            kwargs["tool_choice"] = tool_choice or "auto"
-            kwargs["caching"] = {"type": "enabled"}
-        elif previous_response_id:
-            # Use cached response (tools are in the cached context)
-            kwargs["previous_response_id"] = previous_response_id
-            kwargs["caching"] = {"type": "enabled"}
-            # logger.info(f"[VolcEngineVLM] Using cached response_id: {previous_response_id}")
-        else:
-            # Enable caching by default for prompt caching support
-            kwargs["caching"] = {"type": "enabled"}
-
-        # logger.info(f"[VolcEngineVLM] Request kwargs: caching={kwargs.get('caching')}, previous_response_id={kwargs.get('previous_response_id')}")
-
-        t0 = time.perf_counter()
-        # Use Responses API instead of Chat API
-        response = client.responses.create(**kwargs)
-        elapsed = time.perf_counter() - t0
-        self._update_token_usage_from_response(response, duration_seconds=elapsed)
-
-        # Cache the response_id for future requests
-        if hasattr(response, 'id') and response.id:
-            self._cache_response_id(kwargs_messages, response.id)
-            # logger.info(f"[VolcEngineVLM] Cached response_id: {response.id}")
-
-        return self._build_vlm_response(response, has_tools=bool(tools))
+        return run_async(self.get_completion_async(
+            prompt=prompt,
+            thinking=thinking,
+            tools=tools,
+            tool_choice=tool_choice,
+            messages=messages,
+        ))
 
     def _convert_messages_to_input(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Convert OpenAI-style messages to VolcEngine Responses API input format.
@@ -443,55 +412,61 @@ class VolcEngineVLM(OpenAIVLM):
             role = msg.get("role", "user")
             content = msg.get("content", "")
 
-            # Handle content - check if it contains images
-            has_images = False
-            if isinstance(content, list):
-                text_parts = []
-                image_urls = []
-                for block in content:
-                    if isinstance(block, dict):
-                        block_type = block.get("type", "")
-                        # Handle text blocks
-                        if block_type == "text" or "text" in block:
-                            text = block.get("text", "")
-                            if text:
-                                text_parts.append(text)
-                        # Handle image_url blocks
-                        elif block_type == "image_url" or "image_url" in block:
-                            image_url = block.get("image_url", {})
-                            if isinstance(image_url, dict):
-                                url = image_url.get("url", "")
-                                if url:
-                                    image_urls.append(url)
-                            has_images = True
-                        # Handle other block types
-                        else:
-                            # Try to extract text from any dict block
-                            text = block.get("text", "")
-                            if text:
-                                text_parts.append(text)
-                content = " ".join(text_parts)
-                # If there were images, include them as base64 data URLs in content
-                if image_urls:
-                    # Filter out non-data URLs (keep only data: URLs)
-                    data_urls = [u for u in image_urls if u.startswith("data:")]
-                    if data_urls:
-                        # Append image references to content
-                        content = content + "\n[Images: " + ", ".join([f"data URL ({i+1})" for i in range(len(data_urls))]) + "]"
+            # Handle tool_call role with content as dict {name, args, result}
+            if role == "tool_call" and isinstance(content, dict):
+                import json
+                content_str = json.dumps(content, ensure_ascii=False)
+                role = "user"  # Convert tool_call to user
+            else:
+                # Handle content - check if it contains images
+                has_images = False
+                if isinstance(content, list):
+                    text_parts = []
+                    image_urls = []
+                    for block in content:
+                        if isinstance(block, dict):
+                            block_type = block.get("type", "")
+                            # Handle text blocks
+                            if block_type == "text" or "text" in block:
+                                text = block.get("text", "")
+                                if text:
+                                    text_parts.append(text)
+                            # Handle image_url blocks
+                            elif block_type == "image_url" or "image_url" in block:
+                                image_url = block.get("image_url", {})
+                                if isinstance(image_url, dict):
+                                    url = image_url.get("url", "")
+                                    if url:
+                                        image_urls.append(url)
+                                has_images = True
+                            # Handle other block types
+                            else:
+                                # Try to extract text from any dict block
+                                text = block.get("text", "")
+                                if text:
+                                    text_parts.append(text)
+                    content = " ".join(text_parts)
+                    # If there were images, include them as base64 data URLs in content
+                    if image_urls:
+                        # Filter out non-data URLs (keep only data: URLs)
+                        data_urls = [u for u in image_urls if u.startswith("data:")]
+                        if data_urls:
+                            # Append image references to content
+                            content = content + "\n[Images: " + ", ".join([f"data URL ({i+1})" for i in range(len(data_urls))]) + "]"
 
-            # Ensure content is a string, use placeholder if empty
-            content_str = str(content) if content else "[empty]"
-            # Skip messages with empty content (API requirement)
-            if not content_str or content_str == "[empty]":
-                continue
+                # Ensure content is a string, use placeholder if empty
+                content_str = str(content) if content else "[empty]"
+                # Skip messages with empty content (API requirement)
+                if not content_str or content_str == "[empty]":
+                    continue
 
-            # Handle role conversion
-            # Responses API supports: system, user, assistant
-            # Convert 'tool' role to user with prefix (preserve the tool result context)
-            if role == "tool":
-                # Prefix with tool result indicator
-                content_str = f"[Tool Result]\n{content_str}"
-                role = "user"
+                # Handle role conversion
+                # Responses API supports: system, user, assistant
+                # Convert 'tool' role to user with prefix (preserve the tool result context)
+                if role == "tool":
+                    # Prefix with tool result indicator
+                    content_str = f"[Tool Result]\n{content_str}"
+                    role = "user"
 
             # Simple format: role + content (no type field)
             input_messages.append({
@@ -558,95 +533,69 @@ class VolcEngineVLM(OpenAIVLM):
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
-        """Get text completion asynchronously with prompt caching support.
+        """Get text completion with prompt caching support.
 
-        Uses VolcEngine Responses API for caching support.
+        Uses VolcEngine Responses API with prefix cache.
+        Separates messages into static (cached) and dynamic parts.
         """
-        client = self.get_async_client()
         if messages:
             kwargs_messages = messages
         else:
             kwargs_messages = [{"role": "user", "content": prompt}]
 
-        # Check for cached response_id
-        previous_response_id = self._get_cached_response_id(kwargs_messages)
+        # Separate static messages (with cache_control) from dynamic messages
+        # cache_control 标记"到这个位置为止的前缀可以被缓存"
+        # 找到最后一个 cache_control 位置，从头到该位置的所有消息都是 static
+        last_breakpoint_idx = -1
+        for i, msg in enumerate(kwargs_messages):
+            if msg.get("cache_control"):
+                last_breakpoint_idx = i
 
-        # Use Responses API for prompt caching
-        # Convert messages to input format
-        input_data = self._convert_messages_to_input(kwargs_messages)
-
-        # Build kwargs for Responses API
-        kwargs = {
-            "model": self.model or "doubao-seed-2-0-pro-260215",
-            "input": input_data,
-            "temperature": self.temperature,
-            "thinking": {"type": "disabled" if not thinking else "enabled"},
-        }
-        if self.max_tokens is not None:
-            kwargs["max_tokens"] = self.max_tokens
-
-        # VolcEngine limitation: cannot use tools with previous_response_id
-        # Solution: First call creates cache with tools, subsequent calls use previous_response_id
-        # (server will automatically include tools from cache)
-        # logger.info(f"[VolcEngineVLM] Request: tools={bool(tools)}, previous_response_id={previous_response_id}")
-        if tools and previous_response_id:
-            # Both tools and previous_response_id - use previous_response_id for caching
-            # (server will include tools from cached context)
-            kwargs["previous_response_id"] = previous_response_id
-            kwargs["caching"] = {"type": "enabled"}
-            # logger.info(f"[VolcEngineVLM] Using cached response_id with tools: {previous_response_id}")
-        elif tools:
-            # First call with tools: enable caching (will create cache with tools)
-            converted_tools = self._convert_tools(tools)
-            kwargs["tools"] = converted_tools
-            # logger.debug(f"[VolcEngineVLM] Converted tools: {converted_tools}")
-            kwargs["tool_choice"] = tool_choice or "auto"
-            kwargs["caching"] = {"type": "enabled"}
-        elif previous_response_id:
-            # Use cached response (tools are in the cached context)
-            kwargs["previous_response_id"] = previous_response_id
-            kwargs["caching"] = {"type": "enabled"}
-            # logger.info(f"[VolcEngineVLM] Using cached response_id: {previous_response_id}")
+        if last_breakpoint_idx >= 0:
+            static_messages = kwargs_messages[:last_breakpoint_idx + 1]
+            dynamic_messages = kwargs_messages[last_breakpoint_idx + 1:]
         else:
-            # Enable caching by default for prompt caching support
-            kwargs["caching"] = {"type": "enabled"}
+            static_messages = []
+            dynamic_messages = kwargs_messages
 
-        # logger.info(f"[VolcEngineVLM] Request kwargs: caching={kwargs.get('caching')}, previous_response_id={kwargs.get('previous_response_id')}")
+        # If we have static messages, try prefix cache
+        response_format = None  # Can be extended for structured output
 
-        last_error = None
-        for attempt in range(max_retries + 1):
-            try:
-                t0 = time.perf_counter()
-                # Use Responses API instead of Chat API
-                response = await client.responses.create(**kwargs)
-                elapsed = time.perf_counter() - t0
-                self._update_token_usage_from_response(
-                    response, duration_seconds=elapsed,
+        try:
+            if static_messages:
+                # Use prefix cache
+                response = await self.responseapi_prefixcache_completion(
+                    static_messages=static_messages,
+                    dynamic_messages=dynamic_messages,
+                    response_format=response_format,
+                    tools=tools,
+                    tool_choice=tool_choice,
+                )
+            else:
+                # No static messages, use common completion
+                response = await self.responseapi_common_completion(
+                    static_messages=[],
+                    dynamic_messages=dynamic_messages,
+                    response_format=response_format,
+                    tools=tools,
+                    tool_choice=tool_choice,
                 )
 
-                # Cache the response_id for future requests
-                if hasattr(response, 'id') and response.id:
-                    self._cache_response_id(kwargs_messages, response.id)
-                    # logger.info(f"[VolcEngineVLM] Cached response_id: {response.id}")
+            elapsed = 0  # Timing handled in responseapi methods
+            self._update_token_usage_from_response(response, duration_seconds=elapsed)
+            return self._build_vlm_response(response, has_tools=bool(tools))
 
-                return self._build_vlm_response(response, has_tools=bool(tools))
-            except Exception as e:
-                last_error = e
-                # Log token info from error response if available
-                error_response = getattr(e, 'response', None)
-                if error_response and hasattr(error_response, 'usage'):
-                    u = error_response.usage
-                    prompt_tokens = getattr(u, 'input_tokens', 0) or 0
-                    completion_tokens = getattr(u, 'output_tokens', 0) or 0
-                    logger.info(f"[VolcEngineVLM] Error response - Input tokens: {prompt_tokens}, Output tokens: {completion_tokens}")
-                logger.warning(f"[VolcEngineVLM] Request failed: {e}")
-                if attempt < max_retries:
-                    await asyncio.sleep(2**attempt)
-
-        if last_error:
+        except Exception as e:
+            last_error = e
+            # Log token info from error response if available
+            error_response = getattr(e, 'response', None)
+            if error_response and hasattr(error_response, 'usage'):
+                u = error_response.usage
+                prompt_tokens = getattr(u, 'input_tokens', 0) or 0
+                completion_tokens = getattr(u, 'output_tokens', 0) or 0
+                logger.info(f"[VolcEngineVLM] Error response - Input tokens: {prompt_tokens}, Output tokens: {completion_tokens}")
+            logger.warning(f"[VolcEngineVLM] Request failed: {e}")
             raise last_error
-        else:
-            raise RuntimeError("Unknown error in async completion")
 
     def _detect_image_format(self, data: bytes) -> str:
         """Detect image format from magic bytes.
@@ -772,70 +721,16 @@ class VolcEngineVLM(OpenAIVLM):
     ) -> Union[str, VLMResponse]:
         """Get vision completion with prompt caching support.
 
-        Uses VolcEngine Responses API for caching support.
+        Uses VolcEngine Responses API with prefix cache.
+        Delegates to async implementation.
         """
-        client = self.get_client()
-
-        if messages:
-            kwargs_messages = messages
-        else:
-            content = []
-            if images:
-                for img in images:
-                    content.append(self._prepare_image(img))
-            if prompt:
-                content.append({"type": "text", "text": prompt})
-            kwargs_messages = [{"role": "user", "content": content}]
-
-        # Check for cached response_id
-        previous_response_id = self._get_cached_response_id(kwargs_messages)
-
-        # Use Responses API
-        input_data = self._convert_messages_to_input(kwargs_messages)
-
-        kwargs = {
-            "model": self.model or "doubao-seed-2-0-pro-260215",
-            "input": input_data,
-            "temperature": self.temperature,
-            "thinking": {"type": "disabled" if not thinking else "enabled"},
-        }
-        if self.max_tokens is not None:
-            kwargs["max_tokens"] = self.max_tokens
-
-        # VolcEngine limitation: cannot use tools with previous_response_id
-        # Solution: First call creates cache with tools, subsequent calls use previous_response_id
-        # (server will automatically include tools from cache)
-        if tools:
-            # Convert tools to VolcEngine format
-            converted_tools = self._convert_tools(tools)
-            kwargs["tools"] = converted_tools
-            # logger.debug(f"[VolcEngineVLM] Converted tools: {converted_tools}")
-            kwargs["tool_choice"] = "auto"
-            # First call: enable caching (will create cache with tools)
-            # Subsequent calls: use previous_response_id (no tools needed, server has them in cache)
-            if not previous_response_id:
-                kwargs["caching"] = {"type": "enabled"}
-        elif previous_response_id:
-            # Use cached response (tools are in the cached context)
-            kwargs["previous_response_id"] = previous_response_id
-            kwargs["caching"] = {"type": "enabled"}
-            # logger.info(f"[VolcEngineVLM] Using cached response_id: {previous_response_id}")
-        else:
-            # Enable caching by default for prompt caching support
-            kwargs["caching"] = {"type": "enabled"}
-
-        t0 = time.perf_counter()
-        # Use Responses API
-        response = client.responses.create(**kwargs)
-        elapsed = time.perf_counter() - t0
-        self._update_token_usage_from_response(response, duration_seconds=elapsed)
-
-        # Cache the response_id for future requests
-        if hasattr(response, 'id') and response.id:
-            self._cache_response_id(kwargs_messages, response.id)
-            # logger.info(f"[VolcEngineVLM] Cached response_id: {response.id}")
-
-        return self._build_vlm_response(response, has_tools=bool(tools))
+        return run_async(self.get_vision_completion_async(
+            prompt=prompt,
+            images=images,
+            thinking=thinking,
+            tools=tools,
+            messages=messages,
+        ))
 
     async def get_vision_completion_async(
         self,
@@ -845,12 +740,10 @@ class VolcEngineVLM(OpenAIVLM):
         tools: Optional[List[Dict[str, Any]]] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
-        """Get vision completion asynchronously with prompt caching support.
+        """Get vision completion with prompt caching support.
 
-        Uses VolcEngine Responses API for caching support.
+        Uses VolcEngine Responses API with prefix cache.
         """
-        client = self.get_async_client()
-
         if messages:
             kwargs_messages = messages
         else:
@@ -862,52 +755,42 @@ class VolcEngineVLM(OpenAIVLM):
                 content.append({"type": "text", "text": prompt})
             kwargs_messages = [{"role": "user", "content": content}]
 
-        # Check for cached response_id
-        previous_response_id = self._get_cached_response_id(kwargs_messages)
+        # Separate static messages (with cache_control) from dynamic messages
+        # cache_control 标记"到这个位置为止的前缀可以被缓存"
+        # 找到最后一个 cache_control 位置，从头到该位置的所有消息都是 static
+        last_breakpoint_idx = -1
+        for i, msg in enumerate(kwargs_messages):
+            if msg.get("cache_control"):
+                last_breakpoint_idx = i
 
-        # Use Responses API
-        input_data = self._convert_messages_to_input(kwargs_messages)
-
-        kwargs = {
-            "model": self.model or "doubao-seed-2-0-pro-260215",
-            "input": input_data,
-            "temperature": self.temperature,
-            "thinking": {"type": "disabled" if not thinking else "enabled"},
-        }
-        if self.max_tokens is not None:
-            kwargs["max_tokens"] = self.max_tokens
-
-        # VolcEngine limitation: cannot use tools with previous_response_id
-        # Solution: First call creates cache with tools, subsequent calls use previous_response_id
-        # (server will automatically include tools from cache)
-        if tools:
-            # Convert tools to VolcEngine format
-            converted_tools = self._convert_tools(tools)
-            kwargs["tools"] = converted_tools
-            # logger.debug(f"[VolcEngineVLM] Converted tools: {converted_tools}")
-            kwargs["tool_choice"] = "auto"
-            # First call: enable caching (will create cache with tools)
-            # Subsequent calls: use previous_response_id (no tools needed, server has them in cache)
-            if not previous_response_id:
-                kwargs["caching"] = {"type": "enabled"}
-        elif previous_response_id:
-            # Use cached response (tools are in the cached context)
-            kwargs["previous_response_id"] = previous_response_id
-            kwargs["caching"] = {"type": "enabled"}
-            # logger.info(f"[VolcEngineVLM] Using cached response_id: {previous_response_id}")
+        if last_breakpoint_idx >= 0:
+            static_messages = kwargs_messages[:last_breakpoint_idx + 1]
+            dynamic_messages = kwargs_messages[last_breakpoint_idx + 1:]
         else:
-            # Enable caching by default for prompt caching support
-            kwargs["caching"] = {"type": "enabled"}
+            static_messages = []
+            dynamic_messages = kwargs_messages
 
-        t0 = time.perf_counter()
-        # Use Responses API
-        response = await client.responses.create(**kwargs)
-        elapsed = time.perf_counter() - t0
-        self._update_token_usage_from_response(response, duration_seconds=elapsed)
+        try:
+            if static_messages:
+                # Use prefix cache
+                response = await self.responseapi_prefixcache_completion(
+                    static_messages=static_messages,
+                    dynamic_messages=dynamic_messages,
+                    tools=tools,
+                    tool_choice="auto",
+                )
+            else:
+                # No static messages, use common completion
+                response = await self.responseapi_common_completion(
+                    static_messages=[],
+                    dynamic_messages=dynamic_messages,
+                    tools=tools,
+                    tool_choice="auto",
+                )
 
-        # Cache the response_id for future requests
-        if hasattr(response, 'id') and response.id:
-            self._cache_response_id(kwargs_messages, response.id)
-            # logger.info(f"[VolcEngineVLM] Cached response_id: {response.id}")
+            self._update_token_usage_from_response(response, duration_seconds=0)
+            return self._build_vlm_response(response, has_tools=bool(tools))
 
-        return self._build_vlm_response(response, has_tools=bool(tools))
+        except Exception as e:
+            logger.warning(f"[VolcEngineVLM] Vision request failed: {e}")
+            raise

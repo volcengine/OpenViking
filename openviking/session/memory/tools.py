@@ -18,15 +18,7 @@ from openviking_cli.utils import get_logger
 logger = get_logger(__name__)
 
 
-def optimize_tool_parameters(params: Dict[str, Any]) -> Dict[str, Any]:
-    """优化工具参数以减少 Token 消耗。"""
-    optimized = {}
-    for key, value in params.items():
-        if isinstance(value, str) and len(value) > 100:
-            optimized[key] = value[:100] + "..."
-        else:
-            optimized[key] = value
-    return optimized
+
 
 
 def optimize_search_result(result: Any, limit: int = 10) -> Any:
@@ -48,6 +40,10 @@ def optimize_tool_result(tool_name: str, result: Any) -> Any:
         return {"error": extract_error_summary(result["error"])}
     if tool_name == "search" and isinstance(result, dict) and "memories" in result:
         return optimize_search_result(result)
+    # 对 read 工具返回的 dict，如果包含 content 字段，则截断 content
+    if tool_name == "read" and isinstance(result, dict) and "content" in result:
+        result = result.copy()
+        result["content"] = truncate_content(result["content"])
     return result
 
 def extract_error_summary(error: str) -> str:
@@ -68,14 +64,13 @@ def add_tool_call_pair_to_messages(
     result: Any,
 ) -> None:
     """Add a tool call pair with optimized format to save tokens."""
-    optimized_params = optimize_tool_parameters(params)
-    optimized_result = optimize_tool_result(tool_name, result)
-
     messages.append({
-        "role": "tool_call",
-        "name": tool_name,
-        "args": optimized_params,
-        "result": optimized_result
+        "role": "user",
+        "content": {
+            "tool_call_name": tool_name,
+            "args": params,
+            "result": result
+        }
     })
 
 
