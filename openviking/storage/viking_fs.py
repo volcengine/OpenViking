@@ -791,11 +791,12 @@ class VikingFS:
         """Read directory's L0 summary (.abstract.md)."""
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
-        info = self.agfs.stat(path)
+        info = await asyncio.to_thread(self.agfs.stat, path)
         if not info.get("isDir"):
             raise ValueError(f"{uri} is not a directory")
         file_path = f"{path}/.abstract.md"
-        content_bytes = self._handle_agfs_read(self.agfs.read(file_path))
+        content_bytes = await asyncio.to_thread(self.agfs.read, file_path)
+        content_bytes = self._handle_agfs_read(content_bytes)
 
         if self._encryptor:
             real_ctx = self._ctx_or_default(ctx)
@@ -811,11 +812,12 @@ class VikingFS:
         """Read directory's L1 overview (.overview.md)."""
         self._ensure_access(uri, ctx)
         path = self._uri_to_path(uri, ctx=ctx)
-        info = self.agfs.stat(path)
+        info = await asyncio.to_thread(self.agfs.stat, path)
         if not info.get("isDir"):
             raise ValueError(f"{uri} is not a directory")
         file_path = f"{path}/.overview.md"
-        content_bytes = self._handle_agfs_read(self.agfs.read(file_path))
+        content_bytes = await asyncio.to_thread(self.agfs.read, file_path)
+        content_bytes = self._handle_agfs_read(content_bytes)
 
         if self._encryptor:
             real_ctx = self._ctx_or_default(ctx)
@@ -1380,7 +1382,7 @@ class VikingFS:
     ) -> None:
         """Update URIs in vector store (when moving files).
 
-        Preserves vector data and updates URI-derived identifiers without regenerating embeddings.
+        Preserves vector data, only updates uri and parent_uri fields, no need to regenerate embeddings.
         """
         vector_store = self._get_vector_store()
         if not vector_store:
@@ -1392,11 +1394,13 @@ class VikingFS:
         for uri in uris:
             try:
                 new_uri = uri.replace(old_base_uri, new_base_uri, 1)
+                new_parent_uri = VikingURI(new_uri).parent.uri
 
                 await vector_store.update_uri_mapping(
                     ctx=self._ctx_or_default(ctx),
                     uri=uri,
                     new_uri=new_uri,
+                    new_parent_uri=new_parent_uri,
                     levels=levels,
                 )
                 logger.debug(f"[VikingFS] Updated URI: {uri} -> {new_uri}")
@@ -1496,7 +1500,8 @@ class VikingFS:
         """Read .relations.json."""
         table_path = f"{dir_path}/.relations.json"
         try:
-            content = self._handle_agfs_read(self.agfs.read(table_path))
+            content = await asyncio.to_thread(self.agfs.read, table_path)
+            content = self._handle_agfs_read(content)
             content = await self._decrypt_content(content, ctx=ctx)
             data = json.loads(content.decode("utf-8"))
         except FileNotFoundError:
