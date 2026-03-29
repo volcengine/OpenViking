@@ -85,3 +85,23 @@ class CohereRerankClient:
 
     def close(self):
         self._client.close()
+
+    @classmethod
+    def from_config(cls, config) -> Optional["CohereRerankClient"]:
+        """
+        Create CohereRerankClient from RerankConfig.
+
+        Args:
+            config: RerankConfig instance with provider='cohere'
+
+        Returns:
+            CohereRerankClient instance or None if config is not available
+        """
+        if not config or not config.is_available():
+            return None
+        return cls(
+            api_key=config.api_key,
+            model=config.model_name
+            if config.model_name != "doubao-seed-rerank"
+            else "rerank-v3.5",
+        )

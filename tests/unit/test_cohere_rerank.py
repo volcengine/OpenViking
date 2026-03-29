@@ -125,3 +125,44 @@ class TestRerankConfig:
         config = RerankConfig()
         assert config.is_available() is False
         assert config._effective_provider() is None
+
+
+class TestUnifiedRerankDispatch:
+    """Test that RerankClient.from_config() dispatches all providers uniformly."""
+
+    @patch("openviking_cli.utils.cohere_rerank.httpx.Client")
+    def test_from_config_creates_cohere_client(self, mock_client_class):
+        from openviking_cli.utils.config.rerank_config import RerankConfig
+        from openviking_cli.utils.rerank import RerankClient
+
+        config = RerankConfig(api_key="cohere-key")
+        client = RerankClient.from_config(config)
+        assert isinstance(client, CohereRerankClient)
+        assert client.api_key == "cohere-key"
+        assert client.model == "rerank-v3.5"
+
+    @patch("openviking_cli.utils.cohere_rerank.httpx.Client")
+    def test_from_config_cohere_explicit_provider(self, mock_client_class):
+        from openviking_cli.utils.config.rerank_config import RerankConfig
+        from openviking_cli.utils.rerank import RerankClient
+
+        config = RerankConfig(provider="cohere", api_key="key")
+        client = RerankClient.from_config(config)
+        assert isinstance(client, CohereRerankClient)
+
+    def test_from_config_returns_none_when_unavailable(self):
+        from openviking_cli.utils.config.rerank_config import RerankConfig
+        from openviking_cli.utils.rerank import RerankClient
+
+        config = RerankConfig()
+        assert RerankClient.from_config(config) is None
+
+    @patch("openviking_cli.utils.cohere_rerank.httpx.Client")
+    def test_cohere_from_config_uses_custom_model(self, mock_client_class):
+        from openviking_cli.utils.config.rerank_config import RerankConfig
+        from openviking_cli.utils.rerank import RerankClient
+
+        config = RerankConfig(api_key="key", model_name="rerank-v4.0")
+        client = RerankClient.from_config(config)
+        assert isinstance(client, CohereRerankClient)
+        assert client.model == "rerank-v4.0"

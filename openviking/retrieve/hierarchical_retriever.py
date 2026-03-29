@@ -72,26 +72,13 @@ class HierarchicalRetriever:
         # Use rerank threshold if available, otherwise use a default
         self.threshold = rerank_config.threshold if rerank_config else 0
 
-        # Initialize rerank client based on provider
+        # Initialize rerank client — all providers go through unified dispatch
         if rerank_config and rerank_config.is_available():
+            self._rerank_client = RerankClient.from_config(rerank_config)
             provider = rerank_config._effective_provider()
-            if provider == "cohere":
-                from openviking_cli.utils.cohere_rerank import CohereRerankClient
-
-                self._rerank_client = CohereRerankClient(
-                    api_key=rerank_config.api_key,
-                    model=rerank_config.model_name
-                    if rerank_config.model_name != "doubao-seed-rerank"
-                    else "rerank-v3.5",
-                )
-                logger.info(
-                    f"[HierarchicalRetriever] Cohere rerank enabled, threshold={self.threshold}"
-                )
-            else:
-                self._rerank_client = RerankClient.from_config(rerank_config)
-                logger.info(
-                    f"[HierarchicalRetriever] VikingDB rerank enabled, threshold={self.threshold}"
-                )
+            logger.info(
+                f"[HierarchicalRetriever] Rerank enabled (provider={provider}), threshold={self.threshold}"
+            )
         else:
             self._rerank_client = None
             logger.info(
