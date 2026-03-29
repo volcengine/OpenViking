@@ -68,9 +68,15 @@ class SessionService:
             session_id=session_id,
         )
 
-    async def create(self, ctx: RequestContext) -> Session:
-        """Create a session and persist its root path."""
-        session = self.session(ctx)
+    async def create(self, ctx: RequestContext, session_id: Optional[str] = None) -> Session:
+        """Create a session and persist its root path.
+
+        Args:
+            ctx: Request context
+            session_id: Optional session ID. If provided, creates a session with the given ID.
+                       If None, creates a new session with auto-generated ID.
+        """
+        session = self.session(ctx, session_id)
         await session.ensure_exists()
         return session
 

@@ -78,9 +78,14 @@ class SyncHTTPClient:
         """Check whether a session exists in storage."""
         return run_async(self._async_client.session_exists(session_id))
 
-    def create_session(self) -> Dict[str, Any]:
-        """Create a new session."""
-        return run_async(self._async_client.create_session())
+    def create_session(self, session_id: Optional[str] = None) -> Dict[str, Any]:
+        """Create a new session.
+
+        Args:
+            session_id: Optional session ID. If provided, creates a session with the given ID.
+                       If None, creates a new session with auto-generated ID.
+        """
+        return run_async(self._async_client.create_session(session_id))
 
     def list_sessions(self) -> List[Any]:
         """List all sessions."""

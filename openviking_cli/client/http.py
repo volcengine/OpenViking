@@ -684,11 +684,17 @@ class AsyncHTTPClient(BaseClient):
 
     # ============= Sessions =============
 
-    async def create_session(self) -> Dict[str, Any]:
-        """Create a new session."""
+    async def create_session(self, session_id: Optional[str] = None) -> Dict[str, Any]:
+        """Create a new session.
+
+        Args:
+            session_id: Optional session ID. If provided, creates a session with the given ID.
+                       If None, creates a new session with auto-generated ID.
+        """
+        json_body = {"session_id": session_id} if session_id else {}
         response = await self._http.post(
             "/api/v1/sessions",
-            json={},
+            json=json_body,
         )
         return self._handle_response(response)
 

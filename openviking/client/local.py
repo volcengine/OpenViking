@@ -319,11 +319,16 @@ class LocalClient(BaseClient):
 
     # ============= Sessions =============
 
-    async def create_session(self) -> Dict[str, Any]:
-        """Create a new session."""
+    async def create_session(self, session_id: Optional[str] = None) -> Dict[str, Any]:
+        """Create a new session.
+
+        Args:
+            session_id: Optional session ID. If provided, creates a session with the given ID.
+                       If None, creates a new session with auto-generated ID.
+        """
         await self._service.initialize_user_directories(self._ctx)
         await self._service.initialize_agent_directories(self._ctx)
-        session = await self._service.sessions.create(self._ctx)
+        session = await self._service.sessions.create(self._ctx, session_id)
         return {
             "session_id": session.session_id,
             "user": session.user.to_dict(),
