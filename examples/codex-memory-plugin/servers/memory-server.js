@@ -1,22 +1,23 @@
 /**
- * OpenViking Memory MCP Server for Claude Code
+ * OpenViking Memory MCP Server for Codex
  *
  * Exposes OpenViking long-term memory as MCP tools:
  *   - memory_recall  : semantic search across memories
  *   - memory_store   : extract and persist new memories
  *   - memory_forget  : delete memories by URI or query
+ *   - memory_health  : connectivity and config checks
  *
  * Ported from the OpenClaw context-engine plugin (openclaw-plugin/).
- * Adapted for Claude Code's MCP server interface (stdio transport).
+ * Adapted for Codex's MCP server interface (stdio transport).
  */
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
 import { createHash } from "node:crypto";
 // ---------------------------------------------------------------------------
-// Configuration — loaded from ov.conf (shared with OpenClaw plugin).
+// Configuration — loaded from ov.conf.
 // Env var: OPENVIKING_CONFIG_FILE (default: ~/.openviking/ov.conf)
-// Plugin-specific overrides go in the optional "claude_code" section.
+// Optional runtime overrides can be supplied via environment variables.
 // ---------------------------------------------------------------------------
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
@@ -53,16 +54,15 @@ function str(val, fallback) {
 }
 const file = loadOvConf();
 const serverCfg = (file.server ?? {});
-const cc = (file.claude_code ?? {});
 const host = str(serverCfg.host, "127.0.0.1").replace("0.0.0.0", "127.0.0.1");
 const port = Math.floor(num(serverCfg.port, 1933));
 const config = {
     baseUrl: `http://${host}:${port}`,
     apiKey: str(serverCfg.root_api_key, ""),
-    agentId: str(cc.agentId, "claude-code"),
-    timeoutMs: Math.max(1000, Math.floor(num(cc.timeoutMs, 15000))),
-    recallLimit: Math.max(1, Math.floor(num(cc.recallLimit, 6))),
-    scoreThreshold: Math.min(1, Math.max(0, num(cc.scoreThreshold, 0.01))),
+    agentId: str(process.env.OPENVIKING_AGENT_ID, "codex"),
+    timeoutMs: Math.max(1000, Math.floor(num(process.env.OPENVIKING_TIMEOUT_MS, 15000))),
+    recallLimit: Math.max(1, Math.floor(num(process.env.OPENVIKING_RECALL_LIMIT, 6))),
+    scoreThreshold: Math.min(1, Math.max(0, num(process.env.OPENVIKING_SCORE_THRESHOLD, 0.01))),
 };
 // ---------------------------------------------------------------------------
 // OpenViking HTTP Client (ported from openclaw-plugin/client.ts)
@@ -403,7 +403,7 @@ function markRecalledMemoriesUsed(client, contexts) {
 // ---------------------------------------------------------------------------
 const client = new OpenVikingClient(config.baseUrl, config.apiKey, config.agentId, config.timeoutMs);
 const server = new McpServer({
-    name: "openviking-memory",
+    name: "openviking-memory-codex",
     version: "0.1.0",
 });
 // -- Tool: memory_recall --------------------------------------------------

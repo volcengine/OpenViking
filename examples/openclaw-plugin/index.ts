@@ -1290,8 +1290,8 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
         }
         rememberSessionAgentId(ctx);
         const archiveId = String((params as { archiveId?: string }).archiveId ?? "").trim();
-        const sessionId = ctx.sessionId ?? "";
-        api.logger.info?.(`openviking: ov_archive_expand invoked (archiveId=${archiveId || "(empty)"}, sessionId=${sessionId || "(empty)"})`);
+        const activeSessionId = ctx.sessionId ?? "";
+        api.logger.info?.(`openviking: ov_archive_expand invoked (archiveId=${archiveId || "(empty)"}, sessionId=${activeSessionId || "(empty)"})`);
 
         if (!archiveId) {
           api.logger.warn?.(`openviking: ov_archive_expand missing archiveId`);
@@ -1489,6 +1489,17 @@ const mergeFindResults = (results: FindResult[]): FindResult => {
                 const memories = pickMemoriesForInjection(processed, cfg.recallLimit, queryText);
 
                 if (memories.length > 0) {
+                  const recalledUris = memories
+                    .map((memory) => memory.uri)
+                    .filter((uri): uri is string => typeof uri === "string" && uri.length > 0);
+                  const ovSessionId = openClawSessionToOvStorageId(
+                    ctx?.sessionId,
+                    ctx?.sessionKey,
+                  );
+                  void client.sessionUsed(ovSessionId, recalledUris, agentId).catch((err) => {
+                    api.logger.warn(`openviking: sessionUsed failed: ${String(err)}`);
+                  });
+
                   const { lines: memoryLines, estimatedTokens } = await buildMemoryLinesWithBudget(
                     memories,
                     (uri) => client.read(uri, agentId),
