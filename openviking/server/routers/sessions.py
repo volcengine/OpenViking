@@ -3,6 +3,7 @@
 """Sessions endpoints for OpenViking HTTP Server."""
 
 import logging
+from datetime import datetime
 from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, Path, Query
@@ -64,6 +65,7 @@ class AddMessageRequest(BaseModel):
     role: str
     content: Optional[str] = None
     parts: Optional[List[Dict[str, Any]]] = None
+    created_at: Optional[str] = None
 
     @model_validator(mode="after")
     def validate_content_or_parts(self) -> "AddMessageRequest":
@@ -220,7 +222,15 @@ async def add_message(
     else:
         parts = [TextPart(text=request.content or "")]
 
-    session.add_message(request.role, parts)
+    # 解析 created_at
+    created_at = None
+    if request.created_at:
+        try:
+            created_at = datetime.fromisoformat(request.created_at)
+        except ValueError:
+            logger.warning(f"Invalid created_at format: {request.created_at}")
+
+    session.add_message(request.role, parts, created_at=created_at)
     return Response(
         status="ok",
         result={

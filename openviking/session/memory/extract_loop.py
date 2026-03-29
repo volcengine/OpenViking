@@ -23,11 +23,9 @@ from openviking.session.memory.tools import (
     add_tool_call_pair_to_messages,
     get_tool,
     get_tool_schemas,
+    MEMORY_TOOLS_REGISTRY,
 )
 from openviking.session.memory.utils import (
-    collect_allowed_directories,
-    detect_language_from_conversation,
-    extract_json_from_markdown,
     parse_json_with_stability,
     parse_memory_file_with_fields,
     pretty_print_messages,
@@ -47,7 +45,7 @@ class ExtractLoop:
     Simplified ReAct orchestrator for memory updates.
 
     Workflow:
-    0. Pre-fetch: System performs ls + read .overview.md + search
+    0. Pre-fetch: System performs ls + read .overview.md + search (via strategy)
     1. LLM call with tools: Model decides to either use tools OR output final operations
     2. If tools used: Execute and continue loop
     3. If operations output: Return and finish
@@ -60,7 +58,7 @@ class ExtractLoop:
         model: Optional[str] = None,
         max_iterations: int = 3,
         ctx: Optional[RequestContext] = None,
-        registry: Optional[MemoryTypeRegistry] = None,
+        context_provider: Optional[Any] = None,  # ExtractContextProvider
     ):
         """
         Initialize the ExtractLoop.
@@ -71,45 +69,37 @@ class ExtractLoop:
             model: Model name to use
             max_iterations: Maximum number of ReAct iterations (default: 5)
             ctx: Request context
-            registry: Optional MemoryTypeRegistry - if not provided, will be created
+            context_provider: ExtractContextProvider - 必须提供（由 provider 加载 schema）
         """
         self.vlm = vlm
         self.viking_fs = viking_fs or get_viking_fs()
         self.model = model or self.vlm.model
         self.max_iterations = max_iterations
         self.ctx = ctx
+        self.context_provider = context_provider
 
-        # Initialize schema registry and generators
-        if registry is not None:
-            self.registry = registry
-        else:
-            import os
-            schemas_dir = os.path.join(os.path.dirname(__file__), "..", "..", "prompts", "templates", "memory")
-            self.registry = MemoryTypeRegistry()
-            self.registry.load_from_directory(schemas_dir)
-        self.schema_model_generator = SchemaModelGenerator(self.registry)
-        self.schema_prompt_generator = SchemaPromptGenerator(self.registry)
-
-        # Pre-generate models and JSON schema
-        self.schema_model_generator.generate_all_models()
-        self._json_schema = self.schema_model_generator.get_llm_json_schema()
+        # Schema 生成器（在 run() 中初始化）
+        self.schema_model_generator = None
+        self.schema_prompt_generator = None
+        self._json_schema = None
 
         # Track files read during ReAct for refetch detection
         self._read_files: Set[str] = set()
-        self._output_language: str = "en"
         # Transaction handle for file locking
         self._transaction_handle = None
 
     def _get_all_memory_schema_dirs(self) -> List[str]:
         """
-        Get all memory schema directories
+        Get all memory schema directories from provider
 
         Returns:
             List of all memory schema directories
         """
-        dirs = []
+        # Get schemas from provider
+        schemas = self.context_provider.get_memory_schemas(self.ctx)
 
-        for schema in self.registry.list_all(include_disabled=False):
+        dirs = []
+        for schema in schemas:
             if not schema.directory:
                 continue
 
@@ -128,292 +118,42 @@ class ExtractLoop:
 
         return dirs
 
-    def _assemble_conversation(self, messages: List[Message], latest_archive_overview: str = "") -> str:
-        """Assemble conversation string from messages.
-
-        This method converts a list of Message objects into a formatted string
-        that can be used by the ReAct loop.
-
-        Args:
-            messages: List of Message objects
-            latest_archive_overview: Optional overview from previous archive for context
-
-        Returns:
-            Formatted conversation string
-        """
-        import json
-        from openviking.message.part import ToolPart
-
-        conversation_sections: List[str] = []
-
-        # Add previous archive overview if provided
-        # if latest_archive_overview:
-        #     conversation_sections.append(f"## Previous Archive Overview\n{latest_archive_overview}")
-
-        def format_message_with_parts(msg: Message) -> str:
-            """Format message with text and tool parts."""
-            parts = getattr(msg, "parts", [])
-            has_tool_parts = any(isinstance(p, ToolPart) for p in parts)
-
-            if not has_tool_parts:
-                return msg.content
-
-            tool_lines = []
-            text_lines = []
-            for part in parts:
-                if hasattr(part, "text") and part.text:
-                    text_lines.append(part.text)
-                elif isinstance(part, ToolPart):
-                    tool_info = {
-                        "type": "tool_call",
-                        "tool_name": part.tool_name,
-                        "tool_input": part.tool_input,
-                        "tool_status": part.tool_status,
-                    }
-                    if part.skill_uri:
-                        tool_info["skill_name"] = part.skill_uri.rstrip("/").split("/")[-1]
-                    tool_lines.append(f"[ToolCall] {json.dumps(tool_info, ensure_ascii=False)}")
-
-            all_lines = tool_lines + text_lines
-            return "\n".join(all_lines) if all_lines else msg.content
-
-        conversation_sections.append(
-            "\n".join([f"[{idx}][{msg.role}]: {format_message_with_parts(msg)}" for idx, msg in enumerate(messages)])
-        )
-
-        return "\n\n".join(section for section in conversation_sections if section)
-
-    async def _pre_fetch_context(self, messages: List[Message]) -> Dict[str, Any]:
-        """
-        Pre-fetch context based on activated schemas.
-
-        Optimized logic:
-        - For multi-file schemas (filename_template has variables): ls the directory
-        - For single-file schemas (filename_template no variables): directly read the file
-        - No longer ls the root memories directory
-        - For operation_mode = "add_only": skip ls and search, only read .overview.md
-
-        Args:
-            messages: List of Message objects for extracting user query
-
-        Returns:
-            Pre-fetched context with directories, summaries, and search_results
-        """
-        from openviking.session.memory.tools import get_tool
-        pre_fetch_messages = []
-
-        # Step 1: Separate schemas into multi-file (ls) and single-file (direct read)
-        ls_dirs = set()  # directories to ls (for multi-file schemas)
-        read_files = set()  # files to read directly (for single-file schemas)
-        overview_files = set()  # .overview.md files to read
-
-        for schema in self.registry.list_all(include_disabled=False):
-            if not schema.directory:
-                continue
-
-            # Replace variables in directory path with actual user/agent space
-            user_space = self.ctx.user.user_space_name() if self.ctx and self.ctx.user else "default"
-            agent_space = self.ctx.user.agent_space_name() if self.ctx and self.ctx.user else "default"
-            dir_path = schema.directory.replace("{user_space}", user_space).replace("{agent_space}", agent_space)
-
-            # Always add .overview.md to read list
-            overview_files.add(f"{dir_path}/.overview.md")
-
-            # 根据 operation_mode 决定是否需要 ls 和读取其他文件
-            if schema.operation_mode == "add_only":
-                # 只新增，不需要查看之前的记忆列表，只需要读取 .overview.md
-                continue
-
-            # Check if filename_template has variables (contains {xxx})
-            has_variables = False
-            if schema.filename_template:
-                has_variables = "{" in schema.filename_template and "}" in schema.filename_template
-
-            if has_variables or not schema.filename_template:
-                # Multi-file schema or no filename template: ls the directory
-                ls_dirs.add(dir_path)
-            else:
-                # Single-file schema: directly read the specific file
-                file_uri = f"{dir_path}/{schema.filename_template}"
-                read_files.add(file_uri)
-
-        call_id_seq = 0
-        # Step 2: Execute ls for multi-file schema directories in parallel
-        ls_tool = get_tool("ls")
-        read_tool = get_tool("read")
-        from openviking.server.identity import ToolContext
-
-        # 获取 search URIs
-        user_space = self.ctx.user.user_space_name() if self.ctx and self.ctx.user else "default"
-        agent_space = self.ctx.user.agent_space_name() if self.ctx and self.ctx.user else "default"
-        search_uris = self.registry.list_search_uris(user_space, agent_space)
-
-        tool_ctx = ToolContext(
-            request_ctx=self.ctx,
-            transaction_handle=self._transaction_handle,
-            default_search_uris=search_uris
-        )
-
-        # 首先读取所有 .overview.md 文件（截断以避免窗口过大）
-        for overview_uri in overview_files:
-            try:
-                result_str = await read_tool.execute(self.viking_fs, tool_ctx, uri=overview_uri)
-                add_tool_call_pair_to_messages(
-                    messages=pre_fetch_messages,
-                    call_id=call_id_seq,
-                    tool_name='read',
-                    params={
-                        "uri": overview_uri
-                    },
-                    result=result_str
-                )
-                call_id_seq += 1
-            except Exception as e:
-                logger.warning(f"Failed to read .overview.md: {e}")
-
-        # 然后执行 ls 操作（只对非 add_only 模式）
-        if ls_tool and self.viking_fs and ls_dirs:
-            for dir_uri in ls_dirs:
-                try:
-                    result_str = await ls_tool.execute(self.viking_fs, tool_ctx, uri=dir_uri)
-                    add_tool_call_pair_to_messages(
-                        messages=pre_fetch_messages,
-                        call_id=call_id_seq,
-                        tool_name='ls',
-                        params={
-                            "uri": dir_uri
-                        },
-                        result=result_str
-                    )
-                    call_id_seq += 1
-                except Exception as e:
-                    logger.warning(f"Failed to ls {dir_uri}: {e}")
-
-        # 读取单文件 schema 的文件（只对非 add_only 模式）
-        for file_uri in read_files:
-            try:
-                result_str = await read_tool.execute(self.viking_fs, tool_ctx, uri=file_uri)
-                add_tool_call_pair_to_messages(
-                    messages=pre_fetch_messages,
-                    call_id=call_id_seq,
-                    tool_name='read',
-                    params={
-                        "uri": file_uri
-                    },
-                    result=result_str
-                )
-                call_id_seq += 1
-            except Exception as e:
-                logger.warning(f"Failed to read {file_uri}: {e}")
-
-        # Step 3: Search for relevant memories based on user messages in conversation
-        # 只对非 add_only 模式执行搜索
-        search_tool = get_tool("search")
-        logger.debug(f"Search tool available: {search_tool is not None}")
-        logger.debug(f"VikingFS available: {self.viking_fs is not None}")
-        logger.debug(f"Context available: {self.ctx is not None}")
-
-        if search_tool and self.viking_fs and self.ctx:
-            # 检查是否有非 add_only 模式的 schema 需要搜索
-            has_non_add_only_schemas = any(
-                schema.operation_mode != "add_only"
-                for schema in self.registry.list_all(include_disabled=False)
-            )
-            logger.info(f"  Has non add-only schemas: {has_non_add_only_schemas}")
-
-            # 打印所有启用的记忆类型及其 operation_mode
-            enabled_schemas = self.registry.list_all(include_disabled=False)
-            logger.info(f"  Enabled schemas ({len(enabled_schemas)}):")
-            for schema in enabled_schemas:
-                logger.info(f"    - {schema.memory_type}: operation_mode={schema.operation_mode}, enabled={schema.enabled}")
-
-            if has_non_add_only_schemas:
-                try:
-                    # Extract only user messages from messages (List[Dict])
-                    user_messages = []
-                    for msg in messages:
-                        if msg.role == "user":
-                            user_messages.append(msg.content)
-                    user_query = " ".join(user_messages)
-
-                    # 执行搜索
-                    search_result = None
-                    search_error = None
-                    try:
-                        search_result = await search_tool.execute(
-                            viking_fs=self.viking_fs,
-                            ctx=tool_ctx,
-                            query=user_query or "",
-                        )
-                    except Exception as e:
-                        search_error = str(e)
-                        logger.warning(f"Search execution failed: {e}")
-
-                    # 根据搜索结果确定记录内容
-                    if search_error:
-                        result_value = f"Error: {search_error}"
-                    elif isinstance(search_result, list):
-                        result_value = [m.get("uri", "") for m in search_result]
-                    elif isinstance(search_result, dict):
-                        if "error" in search_result:
-                            result_value = f"Error: {search_result.get('error')}"
-                        else:
-                            result_value = [m.get("uri", "") for m in search_result.get("memories", [])]
-                    else:
-                        result_value = []
-
-                    add_tool_call_pair_to_messages(
-                        messages=pre_fetch_messages,
-                        call_id=call_id_seq,
-                        tool_name='search',
-                        params={"query": "[Keywords from Conversation]"},
-                        result=result_value
-                    )
-                    call_id_seq += 1
-                except Exception as e:
-                    logger.warning(f"Pre-fetch search failed: {e}")
-
-        return pre_fetch_messages
-
-
-    async def run(
-        self,
-        messages: List[Message],
-        latest_archive_overview: str = "",
-    ) -> Tuple[Optional[MemoryOperations], List[Dict[str, Any]]]:
+    async def run(self) -> Tuple[Optional[MemoryOperations], List[Dict[str, Any]]]:
         """
         Run the simplified ReAct loop for memory updates.
-
-        Args:
-            messages: List of Message objects from the conversation
-            latest_archive_overview: Optional overview from previous archive for context
 
         Returns:
             Tuple of (final MemoryOperations, tools_used list)
         """
-        # Assemble conversation from messages
-        conversation = self._assemble_conversation(messages, latest_archive_overview)
-
         iteration = 0
         max_iterations = self.max_iterations
         final_operations = None
         tools_used: List[Dict[str, Any]] = []
 
-        # Detect output language from conversation
-        config = get_openviking_config()
-        fallback_language = (config.language_fallback or "en").strip() or "en"
-        self._output_language = detect_language_from_conversation(
-            conversation, fallback_language=fallback_language
-        )
-        logger.info(f"Detected output language for memory ReAct: {self._output_language}")
+        # 从 provider 获取 schemas（内部自动加载 registry）
+        schemas = self.context_provider.get_memory_schemas(self.ctx)
 
-        # Pre-fetch context internally
-        tool_call_messages = await self._pre_fetch_context(messages)
+        # 初始化 schema 生成器（使用 schemas 而非 registry）
+        self.schema_model_generator = SchemaModelGenerator(schemas)
+        self.schema_prompt_generator = SchemaPromptGenerator(schemas)
+        self.schema_model_generator.generate_all_models()
+        self._json_schema = self.schema_model_generator.get_llm_json_schema()
+
+        # Pre-fetch context via provider
+        tool_call_messages = await self.context_provider.prefetch(
+            ctx=self.ctx,
+            viking_fs=self.viking_fs,
+            transaction_handle=self._transaction_handle,
+            vlm=self.vlm,
+        )
 
         # Reset read files tracking for this run
         self._read_files.clear()
 
-        messages = self._build_initial_messages(conversation, tool_call_messages, self._output_language)
+        # Build initial messages from provider
+        import json
+        schema_str = json.dumps(self._json_schema, ensure_ascii=False)
+        messages = self.context_provider.get_initial_messages(tool_call_messages, schema_str)
 
         while iteration < max_iterations:
             iteration += 1
@@ -430,6 +170,7 @@ class ExtractLoop:
                 })
 
             # Call LLM with tools - model decides: tool calls OR final operations
+            pretty_print_messages(messages)
             tool_calls, operations = await self._call_llm(messages, force_final=is_last_iteration)
             # If model returned final operations, check if refetch is needed
             if operations is not None:
@@ -475,6 +216,11 @@ class ExtractLoop:
 
             # Process results and add to messages
             for _idx, tool_call, result in results:
+                # Skip if arguments is None
+                if tool_call.arguments is None:
+                    logger.warning(f"Tool call {tool_call.name} has no arguments, skipping")
+                    continue
+
                 tools_used.append({
                     "tool_name": tool_call.name,
                     "params": tool_call.arguments,
@@ -504,103 +250,6 @@ class ExtractLoop:
 
         return final_operations, tools_used
 
-    def _build_initial_messages(
-        self,
-        conversation: str,
-        tool_call_messages: List,
-        output_language: str,
-    ) -> List[Dict[str, Any]]:
-        """Build initial messages from conversation and pre-fetched context.
-
-        Prompt caching strategy:
-        - The system prompt is cached (static across all calls)
-        - Each ReAct iteration continues from the previous cached state
-        """
-        system_prompt = self._get_system_prompt(output_language)
-        messages = [
-            {
-                "role": "system",
-                "content": system_prompt,
-                # Cache the system prompt - it's constant and will be reused
-                "cache_control": {"type": "ephemeral"},
-            }
-        ]
-
-        # Add pre-fetched context as tool calls
-        messages.extend(tool_call_messages)
-
-        # Get current date and day of week
-        from datetime import datetime
-        now = datetime.now()
-        current_time = now.strftime("%Y-%m-%d %H:%M:%S")
-        day_of_week = now.strftime("%A")
-
-        messages.append({
-                "role": "user",
-                "content": f"""## Conversation History
-**Current Time:** {current_time} ({day_of_week})
-
-{conversation}
-
-After exploring, analyze the conversation and output ALL memory write/edit/delete operations in a single response. Do not output operations one at a time - gather all changes first, then return them together.""",
-        })
-        # Print messages in a readable format
-        pretty_print_messages(messages)
-
-        return messages
-
-
-    def _get_allowed_directories_list(self) -> str:
-        """Get a formatted list of allowed directories for the system prompt."""
-        user_space = self.ctx.user.user_space_name() if self.ctx and self.ctx.user else "default"
-        agent_space = self.ctx.user.agent_space_name() if self.ctx and self.ctx.user else "default"
-        allowed_dirs = collect_allowed_directories(
-            self.registry.list_all(include_disabled=False),
-            user_space=user_space,
-            agent_space=agent_space,
-        )
-        if not allowed_dirs:
-            return "No directories configured (this is an error)."
-        return "\n".join(f"- {dir_path}" for dir_path in sorted(allowed_dirs))
-
-    def _get_system_prompt(self, output_language: str) -> str:
-        """Get the simplified system prompt."""
-        import json
-        schema_str = json.dumps(self._json_schema, ensure_ascii=False)
-
-        return f"""You are a memory extraction agent. Your task is to analyze conversations and update memories.
-
-## Workflow
-1. Analyze the conversation and pre-fetched context
-2. If you need more information, use the available tools (read/search)
-3. When you have enough information, output ONLY a JSON object (no extra text before or after)
-
-## Critical
-- ONLY read and search tools are available - DO NOT use write tool
-- Before editing ANY existing memory file, you MUST first read its complete content
-- ONLY read URIs that are explicitly listed in ls tool results or returned by previous tool calls
-
-## Target Output Language
-All memory content MUST be written in {output_language}.
-
-## URI Handling
-The system automatically generates URIs based on memory_type and fields. Just provide correct memory_type and fields.
-
-## Edit Overview Files
-After writing new memories, you MUST also update the corresponding .overview.md file.
-- Provide memory_type to identify which directory's overview to update
-- Example: {{"memory_type": "profile", "overview": "User profile overview..."}}
-
-## Overview Format
-See GenericOverviewEdit in the JSON Schema below.
-
-## Output Format
-See the complete JSON Schema below:
-```json
-{schema_str}
-```
-"""
-
     def _validate_operations(self, operations: MemoryOperations) -> None:
         """
         Validate that all operations have allowed URIs.
@@ -611,10 +260,14 @@ See the complete JSON Schema below:
         Raises:
             ValueError: If any operation has a disallowed URI
         """
+        # Get registry from provider (internal method)
+        registry = self.context_provider._get_registry()
+        schemas = self.context_provider.get_memory_schemas(self.ctx)
+
         is_valid, errors = validate_operations_uris(
             operations,
-            self.registry.list_all(include_disabled=False),
-            self.registry,
+            schemas,
+            registry,
             user_space="default",
             agent_space="default",
         )
@@ -638,11 +291,19 @@ See the complete JSON Schema below:
         Returns:
             Tuple of (tool_calls, operations) - one will be None, the other set
         """
-        # Call LLM with tools
+        # Get schemas for this call
+        schemas = self.context_provider.get_memory_schemas(self.ctx)
+
+        # Call LLM with tools - use tools from strategy
         tool_choice = "none" if force_final else None
+
+        # Get tool schemas based on strategy's tool list
+        allowed_tools = self.context_provider.get_tools()
+        tool_schemas = [tool.to_schema() for tool in MEMORY_TOOLS_REGISTRY.values() if tool.name in allowed_tools]
+
         response = await self.vlm.get_completion_async(
             messages=messages,
-            tools=get_tool_schemas(),
+            tools=tool_schemas,
             tool_choice=tool_choice,
             max_retries=self.vlm.max_retries,
         )
@@ -676,10 +337,15 @@ See the complete JSON Schema below:
                 operations_model = self.schema_model_generator.create_structured_operations_model()
 
                 # Use five-layer stable JSON parsing (FaultTolerantBaseModel handles type tolerance)
+                # Build expected_fields dynamically from schemas
+                expected_fields = ['reasoning', 'edit_overview_uris', 'delete_uris']
+                for schema in schemas:
+                    expected_fields.append(schema.memory_type)
+
                 operations, error = parse_json_with_stability(
                     content=content,
                     model_class=operations_model,
-                    expected_fields=['reasoning', 'write_uris', 'edit_uris', 'edit_overview_uris', 'delete_uris'],
+                    expected_fields=expected_fields,
                 )
 
                 if error is not None:
@@ -735,32 +401,37 @@ See the complete JSON Schema below:
         self,
         operations: MemoryOperations,
     ) -> List[str]:
-        """Check if write_uris target existing files that weren't read during ReAct."""
-        if not operations.write_uris:
+        """Check if write operations target existing files that weren't read during ReAct."""
+        memory_type_fields = getattr(operations, '_memory_type_fields', None)
+        if not memory_type_fields:
             return []
 
         from openviking.session.memory.utils.uri import resolve_flat_model_uri
 
+        registry = self.context_provider._get_registry()
         refetch_uris = []
-        for op in operations.write_uris:
-            # Resolve the flat model to URI
-            try:
-                uri = resolve_flat_model_uri(op, self.registry, "default", "default")
-            except Exception as e:
-                logger.warning(f"Failed to resolve URI for {op}: {e}")
-                continue
 
-            # Skip if already read
-            if uri in self._read_files:
+        for field_name in memory_type_fields:
+            value = getattr(operations, field_name, None)
+            if value is None:
                 continue
-            # Check if file exists
-            try:
-                await self.viking_fs.read_file(uri, ctx=self.ctx)
-                # File exists and wasn't read - need refetch
-                refetch_uris.append(uri)
-            except Exception:
-                # File doesn't exist, no need to refetch
-                pass
+            items = value if isinstance(value, list) else [value]
+            for item in items:
+                # Convert to dict
+                item_dict = dict(item) if hasattr(item, 'model_dump') else dict(item)
+                try:
+                    uri = resolve_flat_model_uri(item_dict, registry, "default", "default", memory_type=field_name)
+                except Exception as e:
+                    logger.warning(f"Failed to resolve URI for {item}: {e}")
+                    continue
+
+                if uri in self._read_files:
+                    continue
+                try:
+                    await self.viking_fs.read_file(uri, ctx=self.ctx)
+                    refetch_uris.append(uri)
+                except Exception:
+                    pass
         return refetch_uris
 
     async def _add_refetch_results_to_messages(

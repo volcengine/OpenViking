@@ -12,9 +12,11 @@ enabled: true
 # upsert 表示新增或更新（默认行为）
 operation_mode: "add_only"
 content_template: |
-  time: {{event_time|default('N/A')}}
+  {% set msg_range = extract_context.read_message_ranges(ranges|default('')) if extract_context else None %}
+  {% set first_time = msg_range.first_message_time() if msg_range else None %}
+  time: {{event_time|default(first_time if first_time else 'N/A')}}
   {% if extract_context %}
-  {{ extract_context.read_message_ranges(ranges|default('')).pretty_print() }}
+  {{ msg_range.pretty_print() if msg_range else '' }}
   {% endif %}
 
 

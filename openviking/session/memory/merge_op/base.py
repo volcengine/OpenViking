@@ -53,7 +53,10 @@ def get_python_type_for_field(field_type: FieldType, default: Type[Any] = str) -
 class SearchReplaceBlock(BaseModel):
     """Single SEARCH/REPLACE block for string patches."""
 
-    search: str = Field(..., description="Content to search for")
+    search: str = Field(
+        ...,
+        description="Content to search for. ONLY include the EXACT lines you need to change - NEVER include the entire section. Example (WRONG): '## Melanie\\n- line1\\n- line2\\n[50 more lines]'. Example (CORRECT): '- Art can be in the most unlikely places, and love and acceptance really can be found everywhere'"
+    )
     replace: str = Field(..., description="Content to replace with")
     start_line: Optional[int] = Field(None, description="Starting line number hint")
 
@@ -66,7 +69,7 @@ class StrPatch(BaseModel):
 
     blocks: List[SearchReplaceBlock] = Field(
         default_factory=list,
-        description="List of SEARCH/REPLACE blocks to apply"
+        description="List of SEARCH/REPLACE blocks to apply. PREFER direct string replacement over SEARCH/REPLACE when possible. When using SEARCH/REPLACE, only include the specific line(s) to change, never the entire section."
     )
 
 

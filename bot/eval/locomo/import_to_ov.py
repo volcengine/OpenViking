@@ -135,7 +135,7 @@ def build_session_messages(
 # ---------------------------------------------------------------------------
 
 
-def load_ingest_record(record_path: str = ".ingest_record.json") -> dict:
+def load_ingest_record(record_path: str = "result/ingest_record.json") -> dict:
     """Load existing ingest record file, return empty dict if not exists."""
     try:
         with open(record_path, "r", encoding="utf-8") as f:
@@ -144,7 +144,7 @@ def load_ingest_record(record_path: str = ".ingest_record.json") -> dict:
         return {}
 
 
-def save_ingest_record(record: dict, record_path: str = ".ingest_record.json") -> None:
+def save_ingest_record(record: dict, record_path: str = "result/ingest_record.json") -> None:
     """Save ingest record to file."""
     with open(record_path, "w", encoding="utf-8") as f:
         json.dump(record, f, indent=2, ensure_ascii=False)
@@ -180,8 +180,24 @@ def mark_ingested(
 # ---------------------------------------------------------------------------
 
 
-def viking_ingest(messages: list[dict]) -> None:
-    """Save messages to OpenViking via SyncHTTPClient (add messages + commit session)."""
+def viking_ingest(messages: list[dict], session_time: str = None) -> None:
+    """Save messages to OpenViking via SyncHTTPClient (add messages + commit session).
+
+    Args:
+        messages: List of message dicts with role and text
+        session_time: Session time string (e.g., "9:36 am on 2 April, 2023")
+    """
+    from datetime import datetime
+
+    # 解析 session_time
+    created_at = None
+    if session_time:
+        try:
+            dt = datetime.strptime(session_time, "%I:%M %p on %d %B, %Y")
+            created_at = dt.isoformat()
+        except ValueError:
+            print(f"Warning: Failed to parse session_time: {session_time}", file=sys.stderr)
+
     client = ov.SyncHTTPClient()
     client.initialize()
 
@@ -191,7 +207,7 @@ def viking_ingest(messages: list[dict]) -> None:
 
     # Add messages one by one
     for msg in messages:
-        client.add_message(session_id, role=msg["role"], content=msg["text"])
+        client.add_message(session_id, role=msg["role"], content=msg["text"], created_at=created_at)
 
     # Commit session to trigger memory extraction
     commit_result = client.commit_session(session_id)
@@ -289,7 +305,7 @@ def run_import(args: argparse.Namespace) -> None:
                 print(f"  [{label}] {preview}", file=sys.stderr)
 
                 try:
-                    viking_ingest(messages)
+                    viking_ingest(messages, session_time=meta.get("date_time"))
                     print(f"    -> [SUCCESS] imported to OpenViking", file=sys.stderr)
                     success_count += 1
 

@@ -5,6 +5,7 @@ OpenViking 记忆演示脚本 — 事件跨多个 turn 的测试
 
 import argparse
 import time
+from datetime import datetime
 
 from rich import box
 from rich.console import Console
@@ -102,11 +103,15 @@ def run_ingest(client: ov.SyncHTTPClient, session_id: str, wait_seconds: float):
     console.print(f"  Session: [bold cyan]{session_id}[/bold cyan]")
     console.print()
 
+    # 设置一个测试用的会话时间（2023年4月2日）
+    session_time = datetime(2023, 4, 2, 9, 36)
+    session_time_str = session_time.isoformat()
+
     total = len(CONVERSATION)
     for i, turn in enumerate(CONVERSATION, 1):
         console.print(f"  [dim][{i}/{total}][/dim] 添加 user + assistant 消息...")
-        client.add_message(session_id, role="user", parts=[{"type": "text", "text": turn["user"]}])
-        client.add_message(session_id, role="assistant", parts=[{"type": "text", "text": turn["assistant"]}])
+        client.add_message(session_id, role="user", parts=[{"type": "text", "text": turn["user"]}], created_at=session_time_str)
+        client.add_message(session_id, role="assistant", parts=[{"type": "text", "text": turn["assistant"]}], created_at=session_time_str)
 
     console.print()
     console.print(f"  共添加 [bold]{total * 2}[/bold] 条消息")

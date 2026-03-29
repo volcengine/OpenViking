@@ -13,7 +13,6 @@ from pydantic import BaseModel, Field
 from openviking.session.memory.utils import (
     remove_json_trailing_content,
     extract_json_content,
-    extract_json_from_markdown,
     parse_memory_file_with_fields,
     value_fault_tolerance,
     parse_value_with_tolerance,
@@ -91,32 +90,6 @@ And then some.'''
         result1 = extract_json_content(content)
         result2 = remove_json_trailing_content(content)
         assert result1 == result2
-
-
-class TestExtractJsonFromMarkdown:
-    """Tests for markdown extraction."""
-
-    def test_extracts_json_from_json_code_block(self):
-        """Test JSON wrapped in ```json ... ```."""
-        content = '''```json
-{"reasonning": "test", "write_uris": []}
-```'''
-        result = extract_json_from_markdown(content)
-        assert result == '{"reasonning": "test", "write_uris": []}'
-
-    def test_extracts_json_from_generic_code_block(self):
-        """Test JSON wrapped in ``` ... ``` without json specifier."""
-        content = '''```
-{"reasonning": "test"}
-```'''
-        result = extract_json_from_markdown(content)
-        assert result == '{"reasonning": "test"}'
-
-    def test_returns_plain_json_when_no_markdown(self):
-        """Test plain JSON without markdown is returned as-is."""
-        content = '{"reasonning": "test"}'
-        result = extract_json_from_markdown(content)
-        assert result == content
 
 
 class TestValueFaultTolerance:

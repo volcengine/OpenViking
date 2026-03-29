@@ -100,6 +100,7 @@ class SyncHTTPClient:
         role: str,
         content: str | None = None,
         parts: list[dict] | None = None,
+        created_at: str | None = None,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 
@@ -108,10 +109,11 @@ class SyncHTTPClient:
             role: Message role ("user" or "assistant")
             content: Text content (simple mode)
             parts: Parts array (full Part support: TextPart, ContextPart, ToolPart)
+            created_at: Message creation time (ISO format string)
 
         If both content and parts are provided, parts takes precedence.
         """
-        return run_async(self._async_client.add_message(session_id, role, content, parts))
+        return run_async(self._async_client.add_message(session_id, role, content, parts, created_at))
 
     def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Query background task status."""

@@ -4,14 +4,13 @@
 JSON stable parsing - Five-Layer Fault Tolerance Architecture.
 
 Layer 1: JSON Cleanup    - extract_json_content()
-Layer 2: JSON Repair      - json_repair.loads()
+Layer 2: JSON Repair      - json_repair.loads() (handles markdown too)
 Layer 3: Structure Tolerance - list→object conversion + field filtering
 Layer 4: Value Tolerance  - value_fault_tolerance()
 Layer 5: Validation Tolerance - TypeAdapter(strict=False) + list item filtering
 """
 
 import json
-import re
 from types import UnionType
 from typing import Any, Dict, List, Optional, Tuple, Type, get_type_hints, get_origin, get_args, Union
 
@@ -28,7 +27,6 @@ __all__ = [
     "extract_json_content",
     "remove_json_trailing_content",
     "parse_json_with_stability",
-    "extract_json_from_markdown",
     "value_fault_tolerance",
     "parse_value_with_tolerance",
     "_get_origin_type",
@@ -270,10 +268,41 @@ def parse_value_with_tolerance(value, annotation):
     if value == 'None':
         return None
 
-    parsed_value = value
-
-    # Apply value fault tolerance first
-    parsed_value = value_fault_tolerance(annotation, parsed_value)
+    # Apply value fault tolerance (inline for efficiency)
+    origin_type = _get_origin_type(annotation)
+    if origin_type is str:
+        parsed_value = _any_to_str(value)
+    elif origin_type is int:
+        if isinstance(value, str):
+            if value == 'None':
+                parsed_value = 0
+            else:
+                try:
+                    parsed_value = int(value)
+                except (ValueError, TypeError):
+                    parsed_value = value
+        else:
+            parsed_value = value
+    elif origin_type is float:
+        if isinstance(value, str):
+            if value == 'None':
+                parsed_value = 0.0
+            else:
+                try:
+                    parsed_value = float(value)
+                except (ValueError, TypeError):
+                    parsed_value = value
+        else:
+            parsed_value = value
+    elif origin_type is list:
+        if isinstance(value, str):
+            parsed_value = [value]
+        elif isinstance(value, dict):
+            parsed_value = [value]
+        else:
+            parsed_value = value
+    else:
+        parsed_value = value
 
     # Try validation with TypeAdapter
     try:
@@ -378,7 +407,7 @@ def parse_json_with_stability(
         return model_class.model_validate(parsed_data), None
     except Exception as e:
         logger.warning(f"Direct model validation failed, trying parse_value_with_tolerance: {e}")
-
+        logger.warning(f"content={content}")
         # Fallback: Apply value fault tolerance to each field individually
         try:
             field_types = get_type_hints(model_class)
@@ -401,30 +430,3 @@ def parse_json_with_stability(
             return None, f"Model validation failed even after tolerance: {e} (fallback: {e2})"
 
 
-def extract_json_from_markdown(content: str) -> str:
-    """
-    Extract JSON from markdown code blocks.
-
-    Handles:
-    - ```json { ... } ```
-    - ``` { ... } ```
-    - Plain JSON without markdown
-
-    Args:
-        content: Content possibly containing markdown code blocks
-
-    Returns:
-        Extracted JSON string
-    """
-    if not content:
-        return content
-
-    content = content.strip()
-
-    # Try to find ```json ... ```
-    match = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", content, re.DOTALL)
-    if match:
-        return match.group(1).strip()
-
-    # If no code block, return as-is
-    return content

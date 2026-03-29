@@ -26,6 +26,9 @@ class SumOp(MergeOpBase):
         return f"add for '{field_description}'"
 
     def apply(self, current_value: Any, patch_value: Any) -> Any:
+        # None 或空值保留原值
+        if patch_value is None or patch_value == "":
+            return current_value
         if current_value is None:
             return patch_value
         try:
@@ -33,4 +36,4 @@ class SumOp(MergeOpBase):
                 return float(current_value) + float(patch_value)
             return int(current_value) + int(patch_value)
         except (ValueError, TypeError):
-            return patch_value
+            return current_value

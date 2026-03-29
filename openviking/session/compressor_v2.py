@@ -13,7 +13,7 @@ from typing import List, Optional
 from openviking.core.context import Context
 from openviking.message import Message
 from openviking.server.identity import RequestContext
-from openviking.session.memory import ExtractLoop, MemoryTypeRegistry, MemoryUpdater
+from openviking.session.memory import ExtractLoop, MemoryUpdater
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
@@ -33,27 +33,16 @@ class SessionCompressorV2:
     ):
         """Initialize session compressor."""
         self.vikingdb = vikingdb
-        # Initialize registry once - used by both ExtractLoop and MemoryUpdater
-        self._registry = MemoryTypeRegistry()
+        # registry 现在由 provider 负责加载，这里不再初始化
+        # MemoryUpdater 会在 apply_operations 时从 provider 获取 registry
+        pass
 
-        # Load built-in templates
-        builtin_templates_dir = os.path.join(
-            os.path.dirname(__file__), "..", "prompts", "templates", "memory"
-        )
-        self._registry.load_from_directory(builtin_templates_dir)
-
-        # Load custom templates from config if specified
-        config = get_openviking_config()
-        custom_templates_dir = config.memory.custom_templates_dir
-        if custom_templates_dir:
-            custom_dir = os.path.expanduser(custom_templates_dir)
-            if os.path.exists(custom_dir):
-                loaded = self._registry.load_from_directory(custom_dir)
-                logger.info(f"Loaded {loaded} custom memory templates from {custom_dir}")
-            else:
-                logger.warning(f"Custom templates directory not found: {custom_dir}")
-
-    def _get_or_create_react(self, ctx: Optional[RequestContext] = None) -> ExtractLoop:
+    def _get_or_create_react(
+        self,
+        ctx: Optional[RequestContext] = None,
+        messages: Optional[List] = None,
+        latest_archive_overview: str = "",
+    ) -> ExtractLoop:
         """Create new ExtractLoop instance with current ctx.
 
         Note: Always create new instance to avoid cross-session isolation issues.
@@ -63,20 +52,27 @@ class SessionCompressorV2:
         vlm = config.vlm.get_vlm_instance()
         viking_fs = get_viking_fs()
 
+        # Create context provider with messages (provider 负责加载 schema)
+        from openviking.session.memory.session_extract_context_provider import SessionExtractContextProvider
+        context_provider = SessionExtractContextProvider(
+            messages=messages,
+            latest_archive_overview=latest_archive_overview,
+        )
+
         return ExtractLoop(
             vlm=vlm,
             viking_fs=viking_fs,
             ctx=ctx,
-            registry=self._registry,
+            context_provider=context_provider,
         )
 
-    def _get_or_create_updater(self, transaction_handle=None) -> MemoryUpdater:
+    def _get_or_create_updater(self, registry, transaction_handle=None) -> MemoryUpdater:
         """Create new MemoryUpdater instance for each request.
 
         Always create new instance to avoid cross-request state pollution.
         """
         return MemoryUpdater(
-            registry=self._registry,
+            registry=registry,
             vikingdb=self.vikingdb,
             transaction_handle=transaction_handle
         )
@@ -131,7 +127,11 @@ class SessionCompressorV2:
 
         try:
             # 获取所有记忆 schema 目录并加锁（仅在有锁管理器时）
-            orchestrator = self._get_or_create_react(ctx=ctx)
+            orchestrator = self._get_or_create_react(
+                ctx=ctx,
+                messages=messages,
+                latest_archive_overview=latest_archive_overview,
+            )
             if lock_manager:
                 memory_schema_dirs = orchestrator._get_all_memory_schema_dirs()
                 logger.debug(f"Memory schema directories to lock: {memory_schema_dirs}")
@@ -149,18 +149,31 @@ class SessionCompressorV2:
                     logger.warning("Failed to acquire memory locks, retrying...")
 
             orchestrator._transaction_handle = transaction_handle  # 传递给 ExtractLoop
-            updater = self._get_or_create_updater(transaction_handle)
 
             # Run ReAct orchestrator
-            operations, tools_used = await orchestrator.run(messages=messages, latest_archive_overview=latest_archive_overview)
+            operations, tools_used = await orchestrator.run()
 
             if operations is None:
                 logger.info("No memory operations generated")
                 return []
 
+            # Convert to legacy format for logging and apply_operations
+            if hasattr(operations, 'to_legacy_operations'):
+                legacy = operations.to_legacy_operations()
+                write_uris = legacy.get('write_uris', [])
+                edit_uris = legacy.get('edit_uris', [])
+            else:
+                # Fallback for old format
+                write_uris = operations.write_uris
+                edit_uris = operations.edit_uris
+
+            # 从 orchestrator 获取 registry（从 provider 获取）
+            registry = orchestrator.context_provider._get_registry()
+            updater = self._get_or_create_updater(registry, transaction_handle)
+
             logger.info(
-                f"Generated memory operations: write={len(operations.write_uris)}, "
-                f"edit={len(operations.edit_uris)}, edit_overview={len(operations.edit_overview_uris)}, "
+                f"Generated memory operations: write={len(write_uris)}, "
+                f"edit={len(edit_uris)}, edit_overview={len(operations.edit_overview_uris)}, "
                 f"delete={len(operations.delete_uris)}"
             )
 
@@ -169,7 +182,7 @@ class SessionCompressorV2:
             extract_context = ExtractContext(messages)
 
             # Apply operations
-            result = await updater.apply_operations(operations, ctx, registry=orchestrator.registry, extract_context=extract_context)
+            result = await updater.apply_operations(operations, ctx, registry=registry, extract_context=extract_context)
 
             logger.info(
                 f"Applied memory operations: written={len(result.written_uris)}, "

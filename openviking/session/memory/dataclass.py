@@ -206,8 +206,7 @@ class StructuredMemoryOperations(FaultTolerantBaseModel):
     Fallback memory operations model with fault tolerance.
 
     Use SchemaModelGenerator.create_structured_operations_model() to get
-    the actual type-safe implementation with proper union types for write_uris
-    and edit_uris.
+    the actual type-safe implementation with per-memory_type fields.
     """
 
     reasoning: str = Field(
@@ -239,6 +238,15 @@ class StructuredMemoryOperations(FaultTolerantBaseModel):
             and len(self.edit_overview_uris) == 0
             and len(self.delete_uris) == 0
         )
+
+    def to_legacy_operations(self) -> Dict[str, Any]:
+        """Convert to legacy format (identity for fallback)."""
+        return {
+            "write_uris": self.write_uris,
+            "edit_uris": self.edit_uris,
+            "edit_overview_uris": self.edit_overview_uris,
+            "delete_uris": self.delete_uris,
+        }
 
     model_config = {'extra': 'ignore'}
 

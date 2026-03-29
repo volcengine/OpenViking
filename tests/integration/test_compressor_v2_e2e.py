@@ -9,6 +9,7 @@ No need to worry about ov.conf - server uses its own config.
 """
 
 from dataclasses import asdict
+from datetime import datetime
 import pytest
 import pytest_asyncio
 
@@ -113,11 +114,15 @@ class TestCompressorV2EndToEnd:
         print(f"\nCreated session: {session_id}")
 
         # 2. Add conversation messages
+        # 设置一个测试用的会话时间（2023年4月2日）
+        session_time = datetime(2023, 4, 2, 9, 36)
+        session_time_str = session_time.isoformat()
+
         conversation = create_test_conversation_messages()
         for role, content in conversation:
             parts = [TextPart(content)]
             parts_dicts = [asdict(p) for p in parts]
-            await client.add_message(session_id, role, parts=parts_dicts)
+            await client.add_message(session_id, role, parts=parts_dicts, created_at=session_time_str)
             print(f"[{role}]: {content[:60]}...")
 
         # 3. Commit session (this should trigger memory extraction)

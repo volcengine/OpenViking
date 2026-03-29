@@ -356,6 +356,7 @@ class LocalClient(BaseClient):
         role: str,
         content: Optional[str] = None,
         parts: Optional[List[Dict[str, Any]]] = None,
+        created_at: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 
@@ -364,9 +365,11 @@ class LocalClient(BaseClient):
             role: Message role ("user" or "assistant")
             content: Text content (simple mode, backward compatible)
             parts: Parts array (full Part support mode)
+            created_at: Message creation time (ISO format string)
 
         If both content and parts are provided, parts takes precedence.
         """
+        from datetime import datetime
         from openviking.message.part import Part, TextPart, part_from_dict
 
         session = self._service.sessions.session(self._ctx, session_id)
@@ -380,7 +383,15 @@ class LocalClient(BaseClient):
         else:
             raise ValueError("Either content or parts must be provided")
 
-        session.add_message(role, message_parts)
+        # 解析 created_at
+        msg_created_at = None
+        if created_at:
+            try:
+                msg_created_at = datetime.fromisoformat(created_at)
+            except ValueError:
+                pass
+
+        session.add_message(role, message_parts, created_at=msg_created_at)
         return {
             "session_id": session_id,
             "message_count": len(session.messages),

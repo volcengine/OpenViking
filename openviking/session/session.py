@@ -299,13 +299,14 @@ class Session:
         self,
         role: str,
         parts: List[Part],
+        created_at: datetime = None,
     ) -> Message:
         """Add a message."""
         msg = Message(
             id=f"msg_{uuid4().hex}",
             role=role,
             parts=parts,
-            created_at=datetime.now(),
+            created_at=created_at or datetime.now(),
         )
         self._messages.append(msg)
 

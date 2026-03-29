@@ -632,6 +632,14 @@ class VolcEngineVLM(OpenAIVLM):
                 return self._build_vlm_response(response, has_tools=bool(tools))
             except Exception as e:
                 last_error = e
+                # Log token info from error response if available
+                error_response = getattr(e, 'response', None)
+                if error_response and hasattr(error_response, 'usage'):
+                    u = error_response.usage
+                    prompt_tokens = getattr(u, 'input_tokens', 0) or 0
+                    completion_tokens = getattr(u, 'output_tokens', 0) or 0
+                    logger.info(f"[VolcEngineVLM] Error response - Input tokens: {prompt_tokens}, Output tokens: {completion_tokens}")
+                logger.warning(f"[VolcEngineVLM] Request failed: {e}")
                 if attempt < max_retries:
                     await asyncio.sleep(2**attempt)
 
