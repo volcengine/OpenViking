@@ -17,7 +17,14 @@ variables:
     description: "AST-extracted code skeleton (classes, functions, imports)"
     required: true
 
+  - name: "output_language"
+    type: "string"
+    description: "Language code for output (e.g., 'en', 'zh-CN', 'ja', 'ko', 'ru', 'ar')"
+    required: true
+
 template: |
+  Output Language: {{ output_language }}
+
   You are a code analysis expert. Based on the structural skeleton below,
   generate a concise summary (80-200 words) focusing on purpose, key components,
   and relationships. The skeleton was extracted via AST parsing.

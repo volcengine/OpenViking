@@ -17,7 +17,14 @@ variables:
     description: "File content (documentation text)"
     required: true
 
+  - name: "output_language"
+    type: "string"
+    description: "Language code for output (e.g., 'en', 'zh-CN', 'ja', 'ko', 'ru', 'ar')"
+    required: true
+
 template: |
+  Output Language: {{ output_language }}
+
   You are a documentation analysis expert. Generate a concise yet informative summary for the following documentation file.
 
   【File Name】

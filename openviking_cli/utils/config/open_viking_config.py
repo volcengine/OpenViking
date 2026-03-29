@@ -139,8 +139,8 @@ class OpenVikingConfig(BaseModel):
     language_fallback: str = Field(
         default="en",
         description=(
-            "Fallback language used by memory extraction when dominant user language "
-            "cannot be confidently detected"
+            "Fallback language used by memory extraction and semantic processing when dominant "
+            "user language cannot be confidently detected"
         ),
     )
 
