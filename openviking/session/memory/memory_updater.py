@@ -22,6 +22,7 @@ from openviking.session.memory.utils import (
     resolve_all_operations,
     serialize_with_metadata,
 )
+from openviking.session.memory.utils.uri import ResolvedOperation
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
@@ -97,6 +98,15 @@ class MessageRange:
             else:
                 result.append(f"[{elem.role}]: {elem.content}")
         return "\n".join(result)
+
+    def first_message_time(self) -> str | None:
+        """获取第一条消息的时间（YAML 日期格式），如果没有消息则返回 None"""
+        for elem in self.elements:
+            if isinstance(elem, str):
+                continue
+            if hasattr(elem, 'created_at') and elem.created_at:
+                return elem.created_at.strftime("%Y-%m-%d")
+        return None
 
 
 class MemoryUpdateResult:
@@ -212,24 +222,30 @@ class MemoryUpdater:
             return result
 
         # Apply write operations
-        for op, uri in resolved_ops.write_operations:
+        for resolved_op in resolved_ops.write_operations:
             try:
-                await self._apply_write(op, uri, ctx, extract_context=extract_context)
-                result.add_written(uri)
+                await self._apply_write(
+                    resolved_op.model,
+                    resolved_op.uri,
+                    ctx,
+                    extract_context=extract_context,
+                    memory_type=resolved_op.memory_type,
+                )
+                result.add_written(resolved_op.uri)
             except Exception as e:
-                logger.info(f"Failed to write memory: {e}, op={op}, op type={type(op)}")
-                if hasattr(op, 'model_dump'):
-                    logger.info(f"Op dump: {op.model_dump()}")
-                result.add_error(uri, e)
+                logger.info(f"Failed to write memory: {e}, op={resolved_op.model}, op type={type(resolved_op.model)}")
+                if hasattr(resolved_op.model, 'model_dump'):
+                    logger.info(f"Op dump: {resolved_op.model.model_dump()}")
+                result.add_error(resolved_op.uri, e)
 
         # Apply edit operations
-        for op, uri in resolved_ops.edit_operations:
+        for resolved_op in resolved_ops.edit_operations:
             try:
-                await self._apply_edit(op, uri, ctx)
-                result.add_edited(uri)
+                await self._apply_edit(resolved_op.model, resolved_op.uri, ctx)
+                result.add_edited(resolved_op.uri)
             except Exception as e:
-                logger.error(f"Failed to edit memory {uri}: {e}")
-                result.add_error(uri, e)
+                logger.error(f"Failed to edit memory {resolved_op.uri}: {e}")
+                result.add_error(resolved_op.uri, e)
 
         # Apply edit_overview operations
         for op, uri in resolved_ops.edit_overview_operations:
@@ -255,19 +271,19 @@ class MemoryUpdater:
         logger.info(f"Memory operations applied: {result.summary()}")
         return result
 
-    async def _apply_write(self, flat_model: Any, uri: str, ctx: RequestContext, extract_context: Any = None) -> None:
+    async def _apply_write(self, flat_model: Any, uri: str, ctx: RequestContext, extract_context: Any = None, memory_type: str = None) -> None:
         """Apply write operation from a flat model."""
         viking_fs = self._get_viking_fs()
 
         # Convert model to dict
         model_dict = flat_model_to_dict(flat_model)
 
-
         # Extract content - priority: model_dict["content"]
         content = model_dict.pop("content", None) or ""
 
-        # Get memory type schema to know which fields are business fields vs metadata
-        memory_type_str = model_dict.get("memory_type")
+        # Get memory type schema - use passed memory_type first, then fallback to model_dict
+        memory_type_str = memory_type or model_dict.get("memory_type")
+
         field_schema_map: Dict[str, MemoryField] = {}
         business_fields: Dict[str, Any] = {}
 
@@ -280,13 +296,12 @@ class MemoryUpdater:
                     if field_name in model_dict:
                         business_fields[field_name] = model_dict[field_name]
 
-                # 添加模板渲染逻辑
+                # 模板渲染逻辑
                 if schema.content_template:
                     try:
                         rendered_content = self._render_content_template(schema.content_template, business_fields, extract_context=extract_context)
                         if rendered_content:
                             content = rendered_content
-                        logger.debug(f"Successfully rendered content template for memory type: {memory_type_str}")
                     except Exception as e:
                         logger.warning(f"Failed to render content template for memory type {memory_type_str}: {e}")
                         # 渲染失败时保留原始 content，确保写入操作继续进行

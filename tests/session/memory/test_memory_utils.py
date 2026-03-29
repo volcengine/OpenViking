@@ -439,8 +439,8 @@ class TestUriResolution:
         assert len(resolved.delete_operations) == 1
 
         # Verify resolved URIs
-        assert resolved.write_operations[0][1] == "viking://user/default/memories/preferences/Write test.md"
-        assert resolved.edit_operations[0][1] == "viking://agent/default/memories/tools/edit_tool.md"
+        assert resolved.write_operations[0].uri == "viking://user/default/memories/preferences/Write test.md"
+        assert resolved.edit_operations[0].uri == "viking://agent/default/memories/tools/edit_tool.md"
         assert resolved.delete_operations[0][1] == "viking://user/default/memories/preferences/Delete me.md"
 
     def test_resolve_all_operations_with_errors(self, test_registry):
