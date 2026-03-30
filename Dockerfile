@@ -19,6 +19,7 @@ ENV RUSTUP_HOME=/usr/local/rustup
 ENV PATH="/usr/local/cargo/bin:/usr/local/go/bin:${PATH}"
 ARG OPENVIKING_VERSION=0.0.0
 ARG TARGETPLATFORM
+ARG UV_LOCK_STRATEGY=auto
 ENV SETUPTOOLS_SCM_PRETEND_VERSION_FOR_OPENVIKING=${OPENVIKING_VERSION}
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -43,10 +44,25 @@ COPY src/ src/
 COPY third_party/ third_party/
 
 # Install project and dependencies (triggers setup.py artifact builds + build_extension).
-# --locked ensures the lockfile is used and is consistent with pyproject.toml,
-# preventing silent re-resolution that could pull unexpected package versions.
+# Default to auto-refreshing uv.lock inside the ephemeral build context when it is
+# stale, so Docker builds stay unblocked after dependency changes. Set
+# UV_LOCK_STRATEGY=locked to keep fail-fast reproducibility checks.
 RUN --mount=type=cache,target=/root/.cache/uv,id=uv-${TARGETPLATFORM} \
-    uv sync --locked --no-editable
+    case "${UV_LOCK_STRATEGY}" in \
+        locked) \
+            uv sync --locked --no-editable \
+            ;; \
+        auto) \
+            if ! uv lock --check; then \
+                uv lock; \
+            fi; \
+            uv sync --locked --no-editable \
+            ;; \
+        *) \
+            echo "Unsupported UV_LOCK_STRATEGY: ${UV_LOCK_STRATEGY}" >&2; \
+            exit 2 \
+            ;; \
+    esac
 
 # Stage 4: runtime
 FROM python:3.13-slim-trixie
