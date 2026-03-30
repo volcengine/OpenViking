@@ -13,6 +13,7 @@ Supported providers:
 - Volcengine: Dense, Sparse, Hybrid
 - Jina AI: Dense only
 - Voyage AI: Dense only
+- Cohere: Dense only
 - Google Gemini: Dense only
 - LiteLLM: Dense only (bridges to OpenRouter, Ollama, vLLM, and many others)
 """
@@ -25,6 +26,7 @@ from openviking.models.embedder.base import (
     HybridEmbedderBase,
     SparseEmbedderBase,
 )
+from openviking.models.embedder.cohere_embedders import CohereDenseEmbedder
 
 try:
     from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
@@ -51,6 +53,8 @@ from openviking.models.embedder.volcengine_embedders import (
 from openviking.models.embedder.voyage_embedders import VoyageDenseEmbedder
 
 __all__ = [
+    # Cohere implementations
+    "CohereDenseEmbedder",
     # Base classes
     "EmbedResult",
     "EmbedderBase",
