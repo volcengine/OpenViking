@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Antigravity / Dico Angelo
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Cohere dense embedder implementation.
 
 Uses Cohere's Embed API v2 (https://docs.cohere.com/reference/embed).
