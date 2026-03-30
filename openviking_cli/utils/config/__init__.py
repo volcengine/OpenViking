@@ -12,6 +12,7 @@ from .consts import (
     DEFAULT_OVCLI_CONF,
     OPENVIKING_CLI_CONFIG_ENV,
     OPENVIKING_CONFIG_ENV,
+    OPENVIKING_PROMPT_TEMPLATES_DIR_ENV,
     SYSTEM_CONFIG_DIR,
 )
 from .embedding_config import EmbeddingConfig
@@ -39,6 +40,7 @@ from .parser_config import (
     get_parser_config,
     load_parser_configs_from_dict,
 )
+from .prompts_config import PromptsConfig
 from .rerank_config import RerankConfig
 from .storage_config import StorageConfig
 from .vectordb_config import VectorDBBackendConfig
@@ -53,6 +55,7 @@ __all__ = [
     "LogConfig",
     "OPENVIKING_CLI_CONFIG_ENV",
     "OPENVIKING_CONFIG_ENV",
+    "OPENVIKING_PROMPT_TEMPLATES_DIR_ENV",
     "OpenVikingConfig",
     "OpenVikingConfigSingleton",
     "OVCLIConfig",
@@ -72,6 +75,7 @@ __all__ = [
     "get_parser_config",
     "load_parser_configs_from_dict",
     "PARSER_CONFIG_REGISTRY",
+    "PromptsConfig",
     "get_openviking_config",
     "initialize_openviking_config",
     "load_json_config",
