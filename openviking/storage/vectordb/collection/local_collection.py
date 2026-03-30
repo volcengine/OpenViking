@@ -56,6 +56,7 @@ def get_or_create_local_collection(
     path: str = "",
     vectorizer: Optional[BaseVectorizer] = None,
     config: Optional[Dict[str, Any]] = None,
+    cache_config: Optional[Dict[str, Any]] = None,
 ):
     """Create or retrieve a local Collection.
 
@@ -67,6 +68,10 @@ def get_or_create_local_collection(
             - "ttl_cleanup_seconds": Interval (in seconds) for TTL expiration data cleanup
             - "index_maintenance_seconds": Interval (in seconds) for index maintenance tasks
             If not provided, values will be obtained from environment variables or defaults
+        cache_config: Cache configuration for query result caching, optional settings include:
+            - "max_size": Maximum number of cache entries (default: 1000)
+            - "ttl_seconds": Time-to-live for cache entries in seconds (default: 300)
+            - "enabled": Whether caching is enabled (default: True)
 
     Returns:
         Collection: Collection instance
@@ -81,6 +86,11 @@ def get_or_create_local_collection(
         ...     config={
         ...         "ttl_cleanup_seconds": 5,
         ...         "index_maintenance_seconds": 60
+        ...     },
+        ...     cache_config={
+        ...         "max_size": 2000,
+        ...         "ttl_seconds": 600,
+        ...         "enabled": True
         ...     }
         ... )
 
@@ -103,7 +113,11 @@ def get_or_create_local_collection(
         )
         store_mgr = create_store_manager("local")
         collection = VolatileCollection(
-            meta=meta, store=store_mgr, vectorizer=vectorizer, config=config
+            meta=meta,
+            store=store_mgr,
+            vectorizer=vectorizer,
+            config=config,
+            cache_config=cache_config,
         )
         return Collection(collection)
     else:
@@ -118,7 +132,12 @@ def get_or_create_local_collection(
         storage_path = os.path.join(path, STORAGE_DIR_NAME)
         store_mgr = create_store_manager("local", storage_path)
         collection = PersistCollection(
-            path=path, meta=meta, store=store_mgr, vectorizer=vectorizer, config=config
+            path=path,
+            meta=meta,
+            store=store_mgr,
+            vectorizer=vectorizer,
+            config=config,
+            cache_config=cache_config,
         )
         return Collection(collection)
 
@@ -130,6 +149,7 @@ class LocalCollection(ICollection):
         store_mgr: StoreManager,
         vectorizer: Optional[BaseVectorizer] = None,
         config: Optional[Dict[str, Any]] = None,
+        cache_config: Optional[Dict[str, Any]] = None,
     ):
         self.indexes = ThreadSafeDictManager[IIndex]()
         self.meta: CollectionMeta = meta
@@ -160,6 +180,9 @@ class LocalCollection(ICollection):
             executors={"default": {"type": "threadpool", "max_workers": 1}}
         )
         self.scheduler.start()
+
+        # Cache configuration for all indexes
+        self.cache_config = cache_config or {}
 
     def update(self, fields: Optional[Dict[str, Any]] = None, description: Optional[str] = None):
         meta_data: Dict[str, Any] = {}
@@ -326,6 +349,167 @@ class LocalCollection(ICollection):
         ]
         return search_result
 
+    def batch_search_by_vector(
+        self,
+        index_name: str,
+        dense_vectors: List[List[float]],
+        limit: int = 10,
+        offset: int = 0,
+        filters: Optional[Dict[str, Any]] = None,
+        sparse_vectors: Optional[List[Dict[str, float]]] = None,
+        output_fields: Optional[List[str]] = None,
+        num_threads: Optional[int] = None,
+    ) -> List[SearchResult]:
+        """Perform batch vector similarity search with multiple query vectors.
+
+        This method searches with multiple query vectors in a single call,
+        providing significant performance improvements for batch workloads
+        through parallel processing and query result caching.
+
+        Args:
+            index_name: Name of the index to search
+            dense_vectors: List of dense query vectors
+            limit: Maximum number of results to return per query. Defaults to 10.
+            offset: Number of results to skip per query. Defaults to 0.
+            filters: Query DSL for filtering results by scalar fields.
+            sparse_vectors: List of sparse vectors (dictionaries) for hybrid search.
+            output_fields: List of fields to include in results.
+            num_threads: Number of threads for parallel search. Defaults to 4.
+
+        Returns:
+            List of SearchResult objects, one per query vector, in the same order
+            as the input dense_vectors.
+
+        Example:
+            >>> query_vectors = [[0.1, 0.2, ...], [0.3, 0.4, ...], [0.5, 0.6, ...]]
+            >>> results = collection.batch_search_by_vector(
+            ...     index_name="my_index",
+            ...     dense_vectors=query_vectors,
+            ...     limit=10
+            ... )
+            >>> for i, result in enumerate(results):
+            ...     print(f"Query {i}: {len(result.data)} results")
+        """
+        if not dense_vectors:
+            return []
+
+        index = self.indexes.get(index_name)
+        if not index:
+            return [SearchResult() for _ in dense_vectors]
+
+        # Prepare sparse vectors if provided
+        sparse_raw_terms_list = None
+        sparse_values_list = None
+        if sparse_vectors:
+            sparse_raw_terms_list = []
+            sparse_values_list = []
+            for sv in sparse_vectors:
+                if sv and isinstance(sv, dict):
+                    sparse_raw_terms_list.append(list(sv.keys()))
+                    sparse_values_list.append(list(sv.values()))
+                else:
+                    sparse_raw_terms_list.append([])
+                    sparse_values_list.append([])
+
+        # Perform batch search with parallel processing
+        actual_limit = limit + offset
+        batch_results = index.batch_search(
+            dense_vectors,
+            actual_limit,
+            filters,
+            sparse_raw_terms_list,
+            sparse_values_list,
+            num_threads,
+        )
+
+        # Process results for each query
+        search_results: List[SearchResult] = []
+        if not output_fields:
+            output_fields = list(self.meta.fields_dict.keys())
+
+        for label_list, scores_list in batch_results:
+            search_result = SearchResult()
+
+            # Apply offset by slicing the results
+            if offset > 0:
+                label_list = label_list[offset:]
+                scores_list = scores_list[offset:]
+
+            # Limit to requested size
+            if len(label_list) > limit:
+                label_list = label_list[:limit]
+                scores_list = scores_list[:limit]
+
+            pk_list = label_list
+            fields_list = []
+
+            if self.meta.primary_key or output_fields:
+                if not self.store_mgr:
+                    raise RuntimeError("Store manager is not initialized")
+
+                # Fetch candidate data for labels
+                if label_list:
+                    cands_list = self.store_mgr.fetch_cands_data(label_list)
+
+                    valid_indices = []
+                    for i, cand in enumerate(cands_list):
+                        if cand is not None:
+                            valid_indices.append(i)
+
+                    if len(valid_indices) < len(cands_list):
+                        cands_list = [cands_list[i] for i in valid_indices]
+                        pk_list = [pk_list[i] for i in valid_indices]
+                        scores_list = [scores_list[i] for i in valid_indices]
+
+                    if cands_list:
+                        cands_fields = [json.loads(cand.fields) for cand in cands_list]
+
+                        if self.meta.primary_key:
+                            pk_list = [
+                                cands_field.get(self.meta.primary_key, "")
+                                for cands_field in cands_fields
+                            ]
+                        fields_list = [
+                            {field: cands_field.get(field, None) for field in output_fields}
+                            for cands_field in cands_fields
+                        ]
+                        if self.meta.vector_key:
+                            for i, cands in enumerate(cands_list):
+                                fields_list[i][self.meta.vector_key] = cands.vector
+
+            search_result.data = [
+                SearchItemResult(id=pk, fields=fields, score=score)
+                for pk, score, fields in zip_longest(pk_list, scores_list, fields_list)
+            ]
+            search_results.append(search_result)
+
+        return search_results
+
+    def get_index_cache_stats(self, index_name: str) -> Optional[Dict[str, Any]]:
+        """Get cache statistics for a specific index.
+
+        Args:
+            index_name: Name of the index
+
+        Returns:
+            Dictionary containing cache statistics if the index exists,
+            None otherwise.
+        """
+        index = self.indexes.get(index_name)
+        if not index:
+            return None
+        return index.get_cache_stats()
+
+    def invalidate_index_cache(self, index_name: str) -> None:
+        """Invalidate the query cache for a specific index.
+
+        Args:
+            index_name: Name of the index
+        """
+        index = self.indexes.get(index_name)
+        if index:
+            index.invalidate_cache()
+
     def search_by_id(
         self,
         index_name: str,
@@ -358,7 +542,9 @@ class LocalCollection(ICollection):
             return SearchResult()
         cands = cands_list[0]
         sparse_vector = (
-            dict(zip(cands.sparse_raw_terms, cands.sparse_values)) if cands.sparse_raw_terms else {}
+            dict(zip(cands.sparse_raw_terms, cands.sparse_values, strict=True))
+            if cands.sparse_raw_terms
+            else {}
         )
 
         return self.search_by_vector(
@@ -607,7 +793,9 @@ class LocalCollection(ICollection):
             if not self.vectorizer_adapter:
                 raw_data[vk] = list(cand_data.vector)
                 if svk and cand_data.sparse_raw_terms and cand_data.sparse_values:
-                    raw_data[svk] = dict(zip(cand_data.sparse_raw_terms, cand_data.sparse_values))
+                    raw_data[svk] = dict(
+                        zip(cand_data.sparse_raw_terms, cand_data.sparse_values, strict=True)
+                    )
             raw_data = validation.fix_fields_data(raw_data, self.meta.fields_dict)
             raw_data_list.append(raw_data)
 
@@ -895,8 +1083,9 @@ class VolatileCollection(LocalCollection):
         store: StoreManager,
         vectorizer: Optional[BaseVectorizer] = None,
         config: Optional[Dict[str, Any]] = None,
+        cache_config: Optional[Dict[str, Any]] = None,
     ):
-        super().__init__(meta, store, vectorizer, config)
+        super().__init__(meta, store, vectorizer, config, cache_config)
         LocalCollection._register_scheduler_job(self)
 
     def _new_index(
@@ -911,6 +1100,7 @@ class VolatileCollection(LocalCollection):
             name=index_name,
             meta=meta,
             cands_list=cands_list,
+            cache_config=self.cache_config,
         )
         return index
 
@@ -926,12 +1116,13 @@ class PersistCollection(LocalCollection):
         store: StoreManager,
         vectorizer: Optional[BaseVectorizer] = None,
         config: Optional[Dict[str, Any]] = None,
+        cache_config: Optional[Dict[str, Any]] = None,
     ):
         self.collection_dir = path
         os.makedirs(self.collection_dir, exist_ok=True)
         self.index_dir = os.path.join(self.collection_dir, "index")
         os.makedirs(self.index_dir, exist_ok=True)
-        super().__init__(meta, store, vectorizer, config)
+        super().__init__(meta, store, vectorizer, config, cache_config)
         self._recover()
         LocalCollection._register_scheduler_job(self)  # TTL expiration data cleanup
 
@@ -1031,6 +1222,7 @@ class PersistCollection(LocalCollection):
             meta=meta,
             cands_list=cands_list,
             force_rebuild=force_rebuild,
+            cache_config=self.cache_config,
         )
         return index
 

@@ -273,6 +273,65 @@ class IIndex(ABC):
         """
         return True
 
+    def batch_search(
+        self,
+        query_vectors: List[List[float]],
+        limit: int = 10,
+        filters: Optional[Dict[str, Any]] = None,
+        sparse_raw_terms_list: Optional[List[List[str]]] = None,
+        sparse_values_list: Optional[List[List[float]]] = None,
+    ) -> List[Tuple[List[int], List[float]]]:
+        """Perform batch vector similarity search with multiple query vectors.
+
+        This method allows searching with multiple query vectors in a single call,
+        which can be more efficient than multiple individual searches due to
+        better cache utilization and reduced overhead.
+
+        Args:
+            query_vectors: List of dense query vectors for similarity matching.
+                Each vector should have the same dimensionality as indexed vectors.
+            limit: Maximum number of results to return per query. Defaults to 10.
+            filters: Query DSL for filtering results by scalar fields.
+                Applied to all queries in the batch.
+            sparse_raw_terms_list: List of term token lists for sparse vector search.
+                Each inner list corresponds to a query vector.
+            sparse_values_list: List of weight lists for sparse vector search.
+                Each inner list corresponds to a query vector.
+
+        Returns:
+            List of tuples, one per query vector, each containing:
+                - List of labels (record identifiers) sorted by similarity
+                - List of similarity scores corresponding to each label
+
+        Note:
+            Default implementation calls search() for each query vector sequentially.
+            Subclasses may override this method to provide optimized batch processing.
+        """
+        # Default implementation: sequential search
+        results = []
+        for i, query_vector in enumerate(query_vectors):
+            sparse_terms = sparse_raw_terms_list[i] if sparse_raw_terms_list else None
+            sparse_values = sparse_values_list[i] if sparse_values_list else None
+            result = self.search(query_vector, limit, filters, sparse_terms, sparse_values)
+            results.append(result)
+        return results
+
+    def get_cache_stats(self) -> Optional[Dict[str, Any]]:
+        """Get cache statistics for this index.
+
+        Returns:
+            Dictionary containing cache statistics if caching is enabled,
+            None otherwise.
+        """
+        return None
+
+    def invalidate_cache(self) -> None:
+        """Invalidate the query cache for this index.
+
+        Should be called when the underlying data is modified.
+        """
+        pass
+
 
 class Index:
     """
@@ -480,3 +539,57 @@ class Index:
         if self.__index is None:
             raise RuntimeError("Index is not initialized")
         return self.__index.aggregate(filters)
+
+    def batch_search(
+        self,
+        query_vectors: List[List[float]],
+        limit: int = 10,
+        filters: Optional[Dict[str, Any]] = None,
+        sparse_raw_terms_list: Optional[List[List[str]]] = None,
+        sparse_values_list: Optional[List[List[float]]] = None,
+    ) -> List[Tuple[List[int], List[float]]]:
+        """Perform batch vector similarity search with multiple query vectors.
+
+        This method allows searching with multiple query vectors in a single call,
+        which can be more efficient than multiple individual searches due to
+        better cache utilization and reduced overhead.
+
+        Args:
+            query_vectors: List of dense query vectors for similarity matching.
+            limit: Maximum number of results to return per query. Defaults to 10.
+            filters: Query DSL for filtering results by scalar fields.
+            sparse_raw_terms_list: List of term token lists for sparse vector search.
+            sparse_values_list: List of weight lists for sparse vector search.
+
+        Returns:
+            List of tuples, one per query vector, each containing:
+                - List of labels (record identifiers) sorted by similarity
+                - List of similarity scores corresponding to each label
+
+        Raises:
+            RuntimeError: If the underlying index is not initialized.
+        """
+        if self.__index is None:
+            raise RuntimeError("Index is not initialized")
+        return self.__index.batch_search(
+            query_vectors, limit, filters, sparse_raw_terms_list, sparse_values_list
+        )
+
+    def get_cache_stats(self) -> Optional[Dict[str, Any]]:
+        """Get cache statistics for this index.
+
+        Returns:
+            Dictionary containing cache statistics if caching is enabled,
+            None otherwise.
+        """
+        if self.__index is None:
+            return None
+        return self.__index.get_cache_stats()
+
+    def invalidate_cache(self) -> None:
+        """Invalidate the query cache for this index.
+
+        Should be called when the underlying data is modified.
+        """
+        if self.__index is not None:
+            self.__index.invalidate_cache()

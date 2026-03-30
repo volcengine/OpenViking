@@ -1,9 +1,73 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
 """
-OpenViking - An Agent-native context database
+OpenViking - A Context Database for AI Agents.
 
-Data in, Context out.
+OpenViking is an open-source context database designed specifically for AI Agents.
+It provides a filesystem paradigm for unified context management, enabling developers
+to build an Agent's brain just like managing local files.
+
+Key Features:
+    - Filesystem Management Paradigm: Unified context management of memories,
+      resources, and skills based on a filesystem paradigm.
+    - Tiered Context Loading: L0/L1/L2 three-tier structure, loaded on demand.
+    - Directory Recursive Retrieval: Native filesystem retrieval methods with
+      directory positioning and semantic search.
+    - Visualized Retrieval Trajectory: Supports visualization of directory
+      retrieval trajectories.
+    - Automatic Session Management: Automatically compresses content and extracts
+      long-term memory.
+
+Basic Usage:
+    >>> import openviking
+    >>>
+    >>> # Initialize client (embedded mode)
+    >>> client = openviking.SyncOpenViking()
+    >>> client.initialize()
+    >>>
+    >>> # Add a resource
+    >>> client.add_resource("https://github.com/example/repo", wait=True)
+    >>>
+    >>> # Search for context
+    >>> results = client.find("what is openviking")
+    >>>
+    >>> # Create a session for conversation
+    >>> session = client.session()
+    >>> client.add_message(session.session_id, "user", "Hello!")
+    >>> client.commit_session(session.session_id)
+    >>>
+    >>> # Clean up
+    >>> client.close()
+
+For async usage:
+    >>> from openviking import AsyncOpenViking
+    >>>
+    >>> async def main():
+    ...     client = AsyncOpenViking()
+    ...     await client.initialize()
+    ...     # ... use client ...
+    ...     await client.close()
+
+For HTTP mode (connecting to a remote server):
+    >>> from openviking import AsyncHTTPClient, SyncHTTPClient
+    >>>
+    >>> # Async HTTP client
+    >>> client = AsyncHTTPClient(url="http://localhost:1933")
+    >>>
+    >>> # Sync HTTP client
+    >>> client = SyncHTTPClient(url="http://localhost:1933")
+
+Modules:
+    - openviking.client: Main client classes (SyncOpenViking, AsyncOpenViking)
+    - openviking.session: Session management for conversations
+    - openviking.storage: Storage backends and vector databases
+    - openviking.retrieve: Retrieval and search functionality
+    - openviking.models: Data models and schemas
+
+See Also:
+    - GitHub: https://github.com/volcengine/OpenViking
+    - Documentation: https://www.openviking.ai/docs
+    - Discord: https://discord.com/invite/eHvx8E9XF3
 """
 
 try:
