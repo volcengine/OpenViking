@@ -18,12 +18,6 @@ from openviking.storage.viking_fs import VikingFS
 class ExtractContextProvider(ABC):
     """Extract Context Provider 接口"""
 
-    @property
-    @abstractmethod
-    def name(self) -> str:
-        """Provider 名称"""
-        pass
-
     @abstractmethod
     def instruction(self) -> str:
         """
@@ -31,37 +25,6 @@ class ExtractContextProvider(ABC):
 
         Returns:
             完整的指令描述
-        """
-        pass
-
-    @abstractmethod
-    def get_system_prompt(self, json_schema: str) -> str:
-        """
-        获取完整的 system prompt
-
-        Args:
-            json_schema: JSON Schema 字符串
-
-        Returns:
-            完整的 system prompt
-        """
-        pass
-
-    @abstractmethod
-    def get_initial_messages(
-        self,
-        tool_call_messages: List[Dict],
-        json_schema: str,
-    ) -> List[Dict[str, Any]]:
-        """
-        获取完整的初始消息列表
-
-        Args:
-            tool_call_messages: prefetch 产生的工具调用消息
-            json_schema: JSON Schema 字符串
-
-        Returns:
-            完整的初始消息列表
         """
         pass
 
@@ -107,22 +70,5 @@ class ExtractContextProvider(ABC):
 
         Returns:
             需要参与的 MemoryTypeSchema 列表
-        """
-        pass
-
-    @abstractmethod
-    def get_schema_directories(self) -> List[str]:
-        """
-        获取需要加载的 schema 目录路径（builtin + custom）
-
-        Returns:
-            schema 目录路径列表
-        """
-        pass
-
-    @abstractmethod
-    async def load_schemas(self):
-        """
-        加载所有 schema 到内部 registry（延迟加载）
         """
         pass

@@ -1,10 +1,6 @@
 memory_type: tools
 description: |
-  Tool usage memory - captures "how this tool is used, what works well, and what doesn't".
-  Extract tool usage patterns, statistics, and learnings from [ToolCall] records and conversation context.
-  For each tool, track: how many times it's been called, success rate, average time/tokens, what it's best for, optimal parameters, common failure modes, and actionable recommendations.
-  Also accumulate complete guidelines with "Good Cases" and "Bad Cases" examples.
-  Tool memories help the agent learn from experience and use tools more effectively over time.
+  Record all tool calls
 directory: "viking://agent/{agent_space}/memories/tools"
 filename_template: "{tool_name}.md"
 enabled: true
@@ -89,5 +85,4 @@ fields:
       - "## Guidelines" - best practices
       - "### Good Cases" - successful usage examples
       - "### Bad Cases" - failed usage examples
-      Headings must be in English, content can be in target language.
     merge_op: patch

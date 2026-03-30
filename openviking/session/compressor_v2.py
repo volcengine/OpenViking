@@ -133,7 +133,18 @@ class SessionCompressorV2:
                 latest_archive_overview=latest_archive_overview,
             )
             if lock_manager:
-                memory_schema_dirs = orchestrator._get_all_memory_schema_dirs()
+                # 基于 provider 的 schemas 生成目录列表
+                schemas = orchestrator.context_provider.get_memory_schemas(ctx)
+                memory_schema_dirs = []
+                for schema in schemas:
+                    if not schema.directory:
+                        continue
+                    user_space = ctx.user.user_space_name() if ctx and ctx.user else "default"
+                    agent_space = ctx.user.agent_space_name() if ctx and ctx.user else "default"
+                    dir_path = schema.directory.replace("{user_space}", user_space).replace("{agent_space}", agent_space)
+                    dir_path = viking_fs._uri_to_path(dir_path, ctx)
+                    if dir_path not in memory_schema_dirs:
+                        memory_schema_dirs.append(dir_path)
                 logger.debug(f"Memory schema directories to lock: {memory_schema_dirs}")
 
                 # 循环等待获取锁（机制确保不会死锁）

@@ -9,7 +9,7 @@ import logging
 import time
 from collections import OrderedDict
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Optional, Tuple, Union
 
 from .openai_vlm import OpenAIVLM
 from ..base import VLMResponse, ToolCall
@@ -72,43 +72,101 @@ class VolcEngineVLM(OpenAIVLM):
             key_messages.append(filtered)
         return json.dumps(key_messages, ensure_ascii=False, sort_keys=True)
 
-    async def get_response_id(self, static_messages: List[Dict[str, Any]]) -> Optional[str]:
-        """Create prefix cache and return response_id.
 
-        Uses caching with prefix mode for prompt caching.
+    def _parse_messages_with_breakpoints(self, messages: List[Dict[str, Any]]) -> Tuple[List[List[Dict[str, Any]]], List[Dict[str, Any]]]:
+        """Parse messages into static segment and dynamic messages.
+
+        Only the content BEFORE the first cache_control becomes the static segment.
+        All messages after (including the one with cache_control) become dynamic.
         """
-        if not static_messages:
+        # 找到第一个 cache_control 的位置
+        first_breakpoint_idx = -1
+        for i, msg in enumerate(messages):
+            if msg.get("cache_control"):
+                first_breakpoint_idx = i
+                # print(f'cache_control={msg}')
+                break
+
+        if first_breakpoint_idx > 0:
+            # 有 cache_control，取其之前的内容作为 static segment
+            static_segment = messages[:first_breakpoint_idx+1]
+            dynamic_messages = messages[first_breakpoint_idx+1:]
+            static_segments = [static_segment]
+            print(f'static_segment={len(static_segment)}')
+            print(f'dynamic_messages={len(dynamic_messages)}')
+        else:
+            # 没有 cache_control 或在第一个位置，全部作为 dynamic
+            static_segments = []
+            dynamic_messages = messages
+
+
+        return static_segments, dynamic_messages
+
+    async def _get_or_create_from_segments(
+        self,
+        segments: List[List[Dict[str, Any]]],
+        end_idx: int
+    ) -> Optional[str]:
+        """递归获取或创建 cache，从长到短尝试。
+
+        Args:
+            segments: static 消息分段，每段以 cache_control 结尾
+            end_idx: 尝试的前缀长度（包含的 segment 数量）
+
+        Returns:
+            response_id for the prefix
+        """
+        if end_idx <= 0:
             return None
 
+
+        def segments_to_messages(segs):
+            # 拼接前 end_idx 个 segments
+            msgs = []
+            for seg in segs:
+                msgs.extend(seg)
+            return msgs
+
+        prefix = segments_to_messages(segments[:end_idx])
+
+        if end_idx == 1:
+            response_id =  await self._get_or_create_from_messages(prefix)
+            return response_id
+
+        previous_response_id = await self._get_or_create_from_segments(segments, end_idx - 1)
+        return await self._get_or_create_from_messages(segments_to_messages(segments[end_idx - 1: end_idx]), previous_response_id=previous_response_id)
+
+
+    async def _get_or_create_from_messages(self, messages: List[Dict[str, Any]], previous_response_id=None) -> Optional[str]:
+        """从头创建新 cache。"""
+
         # Check cache first
-        cache_key = self._get_response_id_cache_key(static_messages)
+        cache_key = self._get_response_id_cache_key(messages)
         cached_id = self._response_cache.get(cache_key)
-        if cached_id:
-            logger.info(f"[VolcEngineVLM] Using cached response_id: {cached_id}")
+        if cached_id is not None:
             return cached_id
 
         client = self.get_async_client()
-        input_data = self._convert_messages_to_input(static_messages)
-
+        input_data = self._convert_messages_to_input(messages)
         try:
             response = await client.responses.create(
                 model=self.model,
+                previous_response_id=previous_response_id,
                 input=input_data,
                 caching={"type": "enabled", "prefix": True},
                 thinking={"type": "disabled"},
             )
-            response_id = response.id if hasattr(response, 'id') else None
-            if response_id:
-                self._response_cache.set(cache_key, response_id)
-                logger.info(f"[VolcEngineVLM] Created new response_id: {response_id}")
-            return response_id
+            cached_id = response.id
+            self._response_cache.set(cache_key, cached_id)
+            return cached_id
         except Exception as e:
-            logger.warning(f"[VolcEngineVLM] Failed to create response_id: {e}")
+            logger.warning(f"[VolcEngineVLM] Failed to create new cache: {e}")
             return None
+
 
     async def responseapi_prefixcache_completion(
         self,
-        static_messages: List[Dict[str, Any]],
+        static_segments: List[List[Dict[str, Any]]],
         dynamic_messages: List[Dict[str, Any]],
         response_format: Optional[Dict] = None,
         tools: Optional[List[Dict[str, Any]]] = None,
@@ -117,14 +175,17 @@ class VolcEngineVLM(OpenAIVLM):
         """Use cached response_id for completion with dynamic messages.
 
         Args:
-            static_messages: Messages used to create the cache (shared context)
+            static_segments: Multiple static segments, each ending with cache_control
             dynamic_messages: New messages for this request
             response_format: Response format for structured output
             tools: Tool definitions
             tool_choice: Tool choice setting
         """
-        response_id = await self.get_response_id(static_messages)
-
+        # 使用多段缓存获取 response_id
+        if static_segments:
+            response_id = await self._get_or_create_from_segments(static_segments, len(static_segments))
+        else:
+            response_id = None
         client = self.get_async_client()
         input_data = self._convert_messages_to_input(dynamic_messages)
 
@@ -155,44 +216,6 @@ class VolcEngineVLM(OpenAIVLM):
         response = await client.responses.create(**kwargs)
         return response
 
-    async def responseapi_common_completion(
-        self,
-        static_messages: List[Dict[str, Any]],
-        dynamic_messages: List[Dict[str, Any]],
-        response_format: Optional[Dict] = None,
-        tools: Optional[List[Dict[str, Any]]] = None,
-        tool_choice: Optional[str] = None,
-    ) -> Any:
-        """Common completion without using cache.
-
-        Args:
-            static_messages: First part of messages
-            dynamic_messages: Second part of messages
-            response_format: Response format for structured output
-            tools: Tool definitions
-            tool_choice: Tool choice setting
-        """
-        client = self.get_async_client()
-        input_data = self._convert_messages_to_input(static_messages + dynamic_messages)
-
-        kwargs = {
-            "model": self.model,
-            "input": input_data,
-            "temperature": self.temperature,
-            "thinking": {"type": "disabled"},
-        }
-        if self.max_tokens is not None:
-            kwargs["max_tokens"] = self.max_tokens
-        if response_format:
-            kwargs["text"] = {"format": response_format}
-        if tools:
-            converted_tools = self._convert_tools(tools)
-            kwargs["tools"] = converted_tools
-            kwargs["tool_choice"] = tool_choice or "auto"
-        kwargs["caching"] = {"type": "enabled"}
-
-        response = await client.responses.create(**kwargs)
-        return response
 
     def get_client(self):
         """Get sync client"""
@@ -223,31 +246,6 @@ class VolcEngineVLM(OpenAIVLM):
                 base_url=self.api_base,
             )
         return self._async_client
-
-    def _parse_tool_calls(self, message) -> List[ToolCall]:
-        """Parse tool calls from VolcEngine response message."""
-        tool_calls = []
-        if hasattr(message, "tool_calls") and message.tool_calls:
-            for tc in message.tool_calls:
-                args = tc.arguments
-                if isinstance(args, str):
-                    try:
-                        args = json.loads(args)
-                    except json.JSONDecodeError:
-                        args = {"raw": args}
-                # Handle both tc.name and tc.function.name (Responses API vs Chat API)
-                try:
-                    tool_name = tc.name
-                    if not tool_name:
-                        tool_name = tc.function.name
-                except AttributeError:
-                    tool_name = tc.function.name if hasattr(tc, 'function') else ""
-                tool_calls.append(ToolCall(
-                    id=tc.id or "",
-                    name=tool_name or "",
-                    arguments=args
-                ))
-        return tool_calls
 
     def _update_token_usage_from_response(
         self, response, duration_seconds: float = 0.0,
@@ -543,44 +541,22 @@ class VolcEngineVLM(OpenAIVLM):
         else:
             kwargs_messages = [{"role": "user", "content": prompt}]
 
-        # Separate static messages (with cache_control) from dynamic messages
-        # cache_control 标记"到这个位置为止的前缀可以被缓存"
-        # 找到最后一个 cache_control 位置，从头到该位置的所有消息都是 static
-        last_breakpoint_idx = -1
-        for i, msg in enumerate(kwargs_messages):
-            if msg.get("cache_control"):
-                last_breakpoint_idx = i
+        # Parse messages into multiple static segments and dynamic messages
+        # Each segment ends with cache_control, dynamic is the rest
+        static_segments, dynamic_messages = self._parse_messages_with_breakpoints(kwargs_messages)
 
-        if last_breakpoint_idx >= 0:
-            static_messages = kwargs_messages[:last_breakpoint_idx + 1]
-            dynamic_messages = kwargs_messages[last_breakpoint_idx + 1:]
-        else:
-            static_messages = []
-            dynamic_messages = kwargs_messages
-
-        # If we have static messages, try prefix cache
+        # If we have static segments, try prefix cache
         response_format = None  # Can be extended for structured output
 
         try:
-            if static_messages:
-                # Use prefix cache
-                response = await self.responseapi_prefixcache_completion(
-                    static_messages=static_messages,
-                    dynamic_messages=dynamic_messages,
-                    response_format=response_format,
-                    tools=tools,
-                    tool_choice=tool_choice,
-                )
-            else:
-                # No static messages, use common completion
-                response = await self.responseapi_common_completion(
-                    static_messages=[],
-                    dynamic_messages=dynamic_messages,
-                    response_format=response_format,
-                    tools=tools,
-                    tool_choice=tool_choice,
-                )
-
+            # Use prefix cache with multiple segments
+            response = await self.responseapi_prefixcache_completion(
+                static_segments=static_segments,
+                dynamic_messages=dynamic_messages,
+                response_format=response_format,
+                tools=tools,
+                tool_choice=tool_choice,
+            )
             elapsed = 0  # Timing handled in responseapi methods
             self._update_token_usage_from_response(response, duration_seconds=elapsed)
             return self._build_vlm_response(response, has_tools=bool(tools))
@@ -755,42 +731,10 @@ class VolcEngineVLM(OpenAIVLM):
                 content.append({"type": "text", "text": prompt})
             kwargs_messages = [{"role": "user", "content": content}]
 
-        # Separate static messages (with cache_control) from dynamic messages
-        # cache_control 标记"到这个位置为止的前缀可以被缓存"
-        # 找到最后一个 cache_control 位置，从头到该位置的所有消息都是 static
-        last_breakpoint_idx = -1
-        for i, msg in enumerate(kwargs_messages):
-            if msg.get("cache_control"):
-                last_breakpoint_idx = i
-
-        if last_breakpoint_idx >= 0:
-            static_messages = kwargs_messages[:last_breakpoint_idx + 1]
-            dynamic_messages = kwargs_messages[last_breakpoint_idx + 1:]
-        else:
-            static_messages = []
-            dynamic_messages = kwargs_messages
-
-        try:
-            if static_messages:
-                # Use prefix cache
-                response = await self.responseapi_prefixcache_completion(
-                    static_messages=static_messages,
-                    dynamic_messages=dynamic_messages,
-                    tools=tools,
-                    tool_choice="auto",
-                )
-            else:
-                # No static messages, use common completion
-                response = await self.responseapi_common_completion(
-                    static_messages=[],
-                    dynamic_messages=dynamic_messages,
-                    tools=tools,
-                    tool_choice="auto",
-                )
-
-            self._update_token_usage_from_response(response, duration_seconds=0)
-            return self._build_vlm_response(response, has_tools=bool(tools))
-
-        except Exception as e:
-            logger.warning(f"[VolcEngineVLM] Vision request failed: {e}")
-            raise
+        # 复用 get_completion_async 的逻辑
+        return await self.get_completion_async(
+            prompt=prompt,
+            thinking=thinking,
+            tools=tools,
+            messages=kwargs_messages,
+        )

@@ -83,40 +83,17 @@ class ExtractLoop:
         self.schema_prompt_generator = None
         self._json_schema = None
 
+        # 预计算：避免每次迭代重复计算
+        self._tool_schemas: Optional[List[Dict[str, Any]]] = None
+        self._expected_fields: Optional[List[str]] = None
+        self._operations_model: Optional[Any] = None
+
         # Track files read during ReAct for refetch detection
         self._read_files: Set[str] = set()
         # Transaction handle for file locking
         self._transaction_handle = None
 
-    def _get_all_memory_schema_dirs(self) -> List[str]:
-        """
-        Get all memory schema directories from provider
 
-        Returns:
-            List of all memory schema directories
-        """
-        # Get schemas from provider
-        schemas = self.context_provider.get_memory_schemas(self.ctx)
-
-        dirs = []
-        for schema in schemas:
-            if not schema.directory:
-                continue
-
-            # Replace variables in directory path with actual user/agent space
-            user_space = self.ctx.user.user_space_name() if self.ctx and self.ctx.user else "default"
-            agent_space = self.ctx.user.agent_space_name() if self.ctx and self.ctx.user else "default"
-            dir_path = schema.directory.replace("{user_space}", user_space).replace("{agent_space}", agent_space)
-
-            # Convert Viking URI to AGFS path using VikingFS's internal path conversion
-            # This is necessary because LockManager/PathLock work directly with AGFSClient
-            # which expects /local/{account_id}/ format paths
-            dir_path = self.viking_fs._uri_to_path(dir_path, self.ctx)
-
-            if dir_path not in dirs:
-                dirs.append(dir_path)
-
-        return dirs
 
     async def run(self) -> Tuple[Optional[MemoryOperations], List[Dict[str, Any]]]:
         """
@@ -139,13 +116,19 @@ class ExtractLoop:
         self.schema_model_generator.generate_all_models()
         self._json_schema = self.schema_model_generator.get_llm_json_schema()
 
-        # Pre-fetch context via provider
-        tool_call_messages = await self.context_provider.prefetch(
-            ctx=self.ctx,
-            viking_fs=self.viking_fs,
-            transaction_handle=self._transaction_handle,
-            vlm=self.vlm,
-        )
+        # 预计算工具 schemas
+        allowed_tools = self.context_provider.get_tools()
+        self._tool_schemas = [tool.to_schema() for tool in MEMORY_TOOLS_REGISTRY.values() if tool.name in allowed_tools]
+
+        # 预计算 expected_fields
+        self._expected_fields = ['reasoning', 'edit_overview_uris', 'delete_uris']
+        for schema in schemas:
+            self._expected_fields.append(schema.memory_type)
+
+        # 预计算 operations_model
+        self._operations_model = self.schema_model_generator.create_structured_operations_model()
+
+
 
         # Reset read files tracking for this run
         self._read_files.clear()
@@ -153,7 +136,33 @@ class ExtractLoop:
         # Build initial messages from provider
         import json
         schema_str = json.dumps(self._json_schema, ensure_ascii=False)
-        messages = self.context_provider.get_initial_messages(tool_call_messages, schema_str)
+
+        messages = []
+        # instruction() 返回字符串，需要包装成 message 格式
+        messages.append({
+            "role": "system",
+            "content": self.context_provider.instruction(),
+        })
+        messages.append({
+            "role":"system",
+            "content":f"""
+## Output Format
+See the complete JSON Schema below:
+```json
+{schema_str}
+```
+        """
+        })
+
+        await self._mark_cache_breakpoint(messages)
+        # Pre-fetch context via provider
+        tool_call_messages = await self.context_provider.prefetch(
+            ctx=self.ctx,
+            viking_fs=self.viking_fs,
+            transaction_handle=self._transaction_handle,
+            vlm=self.vlm,
+        )
+        messages.extend(tool_call_messages)
 
         while iteration < max_iterations:
             iteration += 1
@@ -172,6 +181,13 @@ class ExtractLoop:
             # Call LLM with tools - model decides: tool calls OR final operations
             pretty_print_messages(messages)
             tool_calls, operations = await self._call_llm(messages, force_final=is_last_iteration)
+
+
+            if tool_calls:
+                await self._execute_tool_calls(messages, tool_calls, tools_used)
+                await self._mark_cache_breakpoint(messages)
+                continue
+
             # If model returned final operations, check if refetch is needed
             if operations is not None:
                 # Check if any write_uris target existing files that weren't read
@@ -184,62 +200,22 @@ class ExtractLoop:
                     if iteration >= max_iterations:
                         max_iterations += 1
                         logger.info(f"Extended max_iterations to {max_iterations} for refetch")
-                    # Clear operations to force another iteration
-                    operations = None
-                    # Continue to next iteration
+
+                    await self._mark_cache_breakpoint(messages)
                     continue
 
                 final_operations = operations
                 break
-
             # If no tool calls either, continue to next iteration (don't break!)
-            if not tool_calls:
-                logger.warning(f"LLM returned neither tool calls nor operations (iteration {iteration}/{max_iterations})")
-                # If it's the last iteration, use empty operations
-                if is_last_iteration:
-                    final_operations = MemoryOperations()
-                    break
-                # Otherwise continue and try again
-                continue
+            logger.warning(f"LLM returned neither tool calls nor operations (iteration {iteration}/{max_iterations})")
+            # If it's the last iteration, use empty operations
+            if is_last_iteration:
+                final_operations = MemoryOperations()
+                break
+            # Otherwise continue and try again
+            continue
 
-            # Execute all tool calls in parallel
-            async def execute_single_tool_call(idx: int, tool_call):
-                """Execute a single tool call."""
-                result = await self._execute_tool(tool_call)
-                return idx, tool_call, result
 
-            action_tasks = [
-                execute_single_tool_call(idx, tool_call)
-                for idx, tool_call in enumerate(tool_calls)
-            ]
-            results = await self._execute_in_parallel(action_tasks)
-
-            # Process results and add to messages
-            for _idx, tool_call, result in results:
-                # Skip if arguments is None
-                if tool_call.arguments is None:
-                    logger.warning(f"Tool call {tool_call.name} has no arguments, skipping")
-                    continue
-
-                tools_used.append({
-                    "tool_name": tool_call.name,
-                    "params": tool_call.arguments,
-                    "result": result,
-                })
-
-                # Track read tool calls for refetch detection
-                if tool_call.name == "read" and tool_call.arguments.get("uri"):
-                    self._read_files.add(tool_call.arguments["uri"])
-
-                add_tool_call_pair_to_messages(
-                    messages,
-                    call_id=tool_call.id,
-                    tool_name=tool_call.name,
-                    params=tool_call.arguments,
-                    result=result,
-                )
-            # Print updated messages with tool results
-            pretty_print_messages(messages)
         if final_operations is None:
             if iteration >= max_iterations:
                 raise RuntimeError(f"Reached {max_iterations} iterations without completion")
@@ -249,6 +225,44 @@ class ExtractLoop:
         logger.info(f'final_operations={final_operations.model_dump_json(indent=4)}')
 
         return final_operations, tools_used
+
+    async def _execute_tool_calls(self, messages, tool_calls, tools_used):
+        # Execute all tool calls in parallel
+        async def execute_single_tool_call(idx: int, tool_call):
+            """Execute a single tool call."""
+            result = await self._execute_tool(tool_call)
+            return idx, tool_call, result
+
+        action_tasks = [
+            execute_single_tool_call(idx, tool_call)
+            for idx, tool_call in enumerate(tool_calls)
+        ]
+        results = await self._execute_in_parallel(action_tasks)
+
+        # Process results and add to messages
+        for _idx, tool_call, result in results:
+            # Skip if arguments is None
+            if tool_call.arguments is None:
+                logger.warning(f"Tool call {tool_call.name} has no arguments, skipping")
+                continue
+
+            tools_used.append({
+                "tool_name": tool_call.name,
+                "params": tool_call.arguments,
+                "result": result,
+            })
+
+            # Track read tool calls for refetch detection
+            if tool_call.name == "read" and tool_call.arguments.get("uri"):
+                self._read_files.add(tool_call.arguments["uri"])
+
+            add_tool_call_pair_to_messages(
+                messages,
+                call_id=tool_call.id,
+                tool_name=tool_call.name,
+                params=tool_call.arguments,
+                result=result,
+            )
 
     def _validate_operations(self, operations: MemoryOperations) -> None:
         """
@@ -291,19 +305,12 @@ class ExtractLoop:
         Returns:
             Tuple of (tool_calls, operations) - one will be None, the other set
         """
-        # Get schemas for this call
-        schemas = self.context_provider.get_memory_schemas(self.ctx)
-
         # Call LLM with tools - use tools from strategy
         tool_choice = "none" if force_final else None
 
-        # Get tool schemas based on strategy's tool list
-        allowed_tools = self.context_provider.get_tools()
-        tool_schemas = [tool.to_schema() for tool in MEMORY_TOOLS_REGISTRY.values() if tool.name in allowed_tools]
-
         response = await self.vlm.get_completion_async(
             messages=messages,
-            tools=tool_schemas,
+            tools=self._tool_schemas,
             tool_choice=tool_choice,
             max_retries=self.vlm.max_retries,
         )
@@ -333,19 +340,12 @@ class ExtractLoop:
             try:
                 # print(f'LLM response content: {content}')
                 logger.debug(f"[assistant]\n{content}")
-                # Get the dynamically generated operations model for better type safety
-                operations_model = self.schema_model_generator.create_structured_operations_model()
 
-                # Use five-layer stable JSON parsing (FaultTolerantBaseModel handles type tolerance)
-                # Build expected_fields dynamically from schemas
-                expected_fields = ['reasoning', 'edit_overview_uris', 'delete_uris']
-                for schema in schemas:
-                    expected_fields.append(schema.memory_type)
-
+                # Use cached operations_model and expected_fields
                 operations, error = parse_json_with_stability(
                     content=content,
-                    model_class=operations_model,
-                    expected_fields=expected_fields,
+                    model_class=self._operations_model,
+                    expected_fields=self._expected_fields,
                 )
 
                 if error is not None:
@@ -468,3 +468,8 @@ class ExtractLoop:
             "role": "user",
             "content": "Note: The files above were automatically read because they exist and you didn't read them before deciding to write. Please consider the existing content when making write decisions. You can now output updated operations."
         })
+
+    async def _mark_cache_breakpoint(self, messages):
+        # 支持 dict 消息和 object 消息
+        last_msg = messages[-1]
+        last_msg["cache_control"] = {"type": "ephemeral"}

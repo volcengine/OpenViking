@@ -1,10 +1,6 @@
 memory_type: skills
 description: |
-  Skill execution memory - captures "how this skill is executed, what works well, and what doesn't".
-  Extract skill execution patterns, statistics, and learnings from skill usage in conversation.
-  For each skill, track: how many times it's been executed, success rate, what it's best for, recommended execution flow, key dependencies, common failure modes, and actionable recommendations.
-  Also accumulate complete guidelines with "Good Cases" and "Bad Cases" examples.
-  Skill memories help the agent learn from experience and execute skills more effectively over time.
+  Record all skills uses，
 directory: "viking://agent/{agent_space}/memories/skills"
 filename_template: "{skill_name}.md"
 enabled: true

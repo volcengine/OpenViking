@@ -34,10 +34,6 @@ class SessionExtractContextProvider(ExtractContextProvider):
         self._registry = None  # 延迟加载
         self._schema_directories = None
 
-    @property
-    def name(self) -> str:
-        return "session"
-
     def _detect_language(self) -> str:
         """检测输出语言"""
         from openviking.session.memory.utils import detect_language_from_conversation
@@ -81,39 +77,8 @@ See GenericOverviewEdit in the JSON Schema below."""
 
         return goal
 
-    def get_system_prompt(self, json_schema: str) -> str:
-        """获取完整的 system prompt"""
-        instruction = self.instruction()
-        return f"""{instruction}
-
-## Output Format
-See the complete JSON Schema below:
-```json
-{json_schema}
-```
-"""
-
-    def get_initial_messages(
-        self,
-        tool_call_messages: List[Dict],
-        json_schema: str,
-    ) -> List[Dict[str, Any]]:
-        """获取完整的初始消息列表"""
-        # Get system prompt
-        system_prompt = self.get_system_prompt(json_schema)
-
-        messages = [
-            {
-                "role": "system",
-                "content": system_prompt,
-                "cache_control": {"type": "ephemeral"},
-            }
-        ]
-
-        # Add pre-fetched context as tool calls
-        messages.extend(tool_call_messages)
-
-        # 计算 session 时间（第一条消息的时间，如果没有则用当前时间）
+    def _build_conversation_message(self) -> Dict[str, Any]:
+        """构建包含 Conversation History 的 user message"""
         from datetime import datetime
         if self.messages:
             first_msg_time = getattr(self.messages[0], "created_at", None)
@@ -138,17 +103,16 @@ See the complete JSON Schema below:
 
         conversation = self._assemble_conversation(self.messages)
 
-        messages.append({
+        return {
             "role": "user",
             "content": f"""## Conversation History
 **Session Time:** {time_display} ({day_of_week})
+Relative times (e.g., 'last week', 'next month') are based on Session Time, not today.
 
 {conversation}
 
-After exploring, analyze the conversation and output ALL memory write/edit/delete operations in a single response. Do not output operations one at a time - gather all changes first, then return them together.""",
-        })
-
-        return messages
+After exploring, analyze the conversation and output ALL memory write/edit/delete operations in a single response. Do not output operations one at a time - gather all changes first, then return them together."""
+        }
 
     def _assemble_conversation(self, messages: Any) -> str:
         """Assemble conversation string from messages.
@@ -216,7 +180,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             vlm: VLM 实例
 
         Returns:
-            预取的 tool call messages 列表
+            预取的消息列表，第一个元素是 Conversation History user message，后续是 tool call messages
         """
         messages = self.messages
 
@@ -224,11 +188,14 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             logger.warning(f"Expected List[Message], got {type(messages)}")
             return []
 
-        # 使用内部加载的 registry
-        schemas = self._registry.list_all(include_disabled=False)
+        # 先构建 Conversation History user message
+        pre_fetch_messages = []
+        pre_fetch_messages.append(self._build_conversation_message())
+
+        # 触发 registry 加载
+        schemas = self._get_registry().list_all(include_disabled=False)
 
         from openviking.server.identity import ToolContext
-        pre_fetch_messages = []
 
         # Step 1: Separate schemas into multi-file (ls) and single-file (direct read)
         ls_dirs = set()  # directories to ls (for multi-file schemas)
@@ -384,9 +351,4 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                 if os.path.exists(dir_path):
                     self._registry.load_from_directory(dir_path)
         return self._registry
-
-    async def load_schemas(self):
-        """加载所有 schema（现在由 _get_registry 懒加载）"""
-        # 触发加载
-        self._get_registry()
 
