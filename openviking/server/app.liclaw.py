@@ -1,0 +1,197 @@
+# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
+# SPDX-License-Identifier: Apache-2.0
+"""FastAPI application for OpenViking HTTP Server."""
+
+# [liclaw] This file is based on the v0.2.8 official image's app.py,
+# with the EndUser-Tag middleware injected. Do NOT replace with upstream
+# app.py directly — upstream versions may import routers that don't exist
+# in the v0.2.8 base image (e.g. metrics_router).
+
+import time
+from contextlib import asynccontextmanager
+from typing import Callable, Optional
+
+from fastapi import FastAPI, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+from openviking.server.api_keys import APIKeyManager
+from openviking.server.config import ServerConfig, load_server_config, validate_server_config
+from openviking.server.dependencies import set_service
+from openviking.server.enduser_context import bind_enduser_tag  # [liclaw]
+from openviking.server.models import ERROR_CODE_TO_HTTP_STATUS, ErrorInfo, Response
+from openviking.server.routers import (
+    admin_router,
+    bot_router,
+    content_router,
+    debug_router,
+    filesystem_router,
+    observer_router,
+    pack_router,
+    relations_router,
+    resources_router,
+    search_router,
+    sessions_router,
+    system_router,
+    tasks_router,
+)
+from openviking.service.core import OpenVikingService
+from openviking.service.task_tracker import get_task_tracker
+from openviking_cli.exceptions import OpenVikingError
+from openviking_cli.utils import get_logger
+
+logger = get_logger(__name__)
+
+
+def create_app(
+    config: Optional[ServerConfig] = None,
+    service: Optional[OpenVikingService] = None,
+) -> FastAPI:
+    """Create FastAPI application.
+
+    Args:
+        config: Server configuration. If None, loads from default location.
+        service: Pre-initialized OpenVikingService (optional).
+
+    Returns:
+        FastAPI application instance
+    """
+    if config is None:
+        config = load_server_config()
+
+    validate_server_config(config)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        """Application lifespan handler."""
+        nonlocal service
+        owns_service = service is None
+        if owns_service:
+            service = OpenVikingService()
+            await service.initialize()
+            logger.info("OpenVikingService initialized")
+
+        set_service(service)
+
+        # Initialize APIKeyManager after service (needs AGFS)
+        if config.root_api_key:
+            api_key_manager = APIKeyManager(
+                root_key=config.root_api_key,
+                agfs_client=service._agfs,
+            )
+            await api_key_manager.load()
+            app.state.api_key_manager = api_key_manager
+            logger.info("APIKeyManager initialized")
+        else:
+            app.state.api_key_manager = None
+            logger.warning(
+                "Dev mode: no root_api_key configured, authentication disabled. "
+                "This is allowed because the server is bound to localhost (%s). "
+                "Do NOT expose this server to the network without configuring "
+                "server.root_api_key in ov.conf.",
+                config.host,
+            )
+
+        # Start TaskTracker cleanup loop
+        task_tracker = get_task_tracker()
+        task_tracker.start_cleanup_loop()
+
+        yield
+
+        # Cleanup
+        task_tracker.stop_cleanup_loop()
+        if owns_service and service:
+            await service.close()
+            logger.info("OpenVikingService closed")
+
+    app = FastAPI(
+        title="OpenViking API",
+        description="OpenViking API",
+        version="0.1.0",
+        lifespan=lifespan,
+    )
+
+    app.state.config = config
+
+    # Add CORS middleware
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=config.cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
+    # [liclaw] EndUser-Tag middleware: extract X-EndUser-Tag from request headers
+    # and store in ContextVar so LLM/Embedding backends can forward it downstream.
+    @app.middleware("http")
+    async def enduser_tag_middleware(request: Request, call_next: Callable):
+        tag = request.headers.get("X-EndUser-Tag") or None
+        with bind_enduser_tag(tag):
+            return await call_next(request)
+
+    # Add request timing middleware
+    @app.middleware("http")
+    async def add_timing(request: Request, call_next: Callable):
+        start_time = time.time()
+        response = await call_next(request)
+        process_time = time.time() - start_time
+        response.headers["X-Process-Time"] = str(process_time)
+        return response
+
+    # Add exception handler for OpenVikingError
+    @app.exception_handler(OpenVikingError)
+    async def openviking_error_handler(request: Request, exc: OpenVikingError):
+        http_status = ERROR_CODE_TO_HTTP_STATUS.get(exc.code, 500)
+        return JSONResponse(
+            status_code=http_status,
+            content=Response(
+                status="error",
+                error=ErrorInfo(
+                    code=exc.code,
+                    message=exc.message,
+                    details=exc.details,
+                ),
+            ).model_dump(),
+        )
+
+    # Catch-all for unhandled exceptions so clients always get JSON
+    @app.exception_handler(Exception)
+    async def general_error_handler(request: Request, exc: Exception):
+        logger.warning("Unhandled exception: %s", exc)
+        return JSONResponse(
+            status_code=500,
+            content=Response(
+                status="error",
+                error=ErrorInfo(
+                    code="INTERNAL",
+                    message=str(exc),
+                ),
+            ).model_dump(),
+        )
+
+    # Configure Bot API if --with-bot is enabled
+    if config.with_bot:
+        import openviking.server.routers.bot as bot_module
+
+        bot_module.set_bot_api_url(config.bot_api_url)
+        logger.info(f"Bot API proxy enabled, forwarding to {config.bot_api_url}")
+    else:
+        logger.info("Bot API proxy disabled (use --with-bot to enable)")
+
+    # Register routers
+    app.include_router(system_router)
+    app.include_router(admin_router)
+    app.include_router(resources_router)
+    app.include_router(filesystem_router)
+    app.include_router(content_router)
+    app.include_router(search_router)
+    app.include_router(relations_router)
+    app.include_router(sessions_router)
+    app.include_router(pack_router)
+    app.include_router(debug_router)
+    app.include_router(observer_router)
+    app.include_router(tasks_router)
+    app.include_router(bot_router, prefix="/bot/v1")
+
+    return app
