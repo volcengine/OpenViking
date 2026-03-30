@@ -14,7 +14,7 @@ from openviking.session import Session
 from openviking.session.compressor import SessionCompressor
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import VikingFS
-from openviking_cli.exceptions import NotFoundError, NotInitializedError
+from openviking_cli.exceptions import AlreadyExistsError, NotFoundError, NotInitializedError
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -75,7 +75,14 @@ class SessionService:
             ctx: Request context
             session_id: Optional session ID. If provided, creates a session with the given ID.
                        If None, creates a new session with auto-generated ID.
+
+        Raises:
+            AlreadyExistsError: If a session with the given ID already exists
         """
+        if session_id:
+            existing = self.session(ctx, session_id)
+            if await existing.exists():
+                raise AlreadyExistsError(f"Session '{session_id}' already exists")
         session = self.session(ctx, session_id)
         await session.ensure_exists()
         return session
