@@ -293,10 +293,10 @@ class VolcEngineVLM(OpenAIVLM):
         # logger.info(f"[VolcEngineVLM] Full response: {response}")
         if hasattr(response, "output"):
             # logger.debug(f"[VolcEngineVLM] Output items: {len(response.output)}")
-            for i, item in enumerate(response.output):
-                # logger.debug(f"[VolcEngineVLM]   Item {i}: type={getattr(item, 'type', 'unknown')}")
+            for _i, _item in enumerate(response.output):
+                # logger.debug(f"[VolcEngineVLM]   Item {_i}: type={getattr(_item, 'type', 'unknown')}")
                 # Print full item for debugging
-                # logger.info(f"[VolcEngineVLM]   Item {i} full: {item}")
+                # logger.info(f"[VolcEngineVLM]   Item {_i} full: {_item}")
                 pass
 
         # Extract content from Responses API format
@@ -450,7 +450,7 @@ class VolcEngineVLM(OpenAIVLM):
                                     url = image_url.get("url", "")
                                     if url:
                                         image_urls.append(url)
-                                has_images = True
+                                has_images = True  # noqa: F841
                             # Handle other block types
                             else:
                                 # Try to extract text from any dict block
