@@ -58,6 +58,55 @@ export type TaskResult = {
   error?: string;
 };
 
+export type OVMessagePart = {
+  type: string;
+  text?: string;
+  uri?: string;
+  abstract?: string;
+  context_type?: string;
+  tool_id?: string;
+  tool_name?: string;
+  tool_input?: unknown;
+  tool_output?: string;
+  tool_status?: string;
+  skill_uri?: string;
+};
+
+export type OVMessage = {
+  id: string;
+  role: string;
+  parts: OVMessagePart[];
+  created_at: string;
+};
+
+export type PreArchiveAbstract = {
+  archive_id: string;
+  abstract: string;
+};
+
+export type SessionContextResult = {
+  latest_archive_overview: string;
+  latest_archive_id: string;
+  pre_archive_abstracts: PreArchiveAbstract[];
+  messages: OVMessage[];
+  estimatedTokens: number;
+  stats: {
+    totalArchives: number;
+    includedArchives: number;
+    droppedArchives: number;
+    failedArchives: number;
+    activeTokens: number;
+    archiveTokens: number;
+  };
+};
+
+export type SessionArchiveResult = {
+  archive_id: string;
+  abstract: string;
+  overview: string;
+  messages: OVMessage[];
+};
+
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -93,10 +142,40 @@ export class OpenVikingClient {
     private readonly apiKey: string,
     private readonly defaultAgentId: string,
     private readonly timeoutMs: number,
+    /** When set (or defaulted), sent so ROOT key can access tenant-scoped APIs. */
+    private readonly accountId: string = "",
+    private readonly userId: string = "",
+    /** When set, logs routing for find + session writes (tenant headers + paths; never apiKey). */
+    private readonly routingDebugLog?: (message: string) => void,
   ) {}
 
   getDefaultAgentId(): string {
     return this.defaultAgentId;
+  }
+
+  private async emitRoutingDebug(
+    label: string,
+    detail: Record<string, unknown>,
+    agentId?: string,
+  ): Promise<void> {
+    if (!this.routingDebugLog) {
+      return;
+    }
+    const effectiveAgentId = agentId ?? this.defaultAgentId;
+    const identity = await this.getRuntimeIdentity(agentId);
+    this.routingDebugLog(
+      `openviking: ${label} ` +
+        JSON.stringify({
+          ...detail,
+          X_OpenViking_Agent: effectiveAgentId,
+          X_OpenViking_Account: this.accountId.trim() || "default",
+          X_OpenViking_User: this.userId.trim() || "default",
+          resolved_user_id: identity.userId,
+          session_vfs_hint: detail.sessionId
+            ? `viking://session/${identity.userId}/${String(detail.sessionId)}`
+            : undefined,
+        }),
+    );
   }
 
   private async request<T>(path: string, init: RequestInit = {}, agentId?: string): Promise<T> {
@@ -108,6 +187,8 @@ export class OpenVikingClient {
       if (this.apiKey) {
         headers.set("X-API-Key", this.apiKey);
       }
+      headers.set("X-OpenViking-Account", this.accountId.trim() || "default");
+      headers.set("X-OpenViking-User", this.userId.trim() || "default");
       if (effectiveAgentId) {
         headers.set("X-OpenViking-Agent", effectiveAgentId);
       }
@@ -262,6 +343,25 @@ export class OpenVikingClient {
       limit: options.limit,
       score_threshold: options.scoreThreshold,
     };
+    const effectiveAgentId = agentId ?? this.defaultAgentId;
+    const identity = await this.getRuntimeIdentity(agentId);
+    this.routingDebugLog?.(
+      `openviking: find POST ${this.baseUrl}/api/v1/search/find ` +
+        JSON.stringify({
+          X_OpenViking_Agent: effectiveAgentId,
+          X_OpenViking_Account: this.accountId.trim() || "default",
+          X_OpenViking_User: this.userId.trim() || "default",
+          resolved_user_id: identity.userId,
+          target_uri: normalizedTargetUri,
+          target_uri_input: options.targetUri,
+          query:
+            query.length > 4000
+              ? `${query.slice(0, 4000)}…(+${query.length - 4000} more chars)`
+              : query,
+          limit: body.limit,
+          score_threshold: body.score_threshold ?? null,
+        }),
+    );
     return this.request<FindResult>("/api/v1/search/find", {
       method: "POST",
       body: JSON.stringify(body),
@@ -277,6 +377,16 @@ export class OpenVikingClient {
   }
 
   async addSessionMessage(sessionId: string, role: string, content: string, agentId?: string): Promise<void> {
+    await this.emitRoutingDebug(
+      "session message POST",
+      {
+        path: `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`,
+        sessionId,
+        role,
+        contentChars: content.length,
+      },
+      agentId,
+    );
     await this.request<{ session_id: string }>(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/messages`,
       {
@@ -319,6 +429,15 @@ export class OpenVikingClient {
     sessionId: string,
     options?: { wait?: boolean; timeoutMs?: number; agentId?: string },
   ): Promise<CommitSessionResult> {
+    await this.emitRoutingDebug(
+      "session commit POST (archive + memory extraction)",
+      {
+        path: `/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`,
+        sessionId,
+        wait: options?.wait ?? false,
+      },
+      options?.agentId,
+    );
     const result = await this.request<CommitSessionResult>(
       `/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`,
       { method: "POST", body: JSON.stringify({}) },
@@ -361,25 +480,25 @@ export class OpenVikingClient {
     );
   }
 
-  async getContextForAssemble(
+  async getSessionContext(
     sessionId: string,
     tokenBudget: number = 128_000,
     agentId?: string,
-  ): Promise<{
-    archives: Array<{ index: number; overview: string; abstract: string }>;
-    messages: Array<{ id: string; role: string; parts: unknown[]; created_at: string }>;
-    estimatedTokens: number;
-    stats: {
-      totalArchives: number;
-      includedArchives: number;
-      droppedArchives: number;
-      failedArchives: number;
-      activeTokens: number;
-      archiveTokens: number;
-    };
-  }> {
+  ): Promise<SessionContextResult> {
     return this.request(
-      `/api/v1/sessions/${encodeURIComponent(sessionId)}/context-for-assemble?token_budget=${tokenBudget}`,
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/context?token_budget=${tokenBudget}`,
+      { method: "GET" },
+      agentId,
+    );
+  }
+
+  async getSessionArchive(
+    sessionId: string,
+    archiveId: string,
+    agentId?: string,
+  ): Promise<SessionArchiveResult> {
+    return this.request(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/archives/${encodeURIComponent(archiveId)}`,
       { method: "GET" },
       agentId,
     );
@@ -392,5 +511,18 @@ export class OpenVikingClient {
     await this.request(`/api/v1/fs?uri=${encodeURIComponent(uri)}&recursive=false`, {
       method: "DELETE",
     }, agentId);
+  }
+
+  async sessionUsed(
+    sessionId: string,
+    contexts: string[],
+    agentId?: string,
+  ): Promise<void> {
+    if (contexts.length === 0) return;
+    await this.request(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/used`,
+      { method: "POST", body: JSON.stringify({ contexts }) },
+      agentId,
+    );
   }
 }

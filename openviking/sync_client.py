@@ -51,6 +51,16 @@ class SyncOpenViking:
         """Get session details."""
         return run_async(self._async_client.get_session(session_id, auto_create=auto_create))
 
+    def get_session_context(self, session_id: str, token_budget: int = 128_000) -> Dict[str, Any]:
+        """Get assembled session context."""
+        return run_async(
+            self._async_client.get_session_context(session_id, token_budget=token_budget)
+        )
+
+    def get_session_archive(self, session_id: str, archive_id: str) -> Dict[str, Any]:
+        """Get one completed archive for a session."""
+        return run_async(self._async_client.get_session_archive(session_id, archive_id))
+
     def delete_session(self, session_id: str) -> None:
         """Delete a session."""
         run_async(self._async_client.delete_session(session_id))

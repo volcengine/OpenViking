@@ -27,6 +27,7 @@ _REQUEST_ALIASES = {
     "avx2": "x86_avx2",
     "avx512": "x86_avx512",
 }
+_WINDOWS_DLL_DIR_HANDLES = []
 
 
 def _is_x86_machine(machine: str | None = None) -> bool:
@@ -143,6 +144,25 @@ def _load_backend(variant: str) -> ModuleType:
     return importlib.import_module(f".{module_name}", __name__)
 
 
+def _register_windows_dll_dirs(module_path: Path) -> None:
+    if sys.platform != "win32" or not hasattr(os, "add_dll_directory"):
+        return
+
+    package_root = module_path.parents[2]
+    search_dirs = [
+        module_path,
+        package_root / "lib",
+        package_root / "bin",
+    ]
+    seen = set()
+    for search_dir in search_dirs:
+        resolved = search_dir.resolve()
+        if resolved in seen or not resolved.exists():
+            continue
+        seen.add(resolved)
+        _WINDOWS_DLL_DIR_HANDLES.append(os.add_dll_directory(str(resolved)))
+
+
 def _export_backend(module: ModuleType) -> tuple[str, ...]:
     if getattr(module, "_ENGINE_BACKEND_API", None) == "abi3-v1":
         exports = build_abi3_exports(module)
@@ -185,6 +205,7 @@ if _SELECTED_VARIANT is None:
     _EXPORTED_NAMES = ()
 else:
     ENGINE_VARIANT = _SELECTED_VARIANT
+    _register_windows_dll_dirs(Path(__file__).resolve().parent)
     _BACKEND = _load_backend(ENGINE_VARIANT)
     _EXPORTED_NAMES = _export_backend(_BACKEND)
 

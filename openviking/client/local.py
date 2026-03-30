@@ -19,6 +19,18 @@ from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import run_async
 
 
+def _to_jsonable(value: Any) -> Any:
+    """Convert internal objects into JSON-serializable values."""
+    to_dict = getattr(value, "to_dict", None)
+    if callable(to_dict):
+        return to_dict()
+    if isinstance(value, list):
+        return [_to_jsonable(item) for item in value]
+    if isinstance(value, dict):
+        return {k: _to_jsonable(v) for k, v in value.items()}
+    return value
+
+
 class LocalClient(BaseClient):
     """Local Client for OpenViking (embedded mode).
 
@@ -327,6 +339,22 @@ class LocalClient(BaseClient):
         result = session.meta.to_dict()
         result["user"] = session.user.to_dict()
         return result
+
+    async def get_session_context(
+        self, session_id: str, token_budget: int = 128_000
+    ) -> Dict[str, Any]:
+        """Get assembled session context."""
+        session = self._service.sessions.session(self._ctx, session_id)
+        await session.load()
+        result = await session.get_session_context(token_budget=token_budget)
+        return _to_jsonable(result)
+
+    async def get_session_archive(self, session_id: str, archive_id: str) -> Dict[str, Any]:
+        """Get one completed archive for a session."""
+        session = self._service.sessions.session(self._ctx, session_id)
+        await session.load()
+        result = await session.get_session_archive(archive_id)
+        return _to_jsonable(result)
 
     async def delete_session(self, session_id: str) -> None:
         """Delete a session."""

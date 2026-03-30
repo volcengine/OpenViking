@@ -1,29 +1,34 @@
-# Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
-
+#!/usr/bin/env python3
 """
-OpenViking Memory Demo Test - User: 小美 (Xiaomei)
-
-Integration test using the demo conversation from the user.
-Tests memory extraction and recall for a realistic conversation.
+OpenViking 记忆演示脚本 — 用户: 小美（日常生活记录）
 """
 
-from dataclasses import asdict
-import pytest
-import pytest_asyncio
+import argparse
+import time
 
-from openviking.message import TextPart
-from openviking_cli.client.http import AsyncHTTPClient
-from openviking_cli.utils import get_logger
+from rich import box
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
 
-logger = get_logger(__name__)
+import openviking as ov
 
-# Server URL - user starts openviking-server separately
-SERVER_URL = "http://127.0.0.1:1933"
+# ── 常量 ───────────────────────────────────────────────────────────────────
+
 DISPLAY_NAME = "小美"
+DEFAULT_URL = "http://localhost:1933"
+PANEL_WIDTH = 78
+DEFAULT_API_KEY = "1cf407c39990e5dc874ccc697942da4892208a86a44c4781396dfdc57aa5c98d"
+DEFAULT_AGENT_ID = "test"
+DEFAULT_SESSION_ID = "xiaomei-demo"
 
 
-# ── Conversation data (10 turns user + assistant) ─────────────────────────
+
+console = Console()
+
+# ── 对话数据 (10 轮 user + assistant 模拟) ─────────────────────────────────
+# user 消息取自原始 demo，assistant 消息为模拟回复（用于填充 session 上下文）
+
 CONVERSATION = [
     {
         "user": "嗨！我是小美，刚毕业不久，现在在一家互联网公司做运营。我想找个能帮我记录日常生活的小助手，比如记一下每天发生的事情、我的想法、还有想做的事情。你能帮帮我吗？",
@@ -67,7 +72,8 @@ CONVERSATION = [
     },
 ]
 
-# ── Verification queries ──────────────────────────────────────────────────
+# ── 验证查询 ──────────────────────────────────────────────────────────────
+
 VERIFY_QUERIES = [
     {
         "query": "小美的工作情况",
@@ -92,163 +98,203 @@ VERIFY_QUERIES = [
 ]
 
 
-@pytest_asyncio.fixture(scope="function")
-async def http_client():
-    """Create AsyncHTTPClient connected to local server"""
-    client = AsyncHTTPClient(url=SERVER_URL)
-    await client.initialize()
-
-    yield client
-
-    await client.close()
+# ── Phase 1: 写入对话并提交 ────────────────────────────────────────────────
 
 
-class TestXiaomeiMemoryDemo:
-    """Integration test for Xiaomei memory demo"""
+def run_ingest(client: ov.SyncHTTPClient, session_id: str, wait_seconds: float):
+    console.print()
+    console.rule(f"[bold]Phase 1: 写入对话 — {DISPLAY_NAME} ({len(CONVERSATION)} 轮)[/bold]")
 
-    @pytest.mark.integration
-    @pytest.mark.asyncio
-    async def test_xiaomei_memory_extraction_and_recall(
-        self, http_client: AsyncHTTPClient
-    ):
-        """
-        Test full flow:
-        1. Create session and add conversation messages
-        2. Commit session (triggers memory extraction)
-        3. Wait for processing
-        4. Verify memory recall with queries
-        """
-        client = http_client
+    # 获取 session；若不存在则由服务端按 session_id 自动创建
+    session= client.create_session()
+    session_id = session.get('session_id')
+    print(f'session_id={session_id}')
+    console.print(f"  Session: [bold cyan]{session_id}[/bold cyan]")
+    console.print()
 
-        print("\n" + "=" * 80)
-        print(f"OpenViking Memory Demo Test — {DISPLAY_NAME}")
-        print(f"Server: {SERVER_URL}")
-        print("=" * 80)
+    # 逐轮添加消息
+    total = len(CONVERSATION)
+    for i, turn in enumerate(CONVERSATION, 1):
+        console.print(f"  [dim][{i}/{total}][/dim] 添加 user + assistant 消息...")
+        client.add_message(session_id, role="user", parts=[{"type": "text", "text": turn["user"]}])
+        client.add_message(session_id, role="assistant", parts=[{"type": "text", "text": turn["assistant"]}])
 
-        # Get user/agent space names
-        user_space = client._user.user_space_name()
-        agent_space = client._user.agent_space_name()
-        print(f"\nUser space: {user_space}")
-        print(f"Agent space: {agent_space}")
+    console.print()
+    console.print(f"  共添加 [bold]{total * 2}[/bold] 条消息")
 
-        # Phase 1: Create session and add messages
-        print("\n" + "-" * 40)
-        print(f"Phase 1: Ingest conversation ({len(CONVERSATION)} turns)")
-        print("-" * 40)
+    # 提交 session — 触发记忆抽取
+    console.print()
+    console.print("  [yellow]提交 Session（触发记忆抽取）...[/yellow]")
+    commit_result = client.commit_session(session_id)
+    task_id = commit_result.get("task_id")
+    console.print(f"  Commit 结果: {commit_result}")
 
-        result = await client.create_session()
-        assert "session_id" in result
-        session_id = result["session_id"]
-        print(f"\nCreated session: {session_id}")
+    # 轮询后台任务直到完成
+    if task_id:
+        now = time.time()
+        console.print(f"  [yellow]等待记忆提取完成 (task_id={task_id})...[/yellow]")
+        while True:
+            task = client.get_task(task_id)
+            if not task or task.get("status") in ("completed", "failed"):
+                break
+            time.sleep(1)
+        elapsed = time.time() - now
+        status = task.get("status", "unknown") if task else "not found"
+        console.print(f"  [green]任务 {status}，耗时 {elapsed:.2f}s[/green]")
+        console.print(f"  Task 详情: {task}")
 
-        # Add conversation messages
-        total = len(CONVERSATION)
-        for i, turn in enumerate(CONVERSATION, 1):
-            print(f"  [{i}/{total}] Adding user + assistant message...")
-            # Add user message
-            parts = [TextPart(turn["user"])]
-            parts_dicts = [asdict(p) for p in parts]
-            await client.add_message(session_id, "user", parts=parts_dicts)
-            # Add assistant message
-            parts = [TextPart(turn["assistant"])]
-            parts_dicts = [asdict(p) for p in parts]
-            await client.add_message(session_id, "assistant", parts=parts_dicts)
+    # 等待向量化队列处理完成
+    console.print(f"  [yellow]等待向量化完成...[/yellow]")
+    client.wait_processed()
 
-        print(f"\n  Added {total * 2} messages")
 
-        # Commit session
-        print("\n  Committing session...")
-        commit_result = await client.commit_session(session_id)
-        assert commit_result["status"] == "committed"
-        print(f"  Commit result: {commit_result}")
+    if wait_seconds > 0:
+        console.print(f"  [dim]额外等待 {wait_seconds:.0f}s...[/dim]")
+        time.sleep(wait_seconds)
 
-        # Wait for processing
-        print("\n  Waiting for processing...")
-        await client.wait_processed()
-        print("  Processing complete!")
 
-        # Phase 2: Verify memory recall
-        print("\n" + "-" * 40)
-        print(f"Phase 2: Verify memory recall ({len(VERIFY_QUERIES)} queries)")
-        print("-" * 40)
+    session_info = client.get_session(session_id)
+    console.print(f"  Session 详情: {session_info}")
 
-        total_hits = 0
-        total_queries = len(VERIFY_QUERIES)
+    return session_id
 
-        for i, item in enumerate(VERIFY_QUERIES, 1):
-            query = item["query"]
-            expected = item["expected_keywords"]
 
-            print(f"\n  [{i}/{total_queries}] Query: {query}")
-            print(f"      Expected keywords: {', '.join(expected)}")
+# ── Phase 2: 验证记忆召回 ─────────────────────────────────────────────────
 
-            try:
-                results = await client.find(query, limit=5)
 
-                # Collect all recall texts
-                recall_texts = []
-                count = 0
+def run_verify(client: ov.SyncHTTPClient):
+    console.print()
+    console.rule(
+        f"[bold]Phase 2: 验证记忆召回 — {DISPLAY_NAME} ({len(VERIFY_QUERIES)} 条查询)[/bold]"
+    )
 
-                if hasattr(results, "memories") and results.memories:
-                    for m in results.memories:
-                        text = getattr(m, "content", "") or getattr(m, "text", "") or str(m)
-                        recall_texts.append(text)
-                        uri = getattr(m, "uri", "")
-                        score = getattr(m, "score", 0)
-                        print(f"      Memory: {uri} (score: {score:.4f})")
-                        print(f"        {text[:100]}..." if len(text) > 100 else f"        {text}")
-                    count += len(results.memories)
+    results_table = Table(
+        title=f"记忆召回验证 — {DISPLAY_NAME}",
+        box=box.ROUNDED,
+        show_header=True,
+        header_style="bold",
+    )
+    results_table.add_column("#", style="bold", width=4)
+    results_table.add_column("查询", style="cyan", max_width=30)
+    results_table.add_column("召回数", justify="center", width=8)
+    results_table.add_column("命中关键词", style="green")
 
-                if hasattr(results, "resources") and results.resources:
-                    for r in results.resources:
-                        text = getattr(r, "content", "") or getattr(r, "text", "") or str(r)
-                        recall_texts.append(text)
-                        print(f"      Resource: {r.uri} (score: {r.score:.4f})")
-                    count += len(results.resources)
+    total = len(VERIFY_QUERIES)
+    for i, item in enumerate(VERIFY_QUERIES, 1):
+        query = item["query"]
+        expected = item["expected_keywords"]
 
-                # Check keyword hits
-                all_text = " ".join(recall_texts)
-                hits = [kw for kw in expected if kw in all_text]
-                hit_str = ", ".join(hits) if hits else "None"
-
-                print(f"      Recalled: {count}, Hits: {hit_str}")
-                total_hits += len(hits)
-
-            except Exception as e:
-                print(f"      ERROR: {e}")
-
-        # List memory files
-        print("\n" + "-" * 40)
-        print("Memory files created:")
-        print("-" * 40)
+        console.print(f"\n  [dim][{i}/{total}][/dim] 搜索: [cyan]{query}[/cyan]")
+        console.print(f"  [dim]期望关键词: {', '.join(expected)}[/dim]")
 
         try:
-            user_memories = await client.ls(f"viking://user/{user_space}/memories", recursive=True)
-            print(f"\nUser memories ({len(user_memories)} entries):")
-            for entry in user_memories[:20]:
-                print(f"  - {entry['name']} ({'dir' if entry['isDir'] else 'file'})")
+            results = client.find(query, limit=5)
+
+            # 收集所有召回内容
+            recall_texts = []
+            count = 0
+            if hasattr(results, "memories") and results.memories:
+                for m in results.memories:
+                    text = getattr(m, "content", "") or getattr(m, "text", "") or str(m)
+                    recall_texts.append(text)
+                    uri = getattr(m, "uri", "")
+                    score = getattr(m, "score", 0)
+                    console.print(f"    [green]Memory:[/green] {uri} (score: {score:.4f})")
+                    console.print(f"    [dim]{text[:120]}...[/dim]" if len(text) > 120 else f"    [dim]{text}[/dim]")
+                count += len(results.memories)
+
+            if hasattr(results, "resources") and results.resources:
+                for r in results.resources:
+                    text = getattr(r, "content", "") or getattr(r, "text", "") or str(r)
+                    recall_texts.append(text)
+                    console.print(
+                        f"    [blue]Resource:[/blue] {r.uri} (score: {r.score:.4f})"
+                    )
+                count += len(results.resources)
+
+            if hasattr(results, "skills") and results.skills:
+                count += len(results.skills)
+
+            # 检查关键词命中
+            all_text = " ".join(recall_texts)
+            hits = [kw for kw in expected if kw in all_text]
+            hit_str = ", ".join(hits) if hits else "[dim]无[/dim]"
+
+            results_table.add_row(str(i), query, str(count), hit_str)
+
         except Exception as e:
-            print(f"Could not list user memories: {e}")
+            console.print(f"    [red]ERROR: {e}[/red]")
+            results_table.add_row(str(i), query, "[red]ERR[/red]", str(e)[:40])
 
-        try:
-            agent_memories = await client.ls(f"viking://agent/{agent_space}/memories", recursive=True)
-            print(f"\nAgent memories ({len(agent_memories)} entries):")
-            for entry in agent_memories[:20]:
-                print(f"  - {entry['name']} ({'dir' if entry['isDir'] else 'file'})")
-        except Exception as e:
-            print(f"Could not list agent memories: {e}")
+    console.print()
+    console.print(results_table)
 
-        print("\n" + "=" * 80)
-        print(f"Test completed! Total keyword hits: {total_hits}/{total_queries * len(VERIFY_QUERIES[0]['expected_keywords'])}")
-        print("=" * 80)
 
-        # Test passes if no exception is thrown
-        assert True
+# ── 入口 ───────────────────────────────────────────────────────────────────
 
-    @pytest.mark.integration
-    @pytest.mark.asyncio
-    async def test_server_health(self, http_client: AsyncHTTPClient):
-        """Verify server is healthy"""
-        result = await http_client.health()
-        assert result is True
-        print(f"Server at {SERVER_URL} is healthy")
+
+def main():
+    parser = argparse.ArgumentParser(description=f"OpenViking 记忆演示 — {DISPLAY_NAME}")
+    parser.add_argument("--url", default=DEFAULT_URL, help=f"Server URL (默认: {DEFAULT_URL})")
+    parser.add_argument("--api-key", default=DEFAULT_API_KEY, help="API key")
+    parser.add_argument("--agent-id", default=DEFAULT_AGENT_ID, help="Agent ID")
+    parser.add_argument(
+        "--phase",
+        choices=["all", "ingest", "verify"],
+        default="all",
+        help="all=全部, ingest=仅写入, verify=仅验证 (默认: all)",
+    )
+    parser.add_argument(
+        "--session-id", default=DEFAULT_SESSION_ID, help=f"Session ID (默认: {DEFAULT_SESSION_ID})"
+    )
+    parser.add_argument(
+        "--wait", type=float, default=5.0, help="提交后额外等待秒数 (默认: 5)"
+    )
+    args = parser.parse_args()
+
+    console.print(
+        Panel(
+            f"[bold]OpenViking 记忆演示 — {DISPLAY_NAME}[/bold]\n"
+            f"Server: {args.url}  |  Phase: {args.phase}",
+            style="magenta",
+            width=PANEL_WIDTH,
+        )
+    )
+
+    client = ov.SyncHTTPClient(
+        url=args.url, api_key=args.api_key, agent_id=args.agent_id,
+        timeout=180
+    )
+
+    try:
+        client.initialize()
+        console.print(f"  [green]已连接[/green] {args.url}")
+
+        if args.phase in ("all", "ingest"):
+            run_ingest(client, session_id=args.session_id, wait_seconds=args.wait)
+
+        if args.phase in ("all", "verify"):
+            run_verify(client)
+
+        console.print(
+            Panel(
+                "[bold green]演示完成[/bold green]",
+                style="green",
+                width=PANEL_WIDTH,
+            )
+        )
+
+    except Exception as e:
+        console.print(
+            Panel(f"[bold red]Error:[/bold red] {e}", style="red", width=PANEL_WIDTH)
+        )
+        import traceback
+
+        traceback.print_exc()
+
+    finally:
+        client.close()
+
+
+if __name__ == "__main__":
+    main()

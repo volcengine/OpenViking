@@ -12,9 +12,20 @@ Add a skill to the knowledge base.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| data | Any | Yes | - | Skill data (dict, string, or path) |
+| data | Any | Yes | - | Skill data. Raw HTTP accepts structured data or raw `SKILL.md` content, not direct host paths |
+| temp_file_id | str | No | None | Upload ID returned by `POST /api/v1/resources/temp_upload` for raw HTTP local file ingestion |
 | wait | bool | No | False | Wait for vectorization to complete |
 | timeout | float | No | None | Timeout in seconds |
+
+**How local skill files work**
+
+- Python SDK and CLI accept local `SKILL.md` files or directories directly. In HTTP mode they automatically upload local files before calling the server API.
+- Raw HTTP callers should either:
+  - send structured skill data directly in `data`
+  - send raw `SKILL.md` content in `data`
+  - upload a local `SKILL.md` file first with `POST /api/v1/resources/temp_upload`, then call `POST /api/v1/skills` with `temp_file_id`
+  - zip a local skill directory first, upload the `.zip` file, then call `POST /api/v1/skills` with `temp_file_id`
+- `POST /api/v1/skills` does not accept direct host filesystem paths in `data`.
 
 **Supported Data Formats**
 
@@ -185,13 +196,24 @@ print(f"Auxiliary files: {result['auxiliary_files']}")
 **HTTP API**
 
 ```bash
+# Step 1: upload the local SKILL.md file
+TEMP_FILE_ID=$(
+  curl -sS -X POST http://localhost:1933/api/v1/resources/temp_upload \
+    -H "X-API-Key: your-key" \
+    -F 'file=@./skills/search-web/SKILL.md' \
+  | jq -r '.result.temp_file_id'
+)
+
+# Step 2: add the uploaded skill
 curl -X POST http://localhost:1933/api/v1/skills \
   -H "Content-Type: application/json" \
   -H "X-API-Key: your-key" \
-  -d '{
-    "data": "./skills/search-web/SKILL.md"
-  }'
+  -d "{
+    \"temp_file_id\": \"$TEMP_FILE_ID\"
+  }"
 ```
+
+For a local skill directory, zip the directory first, upload the `.zip` file, then call the same `POST /api/v1/skills` request with the returned `temp_file_id`.
 
 ---
 

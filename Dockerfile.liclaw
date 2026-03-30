@@ -1,0 +1,16 @@
+# liclaw: 基于官方镜像 patch Python 文件，跳过 Go/Rust/C++ 编译
+FROM ghcr.io/volcengine/openviking:main
+
+# 只覆盖 liclaw 改动的 Python 文件
+COPY openviking/server/enduser_context.py /app/.venv/lib/python3.13/site-packages/openviking/server/enduser_context.py
+COPY openviking/server/app.py             /app/.venv/lib/python3.13/site-packages/openviking/server/app.py
+COPY openviking/models/vlm/backends/openai_vlm.py      /app/.venv/lib/python3.13/site-packages/openviking/models/vlm/backends/openai_vlm.py
+COPY openviking/models/vlm/backends/volcengine_vlm.py   /app/.venv/lib/python3.13/site-packages/openviking/models/vlm/backends/volcengine_vlm.py
+COPY openviking/models/vlm/base.py        /app/.venv/lib/python3.13/site-packages/openviking/models/vlm/base.py
+COPY openviking/models/vlm/registry.py    /app/.venv/lib/python3.13/site-packages/openviking/models/vlm/registry.py
+COPY openviking/models/embedder/openai_embedders.py    /app/.venv/lib/python3.13/site-packages/openviking/models/embedder/openai_embedders.py
+COPY openviking/models/embedder/litellm_embedders.py   /app/.venv/lib/python3.13/site-packages/openviking/models/embedder/litellm_embedders.py
+COPY openviking/server/routers/system.py /app/.venv/lib/python3.13/site-packages/openviking/server/routers/system.py
+COPY openviking/session/compressor.py    /app/.venv/lib/python3.13/site-packages/openviking/session/compressor.py
+COPY openviking/session/memory_extractor.py /app/.venv/lib/python3.13/site-packages/openviking/session/memory_extractor.py
+COPY openviking_cli/utils/config/memory_config.py /app/.venv/lib/python3.13/site-packages/openviking_cli/utils/config/memory_config.py

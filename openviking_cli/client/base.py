@@ -207,6 +207,18 @@ class BaseClient(ABC):
         ...
 
     @abstractmethod
+    async def get_session_context(
+        self, session_id: str, token_budget: int = 128_000
+    ) -> Dict[str, Any]:
+        """Get assembled session context for a session."""
+        ...
+
+    @abstractmethod
+    async def get_session_archive(self, session_id: str, archive_id: str) -> Dict[str, Any]:
+        """Get one completed archive for a session."""
+        ...
+
+    @abstractmethod
     async def delete_session(self, session_id: str) -> None:
         """Delete a session."""
         ...

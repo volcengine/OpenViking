@@ -13,7 +13,6 @@ from openviking.server.auth import get_request_context
 from openviking.server.dependencies import get_service
 from openviking.server.identity import RequestContext
 from openviking.server.models import ErrorInfo, Response
-from openviking.service.task_tracker import get_task_tracker
 
 router = APIRouter(prefix="/api/v1/sessions", tags=["sessions"])
 logger = logging.getLogger(__name__)
@@ -143,18 +142,40 @@ async def get_session(
     return Response(status="ok", result=result)
 
 
-@router.get("/{session_id}/context-for-assemble")
-async def get_context_for_assemble(
+@router.get("/{session_id}/context")
+async def get_session_context(
     session_id: str = Path(..., description="Session ID"),
-    token_budget: int = Query(128_000, description="Token budget for context assembly"),
+    token_budget: int = Query(128_000, description="Token budget for session context"),
     _ctx: RequestContext = Depends(get_request_context),
 ):
-    """Get trimmed context (archive summaries + active messages) for assemble."""
+    """Get assembled session context."""
     service = get_service()
     session = service.sessions.session(_ctx, session_id)
     await session.load()
-    result = await session.get_context_for_assemble(token_budget)
-    return Response(status="ok", result=result)
+    result = await session.get_session_context(token_budget=token_budget)
+    return Response(status="ok", result=_to_jsonable(result))
+
+
+@router.get("/{session_id}/archives/{archive_id}")
+async def get_session_archive(
+    session_id: str = Path(..., description="Session ID"),
+    archive_id: str = Path(..., description="Archive ID"),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Get one completed archive for a session."""
+    from openviking_cli.exceptions import NotFoundError
+
+    service = get_service()
+    session = service.sessions.session(_ctx, session_id)
+    await session.load()
+    try:
+        result = await session.get_session_archive(archive_id)
+    except NotFoundError:
+        return Response(
+            status="error",
+            error=ErrorInfo(code="NOT_FOUND", message=f"Archive {archive_id} not found"),
+        )
+    return Response(status="ok", result=_to_jsonable(result))
 
 
 @router.delete("/{session_id}")
@@ -180,18 +201,6 @@ async def commit_session(
     polling progress via ``GET /tasks/{task_id}``.
     """
     service = get_service()
-    tracker = get_task_tracker()
-
-    # Reject if same session already has a commit in progress
-    if tracker.has_running("session_commit", session_id):
-        return Response(
-            status="error",
-            error=ErrorInfo(
-                code="CONFLICT",
-                message=f"Session {session_id} already has a commit in progress",
-            ),
-        )
-
     result = await service.sessions.commit_async(session_id, _ctx)
     return Response(status="ok", result=result).model_dump(exclude_none=True)
 

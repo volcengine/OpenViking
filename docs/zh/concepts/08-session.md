@@ -6,7 +6,7 @@ Session 负责管理对话消息、记录上下文使用、提取长期记忆。
 
 **生命周期**：创建 → 交互 → 提交
 
-通过 session_id 获取会话时，如果会话不存在将自动创建。
+通过 session_id 获取会话时，默认不会自动创建不存在的会话；如果需要自动创建，请显式使用 `client.get_session(..., auto_create=True)`。
 
 ```python
 session = client.session(session_id="chat_001")

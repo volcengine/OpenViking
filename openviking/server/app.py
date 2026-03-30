@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 """FastAPI application for OpenViking HTTP Server."""
 
+import asyncio
 import time
 from contextlib import asynccontextmanager
 from typing import Callable, Optional
@@ -126,8 +127,13 @@ def create_app(
         set_prometheus_observer(None)
         task_tracker.stop_cleanup_loop()
         if owns_service and service:
-            await service.close()
-            logger.info("OpenVikingService closed")
+            try:
+                await service.close()
+                logger.info("OpenVikingService closed")
+            except asyncio.CancelledError as e:
+                logger.warning(f"OpenVikingService close cancelled during shutdown: {e}")
+            except Exception as e:
+                logger.warning(f"OpenVikingService close failed during shutdown: {e}")
 
     app = FastAPI(
         title="OpenViking API",

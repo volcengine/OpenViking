@@ -38,7 +38,7 @@ function makeStats() {
 function makeEngine(contextResult: unknown) {
   const logger = makeLogger();
   const client = {
-    getContextForAssemble: vi.fn().mockResolvedValue(contextResult),
+    getSessionContext: vi.fn().mockResolvedValue(contextResult),
   } as unknown as OpenVikingClient;
   const getClient = vi.fn().mockResolvedValue(client);
   const resolveAgentId = vi.fn((sessionId: string) => `agent:${sessionId}`);
@@ -55,7 +55,7 @@ function makeEngine(contextResult: unknown) {
 
   return {
     engine,
-    client: client as unknown as { getContextForAssemble: ReturnType<typeof vi.fn> },
+    client: client as unknown as { getSessionContext: ReturnType<typeof vi.fn> },
     getClient,
     logger,
     resolveAgentId,
@@ -63,15 +63,11 @@ function makeEngine(contextResult: unknown) {
 }
 
 describe("context-engine assemble()", () => {
-  it("assembles archives and completed tool parts into agent messages", async () => {
+  it("assembles summary archive and completed tool parts into agent messages", async () => {
     const { engine, client, resolveAgentId } = makeEngine({
-      archives: [
-        {
-          index: 2,
-          overview: "# Session Summary\nPreviously discussed repository setup.",
-          abstract: "Previously discussed repository setup.",
-        },
-      ],
+      latest_archive_overview: "# Session Summary\nPreviously discussed repository setup.",
+      latest_archive_id: "archive_001",
+      pre_archive_abstracts: [],
       messages: [
         {
           id: "msg_1",
@@ -109,7 +105,7 @@ describe("context-engine assemble()", () => {
     });
 
     expect(resolveAgentId).toHaveBeenCalledWith("session-1");
-    expect(client.getContextForAssemble).toHaveBeenCalledWith("session-1", 4096, "agent:session-1");
+    expect(client.getSessionContext).toHaveBeenCalledWith("session-1", 4096, "agent:session-1");
     expect(result.estimatedTokens).toBe(321);
     expect(result.systemPromptAddition).toContain("Compressed Context");
     expect(result.messages).toEqual([
@@ -142,7 +138,9 @@ describe("context-engine assemble()", () => {
 
   it("emits a non-error toolResult for a running tool (not a synthetic error)", async () => {
     const { engine } = makeEngine({
-      archives: [],
+      latest_archive_overview: "",
+      latest_archive_id: "",
+      pre_archive_abstracts: [],
       messages: [
         {
           id: "msg_2",
@@ -200,7 +198,9 @@ describe("context-engine assemble()", () => {
 
   it("degrades tool parts without tool_id into assistant text blocks", async () => {
     const { engine } = makeEngine({
-      archives: [],
+      latest_archive_overview: "",
+      latest_archive_id: "",
+      pre_archive_abstracts: [],
       messages: [
         {
           id: "msg_3",
@@ -247,7 +247,9 @@ describe("context-engine assemble()", () => {
 
   it("falls back to live messages when assembled active messages look truncated", async () => {
     const { engine } = makeEngine({
-      archives: [],
+      latest_archive_overview: "",
+      latest_archive_id: "",
+      pre_archive_abstracts: [],
       messages: [
         {
           id: "msg_4",

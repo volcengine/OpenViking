@@ -14,12 +14,13 @@ from typing import List, Optional
 from openviking.core.context import Context
 from openviking.message import Message
 from openviking.server.identity import RequestContext
-from openviking.session.memory import MemoryReAct, MemoryTypeRegistry, MemoryUpdater
 from openviking.storage import VikingDBManager
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
+
+from openviking.session.memory import MemoryReAct, MemoryUpdater, MemoryTypeRegistry
 
 logger = get_logger(__name__)
 
@@ -75,7 +76,7 @@ class SessionCompressorV2:
         if self._memory_updater is not None:
             return self._memory_updater
 
-        self._memory_updater = MemoryUpdater(registry=self._registry)
+        self._memory_updater = MemoryUpdater(registry=self._registry, vikingdb=self.vikingdb)
         return self._memory_updater
 
     async def extract_long_term_memories(

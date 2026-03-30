@@ -1,8 +1,17 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
 # SPDX-License-Identifier: Apache-2.0
+from enum import Enum
 from typing import Optional
 
 from pydantic import BaseModel, Field, model_validator
+
+
+class DirectoryMarkerMode(str, Enum):
+    """How S3 directory markers should be persisted."""
+
+    NONE = "none"
+    EMPTY = "empty"
+    NONEMPTY = "nonempty"
 
 
 class S3Config(BaseModel):
@@ -44,6 +53,11 @@ class S3Config(BaseModel):
     use_path_style: bool = Field(
         default=True,
         description="true represent UsePathStyle for MinIO and some S3-compatible services; false represent VirtualHostStyle for TOS  and some S3-compatible services.",
+    )
+
+    directory_marker_mode: DirectoryMarkerMode = Field(
+        default=DirectoryMarkerMode.EMPTY,
+        description="How to persist S3 directory markers: 'none' skips marker creation, 'empty' writes a zero-byte marker, and 'nonempty' writes a non-empty marker payload. Defaults to 'empty'.",
     )
 
     model_config = {"extra": "forbid"}

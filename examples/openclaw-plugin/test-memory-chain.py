@@ -5,8 +5,8 @@ OpenClaw 记忆链路完整测试脚本
 验证 OpenViking 记忆插件重构后的端到端链路:
 1. afterTurn: 本轮消息无损写入 OpenViking session，sessionId 一致
 2. commit: 归档消息 + 提取长期记忆 + .meta.json 写入
-3. assemble: 同用户继续对话时, 从 archives + active messages 重组上下文
-4. assemble budget trimming: 小 token budget 下归档被裁剪
+3. assemble: 同用户继续对话时, 从 latest_archive_overview + active messages 重组上下文
+4. assemble budget trimming: 小 token budget 下 latest_archive_overview 被裁剪
 5. sessionId 一致性: 整条链路使用统一的 sessionId (无 sessionKey)
 6. 新用户记忆召回: 验证 before_prompt_build auto-recall
 
@@ -93,17 +93,17 @@ CHAT_MESSAGES = [
     "昨天线上出了个诡异的 bug，某个接口偶发超时，但日志里看不出什么问题。后来发现是下游服务的连接数满了，但监控指标没配好，没报警。这种问题怎么预防比较好？",
 ]
 
-# assemble 阶段: 同用户继续对话，用于验证 assemble 是否携带了归档上下文
+# assemble 阶段: 同用户继续对话，用于验证 assemble 是否携带了摘要上下文
 ASSEMBLE_FOLLOWUP_MESSAGES = [
     {
         "question": "对了，我之前提到的订单系统重构进展到哪了？支付模块开始了吗？",
         "anchor_keywords": ["订单系统", "支付模块", "60%"],
-        "hook": "assemble — archives 重组",
+        "hook": "assemble — latest_archive_overview 重组",
     },
     {
         "question": "我们团队消息队列最终选了什么？之前我跟你讨论过 Kafka 和 RabbitMQ 的取舍。",
         "anchor_keywords": ["Kafka", "RabbitMQ", "消息队列"],
-        "hook": "assemble — archives 重组",
+        "hook": "assemble — latest_archive_overview 重组",
     },
 ]
 
@@ -209,10 +209,8 @@ class OpenVikingInspector:
             return result.get("messages", [])
         return None
 
-    def get_context_for_assemble(self, session_id: str, token_budget: int = 128000) -> dict | None:
-        return self._get(
-            f"/api/v1/sessions/{session_id}/context-for-assemble?token_budget={token_budget}"
-        )
+    def get_session_context(self, session_id: str, token_budget: int = 128000) -> dict | None:
+        return self._get(f"/api/v1/sessions/{session_id}/context?token_budget={token_budget}")
 
     def commit_session(self, session_id: str, wait: bool = True) -> dict | None:
         result = self._post(f"/api/v1/sessions/{session_id}/commit", timeout=120)
@@ -229,8 +227,8 @@ class OpenVikingInspector:
                     continue
                 if task.get("status") == "completed":
                     result["status"] = "completed"
-                    result["memories_extracted"] = (
-                        task.get("result", {}).get("memories_extracted", {})
+                    result["memories_extracted"] = task.get("result", {}).get(
+                        "memories_extracted", {}
                     )
                     return result
                 if task.get("status") == "failed":
@@ -412,26 +410,26 @@ def run_phase_after_turn(openviking_url: str, user_id: str, verbose: bool) -> bo
     else:
         check("能获取到 session 消息列表", False, "GET messages 返回 None")
 
-    # 2.4 context-for-assemble 在 commit 前应返回 messages
-    console.print("\n[bold]2.4 Commit 前 context-for-assemble[/bold]")
-    ctx = inspector.get_context_for_assemble(user_id)
+    # 2.4 context 在 commit 前应返回 messages
+    console.print("\n[bold]2.4 Commit 前 context[/bold]")
+    ctx = inspector.get_session_context(user_id)
     if ctx:
         ctx_msg_count = len(ctx.get("messages", []))
-        ctx_archive_count = len(ctx.get("archives", []))
+        has_summary_archive = bool(ctx.get("latest_archive_overview"))
         check(
-            "context-for-assemble 返回 messages > 0",
+            "context 返回 messages > 0",
             ctx_msg_count > 0,
             f"messages={ctx_msg_count}",
         )
         check(
-            "commit 前 archives == 0",
-            ctx_archive_count == 0,
-            f"archives={ctx_archive_count}",
+            "commit 前 latest_archive_overview 为空",
+            not has_summary_archive,
+            f"latest_archive_overview={ctx.get('latest_archive_overview')}",
         )
         if verbose and ctx.get("stats"):
             console.print(f"  [dim]stats: {ctx['stats']}[/dim]")
     else:
-        check("context-for-assemble 可调用", False, "返回 None")
+        check("context 可调用", False, "返回 None")
 
     return True
 
@@ -502,28 +500,27 @@ def run_phase_commit(openviking_url: str, user_id: str, verbose: bool) -> bool:
 
     # 3.3 检查归档目录结构
     console.print("\n[bold]3.3 归档目录结构检查[/bold]")
-    # 尝试用 context-for-assemble 来间接确认 archives 存在
-    ctx_after = inspector.get_context_for_assemble(user_id)
+    # 尝试用 context 来间接确认 latest_archive_overview 存在
+    ctx_after = inspector.get_session_context(user_id)
     if ctx_after:
-        archive_count = len(ctx_after.get("archives", []))
+        has_summary_archive = bool(ctx_after.get("latest_archive_overview"))
         check(
-            "commit 后 context-for-assemble 返回 archives > 0",
-            archive_count > 0,
-            f"archives={archive_count}",
+            "commit 后 context 返回 latest_archive_overview",
+            has_summary_archive,
+            f"latest_archive_overview={ctx_after.get('latest_archive_overview')}",
         )
 
-        if archive_count > 0:
-            first_archive = ctx_after["archives"][0]
-            overview = first_archive.get("overview", "")
+        if has_summary_archive:
+            overview = ctx_after.get("latest_archive_overview", "")
             check(
-                "archive.overview 非空 (摘要已生成)",
+                "latest_archive_overview 非空 (摘要已生成)",
                 len(overview) > 10,
                 f"overview 长度={len(overview)} chars",
             )
             if verbose:
                 console.print(f"  [dim]overview 前 200 字: {overview[:200]}...[/dim]")
     else:
-        check("commit 后 context-for-assemble 可调用", False)
+        check("commit 后 context 可调用", False)
 
     # 3.4 检查 estimatedTokens 合理性
     if ctx_after:
@@ -544,49 +541,53 @@ def run_phase_commit(openviking_url: str, user_id: str, verbose: bool) -> bool:
 def run_phase_assemble(
     gateway_url: str, openviking_url: str, user_id: str, delay: float, verbose: bool
 ) -> bool:
-    """Phase 4: Assemble 验证 — 同用户继续对话，验证上下文从 archives 重组。"""
+    """Phase 4: Assemble 验证 — 同用户继续对话，验证上下文从 latest archive overview 重组。"""
     console.print()
     console.rule("[bold]Phase 4: Assemble 验证 — 同用户继续对话[/bold]")
     console.print()
     console.print("[dim]验证点:[/dim]")
-    console.print("[dim]- 同用户对话触发 assemble(): 从 OV archives + active messages 重组上下文[/dim]")
+    console.print(
+        "[dim]- 同用户对话触发 assemble(): 从 OV latest_archive_overview + active messages 重组上下文[/dim]"
+    )
     console.print("[dim]- 回复应能引用 Phase 1 中已被归档的信息[/dim]")
-    console.print("[dim]- context-for-assemble 应返回 archives (证明 assemble 有数据源)[/dim]")
+    console.print("[dim]- context 应返回 latest_archive_overview (证明 assemble 有数据源)[/dim]")
     console.print()
 
     inspector = OpenVikingInspector(openviking_url)
 
-    # 4.1 确认 assemble 的数据源 (archives) 就绪
+    # 4.1 确认 assemble 的数据源 (latest_archive_overview) 就绪
     console.print("[bold]4.1 确认 assemble 数据源[/bold]")
-    ctx = inspector.get_context_for_assemble(user_id)
+    ctx = inspector.get_session_context(user_id)
     if ctx:
-        archive_count = len(ctx.get("archives", []))
+        has_summary_archive = bool(ctx.get("latest_archive_overview"))
         check(
-            "context-for-assemble 返回 archives > 0",
-            archive_count > 0,
-            f"archives={archive_count}, 即 assemble() 有归档可用",
+            "context 返回 latest_archive_overview",
+            has_summary_archive,
+            f"latest_archive_overview={ctx.get('latest_archive_overview')}",
         )
     else:
-        check("context-for-assemble 可用", False)
+        check("context 可用", False)
         return False
 
     # 4.2 assemble budget trimming: 用极小 budget 验证裁剪
     console.print("\n[bold]4.2 Assemble budget trimming[/bold]")
-    tiny_ctx = inspector.get_context_for_assemble(user_id, token_budget=1)
+    tiny_ctx = inspector.get_session_context(user_id, token_budget=1)
     if tiny_ctx:
         stats = tiny_ctx.get("stats", {})
         total_archives = stats.get("totalArchives", 0)
         included = stats.get("includedArchives", 0)
         dropped = stats.get("droppedArchives", 0)
         check(
-            "budget=1 时 archives 被裁剪",
+            "budget=1 时 latest_archive_overview 被裁剪",
             included == 0 or dropped > 0,
             f"total={total_archives}, included={included}, dropped={dropped}",
         )
         active_tokens = stats.get("activeTokens", 0)
-        console.print(f"  [dim]activeTokens={active_tokens}, archiveTokens={stats.get('archiveTokens', 0)}[/dim]")
+        console.print(
+            f"  [dim]activeTokens={active_tokens}, archiveTokens={stats.get('archiveTokens', 0)}[/dim]"
+        )
     else:
-        check("tiny budget context-for-assemble 可调用", False)
+        check("tiny budget context 可调用", False)
 
     # 4.3 同用户继续对话 — assemble 应重组归档上下文
     console.print("\n[bold]4.3 同用户继续对话 — 验证 assemble 重组归档内容[/bold]")
@@ -618,7 +619,7 @@ def run_phase_assemble(
             check(
                 f"Assemble Q{i}: 回复包含归档内容 (命中率 >= 50%)",
                 hit_rate >= 0.5,
-                f"命中={hits}, 未命中={[k for k in keywords if k not in [h for h in hits]]}, rate={hit_rate:.0%}",
+                f"命中={hits}, 未命中={[k for k in keywords if k not in hits]}, rate={hit_rate:.0%}",
             )
         except Exception as e:
             check(f"Assemble Q{i}: 发送成功", False, str(e))
@@ -629,7 +630,7 @@ def run_phase_assemble(
     # 4.4 对话后验证 afterTurn 继续写入 (新消息进入 active messages)
     console.print("\n[bold]4.4 Assemble 后 afterTurn 继续写入[/bold]")
     time.sleep(3)
-    post_ctx = inspector.get_context_for_assemble(user_id)
+    post_ctx = inspector.get_session_context(user_id)
     if post_ctx:
         post_msg_count = len(post_ctx.get("messages", []))
         check(
@@ -652,7 +653,7 @@ def run_phase_session_id(openviking_url: str, user_id: str, verbose: bool) -> bo
     console.print("[dim]验证点:[/dim]")
     console.print("[dim]- 重构后 sessionId 统一为 OpenClaw 传入的 user_id[/dim]")
     console.print("[dim]- OV session_id == user_id (无 sessionKey 前缀/后缀)[/dim]")
-    console.print("[dim]- context-for-assemble 用同一 sessionId 可查到数据[/dim]")
+    console.print("[dim]- context 用同一 sessionId 可查到数据[/dim]")
     console.print()
 
     inspector = OpenVikingInspector(openviking_url)
@@ -683,18 +684,18 @@ def run_phase_session_id(openviking_url: str, user_id: str, verbose: bool) -> bo
             "旧 sessionKey 映射应已移除" if is_absent else f"发现残留: {stale}",
         )
 
-    # 5.3 context-for-assemble 用 user_id 能查到归档
+    # 5.3 context 用 user_id 能查到数据
     console.print("\n[bold]5.3 同一 sessionId 查询归档[/bold]")
-    ctx = inspector.get_context_for_assemble(user_id)
+    ctx = inspector.get_session_context(user_id)
     if ctx:
-        has_data = len(ctx.get("archives", [])) > 0 or len(ctx.get("messages", [])) > 0
+        has_data = bool(ctx.get("latest_archive_overview")) or len(ctx.get("messages", [])) > 0
         check(
-            "context-for-assemble(user_id) 返回数据",
+            "context(user_id) 返回数据",
             has_data,
-            f"archives={len(ctx.get('archives', []))}, messages={len(ctx.get('messages', []))}",
+            f"latest_archive_overview={ctx.get('latest_archive_overview')}, messages={len(ctx.get('messages', []))}",
         )
     else:
-        check("context-for-assemble(user_id) 可调用", False)
+        check("context(user_id) 可调用", False)
 
     # 5.4 验证 commit 也是用同一 sessionId (session 有 commit_count > 0)
     console.print("\n[bold]5.4 Commit 使用同一 sessionId[/bold]")
@@ -715,9 +716,7 @@ def run_phase_session_id(openviking_url: str, user_id: str, verbose: bool) -> bo
 def run_phase_recall(gateway_url: str, user_id: str, delay: float, verbose: bool) -> list:
     """Phase 6: 新用户记忆召回 — 验证 before_prompt_build auto-recall。"""
     console.print()
-    console.rule(
-        f"[bold]Phase 6: 新用户记忆召回 ({len(RECALL_QUESTIONS)} 轮) — auto-recall[/bold]"
-    )
+    console.rule(f"[bold]Phase 6: 新用户记忆召回 ({len(RECALL_QUESTIONS)} 轮) — auto-recall[/bold]")
     console.print()
     console.print("[dim]验证点:[/dim]")
     console.print("[dim]- 新用户 (新 session) 发送问题[/dim]")
@@ -774,9 +773,7 @@ def run_phase_recall(gateway_url: str, user_id: str, delay: float, verbose: bool
 # ── 完整测试 ──────────────────────────────────────────────────────────────
 
 
-def run_full_test(
-    gateway_url: str, openviking_url: str, user_id: str, delay: float, verbose: bool
-):
+def run_full_test(gateway_url: str, openviking_url: str, user_id: str, delay: float, verbose: bool):
     console.print()
     console.print(
         Panel.fit(
@@ -808,7 +805,7 @@ def run_full_test(
     run_phase_session_id(openviking_url, user_id, verbose)
 
     # Phase 6: 新用户召回
-    recall_results = run_phase_recall(gateway_url, user_id, delay, verbose)
+    run_phase_recall(gateway_url, user_id, delay, verbose)
 
     # ── 汇总报告 ──────────────────────────────────────────────────────────
     console.print()
@@ -833,21 +830,6 @@ def run_full_test(
     # 按阶段汇总
     tree = Tree(f"[bold]通过: {passed}/{total}, 失败: {failed}[/bold]")
     tree.add(f"Phase 1: 多轮对话 — {chat_ok} 成功 / {chat_fail} 失败")
-
-    phase_names = {
-        "OpenViking": "Phase 2: afterTurn",
-        "message_count": "Phase 2: afterTurn",
-        "pending_tokens": "Phase 2: afterTurn",
-        "消息内容": "Phase 2: afterTurn",
-        "commit": "Phase 3: Commit",
-        "archived": "Phase 3: Commit",
-        "memories_extracted": "Phase 3: Commit",
-        "Assemble": "Phase 4: Assemble",
-        "budget": "Phase 4: Assemble",
-        "SessionId": "Phase 5: SessionId",
-        "sessionKey": "Phase 5: SessionId",
-        "Recall": "Phase 6: Recall",
-    }
 
     fail_list = [a for a in assertions if not a["ok"]]
     if fail_list:

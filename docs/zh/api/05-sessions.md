@@ -176,6 +176,191 @@ openviking session get a1b2c3d4
 
 ---
 
+### get_session_context()
+
+获取供上下文组装使用的会话上下文。
+
+该接口返回：
+- `latest_archive_overview`：最新一个已完成归档的 `overview` 文本，在 token budget 足够时返回
+- `latest_archive_id`：最新一个已完成归档的 ID，用于后续展开 archive 详情
+- `pre_archive_abstracts`：更早历史归档的轻量列表，每项只包含 `archive_id` 和 `abstract`
+- `messages`：最新已完成归档之后的所有未完成归档消息，再加上当前 live session 消息
+- `stats`：返回结果对应的 token 与纳入统计
+
+说明：
+- 没有可用 completed archive，或最新 overview 超出 token budget 时，`latest_archive_overview` 返回空字符串。
+- 只要存在最新 completed archive，就会返回 `latest_archive_id`；即使 `latest_archive_overview` 因 budget 被裁剪，这个 ID 仍然可用。
+- `token_budget` 会在 active `messages` 之后作用于 assembled archive payload：`latest_archive_overview` 优先级高于 `pre_archive_abstracts`，预算紧张时先淘汰最旧的 abstracts。
+- 只有最终实际返回的 archive 内容，才会计入 `estimatedTokens` 和 `stats.archiveTokens`。
+- 当前每次有消息的 session commit 都会在 Phase 2 生成 archive 摘要；只有带 `.done` 标记的 completed archive 才会被这里返回。
+
+**参数**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| session_id | str | 是 | - | 会话 ID |
+| token_budget | int | 否 | 128000 | active `messages` 之后留给 assembled archive payload 的 token 预算 |
+
+**Python SDK (Embedded / HTTP)**
+
+```python
+context = await client.get_session_context("a1b2c3d4", token_budget=128000)
+print(context["latest_archive_overview"])
+print(context["latest_archive_id"])
+print(context["pre_archive_abstracts"])
+print(len(context["messages"]))
+
+session = client.session("a1b2c3d4")
+context = await session.get_session_context(token_budget=128000)
+```
+
+**HTTP API**
+
+```
+GET /api/v1/sessions/{session_id}/context?token_budget=128000
+```
+
+```bash
+curl -X GET "http://localhost:1933/api/v1/sessions/a1b2c3d4/context?token_budget=128000" \
+  -H "X-API-Key: your-key"
+```
+
+**CLI**
+
+```bash
+ov session get-session-context a1b2c3d4 --token-budget 128000
+```
+
+**响应**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "latest_archive_overview": "# Session Summary\n\n**Overview**: User discussed deployment and auth setup.",
+    "latest_archive_id": "archive_002",
+    "pre_archive_abstracts": [
+      {
+        "archive_id": "archive_001",
+        "abstract": "用户之前讨论了仓库初始化和鉴权配置。"
+      }
+    ],
+    "messages": [
+      {
+        "id": "msg_pending_1",
+        "role": "user",
+        "parts": [
+          {"type": "text", "text": "Pending user message"}
+        ],
+        "created_at": "2026-03-24T09:10:11Z"
+      },
+      {
+        "id": "msg_live_1",
+        "role": "assistant",
+        "parts": [
+          {"type": "text", "text": "Current live message"}
+        ],
+        "created_at": "2026-03-24T09:10:20Z"
+      }
+    ],
+    "estimatedTokens": 147,
+    "stats": {
+      "totalArchives": 2,
+      "includedArchives": 2,
+      "droppedArchives": 0,
+      "failedArchives": 0,
+      "activeTokens": 98,
+      "archiveTokens": 49
+    }
+  }
+}
+```
+
+---
+
+### get_session_archive()
+
+获取某次已完成归档的完整内容。
+
+该接口通常配合 `get_session_context()` 返回的 `latest_archive_id` 或 `pre_archive_abstracts[*].archive_id` 使用。
+
+该接口返回：
+- `archive_id`：被展开的 archive ID
+- `abstract`：该 archive 的轻量摘要
+- `overview`：该 archive 的完整 overview
+- `messages`：该次 archive 对应的完整消息内容
+
+**参数**
+
+| 参数 | 类型 | 必填 | 默认值 | 说明 |
+|------|------|------|--------|------|
+| session_id | str | 是 | - | 会话 ID |
+| archive_id | str | 是 | - | 归档 ID，例如 `archive_002` |
+
+**Python SDK (Embedded / HTTP)**
+
+```python
+archive = await client.get_session_archive("a1b2c3d4", "archive_002")
+print(archive["archive_id"])
+print(archive["overview"])
+print(len(archive["messages"]))
+
+session = client.session("a1b2c3d4")
+archive = await session.get_archive("archive_002")
+```
+
+**HTTP API**
+
+```
+GET /api/v1/sessions/{session_id}/archives/{archive_id}
+```
+
+```bash
+curl -X GET "http://localhost:1933/api/v1/sessions/a1b2c3d4/archives/archive_002" \
+  -H "X-API-Key: your-key"
+```
+
+**CLI**
+
+```bash
+ov session get-session-archive a1b2c3d4 archive_002
+```
+
+**响应**
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "archive_id": "archive_002",
+    "abstract": "用户讨论了部署流程和鉴权配置。",
+    "overview": "# Session Summary\n\n**Overview**: 用户讨论了部署流程和鉴权配置。",
+    "messages": [
+      {
+        "id": "msg_archive_1",
+        "role": "user",
+        "parts": [
+          {"type": "text", "text": "这个服务应该怎么部署？"}
+        ],
+        "created_at": "2026-03-24T08:55:01Z"
+      },
+      {
+        "id": "msg_archive_2",
+        "role": "assistant",
+        "parts": [
+          {"type": "text", "text": "建议先走分阶段部署，再核验鉴权链路。"}
+        ],
+        "created_at": "2026-03-24T08:55:18Z"
+      }
+    ]
+  }
+}
+```
+
+如果 archive 不存在、未完成，或者不属于该 session，接口返回 `404`。
+
+---
+
 ### delete_session()
 
 删除会话。
@@ -421,6 +606,11 @@ curl -X POST http://localhost:1933/api/v1/sessions/a1b2c3d4/used \
 ### commit()
 
 提交会话。归档消息（Phase 1）立即完成，摘要生成和记忆提取（Phase 2）在后台异步执行。返回 `task_id` 用于查询后台任务进度。
+
+说明：
+- 同一 session 的多次快速连续 commit 会被接受；每次请求都会拿到独立的 `task_id`。
+- 后台 Phase 2 会按 archive 顺序串行推进：`archive N+1` 会等待 `archive N` 写出 `.done` 后再继续。
+- 如果更早的 archive 已失败且没有 `.done`，后续 commit 会直接返回 `FAILED_PRECONDITION`，直到该失败被处理。
 
 **参数**
 

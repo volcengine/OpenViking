@@ -97,6 +97,7 @@ CODE_EXTENSIONS = {
     ".py",
     ".java",
     ".cpp",
+    ".cc",
     ".c",
     ".h",
     ".hpp",

@@ -18,6 +18,7 @@ from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
+from openviking_cli.utils.config import get_openviking_config  # [liclaw] scope_mode 读取
 
 from .memory_deduplicator import DedupDecision, MemoryActionDecision, MemoryDeduplicator
 from .memory_extractor import (
@@ -292,6 +293,14 @@ class SessionCompressor:
         if not ctx:
             return []
 
+        # [liclaw] 从全局配置读取 scope_mode；若配置不存在或旧镜像不支持 memory 段，则默认走 agent isolation
+        try:
+            _ov_cfg = get_openviking_config()
+            memory_cfg = getattr(_ov_cfg, "memory", None)
+            scope_mode = getattr(memory_cfg, "scope_mode", "isolated")
+        except Exception:
+            scope_mode = "isolated"
+
         self._pending_semantic_changes.clear()
         telemetry = get_current_telemetry()
         telemetry.set("memory.extract.candidates.total", 0)
@@ -341,7 +350,8 @@ class SessionCompressor:
                     if candidate.category in ALWAYS_MERGE_CATEGORIES:
                         with telemetry.measure("memory.extract.stage.profile_create"):
                             memory = await self.extractor.create_memory(
-                                candidate, user, session_id, ctx=ctx
+                                candidate, user, session_id, ctx=ctx,
+                                scope_mode=scope_mode,  # [liclaw]
                             )
                         if memory:
                             memories.append(memory)
@@ -506,7 +516,8 @@ class SessionCompressor:
 
                         with telemetry.measure("memory.extract.stage.create_memory"):
                             memory = await self.extractor.create_memory(
-                                candidate, user, session_id, ctx=ctx
+                                candidate, user, session_id, ctx=ctx,
+                                scope_mode=scope_mode,  # [liclaw]
                             )
                         if memory:
                             memories.append(memory)

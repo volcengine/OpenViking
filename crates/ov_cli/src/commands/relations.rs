@@ -1,6 +1,6 @@
 use crate::client::HttpClient;
 use crate::error::Result;
-use crate::output::{output_success, OutputFormat};
+use crate::output::{OutputFormat, output_success};
 
 pub async fn list_relations(
     client: &HttpClient,

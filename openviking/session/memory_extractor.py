@@ -134,12 +134,20 @@ class MemoryExtractor:
         self._tool_desc_cache_ready: bool = False
 
     @staticmethod
-    def _get_owner_space(category: MemoryCategory, ctx: RequestContext) -> str:
+    def _get_owner_space(
+        category: MemoryCategory, ctx: RequestContext, scope_mode: str = "isolated"
+    ) -> str:
         """Derive owner_space from memory category.
 
-        PROFILE / PREFERENCES / ENTITIES / EVENTS → user_space
-        CASES / PATTERNS → agent_space
+        Default mode:
+            PROFILE / PREFERENCES / ENTITIES / EVENTS → user_space
+            CASES / PATTERNS → agent_space
+        Isolated mode:
+            ALL categories → agent_space (full agent isolation)
         """
+        # [liclaw] isolated 模式下所有记忆都路由到 agent space，实现完全隔离
+        if scope_mode == "isolated":
+            return ctx.user.agent_space_name()
         if category in MemoryExtractor._USER_CATEGORIES:
             return ctx.user.user_space_name()
         return ctx.user.agent_space_name()
@@ -444,6 +452,7 @@ class MemoryExtractor:
         user: str,
         session_id: str,
         ctx: RequestContext,
+        scope_mode: str = "isolated",  # [liclaw] 缺省即走 agent isolation，避免依赖新配置段
     ) -> Optional[Context]:
         """Create Context object from candidate and persist to AGFS as .md file."""
         viking_fs = get_viking_fs()
@@ -451,18 +460,29 @@ class MemoryExtractor:
             logger.warning("VikingFS not available, skipping memory creation")
             return None
 
-        owner_space = self._get_owner_space(candidate.category, ctx)
+        owner_space = self._get_owner_space(candidate.category, ctx, scope_mode)
+
+        # [liclaw] isolated 模式下使用 agent scope URI，default 模式保持原行为
+        _use_agent_scope = scope_mode == "isolated"
 
         # Special handling for profile: append to profile.md
         if candidate.category == MemoryCategory.PROFILE:
-            payload = await self._append_to_profile(candidate, viking_fs, ctx=ctx)
+            payload = await self._append_to_profile(
+                candidate, viking_fs, ctx=ctx, scope_mode=scope_mode
+            )
             if not payload:
                 return None
-            user_space = ctx.user.user_space_name()
-            memory_uri = f"viking://user/{user_space}/memories/profile.md"
+            if _use_agent_scope:
+                agent_space = ctx.user.agent_space_name()
+                memory_uri = f"viking://agent/{agent_space}/memories/profile.md"
+                parent_uri = f"viking://agent/{agent_space}/memories"
+            else:
+                user_space = ctx.user.user_space_name()
+                memory_uri = f"viking://user/{user_space}/memories/profile.md"
+                parent_uri = f"viking://user/{user_space}/memories"
             memory = Context(
                 uri=memory_uri,
-                parent_uri=f"viking://user/{user_space}/memories",
+                parent_uri=parent_uri,
                 is_leaf=True,
                 abstract=payload.abstract,
                 context_type=ContextType.MEMORY.value,
@@ -476,9 +496,12 @@ class MemoryExtractor:
             memory.set_vectorize(Vectorize(text=payload.content))
             return memory
 
-        # Determine parent URI based on category
+        # Determine parent URI based on category and scope_mode
         cat_dir = self.CATEGORY_DIRS[candidate.category]
-        if candidate.category in [
+        if _use_agent_scope:
+            # [liclaw] isolated 模式：所有类别都用 agent scope
+            parent_uri = f"viking://agent/{ctx.user.agent_space_name()}/{cat_dir}"
+        elif candidate.category in [
             MemoryCategory.PREFERENCES,
             MemoryCategory.ENTITIES,
             MemoryCategory.EVENTS,
@@ -521,9 +544,14 @@ class MemoryExtractor:
         candidate: CandidateMemory,
         viking_fs,
         ctx: RequestContext,
+        scope_mode: str = "isolated",  # [liclaw] 缺省即走 agent isolation，避免依赖新配置段
     ) -> Optional[MergedMemoryPayload]:
         """Update user profile - always merge with existing content."""
-        uri = f"viking://user/{ctx.user.user_space_name()}/memories/profile.md"
+        # [liclaw] isolated 模式下 profile 存入 agent scope
+        if scope_mode == "isolated":
+            uri = f"viking://agent/{ctx.user.agent_space_name()}/memories/profile.md"
+        else:
+            uri = f"viking://user/{ctx.user.user_space_name()}/memories/profile.md"
         existing = ""
         try:
             existing = await viking_fs.read_file(uri, ctx=ctx) or ""

@@ -1,6 +1,6 @@
 use crate::client::HttpClient;
 use crate::error::Result;
-use crate::output::{output_success, OutputFormat};
+use crate::output::{OutputFormat, output_success};
 
 pub async fn ls(
     client: &HttpClient,
@@ -14,7 +14,17 @@ pub async fn ls(
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let result = client.ls(uri, simple, recursive, output, abs_limit, show_all_hidden, node_limit).await?;
+    let result = client
+        .ls(
+            uri,
+            simple,
+            recursive,
+            output,
+            abs_limit,
+            show_all_hidden,
+            node_limit,
+        )
+        .await?;
     output_success(&result, output_format, compact);
     Ok(())
 }
@@ -30,7 +40,16 @@ pub async fn tree(
     output_format: OutputFormat,
     compact: bool,
 ) -> Result<()> {
-    let result = client.tree(uri, output, abs_limit, show_all_hidden, node_limit, level_limit).await?;
+    let result = client
+        .tree(
+            uri,
+            output,
+            abs_limit,
+            show_all_hidden,
+            node_limit,
+            level_limit,
+        )
+        .await?;
     output_success(&result, output_format, compact);
     Ok(())
 }

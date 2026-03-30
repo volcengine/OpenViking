@@ -18,7 +18,7 @@ jobs:
       # All review rules, custom labels, ignore patterns, and tool configs
       # live in .pr_agent.toml — no inline extra_instructions needed here.
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: PR Agent
         uses: qodo-ai/pr-agent@main

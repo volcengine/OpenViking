@@ -90,12 +90,13 @@ uv pip install -e ".[bot,bot-langfuse,bot-telegram]"
 **1. 初始化配置**
 
 ```bash
-vikingbot gateway
+openviking-server --with-bot
 ```
 
 这将自动：
 - 在 `~/.openviking/ov.conf` 创建默认配置
 - 在 openviking的工作空间下创建bot启动文件。默认路径为 `~/.openviking/data/bot/`
+- 启动 OpenViking 服务器并集成 bot
 
 **2. 通过 ov.conf 配置**
 
@@ -105,16 +106,13 @@ vikingbot gateway
 
 ```bash
 # 直接发送单条消息
-vikingbot chat -m "What is 2+2?"
+ov chat -m "What is 2+2?"
 
 # 进入交互式聊天模式（支持多轮对话）
-vikingbot chat
+ov chat
 
 # 显示纯文本回复（不渲染 Markdown）
-vikingbot chat --no-markdown
-
-# 聊天时显示运行时日志（便于调试）
-vikingbot chat --logs
+ov chat --no-format
 ```
 
 就这么简单！您只需 2 分钟就能拥有一个可用的 AI 助手。
@@ -550,31 +548,9 @@ which nodejs
 
 | 命令 | 描述 |
 |---------|-------------|
-| `vikingbot chat -m "..."` | 与代理聊天 |
-| `vikingbot chat` | 交互式聊天模式 |
-| `vikingbot chat --no-markdown` | 显示纯文本回复 |
-| `vikingbot chat --logs` | 聊天期间显示运行时日志 |
-| `vikingbot gateway` | 启动网关 |
-| `vikingbot status` | 显示状态 |
-| `vikingbot channels login` | 链接 WhatsApp（扫描二维码） |
-| `vikingbot channels status` | 显示渠道状态 |
+| `ov chat -m "..."` | 发送单条消息 |
+| `ov chat` | 交互式聊天模式 |
+| `ov chat --no-format` | 显示纯文本回复（无 Markdown） |
 
 交互模式退出：`exit`、`quit`、`/exit`、`/quit`、`:q` 或 `Ctrl+D`。
-
-<details>
-<summary><b>定时任务（Cron）</b></summary>
-
-```bash
-# 添加任务
-vikingbot cron add --name "daily" --message "Good morning!" --cron "0 9 * * *"
-vikingbot cron add --name "hourly" --message "Check status" --every 3600
-
-# 列出任务
-vikingbot cron list
-
-# 移除任务
-vikingbot cron remove <job_id>
-```
-
-</details>
 

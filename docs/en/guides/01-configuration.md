@@ -619,6 +619,19 @@ Directly uses the AGFS Go implementation through a shared library.
 | `prefix` | str | Optional key prefix for namespace isolation | "" |
 | `use_ssl` | bool | Enable/disable SSL (HTTPS) for S3 connections | true |
 | `use_path_style` | bool | true for PathStyle used by MinIO and some S3-compatible services; false for VirtualHostStyle used by TOS and some S3-compatible services | true |
+| `directory_marker_mode` | str | How to persist directory markers: `none`, `empty`, or `nonempty` | `"empty"` |
+
+`directory_marker_mode` controls how AGFS materializes directory objects in S3:
+
+- `empty` is the default. AGFS writes a zero-byte directory marker and preserves empty-directory semantics.
+- `nonempty` writes a non-empty marker payload. Use this for S3-compatible services such as TOS that reject zero-byte directory markers.
+- `none` switches AGFS to prefix-style S3 semantics. AGFS does not create directory marker objects, so empty directories are not persisted and may not be discoverable until they contain at least one child object.
+
+Typical choices:
+
+- For MinIO, SeaweedFS, and most PathStyle backends, keep the default `empty`.
+- For TOS or other VirtualHostStyle backends that reject zero-byte directory markers, use `nonempty`.
+- If you want pure prefix-style behavior and do not need persisted empty directories, use `none`.
 
 </details>
 
@@ -660,7 +673,8 @@ Supports S3 storage in VirtualHostStyle mode, such as TOS.
         "region": "us-east-1",
         "access_key": "your-ak",
         "secret_key": "your-sk",
-        "use_path_style": false
+        "use_path_style": false,
+        "directory_marker_mode": "nonempty"
       }
     }
   }
@@ -744,6 +758,22 @@ openviking-server --config /path/to/ov.conf
 
 The config sections documented above (embedding, vlm, rerank, storage) all belong to `ov.conf`. SDK embedded mode and server share this file.
 
+For memory-related settings, add a `memory` section in `ov.conf`:
+
+```json
+{
+  "memory": {
+    "agent_scope_mode": "user+agent"
+  }
+}
+```
+
+| Field | Description | Default |
+|-------|-------------|---------|
+| `agent_scope_mode` | Agent memory namespace mode: `"user+agent"` isolates by `(user_id, agent_id)`, while `"agent"` isolates only by `agent_id` and shares agent memories across users of the same agent | `"user+agent"` |
+
+`agent_scope_mode` only affects agent-level namespaces such as `viking://agent/{agent_space}/memories/...`. User memories under `viking://user/{user_space}/memories/...` are not affected.
+
 ### ovcli.conf
 
 Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI to connect to a remote server:
@@ -752,6 +782,8 @@ Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI t
 {
   "url": "http://localhost:1933",
   "api_key": "your-secret-key",
+  "account": "acme",
+  "user": "alice",
   "agent_id": "my-agent",
   "output": "table"
 }
@@ -761,8 +793,16 @@ Config file for the HTTP client (`SyncHTTPClient` / `AsyncHTTPClient`) and CLI t
 |-------|-------------|---------|
 | `url` | Server address | (required) |
 | `api_key` | API key for authentication (root key or user key) | `null` (no auth) |
+| `account` | Default account sent as `X-OpenViking-Account` | `null` |
+| `user` | Default user sent as `X-OpenViking-User` | `null` |
 | `agent_id` | Agent identifier for agent space isolation | `null` |
 | `output` | Default output format: `"table"` or `"json"` | `"table"` |
+
+CLI flags can override these identity fields per command:
+
+```bash
+openviking --account acme --user alice --agent-id assistant-2 ls viking://
+```
 
 See [Deployment](./03-deployment.md) for details.
 
@@ -775,6 +815,7 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
   "server": {
     "host": "0.0.0.0",
     "port": 1933,
+    "auth_mode": "api_key",
     "root_api_key": "your-secret-root-key",
     "cors_origins": ["*"]
   }
@@ -785,10 +826,13 @@ When running OpenViking as an HTTP service, add a `server` section to `ov.conf`:
 |-------|------|-------------|---------|
 | `host` | str | Bind address | `0.0.0.0` |
 | `port` | int | Bind port | `1933` |
-| `root_api_key` | str | Root API key for multi-tenant auth, disabled if not set | `null` |
+| `auth_mode` | str | Authentication mode: `"api_key"` or `"trusted"` | `"api_key"` |
+| `root_api_key` | str | Root API key for multi-tenant auth in `api_key` mode | `null` |
 | `cors_origins` | list | Allowed CORS origins | `["*"]` |
 
-When `root_api_key` is configured, the server enables multi-tenant authentication. Use the Admin API to create accounts and user keys. When not set, the server runs in dev mode with no authentication.
+`api_key` mode uses API keys. `trusted` mode trusts `X-OpenViking-Account` / `X-OpenViking-User` headers from a trusted gateway or internal caller.
+
+When `root_api_key` is configured, the server enables multi-tenant authentication. Use the Admin API to create accounts and user keys. Development mode only applies when `auth_mode = "api_key"` and `root_api_key` is not set.
 
 For startup and deployment details see [Deployment](./03-deployment.md), for authentication see [Authentication](./04-authentication.md).
 
