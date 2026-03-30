@@ -36,6 +36,14 @@ type FindResult = {
   total?: number;
 };
 
+type CommitSessionResult = {
+  task_id?: string;
+  status?: string;
+  memories_extracted?: Record<string, number>;
+  active_count_updated?: number;
+  error?: unknown;
+};
+
 type ScopeName = "user" | "agent";
 
 // ---------------------------------------------------------------------------
@@ -284,6 +292,21 @@ class OpenVikingClient {
     );
   }
 
+  async sessionUsed(sessionId: string, contexts: string[]): Promise<void> {
+    if (contexts.length === 0) return;
+    await this.request(`/api/v1/sessions/${encodeURIComponent(sessionId)}/used`, {
+      method: "POST",
+      body: JSON.stringify({ contexts }),
+    });
+  }
+
+  async commitSession(sessionId: string): Promise<CommitSessionResult> {
+    return this.request<CommitSessionResult>(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`,
+      { method: "POST", body: JSON.stringify({}) },
+    );
+  }
+
   async deleteSession(sessionId: string): Promise<void> {
     await this.request(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
   }
@@ -437,6 +460,26 @@ async function searchBothScopes(
   return unique.filter((m) => m.level === 2);
 }
 
+function markRecalledMemoriesUsed(client: OpenVikingClient, contexts: string[]): void {
+  const uniqueContexts = [...new Set(contexts.filter((uri) => typeof uri === "string" && uri.length > 0))];
+  if (uniqueContexts.length === 0) return;
+
+  void (async () => {
+    let sessionId: string | undefined;
+    try {
+      sessionId = await client.createSession();
+      await client.sessionUsed(sessionId, uniqueContexts);
+      await client.commitSession(sessionId);
+    } catch {
+      // Fire-and-forget usage tracking must never block or fail the caller.
+    } finally {
+      if (sessionId) {
+        await client.deleteSession(sessionId).catch(() => {});
+      }
+    }
+  })();
+}
+
 // ---------------------------------------------------------------------------
 // MCP Server
 // ---------------------------------------------------------------------------
@@ -478,6 +521,8 @@ server.tool(
     if (memories.length === 0) {
       return { content: [{ type: "text" as const, text: "No relevant memories found in OpenViking." }] };
     }
+
+    markRecalledMemoriesUsed(client, memories.map((memory) => memory.uri));
 
     // Read full content for leaf memories
     const lines = await Promise.all(
