@@ -12,11 +12,20 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
 
 jobs:
   build-and-push-image:
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            platform: linux/amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            platform: linux/arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
     permissions:
       contents: read
       packages: write
@@ -29,6 +38,13 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Normalize image name
+        id: image-name
+        env:
+          RAW_IMAGE_NAME: ${{ github.repository }}
+        run: |
+          echo "image=$(echo "$RAW_IMAGE_NAME" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
       - name: Log in to the Container registry
         uses: docker/login-action@v4
         with:
@@ -40,10 +56,10 @@ jobs:
         id: meta
         uses: docker/metadata-action@v6
         with:
-          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-
-      - name: Set up QEMU
-        uses: docker/setup-qemu-action@v4
+          images: ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image }}
+          tags: |
+            type=raw,value=${{ github.event.inputs.version }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=ref,event=tag,enable=${{ github.ref_type == 'tag' }}
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -53,10 +69,91 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
-          platforms: linux/amd64,linux/arm64
-          push: ${{ github.ref_type == 'tag' || github.event_name == 'workflow_dispatch' }}
-          tags: ${{ steps.meta.outputs.tags }}
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.REGISTRY }}/${{ steps.image-name.outputs.image }},push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
             # fallback to 0.0.0 if no version is provided
             OPENVIKING_VERSION=${{ (github.event_name == 'workflow_dispatch' && github.event.inputs.version) || (github.ref_type == 'tag' && github.ref_name) || '0.0.0' }}
+
+      - name: Export image digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.push.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+
+      - name: Upload image digest
+        uses: actions/upload-artifact@v7
+        with:
+          name: docker-digests-${{ matrix.arch }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  create-manifest:
+    runs-on: ubuntu-24.04
+    needs: build-and-push-image
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v6
+        with:
+          submodules: recursive
+
+      - name: Normalize image name
+        id: image-name
+        env:
+          RAW_IMAGE_NAME: ${{ github.repository }}
+        run: |
+          echo "image=$(echo "$RAW_IMAGE_NAME" | tr '[:upper:]' '[:lower:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata (tags, labels) for Docker
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.image-name.outputs.image }}
+          tags: |
+            type=raw,value=${{ github.event.inputs.version }},enable=${{ github.event_name == 'workflow_dispatch' }}
+            type=ref,event=tag,enable=${{ github.ref_type == 'tag' }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Download image digests
+        uses: actions/download-artifact@v8
+        with:
+          pattern: docker-digests-*
+          path: /tmp/digests
+          merge-multiple: true
+
+      - name: Create multi-arch manifests
+        env:
+          SOURCE_TAGS: ${{ steps.meta.outputs.tags }}
+        run: |
+          image_refs=()
+          for digest_file in /tmp/digests/*; do
+            [ -e "$digest_file" ] || continue
+            image_refs+=("${{ env.REGISTRY }}/${{ steps.image-name.outputs.image }}@sha256:$(basename "$digest_file")")
+          done
+
+          [ ${#image_refs[@]} -gt 0 ] || {
+            echo "No image digests found" >&2
+            exit 1
+          }
+
+          while IFS= read -r tag; do
+            [ -n "$tag" ] || continue
+            docker buildx imagetools create \
+              --tag "$tag" \
+              "${image_refs[@]}"
+          done <<< "$SOURCE_TAGS"
