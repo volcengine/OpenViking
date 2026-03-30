@@ -218,6 +218,7 @@ class ChannelManager:
         while True:
             try:
                 msg = await asyncio.wait_for(self.bus.consume_outbound(), timeout=1.0)
+                logger.info(f"Received outbound message: {msg}")
 
                 # Try exact match first
                 channel = self.channels.get(msg.session_key.channel_key())
@@ -226,6 +227,22 @@ class ChannelManager:
                         await channel.send(msg)
                     except Exception as e:
                         logger.exception(f"Error sending to {msg.session_key}: {e}")
+                elif msg.session_key.type == "bot_api":
+                    # For bot_api messages, try to find an OpenAPIChannel to handle it
+                    openapi_channel = None
+                    for ch in self.channels.values():
+                        if ch.name == "openapi":
+                            openapi_channel = ch
+                            break
+                    if openapi_channel:
+                        try:
+                            await openapi_channel.send(msg)
+                        except Exception as e:
+                            logger.exception(f"Error sending bot_api message to OpenAPIChannel: {e}")
+                    else:
+                        logger.warning(
+                            f"Unknown channel: {msg.session_key}. Available: {list(self.channels.keys())}"
+                        )
                 else:
                     logger.warning(
                         f"Unknown channel: {msg.session_key}. Available: {list(self.channels.keys())}"
