@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """OpenAI VLM backend implementation"""
 
 import asyncio
@@ -8,10 +8,10 @@ import json
 import logging
 import time
 from pathlib import Path
-from urllib.parse import urlparse
 from typing import Any, Dict, List, Optional, Union
+from urllib.parse import urlparse
 
-from ..base import VLMBase, VLMResponse, ToolCall
+from ..base import ToolCall, VLMBase, VLMResponse
 from ..registry import DEFAULT_AZURE_API_VERSION
 
 logger = logging.getLogger(__name__)
@@ -21,6 +21,7 @@ _DASHSCOPE_HOSTS = {
     "dashscope.aliyuncs.com",
     "dashscope-intl.aliyuncs.com",
 }
+
 
 def _build_openai_client_kwargs(
     provider: str,
@@ -62,8 +63,11 @@ class OpenAIVLM(VLMBase):
             except ImportError:
                 raise ImportError("Please install openai: pip install openai")
             kwargs = _build_openai_client_kwargs(
-                self.provider, self.api_key, self.api_base,
-                self.api_version, self.extra_headers,
+                self.provider,
+                self.api_key,
+                self.api_base,
+                self.api_version,
+                self.extra_headers,
             )
             if self.provider == "azure":
                 self._sync_client = openai.AzureOpenAI(**kwargs)
@@ -79,8 +83,11 @@ class OpenAIVLM(VLMBase):
             except ImportError:
                 raise ImportError("Please install openai: pip install openai")
             kwargs = _build_openai_client_kwargs(
-                self.provider, self.api_key, self.api_base,
-                self.api_version, self.extra_headers,
+                self.provider,
+                self.api_key,
+                self.api_base,
+                self.api_version,
+                self.extra_headers,
             )
             if self.provider == "azure":
                 self._async_client = openai.AsyncAzureOpenAI(**kwargs)
@@ -106,15 +113,15 @@ class OpenAIVLM(VLMBase):
 
         return host.lower() in _DASHSCOPE_HOSTS
 
-    def _apply_provider_specific_extra_body(
-        self, kwargs: Dict[str, Any], thinking: bool
-    ) -> None:
+    def _apply_provider_specific_extra_body(self, kwargs: Dict[str, Any], thinking: bool) -> None:
         """Attach provider-specific raw body parameters understood by compatible APIs."""
         if self._supports_enable_thinking():
             kwargs["extra_body"] = {"enable_thinking": bool(thinking)}
 
     def _update_token_usage_from_response(
-        self, response, duration_seconds: float = 0.0,
+        self,
+        response,
+        duration_seconds: float = 0.0,
     ):
         if hasattr(response, "usage") and response.usage:
             prompt_tokens = response.usage.prompt_tokens
@@ -139,11 +146,7 @@ class OpenAIVLM(VLMBase):
                         args = json.loads(args)
                     except json.JSONDecodeError:
                         args = {"raw": args}
-                tool_calls.append(ToolCall(
-                    id=tc.id,
-                    name=tc.function.name,
-                    arguments=args
-                ))
+                tool_calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=args))
         return tool_calls
 
     def _build_vlm_response(self, response, has_tools: bool) -> Union[str, VLMResponse]:
@@ -347,7 +350,8 @@ class OpenAIVLM(VLMBase):
                     content = await self._process_streaming_response_async(response)
                 else:
                     self._update_token_usage_from_response(
-                        response, duration_seconds=elapsed,
+                        response,
+                        duration_seconds=elapsed,
                     )
                     content = self._extract_content_from_response(response)
 

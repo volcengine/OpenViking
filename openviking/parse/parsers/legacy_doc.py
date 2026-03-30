@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Legacy Word document (.doc) parser for OpenViking.
 
@@ -19,7 +19,7 @@ from openviking_cli.utils.logger import get_logger
 logger = get_logger(__name__)
 
 
-    # Max stream size to read (50MB) — prevents DoS from crafted files
+# Max stream size to read (50MB) — prevents DoS from crafted files
 _MAX_STREAM_SIZE = 50 * 1024 * 1024
 # Max character count sanity cap for ccpText
 _MAX_CCP_TEXT = 10_000_000
@@ -154,9 +154,7 @@ class LegacyDocParser(BaseParser):
         if fc_clx <= 0 or lcb_clx <= 0 or fc_clx + lcb_clx > len(table_data):
             return self._simple_text_extract(word_doc, ccp_text)
 
-        return self._extract_via_clx(
-            word_doc, table_data, fc_clx, lcb_clx, ccp_text
-        )
+        return self._extract_via_clx(word_doc, table_data, fc_clx, lcb_clx, ccp_text)
 
     def _simple_text_extract(self, word_doc: bytes, ccp_text: int) -> str:
         """
@@ -177,7 +175,10 @@ class LegacyDocParser(BaseParser):
             raw = word_doc[text_start:end]
             text = raw.decode("utf-16-le", errors="replace")
             # Sanity: if mostly printable, it's likely correct
-            if sum(1 for c in text[:200] if c.isprintable() or c in "\n\r\t") > len(text[:200]) * 0.5:
+            if (
+                sum(1 for c in text[:200] if c.isprintable() or c in "\n\r\t")
+                > len(text[:200]) * 0.5
+            ):
                 return self._clean_word_text(text)
 
         # Fall back to CP1252 single-byte
@@ -277,7 +278,9 @@ class LegacyDocParser(BaseParser):
                     raw = word_doc[byte_offset:byte_end]
                     text_parts.append(self._decode_cp1252(raw))
                 else:
-                    logger.warning(f"Piece {i} extends beyond stream ({byte_end} > {len(word_doc)})")
+                    logger.warning(
+                        f"Piece {i} extends beyond stream ({byte_end} > {len(word_doc)})"
+                    )
             else:
                 # UTF-16LE
                 byte_offset = fc_real
@@ -286,7 +289,9 @@ class LegacyDocParser(BaseParser):
                     raw = word_doc[byte_offset:byte_end]
                     text_parts.append(raw.decode("utf-16-le", errors="replace"))
                 else:
-                    logger.warning(f"Piece {i} extends beyond stream ({byte_end} > {len(word_doc)})")
+                    logger.warning(
+                        f"Piece {i} extends beyond stream ({byte_end} > {len(word_doc)})"
+                    )
 
             chars_extracted += piece_char_count
 
@@ -305,7 +310,7 @@ class LegacyDocParser(BaseParser):
         """Normalize Word control characters to readable equivalents."""
         text = text.replace("\r\n", "\n").replace("\r", "\n")
         # \x07 = cell/row end, \x0B = soft line break, \x0C = section break
-        text = text.replace("\x07", "\t").replace("\x0B", "\n").replace("\x0C", "\n\n")
+        text = text.replace("\x07", "\t").replace("\x0b", "\n").replace("\x0c", "\n\n")
         return text
 
     def _fallback_extract(self, path: Path) -> str:

@@ -512,4 +512,17 @@ export class OpenVikingClient {
       method: "DELETE",
     }, agentId);
   }
+
+  async sessionUsed(
+    sessionId: string,
+    contexts: string[],
+    agentId?: string,
+  ): Promise<void> {
+    if (contexts.length === 0) return;
+    await this.request(
+      `/api/v1/sessions/${encodeURIComponent(sessionId)}/used`,
+      { method: "POST", body: JSON.stringify({ contexts }) },
+      agentId,
+    );
+  }
 }

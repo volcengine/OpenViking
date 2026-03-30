@@ -7,7 +7,7 @@ description: |
   Pattern names should be in "Process name: Step description" format.
 directory: "viking://agent/{agent_space}/memories/patterns"
 filename_template: "{pattern_name}.md"
-enabled: true
+enabled: false
 fields:
   - name: pattern_name
     type: string

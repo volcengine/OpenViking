@@ -91,6 +91,12 @@ import openviking as ov
 client = ov.SyncHTTPClient(url="http://localhost:1933")
 ```
 
+> **Multi-tenant auth**: If the server has authentication enabled, use a `user_key` (recommended):
+> ```python
+> client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="<user-key>")
+> ```
+> A `root_key` cannot directly call tenant-scoped APIs like `add_resource` or `find` — it requires `account` and `user` parameters. See [Authentication](../../docs/en/guides/04-authentication.md) and [Server Quickstart](../../docs/en/getting-started/03-quickstart-server.md).
+
 ### Adding Resources
 
 Add URLs, local files, or directories:

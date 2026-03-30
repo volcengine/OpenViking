@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 from typing import Any, Optional, cast
 
 from pydantic import BaseModel, Field, model_validator
@@ -103,11 +103,12 @@ class EmbeddingModelConfig(BaseModel):
             "gemini",
             "voyage",
             "minimax",
+            "cohere",
             "litellm",
         ]:
             raise ValueError(
                 f"Invalid embedding provider: '{self.provider}'. Must be one of: "
-                "'openai', 'azure', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'minimax', 'litellm'"
+                "'openai', 'azure', 'volcengine', 'vikingdb', 'jina', 'ollama', 'gemini', 'voyage', 'minimax', 'cohere', 'litellm'"
             )
 
         # Provider-specific validation
@@ -179,6 +180,10 @@ class EmbeddingModelConfig(BaseModel):
             if not self.api_key:
                 raise ValueError("MiniMax provider requires 'api_key' to be set")
 
+        elif self.provider == "cohere":
+            if not self.api_key:
+                raise ValueError("Cohere provider requires 'api_key' to be set")
+
         elif self.provider == "litellm":
             # litellm handles auth via env vars or explicit api_key; no strict requirement
             if not self.dimension:
@@ -201,6 +206,13 @@ class EmbeddingModelConfig(BaseModel):
             )
 
             return get_voyage_model_default_dimension(self.model)
+
+        if provider == "cohere":
+            from openviking.models.embedder.cohere_embedders import (
+                get_cohere_model_default_dimension,
+            )
+
+            return get_cohere_model_default_dimension(self.model)
 
         if provider == "gemini":
             from openviking.models.embedder.gemini_embedders import GeminiDenseEmbedder
@@ -298,6 +310,7 @@ class EmbeddingConfig(BaseModel):
             ValueError: If provider/type combination is not supported
         """
         from openviking.models.embedder import (
+            CohereDenseEmbedder,
             GeminiDenseEmbedder,
             JinaDenseEmbedder,
             LiteLLMDenseEmbedder,
@@ -462,6 +475,15 @@ class EmbeddingConfig(BaseModel):
                     **({"query_param": cfg.query_param} if cfg.query_param else {}),
                     **({"document_param": cfg.document_param} if cfg.document_param else {}),
                     **({"extra_headers": cfg.extra_headers} if cfg.extra_headers else {}),
+                },
+            ),
+            ("cohere", "dense"): (
+                CohereDenseEmbedder,
+                lambda cfg: {
+                    "model_name": cfg.model,
+                    "api_key": cfg.api_key,
+                    "api_base": cfg.api_base,
+                    "dimension": cfg.dimension,
                 },
             ),
             ("litellm", "dense"): (

@@ -1,17 +1,17 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Patch merge operation - SEARCH/REPLACE for strings, direct replace for others.
 """
 
-from typing import Any, Type, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Type
 
 from openviking.session.memory.merge_op.base import (
+    FieldType,
     MergeOp,
     MergeOpBase,
-    FieldType,
-    StrPatch,
     SearchReplaceBlock,
+    StrPatch,
     get_python_type_for_field,
 )
 
@@ -26,7 +26,7 @@ class PatchOp(MergeOpBase):
 
     def __init__(self, field_type: FieldType):
         self._field_type = field_type
-        self._patch_handler: 'MemoryPatchHandler | None' = None
+        self._patch_handler: "MemoryPatchHandler | None" = None
 
     def get_output_schema_type(self, field_type: FieldType) -> Type[Any]:
         if field_type == FieldType.STRING:
@@ -44,8 +44,7 @@ class PatchOp(MergeOpBase):
 
         For string fields (content):
         - StrPatch: use apply_str_patch()
-        - str with "<<<<<<< SEARCH": use MemoryPatchHandler
-        - other str: full replacement
+        - other: full replacement
 
         For non-string fields:
         - Just replace with patch_value
@@ -54,15 +53,12 @@ class PatchOp(MergeOpBase):
         if self._field_type != FieldType.STRING:
             return patch_value
 
-        # For string fields, handle various patch formats
-        from openviking.session.memory.merge_op.patch_handler import (
-            MemoryPatchHandler,
-            apply_str_patch,
-        )
+        # For string fields
+        from openviking.session.memory.merge_op.patch_handler import apply_str_patch
 
         current_str = current_value or ""
 
-        # Case 1: StrPatch object
+        # Case 1: StrPatch object - apply patch
         if isinstance(patch_value, StrPatch):
             return apply_str_patch(current_str, patch_value)
 
@@ -82,15 +78,8 @@ class PatchOp(MergeOpBase):
                 # If conversion fails, treat as simple replacement
                 return str(patch_value) if patch_value is not None else ""
 
-        # Case 3: string with SEARCH/REPLACE markers
-        if isinstance(patch_value, str):
-            if "<<<<<<< SEARCH" in patch_value:
-                if self._patch_handler is None:
-                    self._patch_handler = MemoryPatchHandler()
-                return self._patch_handler.apply_content_patch(current_str, patch_value)
-            else:
-                # Simple full replacement
-                return patch_value
-
-        # Fallback: just return patch_value as-is
+        # Case 3: Simple full replacement
+        # 空字符串和 None 都保持原值
+        if patch_value is None or patch_value == "":
+            return current_value
         return patch_value

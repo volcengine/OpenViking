@@ -208,6 +208,38 @@ async function resolveTargetUri(targetUri) {
   return `viking://${scope}/${space}/${parts.join("/")}`;
 }
 
+function markRecalledMemoriesUsed(contexts) {
+  const uniqueContexts = [...new Set(contexts.filter(uri => typeof uri === "string" && uri.length > 0))];
+  if (uniqueContexts.length === 0) return;
+
+  void (async () => {
+    const sessionResult = await fetchJSON("/api/v1/sessions", {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    if (!sessionResult?.session_id) return;
+
+    const sessionId = sessionResult.session_id;
+    try {
+      await fetchJSON(`/api/v1/sessions/${encodeURIComponent(sessionId)}/used`, {
+        method: "POST",
+        body: JSON.stringify({ contexts: uniqueContexts }),
+      });
+      await fetchJSON(`/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`, {
+        method: "POST",
+        body: JSON.stringify({}),
+      });
+      log("used_signal", { sessionId, count: uniqueContexts.length, uris: uniqueContexts });
+    } catch (err) {
+      logError("used_signal_failed", err);
+    } finally {
+      await fetchJSON(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, {
+        method: "DELETE",
+      }).catch(() => {});
+    }
+  })();
+}
+
 // ---------------------------------------------------------------------------
 // Search OpenViking
 // ---------------------------------------------------------------------------
@@ -331,6 +363,7 @@ async function main() {
   }
 
   log("picked", { pickedCount: memories.length, uris: memories.map(m => m.uri) });
+  markRecalledMemoriesUsed(memories.map(memory => memory.uri));
 
   // Read full content for leaf memories
   const lines = await Promise.all(

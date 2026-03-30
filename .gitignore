@@ -141,6 +141,7 @@ logs/
 *.temp
 .tmp/
 ov.conf
+result/
 
 # Jupyter Notebook
 .ipynb_checkpoints

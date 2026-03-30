@@ -1,27 +1,22 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Tests for MemoryUpdater.
 """
-from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from openviking.session.memory.memory_updater import (
-    MemoryUpdateResult,
-    MemoryUpdater,
-)
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
-from openviking.session.memory.dataclass import (
-    MemoryTypeSchema,
-    MemoryField,
+from openviking.session.memory.memory_updater import (
+    MemoryUpdater,
+    MemoryUpdateResult,
 )
 from openviking.session.memory.merge_op import (
     SearchReplaceBlock,
     StrPatch,
 )
-from openviking.session.memory.merge_op.base import FieldType
 from openviking.session.memory.utils import deserialize_full, serialize_with_metadata
 
 
@@ -139,23 +134,21 @@ Line 4"""
         updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
 
         # Create StrPatch
-        patch = StrPatch(blocks=[
-            SearchReplaceBlock(
-                search="Line 2\nLine 3",
-                replace="Line 2 modified\nLine 3 modified",
-                start_line=2
-            )
-        ])
+        patch = StrPatch(
+            blocks=[
+                SearchReplaceBlock(
+                    search="Line 2\nLine 3",
+                    replace="Line 2 modified\nLine 3 modified",
+                    start_line=2,
+                )
+            ]
+        )
 
         # Mock request context
         mock_ctx = MagicMock()
 
         # Apply edit
-        await updater._apply_edit(
-            {"content": patch},
-            "viking://test/test.md",
-            mock_ctx
-        )
+        await updater._apply_edit({"content": patch}, "viking://test/test.md", mock_ctx)
 
         # Verify
         assert written_content is not None
@@ -192,11 +185,7 @@ Goodbye"""
         # StrPatch as dict (this is what JSON parsing gives us)
         patch_dict = {
             "blocks": [
-                {
-                    "search": "This is a test",
-                    "replace": "This has been modified",
-                    "start_line": 2
-                }
+                {"search": "This is a test", "replace": "This has been modified", "start_line": 2}
             ]
         }
 
@@ -204,11 +193,7 @@ Goodbye"""
         mock_ctx = MagicMock()
 
         # Apply edit
-        await updater._apply_edit(
-            {"content": patch_dict},
-            "viking://test/test.md",
-            mock_ctx
-        )
+        await updater._apply_edit({"content": patch_dict}, "viking://test/test.md", mock_ctx)
 
         # Verify
         assert written_content is not None
@@ -216,57 +201,6 @@ Goodbye"""
         assert "Hello world" in body_content
         assert "This has been modified" in body_content
         assert "Goodbye" in body_content
-
-    @pytest.mark.asyncio
-    async def test_apply_edit_with_string_patch(self):
-        """Test _apply_edit with string patch containing <<<<<<< SEARCH."""
-        updater = MemoryUpdater()
-
-        # Original content
-        original_content = """First line
-Second line
-Third line"""
-        original_metadata = {"name": "test"}
-        original_full_content = serialize_with_metadata(original_content, original_metadata)
-
-        # Mock VikingFS
-        mock_viking_fs = MagicMock()
-        mock_viking_fs.read_file = AsyncMock(return_value=original_full_content)
-        written_content = None
-
-        async def mock_write_file(uri, content, **kwargs):
-            nonlocal written_content
-            written_content = content
-
-        mock_viking_fs.write_file = mock_write_file
-        updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
-
-        # String patch with SEARCH/REPLACE markers
-        patch_str = """<<<<<<< SEARCH
-:start_line:2
--------
-Second line
-=======
-Second line (updated)
->>>>>>> REPLACE
-"""
-
-        # Mock request context
-        mock_ctx = MagicMock()
-
-        # Apply edit
-        await updater._apply_edit(
-            {"content": patch_str},
-            "viking://test/test.md",
-            mock_ctx
-        )
-
-        # Verify
-        assert written_content is not None
-        body_content, metadata = deserialize_full(written_content)
-        assert "First line" in body_content
-        assert "Second line (updated)" in body_content
-        assert "Third line" in body_content
 
     @pytest.mark.asyncio
     async def test_apply_edit_with_simple_string_replacement(self):
@@ -297,11 +231,7 @@ Second line (updated)
         mock_ctx = MagicMock()
 
         # Apply edit
-        await updater._apply_edit(
-            {"content": new_content},
-            "viking://test/test.md",
-            mock_ctx
-        )
+        await updater._apply_edit({"content": new_content}, "viking://test/test.md", mock_ctx)
 
         # Verify
         assert written_content is not None

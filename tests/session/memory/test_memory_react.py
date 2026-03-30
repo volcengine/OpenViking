@@ -1,22 +1,19 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
-Tests for memory ReAct orchestrator.
+Tests for memory ExtractLoop orchestrator.
 """
 
-import json
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from openviking.session.memory.memory_react import (
-    MemoryReAct,
-)
 from openviking.session.memory.dataclass import (
     MemoryTypeSchema,
-    MemoryField,
 )
-from openviking.session.memory.merge_op.base import FieldType, MergeOp
+from openviking.session.memory.extract_loop import (
+    ExtractLoop,
+)
 
 
 class TestPreFetchFileFiltering:
@@ -133,8 +130,9 @@ class TestPreFetchFileFiltering:
             if filename_template:
                 has_variables = "{" in filename_template and "}" in filename_template
 
-            assert has_variables == expected_has_variables, \
+            assert has_variables == expected_has_variables, (
                 f"Template '{filename_template}': expected has_variables={expected_has_variables}"
+            )
 
 
 class TestAllowedDirectoriesList:
@@ -157,7 +155,9 @@ class TestAllowedDirectoriesList:
     def test_get_allowed_directories_list(self, mock_vlm, mock_viking_fs):
         """Test that allowed directories list is properly formatted."""
         # Patch the registry loading so we can inject our own schemas
-        with patch('openviking.session.memory.memory_react.MemoryTypeRegistry') as mock_registry_cls:
+        with patch(
+            "openviking.session.memory.extract_loop.MemoryTypeRegistry"
+        ) as mock_registry_cls:
             mock_registry = MagicMock()
 
             # Create test schemas
@@ -180,9 +180,10 @@ class TestAllowedDirectoriesList:
             mock_registry_cls.return_value = mock_registry
 
             # Also patch schema_model_generator and schema_prompt_generator
-            with patch('openviking.session.memory.memory_react.SchemaModelGenerator') as mock_smg, \
-                 patch('openviking.session.memory.memory_react.SchemaPromptGenerator') as mock_spg:
-
+            with (
+                patch("openviking.session.memory.extract_loop.SchemaModelGenerator") as mock_smg,
+                patch("openviking.session.memory.extract_loop.SchemaPromptGenerator") as mock_spg,
+            ):
                 mock_smg_instance = MagicMock()
                 mock_smg_instance.generate_all_models = MagicMock()
                 mock_smg_instance.get_llm_json_schema = MagicMock(return_value={})
@@ -190,11 +191,11 @@ class TestAllowedDirectoriesList:
 
                 mock_spg.return_value = MagicMock()
 
-                # Create MemoryReAct
-                react = MemoryReAct(mock_vlm, mock_viking_fs)
+                # Create ExtractLoop
+                extract_loop = ExtractLoop(mock_vlm, mock_viking_fs)
 
                 # Call the method
-                result = react._get_allowed_directories_list()
+                result = extract_loop._get_allowed_directories_list()
 
                 # Verify the result contains the expected directories with variables replaced
                 assert "viking://user/default/memories/preferences" in result

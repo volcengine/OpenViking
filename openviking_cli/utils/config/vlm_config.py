@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field, model_validator
@@ -192,7 +192,9 @@ class VLMConfig(BaseModel):
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, Any]:
         """Get LLM completion asynchronously, max_retries=0 means no retry."""
-        return await self.get_vlm_instance().get_completion_async(prompt, thinking, max_retries, tools, messages)
+        return await self.get_vlm_instance().get_completion_async(
+            prompt, thinking, max_retries, tools, messages
+        )
 
     def is_available(self) -> bool:
         """Check if LLM is configured."""
@@ -207,7 +209,9 @@ class VLMConfig(BaseModel):
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, Any]:
         """Get LLM completion with images."""
-        return self.get_vlm_instance().get_vision_completion(prompt, images, thinking, tools, messages)
+        return self.get_vlm_instance().get_vision_completion(
+            prompt, images, thinking, tools, messages
+        )
 
     async def get_vision_completion_async(
         self,
@@ -218,4 +222,6 @@ class VLMConfig(BaseModel):
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, Any]:
         """Get LLM completion with images asynchronously."""
-        return await self.get_vlm_instance().get_vision_completion_async(prompt, images, thinking, tools, messages)
+        return await self.get_vlm_instance().get_vision_completion_async(
+            prompt, images, thinking, tools, messages
+        )

@@ -58,6 +58,26 @@ class PathLock:
         path = path.rstrip("/")
         return f"{path}/{LOCK_FILE_NAME}"
 
+    def _ensure_directory_exists(self, path: str):
+        """确保目录存在，不存在则创建"""
+        try:
+            # 检查路径是否存在
+            self._agfs.stat(path)
+        except Exception:
+            # 路径不存在，尝试创建目录
+            try:
+                parent = self._get_parent_path(path)
+                if parent:
+                    # 递归创建父目录
+                    self._ensure_directory_exists(parent)
+                # 创建当前目录
+                self._agfs.mkdir(path)
+                logger.debug(f"Directory created: {path}")
+            except Exception as e:
+                logger.warning(f"Failed to create directory {path}: {e}")
+                return False
+        return True
+
     def _get_parent_path(self, path: str) -> Optional[str]:
         path = path.rstrip("/")
         if "/" not in path:
@@ -154,15 +174,19 @@ class PathLock:
             logger.warning(f"Failed to scan descendants of {path}: {e}")
         return None
 
-    async def acquire_point(self, path: str, owner: LockOwner, timeout: float = 0.0) -> bool:
+    async def acquire_point(self, path: str, owner: LockOwner, timeout: Optional[float] = 0.0) -> bool:
         owner_id = owner.id
         lock_path = self._get_lock_path(path)
-        deadline = asyncio.get_running_loop().time() + timeout
+        if timeout is None:
+            # 无限等待
+            deadline = float('inf')
+        else:
+            # 有限超时
+            deadline = asyncio.get_running_loop().time() + timeout
 
-        try:
-            self._agfs.stat(path)
-        except Exception:
-            logger.warning(f"[POINT] Directory does not exist: {path}")
+        # 确保目录存在
+        if not self._ensure_directory_exists(path):
+            logger.warning(f"[POINT] Failed to ensure directory exists: {path}")
             return False
 
         while True:
@@ -231,15 +255,19 @@ class PathLock:
             logger.debug(f"[POINT] Lock acquired: {lock_path}")
             return True
 
-    async def acquire_subtree(self, path: str, owner: LockOwner, timeout: float = 0.0) -> bool:
+    async def acquire_subtree(self, path: str, owner: LockOwner, timeout: Optional[float] = 0.0) -> bool:
         owner_id = owner.id
         lock_path = self._get_lock_path(path)
-        deadline = asyncio.get_running_loop().time() + timeout
+        if timeout is None:
+            # 无限等待
+            deadline = float('inf')
+        else:
+            # 有限超时
+            deadline = asyncio.get_running_loop().time() + timeout
 
-        try:
-            self._agfs.stat(path)
-        except Exception:
-            logger.warning(f"[SUBTREE] Directory does not exist: {path}")
+        # 确保目录存在
+        if not self._ensure_directory_exists(path):
+            logger.warning(f"[SUBTREE] Failed to ensure directory exists: {path}")
             return False
 
         while True:
@@ -330,7 +358,7 @@ class PathLock:
         src_path: str,
         dst_parent_path: str,
         owner: LockOwner,
-        timeout: float = 0.0,
+        timeout: Optional[float] = 0.0,
         src_is_dir: bool = True,
     ) -> bool:
         """Acquire locks for a move operation.

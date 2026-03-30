@@ -91,6 +91,12 @@ import openviking as ov
 client = ov.SyncHTTPClient(url="http://localhost:1933")
 ```
 
+> **多租户认证**：如果服务端启用了认证，请使用 `user_key`（推荐）：
+> ```python
+> client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="<user-key>")
+> ```
+> `root_key` 不能直接用于 `add_resource`、`find` 等租户级 API，必须同时传入 `account` 和 `user`。详见 [认证文档](../../docs/zh/guides/04-authentication.md) 和 [快速开始：服务端模式](../../docs/zh/getting-started/03-quickstart-server.md)。
+
 ### 添加资源
 
 添加 URL、本地文件或目录：

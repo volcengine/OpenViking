@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 VikingDB Rerank API Client.
 
@@ -156,12 +156,19 @@ class RerankClient:
         if not config or not config.is_available():
             return None
 
-        if config.provider == "litellm":
+        provider = config._effective_provider()
+
+        if provider == "cohere":
+            from openviking_cli.utils.cohere_rerank import CohereRerankClient
+
+            return CohereRerankClient.from_config(config)
+
+        if provider == "litellm":
             from openviking_cli.utils.rerank_litellm import LiteLLMRerankClient
 
             return LiteLLMRerankClient.from_config(config)
 
-        if config.provider == "openai":
+        if provider == "openai":
             from openviking_cli.utils.rerank_openai import OpenAIRerankClient
 
             return OpenAIRerankClient.from_config(config)

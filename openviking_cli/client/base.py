@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Base client interface for OpenViking.
 
 Defines the abstract base class that both LocalClient and AsyncHTTPClient implement.
@@ -237,6 +237,7 @@ class BaseClient(ABC):
         role: str,
         content: str | None = None,
         parts: list[dict] | None = None,
+        created_at: str | None = None,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 
@@ -245,6 +246,7 @@ class BaseClient(ABC):
             role: Message role ("user" or "assistant")
             content: Text content (simple mode)
             parts: Parts array (full Part support: TextPart, ContextPart, ToolPart)
+            created_at: Message creation time (ISO format string)
 
         If both content and parts are provided, parts takes precedence.
         """

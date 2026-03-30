@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 LLM utilities for OpenViking.
 
@@ -33,7 +33,7 @@ def parse_json_from_response(response: Union[str, Any]) -> Optional[Any]:
         Optional[Any]: Parsed JSON object, None if parsing fails
     """
     # Handle VLMResponse - extract content
-    if hasattr(response, 'content'):
+    if hasattr(response, "content"):
         response = response.content
 
     if response is None:
@@ -199,7 +199,9 @@ class StructuredVLM:
         if schema and not messages:
             prompt = f"{prompt}\n\n{get_json_schema_prompt(schema)}"
 
-        response = await self._get_vlm().get_completion_async(prompt, thinking, max_retries, tools, messages)
+        response = await self._get_vlm().get_completion_async(
+            prompt, thinking, max_retries, tools, messages
+        )
         return parse_json_from_response(response)
 
     def complete_model(
@@ -261,4 +263,6 @@ class StructuredVLM:
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, Any]:
         """Async vision completion."""
-        return await self._get_vlm().get_vision_completion_async(prompt, images, thinking, tools, messages)
+        return await self._get_vlm().get_vision_completion_async(
+            prompt, images, thinking, tools, messages
+        )

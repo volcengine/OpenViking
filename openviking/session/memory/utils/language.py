@@ -1,11 +1,10 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Language detection utilities.
 """
 
 import re
-from typing import Optional
 
 from openviking_cli.utils import get_logger
 

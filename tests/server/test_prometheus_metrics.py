@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 
 """Tests for the Prometheus metrics exporter."""
 
@@ -120,9 +120,7 @@ class TestMetricsEndpoint:
             assert resp.status_code == 404
 
     async def test_metrics_enabled_returns_200(self):
-        config = ServerConfig(
-            telemetry=TelemetryConfig(prometheus=PrometheusConfig(enabled=True))
-        )
+        config = ServerConfig(telemetry=TelemetryConfig(prometheus=PrometheusConfig(enabled=True)))
         app = create_app(config=config, service=None)
         # Simulate lifespan setting the observer on app.state
         obs = PrometheusObserver()

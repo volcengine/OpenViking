@@ -1,18 +1,18 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """OpenAI Embedder Implementation"""
 
 from typing import Any, Dict, List, Optional
 
 import openai
 
-from openviking.models.vlm.registry import DEFAULT_AZURE_API_VERSION
 from openviking.models.embedder.base import (
     DenseEmbedderBase,
     EmbedResult,
     HybridEmbedderBase,
     SparseEmbedderBase,
 )
+from openviking.models.vlm.registry import DEFAULT_AZURE_API_VERSION
 from openviking.telemetry import get_current_telemetry
 
 

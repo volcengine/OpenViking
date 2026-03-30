@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Isolated unit tests for directory-import parser routing and path mapping.
 
 This script verifies **two independent concerns** without invoking the full

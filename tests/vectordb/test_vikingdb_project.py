@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 import unittest
 
 from openviking.storage.vectordb.project.vikingdb_project import get_or_create_vikingdb_project

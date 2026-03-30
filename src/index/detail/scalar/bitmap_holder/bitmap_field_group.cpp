@@ -1,5 +1,5 @@
 // Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-// SPDX-License-Identifier: Apache-2.0
+// SPDX-License-Identifier: AGPL-3.0
 #include "bitmap_field_group.h"
 #include "index/detail/scalar/bitmap_holder/dir_index.h"
 #include "common/io_utils.h"

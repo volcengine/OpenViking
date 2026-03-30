@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 OpenViking Service Core.
 
@@ -21,7 +21,7 @@ from openviking.service.relation_service import RelationService
 from openviking.service.resource_service import ResourceService
 from openviking.service.search_service import SearchService
 from openviking.service.session_service import SessionService
-from openviking.session import create_session_compressor, SessionCompressor
+from openviking.session import SessionCompressor, create_session_compressor
 from openviking.storage import VikingDBManager
 from openviking.storage.collection_schemas import init_context_collection
 from openviking.storage.queuefs.queue_manager import QueueManager, init_queue_manager

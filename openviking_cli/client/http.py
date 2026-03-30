@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Async HTTP Client for OpenViking.
 
 Implements BaseClient interface using HTTP calls to OpenViking Server.
@@ -759,6 +759,7 @@ class AsyncHTTPClient(BaseClient):
         role: str,
         content: str | None = None,
         parts: list[dict] | None = None,
+        created_at: str | None = None,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 
@@ -767,6 +768,7 @@ class AsyncHTTPClient(BaseClient):
             role: Message role ("user" or "assistant")
             content: Text content (simple mode, backward compatible)
             parts: Parts array (full Part support mode)
+            created_at: Message creation time (ISO format string)
 
         If both content and parts are provided, parts takes precedence.
         """
@@ -777,6 +779,9 @@ class AsyncHTTPClient(BaseClient):
             payload["content"] = content
         else:
             raise ValueError("Either content or parts must be provided")
+
+        if created_at is not None:
+            payload["created_at"] = created_at
 
         response = await self._http.post(
             f"/api/v1/sessions/{session_id}/messages",
