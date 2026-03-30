@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Test for SessionCompressorV2.
 
@@ -8,7 +8,7 @@ Uses MockVikingFS and real VLM (from config).
 
 import logging
 from types import SimpleNamespace
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 from unittest.mock import patch
 
 import pytest
@@ -275,7 +275,6 @@ def create_test_conversation() -> List[Message]:
 class TestCompressorV2:
     """Tests for SessionCompressorV2."""
 
-
     @pytest.mark.asyncio
     async def test_extract_long_term_memories_includes_latest_archive_overview(self):
         """Latest archive overview should be prepended to the v2 conversation context."""
@@ -294,6 +293,7 @@ class TestCompressorV2:
                 class DummyProvider:
                     def get_memory_schemas(self, ctx):
                         return []
+
                 return DummyProvider()
 
             async def run(self):
@@ -330,7 +330,6 @@ class TestCompressorV2:
 
         assert result == []
         # Note: latest_archive_overview 功能已移除，测试需要更新
-
 
     @pytest.mark.integration
     @pytest.mark.asyncio

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Local Client for OpenViking.
 
 Implements BaseClient interface using direct service calls (embedded mode).
@@ -398,6 +398,7 @@ class LocalClient(BaseClient):
         If both content and parts are provided, parts takes precedence.
         """
         from datetime import datetime
+
         from openviking.message.part import Part, TextPart, part_from_dict
 
         session = self._service.sessions.session(self._ctx, session_id)

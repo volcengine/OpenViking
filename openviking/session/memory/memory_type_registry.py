@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Memory type registry - loads YAML configurations.
 """
@@ -76,7 +76,9 @@ class MemoryTypeRegistry:
         uris = []
         for schema in self.list_all(include_disabled=False):
             if schema.directory:
-                dir_path = schema.directory.replace("{user_space}", user_space).replace("{agent_space}", agent_space)
+                dir_path = schema.directory.replace("{user_space}", user_space).replace(
+                    "{agent_space}", agent_space
+                )
                 uris.append(dir_path)
         return uris
 
@@ -150,7 +152,6 @@ class MemoryTypeRegistry:
             enabled=data.get("enabled", data.get("enable", True)),
             operation_mode=data.get("operation_mode", "upsert"),
         )
-
 
 
 def create_default_registry(schemas_dir: Optional[str] = None) -> MemoryTypeRegistry:

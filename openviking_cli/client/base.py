@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Base client interface for OpenViking.
 
 Defines the abstract base class that both LocalClient and AsyncHTTPClient implement.

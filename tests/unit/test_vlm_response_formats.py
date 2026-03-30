@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Tests for VLM response format handling (Issue #801)."""
 
 from types import SimpleNamespace
@@ -50,14 +50,12 @@ class TestVLMBaseResponseFormats:
         )
 
     def test_extract_content_from_str_response(self, vlm):
-        assert vlm._extract_content_from_response("plain string response") == "plain string response"
+        assert (
+            vlm._extract_content_from_response("plain string response") == "plain string response"
+        )
 
     def test_extract_content_from_standard_openai_response(self, vlm):
         response = SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(content="standard response content")
-                )
-            ]
+            choices=[SimpleNamespace(message=SimpleNamespace(content="standard response content"))]
         )
         assert vlm._extract_content_from_response(response) == "standard response content"

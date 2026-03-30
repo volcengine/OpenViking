@@ -687,14 +687,19 @@ OpenViking 仍处于早期阶段，有许多改进和探索的空间。我们真
 
 ## 许可证
 
-本项目采用 Apache License 2.0 许可证 - 详情请参见 [LICENSE](./LICENSE) 文件。
+OpenViking 项目不同组件采用不同的开源协议：
+
+- **主项目**: AGPLv3 - 详情请参见 [LICENSE](./LICENSE) 文件
+- **crates/ov_cli**: Apache 2.0 - 详情请参见 [LICENSE](./crates/ov_cli/LICENSE) 文件
+- **examples**: Apache 2.0 - 详情请参见 [LICENSE](./examples/LICENSE) 文件
+- **third_party**: 保留各三方项目的原有协议
 
 
 <!-- Link Definitions -->
 
 [release-shield]: https://img.shields.io/github/v/release/volcengine/OpenViking?color=369eff&labelColor=black&logo=github&style=flat-square
 [release-link]: https://github.com/volcengine/OpenViking/releases
-[license-shield]: https://img.shields.io/badge/license-apache%202.0-white?labelColor=black&style=flat-square
+[license-shield]: https://img.shields.io/badge/license-AGPLv3-white?labelColor=black&style=flat-square
 [license-shield-link]: https://github.com/volcengine/OpenViking/blob/main/LICENSE
 [last-commit-shield]: https://img.shields.io/github/last-commit/volcengine/OpenViking?color=c4f042&labelColor=black&style=flat-square
 [last-commit-shield-link]: https://github.com/volcengine/OpenViking/commcommits/main

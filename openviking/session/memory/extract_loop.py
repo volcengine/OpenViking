@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Simplified ReAct orchestrator for memory updates - single LLM call with tool use.
 
@@ -10,34 +10,28 @@ import asyncio
 import json
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from openviking.message import Message
 from openviking.models.vlm.base import VLMBase
 from openviking.server.identity import RequestContext
 from openviking.session.memory.dataclass import MemoryOperations
-from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.schema_model_generator import (
     SchemaModelGenerator,
     SchemaPromptGenerator,
 )
 from openviking.session.memory.tools import (
+    MEMORY_TOOLS_REGISTRY,
     add_tool_call_pair_to_messages,
     get_tool,
-    get_tool_schemas,
-    MEMORY_TOOLS_REGISTRY,
 )
 from openviking.session.memory.utils import (
     parse_json_with_stability,
     parse_memory_file_with_fields,
     pretty_print_messages,
-    truncate_content,
     validate_operations_uris,
 )
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
 from openviking_cli.utils import get_logger
-from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
-
 
 
 class ExtractLoop:
@@ -93,8 +87,6 @@ class ExtractLoop:
         # Transaction handle for file locking
         self._transaction_handle = None
 
-
-
     async def run(self) -> Tuple[Optional[MemoryOperations], List[Dict[str, Any]]]:
         """
         Run the simplified ReAct loop for memory updates.
@@ -118,41 +110,48 @@ class ExtractLoop:
 
         # 预计算工具 schemas
         allowed_tools = self.context_provider.get_tools()
-        self._tool_schemas = [tool.to_schema() for tool in MEMORY_TOOLS_REGISTRY.values() if tool.name in allowed_tools]
+        self._tool_schemas = [
+            tool.to_schema()
+            for tool in MEMORY_TOOLS_REGISTRY.values()
+            if tool.name in allowed_tools
+        ]
 
         # 预计算 expected_fields
-        self._expected_fields = ['reasoning', 'edit_overview_uris', 'delete_uris']
+        self._expected_fields = ["reasoning", "edit_overview_uris", "delete_uris"]
         for schema in schemas:
             self._expected_fields.append(schema.memory_type)
 
         # 预计算 operations_model
         self._operations_model = self.schema_model_generator.create_structured_operations_model()
 
-
-
         # Reset read files tracking for this run
         self._read_files.clear()
 
         # Build initial messages from provider
         import json
+
         schema_str = json.dumps(self._json_schema, ensure_ascii=False)
 
         messages = []
         # instruction() 返回字符串，需要包装成 message 格式
-        messages.append({
-            "role": "system",
-            "content": self.context_provider.instruction(),
-        })
-        messages.append({
-            "role":"system",
-            "content":f"""
+        messages.append(
+            {
+                "role": "system",
+                "content": self.context_provider.instruction(),
+            }
+        )
+        messages.append(
+            {
+                "role": "system",
+                "content": f"""
 ## Output Format
 See the complete JSON Schema below:
 ```json
 {schema_str}
 ```
-        """
-        })
+        """,
+            }
+        )
 
         await self._mark_cache_breakpoint(messages)
         # Pre-fetch context via provider
@@ -173,15 +172,16 @@ See the complete JSON Schema below:
 
             # If last iteration, add a message telling the model to return result directly
             if is_last_iteration:
-                messages.append({
-                    "role": "user",
-                    "content": "You have reached the maximum number of tool call iterations. Do not call any more tools - return your final result directly now."
-                })
+                messages.append(
+                    {
+                        "role": "user",
+                        "content": "You have reached the maximum number of tool call iterations. Do not call any more tools - return your final result directly now.",
+                    }
+                )
 
             # Call LLM with tools - model decides: tool calls OR final operations
             pretty_print_messages(messages)
             tool_calls, operations = await self._call_llm(messages, force_final=is_last_iteration)
-
 
             if tool_calls:
                 await self._execute_tool_calls(messages, tool_calls, tools_used)
@@ -207,7 +207,9 @@ See the complete JSON Schema below:
                 final_operations = operations
                 break
             # If no tool calls either, continue to next iteration (don't break!)
-            logger.warning(f"LLM returned neither tool calls nor operations (iteration {iteration}/{max_iterations})")
+            logger.warning(
+                f"LLM returned neither tool calls nor operations (iteration {iteration}/{max_iterations})"
+            )
             # If it's the last iteration, use empty operations
             if is_last_iteration:
                 final_operations = MemoryOperations()
@@ -215,14 +217,13 @@ See the complete JSON Schema below:
             # Otherwise continue and try again
             continue
 
-
         if final_operations is None:
             if iteration >= max_iterations:
                 raise RuntimeError(f"Reached {max_iterations} iterations without completion")
             else:
                 raise RuntimeError("ReAct loop completed but no operations generated")
 
-        logger.info(f'final_operations={final_operations.model_dump_json(indent=4)}')
+        logger.info(f"final_operations={final_operations.model_dump_json(indent=4)}")
 
         return final_operations, tools_used
 
@@ -234,8 +235,7 @@ See the complete JSON Schema below:
             return idx, tool_call, result
 
         action_tasks = [
-            execute_single_tool_call(idx, tool_call)
-            for idx, tool_call in enumerate(tool_calls)
+            execute_single_tool_call(idx, tool_call) for idx, tool_call in enumerate(tool_calls)
         ]
         results = await self._execute_in_parallel(action_tasks)
 
@@ -246,11 +246,13 @@ See the complete JSON Schema below:
                 logger.warning(f"Tool call {tool_call.name} has no arguments, skipping")
                 continue
 
-            tools_used.append({
-                "tool_name": tool_call.name,
-                "params": tool_call.arguments,
-                "result": result,
-            })
+            tools_used.append(
+                {
+                    "tool_name": tool_call.name,
+                    "params": tool_call.arguments,
+                    "result": result,
+                }
+            )
 
             # Track read tool calls for refetch detection
             if tool_call.name == "read" and tool_call.arguments.get("uri"):
@@ -316,15 +318,23 @@ See the complete JSON Schema below:
         )
         # print(f'response={response}')
         # Log cache hit info
-        if hasattr(response, 'usage') and response.usage:
+        if hasattr(response, "usage") and response.usage:
             usage = response.usage
-            prompt_tokens = usage.get('prompt_tokens', 0)
-            cached_tokens = usage.get('prompt_tokens_details', {}).get('cached_tokens', 0) if isinstance(usage.get('prompt_tokens_details'), dict) else 0
+            prompt_tokens = usage.get("prompt_tokens", 0)
+            cached_tokens = (
+                usage.get("prompt_tokens_details", {}).get("cached_tokens", 0)
+                if isinstance(usage.get("prompt_tokens_details"), dict)
+                else 0
+            )
             if prompt_tokens > 0:
                 cache_hit_rate = (cached_tokens / prompt_tokens) * 100
-                logger.info(f"[KVCache] prompt_tokens={prompt_tokens}, cached_tokens={cached_tokens}, cache_hit_rate={cache_hit_rate:.1f}%")
+                logger.info(
+                    f"[KVCache] prompt_tokens={prompt_tokens}, cached_tokens={cached_tokens}, cache_hit_rate={cache_hit_rate:.1f}%"
+                )
             else:
-                logger.info(f"[KVCache] prompt_tokens={prompt_tokens}, cached_tokens={cached_tokens}")
+                logger.info(
+                    f"[KVCache] prompt_tokens={prompt_tokens}, cached_tokens={cached_tokens}"
+                )
 
         # Case 1: LLM returned tool calls
         if response.has_tool_calls:
@@ -349,7 +359,7 @@ See the complete JSON Schema below:
                 )
 
                 if error is not None:
-                    print(f'content={content}')
+                    print(f"content={content}")
                     logger.warning(f"Failed to parse memory operations: {error}")
                     return (None, None)
 
@@ -357,11 +367,11 @@ See the complete JSON Schema below:
                 self._validate_operations(operations)
                 return (None, operations)
             except Exception as e:
-                print(f'Error parsing operations: {e}')
+                print(f"Error parsing operations: {e}")
                 logger.warning(f"Unexpected error parsing memory operations: {e}")
 
         # Case 3: No tool calls and no parsable operations
-        print('No tool calls or operations parsed')
+        print("No tool calls or operations parsed")
         return (None, None)
 
     async def _execute_tool(
@@ -378,10 +388,8 @@ See the complete JSON Schema below:
 
         # 创建 ToolContext
         from openviking.server.identity import ToolContext
-        tool_ctx = ToolContext(
-            request_ctx=self.ctx,
-            transaction_handle=self._transaction_handle
-        )
+
+        tool_ctx = ToolContext(request_ctx=self.ctx, transaction_handle=self._transaction_handle)
 
         try:
             result = await tool.execute(self.viking_fs, tool_ctx, **tool_call.arguments)
@@ -402,7 +410,7 @@ See the complete JSON Schema below:
         operations: MemoryOperations,
     ) -> List[str]:
         """Check if write operations target existing files that weren't read during ReAct."""
-        memory_type_fields = getattr(operations, '_memory_type_fields', None)
+        memory_type_fields = getattr(operations, "_memory_type_fields", None)
         if not memory_type_fields:
             return []
 
@@ -418,9 +426,11 @@ See the complete JSON Schema below:
             items = value if isinstance(value, list) else [value]
             for item in items:
                 # Convert to dict
-                item_dict = dict(item) if hasattr(item, 'model_dump') else dict(item)
+                item_dict = dict(item) if hasattr(item, "model_dump") else dict(item)
                 try:
-                    uri = resolve_flat_model_uri(item_dict, registry, "default", "default", memory_type=field_name)
+                    uri = resolve_flat_model_uri(
+                        item_dict, registry, "default", "default", memory_type=field_name
+                    )
                 except Exception as e:
                     logger.warning(f"Failed to resolve URI for {item}: {e}")
                     continue
@@ -464,10 +474,12 @@ See the complete JSON Schema below:
                 logger.warning(f"Failed to refetch {uri}: {e}")
 
         # Add reminder message for the model
-        messages.append({
-            "role": "user",
-            "content": "Note: The files above were automatically read because they exist and you didn't read them before deciding to write. Please consider the existing content when making write decisions. You can now output updated operations."
-        })
+        messages.append(
+            {
+                "role": "user",
+                "content": "Note: The files above were automatically read because they exist and you didn't read them before deciding to write. Please consider the existing content when making write decisions. You can now output updated operations.",
+            }
+        )
 
     async def _mark_cache_breakpoint(self, messages):
         # 支持 dict 消息和 object 消息

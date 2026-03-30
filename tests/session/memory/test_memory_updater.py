@@ -1,27 +1,22 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Tests for MemoryUpdater.
 """
-from datetime import datetime
-from unittest.mock import AsyncMock, MagicMock, patch
+
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from openviking.session.memory.memory_updater import (
-    MemoryUpdateResult,
-    MemoryUpdater,
-)
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
-from openviking.session.memory.dataclass import (
-    MemoryTypeSchema,
-    MemoryField,
+from openviking.session.memory.memory_updater import (
+    MemoryUpdater,
+    MemoryUpdateResult,
 )
 from openviking.session.memory.merge_op import (
     SearchReplaceBlock,
     StrPatch,
 )
-from openviking.session.memory.merge_op.base import FieldType
 from openviking.session.memory.utils import deserialize_full, serialize_with_metadata
 
 
@@ -139,23 +134,21 @@ Line 4"""
         updater._get_viking_fs = MagicMock(return_value=mock_viking_fs)
 
         # Create StrPatch
-        patch = StrPatch(blocks=[
-            SearchReplaceBlock(
-                search="Line 2\nLine 3",
-                replace="Line 2 modified\nLine 3 modified",
-                start_line=2
-            )
-        ])
+        patch = StrPatch(
+            blocks=[
+                SearchReplaceBlock(
+                    search="Line 2\nLine 3",
+                    replace="Line 2 modified\nLine 3 modified",
+                    start_line=2,
+                )
+            ]
+        )
 
         # Mock request context
         mock_ctx = MagicMock()
 
         # Apply edit
-        await updater._apply_edit(
-            {"content": patch},
-            "viking://test/test.md",
-            mock_ctx
-        )
+        await updater._apply_edit({"content": patch}, "viking://test/test.md", mock_ctx)
 
         # Verify
         assert written_content is not None
@@ -192,11 +185,7 @@ Goodbye"""
         # StrPatch as dict (this is what JSON parsing gives us)
         patch_dict = {
             "blocks": [
-                {
-                    "search": "This is a test",
-                    "replace": "This has been modified",
-                    "start_line": 2
-                }
+                {"search": "This is a test", "replace": "This has been modified", "start_line": 2}
             ]
         }
 
@@ -204,11 +193,7 @@ Goodbye"""
         mock_ctx = MagicMock()
 
         # Apply edit
-        await updater._apply_edit(
-            {"content": patch_dict},
-            "viking://test/test.md",
-            mock_ctx
-        )
+        await updater._apply_edit({"content": patch_dict}, "viking://test/test.md", mock_ctx)
 
         # Verify
         assert written_content is not None
@@ -246,11 +231,7 @@ Goodbye"""
         mock_ctx = MagicMock()
 
         # Apply edit
-        await updater._apply_edit(
-            {"content": new_content},
-            "viking://test/test.md",
-            mock_ctx
-        )
+        await updater._apply_edit({"content": new_content}, "viking://test/test.md", mock_ctx)
 
         # Verify
         assert written_content is not None

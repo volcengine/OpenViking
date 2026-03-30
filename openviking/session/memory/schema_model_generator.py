@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Dynamic Pydantic model generator based on YAML schemas.
 
@@ -8,17 +8,14 @@ definitions, with discriminator support for polymorphic fields.
 """
 
 import re
-from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple, Type, Union
 
 from pydantic import BaseModel, Field, create_model
 from pydantic.config import ConfigDict
-from typing_extensions import Annotated, Literal
 
 from openviking.session.memory.dataclass import FaultTolerantBaseModel, MemoryTypeSchema
 from openviking.session.memory.merge_op import MergeOp, MergeOpFactory
 from openviking.session.memory.merge_op.base import FieldType, StrPatch, get_python_type_for_field
-from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -185,8 +182,7 @@ class SchemaModelGenerator:
         # Create union of flat data models
         enabled_memory_types = self.schemas
         flat_model_union_types = tuple(
-            self._flat_data_models[mt.memory_type]
-            for mt in enabled_memory_types
+            self._flat_data_models[mt.memory_type] for mt in enabled_memory_types
         )
 
         if flat_model_union_types:
@@ -195,12 +191,15 @@ class SchemaModelGenerator:
             # Fallback if no types are enabled
             class GenericMemoryData(BaseModel):
                 """Generic memory data (fallback)."""
+
                 memory_type: str = Field(..., description="Memory type identifier")
+
             FlatDataUnion = GenericMemoryData  # type: ignore
 
         # Wrap the union in a BaseModel for JSON schema generation
         class MemoryDataWrapper(BaseModel):
             """Wrapper model for memory data union."""
+
             data: FlatDataUnion = Field(..., description="Memory data")  # type: ignore
 
             model_config = ConfigDict(extra="forbid")
@@ -245,7 +244,7 @@ class SchemaModelGenerator:
 
         field_definitions["reasoning"] = (
             str,
-            Field('', description="reasoning"),
+            Field("", description="reasoning"),
         )
 
         for mt in enabled_memory_types:
@@ -262,15 +261,22 @@ class SchemaModelGenerator:
                 # List: List[FlatModel] = []
                 field_definitions[mt.memory_type] = (
                     List[flat_model],  # type: ignore
-                    Field(default_factory=list, description=f"{mt.memory_type} memories (add or edit)"),
+                    Field(
+                        default_factory=list, description=f"{mt.memory_type} memories (add or edit)"
+                    ),
                 )
 
         # Use single generic model for overview edit (same for all memory types)
-        generic_overview_edit = self.create_overview_edit_model(enabled_memory_types[0] if enabled_memory_types else None)
+        generic_overview_edit = self.create_overview_edit_model(
+            enabled_memory_types[0] if enabled_memory_types else None
+        )
 
         field_definitions["edit_overview_uris"] = (
             List[generic_overview_edit],  # type: ignore
-            Field(default_factory=list, description="Edit operations for .overview.md files using memory_type"),
+            Field(
+                default_factory=list,
+                description="Edit operations for .overview.md files using memory_type",
+            ),
         )
 
         field_definitions["delete_uris"] = (
@@ -280,8 +286,8 @@ class SchemaModelGenerator:
 
         # Create model using create_model
         StructuredMemoryOperations = create_model(
-            'StructuredMemoryOperations',
-            __config__=ConfigDict(extra='ignore'),
+            "StructuredMemoryOperations",
+            __config__=ConfigDict(extra="ignore"),
             __base__=FaultTolerantBaseModel,
             **field_definitions,
         )
@@ -298,10 +304,7 @@ class SchemaModelGenerator:
                     else:
                         # Single value (not None)
                         return False
-            return (
-                len(self.edit_overview_uris) == 0
-                and len(self.delete_uris) == 0
-            )
+            return len(self.edit_overview_uris) == 0 and len(self.delete_uris) == 0
 
         def to_legacy_operations(self) -> Dict[str, Any]:
             """Convert new per-type structure to legacy write_uris/edit_uris format."""
@@ -314,12 +317,12 @@ class SchemaModelGenerator:
                     continue
                 if isinstance(value, list):
                     for item in value:
-                        if hasattr(item, 'uri') and item.uri:
+                        if hasattr(item, "uri") and item.uri:
                             edit_uris.append(item)
                         else:
                             write_uris.append(item)
                 else:
-                    if hasattr(value, 'uri') and value.uri:
+                    if hasattr(value, "uri") and value.uri:
                         edit_uris.append(value)
                     else:
                         write_uris.append(value)
@@ -405,7 +408,9 @@ class SchemaPromptGenerator:
             if mt.fields:
                 lines.append("\n**Fields:**")
                 for field in mt.fields:
-                    lines.append(f"- `{field.name}` ({field.field_type.value}): {field.description}")
+                    lines.append(
+                        f"- `{field.name}` ({field.field_type.value}): {field.description}"
+                    )
 
         return "\n".join(lines)
 

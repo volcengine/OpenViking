@@ -1,21 +1,19 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """VolcEngine VLM backend implementation"""
 
-import asyncio
 import base64
 import json
 import logging
-import time
 from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from .openai_vlm import OpenAIVLM
-from ..base import VLMResponse, ToolCall
-
 # Import run_async for sync-to-async calls
 from openviking_cli.utils import run_async
+
+from ..base import ToolCall, VLMResponse
+from .openai_vlm import OpenAIVLM
 
 logger = logging.getLogger(__name__)
 
@@ -72,8 +70,9 @@ class VolcEngineVLM(OpenAIVLM):
             key_messages.append(filtered)
         return json.dumps(key_messages, ensure_ascii=False, sort_keys=True)
 
-
-    def _parse_messages_with_breakpoints(self, messages: List[Dict[str, Any]]) -> Tuple[List[List[Dict[str, Any]]], List[Dict[str, Any]]]:
+    def _parse_messages_with_breakpoints(
+        self, messages: List[Dict[str, Any]]
+    ) -> Tuple[List[List[Dict[str, Any]]], List[Dict[str, Any]]]:
         """Parse messages into static segment and dynamic messages.
 
         Only the content BEFORE the first cache_control becomes the static segment.
@@ -89,23 +88,20 @@ class VolcEngineVLM(OpenAIVLM):
 
         if first_breakpoint_idx > 0:
             # 有 cache_control，取其之前的内容作为 static segment
-            static_segment = messages[:first_breakpoint_idx+1]
-            dynamic_messages = messages[first_breakpoint_idx+1:]
+            static_segment = messages[: first_breakpoint_idx + 1]
+            dynamic_messages = messages[first_breakpoint_idx + 1 :]
             static_segments = [static_segment]
-            print(f'static_segment={len(static_segment)}')
-            print(f'dynamic_messages={len(dynamic_messages)}')
+            print(f"static_segment={len(static_segment)}")
+            print(f"dynamic_messages={len(dynamic_messages)}")
         else:
             # 没有 cache_control 或在第一个位置，全部作为 dynamic
             static_segments = []
             dynamic_messages = messages
 
-
         return static_segments, dynamic_messages
 
     async def _get_or_create_from_segments(
-        self,
-        segments: List[List[Dict[str, Any]]],
-        end_idx: int
+        self, segments: List[List[Dict[str, Any]]], end_idx: int
     ) -> Optional[str]:
         """递归获取或创建 cache，从长到短尝试。
 
@@ -119,7 +115,6 @@ class VolcEngineVLM(OpenAIVLM):
         if end_idx <= 0:
             return None
 
-
         def segments_to_messages(segs):
             # 拼接前 end_idx 个 segments
             msgs = []
@@ -130,14 +125,18 @@ class VolcEngineVLM(OpenAIVLM):
         prefix = segments_to_messages(segments[:end_idx])
 
         if end_idx == 1:
-            response_id =  await self._get_or_create_from_messages(prefix)
+            response_id = await self._get_or_create_from_messages(prefix)
             return response_id
 
         previous_response_id = await self._get_or_create_from_segments(segments, end_idx - 1)
-        return await self._get_or_create_from_messages(segments_to_messages(segments[end_idx - 1: end_idx]), previous_response_id=previous_response_id)
+        return await self._get_or_create_from_messages(
+            segments_to_messages(segments[end_idx - 1 : end_idx]),
+            previous_response_id=previous_response_id,
+        )
 
-
-    async def _get_or_create_from_messages(self, messages: List[Dict[str, Any]], previous_response_id=None) -> Optional[str]:
+    async def _get_or_create_from_messages(
+        self, messages: List[Dict[str, Any]], previous_response_id=None
+    ) -> Optional[str]:
         """从头创建新 cache。"""
 
         # Check cache first
@@ -163,7 +162,6 @@ class VolcEngineVLM(OpenAIVLM):
             logger.warning(f"[VolcEngineVLM] Failed to create new cache: {e}")
             return None
 
-
     async def responseapi_prefixcache_completion(
         self,
         static_segments: List[List[Dict[str, Any]]],
@@ -183,7 +181,9 @@ class VolcEngineVLM(OpenAIVLM):
         """
         # 使用多段缓存获取 response_id
         if static_segments:
-            response_id = await self._get_or_create_from_segments(static_segments, len(static_segments))
+            response_id = await self._get_or_create_from_segments(
+                static_segments, len(static_segments)
+            )
         else:
             response_id = None
         client = self.get_async_client()
@@ -216,7 +216,6 @@ class VolcEngineVLM(OpenAIVLM):
         response = await client.responses.create(**kwargs)
         return response
 
-
     def get_client(self):
         """Get sync client"""
         if self._sync_client is None:
@@ -248,14 +247,16 @@ class VolcEngineVLM(OpenAIVLM):
         return self._async_client
 
     def _update_token_usage_from_response(
-        self, response, duration_seconds: float = 0.0,
+        self,
+        response,
+        duration_seconds: float = 0.0,
     ) -> None:
         """Update token usage from VolcEngine Responses API response."""
         if hasattr(response, "usage") and response.usage:
             u = response.usage
             # Responses API uses input_tokens/output_tokens instead of prompt_tokens/completion_tokens
-            prompt_tokens = getattr(u, 'input_tokens', 0) or 0
-            completion_tokens = getattr(u, 'output_tokens', 0) or 0
+            prompt_tokens = getattr(u, "input_tokens", 0) or 0
+            completion_tokens = getattr(u, "output_tokens", 0) or 0
             self.update_token_usage(
                 model_name=self.model or "unknown",
                 provider=self.provider,
@@ -274,9 +275,9 @@ class VolcEngineVLM(OpenAIVLM):
         - response.usage: token usage
         """
         # Debug: print response structure
-        #logger.debug(f"[VolcEngineVLM] Response type: {type(response)}")
+        # logger.debug(f"[VolcEngineVLM] Response type: {type(response)}")
         # logger.info(f"[VolcEngineVLM] Full response: {response}")
-        if hasattr(response, 'output'):
+        if hasattr(response, "output"):
             # logger.debug(f"[VolcEngineVLM] Output items: {len(response.output)}")
             for i, item in enumerate(response.output):
                 # logger.debug(f"[VolcEngineVLM]   Item {i}: type={getattr(item, 'type', 'unknown')}")
@@ -289,11 +290,11 @@ class VolcEngineVLM(OpenAIVLM):
         tool_calls = []
         finish_reason = "stop"
 
-        if hasattr(response, 'output') and response.output:
+        if hasattr(response, "output") and response.output:
             for item in response.output:
-                item_type = getattr(item, 'type', None)
+                item_type = getattr(item, "type", None)
                 # Check if it's a function_call item (Responses API format)
-                if item_type == 'function_call':
+                if item_type == "function_call":
                     # logger.debug(f"[VolcEngineVLM] Found function_call tool call")
                     args = item.arguments
                     if isinstance(args, str):
@@ -301,28 +302,26 @@ class VolcEngineVLM(OpenAIVLM):
                             args = json.loads(args)
                         except json.JSONDecodeError:
                             args = {"raw": args}
-                    tool_calls.append(ToolCall(
-                        id=item.call_id or "",
-                        name=item.name or "",
-                        arguments=args
-                    ))
+                    tool_calls.append(
+                        ToolCall(id=item.call_id or "", name=item.name or "", arguments=args)
+                    )
                     finish_reason = "tool_calls"
                 # Check if it's a message item (Chat API compatibility)
-                elif item_type == 'message':
+                elif item_type == "message":
                     message = item
-                    if hasattr(message, 'content'):
+                    if hasattr(message, "content"):
                         # Content can be a list or string
                         if isinstance(message.content, list):
                             for block in message.content:
-                                if hasattr(block, 'type') and block.type == 'output_text':
+                                if hasattr(block, "type") and block.type == "output_text":
                                     content = block.text or ""
-                                elif hasattr(block, 'text'):
+                                elif hasattr(block, "text"):
                                     content = block.text or ""
                         else:
                             content = message.content or ""
 
                     # Parse tool calls from message
-                    if hasattr(message, 'tool_calls') and message.tool_calls:
+                    if hasattr(message, "tool_calls") and message.tool_calls:
                         # logger.debug(f"[VolcEngineVLM] Found {len(message.tool_calls)} tool calls in message")
                         for tc in message.tool_calls:
                             args = tc.arguments
@@ -337,29 +336,27 @@ class VolcEngineVLM(OpenAIVLM):
                                 if not tool_name:
                                     tool_name = tc.function.name
                             except AttributeError:
-                                tool_name = tc.function.name if hasattr(tc, 'function') else ""
-                            tool_calls.append(ToolCall(
-                                id=tc.id or "",
-                                name=tool_name or "",
-                                arguments=args
-                            ))
+                                tool_name = tc.function.name if hasattr(tc, "function") else ""
+                            tool_calls.append(
+                                ToolCall(id=tc.id or "", name=tool_name or "", arguments=args)
+                            )
 
-                    finish_reason = getattr(message, 'finish_reason', 'stop') or 'stop'
+                    finish_reason = getattr(message, "finish_reason", "stop") or "stop"
 
         # Extract usage
         usage = {}
-        if hasattr(response, 'usage') and response.usage:
+        if hasattr(response, "usage") and response.usage:
             u = response.usage
             usage = {
-                "prompt_tokens": getattr(u, 'input_tokens', 0),
-                "completion_tokens": getattr(u, 'output_tokens', 0),
-                "total_tokens": getattr(u, 'total_tokens', 0),
+                "prompt_tokens": getattr(u, "input_tokens", 0),
+                "completion_tokens": getattr(u, "output_tokens", 0),
+                "total_tokens": getattr(u, "total_tokens", 0),
             }
             # Handle cached tokens
-            input_details = getattr(u, 'input_tokens_details', None)
+            input_details = getattr(u, "input_tokens_details", None)
             if input_details:
                 usage["prompt_tokens_details"] = {
-                    "cached_tokens": getattr(input_details, 'cached_tokens', 0),
+                    "cached_tokens": getattr(input_details, "cached_tokens", 0),
                 }
 
         if has_tools:
@@ -385,13 +382,15 @@ class VolcEngineVLM(OpenAIVLM):
         Uses VolcEngine Responses API with prefix cache.
         Delegates to async implementation.
         """
-        return run_async(self.get_completion_async(
-            prompt=prompt,
-            thinking=thinking,
-            tools=tools,
-            tool_choice=tool_choice,
-            messages=messages,
-        ))
+        return run_async(
+            self.get_completion_async(
+                prompt=prompt,
+                thinking=thinking,
+                tools=tools,
+                tool_choice=tool_choice,
+                messages=messages,
+            )
+        )
 
     def _convert_messages_to_input(self, messages: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Convert OpenAI-style messages to VolcEngine Responses API input format.
@@ -413,6 +412,7 @@ class VolcEngineVLM(OpenAIVLM):
             # Handle tool_call role with content as dict {name, args, result}
             if role == "tool_call" and isinstance(content, dict):
                 import json
+
                 content_str = json.dumps(content, ensure_ascii=False)
                 role = "user"  # Convert tool_call to user
             else:
@@ -450,7 +450,12 @@ class VolcEngineVLM(OpenAIVLM):
                         data_urls = [u for u in image_urls if u.startswith("data:")]
                         if data_urls:
                             # Append image references to content
-                            content = content + "\n[Images: " + ", ".join([f"data URL ({i+1})" for i in range(len(data_urls))]) + "]"
+                            content = (
+                                content
+                                + "\n[Images: "
+                                + ", ".join([f"data URL ({i + 1})" for i in range(len(data_urls))])
+                                + "]"
+                            )
 
                 # Ensure content is a string, use placeholder if empty
                 content_str = str(content) if content else "[empty]"
@@ -467,10 +472,12 @@ class VolcEngineVLM(OpenAIVLM):
                     role = "user"
 
             # Simple format: role + content (no type field)
-            input_messages.append({
-                "role": role,
-                "content": content_str,
-            })
+            input_messages.append(
+                {
+                    "role": role,
+                    "content": content_str,
+                }
+            )
 
         return input_messages
 
@@ -491,31 +498,37 @@ class VolcEngineVLM(OpenAIVLM):
             # Check if it's OpenAI format: {"type": "function", "function": {...}}
             if tool.get("type") == "function" and "function" in tool:
                 func = tool["function"]
-                converted.append({
-                    "type": "function",  # Keep the type field
-                    "name": func.get("name", ""),
-                    "description": func.get("description", ""),
-                    "parameters": func.get("parameters", {}),
-                })
+                converted.append(
+                    {
+                        "type": "function",  # Keep the type field
+                        "name": func.get("name", ""),
+                        "description": func.get("description", ""),
+                        "parameters": func.get("parameters", {}),
+                    }
+                )
             elif "function" in tool:
                 # Has function but no type
                 func = tool["function"]
-                converted.append({
-                    "type": "function",
-                    "name": func.get("name", ""),
-                    "description": func.get("description", ""),
-                    "parameters": func.get("parameters", {}),
-                })
+                converted.append(
+                    {
+                        "type": "function",
+                        "name": func.get("name", ""),
+                        "description": func.get("description", ""),
+                        "parameters": func.get("parameters", {}),
+                    }
+                )
             else:
                 # Already in correct format or other format
                 # Ensure it has type: function
                 if tool.get("type") != "function":
-                    converted.append({
-                        "type": "function",
-                        "name": tool.get("name", ""),
-                        "description": tool.get("description", ""),
-                        "parameters": tool.get("parameters", {}),
-                    })
+                    converted.append(
+                        {
+                            "type": "function",
+                            "name": tool.get("name", ""),
+                            "description": tool.get("description", ""),
+                            "parameters": tool.get("parameters", {}),
+                        }
+                    )
                 else:
                     # Keep as is
                     converted.append(tool)
@@ -564,12 +577,14 @@ class VolcEngineVLM(OpenAIVLM):
         except Exception as e:
             last_error = e
             # Log token info from error response if available
-            error_response = getattr(e, 'response', None)
-            if error_response and hasattr(error_response, 'usage'):
+            error_response = getattr(e, "response", None)
+            if error_response and hasattr(error_response, "usage"):
                 u = error_response.usage
-                prompt_tokens = getattr(u, 'input_tokens', 0) or 0
-                completion_tokens = getattr(u, 'output_tokens', 0) or 0
-                logger.info(f"[VolcEngineVLM] Error response - Input tokens: {prompt_tokens}, Output tokens: {completion_tokens}")
+                prompt_tokens = getattr(u, "input_tokens", 0) or 0
+                completion_tokens = getattr(u, "output_tokens", 0) or 0
+                logger.info(
+                    f"[VolcEngineVLM] Error response - Input tokens: {prompt_tokens}, Output tokens: {completion_tokens}"
+                )
             logger.warning(f"[VolcEngineVLM] Request failed: {e}")
             raise last_error
 
@@ -645,7 +660,7 @@ class VolcEngineVLM(OpenAIVLM):
             b64 = base64.b64encode(image).decode("utf-8")
             mime_type = self._detect_image_format(image)
             # logger.info(
-                # f"[VolcEngineVLM] Preparing image from bytes, size={len(image)}, detected mime={mime_type}"
+            # f"[VolcEngineVLM] Preparing image from bytes, size={len(image)}, detected mime={mime_type}"
             # )
             return {
                 "type": "image_url",
@@ -700,13 +715,15 @@ class VolcEngineVLM(OpenAIVLM):
         Uses VolcEngine Responses API with prefix cache.
         Delegates to async implementation.
         """
-        return run_async(self.get_vision_completion_async(
-            prompt=prompt,
-            images=images,
-            thinking=thinking,
-            tools=tools,
-            messages=messages,
-        ))
+        return run_async(
+            self.get_vision_completion_async(
+                prompt=prompt,
+                images=images,
+                thinking=thinking,
+                tools=tools,
+                messages=messages,
+            )
+        )
 
     async def get_vision_completion_async(
         self,

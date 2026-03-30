@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 JSON stable parsing - Five-Layer Fault Tolerance Architecture.
 
@@ -12,7 +12,17 @@ Layer 5: Validation Tolerance - TypeAdapter(strict=False) + list item filtering
 
 import json
 from types import UnionType
-from typing import Any, Dict, List, Optional, Tuple, Type, get_type_hints, get_origin, get_args, Union
+from typing import (
+    Any,
+    List,
+    Optional,
+    Tuple,
+    Type,
+    Union,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
 import json_repair
 from pydantic import TypeAdapter
@@ -58,8 +68,8 @@ def extract_json_content(s: str) -> str:
     temp_s = s
 
     # Find first { or [
-    first_brace = temp_s.find('{')
-    first_bracket = temp_s.find('[')
+    first_brace = temp_s.find("{")
+    first_bracket = temp_s.find("[")
 
     start_idx = 0
     if first_brace != -1 and first_bracket != -1:
@@ -76,8 +86,8 @@ def extract_json_content(s: str) -> str:
         temp_s = temp_s[start_idx:]
 
     # Find last } or ]
-    last_brace = temp_s.rfind('}')
-    last_bracket = temp_s.rfind(']')
+    last_brace = temp_s.rfind("}")
+    last_bracket = temp_s.rfind("]")
 
     end_idx = len(temp_s)
     if last_brace != -1 and last_bracket != -1:
@@ -180,7 +190,7 @@ def _any_to_str(value) -> str:
     elif isinstance(value, dict):
         return json.dumps(value, ensure_ascii=False)
     elif isinstance(value, (int, bool, float)):
-        return f'{value}'
+        return f"{value}"
     return str(value)
 
 
@@ -206,7 +216,7 @@ def value_fault_tolerance(field_type, value):
     origin_type = _get_origin_type(field_type)
 
     # Handle json_repair converting None to 'None'
-    if value == 'None':
+    if value == "None":
         if origin_type is not str:
             return None
 
@@ -215,7 +225,7 @@ def value_fault_tolerance(field_type, value):
         return _any_to_str(value)
     elif origin_type is int:
         if isinstance(value, str):
-            if value is None or value == 'None':
+            if value is None or value == "None":
                 return 0
             try:
                 return int(value)
@@ -223,7 +233,7 @@ def value_fault_tolerance(field_type, value):
                 pass
     elif origin_type is float:
         if isinstance(value, str):
-            if value is None or value == 'None':
+            if value is None or value == "None":
                 return 0.0
             try:
                 return float(value)
@@ -263,9 +273,13 @@ def parse_value_with_tolerance(value, annotation):
         if isinstance(value, str):
             return value
         else:
-            return json.dumps(value, ensure_ascii=False) if isinstance(value, (dict, list)) else str(value)
+            return (
+                json.dumps(value, ensure_ascii=False)
+                if isinstance(value, (dict, list))
+                else str(value)
+            )
 
-    if value == 'None':
+    if value == "None":
         return None
 
     # Apply value fault tolerance (inline for efficiency)
@@ -274,7 +288,7 @@ def parse_value_with_tolerance(value, annotation):
         parsed_value = _any_to_str(value)
     elif origin_type is int:
         if isinstance(value, str):
-            if value == 'None':
+            if value == "None":
                 parsed_value = 0
             else:
                 try:
@@ -285,7 +299,7 @@ def parse_value_with_tolerance(value, annotation):
             parsed_value = value
     elif origin_type is float:
         if isinstance(value, str):
-            if value == 'None':
+            if value == "None":
                 parsed_value = 0.0
             else:
                 try:
@@ -308,11 +322,10 @@ def parse_value_with_tolerance(value, annotation):
     try:
         return TypeAdapter(annotation).validate_python(parsed_value, strict=False)
     except Exception as e:
-        logger.warning(f'TypeAdapter validation failed: {e}')
+        logger.warning(f"TypeAdapter validation failed: {e}")
 
         # For list types, try filtering invalid items
-        if (get_origin(annotation) is list and
-            isinstance(parsed_value, list)):
+        if get_origin(annotation) is list and isinstance(parsed_value, list):
             filtered_items = []
             item_type = _get_arg_type(annotation)
             if item_type is not None:
@@ -416,8 +429,7 @@ def parse_json_with_stability(
                 if field_name in field_types:
                     try:
                         tolerant_data[field_name] = parse_value_with_tolerance(
-                            field_value,
-                            field_types[field_name]
+                            field_value, field_types[field_name]
                         )
                     except Exception as field_e:
                         logger.warning(f"Field {field_name} parsing failed: {field_e}")
@@ -428,5 +440,3 @@ def parse_json_with_stability(
             return model_class.model_validate(tolerant_data), None
         except Exception as e2:
             return None, f"Model validation failed even after tolerance: {e} (fallback: {e2})"
-
-

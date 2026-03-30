@@ -1,11 +1,11 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """LockManager — global singleton managing lock lifecycle and redo recovery."""
 
 import asyncio
 import json
 import time
-from typing import Any, Dict, Optional, List
+from typing import Any, Dict, List, Optional
 
 from openviking.pyagfs import AGFSClient
 from openviking.storage.transaction.lock_handle import LockHandle

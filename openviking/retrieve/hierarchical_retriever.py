@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Hierarchical retriever for OpenViking.
 
@@ -8,8 +8,8 @@ and rerank-based relevance scoring.
 """
 
 import heapq
-import math
 import logging
+import math
 import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
@@ -297,8 +297,7 @@ class HierarchicalRetriever:
 
         # Results from global search
         default_scores = [
-            s if math.isfinite(s) else 0.0
-            for s in (r.get("_score", 0.0) for r in global_results)
+            s if math.isfinite(s) else 0.0 for s in (r.get("_score", 0.0) for r in global_results)
         ]
         if self._rerank_client and mode == RetrieverMode.THINKING:
             docs = [str(r.get("abstract", "")) for r in global_results]
@@ -439,8 +438,7 @@ class HierarchicalRetriever:
                 continue
 
             query_scores = [
-                s if math.isfinite(s) else 0.0
-                for s in (r.get("_score", 0.0) for r in results)
+                s if math.isfinite(s) else 0.0 for s in (r.get("_score", 0.0) for r in results)
             ]
             if self._rerank_client and mode == RetrieverMode.THINKING:
                 documents = [str(r.get("abstract", "")) for r in results]

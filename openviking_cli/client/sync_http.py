@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Synchronous HTTP Client for OpenViking.
 
 Wraps AsyncHTTPClient with synchronous methods.
@@ -121,7 +121,9 @@ class SyncHTTPClient:
 
         If both content and parts are provided, parts takes precedence.
         """
-        return run_async(self._async_client.add_message(session_id, role, content, parts, created_at))
+        return run_async(
+            self._async_client.add_message(session_id, role, content, parts, created_at)
+        )
 
     def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
         """Query background task status."""

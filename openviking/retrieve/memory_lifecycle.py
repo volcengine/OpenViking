@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Hotness scoring for cold/hot memory lifecycle management (#296).
 
 Provides a pure function to compute a 0.0–1.0 hotness score based on

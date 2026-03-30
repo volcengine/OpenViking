@@ -1,12 +1,12 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 URI generation and validation utilities.
 """
 
 import re
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional, Set, Tuple, Type
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 from openviking.session.memory.dataclass import MemoryTypeSchema
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
@@ -18,6 +18,7 @@ logger = get_logger(__name__)
 @dataclass
 class ResolvedOperation:
     """A resolved memory operation with URI and memory_type."""
+
     model: Any  # The flat model data
     uri: str  # The resolved URI
     memory_type: str  # The memory type (e.g., 'tools', 'skills', 'events')
@@ -130,7 +131,9 @@ def collect_allowed_directories(
     allowed_dirs = set()
     for schema in schemas:
         if schema.directory:
-            dir_path = schema.directory.replace("{user_space}", user_space).replace("{agent_space}", agent_space)
+            dir_path = schema.directory.replace("{user_space}", user_space).replace(
+                "{agent_space}", agent_space
+            )
             allowed_dirs.add(dir_path)
     return allowed_dirs
 
@@ -163,7 +166,9 @@ def collect_allowed_path_patterns(
             pattern_parts.append(schema.filename_template)
         if pattern_parts:
             pattern = "/".join(pattern_parts)
-            pattern = pattern.replace("{user_space}", user_space).replace("{agent_space}", agent_space)
+            pattern = pattern.replace("{user_space}", user_space).replace(
+                "{agent_space}", agent_space
+            )
             allowed_patterns.add(pattern)
     return allowed_patterns
 
@@ -304,10 +309,10 @@ def resolve_flat_model_uri(
     # Get memory_type from parameter or from model
     if memory_type:
         memory_type_str = memory_type
-    elif hasattr(flat_model, 'memory_type'):
+    elif hasattr(flat_model, "memory_type"):
         memory_type_str = flat_model.memory_type
-    elif isinstance(flat_model, dict) and 'memory_type' in flat_model:
-        memory_type_str = flat_model['memory_type']
+    elif isinstance(flat_model, dict) and "memory_type" in flat_model:
+        memory_type_str = flat_model["memory_type"]
     else:
         raise ValueError("Flat model missing 'memory_type' field")
 
@@ -316,10 +321,10 @@ def resolve_flat_model_uri(
         raise ValueError(f"Unknown memory type: {memory_type_str}")
 
     # Check if model already has a uri field
-    if hasattr(flat_model, 'uri') and flat_model.uri is not None:
+    if hasattr(flat_model, "uri") and flat_model.uri is not None:
         return flat_model.uri
-    elif isinstance(flat_model, dict) and 'uri' in flat_model and flat_model['uri'] is not None:
-        return flat_model['uri']
+    elif isinstance(flat_model, dict) and "uri" in flat_model and flat_model["uri"] is not None:
+        return flat_model["uri"]
 
     # Extract URI fields and generate URI
     uri_fields = extract_uri_fields_from_flat_model(flat_model, schema)
@@ -348,10 +353,10 @@ def resolve_overview_edit_uri(
         ValueError: If memory_type not found or directory not found
     """
     # Get memory_type from model
-    if hasattr(overview_model, 'memory_type'):
+    if hasattr(overview_model, "memory_type"):
         memory_type_str = overview_model.memory_type
     elif isinstance(overview_model, dict):
-        memory_type_str = overview_model.get('memory_type')
+        memory_type_str = overview_model.get("memory_type")
     else:
         raise ValueError("overview_model must have memory_type field")
 
@@ -364,7 +369,9 @@ def resolve_overview_edit_uri(
         raise ValueError(f"Memory type {memory_type_str} has no directory configured")
 
     # Substitute user_space and agent_space in directory
-    directory = schema.directory.replace("{user_space}", user_space).replace("{agent_space}", agent_space)
+    directory = schema.directory.replace("{user_space}", user_space).replace(
+        "{agent_space}", agent_space
+    )
 
     # Return the .overview.md URI
     return f"{directory}/.overview.md"
@@ -376,7 +383,9 @@ class ResolvedOperations:
     def __init__(self):
         self.write_operations: List[ResolvedOperation] = []
         self.edit_operations: List[ResolvedOperation] = []
-        self.edit_overview_operations: List[Tuple[Any, str]] = []  # (overview_edit_model, overview_uri)
+        self.edit_overview_operations: List[
+            Tuple[Any, str]
+        ] = []  # (overview_edit_model, overview_uri)
         self.delete_operations: List[Tuple[str, str]] = []  # (uri_str, uri_str) - just the uri
         self.errors: List[str] = []
 
@@ -407,7 +416,7 @@ def resolve_all_operations(
     resolved = ResolvedOperations()
 
     # Check if using new per-memory_type format
-    memory_type_fields = getattr(operations, '_memory_type_fields', None)
+    memory_type_fields = getattr(operations, "_memory_type_fields", None)
     if memory_type_fields:
         # New format: iterate each memory_type field
         for field_name in memory_type_fields:
@@ -418,44 +427,54 @@ def resolve_all_operations(
             for item in items:
                 # Determine if edit (has uri) or write
                 is_edit = False
-                if hasattr(item, 'uri') and item.uri:
+                if hasattr(item, "uri") and item.uri:
                     is_edit = True
-                elif isinstance(item, dict) and item.get('uri'):
+                elif isinstance(item, dict) and item.get("uri"):
                     is_edit = True
                 # Convert to dict for URI resolution
-                item_dict = dict(item) if hasattr(item, 'model_dump') else dict(item)
+                item_dict = dict(item) if hasattr(item, "model_dump") else dict(item)
                 try:
-                    uri = resolve_flat_model_uri(item_dict, registry, user_space, agent_space, memory_type=field_name)
+                    uri = resolve_flat_model_uri(
+                        item_dict, registry, user_space, agent_space, memory_type=field_name
+                    )
                     if is_edit:
-                        resolved.edit_operations.append(ResolvedOperation(model=item_dict, uri=uri, memory_type=field_name))
+                        resolved.edit_operations.append(
+                            ResolvedOperation(model=item_dict, uri=uri, memory_type=field_name)
+                        )
                     else:
-                        resolved.write_operations.append(ResolvedOperation(model=item_dict, uri=uri, memory_type=field_name))
+                        resolved.write_operations.append(
+                            ResolvedOperation(model=item_dict, uri=uri, memory_type=field_name)
+                        )
                 except Exception as e:
                     resolved.errors.append(f"Failed to resolve {field_name} operation: {e}")
     else:
         # Legacy format
-        write_uris = operations.write_uris if hasattr(operations, 'write_uris') else []
-        edit_uris = operations.edit_uris if hasattr(operations, 'edit_uris') else []
+        write_uris = operations.write_uris if hasattr(operations, "write_uris") else []
+        edit_uris = operations.edit_uris if hasattr(operations, "edit_uris") else []
 
         for op in write_uris:
             try:
                 uri = resolve_flat_model_uri(op, registry, user_space, agent_space)
                 # Legacy format: try to get memory_type from model, otherwise empty
-                memory_type = op.get('memory_type', '') if isinstance(op, dict) else ''
-                resolved.write_operations.append(ResolvedOperation(model=op, uri=uri, memory_type=memory_type))
+                memory_type = op.get("memory_type", "") if isinstance(op, dict) else ""
+                resolved.write_operations.append(
+                    ResolvedOperation(model=op, uri=uri, memory_type=memory_type)
+                )
             except Exception as e:
                 resolved.errors.append(f"Failed to resolve write operation: {e}")
 
         for op in edit_uris:
             try:
                 uri = resolve_flat_model_uri(op, registry, user_space, agent_space)
-                memory_type = op.get('memory_type', '') if isinstance(op, dict) else ''
-                resolved.edit_operations.append(ResolvedOperation(model=op, uri=uri, memory_type=memory_type))
+                memory_type = op.get("memory_type", "") if isinstance(op, dict) else ""
+                resolved.edit_operations.append(
+                    ResolvedOperation(model=op, uri=uri, memory_type=memory_type)
+                )
             except Exception as e:
                 resolved.errors.append(f"Failed to resolve edit operation: {e}")
 
     # Resolve edit_overview operations (overview edit models)
-    if hasattr(operations, 'edit_overview_uris'):
+    if hasattr(operations, "edit_overview_uris"):
         for op in operations.edit_overview_uris:
             try:
                 uri = resolve_overview_edit_uri(op, registry, user_space, agent_space)
@@ -464,7 +483,7 @@ def resolve_all_operations(
                 resolved.errors.append(f"Failed to resolve edit_overview operation: {e}")
 
     # Resolve delete operations (already URI strings)
-    if hasattr(operations, 'delete_uris'):
+    if hasattr(operations, "delete_uris"):
         for uri in operations.delete_uris:
             try:
                 # Delete operations are already URIs, just pass them through

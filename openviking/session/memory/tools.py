@@ -1,24 +1,19 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Memory tools - encapsulate VikingFS read operations for ReAct loop.
 
 Reference: bot/vikingbot/agent/tools/base.py design pattern
 """
 
-import json
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from openviking.server.identity import RequestContext
 from openviking.session.memory.utils import parse_memory_file_with_fields
 from openviking.storage.viking_fs import VikingFS
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
-
-
-
 
 
 def optimize_search_result(result: Any, limit: int = 10) -> Any:
@@ -27,8 +22,12 @@ def optimize_search_result(result: Any, limit: int = 10) -> Any:
         return {"error": extract_error_summary(result["error"])}
     if isinstance(result, dict) and "memories" in result:
         filtered = [
-            item for item in result["memories"]
-            if not (item.get("uri", "").endswith(".abstract.md") or item.get("uri", "").endswith(".overview.md"))
+            item
+            for item in result["memories"]
+            if not (
+                item.get("uri", "").endswith(".abstract.md")
+                or item.get("uri", "").endswith(".overview.md")
+            )
         ]
         return [{"uri": item["uri"], "score": item["score"]} for item in filtered[:limit]]
     return []
@@ -45,6 +44,7 @@ def optimize_tool_result(tool_name: str, result: Any) -> Any:
         result = result.copy()
         result["content"] = truncate_content(result["content"])
     return result
+
 
 def extract_error_summary(error: str) -> str:
     if "File not found" in error:
@@ -64,14 +64,9 @@ def add_tool_call_pair_to_messages(
     result: Any,
 ) -> None:
     """Add a tool call pair with optimized format to save tokens."""
-    messages.append({
-        "role": "user",
-        "content": {
-            "tool_call_name": tool_name,
-            "args": params,
-            "result": result
-        }
-    })
+    messages.append(
+        {"role": "user", "content": {"tool_call_name": tool_name, "args": params, "result": result}}
+    )
 
 
 def add_tool_call_items_to_messages(

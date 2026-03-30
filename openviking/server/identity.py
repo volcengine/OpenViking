@@ -1,10 +1,10 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Identity and role types for OpenViking multi-tenant HTTP Server."""
 
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import List, Optional, Any
+from typing import Any, List, Optional
 
 from openviking_cli.session.user_id import UserIdentifier
 

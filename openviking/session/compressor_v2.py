@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Session Compressor V2 for OpenViking.
 
@@ -7,7 +7,6 @@ Uses the new Memory Templating System with ReAct orchestrator.
 Maintains the same interface as compressor.py for backward compatibility.
 """
 
-import os
 from typing import List, Optional
 
 from openviking.core.context import Context
@@ -53,7 +52,10 @@ class SessionCompressorV2:
         viking_fs = get_viking_fs()
 
         # Create context provider with messages (provider 负责加载 schema)
-        from openviking.session.memory.session_extract_context_provider import SessionExtractContextProvider
+        from openviking.session.memory.session_extract_context_provider import (
+            SessionExtractContextProvider,
+        )
+
         context_provider = SessionExtractContextProvider(
             messages=messages,
             latest_archive_overview=latest_archive_overview,
@@ -72,9 +74,7 @@ class SessionCompressorV2:
         Always create new instance to avoid cross-request state pollution.
         """
         return MemoryUpdater(
-            registry=registry,
-            vikingdb=self.vikingdb,
-            transaction_handle=transaction_handle
+            registry=registry, vikingdb=self.vikingdb, transaction_handle=transaction_handle
         )
 
     async def extract_long_term_memories(
@@ -117,13 +117,12 @@ class SessionCompressorV2:
         viking_fs = get_viking_fs()
         lock_manager = None
         transaction_handle = None
-        if viking_fs and hasattr(viking_fs, 'agfs') and viking_fs.agfs:
+        if viking_fs and hasattr(viking_fs, "agfs") and viking_fs.agfs:
             init_lock_manager(viking_fs.agfs)
             lock_manager = get_lock_manager()
             transaction_handle = lock_manager.create_handle()
         else:
             logger.warning("VikingFS or AGFS not available, running without lock mechanism")
-
 
         try:
             # 获取所有记忆 schema 目录并加锁（仅在有锁管理器时）
@@ -141,7 +140,9 @@ class SessionCompressorV2:
                         continue
                     user_space = ctx.user.user_space_name() if ctx and ctx.user else "default"
                     agent_space = ctx.user.agent_space_name() if ctx and ctx.user else "default"
-                    dir_path = schema.directory.replace("{user_space}", user_space).replace("{agent_space}", agent_space)
+                    dir_path = schema.directory.replace("{user_space}", user_space).replace(
+                        "{agent_space}", agent_space
+                    )
                     dir_path = viking_fs._uri_to_path(dir_path, ctx)
                     if dir_path not in memory_schema_dirs:
                         memory_schema_dirs.append(dir_path)
@@ -169,10 +170,10 @@ class SessionCompressorV2:
                 return []
 
             # Convert to legacy format for logging and apply_operations
-            if hasattr(operations, 'to_legacy_operations'):
+            if hasattr(operations, "to_legacy_operations"):
                 legacy = operations.to_legacy_operations()
-                write_uris = legacy.get('write_uris', [])
-                edit_uris = legacy.get('edit_uris', [])
+                write_uris = legacy.get("write_uris", [])
+                edit_uris = legacy.get("edit_uris", [])
             else:
                 # Fallback for old format
                 write_uris = operations.write_uris
@@ -190,10 +191,13 @@ class SessionCompressorV2:
 
             # Create extract context from messages
             from openviking.session.memory.memory_updater import ExtractContext
+
             extract_context = ExtractContext(messages)
 
             # Apply operations
-            result = await updater.apply_operations(operations, ctx, registry=registry, extract_context=extract_context)
+            result = await updater.apply_operations(
+                operations, ctx, registry=registry, extract_context=extract_context
+            )
 
             logger.info(
                 f"Applied memory operations: written={len(result.written_uris)}, "
@@ -203,7 +207,10 @@ class SessionCompressorV2:
 
             # Report telemetry stats (matching v1 pattern)
             telemetry = get_current_telemetry()
-            telemetry.set("memory.extract.candidates.total", len(result.written_uris) + len(result.edited_uris))
+            telemetry.set(
+                "memory.extract.candidates.total",
+                len(result.written_uris) + len(result.edited_uris),
+            )
             telemetry.set("memory.extract.created", len(result.written_uris))
             telemetry.set("memory.extract.merged", len(result.edited_uris))
             telemetry.set("memory.extract.deleted", len(result.deleted_uris))
@@ -214,27 +221,33 @@ class SessionCompressorV2:
 
             # Written memories
             for uri in result.written_uris:
-                contexts.append(Context(
-                    uri=uri,
-                    category="memory_write",
-                    context_type="memory",
-                ))
+                contexts.append(
+                    Context(
+                        uri=uri,
+                        category="memory_write",
+                        context_type="memory",
+                    )
+                )
 
             # Edited memories
             for uri in result.edited_uris:
-                contexts.append(Context(
-                    uri=uri,
-                    category="memory_edit",
-                    context_type="memory",
-                ))
+                contexts.append(
+                    Context(
+                        uri=uri,
+                        category="memory_edit",
+                        context_type="memory",
+                    )
+                )
 
             # Deleted memories
             for uri in result.deleted_uris:
-                contexts.append(Context(
-                    uri=uri,
-                    category="memory_delete",
-                    context_type="memory",
-                ))
+                contexts.append(
+                    Context(
+                        uri=uri,
+                        category="memory_delete",
+                        context_type="memory",
+                    )
+                )
 
             return contexts
 

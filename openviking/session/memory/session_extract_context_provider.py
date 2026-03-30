@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Session Extract Context Provider - 会话提取 Provider 实现
 
@@ -37,6 +37,7 @@ class SessionExtractContextProvider(ExtractContextProvider):
     def _detect_language(self) -> str:
         """检测输出语言"""
         from openviking.session.memory.utils import detect_language_from_conversation
+
         conversation = self._assemble_conversation(self.messages)
         config = get_openviking_config()
         fallback_language = (config.language_fallback or "en").strip() or "en"
@@ -80,6 +81,7 @@ See GenericOverviewEdit in the JSON Schema below."""
     def _build_conversation_message(self) -> Dict[str, Any]:
         """构建包含 Conversation History 的 user message"""
         from datetime import datetime
+
         if self.messages:
             first_msg_time = getattr(self.messages[0], "created_at", None)
             last_msg_time = getattr(self.messages[-1], "created_at", None)
@@ -111,7 +113,7 @@ Relative times (e.g., 'last week', 'next month') are based on Session Time, not 
 
 {conversation}
 
-After exploring, analyze the conversation and output ALL memory write/edit/delete operations in a single response. Do not output operations one at a time - gather all changes first, then return them together."""
+After exploring, analyze the conversation and output ALL memory write/edit/delete operations in a single response. Do not output operations one at a time - gather all changes first, then return them together.""",
         }
 
     def _assemble_conversation(self, messages: Any) -> str:
@@ -124,7 +126,6 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         Returns:
             Formatted conversation string
         """
-        import json
         from openviking.message import Message
         from openviking.message.part import ToolPart
 
@@ -158,7 +159,12 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             return "\n".join(all_lines) if all_lines else msg.content
 
         conversation_sections.append(
-            "\n".join([f"[{idx}][{msg.role}]: {format_message_with_parts(msg)}" for idx, msg in enumerate(messages)])
+            "\n".join(
+                [
+                    f"[{idx}][{msg.role}]: {format_message_with_parts(msg)}"
+                    for idx, msg in enumerate(messages)
+                ]
+            )
         )
 
         return "\n\n".join(section for section in conversation_sections if section)
@@ -209,7 +215,9 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             # Replace variables in directory path with actual user/agent space
             user_space = ctx.user.user_space_name() if ctx and ctx.user else "default"
             agent_space = ctx.user.agent_space_name() if ctx and ctx.user else "default"
-            dir_path = schema.directory.replace("{user_space}", user_space).replace("{agent_space}", agent_space)
+            dir_path = schema.directory.replace("{user_space}", user_space).replace(
+                "{agent_space}", agent_space
+            )
 
             # Always add .overview.md to read list
             overview_files.add(f"{dir_path}/.overview.md")
@@ -240,9 +248,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
         # 首先读取所有 .overview.md 文件（截断以避免窗口过大）
         # 为 overview 读取创建一个基本的 tool_ctx
         tool_ctx = ToolContext(
-            request_ctx=ctx,
-            transaction_handle=transaction_handle,
-            default_search_uris=[]
+            request_ctx=ctx, transaction_handle=transaction_handle, default_search_uris=[]
         )
         for overview_uri in overview_files:
             try:
@@ -250,11 +256,9 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                 add_tool_call_pair_to_messages(
                     messages=pre_fetch_messages,
                     call_id=call_id_seq,
-                    tool_name='read',
-                    params={
-                        "uri": overview_uri
-                    },
-                    result=result_str
+                    tool_name="read",
+                    params={"uri": overview_uri},
+                    result=result_str,
                 )
                 call_id_seq += 1
             except Exception as e:
@@ -267,7 +271,7 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                 tool_ctx_dir = ToolContext(
                     request_ctx=ctx,
                     transaction_handle=transaction_handle,
-                    default_search_uris=[dir_uri]
+                    default_search_uris=[dir_uri],
                 )
                 try:
                     search_result = await search_tool.execute(
@@ -282,19 +286,18 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                         if "error" in search_result:
                             result_value = f"Error: {search_result.get('error')}"
                         else:
-                            result_value = [m.get("uri", "") for m in search_result.get("memories", [])]
+                            result_value = [
+                                m.get("uri", "") for m in search_result.get("memories", [])
+                            ]
                     else:
                         result_value = []
 
                     add_tool_call_pair_to_messages(
                         messages=pre_fetch_messages,
                         call_id=call_id_seq,
-                        tool_name='search',
-                        params={
-                            "query": "[Keywords]",
-                            "search_uri": dir_uri
-                        },
-                        result=result_value
+                        tool_name="search",
+                        params={"query": "[Keywords]", "search_uri": dir_uri},
+                        result=result_value,
                     )
                     call_id_seq += 1
                 except Exception as e:
@@ -307,16 +310,13 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                 add_tool_call_pair_to_messages(
                     messages=pre_fetch_messages,
                     call_id=call_id_seq,
-                    tool_name='read',
-                    params={
-                        "uri": file_uri
-                    },
-                    result=result_str
+                    tool_name="read",
+                    params={"uri": file_uri},
+                    result=result_str,
                 )
                 call_id_seq += 1
             except Exception as e:
                 logger.warning(f"Failed to read {file_uri}: {e}")
-
 
         return pre_fetch_messages
 
@@ -351,4 +351,3 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                 if os.path.exists(dir_path):
                     self._registry.load_from_directory(dir_path)
         return self._registry
-

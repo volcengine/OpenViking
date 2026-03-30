@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Memory updater - applies MemoryOperations directly.
 
@@ -22,7 +22,6 @@ from openviking.session.memory.utils import (
     resolve_all_operations,
     serialize_with_metadata,
 )
-from openviking.session.memory.utils.uri import ResolvedOperation
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
@@ -32,6 +31,7 @@ logger = get_logger(__name__)
 
 class ExtractContext:
     """Extract context for template rendering."""
+
     def __init__(self, messages: List[Message]):
         self.messages = messages
 
@@ -49,12 +49,12 @@ class ExtractContext:
 
         # 解析所有范围/索引
         ranges = []
-        for part in ranges_str.split(','):
+        for part in ranges_str.split(","):
             part = part.strip()
             if not part:
                 continue
-            if '-' in part:
-                start, end = part.split('-')
+            if "-" in part:
+                start, end = part.split("-")
                 ranges.append((int(start), int(end)))
             else:
                 # 单个索引转为相同起止范围
@@ -72,7 +72,7 @@ class ExtractContext:
         for i, (start, end) in enumerate(ranges):
             if start < 0 or end >= len(self.messages):
                 continue
-            range_msgs = self.messages[start:end + 1]
+            range_msgs = self.messages[start : end + 1]
 
             if i > 0:
                 prev_end = ranges[i - 1][1]
@@ -86,6 +86,7 @@ class ExtractContext:
 
 class MessageRange:
     """Represents a range of messages for formatting."""
+
     def __init__(self, elements: List[Message | str]):
         self.elements = elements
 
@@ -104,7 +105,7 @@ class MessageRange:
         for elem in self.elements:
             if isinstance(elem, str):
                 continue
-            if hasattr(elem, 'created_at') and elem.created_at:
+            if hasattr(elem, "created_at") and elem.created_at:
                 return elem.created_at.strftime("%Y-%m-%d")
         return None
 
@@ -131,11 +132,7 @@ class MemoryUpdateResult:
         self.errors.append((uri, error))
 
     def has_changes(self) -> bool:
-        return (
-            len(self.written_uris) > 0
-            or len(self.edited_uris) > 0
-            or len(self.deleted_uris) > 0
-        )
+        return len(self.written_uris) > 0 or len(self.edited_uris) > 0 or len(self.deleted_uris) > 0
 
     def summary(self) -> str:
         return (
@@ -146,8 +143,6 @@ class MemoryUpdateResult:
         )
 
 
-
-
 class MemoryUpdater:
     """
     Applies MemoryOperations to storage.
@@ -156,7 +151,9 @@ class MemoryUpdater:
     No function calls are used for write/edit/delete - these are executed directly.
     """
 
-    def __init__(self, registry: Optional[MemoryTypeRegistry] = None, vikingdb=None, transaction_handle=None):
+    def __init__(
+        self, registry: Optional[MemoryTypeRegistry] = None, vikingdb=None, transaction_handle=None
+    ):
         self._viking_fs = None
         self._registry = registry
         self._vikingdb = vikingdb
@@ -233,8 +230,10 @@ class MemoryUpdater:
                 )
                 result.add_written(resolved_op.uri)
             except Exception as e:
-                logger.info(f"Failed to write memory: {e}, op={resolved_op.model}, op type={type(resolved_op.model)}")
-                if hasattr(resolved_op.model, 'model_dump'):
+                logger.info(
+                    f"Failed to write memory: {e}, op={resolved_op.model}, op type={type(resolved_op.model)}"
+                )
+                if hasattr(resolved_op.model, "model_dump"):
                     logger.info(f"Op dump: {resolved_op.model.model_dump()}")
                 result.add_error(resolved_op.uri, e)
 
@@ -271,7 +270,14 @@ class MemoryUpdater:
         logger.info(f"Memory operations applied: {result.summary()}")
         return result
 
-    async def _apply_write(self, flat_model: Any, uri: str, ctx: RequestContext, extract_context: Any = None, memory_type: str = None) -> None:
+    async def _apply_write(
+        self,
+        flat_model: Any,
+        uri: str,
+        ctx: RequestContext,
+        extract_context: Any = None,
+        memory_type: str = None,
+    ) -> None:
         """Apply write operation from a flat model."""
         viking_fs = self._get_viking_fs()
 
@@ -299,11 +305,17 @@ class MemoryUpdater:
                 # 模板渲染逻辑
                 if schema.content_template:
                     try:
-                        rendered_content = self._render_content_template(schema.content_template, business_fields, extract_context=extract_context)
+                        rendered_content = self._render_content_template(
+                            schema.content_template,
+                            business_fields,
+                            extract_context=extract_context,
+                        )
                         if rendered_content:
                             content = rendered_content
                     except Exception as e:
-                        logger.warning(f"Failed to render content template for memory type {memory_type_str}: {e}")
+                        logger.warning(
+                            f"Failed to render content template for memory type {memory_type_str}: {e}"
+                        )
                         # 渲染失败时保留原始 content，确保写入操作继续进行
 
         # Collect metadata - only include business fields (from schema, except content)
@@ -317,7 +329,9 @@ class MemoryUpdater:
         await viking_fs.write_file(uri, full_content, ctx=ctx)
         logger.debug(f"Written memory: {uri}")
 
-    def _render_content_template(self, template: str, fields: Dict[str, Any], extract_context: Any = None) -> str:
+    def _render_content_template(
+        self, template: str, fields: Dict[str, Any], extract_context: Any = None
+    ) -> str:
         """
         Render content template using Jinja2 template engine.
 
@@ -355,6 +369,7 @@ class MemoryUpdater:
     def _is_patch_format(self, content: Any) -> bool:
         """Check if content is a patch format (StrPatch), not a complete replacement."""
         from openviking.session.memory.merge_op.patch import StrPatch
+
         return isinstance(content, StrPatch)
 
     async def _apply_edit(self, flat_model: Any, uri: str, ctx: RequestContext) -> None:
@@ -420,6 +435,7 @@ class MemoryUpdater:
         if "content" in model_dict and "content" not in field_schema_map:
             from openviking.session.memory.merge_op import PatchOp
             from openviking.session.memory.merge_op.base import FieldType
+
             patch_value = model_dict["content"]
             merge_op = PatchOp(FieldType.STRING)
             new_plain_content = merge_op.apply(current_plain_content, patch_value)
@@ -446,7 +462,9 @@ class MemoryUpdater:
             logger.warning(f"Memory not found for delete: {uri}")
             # Idempotent - deleting non-existent file succeeds
 
-    async def _apply_edit_overview(self, overview_model: Any, uri: str, ctx: RequestContext) -> None:
+    async def _apply_edit_overview(
+        self, overview_model: Any, uri: str, ctx: RequestContext
+    ) -> None:
         """
         Apply edit operation for .overview.md file.
 
@@ -458,10 +476,10 @@ class MemoryUpdater:
         viking_fs = self._get_viking_fs()
 
         # Get overview value from model
-        if hasattr(overview_model, 'overview'):
+        if hasattr(overview_model, "overview"):
             overview_value = overview_model.overview
         elif isinstance(overview_model, dict):
-            overview_value = overview_model.get('overview')
+            overview_value = overview_model.get("overview")
         else:
             raise ValueError("overview_model must have overview field")
 
@@ -487,9 +505,9 @@ class MemoryUpdater:
                 new_overview = overview_value
         elif isinstance(overview_value, dict):
             # Dict format - convert to StrPatch if needed
-            if 'blocks' in overview_value:
+            if "blocks" in overview_value:
                 # Already in StrPatch format
-                blocks = [SearchReplaceBlock(**block) for block in overview_value['blocks']]
+                blocks = [SearchReplaceBlock(**block) for block in overview_value["blocks"]]
                 str_patch = StrPatch(blocks=blocks)
             else:
                 # Unexpected format
@@ -563,6 +581,7 @@ class MemoryUpdater:
         """Print a diff of the memory edit using diff_match_patch."""
         try:
             from diff_match_patch import diff_match_patch
+
             dmp = diff_match_patch()
 
             # Compute character-level diff
@@ -577,7 +596,7 @@ class MemoryUpdater:
 
             # ANSI styles
             STYLE_DELETE = "\033[9m\033[31m"  # 删除线 + 红色
-            STYLE_INSERT = "\033[32m"          # 绿色
+            STYLE_INSERT = "\033[32m"  # 绿色
             STYLE_RESET = "\033[0m"
 
             for op, text in diffs:

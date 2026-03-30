@@ -1,21 +1,19 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Chat channel for interactive mode."""
 
 import asyncio
 import os
 import signal
-import sys
 from pathlib import Path
 from typing import Any
 
-from loguru import logger
 from rich.style import Style
 
-from vikingbot.bus.events import InboundMessage, OutboundMessage, OutboundEventType
+from vikingbot.bus.events import InboundMessage, OutboundEventType, OutboundMessage
 from vikingbot.bus.queue import MessageBus
 from vikingbot.channels.base import BaseChannel
-from vikingbot.config.schema import SessionKey, BaseChannelConfig
+from vikingbot.config.schema import BaseChannelConfig, SessionKey
 
 
 class ChatChannelConfig(BaseChannelConfig):
@@ -71,9 +69,10 @@ class ChatChannel(BaseChannel):
 
     async def send(self, msg: OutboundMessage) -> None:
         """Send a message - display thinking events and store final response."""
-        from vikingbot.cli.commands import console
         from rich.markdown import Markdown
         from rich.text import Text
+
+        from vikingbot.cli.commands import console
 
         if msg.is_normal_message:
             self._last_response = msg.content
@@ -117,10 +116,9 @@ class ChatChannel(BaseChannel):
             _flush_pending_tty_input,
             _init_prompt_session,
             _is_exit_command,
-            _restore_terminal,
-            __logo__,
-            console,
             _read_interactive_input_async,
+            _restore_terminal,
+            console,
         )
 
         _init_prompt_session()

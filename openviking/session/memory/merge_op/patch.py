@@ -1,17 +1,17 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Patch merge operation - SEARCH/REPLACE for strings, direct replace for others.
 """
 
-from typing import Any, Type, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Type
 
 from openviking.session.memory.merge_op.base import (
+    FieldType,
     MergeOp,
     MergeOpBase,
-    FieldType,
-    StrPatch,
     SearchReplaceBlock,
+    StrPatch,
     get_python_type_for_field,
 )
 
@@ -26,7 +26,7 @@ class PatchOp(MergeOpBase):
 
     def __init__(self, field_type: FieldType):
         self._field_type = field_type
-        self._patch_handler: 'MemoryPatchHandler | None' = None
+        self._patch_handler: "MemoryPatchHandler | None" = None
 
     def get_output_schema_type(self, field_type: FieldType) -> Type[Any]:
         if field_type == FieldType.STRING:

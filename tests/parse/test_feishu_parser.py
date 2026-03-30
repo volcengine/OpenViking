@@ -1,12 +1,12 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Tests for FeishuParser."""
 
 import asyncio
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
-from types import SimpleNamespace
 
 from openviking.parse.parsers.feishu import FeishuParser
 
@@ -15,31 +15,58 @@ def _make_block(**kwargs):
     """Create a mock block object with only the specified attributes populated."""
     # Start with all common attributes as None
     defaults = {
-        "block_id": "test_id", "block_type": 0, "parent_id": "parent_id",
-        "children": None, "comment_ids": None, "add_ons": None,
-        "page": None, "text": None, "heading1": None, "heading2": None,
-        "heading3": None, "heading4": None, "heading5": None, "heading6": None,
-        "heading7": None, "heading8": None, "heading9": None,
-        "bullet": None, "ordered": None, "code": None, "quote": None,
-        "todo": None, "divider": None, "image": None, "table": None,
-        "table_cell": None, "quote_container": None, "sheet": None,
-        "callout": None, "equation": None, "task": None,
+        "block_id": "test_id",
+        "block_type": 0,
+        "parent_id": "parent_id",
+        "children": None,
+        "comment_ids": None,
+        "add_ons": None,
+        "page": None,
+        "text": None,
+        "heading1": None,
+        "heading2": None,
+        "heading3": None,
+        "heading4": None,
+        "heading5": None,
+        "heading6": None,
+        "heading7": None,
+        "heading8": None,
+        "heading9": None,
+        "bullet": None,
+        "ordered": None,
+        "code": None,
+        "quote": None,
+        "todo": None,
+        "divider": None,
+        "image": None,
+        "table": None,
+        "table_cell": None,
+        "quote_container": None,
+        "sheet": None,
+        "callout": None,
+        "equation": None,
+        "task": None,
     }
     defaults.update(kwargs)
     return SimpleNamespace(**defaults)
 
 
-def _make_text_content(text: str, bold=False, italic=False, inline_code=False,
-                       strikethrough=False, link_url=None):
+def _make_text_content(
+    text: str, bold=False, italic=False, inline_code=False, strikethrough=False, link_url=None
+):
     """Create a mock text content object with elements."""
     style = SimpleNamespace(
-        bold=bold, italic=italic, inline_code=inline_code,
+        bold=bold,
+        italic=italic,
+        inline_code=inline_code,
         strikethrough=strikethrough,
         link=SimpleNamespace(url=link_url) if link_url else None,
     )
     element = SimpleNamespace(
         text_run=SimpleNamespace(content=text, text_element_style=style),
-        mention_user=None, mention_doc=None, equation=None,
+        mention_user=None,
+        mention_doc=None,
+        equation=None,
     )
     return SimpleNamespace(elements=[element], style=None)
 
@@ -53,9 +80,7 @@ class TestParseFeishuUrl:
         assert token == "doxcnABC123"
 
     def test_wiki_url(self):
-        doc_type, token = FeishuParser._parse_feishu_url(
-            "https://example.feishu.cn/wiki/wikiXYZ"
-        )
+        doc_type, token = FeishuParser._parse_feishu_url("https://example.feishu.cn/wiki/wikiXYZ")
         assert doc_type == "wiki"
         assert token == "wikiXYZ"
 
@@ -86,22 +111,24 @@ class TestParseFeishuUrl:
 class TestIsFeishuUrl:
     def test_feishu_docx(self):
         from openviking.utils.media_processor import UnifiedResourceProcessor
-        assert UnifiedResourceProcessor._is_feishu_url(
-            "https://example.feishu.cn/docx/abc123"
-        )
+
+        assert UnifiedResourceProcessor._is_feishu_url("https://example.feishu.cn/docx/abc123")
 
     def test_larksuite(self):
         from openviking.utils.media_processor import UnifiedResourceProcessor
+
         assert UnifiedResourceProcessor._is_feishu_url(
             "https://example.larksuite.com/sheets/abc123"
         )
 
     def test_non_feishu_url(self):
         from openviking.utils.media_processor import UnifiedResourceProcessor
+
         assert not UnifiedResourceProcessor._is_feishu_url("https://github.com/foo/bar")
 
     def test_feishu_non_doc_path(self):
         from openviking.utils.media_processor import UnifiedResourceProcessor
+
         assert not UnifiedResourceProcessor._is_feishu_url(
             "https://example.feishu.cn/profile/settings"
         )
@@ -165,9 +192,7 @@ class TestBlockToMarkdown:
         assert result == "---"
 
     def test_image_block(self):
-        block = _make_block(
-            image=SimpleNamespace(token="img_token_123", alt="screenshot")
-        )
+        block = _make_block(image=SimpleNamespace(token="img_token_123", alt="screenshot"))
         result = self.parser._block_to_markdown(block, {}, {})
         assert result == "![screenshot](feishu://image/img_token_123)"
 
@@ -190,25 +215,49 @@ class TestBlockToMarkdown:
 
 class TestApplyTextStyle:
     def test_bold(self):
-        assert FeishuParser._apply_text_style("text", SimpleNamespace(
-            bold=True, italic=False, strikethrough=False, inline_code=False, link=None
-        )) == "**text**"
+        assert (
+            FeishuParser._apply_text_style(
+                "text",
+                SimpleNamespace(
+                    bold=True, italic=False, strikethrough=False, inline_code=False, link=None
+                ),
+            )
+            == "**text**"
+        )
 
     def test_italic(self):
-        assert FeishuParser._apply_text_style("text", SimpleNamespace(
-            bold=False, italic=True, strikethrough=False, inline_code=False, link=None
-        )) == "*text*"
+        assert (
+            FeishuParser._apply_text_style(
+                "text",
+                SimpleNamespace(
+                    bold=False, italic=True, strikethrough=False, inline_code=False, link=None
+                ),
+            )
+            == "*text*"
+        )
 
     def test_inline_code(self):
-        assert FeishuParser._apply_text_style("code", SimpleNamespace(
-            bold=False, italic=False, strikethrough=False, inline_code=True, link=None
-        )) == "`code`"
+        assert (
+            FeishuParser._apply_text_style(
+                "code",
+                SimpleNamespace(
+                    bold=False, italic=False, strikethrough=False, inline_code=True, link=None
+                ),
+            )
+            == "`code`"
+        )
 
     def test_link(self):
-        result = FeishuParser._apply_text_style("click", SimpleNamespace(
-            bold=False, italic=False, strikethrough=False, inline_code=False,
-            link=SimpleNamespace(url="https://example.com"),
-        ))
+        result = FeishuParser._apply_text_style(
+            "click",
+            SimpleNamespace(
+                bold=False,
+                italic=False,
+                strikethrough=False,
+                inline_code=False,
+                link=SimpleNamespace(url="https://example.com"),
+            ),
+        )
         assert result == "[click](https://example.com)"
 
     def test_empty_text(self):
@@ -267,15 +316,37 @@ def _mock_list_blocks_response(blocks, has_more=False, page_token=None):
 def _make_sdk_block(block_id, parent_id="doc_id", **attrs):
     """Create a mock SDK block with all attributes defaulting to None."""
     defaults = {
-        "block_id": block_id, "block_type": 0, "parent_id": parent_id,
-        "children": None, "comment_ids": None, "add_ons": None,
-        "page": None, "text": None, "heading1": None, "heading2": None,
-        "heading3": None, "heading4": None, "heading5": None, "heading6": None,
-        "heading7": None, "heading8": None, "heading9": None,
-        "bullet": None, "ordered": None, "code": None, "quote": None,
-        "todo": None, "divider": None, "image": None, "table": None,
-        "table_cell": None, "quote_container": None, "sheet": None,
-        "callout": None, "equation": None, "task": None,
+        "block_id": block_id,
+        "block_type": 0,
+        "parent_id": parent_id,
+        "children": None,
+        "comment_ids": None,
+        "add_ons": None,
+        "page": None,
+        "text": None,
+        "heading1": None,
+        "heading2": None,
+        "heading3": None,
+        "heading4": None,
+        "heading5": None,
+        "heading6": None,
+        "heading7": None,
+        "heading8": None,
+        "heading9": None,
+        "bullet": None,
+        "ordered": None,
+        "code": None,
+        "quote": None,
+        "todo": None,
+        "divider": None,
+        "image": None,
+        "table": None,
+        "table_cell": None,
+        "quote_container": None,
+        "sheet": None,
+        "callout": None,
+        "equation": None,
+        "task": None,
     }
     defaults.update(attrs)
     return SimpleNamespace(**defaults)
@@ -295,12 +366,21 @@ class TestParseDocxIntegration:
     def test_parse_docx_basic(self):
         """Test basic document with page title, heading, and text."""
         blocks = [
-            _make_sdk_block("page_id", page=SimpleNamespace(
-                elements=[SimpleNamespace(
-                    text_run=SimpleNamespace(content="My Document", text_element_style=None),
-                    mention_user=None, mention_doc=None, equation=None,
-                )]
-            )),
+            _make_sdk_block(
+                "page_id",
+                page=SimpleNamespace(
+                    elements=[
+                        SimpleNamespace(
+                            text_run=SimpleNamespace(
+                                content="My Document", text_element_style=None
+                            ),
+                            mention_user=None,
+                            mention_doc=None,
+                            equation=None,
+                        )
+                    ]
+                ),
+            ),
             _make_sdk_block("h1_id", heading2=_make_text_content("Introduction")),
             _make_sdk_block("t1_id", text=_make_text_content("Hello world")),
         ]
@@ -317,12 +397,21 @@ class TestParseDocxIntegration:
     def test_parse_docx_with_pagination(self):
         """Test document fetching with multiple pages of blocks."""
         page1_blocks = [
-            _make_sdk_block("page_id", page=SimpleNamespace(
-                elements=[SimpleNamespace(
-                    text_run=SimpleNamespace(content="Paginated Doc", text_element_style=None),
-                    mention_user=None, mention_doc=None, equation=None,
-                )]
-            )),
+            _make_sdk_block(
+                "page_id",
+                page=SimpleNamespace(
+                    elements=[
+                        SimpleNamespace(
+                            text_run=SimpleNamespace(
+                                content="Paginated Doc", text_element_style=None
+                            ),
+                            mention_user=None,
+                            mention_doc=None,
+                            equation=None,
+                        )
+                    ]
+                ),
+            ),
             _make_sdk_block("t1_id", text=_make_text_content("Page 1 content")),
         ]
         page2_blocks = [
@@ -371,24 +460,38 @@ class TestParseDocxIntegration:
     def test_parse_docx_mixed_blocks(self):
         """Test document with various block types."""
         blocks = [
-            _make_sdk_block("page_id", page=SimpleNamespace(
-                elements=[SimpleNamespace(
-                    text_run=SimpleNamespace(content="Report", text_element_style=None),
-                    mention_user=None, mention_doc=None, equation=None,
-                )]
-            )),
+            _make_sdk_block(
+                "page_id",
+                page=SimpleNamespace(
+                    elements=[
+                        SimpleNamespace(
+                            text_run=SimpleNamespace(content="Report", text_element_style=None),
+                            mention_user=None,
+                            mention_doc=None,
+                            equation=None,
+                        )
+                    ]
+                ),
+            ),
             _make_sdk_block("h_id", heading2=_make_text_content("Section 1")),
             _make_sdk_block("b1_id", bullet=_make_text_content("Item A")),
             _make_sdk_block("b2_id", bullet=_make_text_content("Item B")),
             _make_sdk_block("div_id", divider=SimpleNamespace()),
             _make_sdk_block("q_id", quote=_make_text_content("A wise quote")),
-            _make_sdk_block("code_id", code=SimpleNamespace(
-                elements=[SimpleNamespace(
-                    text_run=SimpleNamespace(content="x = 1", text_element_style=None),
-                    mention_user=None, mention_doc=None, equation=None,
-                )],
-                style=SimpleNamespace(language="python"),
-            )),
+            _make_sdk_block(
+                "code_id",
+                code=SimpleNamespace(
+                    elements=[
+                        SimpleNamespace(
+                            text_run=SimpleNamespace(content="x = 1", text_element_style=None),
+                            mention_user=None,
+                            mention_doc=None,
+                            equation=None,
+                        )
+                    ],
+                    style=SimpleNamespace(language="python"),
+                ),
+            ),
         ]
         response = _mock_list_blocks_response(blocks)
         parser = self._make_parser_with_mock_client(response)
@@ -409,7 +512,9 @@ class TestParseDocxIntegration:
             _make_sdk_block("page_id", page=SimpleNamespace(elements=[])),
             _make_sdk_block("o1", ordered=_make_text_content("First")),
             _make_sdk_block("o2", ordered=_make_text_content("Second")),
-            _make_sdk_block("t1", text=_make_text_content("Break")),  # Non-ordered block resets counter
+            _make_sdk_block(
+                "t1", text=_make_text_content("Break")
+            ),  # Non-ordered block resets counter
             _make_sdk_block("o3", ordered=_make_text_content("New first")),
         ]
         response = _mock_list_blocks_response(blocks)
@@ -430,12 +535,19 @@ class TestParseAsyncIntegration:
         parser = FeishuParser()
 
         blocks = [
-            _make_sdk_block("page_id", page=SimpleNamespace(
-                elements=[SimpleNamespace(
-                    text_run=SimpleNamespace(content="Test Doc", text_element_style=None),
-                    mention_user=None, mention_doc=None, equation=None,
-                )]
-            )),
+            _make_sdk_block(
+                "page_id",
+                page=SimpleNamespace(
+                    elements=[
+                        SimpleNamespace(
+                            text_run=SimpleNamespace(content="Test Doc", text_element_style=None),
+                            mention_user=None,
+                            mention_doc=None,
+                            equation=None,
+                        )
+                    ]
+                ),
+            ),
             _make_sdk_block("t1", text=_make_text_content("Content here")),
         ]
         mock_client = MagicMock()
@@ -451,8 +563,10 @@ class TestParseAsyncIntegration:
 
         with patch("openviking.parse.parsers.feishu.MarkdownParser") as MockMD:
             mock_md_instance = MagicMock()
+
             async def _mock_parse_content(*a, **kw):
                 return mock_md_result
+
             mock_md_instance.parse_content = _mock_parse_content
             MockMD.return_value = mock_md_instance
 
@@ -494,8 +608,10 @@ class TestParseAsyncIntegration:
 
         with patch("openviking.parse.parsers.feishu.MarkdownParser") as MockMD:
             mock_md_instance = MagicMock()
+
             async def _mock_parse_content(*a, **kw):
                 return mock_md_result
+
             mock_md_instance.parse_content = _mock_parse_content
             MockMD.return_value = mock_md_instance
 

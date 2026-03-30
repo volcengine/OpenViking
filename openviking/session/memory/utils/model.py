@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Model utilities - shared model conversion functions.
 """
@@ -17,11 +17,11 @@ def model_to_dict(model: Any, exclude_none: bool = True) -> Dict[str, Any]:
     Returns:
         Dictionary representation of the model
     """
-    if hasattr(model, 'model_dump'):
+    if hasattr(model, "model_dump"):
         if exclude_none:
             return model.model_dump(exclude_none=True)
         return model.model_dump()
-    elif hasattr(model, 'dict'):
+    elif hasattr(model, "dict"):
         # For backward compatibility with older Pydantic
         if exclude_none:
             return model.dict(exclude_none=True)

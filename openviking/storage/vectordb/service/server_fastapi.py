@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 
 """FastAPI server for VikingDB vector database service.
 
@@ -11,7 +11,7 @@ import asyncio
 import random
 import time
 from contextlib import asynccontextmanager
-from typing import Dict, Any
+from typing import Any, Dict
 
 import uvicorn
 from fastapi import FastAPI, Request
@@ -28,19 +28,19 @@ _active_requests = 0
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Handle application startup and shutdown events.
-    
+
     Manages resource initialization and cleanup, ensuring graceful shutdown
     by waiting for all active requests to complete.
-    
+
     Args:
         app: The FastAPI application instance
     """
     # Startup
     logger.info("============ VikingDB Server Starting =============")
     random.seed(time.time_ns())
-    
+
     yield
-    
+
     # Shutdown
     logger.info("Waiting for active requests to complete...")
     while _active_requests > 0:
@@ -61,31 +61,30 @@ app = FastAPI(
 @app.exception_handler(VikingDBException)
 async def vikingdb_exception_handler(request: Request, exc: VikingDBException) -> JSONResponse:
     """Handle VikingDB-specific exceptions.
-    
+
     Args:
         request: The incoming HTTP request
         exc: The VikingDBException that was raised
-        
+
     Returns:
         JSONResponse with error details
     """
     return JSONResponse(
-        status_code=200, 
-        content=error_response(exc.message, exc.code.value, request=request)
+        status_code=200, content=error_response(exc.message, exc.code.value, request=request)
     )
 
 
 @app.middleware("http")
 async def request_tracking_middleware(request: Request, call_next):
     """Middleware to track request processing time and active request count.
-    
+
     Increments active request counter, measures processing time,
     and adds processing time header to response.
-    
+
     Args:
         request: The incoming HTTP request
         call_next: The next middleware/handler in the chain
-        
+
     Returns:
         Response with added X-Process-Time header
     """
@@ -118,7 +117,7 @@ app.include_router(api_fastapi.search_router)
 @app.get("/")
 async def root() -> Dict[str, str]:
     """Root endpoint providing basic server information.
-    
+
     Returns:
         Dict containing server name and version
     """
@@ -128,7 +127,7 @@ async def root() -> Dict[str, str]:
 @app.get("/health")
 async def health() -> Dict[str, Any]:
     """Health check endpoint for monitoring server status.
-    
+
     Returns:
         Dict containing health status and current active request count
     """

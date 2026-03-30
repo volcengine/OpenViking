@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Feishu/Lark cloud document parser for OpenViking.
 
@@ -73,32 +73,93 @@ class FeishuParser(BaseParser):
     # Primary dispatch mechanism for reliable block detection.
     # Source: Feishu OpenAPI documentation + lark-oapi SDK Block class.
     _BLOCK_TYPE_TO_ATTR = {
-        1: "page", 2: "text",
-        3: "heading1", 4: "heading2", 5: "heading3", 6: "heading4",
-        7: "heading5", 8: "heading6", 9: "heading7", 10: "heading8", 11: "heading9",
-        12: "bullet", 13: "ordered", 14: "code", 15: "quote",
-        17: "todo", 18: "bitable", 19: "callout",
-        22: "divider", 24: "file",
+        1: "page",
+        2: "text",
+        3: "heading1",
+        4: "heading2",
+        5: "heading3",
+        6: "heading4",
+        7: "heading5",
+        8: "heading6",
+        9: "heading7",
+        10: "heading8",
+        11: "heading9",
+        12: "bullet",
+        13: "ordered",
+        14: "code",
+        15: "quote",
+        17: "todo",
+        18: "bitable",
+        19: "callout",
+        22: "divider",
+        24: "file",
         27: "image",
         30: "sheet",
-        31: "table", 32: "table_cell",
+        31: "table",
+        32: "table_cell",
         34: "quote_container",
     }
 
     # All known content attribute names on SDK Block objects (for fallback detection).
-    _KNOWN_CONTENT_ATTRS = frozenset({
-        "page", "text", "heading1", "heading2", "heading3", "heading4",
-        "heading5", "heading6", "heading7", "heading8", "heading9",
-        "bullet", "ordered", "code", "quote", "todo", "callout",
-        "divider", "image", "table", "table_cell", "quote_container",
-        "sheet", "file", "bitable", "equation", "task",
-        "grid", "grid_column", "iframe", "board", "chat_card", "diagram",
-        "agenda", "agenda_item", "agenda_item_content", "agenda_item_title",
-        "ai_template", "isv", "jira_issue", "link_preview", "meeting_notes_qa",
-        "mindnote", "okr", "okr_key_result", "okr_objective", "okr_progress",
-        "project", "reference_base", "reference_synced", "source_synced",
-        "sub_page_list", "undefined", "view", "wiki_catalog",
-    })
+    _KNOWN_CONTENT_ATTRS = frozenset(
+        {
+            "page",
+            "text",
+            "heading1",
+            "heading2",
+            "heading3",
+            "heading4",
+            "heading5",
+            "heading6",
+            "heading7",
+            "heading8",
+            "heading9",
+            "bullet",
+            "ordered",
+            "code",
+            "quote",
+            "todo",
+            "callout",
+            "divider",
+            "image",
+            "table",
+            "table_cell",
+            "quote_container",
+            "sheet",
+            "file",
+            "bitable",
+            "equation",
+            "task",
+            "grid",
+            "grid_column",
+            "iframe",
+            "board",
+            "chat_card",
+            "diagram",
+            "agenda",
+            "agenda_item",
+            "agenda_item_content",
+            "agenda_item_title",
+            "ai_template",
+            "isv",
+            "jira_issue",
+            "link_preview",
+            "meeting_notes_qa",
+            "mindnote",
+            "okr",
+            "okr_key_result",
+            "okr_objective",
+            "okr_progress",
+            "project",
+            "reference_base",
+            "reference_synced",
+            "source_synced",
+            "sub_page_list",
+            "undefined",
+            "view",
+            "wiki_catalog",
+        }
+    )
 
     # Document type → parse method name mapping.
     # Wiki nodes are resolved to one of these types via _resolve_wiki_node.
@@ -150,11 +211,7 @@ class FeishuParser(BaseParser):
                 )
             domain = config.domain or "https://open.feishu.cn"
             self._client = (
-                lark.Client.builder()
-                .app_id(app_id)
-                .app_secret(app_secret)
-                .domain(domain)
-                .build()
+                lark.Client.builder().app_id(app_id).app_secret(app_secret).domain(domain).build()
             )
         return self._client
 
@@ -178,9 +235,7 @@ class FeishuParser(BaseParser):
 
     # ========== Main Parse ==========
 
-    async def parse(
-        self, source: Union[str, Path], instruction: str = "", **kwargs
-    ) -> ParseResult:
+    async def parse(self, source: Union[str, Path], instruction: str = "", **kwargs) -> ParseResult:
         """Parse a Feishu cloud document URL."""
         url = str(source)
         start_time = time.time()
@@ -201,9 +256,7 @@ class FeishuParser(BaseParser):
                     f"Unsupported Feishu document type: {doc_type}. "
                     f"Supported: {list(self._DOC_TYPE_HANDLERS.keys())}"
                 )
-            markdown, doc_title = await asyncio.to_thread(
-                getattr(self, handler_name), token
-            )
+            markdown, doc_title = await asyncio.to_thread(getattr(self, handler_name), token)
 
             if title:
                 doc_title = title
@@ -261,8 +314,7 @@ class FeishuParser(BaseParser):
         response = client.wiki.v2.space.get_node(request)
         if not response.success():
             raise RuntimeError(
-                f"Failed to resolve wiki node {token}: "
-                f"code={response.code}, msg={response.msg}"
+                f"Failed to resolve wiki node {token}: code={response.code}, msg={response.msg}"
             )
         node = response.data.node
         obj_type = node.obj_type or ""
@@ -306,7 +358,9 @@ class FeishuParser(BaseParser):
             if block.page is not None:
                 continue  # Skip page container
 
-            line = self._block_to_markdown(block, block_map, ordered_counter, document_id=document_id)
+            line = self._block_to_markdown(
+                block, block_map, ordered_counter, document_id=document_id
+            )
             if line is not None:
                 markdown_lines.append(line)
 
@@ -374,8 +428,9 @@ class FeishuParser(BaseParser):
                 return attr
         return None
 
-    def _block_to_markdown(self, block, block_map: Dict, ordered_counter: Dict[str, int],
-                           document_id: str = "") -> Optional[str]:
+    def _block_to_markdown(
+        self, block, block_map: Dict, ordered_counter: Dict[str, int], document_id: str = ""
+    ) -> Optional[str]:
         """Convert a single SDK block object to markdown string.
 
         Uses block_type integer for primary dispatch, with attribute whitelist
@@ -578,8 +633,9 @@ class FeishuParser(BaseParser):
 
     # ========== Embedded Sheet in Docx ==========
 
-    def _embedded_sheet_to_markdown(self, block, block_map: Dict = None, *,
-                                     document_id: str = "", **_) -> Optional[str]:
+    def _embedded_sheet_to_markdown(
+        self, block, block_map: Dict = None, *, document_id: str = "", **_
+    ) -> Optional[str]:
         """Convert an embedded sheet block to markdown table.
 
         These blocks appear in docx documents when a user embeds a spreadsheet
@@ -604,9 +660,7 @@ class FeishuParser(BaseParser):
             return None
 
         data = json.loads(raw_resp.raw.content)
-        sheet_token = (
-            data.get("data", {}).get("block", {}).get("sheet", {}).get("token", "")
-        )
+        sheet_token = data.get("data", {}).get("block", {}).get("sheet", {}).get("token", "")
         if not sheet_token:
             return None
 
@@ -618,9 +672,7 @@ class FeishuParser(BaseParser):
 
         # Read cell data and trim empty trailing columns
         try:
-            rows = self._read_sheet_range(
-                spreadsheet_token, sheet_id, max_rows=100, max_cols=26
-            )
+            rows = self._read_sheet_range(spreadsheet_token, sheet_id, max_rows=100, max_cols=26)
             if rows:
                 rows = self._trim_empty_columns(rows)
             if rows:
@@ -666,9 +718,7 @@ class FeishuParser(BaseParser):
             title = meta_response.data.spreadsheet.title or title
 
         # Get sheet list
-        sheets_request = (
-            QuerySpreadsheetSheetRequest.builder().spreadsheet_token(token).build()
-        )
+        sheets_request = QuerySpreadsheetSheetRequest.builder().spreadsheet_token(token).build()
         sheets_response = client.sheets.v3.spreadsheet_sheet.query(sheets_request)
         if not sheets_response.success():
             raise RuntimeError(
@@ -736,9 +786,7 @@ class FeishuParser(BaseParser):
 
         data = json.loads(response.raw.content)
         values = data.get("data", {}).get("valueRange", {}).get("values", [])
-        return [
-            [str(cell) if cell is not None else "" for cell in row] for row in values
-        ]
+        return [[str(cell) if cell is not None else "" for cell in row] for row in values]
 
     @staticmethod
     def _col_number_to_letter(n: int) -> str:
@@ -775,10 +823,7 @@ class FeishuParser(BaseParser):
             table_name = table.name or table_id
 
             fields_request = (
-                ListAppTableFieldRequest.builder()
-                .app_token(app_token)
-                .table_id(table_id)
-                .build()
+                ListAppTableFieldRequest.builder().app_token(app_token).table_id(table_id).build()
             )
             fields_response = client.bitable.v1.app_table_field.list(fields_request)
             field_names: List[str] = []
@@ -798,9 +843,7 @@ class FeishuParser(BaseParser):
                 )
                 if page_token:
                     builder = builder.page_token(page_token)
-                records_response = client.bitable.v1.app_table_record.list(
-                    builder.build()
-                )
+                records_response = client.bitable.v1.app_table_record.list(builder.build())
                 if not records_response.success():
                     break
                 items = records_response.data.items or []

@@ -1,25 +1,32 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Core domain data classes for memory system.
 """
 
 import json
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Protocol, TypeVar, Union, get_type_hints, get_origin, get_args
+from typing import (
+    Any,
+    Dict,
+    List,
+    Optional,
+    Protocol,
+    TypeVar,
+    Union,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
 from pydantic import BaseModel, Field, model_validator
 
 from openviking.session.memory.merge_op.base import (
     FieldType,
     MergeOp,
-    SearchReplaceBlock,
-    StrPatch,
-    get_python_type_for_field,
 )
 
-
-T = TypeVar('T')
+T = TypeVar("T")
 
 
 # ============================================================================
@@ -43,10 +50,14 @@ class MemoryTypeSchema(BaseModel):
     description: str = Field("", description="Type description")
     fields: List[MemoryField] = Field(default_factory=list, description="Field definitions")
     filename_template: str = Field("", description="Filename template")
-    content_template: Optional[str] = Field(None, description="Content template (for template mode)")
+    content_template: Optional[str] = Field(
+        None, description="Content template (for template mode)"
+    )
     directory: str = Field("", description="Directory path")
     enabled: bool = Field(True, description="Whether this memory type is enabled")
-    operation_mode: str = Field("upsert", description="Operation mode: 'upsert' (default), 'add_only', or 'update_only'")
+    operation_mode: str = Field(
+        "upsert", description="Operation mode: 'upsert' (default), 'add_only', or 'update_only'"
+    )
 
 
 class MemoryData(BaseModel):
@@ -72,8 +83,6 @@ class MemoryData(BaseModel):
         self.fields[field_name] = value
 
 
-
-
 # ============================================================================
 # Fault Tolerant Base Model (参考 vikingdb BaseModelCompat)
 # ============================================================================
@@ -87,7 +96,7 @@ class FaultTolerantBaseModel(BaseModel):
     使得模型可以接受 LLM 输出的不标准格式数据。
     """
 
-    @model_validator(mode='before')
+    @model_validator(mode="before")
     @classmethod
     def values_fault_tolerance(cls, data: Dict[str, Any]) -> Dict[str, Any]:
         """在验证前对所有字段做容错处理"""
@@ -135,7 +144,7 @@ class FaultTolerantBaseModel(BaseModel):
         elif isinstance(value, dict):
             return json.dumps(value, ensure_ascii=False)
         elif isinstance(value, (int, bool, float)):
-            return f'{value}'
+            return f"{value}"
         return str(value)
 
     @classmethod
@@ -151,14 +160,14 @@ class FaultTolerantBaseModel(BaseModel):
         origin_type = cls.get_origin_type(field_type)
 
         # json_repair 会把 None 转换成 'None'
-        if value == 'None' and origin_type is not str:
+        if value == "None" and origin_type is not str:
             return None
 
         if origin_type is str:
             return cls.any_to_str(value)
         elif origin_type is int:
             if isinstance(value, str):
-                if value is None or value == 'None':
+                if value is None or value == "None":
                     return 0
                 try:
                     return int(value)
@@ -166,7 +175,7 @@ class FaultTolerantBaseModel(BaseModel):
                     pass
         elif origin_type is float:
             if isinstance(value, str):
-                if value is None or value == 'None':
+                if value is None or value == "None":
                     return 0.0
                 try:
                     return float(value)
@@ -210,7 +219,7 @@ class StructuredMemoryOperations(FaultTolerantBaseModel):
     """
 
     reasoning: str = Field(
-        '',
+        "",
         description="reasoning",
     )
     write_uris: List[Any] = Field(
@@ -248,7 +257,7 @@ class StructuredMemoryOperations(FaultTolerantBaseModel):
             "delete_uris": self.delete_uris,
         }
 
-    model_config = {'extra': 'ignore'}
+    model_config = {"extra": "ignore"}
 
 
 # Backward compatibility alias
