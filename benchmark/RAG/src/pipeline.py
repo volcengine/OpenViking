@@ -42,24 +42,21 @@ class BenchmarkPipeline:
     def run_generation(self):
         """Step 1: Data Preparation"""
         self.logger.info(">>> Stage: Ingestion & Generation")
+        skip_ingestion = self.config['execution'].get('skip_ingestion', False)
         doc_dir = self.config['paths'].get('doc_output_dir')
         if not doc_dir:
             doc_dir = os.path.join(self.output_dir, "docs")
-        
-        try:
-            doc_info = self.adapter.data_prepare(doc_dir)
-        except Exception as e:
-            self.logger.exception(f"Data preparation failed: {e}")
-            exit(1)
-        
-        skip_ingestion = self.config['execution'].get('skip_ingestion', False)
 
         if skip_ingestion:
-            self.logger.info(f"Skipping Ingestion. Using existing docs at: {doc_dir}")
-            if not os.path.exists(doc_dir):
-                 self.logger.warning(f"Warning: Doc directory {doc_dir} not found, but ingestion is skipped.")
+            self.logger.info(f"Skipping ingestion. Reusing existing vector index at: {self.db.store_path}")
             self.metrics_summary["insertion"] = {"time": 0, "input_tokens": 0, "output_tokens": 0, "embedding_tokens": 0}
         else:
+            try:
+                doc_info = self.adapter.data_prepare(doc_dir)
+            except Exception as e:
+                self.logger.exception(f"Data preparation failed: {e}")
+                exit(1)
+
             ingest_workers = self.config['execution'].get('ingest_workers', 10)
             ingest_mode = self.config['execution'].get('ingest_mode', 'per_file')
             
@@ -92,6 +89,7 @@ class BenchmarkPipeline:
         tasks = self._prepare_tasks(samples)
         results_map = {}
         max_workers = self.config['execution']['max_workers']
+        task_errors = []
         
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_to_task = {
@@ -107,9 +105,16 @@ class BenchmarkPipeline:
                     results_map[res['_global_index']] = res
                 except Exception as e:
                     self.logger.error(f"Generation failed for task {task['id']}: {e}")
+                    task_errors.append((task['id'], e))
                 pbar.set_postfix(self.monitor.get_status_dict())
                 pbar.update(1)
             pbar.close()
+
+        if task_errors:
+            first_id, first_err = task_errors[0]
+            raise RuntimeError(
+                f"Generation failed for {len(task_errors)} tasks; first failure task_id={first_id}: {type(first_err).__name__}: {first_err}"
+            ) from first_err
 
         sorted_results = [results_map[i] for i in sorted(results_map.keys())]
         dataset_name = self.config.get('dataset_name', 'Unknown_Dataset')

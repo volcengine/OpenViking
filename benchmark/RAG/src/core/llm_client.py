@@ -22,6 +22,9 @@ class LLMClientWrapper:
                 return resp.content
             except Exception as e:
                 last_err = e
-                time.sleep(1.5 * (attempt + 1))
-        
-        return f"ERROR: {str(last_err)}"
+                if attempt < self.retry_count - 1:
+                    time.sleep(1.5 * (attempt + 1))
+
+        raise RuntimeError(
+            f"LLM generate failed after {self.retry_count} retries: {type(last_err).__name__}: {last_err}"
+        ) from last_err
