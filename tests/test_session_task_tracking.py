@@ -222,11 +222,11 @@ async def test_task_failed_when_memory_extraction_raises(api_client):
     assert "memory_extraction_failed" in result["error"]
 
 
-# ── Duplicate commit rejection ──
+# ── Duplicate commit acceptance ──
 
 
-async def test_duplicate_commit_rejected(api_client):
-    """Second commit on same session should be rejected while first is running."""
+async def test_duplicate_commit_returns_second_task(api_client):
+    """Second commit on same session should also be accepted with its own task."""
     client, service = api_client
     session_id = await _new_session_with_message(client)
 
@@ -237,11 +237,14 @@ async def test_duplicate_commit_rejected(api_client):
     # First commit
     resp1 = await client.post(f"/api/v1/sessions/{session_id}/commit")
     assert resp1.json()["result"]["status"] == "accepted"
+    task_id_1 = resp1.json()["result"]["task_id"]
 
-    # Second commit should be rejected
+    # Second commit should also be accepted
     resp2 = await client.post(f"/api/v1/sessions/{session_id}/commit")
-    assert resp2.json()["status"] == "error"
-    assert "already has a commit in progress" in resp2.json()["error"]["message"]
+    assert resp2.status_code == 200
+    assert resp2.json()["result"]["status"] == "accepted"
+    task_id_2 = resp2.json()["result"]["task_id"]
+    assert task_id_1 != task_id_2
 
     gate.set()
     await asyncio.sleep(0.1)

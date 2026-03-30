@@ -3,10 +3,65 @@
 
 """Tests for session endpoints."""
 
-import httpx
+import asyncio
+import json
+from unittest.mock import patch
 
+import httpx
+import pytest
+
+from openviking.message import Message
 from openviking.server.identity import RequestContext, Role
 from openviking_cli.session.user_id import UserIdentifier
+from openviking_cli.utils.config.open_viking_config import OpenVikingConfigSingleton
+from tests.utils.mock_agfs import MockLocalAGFS
+
+
+@pytest.fixture(autouse=True)
+def _configure_test_env(monkeypatch, tmp_path):
+    config_path = tmp_path / "ov.conf"
+    config_path.write_text(
+        json.dumps(
+            {
+                "storage": {
+                    "workspace": str(tmp_path / "workspace"),
+                    "agfs": {"backend": "local", "mode": "binding-client"},
+                    "vectordb": {"backend": "local"},
+                },
+                "embedding": {
+                    "dense": {
+                        "provider": "openai",
+                        "model": "test-embedder",
+                        "api_base": "http://127.0.0.1:11434/v1",
+                        "dimension": 1024,
+                    }
+                },
+                "encryption": {"enabled": False},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    mock_agfs = MockLocalAGFS(root_path=tmp_path / "mock_agfs_root")
+
+    monkeypatch.setenv("OPENVIKING_CONFIG_FILE", str(config_path))
+    OpenVikingConfigSingleton.reset_instance()
+
+    with patch("openviking.utils.agfs_utils.create_agfs_client", return_value=mock_agfs):
+        yield
+
+    OpenVikingConfigSingleton.reset_instance()
+
+
+async def _wait_for_task(client: httpx.AsyncClient, task_id: str, timeout: float = 10.0):
+    for _ in range(int(timeout / 0.1)):
+        resp = await client.get(f"/api/v1/tasks/{task_id}")
+        if resp.status_code == 200:
+            task = resp.json()["result"]
+            if task["status"] in ("completed", "failed"):
+                return task
+        await asyncio.sleep(0.1)
+    raise TimeoutError(f"Task {task_id} did not complete within {timeout}s")
 
 
 async def test_create_session(client: httpx.AsyncClient):
@@ -36,6 +91,66 @@ async def test_get_session(client: httpx.AsyncClient):
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"]["session_id"] == session_id
+
+
+async def test_get_session_context(client: httpx.AsyncClient):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={"role": "user", "content": "Current live message"},
+    )
+
+    resp = await client.get(f"/api/v1/sessions/{session_id}/context")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["result"]["latest_archive_overview"] == ""
+    assert body["result"]["latest_archive_id"] == ""
+    assert body["result"]["pre_archive_abstracts"] == []
+    assert [m["parts"][0]["text"] for m in body["result"]["messages"]] == ["Current live message"]
+
+
+async def test_get_session_context_includes_incomplete_archive_messages(
+    client: httpx.AsyncClient, service
+):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={"role": "user", "content": "Archived seed"},
+    )
+    commit_resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
+    assert commit_resp.status_code == 200
+
+    ctx = RequestContext(user=UserIdentifier.the_default_user(), role=Role.ROOT)
+    session = service.sessions.session(ctx, session_id)
+    await session.load()
+    pending_messages = [
+        Message.create_user("Pending user message"),
+        Message.create_assistant("Pending assistant response"),
+    ]
+    await session._viking_fs.write_file(
+        uri=f"{session.uri}/history/archive_002/messages.jsonl",
+        content="\n".join(msg.to_jsonl() for msg in pending_messages) + "\n",
+        ctx=session.ctx,
+    )
+
+    await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={"role": "user", "content": "Current live message"},
+    )
+
+    resp = await client.get(f"/api/v1/sessions/{session_id}/context")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert [m["parts"][0]["text"] for m in body["result"]["messages"]] == [
+        "Pending user message",
+        "Pending assistant response",
+        "Current live message",
+    ]
 
 
 async def test_add_message(client: httpx.AsyncClient):
@@ -175,3 +290,120 @@ async def test_extract_session_jsonable_regression(client: httpx.AsyncClient, se
     body = resp.json()
     assert body["status"] == "ok"
     assert body["result"] == [{"uri": "viking://user/memories/mock.md"}]
+
+
+async def test_get_session_context_endpoint_returns_trimmed_latest_archive_and_messages(
+    client: httpx.AsyncClient,
+):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={"role": "user", "content": "archived message"},
+    )
+    commit_resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
+    task_id = commit_resp.json()["result"]["task_id"]
+    await _wait_for_task(client, task_id)
+
+    await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={
+            "role": "assistant",
+            "parts": [
+                {"type": "text", "text": "Running tool"},
+                {
+                    "type": "tool",
+                    "tool_id": "tool_123",
+                    "tool_name": "demo_tool",
+                    "tool_uri": f"viking://session/{session_id}/tools/tool_123",
+                    "tool_input": {"x": 1},
+                    "tool_status": "running",
+                },
+            ],
+        },
+    )
+
+    resp = await client.get(f"/api/v1/sessions/{session_id}/context?token_budget=1")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+
+    result = body["result"]
+    assert result["latest_archive_overview"] == ""
+    assert result["latest_archive_id"] == "archive_001"
+    assert result["pre_archive_abstracts"] == []
+    assert len(result["messages"]) == 1
+    assert result["messages"][0]["role"] == "assistant"
+    assert any(
+        part["type"] == "tool" and part["tool_id"] == "tool_123"
+        for part in result["messages"][0]["parts"]
+    )
+    assert result["stats"]["totalArchives"] == 1
+    assert result["stats"]["includedArchives"] == 0
+    assert result["stats"]["droppedArchives"] == 1
+    assert result["stats"]["failedArchives"] == 0
+
+
+async def test_get_session_archive_endpoint_returns_archive_details(client: httpx.AsyncClient):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={"role": "user", "content": "archived question"},
+    )
+    await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={"role": "assistant", "content": "archived answer"},
+    )
+    commit_resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
+    task_id = commit_resp.json()["result"]["task_id"]
+    await _wait_for_task(client, task_id)
+
+    resp = await client.get(f"/api/v1/sessions/{session_id}/archives/archive_001")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["status"] == "ok"
+    assert body["result"]["archive_id"] == "archive_001"
+    assert body["result"]["overview"]
+    assert body["result"]["abstract"]
+    assert [m["parts"][0]["text"] for m in body["result"]["messages"]] == [
+        "archived question",
+        "archived answer",
+    ]
+
+
+async def test_commit_endpoint_rejects_after_failed_archive(
+    client: httpx.AsyncClient,
+    service,
+):
+    create_resp = await client.post("/api/v1/sessions", json={})
+    session_id = create_resp.json()["result"]["session_id"]
+
+    async def failing_extract(*args, **kwargs):
+        del args, kwargs
+        raise RuntimeError("synthetic extraction failure")
+
+    service.sessions._session_compressor.extract_long_term_memories = failing_extract
+
+    await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={"role": "user", "content": "first round"},
+    )
+    commit_resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
+    task_id = commit_resp.json()["result"]["task_id"]
+    task = await _wait_for_task(client, task_id)
+    assert task["status"] == "failed"
+
+    await client.post(
+        f"/api/v1/sessions/{session_id}/messages",
+        json={"role": "user", "content": "second round"},
+    )
+    resp = await client.post(f"/api/v1/sessions/{session_id}/commit")
+
+    assert resp.status_code == 412
+    body = resp.json()
+    assert body["status"] == "error"
+    assert body["error"]["code"] == "FAILED_PRECONDITION"
+    assert "unresolved failed archive" in body["error"]["message"]

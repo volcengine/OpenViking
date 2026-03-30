@@ -336,6 +336,7 @@ openviking -o json ls viking://resources/
 | POST | `/api/v1/sessions` | 创建会话 |
 | GET | `/api/v1/sessions` | 列出会话 |
 | GET | `/api/v1/sessions/{id}` | 获取会话 |
+| GET | `/api/v1/sessions/{id}/context` | 获取组装后的会话上下文 |
 | DELETE | `/api/v1/sessions/{id}` | 删除会话 |
 | POST | `/api/v1/sessions/{id}/commit` | 提交会话 |
 | POST | `/api/v1/sessions/{id}/messages` | 添加消息 |

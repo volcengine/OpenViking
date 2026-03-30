@@ -43,15 +43,47 @@ import openviking as ov
 client = ov.SyncHTTPClient(url="http://localhost:1933")
 ```
 
-If the server has authentication enabled, pass the API key and optionally an agent ID:
+### Authentication
+
+When authentication is enabled, pass an API key. OpenViking uses a two-tier key system:
+
+**Regular data access: use a `user_key` (recommended)**
+
+For most scenarios, use a `user_key` — it directly works with tenant-scoped APIs like `add_resource`, `find`, and `ls`:
 
 ```python
 import openviking as ov
 
-client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key", agent_id="my-agent")
+client = ov.SyncHTTPClient(
+    url="http://localhost:1933",
+    api_key="<user-key>",
+    agent_id="my-agent",      # optional
+)
 ```
 
-**Full example:**
+> `user_key` is created via the Admin API (see [Authentication](../guides/04-authentication.md)). The server can automatically resolve the tenant from the key.
+
+**Administrative operations: use a `root_key`**
+
+`root_key` is for management operations (creating accounts, system status, etc.). To access tenant-scoped APIs with `root_key`, you **must** also pass `account` and `user`:
+
+```python
+import openviking as ov
+
+client = ov.SyncHTTPClient(
+    url="http://localhost:1933",
+    api_key="<root-key>",
+    account="acme",           # required: target tenant
+    user="alice",             # required: target user
+)
+```
+
+> ⚠️ Using `root_key` for `add_resource`, `find`, etc. without `account`/`user` will return:
+> `ROOT requests to tenant-scoped APIs must include X-OpenViking-Account and X-OpenViking-User headers`
+
+See [Authentication](../guides/04-authentication.md) for details (trusted mode, CLI config, etc.).
+
+**Full example (using `user_key`):**
 
 ```python
 import openviking as ov

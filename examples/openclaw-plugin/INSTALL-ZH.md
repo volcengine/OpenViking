@@ -107,7 +107,7 @@ npx -y -p openclaw-openviking-setup-helper ov-install -y
 | 参数 | 含义 |
 | --- | --- |
 | `--github-repo owner/repo` | 从哪个 GitHub 仓库拉取插件文件（默认：`volcengine/OpenViking`） |
-| `--plugin-version REF` | 分支、tag 或 commit，用于拉取插件（默认：`main`） |
+| `--plugin-version REF` | 分支、tag 或 commit，用于拉取插件（默认：`volcengine/OpenViking` 仓库中的最新 tag） |
 | `--openviking-version VER` | 固定为 `pip install openviking==VER`（不写则安装 PyPI 最新版） |
 
 示例：
@@ -116,7 +116,7 @@ npx -y -p openclaw-openviking-setup-helper ov-install -y
 # 安装指定 tag 版本的插件（例如 v0.2.9）
 ov-install -y --plugin-version v0.2.9
 
-# 固定 PyPI 上的 OpenViking 版本，插件仍从 main 拉取
+# 固定 PyPI 上的 OpenViking 版本，插件默认仍跟随仓库最新 tag
 ov-install -y --openviking-version 0.2.9
 
 # 同时指定插件 tag 和 OpenViking PyPI 版本
@@ -211,7 +211,7 @@ curl -fsSL https://raw.githubusercontent.com/volcengine/OpenViking/main/examples
 | 参数 / 环境变量 | 含义 |
 | --- | --- |
 | `--repo owner/repo`、`REPO` | 从哪个 GitHub 仓库拉取插件文件（默认：`volcengine/OpenViking`） |
-| `--plugin-version REF`、`PLUGIN_VERSION` | 分支、tag 或 commit（默认：`main`；兼容旧变量 `BRANCH`） |
+| `--plugin-version REF`、`PLUGIN_VERSION` | 分支、tag 或 commit（默认：最新 tag；兼容旧变量 `BRANCH`） |
 | `--openviking-version VER`、`OPENVIKING_VERSION` | `pip install openviking==VER`（不写则安装 PyPI 最新版） |
 
 示例：

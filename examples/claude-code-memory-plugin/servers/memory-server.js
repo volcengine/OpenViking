@@ -228,6 +228,17 @@ class OpenVikingClient {
     async extractSessionMemories(sessionId) {
         return this.request(`/api/v1/sessions/${encodeURIComponent(sessionId)}/extract`, { method: "POST", body: JSON.stringify({}) });
     }
+    async sessionUsed(sessionId, contexts) {
+        if (contexts.length === 0)
+            return;
+        await this.request(`/api/v1/sessions/${encodeURIComponent(sessionId)}/used`, {
+            method: "POST",
+            body: JSON.stringify({ contexts }),
+        });
+    }
+    async commitSession(sessionId) {
+        return this.request(`/api/v1/sessions/${encodeURIComponent(sessionId)}/commit`, { method: "POST", body: JSON.stringify({}) });
+    }
     async deleteSession(sessionId) {
         await this.request(`/api/v1/sessions/${encodeURIComponent(sessionId)}`, { method: "DELETE" });
     }
@@ -366,6 +377,27 @@ async function searchBothScopes(client, query, limit) {
     const unique = all.filter((m, i, self) => i === self.findIndex((o) => o.uri === m.uri));
     return unique.filter((m) => m.level === 2);
 }
+function markRecalledMemoriesUsed(client, contexts) {
+    const uniqueContexts = [...new Set(contexts.filter((uri) => typeof uri === "string" && uri.length > 0))];
+    if (uniqueContexts.length === 0)
+        return;
+    void (async () => {
+        let sessionId;
+        try {
+            sessionId = await client.createSession();
+            await client.sessionUsed(sessionId, uniqueContexts);
+            await client.commitSession(sessionId);
+        }
+        catch {
+            // Fire-and-forget usage tracking must never block or fail the caller.
+        }
+        finally {
+            if (sessionId) {
+                await client.deleteSession(sessionId).catch(() => { });
+            }
+        }
+    })();
+}
 // ---------------------------------------------------------------------------
 // MCP Server
 // ---------------------------------------------------------------------------
@@ -397,6 +429,7 @@ server.tool("memory_recall", "Search long-term memories from OpenViking. Use whe
     if (memories.length === 0) {
         return { content: [{ type: "text", text: "No relevant memories found in OpenViking." }] };
     }
+    markRecalledMemoriesUsed(client, memories.map((memory) => memory.uri));
     // Read full content for leaf memories
     const lines = await Promise.all(memories.map(async (item) => {
         if (item.level === 2) {

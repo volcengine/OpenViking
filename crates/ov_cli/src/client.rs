@@ -4,8 +4,9 @@ use serde_json::Value;
 use std::fs::File;
 use std::path::Path;
 use tempfile::{Builder, NamedTempFile};
-use zip::write::FileOptions;
+use url::Url;
 use zip::CompressionMethod;
+use zip::write::FileOptions;
 
 use crate::error::{Error, Result};
 

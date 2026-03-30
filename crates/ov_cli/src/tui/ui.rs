@@ -1,9 +1,9 @@
 use ratatui::{
+    Frame,
     layout::{Constraint, Direction, Layout},
     style::{Color, Modifier, Style},
     text::{Line, Span},
     widgets::{Block, Borders, List, ListItem, ListState, Paragraph, Wrap},
-    Frame,
 };
 
 use super::app::{App, Panel};
@@ -61,11 +61,7 @@ fn render_tree(frame: &mut Frame, app: &App, area: ratatui::layout::Rect) {
         .map(|row| {
             let indent = "  ".repeat(row.depth);
             let icon = if row.is_dir {
-                if row.expanded {
-                    "▾ "
-                } else {
-                    "▸ "
-                }
+                if row.expanded { "▾ " } else { "▸ " }
             } else {
                 "  "
             };

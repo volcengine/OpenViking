@@ -19,6 +19,7 @@ from openviking_cli.exceptions import (
     AlreadyExistsError,
     DeadlineExceededError,
     EmbeddingFailedError,
+    FailedPreconditionError,
     InternalError,
     InvalidArgumentError,
     InvalidURIError,
@@ -44,6 +45,7 @@ ERROR_CODE_TO_EXCEPTION = {
     "INVALID_URI": InvalidURIError,
     "NOT_FOUND": NotFoundError,
     "ALREADY_EXISTS": AlreadyExistsError,
+    "FAILED_PRECONDITION": FailedPreconditionError,
     "UNAUTHENTICATED": UnauthenticatedError,
     "PERMISSION_DENIED": PermissionDeniedError,
     "UNAVAILABLE": UnavailableError,
@@ -701,6 +703,23 @@ class AsyncHTTPClient(BaseClient):
         if auto_create:
             params["auto_create"] = "true"
         response = await self._http.get(f"/api/v1/sessions/{session_id}", params=params)
+        return self._handle_response(response)
+
+    async def get_session_context(
+        self, session_id: str, token_budget: int = 128_000
+    ) -> Dict[str, Any]:
+        """Get assembled session context."""
+        response = await self._http.get(
+            f"/api/v1/sessions/{session_id}/context",
+            params={"token_budget": token_budget},
+        )
+        return self._handle_response(response)
+
+    async def get_session_archive(self, session_id: str, archive_id: str) -> Dict[str, Any]:
+        """Get one completed archive for a session."""
+        response = await self._http.get(
+            f"/api/v1/sessions/{session_id}/archives/{archive_id}",
+        )
         return self._handle_response(response)
 
     async def delete_session(self, session_id: str) -> None:

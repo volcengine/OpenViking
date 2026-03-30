@@ -5,7 +5,7 @@
 #
 # Options:
 #   --repo <owner/repo>           - GitHub repository (default: volcengine/OpenViking)
-#   --plugin-version <tag>        - Plugin version (Git tag, e.g. v0.2.9, default: main)
+#   --plugin-version <tag>        - Plugin version (Git tag, e.g. v0.2.9, default: latest tag)
 #   --openviking-version <ver>    - OpenViking PyPI version (e.g. 0.2.9, default: latest)
 #   --workdir <path>              - OpenClaw config directory (default: ~/.openclaw)
 #   --update / --upgrade-plugin   - Upgrade only the plugin using native script logic
@@ -45,8 +45,12 @@ set -o pipefail
 OPENVIKING_PYTHON_PATH=""
 
 REPO="${REPO:-volcengine/OpenViking}"
-# BRANCH is legacy, prefer PLUGIN_VERSION
-PLUGIN_VERSION="${PLUGIN_VERSION:-${BRANCH:-main}}"
+# BRANCH is legacy, prefer PLUGIN_VERSION. If omitted, resolve the latest tag from GitHub.
+PLUGIN_VERSION_EXPLICIT="0"
+if [[ -n "${PLUGIN_VERSION:-}" || -n "${BRANCH:-}" ]]; then
+  PLUGIN_VERSION_EXPLICIT="1"
+fi
+PLUGIN_VERSION="${PLUGIN_VERSION:-${BRANCH:-}}"
 OPENVIKING_VERSION="${OPENVIKING_VERSION:-}"
 INSTALL_YES="${OPENVIKING_INSTALL_YES:-0}"
 UPGRADE_PLUGIN_ONLY="${OPENVIKING_UPGRADE_PLUGIN_ONLY:-0}"
@@ -115,6 +119,7 @@ for arg in "$@"; do
   fi
   if [[ -n "$_expect_plugin_version" ]]; then
     PLUGIN_VERSION="$arg"
+    PLUGIN_VERSION_EXPLICIT="1"
     _expect_plugin_version=""
     continue
   fi
@@ -141,7 +146,7 @@ for arg in "$@"; do
     echo ""
     echo "Options:"
     echo "  --repo <owner/repo>      GitHub repository (default: volcengine/OpenViking)"
-    echo "  --plugin-version <tag>   Plugin version (Git tag, e.g. v0.2.9, default: main)"
+    echo "  --plugin-version <tag>   Plugin version (Git tag, e.g. v0.2.9, default: latest tag)"
     echo "  --openviking-version <v> OpenViking PyPI version (e.g. 0.2.9, default: latest)"
     echo "  --workdir <path>         OpenClaw config directory (default: ~/.openclaw)"
     echo "  --update, --upgrade-plugin"
@@ -161,7 +166,7 @@ for arg in "$@"; do
     echo "  # Install specific plugin version"
     echo "  curl -fsSL <URL> | bash -s -- --plugin-version v0.2.8"
     echo ""
-    echo "  # Upgrade only the plugin files"
+    echo "  # Upgrade only the plugin files from main branch"
     echo "  curl -fsSL <URL> | bash -s -- --update --plugin-version main"
     echo ""
     echo "  # Roll back the last plugin upgrade"
@@ -1126,6 +1131,73 @@ is_semver_like() {
   [[ "$1" =~ ^v?[0-9]+(\.[0-9]+){1,2}$ ]]
 }
 
+pick_latest_plugin_tag() {
+  local latest_semver=""
+  local first_tag=""
+  local tag=""
+  while IFS= read -r tag; do
+    [[ -z "$tag" ]] && continue
+    [[ -z "$first_tag" ]] && first_tag="$tag"
+    if is_semver_like "$tag"; then
+      if [[ -z "$latest_semver" ]] || version_gte "$tag" "$latest_semver"; then
+        latest_semver="$tag"
+      fi
+    fi
+  done
+
+  if [[ -n "$latest_semver" ]]; then
+    printf '%s\n' "$latest_semver"
+    return 0
+  fi
+
+  if [[ -n "$first_tag" ]]; then
+    printf '%s\n' "$first_tag"
+  fi
+}
+
+resolve_default_plugin_version() {
+  [[ -n "$PLUGIN_VERSION" ]] && return 0
+
+  info "$(tr "No plugin version specified; resolving latest tag from ${REPO}..." "未指定插件版本，正在解析 ${REPO} 的最新 tag...")"
+
+  local latest_tag=""
+  local api_tags=""
+  api_tags="$(
+    curl -fsSL --connect-timeout 10 \
+      -H "Accept: application/vnd.github+json" \
+      -H "User-Agent: openviking-installer" \
+      "https://api.github.com/repos/${REPO}/tags?per_page=100" 2>/dev/null \
+      | tr -d '\r' \
+      | grep -oE '"name":"[^"]+"' \
+      | sed -E 's/^"name":"(.*)"$/\1/' \
+      || true
+  )"
+  if [[ -n "$api_tags" ]]; then
+    latest_tag="$(printf '%s\n' "$api_tags" | pick_latest_plugin_tag)"
+  fi
+
+  if [[ -z "$latest_tag" ]] && command -v git >/dev/null 2>&1; then
+    local git_tags=""
+    git_tags="$(
+      git ls-remote --tags --refs "https://github.com/${REPO}.git" 2>/dev/null \
+      | sed -E 's#^.*refs/tags/##' \
+      || true
+    )"
+    if [[ -n "$git_tags" ]]; then
+      latest_tag="$(printf '%s\n' "$git_tags" | pick_latest_plugin_tag)"
+    fi
+  fi
+
+  if [[ -z "$latest_tag" ]]; then
+    err "$(tr "Could not resolve the latest tag for ${REPO}." "无法解析 ${REPO} 的最新 tag。")"
+    echo "$(tr "Please rerun with --plugin-version <tag>, or use --plugin-version main to track the branch head explicitly." "请使用 --plugin-version <tag> 重新执行；如果需要显式跟踪分支头，请使用 --plugin-version main。")"
+    exit 1
+  fi
+
+  PLUGIN_VERSION="$latest_tag"
+  info "$(tr "Resolved default plugin version to latest tag: ${PLUGIN_VERSION}" "已将默认插件版本解析为最新 tag: ${PLUGIN_VERSION}")"
+}
+
 # Detect OpenClaw version
 detect_openclaw_version() {
   local version_output
@@ -1312,7 +1384,7 @@ check_openclaw_compatibility() {
   fi
 
   # If user explicitly requested an old version, pass
-  if [[ "$PLUGIN_VERSION" != "main" ]] && is_semver_like "$PLUGIN_VERSION" && ! version_gte "$PLUGIN_VERSION" "v0.2.8"; then
+  if is_semver_like "$PLUGIN_VERSION" && ! version_gte "$PLUGIN_VERSION" "v0.2.8"; then
     return 0
   fi
 
@@ -2020,20 +2092,22 @@ main() {
   detect_os
   ensure_plugin_only_operation_args
   select_workdir
-  info "Target: ${OPENCLAW_DIR}"
-  info "Repository: ${REPO}"
-  info "Plugin version: ${PLUGIN_VERSION}"
-  [[ -n "$OPENVIKING_VERSION" ]] && info "OpenViking version: ${OPENVIKING_VERSION}"
-
   if [[ "$ROLLBACK_LAST_UPGRADE" == "1" ]]; then
+    info "Target: ${OPENCLAW_DIR}"
+    info "Repository: ${REPO}"
     info "Mode: rollback last plugin upgrade"
-    if [[ "${PLUGIN_VERSION}" != "main" ]]; then
+    if [[ "$PLUGIN_VERSION_EXPLICIT" == "1" ]]; then
       warn "--plugin-version is ignored in --rollback mode."
     fi
     rollback_last_upgrade_operation
     return 0
   fi
+  resolve_default_plugin_version
   validate_requested_plugin_version
+  info "Target: ${OPENCLAW_DIR}"
+  info "Repository: ${REPO}"
+  info "Plugin version: ${PLUGIN_VERSION}"
+  [[ -n "$OPENVIKING_VERSION" ]] && info "OpenViking version: ${OPENVIKING_VERSION}"
 
   if [[ "$UPGRADE_PLUGIN_ONLY" == "1" ]]; then
     SELECTED_MODE="local"

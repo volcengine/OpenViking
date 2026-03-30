@@ -504,6 +504,21 @@ enum SessionCommands {
         /// Session ID
         session_id: String,
     },
+    /// Get full merged session context
+    GetSessionContext {
+        /// Session ID
+        session_id: String,
+        /// Token budget for latest archive overview inclusion
+        #[arg(long = "token-budget", default_value = "128000")]
+        token_budget: i32,
+    },
+    /// Get one completed archive for a session
+    GetSessionArchive {
+        /// Session ID
+        session_id: String,
+        /// Archive ID
+        archive_id: String,
+    },
     /// Delete a session
     Delete {
         /// Session ID
@@ -986,6 +1001,32 @@ async fn handle_session(cmd: SessionCommands, ctx: CliContext) -> Result<()> {
         SessionCommands::Get { session_id } => {
             commands::session::get_session(&client, &session_id, ctx.output_format, ctx.compact)
                 .await
+        }
+        SessionCommands::GetSessionContext {
+            session_id,
+            token_budget,
+        } => {
+            commands::session::get_session_context(
+                &client,
+                &session_id,
+                token_budget,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
+        }
+        SessionCommands::GetSessionArchive {
+            session_id,
+            archive_id,
+        } => {
+            commands::session::get_session_archive(
+                &client,
+                &session_id,
+                &archive_id,
+                ctx.output_format,
+                ctx.compact,
+            )
+            .await
         }
         SessionCommands::Delete { session_id } => {
             commands::session::delete_session(&client, &session_id, ctx.output_format, ctx.compact)

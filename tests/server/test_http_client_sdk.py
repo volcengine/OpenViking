@@ -5,10 +5,12 @@
 
 import io
 import zipfile
-
+import asyncio
 import pytest_asyncio
+import pytest
 
 from openviking_cli.client.http import AsyncHTTPClient
+from openviking_cli.exceptions import FailedPreconditionError
 from tests.server.conftest import SAMPLE_MD_CONTENT, TEST_TMP_DIR
 
 
@@ -145,9 +147,65 @@ async def test_sdk_session_lifecycle(http_client):
     info = await client.get_session(session_id)
     assert info["session_id"] == session_id
 
+    context = await client.get_session_context(session_id)
+    assert context["latest_archive_overview"] == ""
+    assert context["latest_archive_id"] == ""
+    assert context["pre_archive_abstracts"] == []
+    assert [m["parts"][0]["text"] for m in context["messages"]] == ["Hello from SDK"]
+
     # List
     sessions = await client.list_sessions()
     assert isinstance(sessions, list)
+
+
+async def test_sdk_get_session_archive(http_client):
+    client, _ = http_client
+
+    session_info = await client.create_session()
+    session_id = session_info["session_id"]
+
+    await client.add_message(session_id, "user", "Archive me")
+    commit_result = await client.commit_session(session_id)
+    task_id = commit_result["task_id"]
+
+    for _ in range(100):
+        task = await client.get_task(task_id)
+        if task and task["status"] in ("completed", "failed"):
+            break
+        await asyncio.sleep(0.1)
+
+    archive = await client.get_session_archive(session_id, "archive_001")
+    assert archive["archive_id"] == "archive_001"
+    assert archive["overview"]
+    assert archive["abstract"]
+    assert [m["parts"][0]["text"] for m in archive["messages"]] == ["Archive me"]
+
+
+async def test_sdk_commit_raises_failed_precondition_after_failed_archive(http_client):
+    client, svc = http_client
+
+    session_info = await client.create_session()
+    session_id = session_info["session_id"]
+
+    async def failing_extract(*args, **kwargs):
+        del args, kwargs
+        raise RuntimeError("synthetic extraction failure")
+
+    svc.session_compressor.extract_long_term_memories = failing_extract
+
+    await client.add_message(session_id, "user", "First round")
+    commit_result = await client.commit_session(session_id)
+    task_id = commit_result["task_id"]
+
+    for _ in range(100):
+        task = await client.get_task(task_id)
+        if task and task["status"] in ("completed", "failed"):
+            break
+        await asyncio.sleep(0.1)
+
+    await client.add_message(session_id, "user", "Second round")
+    with pytest.raises(FailedPreconditionError, match="unresolved failed archive"):
+        await client.commit_session(session_id)
 
 
 # ===================================================================

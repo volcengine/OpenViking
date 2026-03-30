@@ -4,10 +4,6 @@
 
 from typing import Optional
 
-from openviking.storage import VikingDBManager
-from openviking_cli.utils import get_logger
-from openviking_cli.utils.config import get_openviking_config
-
 from openviking.session.compressor import ExtractionStats, SessionCompressor
 from openviking.session.memory_archiver import (
     ArchivalCandidate,
@@ -28,6 +24,9 @@ from openviking.session.memory_extractor import (
     ToolSkillCandidateMemory,
 )
 from openviking.session.session import Session, SessionCompression, SessionMeta, SessionStats
+from openviking.storage import VikingDBManager
+from openviking_cli.utils import get_logger
+from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 
@@ -60,6 +59,7 @@ def create_session_compressor(
         logger.info("Using v2 memory compressor (templating system)")
         try:
             from openviking.session.compressor_v2 import SessionCompressorV2
+
             return SessionCompressorV2(vikingdb=vikingdb)
         except Exception as e:
             logger.warning(f"Failed to load v2 compressor, falling back to v1: {e}")

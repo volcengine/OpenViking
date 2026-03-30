@@ -500,13 +500,11 @@ class VikingDBManagerProxy:
         self,
         uri: str,
         new_uri: str,
-        new_parent_uri: str,
     ) -> bool:
         return await self._manager.update_uri_mapping(
             self._ctx,
             uri=uri,
             new_uri=new_uri,
-            new_parent_uri=new_parent_uri,
         )
 
     async def increment_active_count(self, uris: List[str]) -> int:
