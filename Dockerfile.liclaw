@@ -1,9 +1,9 @@
 # liclaw: 基于官方镜像 patch Python 文件，跳过 Go/Rust/C++ 编译
-FROM ghcr.io/volcengine/openviking:main
+FROM ghcr.io/volcengine/openviking:v0.2.13
 
 # 只覆盖 liclaw 改动的 Python 文件
 COPY openviking/server/enduser_context.py /app/.venv/lib/python3.13/site-packages/openviking/server/enduser_context.py
-COPY openviking/server/app.liclaw.py      /app/.venv/lib/python3.13/site-packages/openviking/server/app.py
+COPY openviking/server/app.py             /app/.venv/lib/python3.13/site-packages/openviking/server/app.py
 COPY openviking/models/vlm/backends/openai_vlm.py      /app/.venv/lib/python3.13/site-packages/openviking/models/vlm/backends/openai_vlm.py
 COPY openviking/models/vlm/backends/volcengine_vlm.py   /app/.venv/lib/python3.13/site-packages/openviking/models/vlm/backends/volcengine_vlm.py
 COPY openviking/models/vlm/base.py        /app/.venv/lib/python3.13/site-packages/openviking/models/vlm/base.py
