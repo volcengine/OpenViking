@@ -68,6 +68,7 @@ dependencies = [
     "tree-sitter-rust>=0.23.0",
     "tree-sitter-go>=0.23.0",
     "tree-sitter-c-sharp>=0.23.0",
+    "tree-sitter-php>=0.23.0",
     "loguru>=0.7.3",
     "cryptography>=42.0.0",
     "argon2-cffi>=23.0.0",
