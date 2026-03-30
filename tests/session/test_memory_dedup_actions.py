@@ -1,6 +1,7 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 
+import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -267,6 +268,54 @@ class TestMemoryDeduplicatorPayload:
         assert "facet=" in existing_text
         assert similar[4].uri in existing_text
         assert similar[5].uri not in existing_text
+
+    @pytest.mark.asyncio
+    async def test_llm_decision_falls_back_to_create_on_cancelled_error(self):
+        dedup = MemoryDeduplicator(vikingdb=_DummyVikingDB())
+        dedup.vikingdb.is_closing = True
+
+        class _DummyVLM:
+            def is_available(self):
+                return True
+
+            async def get_completion_async(self, _prompt):
+                raise asyncio.CancelledError("llm shutdown")
+
+        class _DummyConfig:
+            vlm = _DummyVLM()
+
+        with patch(
+            "openviking.session.memory_deduplicator.get_openviking_config",
+            return_value=_DummyConfig(),
+        ):
+            decision, reason, actions = await dedup._llm_decision(_make_candidate(), [])
+
+        assert decision == DedupDecision.CREATE
+        assert "cancelled" in reason.lower()
+        assert actions == []
+
+    @pytest.mark.asyncio
+    async def test_llm_decision_reraises_cancelled_error_when_not_shutting_down(self):
+        dedup = MemoryDeduplicator(vikingdb=_DummyVikingDB())
+
+        class _DummyVLM:
+            def is_available(self):
+                return True
+
+            async def get_completion_async(self, _prompt):
+                raise asyncio.CancelledError("llm shutdown")
+
+        class _DummyConfig:
+            vlm = _DummyVLM()
+
+        with (
+            patch(
+                "openviking.session.memory_deduplicator.get_openviking_config",
+                return_value=_DummyConfig(),
+            ),
+            pytest.raises(asyncio.CancelledError),
+        ):
+            await dedup._llm_decision(_make_candidate(), [])
 
     @pytest.mark.asyncio
     async def test_find_similar_includes_batch_memories(self):

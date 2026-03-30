@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """BuildingTree container for OpenViking context trees."""
 
 from typing import TYPE_CHECKING, Any, Dict, List, Optional

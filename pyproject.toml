@@ -16,7 +16,7 @@ requires-python = ">=3.10"
 authors = [
     {name = "ByteDance", email = "noreply@bytedance.com"}
 ]
-license = { text = "Apache-2.0" }
+license = { text = "AGPL-3.0" }
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -57,7 +57,7 @@ dependencies = [
     "protobuf>=6.33.5",
     "pdfminer-six>=20251230",
     "typer>=0.12.0",
-    "litellm>=1.0.0",
+    "litellm>=1.0.0,<1.82.6",
     "python-multipart>=0.0.22",
     "tree-sitter>=0.23.0",
     "tree-sitter-python>=0.23.0",
@@ -108,6 +108,9 @@ gemini = [
 gemini-async = [
     "google-genai>=1.0.0",
     "anyio>=4.0.0",
+]
+ocr = [
+    "pytesseract>=0.3.10",
 ]
 build = [
     "setuptools>=61.0",

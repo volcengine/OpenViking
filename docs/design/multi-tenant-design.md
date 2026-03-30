@@ -225,15 +225,24 @@ def get_request_context(identity) -> RequestContext  # 构造 RequestContext
 
 ### 4.3 Agent 归属
 
-Agent 目录由 `user_id + agent_id` 共同决定，每个用户与 agent 的组合有独立数据空间：
+Agent 目录由 `memory.agent_scope_mode` 配置决定：
+
+- 默认 `user+agent`：按 `user_id + agent_id` 共同决定，用户与 agent 的组合有独立数据空间
+- 可选 `agent`：仅按 `agent_id` 决定，同一 agent_id 的不同用户共享 agent 空间
 
 ```
-/{account_id}/agent/{md5(user_id + agent_id)[:12]}/memories/cases/
-/{account_id}/agent/{md5(user_id + agent_id)[:12]}/skills/
-/{account_id}/agent/{md5(user_id + agent_id)[:12]}/instructions/
+# memory.agent_scope_mode = "user+agent"
+/{account_id}/agent/{md5(user_id:agent_id)[:12]}/memories/cases/
+/{account_id}/agent/{md5(user_id:agent_id)[:12]}/skills/
+/{account_id}/agent/{md5(user_id:agent_id)[:12]}/instructions/
+
+# memory.agent_scope_mode = "agent"
+/{account_id}/agent/{md5(agent_id)[:12]}/memories/cases/
+/{account_id}/agent/{md5(agent_id)[:12]}/skills/
+/{account_id}/agent/{md5(agent_id)[:12]}/instructions/
 ```
 
-alice 和 bob 使用同一 agent_id 时，各自有独立的记忆和技能空间，互不可见。如果后续需要团队共享 agent 知识，可通过 ACL 机制（见 5.7）扩展。
+因此，alice 和 bob 使用同一 agent_id 时，是否共享 agent 记忆和技能空间取决于 `memory.agent_scope_mode`。
 
 ### 4.4 Admin API
 
@@ -259,7 +268,7 @@ PUT    /api/v1/admin/accounts/{account_id}/users/{uid}/role 修改用户角色 (
 
 - **account**：顶层隔离，不同租户之间完全不可见
 - **user**：同一 account 内，不同用户的私有数据互不可见。用户记忆、资源、session 属于用户本人
-- **agent**：同一 account 内，agent 目录由 user_id + agent_id 共同决定，每用户独立（见 4.3）
+- **agent**：同一 account 内，agent 目录默认由 user_id + agent_id 共同决定；也可通过 `memory.agent_scope_mode="agent"` 改为仅由 agent_id 决定（见 4.3）
 
 **Space 标识符**：`UserIdentifier` 提供两个方法 `user_space_name()` 和 `agent_space_name()`：
 
@@ -269,8 +278,10 @@ def user_space_name(self) -> str:
     return f"{self._account_id}_{hashlib.md5(self._user_id.encode()).hexdigest()[:8]}"
 
 def agent_space_name(self) -> str:
-    """Agent 级 space，由 user_id + agent_id 共同决定"""
-    return hashlib.md5((self._user_id + self._agent_id).encode()).hexdigest()[:12]
+    """Agent 级 space，受 memory.agent_scope_mode 控制"""
+    if config.memory.agent_scope_mode == "agent":
+        return hashlib.md5(self._agent_id.encode()).hexdigest()[:12]
+    return hashlib.md5(f"{self._user_id}:{self._agent_id}".encode()).hexdigest()[:12]
 ```
 
 ### 5.2 各 Scope 的隔离方式
@@ -278,9 +289,9 @@ def agent_space_name(self) -> str:
 | scope | AGFS 路径 | 隔离维度 | 说明 |
 |-------|-----------|----------|------|
 | `user/memories` | `/{account_id}/user/{user_space}/memories/` | account + user | 用户偏好、实体、事件属于用户本人 |
-| `agent/memories` | `/{account_id}/agent/{agent_space}/memories/` | account + user + agent | agent 的学习记忆，每用户独立 |
-| `agent/skills` | `/{account_id}/agent/{agent_space}/skills/` | account + user + agent | agent 的能力集，每用户独立 |
-| `agent/instructions` | `/{account_id}/agent/{agent_space}/instructions/` | account + user + agent | agent 的行为规则，每用户独立 |
+| `agent/memories` | `/{account_id}/agent/{agent_space}/memories/` | account + agent scope | agent 的学习记忆，隔离粒度由 `memory.agent_scope_mode` 决定 |
+| `agent/skills` | `/{account_id}/agent/{agent_space}/skills/` | account + agent scope | agent 的能力集，隔离粒度由 `memory.agent_scope_mode` 决定 |
+| `agent/instructions` | `/{account_id}/agent/{agent_space}/instructions/` | account + agent scope | agent 的行为规则，隔离粒度由 `memory.agent_scope_mode` 决定 |
 | `resources/` | `/{account_id}/resources/` | account | account 内共享的知识资源 |
 | `session/` | `/{account_id}/session/{user_space}/{session_id}/` | account + user | 用户的对话记录 |
 | `redo/` | `/{account_id}/_system/redo/` | account | 崩溃恢复 redo 标记 |

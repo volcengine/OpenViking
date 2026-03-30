@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 
 """Tests for session commit race condition fix (#580)."""
 
@@ -41,12 +41,15 @@ class TestCommitRace:
         phase1_done = asyncio.Event()
         original_generate = session._generate_archive_summary_async
 
-        async def slow_generate(messages):
+        async def slow_generate(messages, latest_archive_overview=""):
             # Signal that Phase 1 is complete (lock released, messages cleared)
             phase1_done.set()
             # Yield control so add_message can run before archive completes
             await asyncio.sleep(0)
-            return await original_generate(messages)
+            return await original_generate(
+                messages,
+                latest_archive_overview=latest_archive_overview,
+            )
 
         session._generate_archive_summary_async = slow_generate
 

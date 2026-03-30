@@ -11,9 +11,5 @@ pub fn truncate_utf8(s: &str, max_bytes: usize) -> &str {
         boundary -= 1;
     }
 
-    if boundary == 0 {
-        ""
-    } else {
-        &s[..boundary]
-    }
+    if boundary == 0 { "" } else { &s[..boundary] }
 }

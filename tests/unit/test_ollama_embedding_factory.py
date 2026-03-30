@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Tests for the ollama embedding factory in EmbeddingConfig._create_embedder.
 
 Regression tests for two bugs fixed in the ollama factory lambda:
@@ -9,7 +9,6 @@ Regression tests for two bugs fixed in the ollama factory lambda:
      with the openai factory and the placeholder used inside OpenAIDenseEmbedder.
 """
 
-import pytest
 from unittest.mock import MagicMock, patch
 
 from openviking_cli.utils.config.embedding_config import EmbeddingConfig, EmbeddingModelConfig

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """ov doctor - validate OpenViking subsystems and report actionable diagnostics.
 
 Unlike ``ov health`` (which pings a running server), ``ov doctor`` checks
@@ -9,6 +9,7 @@ native vector engine, AGFS, embedding provider, VLM provider, and disk space.
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import platform
@@ -127,16 +128,16 @@ def check_native_engine() -> tuple[bool, str, Optional[str]]:
 
 
 def check_agfs() -> tuple[bool, str, Optional[str]]:
-    """Verify pyagfs module loads."""
+    """Verify the bundled OpenViking AGFS client loads."""
     try:
-        import pyagfs
+        pyagfs = importlib.import_module("openviking.pyagfs")
 
         version = getattr(pyagfs, "__version__", "unknown")
-        return True, f"pyagfs {version}", None
+        return True, f"AGFS SDK {version}", None
     except ImportError:
         return (
             False,
-            "pyagfs module not found",
+            "Bundled AGFS client not found",
             "pip install openviking --upgrade --force-reinstall",
         )
 

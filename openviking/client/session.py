@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Lightweight Session class for OpenViking client.
 
 Session delegates all operations to the underlying Client (LocalClient or AsyncHTTPClient).
@@ -86,6 +86,14 @@ class Session:
             Session details
         """
         return await self._client.get_session(self.session_id)
+
+    async def get_session_context(self, token_budget: int = 128_000) -> Dict[str, Any]:
+        """Get assembled session context."""
+        return await self._client.get_session_context(self.session_id, token_budget=token_budget)
+
+    async def get_archive(self, archive_id: str) -> Dict[str, Any]:
+        """Get one completed archive for the session."""
+        return await self._client.get_session_archive(self.session_id, archive_id)
 
     def __repr__(self) -> str:
         return f"Session(id={self.session_id}, user={self.user.__str__()})"

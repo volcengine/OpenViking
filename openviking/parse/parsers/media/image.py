@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Media parser interfaces for OpenViking - Future expansion.
 
@@ -10,6 +10,8 @@ They serve as a design reference for future media parsing capabilities.
 For current document parsing (PDF, Markdown, HTML, Text), see other parser modules.
 """
 
+import asyncio
+import io
 from pathlib import Path
 from typing import List, Optional, Union
 
@@ -191,19 +193,31 @@ class ImageParser(BaseParser):
 
     async def _ocr_extract(self, image_bytes: bytes, lang: str) -> Optional[str]:
         """
-        Extract text from image using OCR.
+        Extract text from image using OCR via Tesseract.
 
         Args:
             image_bytes: Image binary data
-            lang: OCR language code
+            lang: OCR language code (e.g., "eng", "chi_sim")
 
         Returns:
-            Extracted text in markdown format, or None if no text found
-
-        TODO: Integrate with OCR API (Tesseract, PaddleOCR, etc.)
+            Extracted text as a string, or None if no text found
         """
-        # Not implemented - return None
-        return None
+        try:
+            import pytesseract
+        except ImportError:
+            logger.warning("pytesseract not installed. Install with: pip install openviking[ocr]")
+            return None
+
+        def _sync_ocr() -> Optional[str]:
+            img = Image.open(io.BytesIO(image_bytes))
+            text = pytesseract.image_to_string(img, lang=lang).strip()
+            return text if text else None
+
+        try:
+            return await asyncio.get_event_loop().run_in_executor(None, _sync_ocr)
+        except Exception as e:
+            logger.error(f"[ImageParser._ocr_extract] OCR extraction failed: {e}", exc_info=True)
+            return None
 
     async def _generate_semantic_info(
         self, node: ResourceNode, description: str, viking_fs, has_ocr: bool, root_dir_uri: str

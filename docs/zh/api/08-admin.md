@@ -443,6 +443,7 @@ curl -X DELETE http://localhost:1933/api/v1/admin/accounts/acme \
 
 ## 相关文档
 
+- [多租户](../concepts/11-multi-tenant.md) - 多租户模型、角色和共享边界
 - [API 概览](01-overview.md) - 认证与响应格式
 - [会话管理](05-sessions.md) - 会话管理
 - [系统](07-system.md) - 系统和监控 API

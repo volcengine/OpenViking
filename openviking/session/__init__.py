@@ -1,12 +1,8 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Session management module."""
 
 from typing import Optional
-
-from openviking.storage import VikingDBManager
-from openviking_cli.utils import get_logger
-from openviking_cli.utils.config import get_openviking_config
 
 from openviking.session.compressor import ExtractionStats, SessionCompressor
 from openviking.session.memory_archiver import (
@@ -27,7 +23,10 @@ from openviking.session.memory_extractor import (
     MemoryExtractor,
     ToolSkillCandidateMemory,
 )
-from openviking.session.session import Session, SessionCompression, SessionStats
+from openviking.session.session import Session, SessionCompression, SessionMeta, SessionStats
+from openviking.storage import VikingDBManager
+from openviking_cli.utils import get_logger
+from openviking_cli.utils.config import get_openviking_config
 
 logger = get_logger(__name__)
 
@@ -60,6 +59,7 @@ def create_session_compressor(
         logger.info("Using v2 memory compressor (templating system)")
         try:
             from openviking.session.compressor_v2 import SessionCompressorV2
+
             return SessionCompressorV2(vikingdb=vikingdb)
         except Exception as e:
             logger.warning(f"Failed to load v2 compressor, falling back to v1: {e}")
@@ -74,6 +74,7 @@ __all__ = [
     # Session
     "Session",
     "SessionCompression",
+    "SessionMeta",
     "SessionStats",
     # Compressor
     "SessionCompressor",

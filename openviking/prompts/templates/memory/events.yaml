@@ -1,30 +1,54 @@
 memory_type: events
 description: |
-  Event memory - captures "what happened, what decision was made, and why".
-  Extract notable events, decisions, milestones, and turning points from the conversation.
-  Events should be things worth remembering for future context: decisions made, agreements reached, milestones achieved, problems solved, etc.
-  Each event should include: what happened, why it happened, what the outcome was, and any relevant context/timeline.
-  Use absolute dates for event_time, not relative time like "today" or "recently".
+  # Guidelines
+  - The summary must include information records related to the entities involved, with attention to detail, especially emphasizing commitments, agreements, or proposals that may be referenced in the future (for example: Xiaoming once asked, "Do you need me to help you get a membership?" and Xiaosen replied, "Let's talk about it later"), and nothing should be omitted. If there is a time expression (such as "yesterday"), the date must be converted to a specific year, month, and day format according to when the event occurred.
+  - Include all facts as comprehensively as possible, especially requests made by specific roles and mark major events.
+  - Convert dialogue into indirect speech, covering emotions and speaker characteristics, recording the user's emotional state, conversation content, emotional feedback (such as happy, sad, curious, etc.), and the assistant's response.
+  - Create a coherent narrative, retaining key dramatic elements.
+  - Use a third-person perspective.
+  - If possible, combine the user's current behavior and reactions to speculate on the user's possible thoughts or actions.
+  - Describe the complete content of an event within a single event as much as possible; do not split one event into multiple parts.
 directory: "viking://user/{user_space}/memories/events"
 filename_template: "{event_time}_{event_name}.md"
 enabled: true
+# 操作模式：add_only 表示只新增记忆，不需要查看之前的记忆列表
+# upsert 表示新增或更新（默认行为）
+operation_mode: "add_only"
+content_template: |
+  {% set msg_range = extract_context.read_message_ranges(ranges|default('')) if extract_context else None %}
+  {% set first_time = msg_range.first_message_time() if msg_range else None %}
+  time: {{event_time|default(first_time if first_time else 'N/A')}}
+  {% if extract_context %}
+  {{ msg_range.pretty_print() if msg_range else '' }}
+  {% endif %}
+
+
 fields:
   - name: event_name
     type: string
     description: |
-      Event name in Chinese or English. If English, use lowercase with underscores, max 3 words.
+      Event name in Chinese or English. If English, use lowercase with underscores, max 3 words. Do not include any dates.
     merge_op: immutable
+
+  - name: goal
+    type: string
+    description: |
+      Summarize the purpose of the content in 5 words or less
+
+  - name: summary
+    type: string
+    description: |
+      Based on the content of the above fields, compile a description to outline the complete Fact content, in English
 
   - name: event_time
     type: string
     description: |
-      Time when the event occurred, format “2026-03-17”. If unknown, use current time.
+      Time when the event occurred, format “2026-03-17” / “2026-03” / “2026”. If unknown, use current time.
     merge_op: immutable
 
-  - name: content
+  - name: ranges
     type: string
     description: |
-      Event content in Markdown format, describing “what happened”.
-      Includes: decision content, reasons, outcomes, context, timeline, etc.
-      Example: “In memory system design discussion, found original 6 category boundaries were unclear. Especially status, lessons learned, and insights often overlapped, making them difficult to distinguish. Decided to refactor to 5 categories, removing these three to make boundaries clearer.”
-    merge_op: patch
+      Conversation message index ranges to extract, format: "start-end,start-end,..."
+      Example: "0-10,50-60" means extract messages 0-10 and 50-60.
+    merge_op: immutable

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Tests for non-symmetric query/document embedding passthrough.
 
 Tests EmbeddingConfig's ability to create context-specific embedders:

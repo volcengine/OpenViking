@@ -3553,7 +3553,7 @@ requires-dist = [
     { name = "json-repair", specifier = ">=0.25.0" },
     { name = "langfuse", marker = "extra == 'bot-langfuse'", specifier = ">=3.0.0" },
     { name = "lark-oapi", marker = "extra == 'bot-feishu'", specifier = ">=1.0.0" },
-    { name = "litellm", specifier = ">=1.0.0" },
+    { name = "litellm", specifier = ">=1.0.0,<1.82.6" },
     { name = "loguru", specifier = ">=0.7.3" },
     { name = "markdownify", specifier = ">=0.11.0" },
     { name = "msgpack", marker = "extra == 'bot'", specifier = ">=1.0.8" },

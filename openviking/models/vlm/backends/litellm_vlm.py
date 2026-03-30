@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """LiteLLM VLM Provider implementation with multi-provider support."""
 
 import base64
@@ -198,6 +198,7 @@ class LiteLLMVLMProvider(VLMBase):
         messages: list,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
+        thinking: bool = False,
     ) -> dict[str, Any]:
         """Build kwargs for LiteLLM call."""
         kwargs: dict[str, Any] = {
@@ -221,6 +222,13 @@ class LiteLLMVLMProvider(VLMBase):
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
+
+        # Only send enable_thinking to DashScope-compatible providers
+        provider = self._detected_provider or detect_provider_by_model(model)
+        if provider == "dashscope":
+            extra = kwargs.get("extra_body", {})
+            extra["enable_thinking"] = thinking
+            kwargs["extra_body"] = extra
 
         return kwargs
 
@@ -264,18 +272,20 @@ class LiteLLMVLMProvider(VLMBase):
     def _build_text_kwargs(
         self,
         prompt: str = "",
+        thinking: bool = False,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> dict[str, Any]:
         model = self._resolve_model(self.model or "gpt-4o-mini")
         kwargs_messages = messages or [{"role": "user", "content": prompt}]
-        return self._build_kwargs(model, kwargs_messages, tools, tool_choice)
+        return self._build_kwargs(model, kwargs_messages, tools, tool_choice, thinking=thinking)
 
     def _build_vision_kwargs(
         self,
         prompt: str = "",
         images: Optional[List[Union[str, Path, bytes]]] = None,
+        thinking: bool = False,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
@@ -290,7 +300,7 @@ class LiteLLMVLMProvider(VLMBase):
             if prompt:
                 content.append({"type": "text", "text": prompt})
             kwargs_messages = [{"role": "user", "content": content}]
-        return self._build_kwargs(model, kwargs_messages, tools, tool_choice)
+        return self._build_kwargs(model, kwargs_messages, tools, tool_choice, thinking=thinking)
 
     def get_completion(
         self,
@@ -301,7 +311,7 @@ class LiteLLMVLMProvider(VLMBase):
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion synchronously."""
-        kwargs = self._build_text_kwargs(prompt, tools, tool_choice, messages)
+        kwargs = self._build_text_kwargs(prompt, thinking, tools, tool_choice, messages)
 
         def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
@@ -328,7 +338,7 @@ class LiteLLMVLMProvider(VLMBase):
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously."""
-        kwargs = self._build_text_kwargs(prompt, tools, tool_choice, messages)
+        kwargs = self._build_text_kwargs(prompt, thinking, tools, tool_choice, messages)
 
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
@@ -355,7 +365,7 @@ class LiteLLMVLMProvider(VLMBase):
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get vision completion synchronously."""
-        kwargs = self._build_vision_kwargs(prompt, images, tools, None, messages)
+        kwargs = self._build_vision_kwargs(prompt, images, thinking, tools, None, messages)
 
         def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()
@@ -382,7 +392,7 @@ class LiteLLMVLMProvider(VLMBase):
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, VLMResponse]:
         """Get vision completion asynchronously."""
-        kwargs = self._build_vision_kwargs(prompt, images, tools, None, messages)
+        kwargs = self._build_vision_kwargs(prompt, images, thinking, tools, None, messages)
 
         async def _call() -> Union[str, VLMResponse]:
             t0 = time.perf_counter()

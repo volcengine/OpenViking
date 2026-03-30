@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Tests for memory utilities - URI generation, etc.
 """
@@ -8,9 +8,10 @@ import pytest
 
 from openviking.session.memory.dataclass import (
     MemoryField,
-    MemoryTypeSchema,
     MemoryOperations,
+    MemoryTypeSchema,
 )
+from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking.session.memory.merge_op.base import FieldType, MergeOp
 from openviking.session.memory.utils import (
     collect_allowed_directories,
@@ -22,7 +23,6 @@ from openviking.session.memory.utils import (
     resolve_all_operations,
     validate_uri_template,
 )
-from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 
 
 class TestUriGeneration:
@@ -226,7 +226,9 @@ class TestUriValidation:
             ),
         ]
 
-        dirs = collect_allowed_directories([s for s in schemas if s.enabled], user_space="default", agent_space="default")
+        dirs = collect_allowed_directories(
+            [s for s in schemas if s.enabled], user_space="default", agent_space="default"
+        )
 
         assert dirs == {
             "viking://user/default/memories/preferences",
@@ -245,7 +247,9 @@ class TestUriValidation:
             ),
         ]
 
-        patterns = collect_allowed_path_patterns(schemas, user_space="default", agent_space="default")
+        patterns = collect_allowed_path_patterns(
+            schemas, user_space="default", agent_space="default"
+        )
 
         assert patterns == {
             "viking://user/default/memories/preferences/{topic}.md",
@@ -259,23 +263,32 @@ class TestUriValidation:
         }
         allowed_patterns = set()
 
-        assert is_uri_allowed(
-            "viking://user/default/memories/preferences/test.md",
-            allowed_dirs,
-            allowed_patterns,
-        ) is True
+        assert (
+            is_uri_allowed(
+                "viking://user/default/memories/preferences/test.md",
+                allowed_dirs,
+                allowed_patterns,
+            )
+            is True
+        )
 
-        assert is_uri_allowed(
-            "viking://user/default/memories/preferences",
-            allowed_dirs,
-            allowed_patterns,
-        ) is True
+        assert (
+            is_uri_allowed(
+                "viking://user/default/memories/preferences",
+                allowed_dirs,
+                allowed_patterns,
+            )
+            is True
+        )
 
-        assert is_uri_allowed(
-            "viking://user/default/memories/preferences/subdir/test.md",
-            allowed_dirs,
-            allowed_patterns,
-        ) is True
+        assert (
+            is_uri_allowed(
+                "viking://user/default/memories/preferences/subdir/test.md",
+                allowed_dirs,
+                allowed_patterns,
+            )
+            is True
+        )
 
     def test_is_uri_allowed_by_pattern(self):
         """Test URI allowed by matching pattern."""
@@ -284,11 +297,14 @@ class TestUriValidation:
             "viking://user/default/memories/preferences/{topic}.md",
         }
 
-        assert is_uri_allowed(
-            "viking://user/default/memories/preferences/Python code style.md",
-            allowed_dirs,
-            allowed_patterns,
-        ) is True
+        assert (
+            is_uri_allowed(
+                "viking://user/default/memories/preferences/Python code style.md",
+                allowed_dirs,
+                allowed_patterns,
+            )
+            is True
+        )
 
     def test_is_uri_disallowed(self):
         """Test URI not allowed."""
@@ -297,17 +313,23 @@ class TestUriValidation:
         }
         allowed_patterns = set()
 
-        assert is_uri_allowed(
-            "viking://user/default/memories/other/test.md",
-            allowed_dirs,
-            allowed_patterns,
-        ) is False
+        assert (
+            is_uri_allowed(
+                "viking://user/default/memories/other/test.md",
+                allowed_dirs,
+                allowed_patterns,
+            )
+            is False
+        )
 
-        assert is_uri_allowed(
-            "viking://user/other/memories/preferences/test.md",
-            allowed_dirs,
-            allowed_patterns,
-        ) is False
+        assert (
+            is_uri_allowed(
+                "viking://user/other/memories/preferences/test.md",
+                allowed_dirs,
+                allowed_patterns,
+            )
+            is False
+        )
 
     def test_is_uri_allowed_for_schema(self):
         """Test checking URI against schemas."""
@@ -321,15 +343,21 @@ class TestUriValidation:
             ),
         ]
 
-        assert is_uri_allowed_for_schema(
-            "viking://user/default/memories/preferences/test.md",
-            schemas,
-        ) is True
+        assert (
+            is_uri_allowed_for_schema(
+                "viking://user/default/memories/preferences/test.md",
+                schemas,
+            )
+            is True
+        )
 
-        assert is_uri_allowed_for_schema(
-            "viking://user/default/memories/other/test.md",
-            schemas,
-        ) is False
+        assert (
+            is_uri_allowed_for_schema(
+                "viking://user/default/memories/other/test.md",
+                schemas,
+            )
+            is False
+        )
 
 
 class TestUriResolution:
@@ -341,26 +369,32 @@ class TestUriResolution:
         registry = MemoryTypeRegistry()
 
         # Add preferences schema
-        registry.register(MemoryTypeSchema(
-            memory_type="preferences",
-            description="User preferences",
-            directory="viking://user/{user_space}/memories/preferences",
-            filename_template="{topic}.md",
-            fields=[
-                MemoryField(name="topic", field_type=FieldType.STRING, description="Topic"),
-            ],
-        ))
+        registry.register(
+            MemoryTypeSchema(
+                memory_type="preferences",
+                description="User preferences",
+                directory="viking://user/{user_space}/memories/preferences",
+                filename_template="{topic}.md",
+                fields=[
+                    MemoryField(name="topic", field_type=FieldType.STRING, description="Topic"),
+                ],
+            )
+        )
 
         # Add tools schema
-        registry.register(MemoryTypeSchema(
-            memory_type="tools",
-            description="Tool memories",
-            directory="viking://agent/{agent_space}/memories/tools",
-            filename_template="{tool_name}.md",
-            fields=[
-                MemoryField(name="tool_name", field_type=FieldType.STRING, description="Tool name"),
-            ],
-        ))
+        registry.register(
+            MemoryTypeSchema(
+                memory_type="tools",
+                description="Tool memories",
+                directory="viking://agent/{agent_space}/memories/tools",
+                filename_template="{tool_name}.md",
+                fields=[
+                    MemoryField(
+                        name="tool_name", field_type=FieldType.STRING, description="Tool name"
+                    ),
+                ],
+            )
+        )
 
         return registry
 
@@ -439,9 +473,17 @@ class TestUriResolution:
         assert len(resolved.delete_operations) == 1
 
         # Verify resolved URIs
-        assert resolved.write_operations[0][1] == "viking://user/default/memories/preferences/Write test.md"
-        assert resolved.edit_operations[0][1] == "viking://agent/default/memories/tools/edit_tool.md"
-        assert resolved.delete_operations[0][1] == "viking://user/default/memories/preferences/Delete me.md"
+        assert (
+            resolved.write_operations[0].uri
+            == "viking://user/default/memories/preferences/Write test.md"
+        )
+        assert (
+            resolved.edit_operations[0].uri == "viking://agent/default/memories/tools/edit_tool.md"
+        )
+        assert (
+            resolved.delete_operations[0][1]
+            == "viking://user/default/memories/preferences/Delete me.md"
+        )
 
     def test_resolve_all_operations_with_errors(self, test_registry):
         """Test resolving operations with errors."""
@@ -466,7 +508,7 @@ class TestParseMemoryFileWithFields:
 
     def test_parses_memory_fields_comment(self):
         """Test parsing MEMORY_FIELDS HTML comment."""
-        content = '''<!-- MEMORY_FIELDS
+        content = """<!-- MEMORY_FIELDS
 {
   "tool_name": "web_search",
   "static_desc": "Searches the web for information",
@@ -475,7 +517,7 @@ class TestParseMemoryFileWithFields:
 }
 -->
 Here is the actual file content.
-It has multiple lines.'''
+It has multiple lines."""
         result = parse_memory_file_with_fields(content)
         assert result["fields"] is not None
         assert result["fields"]["tool_name"] == "web_search"
@@ -500,22 +542,22 @@ It has multiple lines.'''
 
     def test_handles_invalid_json_in_comment(self):
         """Test handles invalid JSON in MEMORY_FIELDS comment gracefully."""
-        content = '''<!-- MEMORY_FIELDS
+        content = """<!-- MEMORY_FIELDS
 {
   "tool_name": "web_search",
   invalid json here
 }
 -->
-File content'''
+File content"""
         result = parse_memory_file_with_fields(content)
         assert result["fields"] is None
         assert "File content" in result["content"]
 
     def test_removes_comment_from_content(self):
         """Test that the comment is completely removed from content."""
-        content = '''Before comment
+        content = """Before comment
 <!-- MEMORY_FIELDS {"test": "value"} -->
-After comment'''
+After comment"""
         result = parse_memory_file_with_fields(content)
         assert "<!-- MEMORY_FIELDS" not in result["content"]
         assert "Before comment" in result["content"]
@@ -526,8 +568,8 @@ After comment'''
 
     def test_fields_on_same_line(self):
         """Test MEMORY_FIELDS on single line."""
-        content = '''<!-- MEMORY_FIELDS {"tool_name": "test", "value": 42} -->
-Content'''
+        content = """<!-- MEMORY_FIELDS {"tool_name": "test", "value": 42} -->
+Content"""
         result = parse_memory_file_with_fields(content)
         assert result["fields"] is not None
         assert result["fields"]["tool_name"] == "test"

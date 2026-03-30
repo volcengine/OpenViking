@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 OpenViking - An Agent-native context database
 
@@ -18,10 +18,11 @@ except ImportError:
 
 try:
     from openviking.pyagfs import AGFSClient
-except ImportError:
+except ImportError as exc:
     raise ImportError(
-        "pyagfs not found. Please install: pip install -e third_party/agfs/agfs-sdk/python"
-    )
+        "Bundled OpenViking AGFS client is unavailable. "
+        "Reinstall openviking or run 'pip install -e .' from the project root."
+    ) from exc
 
 
 def __getattr__(name: str):

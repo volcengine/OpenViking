@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """End-to-end lock tests using real AGFS backend.
 
 These tests exercise LockContext -> LockManager -> PathLock -> AGFS,

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Async HTTP Client for OpenViking.
 
 Implements BaseClient interface using HTTP calls to OpenViking Server.
@@ -19,6 +19,7 @@ from openviking_cli.exceptions import (
     AlreadyExistsError,
     DeadlineExceededError,
     EmbeddingFailedError,
+    FailedPreconditionError,
     InternalError,
     InvalidArgumentError,
     InvalidURIError,
@@ -44,6 +45,7 @@ ERROR_CODE_TO_EXCEPTION = {
     "INVALID_URI": InvalidURIError,
     "NOT_FOUND": NotFoundError,
     "ALREADY_EXISTS": AlreadyExistsError,
+    "FAILED_PRECONDITION": FailedPreconditionError,
     "UNAUTHENTICATED": UnauthenticatedError,
     "PERMISSION_DENIED": PermissionDeniedError,
     "UNAVAILABLE": UnavailableError,
@@ -282,14 +284,6 @@ class AsyncHTTPClient(BaseClient):
         else:
             raise exc_class(message)
 
-    def _is_local_server(self) -> bool:
-        """Check if the server URL is localhost or 127.0.0.1."""
-        from urllib.parse import urlparse
-
-        parsed_url = urlparse(self._url)
-        hostname = parsed_url.hostname
-        return hostname in ("localhost", "127.0.0.1")
-
     def _zip_directory(self, dir_path: str) -> str:
         """Create a temporary zip file from a directory."""
         dir_path = Path(dir_path)
@@ -309,7 +303,7 @@ class AsyncHTTPClient(BaseClient):
         return str(zip_path)
 
     async def _upload_temp_file(self, file_path: str) -> str:
-        """Upload a file to /api/v1/resources/temp_upload and return the temp_path."""
+        """Upload a file to /api/v1/resources/temp_upload and return the temp_file_id."""
         with open(file_path, "rb") as f:
             files = {"file": (Path(file_path).name, f, "application/octet-stream")}
             response = await self._http.post(
@@ -317,7 +311,7 @@ class AsyncHTTPClient(BaseClient):
                 files=files,
             )
         result = self._handle_response(response)
-        return result.get("temp_path", "")
+        return result.get("temp_file_id", "")
 
     # ============= Resource Management =============
 
@@ -361,17 +355,17 @@ class AsyncHTTPClient(BaseClient):
             request_data["preserve_structure"] = preserve_structure
 
         path_obj = Path(path)
-        if path_obj.exists() and not self._is_local_server():
+        if path_obj.exists():
             if path_obj.is_dir():
                 zip_path = self._zip_directory(path)
                 try:
-                    temp_path = await self._upload_temp_file(zip_path)
-                    request_data["temp_path"] = temp_path
+                    temp_file_id = await self._upload_temp_file(zip_path)
+                    request_data["temp_file_id"] = temp_file_id
                 finally:
                     Path(zip_path).unlink(missing_ok=True)
             elif path_obj.is_file():
-                temp_path = await self._upload_temp_file(path)
-                request_data["temp_path"] = temp_path
+                temp_file_id = await self._upload_temp_file(path)
+                request_data["temp_file_id"] = temp_file_id
             else:
                 request_data["path"] = path
         else:
@@ -400,17 +394,17 @@ class AsyncHTTPClient(BaseClient):
 
         if isinstance(data, str):
             path_obj = Path(data)
-            if path_obj.exists() and not self._is_local_server():
+            if path_obj.exists():
                 if path_obj.is_dir():
                     zip_path = self._zip_directory(data)
                     try:
-                        temp_path = await self._upload_temp_file(zip_path)
-                        request_data["temp_path"] = temp_path
+                        temp_file_id = await self._upload_temp_file(zip_path)
+                        request_data["temp_file_id"] = temp_file_id
                     finally:
                         Path(zip_path).unlink(missing_ok=True)
                 elif path_obj.is_file():
-                    temp_path = await self._upload_temp_file(data)
-                    request_data["temp_path"] = temp_path
+                    temp_file_id = await self._upload_temp_file(data)
+                    request_data["temp_file_id"] = temp_file_id
                 else:
                     request_data["data"] = data
             else:
@@ -703,15 +697,49 @@ class AsyncHTTPClient(BaseClient):
         response = await self._http.get("/api/v1/sessions")
         return self._handle_response(response)
 
-    async def get_session(self, session_id: str) -> Dict[str, Any]:
+    async def get_session(self, session_id: str, *, auto_create: bool = False) -> Dict[str, Any]:
         """Get session details."""
-        response = await self._http.get(f"/api/v1/sessions/{session_id}")
+        params = {}
+        if auto_create:
+            params["auto_create"] = "true"
+        response = await self._http.get(f"/api/v1/sessions/{session_id}", params=params)
+        return self._handle_response(response)
+
+    async def get_session_context(
+        self, session_id: str, token_budget: int = 128_000
+    ) -> Dict[str, Any]:
+        """Get assembled session context."""
+        response = await self._http.get(
+            f"/api/v1/sessions/{session_id}/context",
+            params={"token_budget": token_budget},
+        )
+        return self._handle_response(response)
+
+    async def get_session_archive(self, session_id: str, archive_id: str) -> Dict[str, Any]:
+        """Get one completed archive for a session."""
+        response = await self._http.get(
+            f"/api/v1/sessions/{session_id}/archives/{archive_id}",
+        )
         return self._handle_response(response)
 
     async def delete_session(self, session_id: str) -> None:
         """Delete a session."""
         response = await self._http.delete(f"/api/v1/sessions/{session_id}")
         self._handle_response(response)
+
+    async def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Query background task status.
+
+        Args:
+            task_id: Task ID (returned by commit)
+
+        Returns:
+            Task info dict, or None if not found
+        """
+        response = await self._http.get(f"/api/v1/tasks/{task_id}")
+        if response.status_code == 404:
+            return None
+        return self._handle_response(response)
 
     async def commit_session(
         self, session_id: str, telemetry: TelemetryRequest = False
@@ -731,6 +759,7 @@ class AsyncHTTPClient(BaseClient):
         role: str,
         content: str | None = None,
         parts: list[dict] | None = None,
+        created_at: str | None = None,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 
@@ -739,6 +768,7 @@ class AsyncHTTPClient(BaseClient):
             role: Message role ("user" or "assistant")
             content: Text content (simple mode, backward compatible)
             parts: Parts array (full Part support mode)
+            created_at: Message creation time (ISO format string)
 
         If both content and parts are provided, parts takes precedence.
         """
@@ -749,6 +779,9 @@ class AsyncHTTPClient(BaseClient):
             payload["content"] = content
         else:
             raise ValueError("Either content or parts must be provided")
+
+        if created_at is not None:
+            payload["created_at"] = created_at
 
         response = await self._http.post(
             f"/api/v1/sessions/{session_id}/messages",
@@ -784,11 +817,13 @@ class AsyncHTTPClient(BaseClient):
         }
 
         file_path_obj = Path(file_path)
-        if file_path_obj.exists() and file_path_obj.is_file() and not self._is_local_server():
-            temp_path = await self._upload_temp_file(file_path)
-            request_data["temp_path"] = temp_path
-        else:
-            request_data["file_path"] = file_path
+        if not file_path_obj.exists():
+            raise FileNotFoundError(f"Local ovpack file not found: {file_path}")
+        if not file_path_obj.is_file():
+            raise ValueError(f"Path {file_path} is not a file")
+
+        temp_file_id = await self._upload_temp_file(file_path)
+        request_data["temp_file_id"] = temp_file_id
 
         response = await self._http.post(
             "/api/v1/pack/import",

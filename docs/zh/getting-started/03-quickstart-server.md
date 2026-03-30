@@ -43,15 +43,47 @@ import openviking as ov
 client = ov.SyncHTTPClient(url="http://localhost:1933")
 ```
 
-如果服务端启用了认证，需要传入 `api_key`，可选传入 `agent_id`：
+### 启用认证
+
+服务端启用认证后，需要传入 `api_key`。OpenViking 使用两层 API Key 体系，请根据场景选择：
+
+**常规数据访问：使用 `user_key`（推荐）**
+
+大多数场景应使用 `user_key`，可直接调用 `add_resource`、`find`、`ls` 等租户级 API：
 
 ```python
 import openviking as ov
 
-client = ov.SyncHTTPClient(url="http://localhost:1933", api_key="your-key", agent_id="my-agent")
+client = ov.SyncHTTPClient(
+    url="http://localhost:1933",
+    api_key="<user-key>",
+    agent_id="my-agent",      # 可选
+)
 ```
 
-**完整示例：**
+> `user_key` 通过 Admin API 创建（参见 [认证文档](../../guides/04-authentication.md)），服务端可自动识别其所属租户。
+
+**管理操作：使用 `root_key`**
+
+`root_key` 适用于管理操作（创建账户、系统状态等）。如需用 `root_key` 访问租户级 API，**必须**同时传入 `account` 和 `user`，否则服务端会拒绝请求：
+
+```python
+import openviking as ov
+
+client = ov.SyncHTTPClient(
+    url="http://localhost:1933",
+    api_key="<root-key>",
+    account="acme",           # 必须：目标租户
+    user="alice",             # 必须：目标用户
+)
+```
+
+> ⚠️ 使用 `root_key` 调用 `add_resource`、`find` 等租户级 API 时，如果未提供 `account`/`user`，会收到：
+> `ROOT requests to tenant-scoped APIs must include X-OpenViking-Account and X-OpenViking-User headers`
+
+更多认证细节（trusted 模式、CLI 配置等）请参见 [认证文档](../../guides/04-authentication.md)。
+
+**完整示例（使用 `user_key`）：**
 
 ```python
 import openviking as ov
@@ -113,6 +145,8 @@ export OPENVIKING_CLI_CONFIG_FILE=/path/to/ovcli.conf
 ```
 
 ## 使用 curl 连接
+
+远端 URL 可以直接放在 `path` 里。本地文件需要先调用 `POST /api/v1/resources/temp_upload` 上传，再用返回的 `temp_file_id` 调目标 API。裸 HTTP 如果导入本地目录，需要先把目录打成 `.zip` 再上传。
 
 ```bash
 # Add a resource

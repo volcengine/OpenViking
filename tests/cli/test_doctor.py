@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Tests for ``ov doctor`` diagnostic checks."""
 
 from __future__ import annotations
@@ -111,17 +111,30 @@ class TestCheckAgfs:
         assert isinstance(ok, bool)
         assert isinstance(detail, str)
 
+    def test_pass_when_only_vendored_openviking_pyagfs_is_available(self):
+        real_import = __import__
+
+        def import_side_effect(name, globals=None, locals=None, fromlist=(), level=0):
+            if name == "pyagfs":
+                raise ImportError("No module named 'pyagfs'")
+            return real_import(name, globals, locals, fromlist, level)
+
+        with patch("builtins.__import__", side_effect=import_side_effect):
+            ok, detail, fix = check_agfs()
+
+        assert ok
+        assert "AGFS" in detail
+        assert fix is None
+
     def test_fail_when_missing(self):
-        with patch.dict(sys.modules, {"pyagfs": None}):
-            # Force ImportError by removing from sys.modules
-            saved = sys.modules.pop("pyagfs", None)
-            try:
-                with patch("builtins.__import__", side_effect=_import_fail("pyagfs")):
-                    ok, detail, fix = check_agfs()
-                assert not ok
-            finally:
-                if saved is not None:
-                    sys.modules["pyagfs"] = saved
+        with patch(
+            "openviking_cli.doctor.importlib.import_module",
+            side_effect=ImportError("No module named 'openviking.pyagfs'"),
+        ):
+            ok, detail, fix = check_agfs()
+        assert not ok
+        assert "Bundled AGFS client not found" in detail
+        assert fix is not None
 
 
 class TestCheckEmbedding:

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 import copy
 import json
 from typing import Any, Dict, List, Optional
@@ -132,7 +132,7 @@ class VolcengineCollection(ICollection):
 
     @classmethod
     def _sanitize_payload(cls, obj: Any) -> Any:
-        """Recursively sanitize URI values in payload (including data and filter DSL), and forcefully add parent_uri if missing"""
+        """Recursively sanitize URI values in payload, including filter DSL."""
         # Dictionary node
         if isinstance(obj, dict):
             return cls._sanitize_dict_payload(obj)
@@ -167,8 +167,6 @@ class VolcengineCollection(ICollection):
         if not new_obj:
             return None
 
-        # Forcefully add parent_uri: when the dictionary looks like a data record (contains uri)
-        cls._ensure_parent_uri(new_obj)
         return new_obj
 
     @classmethod
@@ -210,13 +208,6 @@ class VolcengineCollection(ICollection):
                 if y is not None:
                     new_obj[k] = y
         return new_obj
-
-    @classmethod
-    def _ensure_parent_uri(cls, obj: Dict[str, Any]) -> None:
-        """Forcefully add parent_uri: when the dictionary looks like a data record (contains uri)"""
-        if "uri" in obj:
-            if "parent_uri" not in obj or not obj.get("parent_uri"):
-                obj["parent_uri"] = "/"
 
     @classmethod
     def _sanitize_list_payload(cls, obj: List[Any]) -> List[Any]:

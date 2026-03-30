@@ -1,6 +1,6 @@
 use crate::client::HttpClient;
 use crate::error::Result;
-use crate::output::{output_success, OutputFormat};
+use crate::output::{OutputFormat, output_success};
 use serde_json::json;
 
 pub async fn wait(
@@ -20,11 +20,7 @@ pub async fn wait(
     Ok(())
 }
 
-pub async fn status(
-    client: &HttpClient,
-    output_format: OutputFormat,
-    compact: bool,
-) -> Result<()> {
+pub async fn status(client: &HttpClient, output_format: OutputFormat, compact: bool) -> Result<()> {
     let response: serde_json::Value = client.get("/api/v1/system/status", &[]).await?;
     output_success(&response, output_format, compact);
     Ok(())
@@ -36,13 +32,16 @@ pub async fn health(
     compact: bool,
 ) -> Result<bool> {
     let response: serde_json::Value = client.get("/health", &[]).await?;
-    
+
     // Extract the key fields
-    let healthy = response.get("healthy").and_then(|v| v.as_bool()).unwrap_or(false);
+    let healthy = response
+        .get("healthy")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
     let _status = response.get("status").and_then(|v| v.as_str());
     let version = response.get("version").and_then(|v| v.as_str());
     let user_id = response.get("user_id").and_then(|v| v.as_str());
-    
+
     // For table output, print in a readable format
     if matches!(output_format, OutputFormat::Table) || matches!(output_format, OutputFormat::Json) {
         output_success(&response, output_format, compact);
@@ -57,6 +56,6 @@ pub async fn health(
         }
         println!();
     }
-    
+
     Ok(healthy)
 }

@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Synchronous HTTP Client for OpenViking.
 
 Wraps AsyncHTTPClient with synchronous methods.
@@ -86,9 +86,17 @@ class SyncHTTPClient:
         """List all sessions."""
         return run_async(self._async_client.list_sessions())
 
-    def get_session(self, session_id: str) -> Dict[str, Any]:
+    def get_session(self, session_id: str, *, auto_create: bool = False) -> Dict[str, Any]:
         """Get session details."""
-        return run_async(self._async_client.get_session(session_id))
+        return run_async(self._async_client.get_session(session_id, auto_create=auto_create))
+
+    def get_session_context(self, session_id: str, token_budget: int = 128_000) -> Dict[str, Any]:
+        """Get assembled session context."""
+        return run_async(self._async_client.get_session_context(session_id, token_budget))
+
+    def get_session_archive(self, session_id: str, archive_id: str) -> Dict[str, Any]:
+        """Get one completed archive for a session."""
+        return run_async(self._async_client.get_session_archive(session_id, archive_id))
 
     def delete_session(self, session_id: str) -> None:
         """Delete a session."""
@@ -100,6 +108,7 @@ class SyncHTTPClient:
         role: str,
         content: str | None = None,
         parts: list[dict] | None = None,
+        created_at: str | None = None,
     ) -> Dict[str, Any]:
         """Add a message to a session.
 
@@ -108,10 +117,17 @@ class SyncHTTPClient:
             role: Message role ("user" or "assistant")
             content: Text content (simple mode)
             parts: Parts array (full Part support: TextPart, ContextPart, ToolPart)
+            created_at: Message creation time (ISO format string)
 
         If both content and parts are provided, parts takes precedence.
         """
-        return run_async(self._async_client.add_message(session_id, role, content, parts))
+        return run_async(
+            self._async_client.add_message(session_id, role, content, parts, created_at)
+        )
+
+    def get_task(self, task_id: str) -> Optional[Dict[str, Any]]:
+        """Query background task status."""
+        return run_async(self._async_client.get_task(task_id))
 
     def commit_session(
         self, session_id: str, telemetry: TelemetryRequest = False

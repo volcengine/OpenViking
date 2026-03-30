@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Integration tests for GeminiDenseEmbedder — require real GOOGLE_API_KEY.
 Run: GOOGLE_API_KEY=<key> pytest tests/integration/test_gemini_embedding_it.py -v

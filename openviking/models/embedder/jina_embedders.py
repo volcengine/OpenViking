@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """Jina AI Embedder Implementation"""
 
 import logging
@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 JINA_MODEL_DIMENSIONS = {
     "jina-embeddings-v5-text-small": 1024,  # 677M params, max seq 32768
     "jina-embeddings-v5-text-nano": 768,  # 239M params, max seq 8192
+    "jina-code-embeddings-1.5b": 1024,  # code model, max seq 8192
+    "jina-code-embeddings-0.5b": 768,  # code model, max seq 8192
 }
 
 DEFAULT_JINA_QUERY_TASK = "retrieval.query"
@@ -143,6 +145,16 @@ class JinaDenseEmbedder(DenseEmbedderBase):
             extra_body["late_chunking"] = self.late_chunking
         return extra_body if extra_body else None
 
+    def _raise_task_error(self, error: openai.APIError) -> None:
+        """Raise an actionable error if a 422 indicates an invalid task type."""
+        if getattr(error, "status_code", None) == 422 and "task" in str(error.body):
+            raise RuntimeError(
+                f"Jina API rejected task type for model '{self.model_name}'. "
+                f"This usually means the model requires a different task prefix. "
+                f"Set 'query_param' and 'document_param' in your embedding config "
+                f"to a valid task type for this model. API details: {error.message}"
+            ) from error
+
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform dense embedding on text
 
@@ -178,6 +190,7 @@ class JinaDenseEmbedder(DenseEmbedderBase):
                 operation_name="Jina embedding",
             )
         except openai.APIError as e:
+            self._raise_task_error(e)
             raise RuntimeError(f"Jina API error: {e.message}") from e
         except Exception as e:
             raise RuntimeError(f"Embedding failed: {str(e)}") from e
@@ -218,6 +231,7 @@ class JinaDenseEmbedder(DenseEmbedderBase):
                 operation_name="Jina batch embedding",
             )
         except openai.APIError as e:
+            self._raise_task_error(e)
             raise RuntimeError(f"Jina API error: {e.message}") from e
         except Exception as e:
             raise RuntimeError(f"Batch embedding failed: {str(e)}") from e

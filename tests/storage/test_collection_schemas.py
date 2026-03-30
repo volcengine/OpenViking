@@ -1,13 +1,18 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 
+import inspect
 import json
 from types import SimpleNamespace
 
 import pytest
 
 from openviking.models.embedder.base import EmbedResult
-from openviking.storage.collection_schemas import TextEmbeddingHandler
+from openviking.storage.collection_schemas import (
+    CollectionSchemas,
+    TextEmbeddingHandler,
+    init_context_collection,
+)
 from openviking.storage.queuefs.embedding_msg import EmbeddingMsg
 
 
@@ -21,8 +26,8 @@ class _DummyEmbedder:
 
 
 class _DummyConfig:
-    def __init__(self, embedder: _DummyEmbedder):
-        self.storage = SimpleNamespace(vectordb=SimpleNamespace(name="context"))
+    def __init__(self, embedder: _DummyEmbedder, backend: str = "volcengine"):
+        self.storage = SimpleNamespace(vectordb=SimpleNamespace(name="context", backend=backend))
         self.embedding = SimpleNamespace(
             dimension=2,
             get_embedder=lambda: embedder,
@@ -104,3 +109,97 @@ async def test_embedding_handler_treats_shutdown_write_lock_as_success(monkeypat
     assert embedder.calls == 1
     assert status["success"] == 1
     assert status["error"] == 0
+
+
+@pytest.mark.asyncio
+async def test_embedding_handler_preserves_parent_uri_for_backend_upsert_logic(monkeypatch):
+    captured = {}
+
+    class _CapturingVikingDB:
+        is_closing = False
+        mode = "local"
+
+        async def upsert(self, data, *, ctx):
+            captured["data"] = dict(data)
+            return "rec-1"
+
+    embedder = _DummyEmbedder()
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: _DummyConfig(embedder),
+    )
+
+    handler = TextEmbeddingHandler(_CapturingVikingDB())
+    payload = _build_queue_payload()
+    queue_data = json.loads(payload["data"])
+    queue_data["context_data"]["parent_uri"] = "viking://resources"
+    payload["data"] = json.dumps(queue_data)
+
+    result = await handler.on_dequeue(payload)
+
+    assert result is not None
+    assert "data" in captured
+    assert captured["data"]["parent_uri"] == "viking://resources"
+
+
+def test_context_collection_excludes_parent_uri():
+    schema = CollectionSchemas.context_collection("ctx", 8)
+
+    field_names = [field["FieldName"] for field in schema["Fields"]]
+
+    assert "parent_uri" not in field_names
+    assert "parent_uri" not in schema["ScalarIndex"]
+
+
+def test_context_collection_signature_has_no_include_parent_uri():
+    signature = inspect.signature(CollectionSchemas.context_collection)
+
+    assert "include_parent_uri" not in signature.parameters
+
+
+@pytest.mark.asyncio
+async def test_init_context_collection_uses_backend_specific_schema(monkeypatch):
+    captured = {}
+
+    class _Storage:
+        async def create_collection(self, name, schema):
+            captured["name"] = name
+            captured["schema"] = schema
+            return True
+
+    embedder = _DummyEmbedder()
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: _DummyConfig(embedder, backend="volcengine"),
+    )
+
+    created = await init_context_collection(_Storage())
+
+    assert created is True
+    field_names = [field["FieldName"] for field in captured["schema"]["Fields"]]
+    assert "parent_uri" not in field_names
+    assert "parent_uri" not in captured["schema"]["ScalarIndex"]
+
+
+@pytest.mark.asyncio
+async def test_init_context_collection_excludes_parent_uri_for_local_backend(monkeypatch):
+    captured = {}
+
+    class _Storage:
+        async def create_collection(self, name, schema):
+            captured["name"] = name
+            captured["schema"] = schema
+            return True
+
+    embedder = _DummyEmbedder()
+    monkeypatch.setattr(
+        "openviking_cli.utils.config.get_openviking_config",
+        lambda: _DummyConfig(embedder, backend="local"),
+    )
+
+    created = await init_context_collection(_Storage())
+
+    assert created is True
+    field_names = [field["FieldName"] for field in captured["schema"]["Fields"]]
+    assert "parent_uri" not in field_names
+    assert "parent_uri" not in captured["schema"]["ScalarIndex"]

@@ -351,13 +351,15 @@ class AgentLoop:
                     tools_used.append(tool_used_dict)
 
                 messages.append(
-                    {"role": "system", "content": "Reflect on the results and decide next steps."}
+                    {"role": "user", "content": "Reflect on the results and decide next steps."}
                 )
             else:
                 final_content = response.content
                 break
 
-        if final_content is None:
+        if final_content is None or (
+            isinstance(final_content, str) and not final_content.strip()
+        ):
             if iteration >= self.max_iterations:
                 final_content = f"Reached {self.max_iterations} iterations without completion."
             else:
@@ -576,7 +578,9 @@ class AgentLoop:
             publish_events=False,
         )
 
-        if final_content is None:
+        if final_content is None or (
+            isinstance(final_content, str) and not final_content.strip()
+        ):
             final_content = "Background task completed."
 
         # Save to session (mark as system message in history)

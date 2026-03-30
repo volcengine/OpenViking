@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Test memory extraction flow with memory module components.
 
@@ -11,11 +11,10 @@ This test simulates the complete memory extraction workflow:
 5. Apply operations via MemoryUpdater
 """
 
-from unittest.mock import AsyncMock, MagicMock, patch
-from typing import Any, Dict, List, Optional, Tuple
-from dataclasses import dataclass
-
 import logging
+from typing import Any, Dict, List, Tuple
+from unittest.mock import patch
+
 import pytest
 
 # 让 openviking logger 的日志 propagate 到 pytest
@@ -30,8 +29,7 @@ logger = logging.getLogger(__name__)
 from openviking.message import Message, TextPart
 from openviking.server.identity import RequestContext, Role
 from openviking.session.memory import (
-    MemoryOperations,
-    MemoryReAct,
+    ExtractLoop,
     MemoryUpdater,
     MemoryUpdateResult,
 )
@@ -75,10 +73,7 @@ class MockVikingFS:
             await self.mkdir(parent_uri)
 
         # Write the file
-        self._store[uri] = {
-            "type": "file",
-            "content": content
-        }
+        self._store[uri] = {"type": "file", "content": content}
 
         # Update parent directory's entries
         if parent_uri and parent_uri in self._store:
@@ -88,17 +83,14 @@ class MockVikingFS:
                 "name": name,
                 "isDir": False,
                 "uri": uri,
-                "abstract": content[:100] if content else ""
+                "abstract": content[:100] if content else "",
             }
             # Update or add to parent's children
             parent = self._store[parent_uri]
             if "children" not in parent:
                 parent["children"] = []
             # Remove existing entry if present
-            parent["children"] = [
-                c for c in parent["children"]
-                if c.get("name") != name
-            ]
+            parent["children"] = [c for c in parent["children"] if c.get("name") != name]
             parent["children"].append(file_entry)
 
     async def ls(self, uri: str, **kwargs) -> List[Dict[str, Any]]:
@@ -119,25 +111,15 @@ class MockVikingFS:
             await self.mkdir(parent_uri)
 
         # Create this directory
-        self._store[uri] = {
-            "type": "dir",
-            "children": []
-        }
+        self._store[uri] = {"type": "dir", "children": []}
 
         # Update parent directory's entries
         if parent_uri and parent_uri in self._store:
             name = self._get_name_from_uri(uri)
-            dir_entry = {
-                "name": name,
-                "isDir": True,
-                "uri": uri
-            }
+            dir_entry = {"name": name, "isDir": True, "uri": uri}
             parent = self._store[parent_uri]
             # Remove existing entry if present
-            parent["children"] = [
-                c for c in parent["children"]
-                if c.get("name") != name
-            ]
+            parent["children"] = [c for c in parent["children"] if c.get("name") != name]
             parent["children"].append(dir_entry)
 
     async def rm(self, uri: str, **kwargs) -> None:
@@ -150,10 +132,7 @@ class MockVikingFS:
         name = self._get_name_from_uri(uri)
         if parent_uri and parent_uri in self._store:
             parent = self._store[parent_uri]
-            parent["children"] = [
-                c for c in parent.get("children", [])
-                if c.get("name") != name
-            ]
+            parent["children"] = [c for c in parent.get("children", []) if c.get("name") != name]
 
         # Remove the file/directory
         del self._store[uri]
@@ -174,13 +153,10 @@ class MockVikingFS:
             if entry.get("type") == "file":
                 name = self._get_name_from_uri(uri)
                 content = entry.get("content", "")
-                if (query_lower in name.lower() or
-                    query_lower in content.lower()):
-                    memories.append({
-                        "uri": uri,
-                        "name": name,
-                        "abstract": content[:200] if content else ""
-                    })
+                if query_lower in name.lower() or query_lower in content.lower():
+                    memories.append(
+                        {"uri": uri, "name": name, "abstract": content[:200] if content else ""}
+                    )
 
         return {
             "memories": memories,
@@ -221,21 +197,14 @@ class MockVikingFS:
             if uri not in self._snapshot:
                 added[uri] = content
             elif content != self._snapshot[uri]:
-                modified[uri] = {
-                    "old": self._snapshot[uri],
-                    "new": content
-                }
+                modified[uri] = {"old": self._snapshot[uri], "new": content}
 
         # Check for deleted files
         for uri in self._snapshot:
             if uri not in current_files:
                 deleted[uri] = self._snapshot[uri]
 
-        return {
-            "added": added,
-            "modified": modified,
-            "deleted": deleted
-        }
+        return {"added": added, "modified": modified, "deleted": deleted}
 
 
 def print_diff(diff: Dict[str, Dict[str, str]]) -> None:
@@ -253,6 +222,7 @@ def print_diff(diff: Dict[str, Dict[str, str]]) -> None:
 
     try:
         from diff_match_patch import diff_match_patch
+
         has_dmp = True
     except ImportError:
         has_dmp = False
@@ -291,7 +261,7 @@ def print_diff(diff: Dict[str, Dict[str, str]]) -> None:
                     _print_inline_diff(diffs, STYLE_DELETE, STYLE_INSERT, STYLE_RESET)
                 except Exception as e:
                     # Fallback to simple line-by-line comparison
-                    logger.exception("diff_match_patch fail",e)
+                    logger.exception("diff_match_patch fail", e)
             else:
                 logger.exception("has_dmp= False")
 
@@ -310,7 +280,9 @@ def print_diff(diff: Dict[str, Dict[str, str]]) -> None:
     print("\n" + "=" * 80 + "\n")
 
 
-def _print_inline_diff(diffs: List[Tuple[int, str]], style_delete: str, style_insert: str, style_reset: str) -> None:
+def _print_inline_diff(
+    diffs: List[Tuple[int, str]], style_delete: str, style_insert: str, style_reset: str
+) -> None:
     """
     Print character-level diff with inline colors.
 
@@ -323,14 +295,14 @@ def _print_inline_diff(diffs: List[Tuple[int, str]], style_delete: str, style_in
         if op == 0:  # 文本无差异：正常显示
             output.append(f"{text}")
         elif op == -1:  # 文本删除：红色删除线
-            output.append('\n'.join([f'{style_delete}{t}{style_reset}' for t in text.split('\n')]))
+            output.append("\n".join([f"{style_delete}{t}{style_reset}" for t in text.split("\n")]))
         elif op == 1:  # 文本新增：绿色
-            output.append('\n'.join([f'{style_insert}{t}{style_reset}' for t in text.split('\n')]))
+            output.append("\n".join([f"{style_insert}{t}{style_reset}" for t in text.split("\n")]))
 
     # 合并并打印最终结果，添加行号
     formatted_text = "".join(output)
-    for idx, line in enumerate(formatted_text.split('\n')):
-        print(f"  {idx+1}: {line}")
+    for idx, line in enumerate(formatted_text.split("\n")):
+        print(f"  {idx + 1}: {line}")
 
 
 def create_test_conversation() -> List[Message]:
@@ -344,7 +316,11 @@ def create_test_conversation() -> List[Message]:
     msg1 = Message(
         id="msg1",
         role="user",
-        parts=[TextPart("We're starting the memory extraction feature for the OpenViking project today. This project is an Agent-native context database.")],
+        parts=[
+            TextPart(
+                "We're starting the memory extraction feature for the OpenViking project today. This project is an Agent-native context database."
+            )
+        ],
     )
     messages.append(msg1)
 
@@ -352,7 +328,11 @@ def create_test_conversation() -> List[Message]:
     msg2 = Message(
         id="msg2",
         role="assistant",
-        parts=[TextPart("Great! The memory extraction feature is important. What technical approach are we planning to use?")],
+        parts=[
+            TextPart(
+                "Great! The memory extraction feature is important. What technical approach are we planning to use?"
+            )
+        ],
     )
     messages.append(msg2)
 
@@ -360,10 +340,12 @@ def create_test_conversation() -> List[Message]:
     msg3 = Message(
         id="msg3",
         role="user",
-        parts=[TextPart(
-            "We've decided to use the MemoryReAct pattern, combined with LLMs to analyze conversations and generate memory operations. "
-            "There are two main memory types: cards for knowledge cards (Zettelkasten note-taking method), and events for recording important events and decisions."
-        )],
+        parts=[
+            TextPart(
+                "We've decided to use the ExtractLoop pattern, combined with LLMs to analyze conversations and generate memory operations. "
+                "There are two main memory types: cards for knowledge cards (Zettelkasten note-taking method), and events for recording important events and decisions."
+            )
+        ],
     )
     messages.append(msg3)
 
@@ -379,11 +361,13 @@ def create_test_conversation() -> List[Message]:
     msg5 = Message(
         id="msg5",
         role="user",
-        parts=[TextPart(
-            "Cards are stored in viking://agent/{agent_space}/memories/cards, each card has name and content fields. "
-            "Events are stored in viking://user/{user_space}/memories/events, each event has event_name, event_time, and content fields. "
-            "Just now, we also decided to add diff-match-patch to print memory modification differences."
-        )],
+        parts=[
+            TextPart(
+                "Cards are stored in viking://agent/{agent_space}/memories/cards, each card has name and content fields. "
+                "Events are stored in viking://user/{user_space}/memories/events, each event has event_name, event_time, and content fields. "
+                "Just now, we also decided to add diff-match-patch to print memory modification differences."
+            )
+        ],
     )
     messages.append(msg5)
 
@@ -399,7 +383,7 @@ def create_existing_memories_content() -> Dict[str, str]:
 OpenViking is an Agent-native context database.
 
 ## Technical Approach
-- Uses MemoryReAct pattern
+- Uses ExtractLoop pattern
 - Combines LLM to analyze conversations and generate memory operations
 
 
@@ -408,10 +392,10 @@ OpenViking is an Agent-native context database.
   "name": "openviking_project"
 }
 -->""",
-        "viking://agent/default/memories/cards/memory_react.md": """# MemoryReAct Pattern
+        "viking://agent/default/memories/cards/extract_loop.md": """# ExtractLoop Pattern
 
 ## Overview
-MemoryReAct is an orchestrator pattern for memory extraction.
+ExtractLoop is an orchestrator pattern for memory extraction.
 
 ## Features
 - Analyze conversation content
@@ -420,7 +404,7 @@ MemoryReAct is an orchestrator pattern for memory extraction.
 
 <!-- MEMORY_FIELDS
 {
-  "name": "memory_react"
+  "name": "extract_loop"
 }
 -->""",
         "viking://user/default/memories/events/2026-03-20_Started_memory_extraction_feature_development.md": """# Event: Started memory extraction feature development
@@ -432,7 +416,7 @@ Started memory extraction feature development
 2026-03-20
 
 ## Content
-Today we started working on the memory extraction feature for the OpenViking project. Decided to use the MemoryReAct pattern.
+Today we started working on the memory extraction feature for the OpenViking project. Decided to use the ExtractLoop pattern.
 
 
 <!-- MEMORY_FIELDS
@@ -455,13 +439,15 @@ def create_update_conversation() -> List[Message]:
     msg1 = Message(
         id="msg1",
         role="user",
-        parts=[TextPart(
-            "I just looked at our OpenViking project card and need to correct it: "
-            "OpenViking is not just a context database, it's an Agent-native memory system, "
-            "supporting multi-level memory (L0/L1/L2) and incremental updates. "
-            "Also, in the technical approach section, we not only use the MemoryReAct pattern, "
-            "but also need to support schema-driven memory extraction."
-        )],
+        parts=[
+            TextPart(
+                "I just looked at our OpenViking project card and need to correct it: "
+                "OpenViking is not just a context database, it's an Agent-native memory system, "
+                "supporting multi-level memory (L0/L1/L2) and incremental updates. "
+                "Also, in the technical approach section, we not only use the ExtractLoop pattern, "
+                "but also need to support schema-driven memory extraction."
+            )
+        ],
     )
     messages.append(msg1)
 
@@ -469,21 +455,27 @@ def create_update_conversation() -> List[Message]:
     msg2 = Message(
         id="msg2",
         role="assistant",
-        parts=[TextPart("Okay, I'll update the project card! Does the MemoryReAct pattern description need adjustment too?")],
+        parts=[
+            TextPart(
+                "Okay, I'll update the project card! Does the ExtractLoop pattern description need adjustment too?"
+            )
+        ],
     )
     messages.append(msg2)
 
-    # Message 3: User updates MemoryReAct card and adds to event
+    # Message 3: User updates ExtractLoop card and adds to event
     msg3 = Message(
         id="msg3",
         role="user",
-        parts=[TextPart(
-            "Yes, the MemoryReAct card also needs updating: MemoryReAct is not just about analyzing conversations and generating operations, "
-            "it's a complete orchestrator responsible for tool calling, LLM reasoning, and memory operation integration. "
-            "Also, the event card that mentions 'Decided to use MemoryReAct pattern' "
-            "needs to add the reason: because the MemoryReAct pattern can handle uncertainty well, "
-            "verifying the correctness of memory operations through the ReAct flow."
-        )],
+        parts=[
+            TextPart(
+                "Yes, the ExtractLoop card also needs updating: ExtractLoop is not just about analyzing conversations and generating operations, "
+                "it's a complete orchestrator responsible for tool calling, LLM reasoning, and memory operation integration. "
+                "Also, the event card that mentions 'Decided to use ExtractLoop pattern' "
+                "needs to add the reason: because the ExtractLoop pattern can handle uncertainty well, "
+                "verifying the correctness of memory operations through the ReAct flow."
+            )
+        ],
     )
     messages.append(msg3)
 
@@ -493,18 +485,15 @@ def create_update_conversation() -> List[Message]:
 class TestMemoryExtractorFlow:
     """Test the complete memory extraction flow."""
 
-
     @pytest.mark.integration
     @pytest.mark.asyncio
     async def test_full_flow_with_real_llm(self):
-
-
         # Only mock VikingFS, everything else is real!
         viking_fs = MockVikingFS()
         initialize_openviking_config()
         config = get_openviking_config()
         vlm = config.vlm.get_vlm_instance()
-        print(f'vlm={vlm}')
+        print(f"vlm={vlm}")
         user = UserIdentifier.the_default_user()
         ctx = RequestContext(user=user, role=Role.ROOT)
 
@@ -512,10 +501,7 @@ class TestMemoryExtractorFlow:
         messages = create_test_conversation()
 
         # Format conversation as string
-        conversation_str = "\n".join([
-            f"[{msg.role}]: {msg.content}"
-            for msg in messages
-        ])
+        conversation_str = "\n".join([f"[{msg.role}]: {msg.content}" for msg in messages])
 
         print("-" * 60)
         print("使用真实 LLM 测试完整流程（cards & events）...")
@@ -524,7 +510,7 @@ class TestMemoryExtractorFlow:
         print("-" * 60)
 
         # Initialize orchestrator with real VLM!
-        orchestrator = MemoryReAct(
+        orchestrator = ExtractLoop(
             vlm=vlm,
             viking_fs=viking_fs,
             ctx=ctx,
@@ -535,7 +521,7 @@ class TestMemoryExtractorFlow:
 
         # Actually run the orchestrator with real LLM calls!
         operations, tools_used = await orchestrator.run(
-            conversation=conversation_str,
+            messages=messages,
         )
 
         # Verify results
@@ -543,7 +529,7 @@ class TestMemoryExtractorFlow:
         assert tools_used is not None
 
         print("-" * 60)
-        print(f"生成的操作：")
+        print("生成的操作：")
         print(f"  写入：{len(operations.write_uris)}")
         print(f"  编辑：{len(operations.edit_uris)}")
         print(f"  删除：{len(operations.delete_uris)}")
@@ -551,14 +537,16 @@ class TestMemoryExtractorFlow:
         print("-" * 60)
 
         # Now test MemoryUpdater with the operations, mock get_viking_fs
-        with patch('openviking.session.memory.memory_updater.get_viking_fs', return_value=viking_fs):
+        with patch(
+            "openviking.session.memory.memory_updater.get_viking_fs", return_value=viking_fs
+        ):
             updater = MemoryUpdater()
             # Pass the registry from orchestrator
             result = await updater.apply_operations(operations, ctx, registry=orchestrator.registry)
 
             assert isinstance(result, MemoryUpdateResult)
 
-            print(f"已应用的操作：")
+            print("已应用的操作：")
             print(f"  已写入：{len(result.written_uris)}")
             print(f"  已编辑：{len(result.edited_uris)}")
             print(f"  已删除：{len(result.deleted_uris)}")
@@ -570,9 +558,9 @@ class TestMemoryExtractorFlow:
             print_diff(diff)
 
         # Check that at least something happened (could be write/edit/delete depending on LLM)
-        total_changes = (len(operations.write_uris) +
-                        len(operations.edit_uris) +
-                        len(operations.delete_uris))
+        total_changes = (
+            len(operations.write_uris) + len(operations.edit_uris) + len(operations.delete_uris)
+        )
         print(f"LLM 建议的总变更数：{total_changes}")
 
     @pytest.mark.integration
@@ -583,7 +571,7 @@ class TestMemoryExtractorFlow:
         initialize_openviking_config()
         config = get_openviking_config()
         vlm = config.vlm.get_vlm_instance()
-        print(f'vlm={vlm}')
+        print(f"vlm={vlm}")
 
         # Only mock VikingFS, everything else is real!
         viking_fs = MockVikingFS()
@@ -598,10 +586,7 @@ class TestMemoryExtractorFlow:
         messages = create_update_conversation()
 
         # Format conversation as string
-        conversation_str = "\n".join([
-            f"[{msg.role}]: {msg.content}"
-            for msg in messages
-        ])
+        conversation_str = "\n".join([f"[{msg.role}]: {msg.content}" for msg in messages])
 
         print("=" * 60)
         print("测试更新已有 cards 和 events...")
@@ -616,7 +601,7 @@ class TestMemoryExtractorFlow:
         print("=" * 60)
 
         # Initialize orchestrator with real VLM!
-        orchestrator = MemoryReAct(
+        orchestrator = ExtractLoop(
             vlm=vlm,
             viking_fs=viking_fs,
             ctx=ctx,
@@ -627,15 +612,15 @@ class TestMemoryExtractorFlow:
 
         # Actually run the orchestrator with real LLM calls!
         operations, tools_used = await orchestrator.run(
-            conversation=conversation_str,
+            messages=messages,
         )
 
         # Verify results
         assert operations is not None
         assert tools_used is not None
-        print(f'operations={operations.model_dump_json(indent=4)}')
+        print(f"operations={operations.model_dump_json(indent=4)}")
         print("=" * 60)
-        print(f"生成的操作：")
+        print("生成的操作：")
         print(f"  写入：{len(operations.write_uris)}")
         print(f"  编辑：{len(operations.edit_uris)}")
         print(f"  删除：{len(operations.delete_uris)}")
@@ -647,37 +632,39 @@ class TestMemoryExtractorFlow:
                 # Handle both dict and model objects
                 if isinstance(op, dict):
                     print(f"  - memory_type: {op.get('memory_type', 'unknown')}")
-                    if 'fields' in op:
+                    if "fields" in op:
                         print(f"  - fields: {op['fields']}")
-                    if 'patches' in op:
+                    if "patches" in op:
                         print(f"    补丁：{list(op['patches'].keys())}")
-                    if 'content' in op:
+                    if "content" in op:
                         print(f"  - content: {str(op['content'])[:100]}...")
                 else:
                     # Try to access as model attributes
-                    memory_type = getattr(op, 'memory_type', 'unknown')
+                    memory_type = getattr(op, "memory_type", "unknown")
                     print(f"  - memory_type: {memory_type}")
-                    fields = getattr(op, 'fields', None)
+                    fields = getattr(op, "fields", None)
                     if fields:
                         print(f"  - fields: {fields}")
-                    patches = getattr(op, 'patches', None)
+                    patches = getattr(op, "patches", None)
                     if patches:
                         print(f"    补丁：{list(patches.keys())}")
-                    content = getattr(op, 'content', None)
+                    content = getattr(op, "content", None)
                     if content:
                         print(f"  - content: {str(content)[:100]}...")
 
         print("=" * 60)
 
         # Now test MemoryUpdater with the operations, mock get_viking_fs
-        with patch('openviking.session.memory.memory_updater.get_viking_fs', return_value=viking_fs):
+        with patch(
+            "openviking.session.memory.memory_updater.get_viking_fs", return_value=viking_fs
+        ):
             updater = MemoryUpdater()
             # Pass the registry from orchestrator
             result = await updater.apply_operations(operations, ctx, registry=orchestrator.registry)
 
             assert isinstance(result, MemoryUpdateResult)
 
-            print(f"已应用的操作：")
+            print("已应用的操作：")
             print(f"  已写入：{len(result.written_uris)}")
             print(f"  已编辑：{len(result.edited_uris)}")
             print(f"  已删除：{len(result.deleted_uris)}")
@@ -715,9 +702,9 @@ class TestMemoryExtractorFlow:
         print("=" * 60)
 
         # Check that at least something happened (could be write/edit/delete depending on LLM)
-        total_changes = (len(operations.write_uris) +
-                        len(operations.edit_uris) +
-                        len(operations.delete_uris))
+        total_changes = (
+            len(operations.write_uris) + len(operations.edit_uris) + len(operations.delete_uris)
+        )
         print(f"LLM 建议的总变更数：{total_changes}")
 
     def test_message_formatting(self):
@@ -728,5 +715,3 @@ class TestMemoryExtractorFlow:
         assert messages[0].role == "user"
         assert "OpenViking" in messages[0].content
         assert "memory extraction" in messages[0].content
-
-

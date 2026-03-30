@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 
 """Shared fixtures for OpenViking server tests."""
 
@@ -8,6 +8,7 @@ import socket
 import threading
 import time
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -105,6 +106,23 @@ def sample_markdown_file(temp_dir: Path) -> Path:
     f = temp_dir / "sample.md"
     f.write_text(SAMPLE_MD_CONTENT)
     return f
+
+
+@pytest.fixture(scope="function")
+def upload_temp_dir(temp_dir: Path, monkeypatch) -> Path:
+    """Use the per-test temp directory as the HTTP upload temp dir."""
+    config = SimpleNamespace(
+        storage=SimpleNamespace(get_upload_temp_dir=lambda: temp_dir),
+    )
+    monkeypatch.setattr(
+        "openviking.server.routers.resources.get_openviking_config",
+        lambda: config,
+    )
+    monkeypatch.setattr(
+        "openviking.server.routers.pack.get_openviking_config",
+        lambda: config,
+    )
+    return temp_dir
 
 
 @pytest_asyncio.fixture(scope="function")

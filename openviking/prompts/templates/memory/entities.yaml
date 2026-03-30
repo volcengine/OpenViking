@@ -14,17 +14,11 @@ fields:
     type: string
     description: |
       # Content
-      - Entity card name in English, lowercase with underscores, max 3 words
-
-      # Format Requirements
-      ## Entity Cards
-      - In triage scenarios, each card represents a department or symptom
-      - Entities should be as granular as possible - split combined symptoms into individual entities
-
+      - Entity name in Chinese or English. If English, use lowercase with underscores, max 3 words. Do not include any dates.
+  
       ### Good Examples
       emergency_department
       cough_symptom
-      daily_20260110
 
       ### Bad Examples
       progressive_memory_loss_with_personality_change  // Too long, max 3 words

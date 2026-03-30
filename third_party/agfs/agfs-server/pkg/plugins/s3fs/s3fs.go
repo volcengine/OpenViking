@@ -87,7 +87,7 @@ func (fs *S3FS) Create(path string) error {
 
 	// Check if parent directory exists
 	parent := getParentPath(path)
-	if parent != "" {
+	if parent != "" && fs.client.shouldEnforceParentDirectoryExistence() {
 		dirExists, err := fs.client.DirectoryExists(ctx, parent)
 		if err != nil {
 			return fmt.Errorf("failed to check parent directory: %w", err)
@@ -125,7 +125,7 @@ func (fs *S3FS) Mkdir(path string, perm uint32) error {
 
 	// Check if parent directory exists
 	parent := getParentPath(path)
-	if parent != "" {
+	if parent != "" && fs.client.shouldEnforceParentDirectoryExistence() {
 		dirExists, err := fs.client.DirectoryExists(ctx, parent)
 		if err != nil {
 			return fmt.Errorf("failed to check parent directory: %w", err)
@@ -560,11 +560,36 @@ func (p *S3FSPlugin) Name() string {
 	return PluginName
 }
 
+func normalizeDirectoryMarkerModeConfig(cfg map[string]interface{}) (DirectoryMarkerMode, error) {
+	rawMode, exists := cfg["directory_marker_mode"]
+	if !exists {
+		return DirectoryMarkerModeEmpty, nil
+	}
+
+	modeString, ok := rawMode.(string)
+	if !ok {
+		return "", fmt.Errorf("directory_marker_mode must be a string")
+	}
+	modeValue := strings.ToLower(strings.TrimSpace(modeString))
+	mode := DirectoryMarkerMode(modeValue)
+	if !isValidDirectoryMarkerMode(mode) {
+		return "", fmt.Errorf(
+			"directory_marker_mode must be one of: %s, %s, %s",
+			DirectoryMarkerModeNone,
+			DirectoryMarkerModeEmpty,
+			DirectoryMarkerModeNonEmpty,
+		)
+	}
+
+	return mode, nil
+}
+
 func (p *S3FSPlugin) Validate(cfg map[string]interface{}) error {
 	// Check for unknown parameters
 	allowedKeys := []string{
 		"bucket", "region", "access_key_id", "secret_access_key", "endpoint", "prefix", "disable_ssl", "mount_path",
 		"cache_enabled", "cache_ttl", "stat_cache_ttl", "cache_max_size", "use_path_style",
+		"directory_marker_mode",
 	}
 	if err := config.ValidateOnlyKnownKeys(cfg, allowedKeys); err != nil {
 		return err
@@ -580,6 +605,9 @@ func (p *S3FSPlugin) Validate(cfg map[string]interface{}) error {
 		if err := config.ValidateStringType(cfg, key); err != nil {
 			return err
 		}
+	}
+	if err := config.ValidateStringType(cfg, "directory_marker_mode"); err != nil {
+		return err
 	}
 
 	// Validate disable_ssl (optional boolean)
@@ -597,22 +625,32 @@ func (p *S3FSPlugin) Validate(cfg map[string]interface{}) error {
 		return err
 	}
 
+	if _, err := normalizeDirectoryMarkerModeConfig(cfg); err != nil {
+		return err
+	}
+
 	return nil
 }
 
 func (p *S3FSPlugin) Initialize(config map[string]interface{}) error {
 	p.config = config
 
+	directoryMarkerMode, err := normalizeDirectoryMarkerModeConfig(config)
+	if err != nil {
+		return err
+	}
+
 	// Parse S3 configuration
 	cfg := S3Config{
-		Region:          getStringConfig(config, "region", "us-east-1"),
-		Bucket:          getStringConfig(config, "bucket", ""),
-		AccessKeyID:     getStringConfig(config, "access_key_id", ""),
-		SecretAccessKey: getStringConfig(config, "secret_access_key", ""),
-		Endpoint:        getStringConfig(config, "endpoint", ""),
-		Prefix:          getStringConfig(config, "prefix", ""),
-		DisableSSL:      getBoolConfig(config, "disable_ssl", false),
-		UsePathStyle:    getBoolConfig(config, "use_path_style", true),
+		Region:              getStringConfig(config, "region", "us-east-1"),
+		Bucket:              getStringConfig(config, "bucket", ""),
+		AccessKeyID:         getStringConfig(config, "access_key_id", ""),
+		SecretAccessKey:     getStringConfig(config, "secret_access_key", ""),
+		Endpoint:            getStringConfig(config, "endpoint", ""),
+		Prefix:              getStringConfig(config, "prefix", ""),
+		DisableSSL:          getBoolConfig(config, "disable_ssl", false),
+		UsePathStyle:        getBoolConfig(config, "use_path_style", true),
+		DirectoryMarkerMode: directoryMarkerMode,
 	}
 
 	if cfg.Bucket == "" {
@@ -634,7 +672,13 @@ func (p *S3FSPlugin) Initialize(config map[string]interface{}) error {
 	}
 	p.fs = fs
 
-	log.Infof("[s3fs] Initialized with bucket: %s, region: %s, cache: %v", cfg.Bucket, cfg.Region, cacheCfg.Enabled)
+	log.Infof(
+		"[s3fs] Initialized with bucket: %s, region: %s, cache: %v, directory_marker_mode: %s",
+		cfg.Bucket,
+		cfg.Region,
+		cacheCfg.Enabled,
+		cfg.DirectoryMarkerMode,
+	)
 	return nil
 }
 
@@ -702,7 +746,14 @@ func (p *S3FSPlugin) GetConfigParams() []plugin.ConfigParameter {
 			Type:        "bool",
 			Required:    false,
 			Default:     "true",
-			Description: "Whether to use path-style addressing (true) or virtual-host-style (false). Defaults to false for TOS, true for other services.",
+			Description: "Whether to use path-style addressing (true) or virtual-host-style (false). Set false for TOS and other VirtualHostStyle backends.",
+		},
+		{
+			Name:        "directory_marker_mode",
+			Type:        "string",
+			Required:    false,
+			Default:     "empty",
+			Description: "How to persist directory markers: 'none' skips marker creation, 'empty' writes a zero-byte marker, and 'nonempty' writes a non-empty payload.",
 		},
 		{
 			Name:        "cache_enabled",
@@ -764,6 +815,7 @@ CONFIGURATION:
     bucket = "my-bucket"
     access_key_id = "AKIAIOSFODNN7EXAMPLE"
     secret_access_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+    directory_marker_mode = "empty"
     prefix = "agfs/"  # Optional: all keys will be prefixed with this
 
   S3-Compatible Service (MinIO, LocalStack):
@@ -847,6 +899,9 @@ EXAMPLES:
 
 NOTES:
   - S3 doesn't have real directories; they are simulated with "/" in object keys
+  - directory_marker_mode = "empty" is the default and preserves empty-directory semantics with zero-byte markers
+  - Use directory_marker_mode = "nonempty" for backends such as TOS that reject zero-byte directory markers
+  - Use directory_marker_mode = "none" for pure prefix-style behavior when you do not need persisted empty directories
   - Use --stream flag for large files to minimize memory usage (256KB chunks)
   - Permissions (chmod) are not supported by S3
   - Atomic operations are limited by S3's eventual consistency model

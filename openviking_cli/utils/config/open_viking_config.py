@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 import json
 import os
 from pathlib import Path
@@ -21,6 +21,7 @@ from .consts import (
 from .embedding_config import EmbeddingConfig
 from .encryption_config import EncryptionConfig
 from .log_config import LogConfig
+from .memory_config import MemoryConfig
 from .parser_config import (
     AudioConfig,
     CodeConfig,
@@ -37,7 +38,6 @@ from .parser_config import (
 from .rerank_config import RerankConfig
 from .storage_config import StorageConfig
 from .vlm_config import VLMConfig
-from .memory_config import MemoryConfig
 
 
 class OpenVikingConfig(BaseModel):
@@ -224,6 +224,22 @@ class OpenVikingConfig(BaseModel):
                     config_class = getattr(instance, parser_type).__class__
                     setattr(instance, parser_type, config_class.from_dict(parser_data))
 
+            # Check dimension consistency
+            if (
+                getattr(instance, "storage", None)
+                and getattr(instance.storage, "vectordb", None)
+                and getattr(instance, "embedding", None)
+            ):
+                db_dim = instance.storage.vectordb.dimension
+                emb_dim = instance.embedding.dimension
+                if db_dim > 0 and emb_dim > 0 and db_dim != emb_dim:
+                    import logging
+
+                    logging.warning(
+                        f"Dimension mismatch: VectorDB dimension is {db_dim}, "
+                        f"but Embedding dimension is {emb_dim}. "
+                        "This may cause errors during vector search."
+                    )
             return instance
         except ValidationError as e:
             raise ValueError(format_validation_error(root_model=cls, error=e)) from e

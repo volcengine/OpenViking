@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Unified exception classes for OpenViking.
 
@@ -76,6 +76,13 @@ class ConflictError(OpenVikingError):
     def __init__(self, message: str, resource: Optional[str] = None):
         details = {"resource": resource} if resource else {}
         super().__init__(message, code="CONFLICT", details=details)
+
+
+class FailedPreconditionError(OpenVikingError):
+    """Operation cannot proceed because a required precondition is unmet."""
+
+    def __init__(self, message: str, details: Optional[dict] = None):
+        super().__init__(message, code="FAILED_PRECONDITION", details=details)
 
 
 # ============= Authentication Errors =============

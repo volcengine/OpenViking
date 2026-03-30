@@ -3,17 +3,17 @@
 from typing import TYPE_CHECKING, Callable
 
 from vikingbot.agent.tools.cron import CronTool
-from vikingbot.agent.tools.filesystem import ReadFileTool, WriteFileTool, EditFileTool, ListDirTool
+from vikingbot.agent.tools.filesystem import EditFileTool, ListDirTool, ReadFileTool, WriteFileTool
 from vikingbot.agent.tools.image import ImageGenerationTool
 from vikingbot.agent.tools.message import MessageTool
 from vikingbot.agent.tools.ov_file import (
-    VikingListTool,
-    VikingSearchTool,
-    VikingGrepTool,
-    VikingGlobTool,
-    VikingMultiReadTool,
-    VikingMemoryCommitTool,
     VikingAddResourceTool,
+    VikingGlobTool,
+    VikingGrepTool,
+    VikingListTool,
+    VikingMemoryCommitTool,
+    VikingMultiReadTool,
+    VikingSearchTool,
 )
 from vikingbot.agent.tools.registry import ToolRegistry
 from vikingbot.agent.tools.shell import ExecTool
@@ -22,7 +22,10 @@ from vikingbot.agent.tools.websearch import WebSearchTool
 from vikingbot.config.loader import load_config
 
 if TYPE_CHECKING:
-    from vikingbot.agent.tools.spawn import SpawnTool
+    from vikingbot.agent.subagent import SubagentManager
+    from vikingbot.bus.events import OutboundMessage
+    from vikingbot.config.schema import Config
+    from vikingbot.cron.service import CronService
 
 
 def register_default_tools(
@@ -53,7 +56,6 @@ def register_default_tools(
         include_viking_tools: Whether to include Viking tools
     """
     # Derive all parameters from config
-    workspace = config.workspace_path
     exec_config = config.tools.exec
     brave_api_key = config.tools.web.search.api_key if config.tools.web.search else None
     exa_api_key = None  # TODO: Add to config if needed
@@ -80,7 +82,12 @@ def register_default_tools(
 
     # Web tools
     registry.register(
-        WebSearchTool(backend="auto", brave_api_key=brave_api_key, exa_api_key=exa_api_key, tavily_api_key=tavily_api_key)
+        WebSearchTool(
+            backend="auto",
+            brave_api_key=brave_api_key,
+            exa_api_key=exa_api_key,
+            tavily_api_key=tavily_api_key,
+        )
     )
     registry.register(WebFetchTool())
 
@@ -94,8 +101,6 @@ def register_default_tools(
         registry.register(VikingMemoryCommitTool())
         if not config.read_only:
             registry.register(VikingAddResourceTool())
-
-
 
     # Image generation tool
     if include_image_tool:

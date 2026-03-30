@@ -6,7 +6,7 @@
 set -e
 
 # Default values
-PORT="1933"
+PORT="1934"
 BOT_URL="http://localhost:18790"
 TEST_CONFIG="$HOME/.openviking_test/ov.conf"
 TEST_DATA_DIR="$HOME/.openviking_test/data"
@@ -67,21 +67,25 @@ else
     echo "  ✓ No existing vikingbot processes found"
 fi
 
-# Step 2: Kill existing openviking-server processes
+# Step 2: Kill existing openviking-server on specific port
 echo ""
-echo "Step 2: Stopping existing openviking-server processes..."
-if pgrep -f "openviking-server" > /dev/null 2>&1; then
-    pkill -f "openviking-server" 2>/dev/null || true
+echo "Step 2: Stopping openviking-server on port $PORT..."
+PID=$(lsof -ti :$PORT 2>/dev/null || true)
+if [ -n "$PID" ]; then
+    echo "  Found PID: $PID"
+    pkill -f "vikingbot.*openapi" 2>/dev/null || true
+    pkill -f "vikingbot.*gateway" 2>/dev/null || true
+    kill $PID 2>/dev/null || true
     sleep 2
     # Force kill if still running
-    if pgrep -f "openviking-server" > /dev/null 2>&1; then
-        echo "  Force killing remaining processes..."
-        pkill -9 -f "openviking-server" 2>/dev/null || true
+    if lsof -ti :$PORT > /dev/null 2>&1; then
+        echo "  Force killing..."
+        kill -9 $PID 2>/dev/null || true
         sleep 1
     fi
-    echo "  ✓ Stopped existing processes"
+    echo "  ✓ Stopped process on port $PORT"
 else
-    echo "  ✓ No existing processes found"
+    echo "  ✓ No process found on port $PORT"
 fi
 
 # Step 3: Wait for port to be released

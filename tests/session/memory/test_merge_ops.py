@@ -1,41 +1,23 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Tests for MergeOp architecture - type-safe merge operations.
 """
 
-import tempfile
-from pathlib import Path
-
-import pytest
-import yaml
-
 from openviking.session.memory.dataclass import (
     MemoryField,
-    MemoryTypeSchema,
 )
 from openviking.session.memory.merge_op import (
+    ImmutableOp,
     MergeOp,
-    MergeOpBase,
     MergeOpFactory,
     PatchOp,
-    SumOp,
-    ImmutableOp,
     SearchReplaceBlock,
     StrPatch,
+    SumOp,
     apply_str_patch,
 )
 from openviking.session.memory.merge_op.base import FieldType
-from openviking.session.memory.schema_model_generator import (
-    SchemaModelGenerator,
-    SchemaPromptGenerator,
-    to_pascal_case,
-)
-from openviking.session.memory.memory_type_registry import (
-    MemoryTypeRegistry,
-    create_default_registry,
-)
-
 
 # ============================================================================
 # Test MergeOp Base Classes
@@ -248,13 +230,9 @@ class TestApplyStrPatch:
     def test_simple_replace(self):
         """Simple replace."""
         original = "hello world"
-        patch = StrPatch(blocks=[
-            SearchReplaceBlock(
-                search="hello world",
-                replace="hello there",
-                start_line=1
-            )
-        ])
+        patch = StrPatch(
+            blocks=[SearchReplaceBlock(search="hello world", replace="hello there", start_line=1)]
+        )
         result = apply_str_patch(original, patch)
         # Directly test apply_str_patch
         assert result == "hello there"

@@ -1,11 +1,11 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """LockManager — global singleton managing lock lifecycle and redo recovery."""
 
 import asyncio
 import json
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from openviking.pyagfs import AGFSClient
 from openviking.storage.transaction.lock_handle import LockHandle
@@ -80,6 +80,60 @@ class LockManager:
             path, handle, timeout=timeout if timeout is not None else self._lock_timeout
         )
 
+    async def acquire_subtree_batch(
+        self,
+        handle: LockHandle,
+        paths: List[str],
+        timeout: Optional[float] = None,
+    ) -> bool:
+        """
+        一次性对多个路径进行子树加锁，使用有序加锁法防止死锁
+
+        核心思想：
+        1. 对路径按照固定的顺序进行排序，确保所有进程获取锁的顺序一致
+        2. 防止循环等待条件，从而避免死锁
+
+        排序规则：
+        1. 路径长度升序
+        2. 长度相同的路径按照字典序升序
+
+        Args:
+            handle: 锁句柄
+            paths: 需要加锁的路径列表
+            timeout: 超时时间，None表示无限等待
+
+        Returns:
+            是否成功获取所有锁
+        """
+        if not paths:
+            return True
+
+        # 对路径进行排序，确保加锁顺序一致
+        sorted_paths = sorted(paths, key=lambda x: (len(x), x))
+        acquired = []
+
+        try:
+            for path in sorted_paths:
+                success = await self._path_lock.acquire_subtree(
+                    path,
+                    handle,
+                    timeout=timeout,
+                )
+                if not success:
+                    # 释放已获得的锁
+                    for p in acquired:
+                        await self._path_lock.release_subtree(p, handle)
+                    return False
+                acquired.append(path)
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to acquire subtree batch lock: {e}")
+            for p in acquired:
+                await self._path_lock.release_subtree(p, handle)
+            return False
+
     async def acquire_mv(
         self,
         handle: LockHandle,
@@ -140,7 +194,6 @@ class LockManager:
         """
         from openviking.message import Message
         from openviking.server.identity import RequestContext, Role
-        from openviking.session.compressor import SessionCompressor
         from openviking.storage.viking_fs import get_viking_fs
         from openviking_cli.session.user_id import UserIdentifier
 
@@ -180,7 +233,9 @@ class LockManager:
         if messages:
             session_id = session_uri.rstrip("/").rsplit("/", 1)[-1]
             try:
-                compressor = SessionCompressor(vikingdb=None)
+                from openviking.session import create_session_compressor
+
+                compressor = create_session_compressor(vikingdb=None)
                 memories = await compressor.extract_long_term_memories(
                     messages=messages,
                     user=user,

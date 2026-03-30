@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """VikingDB storage backend for OpenViking."""
 
 from __future__ import annotations
@@ -16,6 +16,67 @@ from openviking_cli.utils import get_logger
 from openviking_cli.utils.config.vectordb_config import DEFAULT_INDEX_NAME, VectorDBBackendConfig
 
 logger = get_logger(__name__)
+
+RETRIEVAL_OUTPUT_FIELDS = [
+    "uri",
+    "level",
+    "context_type",
+    "abstract",
+    "active_count",
+    "updated_at",
+]
+
+LOOKUP_OUTPUT_FIELDS = [
+    "uri",
+    "level",
+    "active_count",
+]
+
+MEMORY_DEDUP_OUTPUT_FIELDS = [
+    "uri",
+    "abstract",
+    "context_type",
+    "created_at",
+    "updated_at",
+    "active_count",
+    "level",
+    "account_id",
+    "owner_space",
+]
+
+FETCH_BY_URI_OUTPUT_FIELDS = [
+    "uri",
+    "type",
+    "context_type",
+    "created_at",
+    "updated_at",
+    "active_count",
+    "level",
+    "name",
+    "description",
+    "tags",
+    "abstract",
+    "account_id",
+    "owner_space",
+]
+
+URI_REWRITE_OUTPUT_FIELDS = [
+    "uri",
+    "type",
+    "context_type",
+    "vector",
+    "sparse_vector",
+    "created_at",
+    "updated_at",
+    "active_count",
+    "level",
+    "name",
+    "description",
+    "tags",
+    "abstract",
+    "account_id",
+    "owner_space",
+]
 
 
 class _SingleAccountBackend:
@@ -210,6 +271,7 @@ class _SingleAccountBackend:
             records = await self.query(
                 filter={"op": "must", "field": "uri", "conds": [uri]},
                 limit=2,
+                output_fields=FETCH_BY_URI_OUTPUT_FIELDS,
             )
             if len(records) == 1:
                 return records[0]
@@ -300,6 +362,7 @@ class _SingleAccountBackend:
             target_records = await self.filter(
                 {"op": "must", "field": "uri", "conds": [uri]},
                 limit=10,
+                output_fields=LOOKUP_OUTPUT_FIELDS,
             )
             if not target_records:
                 return 0
@@ -319,8 +382,9 @@ class _SingleAccountBackend:
     async def _remove_descendants(self, parent_uri: str) -> int:
         total_deleted = 0
         children = await self.filter(
-            {"op": "must", "field": "parent_uri", "conds": [parent_uri]},
+            PathScope("uri", parent_uri, depth=1),
             limit=100000,
+            output_fields=LOOKUP_OUTPUT_FIELDS,
         )
         for child in children:
             child_uri = child.get("uri")
@@ -715,6 +779,7 @@ class VikingVectorIndexBackend:
             filter=scope_filter,
             limit=limit,
             offset=offset,
+            output_fields=RETRIEVAL_OUTPUT_FIELDS,
             ctx=ctx,
         )
 
@@ -745,6 +810,7 @@ class VikingVectorIndexBackend:
             sparse_query_vector=sparse_query_vector,
             filter=merged_filter,
             limit=limit,
+            output_fields=RETRIEVAL_OUTPUT_FIELDS,
             ctx=ctx,
         )
 
@@ -773,6 +839,7 @@ class VikingVectorIndexBackend:
             sparse_query_vector=sparse_query_vector,
             filter=merged_filter,
             limit=limit,
+            output_fields=RETRIEVAL_OUTPUT_FIELDS,
             ctx=ctx,
         )
 
@@ -800,6 +867,7 @@ class VikingVectorIndexBackend:
             query_vector=query_vector,
             filter=And(conds),
             limit=limit,
+            output_fields=MEMORY_DEDUP_OUTPUT_FIELDS,
         )
 
     async def get_context_by_uri(
@@ -818,7 +886,11 @@ class VikingVectorIndexBackend:
             conds.append(Eq("level", level))
 
         backend = self._get_backend_for_context(ctx)
-        return await backend.filter(filter=And(conds), limit=limit)
+        return await backend.filter(
+            filter=And(conds),
+            limit=limit,
+            output_fields=LOOKUP_OUTPUT_FIELDS,
+        )
 
     async def delete_account_data(self, account_id: str, *, ctx: RequestContext) -> int:
         """删除指定 account 的所有数据（仅限，root 角色操作）"""
@@ -848,7 +920,6 @@ class VikingVectorIndexBackend:
         ctx: RequestContext,
         uri: str,
         new_uri: str,
-        new_parent_uri: str,
         levels: Optional[List[int]] = None,
     ) -> bool:
         import hashlib
@@ -864,7 +935,12 @@ class VikingVectorIndexBackend:
             )
             conds.append(Eq("owner_space", owner_space))
 
-        records = await self.filter(filter=And(conds), limit=100, ctx=ctx)
+        records = await self.filter(
+            filter=And(conds),
+            limit=100,
+            output_fields=URI_REWRITE_OUTPUT_FIELDS,
+            ctx=ctx,
+        )
         if not records:
             return False
 
@@ -894,7 +970,6 @@ class VikingVectorIndexBackend:
                 **record,
                 "id": new_id,
                 "uri": new_uri,
-                "parent_uri": new_parent_uri,
             }
             if await self.upsert(updated, ctx=ctx):
                 success = True
