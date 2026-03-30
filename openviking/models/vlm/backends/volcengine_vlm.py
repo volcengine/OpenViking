@@ -9,7 +9,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from openviking.models.retry import transient_retry, transient_retry_async
+from openviking.models.retry import transient_retry_async
 from openviking_cli.utils import run_async
 
 from ..base import ToolCall, VLMResponse
