@@ -15,7 +15,7 @@
  *
  * Environment variables:
  *   REPO, PLUGIN_VERSION (or BRANCH), OPENVIKING_INSTALL_YES, SKIP_OPENCLAW, SKIP_OPENVIKING
- *   OPENVIKING_VERSION       Pip install openviking==VERSION (omit for latest)
+ *   OPENVIKING_VERSION       Pip install openviking==VERSION (omit to follow release plugin version when possible)
  *   OPENVIKING_REPO          Repo path: source install (pip -e) + local plugin (default: off)
  *   NPM_REGISTRY, PIP_INDEX_URL
  *   OPENVIKING_VLM_API_KEY, OPENVIKING_EMBEDDING_API_KEY, OPENVIKING_ARK_API_KEY
@@ -273,6 +273,33 @@ function normalizeCombinedVersion(version) {
   };
 }
 
+function deriveOpenvikingVersionFromPluginVersion(version) {
+  const value = (version || "").trim();
+  if (!isSemverLike(value)) {
+    return "";
+  }
+  return value.startsWith("v") ? value.slice(1) : value;
+}
+
+function syncOpenvikingVersionWithPluginVersion(reason = "") {
+  if (openvikingVersion) {
+    return;
+  }
+
+  const derivedVersion = deriveOpenvikingVersionFromPluginVersion(PLUGIN_VERSION);
+  if (!derivedVersion) {
+    return;
+  }
+
+  openvikingVersion = derivedVersion;
+  info(tr(
+    `No OpenViking version specified; syncing runtime version to plugin version ${PLUGIN_VERSION}${reason ? ` (${reason})` : ""}.`,
+    `未指定 OpenViking 版本；已将运行时版本同步为插件版本 ${PLUGIN_VERSION}${reason ? `（${reason}）` : ""}。`,
+  ));
+}
+
+syncOpenvikingVersionWithPluginVersion("requested plugin version");
+
 function printHelp() {
   console.log("Usage: node install.js [ OPTIONS ]");
   console.log("");
@@ -280,7 +307,7 @@ function printHelp() {
   console.log("  --github-repo=OWNER/REPO GitHub repository (default: volcengine/OpenViking)");
   console.log("  --version=V              Shorthand for --plugin-version=vV and --openviking-version=V");
   console.log("  --plugin-version=TAG     Plugin version (Git tag, e.g. v0.2.9, default: latest tag)");
-  console.log("  --openviking-version=V   OpenViking PyPI version (e.g. 0.2.9, default: latest)");
+  console.log("  --openviking-version=V   OpenViking PyPI version (e.g. 0.2.9, default: match plugin release version)");
   console.log("  --workdir PATH           OpenClaw config directory (default: ~/.openclaw)");
   console.log("  --current-version        Print installed plugin/OpenViking versions and exit");
   console.log("  --repo=PATH              Use local OpenViking repo at PATH (pip -e + local plugin)");
@@ -792,6 +819,7 @@ async function resolveDefaultPluginVersion() {
         const latestTag = pickLatestPluginTag(payload.map((item) => item?.name || ""));
         if (latestTag) {
           PLUGIN_VERSION = latestTag;
+          syncOpenvikingVersionWithPluginVersion("latest plugin tag");
           info(tr(
             `Resolved default plugin version to latest tag: ${PLUGIN_VERSION}`,
             `已将默认插件版本解析为最新 tag: ${PLUGIN_VERSION}`,
@@ -816,6 +844,7 @@ async function resolveDefaultPluginVersion() {
     const latestTag = pickLatestPluginTag(parseGitLsRemoteTags(gitResult.out));
     if (latestTag) {
       PLUGIN_VERSION = latestTag;
+      syncOpenvikingVersionWithPluginVersion("latest plugin tag");
       info(tr(
         `Resolved default plugin version via git tags: ${PLUGIN_VERSION}`,
         `已通过 git tag 解析默认插件版本: ${PLUGIN_VERSION}`,
