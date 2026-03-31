@@ -8,28 +8,32 @@ Create `~/.openviking/ov.conf` in your project directory:
 
 ```json
 {
+  "storage": {
+    "workspace": "./data",
+    "vectordb": {
+      "name": "context",
+      "backend": "local"
+    },
+    "agfs": {
+      "port": 1833,
+      "log_level": "warn",
+      "backend": "local"
+    }
+  },
   "embedding": {
     "dense": {
-      "provider": "volcengine",
-      "api_key": "your-api-key",
-      "model": "doubao-embedding-vision-250615",
-      "dimension": 1024
+      "api_base" : "<api-endpoint>",
+      "api_key"  : "<your-api-key>",
+      "provider" : "<provider-type>",
+      "dimension": 1024,
+      "model"    : "<model-name>"
     }
   },
   "vlm": {
-    "provider": "volcengine",
-    "api_key": "your-api-key",
-    "model": "doubao-seed-2-0-pro-260215"
-  },
-  "rerank": {
-    "provider": "volcengine",
-    "api_key": "your-api-key",
-    "model": "doubao-rerank-250615"
-  },
-  "storage": {
-    "workspace": "./data",
-    "agfs": { "backend": "local" },
-    "vectordb": { "backend": "local" }
+    "api_base" : "<api-endpoint>",
+    "api_key"  : "<your-api-key>",
+    "provider" : "<provider-type>",
+    "model"    : "<model-name>"
   }
 }
 ```
@@ -500,19 +504,23 @@ See [Code Skeleton Extraction](../concepts/06-extraction.md#code-skeleton-extrac
 
 ### rerank
 
-Reranking model for search result refinement.
+Reranking model for search result refinement. Supports VikingDB (Volcengine), Cohere, OpenAI-compatible APIs, and LiteLLM.
+
+**Volcengine (VikingDB):**
 
 ```json
 {
   "rerank": {
-    "provider": "volcengine",
-    "api_key": "your-api-key",
-    "model": "doubao-rerank-250615"
+    "provider": "vikingdb",
+    "ak": "your-access-key",
+    "sk": "your-secret-key",
+    "model_name": "doubao-seed-rerank",
+    "model_version": "251028"
   }
 }
 ```
 
-**OpenAI-compatible provider (e.g. DashScope qwen3-rerank):**
+**OpenAI-compatible provider (e.g. DashScope):**
 
 ```json
 {
@@ -520,19 +528,30 @@ Reranking model for search result refinement.
     "provider": "openai",
     "api_key": "your-api-key",
     "api_base": "https://dashscope.aliyuncs.com/compatible-api/v1/reranks",
-    "model": "qwen3-rerank",
+    "model": "qwen3-vl-rerank",
     "threshold": 0.1
   }
 }
 ```
 
+**Parameters**
+
 | Parameter | Type | Description |
 |-----------|------|-------------|
-| `provider` | str | `"volcengine"` or `"openai"` |
-| `api_key` | str | API key |
-| `model` | str | Model name |
-| `api_base` | str | Endpoint URL (openai provider only) |
-| `threshold` | float | Score threshold; results below this are filtered out. Default: `0.1` |
+| `provider` | str | `"vikingdb"`, `"cohere"`, `"openai"`, or `"litellm"`. Auto-detected if omitted. |
+| `ak` | str | VikingDB Access Key (vikingdb provider only) |
+| `sk` | str | VikingDB Secret Key (vikingdb provider only) |
+| `model_name` | str | Model name (vikingdb provider only, default: `doubao-seed-rerank`) |
+| `api_key` | str | API key (for `openai`, `cohere`, or `litellm` providers) |
+| `api_base` | str | Endpoint URL (for `openai` provider) |
+| `model` | str | Model name (for `openai` or `litellm` providers) |
+| `threshold` | float | Score threshold between `0.0` and `1.0`; results below this are filtered out. Default: `0.1` |
+
+**Supported providers:**
+- `vikingdb`: Volcengine VikingDB Rerank API (uses AK/SK)
+- `cohere`: Cohere Rerank API
+- `openai`: OpenAI-compatible Rerank API
+- `litellm`: Rerank services via LiteLLM (requires `litellm` package)
 
 If rerank is not configured, search uses vector similarity only.
 
