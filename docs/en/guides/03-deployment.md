@@ -202,7 +202,7 @@ docker run -d \
   -v ~/.openviking/ov.conf:/app/ov.conf \
   -v /var/lib/openviking/data:/app/data \
   --restart unless-stopped \
-  ghcr.io/volcengine/openviking:main
+  ghcr.io/volcengine/openviking:latest
 ```
 
 You can also use Docker Compose with the `docker-compose.yml` provided in the project root:

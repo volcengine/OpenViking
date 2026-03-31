@@ -36,7 +36,7 @@ If you prefer to run OpenViking as a standalone service, Docker is recommended.
    ```yaml
    services:
      openviking:
-       image: ghcr.io/volcengine/openviking:main
+       image: ghcr.io/volcengine/openviking:latest
        container_name: openviking
        ports:
          - "1933:1933"
@@ -59,7 +59,7 @@ If you prefer to run OpenViking as a standalone service, Docker is recommended.
 > ```yaml
 > services:
 >   openviking:
->     image: ghcr.io/volcengine/openviking:main
+>     image: ghcr.io/volcengine/openviking:latest
 >     ports:
 >       - "1933:1934" # Map host 1933 to container 1934
 >     volumes:

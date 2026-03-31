@@ -200,7 +200,7 @@ docker run -d \
   -v ~/.openviking/ov.conf:/app/ov.conf \
   -v /var/lib/openviking/data:/app/data \
   --restart unless-stopped \
-  ghcr.io/volcengine/openviking:main
+  ghcr.io/volcengine/openviking:latest
 ```
 
 也可以使用 Docker Compose，项目根目录提供了 `docker-compose.yml`：

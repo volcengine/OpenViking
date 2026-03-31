@@ -36,7 +36,7 @@ pip install openviking --upgrade --force-reinstall
    ```yaml
    services:
      openviking:
-       image: ghcr.io/volcengine/openviking:main
+       image: ghcr.io/volcengine/openviking:latest
        container_name: openviking
        ports:
          - "1933:1933"
@@ -59,7 +59,7 @@ pip install openviking --upgrade --force-reinstall
 > ```yaml
 > services:
 >   openviking:
->     image: ghcr.io/volcengine/openviking:main
+>     image: ghcr.io/volcengine/openviking:latest
 >     ports:
 >       - "1933:1934" # 将宿主机 1933 映射到容器 1934
 >     volumes:
