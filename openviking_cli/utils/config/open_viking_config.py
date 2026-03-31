@@ -35,6 +35,7 @@ from .parser_config import (
     TextConfig,
     VideoConfig,
 )
+from .prompts_config import PromptsConfig
 from .rerank_config import RerankConfig
 from .storage_config import StorageConfig
 from .vlm_config import VLMConfig
@@ -139,8 +140,8 @@ class OpenVikingConfig(BaseModel):
     language_fallback: str = Field(
         default="en",
         description=(
-            "Fallback language used by memory extraction when dominant user language "
-            "cannot be confidently detected"
+            "Fallback language used by memory extraction and semantic processing when dominant "
+            "user language cannot be confidently detected"
         ),
     )
 
@@ -148,6 +149,11 @@ class OpenVikingConfig(BaseModel):
 
     memory: MemoryConfig = Field(
         default_factory=lambda: MemoryConfig(), description="Memory configuration"
+    )
+
+    prompts: PromptsConfig = Field(
+        default_factory=lambda: PromptsConfig(),
+        description="Prompt template configuration",
     )
 
     model_config = {"arbitrary_types_allowed": True, "extra": "forbid"}

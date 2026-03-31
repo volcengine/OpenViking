@@ -73,12 +73,14 @@ class MemoryTypeRegistry:
         Returns:
             List of directory URIs from enabled schemas
         """
+        import jinja2
+
         uris = []
         for schema in self.list_all(include_disabled=False):
             if schema.directory:
-                dir_path = schema.directory.replace("{user_space}", user_space).replace(
-                    "{agent_space}", agent_space
-                )
+                env = jinja2.Environment(autoescape=False)
+                template = env.from_string(schema.directory)
+                dir_path = template.render(user_space=user_space, agent_space=agent_space)
                 uris.append(dir_path)
         return uris
 

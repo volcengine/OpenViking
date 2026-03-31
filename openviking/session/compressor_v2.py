@@ -140,9 +140,11 @@ class SessionCompressorV2:
                         continue
                     user_space = ctx.user.user_space_name() if ctx and ctx.user else "default"
                     agent_space = ctx.user.agent_space_name() if ctx and ctx.user else "default"
-                    dir_path = schema.directory.replace("{user_space}", user_space).replace(
-                        "{agent_space}", agent_space
-                    )
+                    # 使用 Jinja2 渲染 directory
+                    import jinja2
+                    env = jinja2.Environment(autoescape=False)
+                    template = env.from_string(schema.directory)
+                    dir_path = template.render(user_space=user_space, agent_space=agent_space)
                     dir_path = viking_fs._uri_to_path(dir_path, ctx)
                     if dir_path not in memory_schema_dirs:
                         memory_schema_dirs.append(dir_path)

@@ -5,6 +5,7 @@ on:
   push:
     branches:
       - 'api_test'
+      - 'main'
     paths-ignore:
       - 'docs/**'
       - '**.md'
@@ -20,7 +21,6 @@ on:
   pull_request:
     branches:
       - 'main'
-      - 'develop'
     paths-ignore:
       - 'docs/**'
       - '**.md'
@@ -34,15 +34,18 @@ on:
       - '.gitignore'
       - '.editorconfig'
 
-# 同一 PR 只运行最新的一次，取消之前的运行
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   api-tests:
-    name: API Integration Tests
-    runs-on: ubuntu-24.04
+    name: API Integration Tests (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-14, macos-15-intel, windows-latest]
     
     steps:
       - uses: actions/checkout@v6
@@ -55,7 +58,7 @@ jobs:
           python-version: '3.10'
 
       - name: Cache Go modules
-        uses: actions/cache@v5
+        uses: actions/cache@v4
         with:
           path: ~/go/pkg/mod
           key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
@@ -63,17 +66,27 @@ jobs:
             ${{ runner.os }}-go-
 
       - name: Cache C++ extensions
-        uses: actions/cache@v5
+        uses: actions/cache@v4
         with:
           path: openviking/pyagfs
           key: ${{ runner.os }}-cpp-${{ hashFiles('**/CMakeLists.txt', '**/*.cpp', '**/*.h') }}
           restore-keys: |
             ${{ runner.os }}-cpp-
 
-      - name: Cache Python dependencies
-        uses: actions/cache@v5
+      - name: Cache Python dependencies (Unix)
+        if: runner.os != 'Windows'
+        uses: actions/cache@v4
         with:
           path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt', '**/pyproject.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Cache Python dependencies (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/cache@v4
+        with:
+          path: ~\AppData\Local\pip\Cache
           key: ${{ runner.os }}-pip-${{ hashFiles('**/requirements.txt', '**/pyproject.toml') }}
           restore-keys: |
             ${{ runner.os }}-pip-
@@ -81,11 +94,22 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v6
         with:
-          go-version: '1.25.1'
+          go-version: '1.22'
 
       - name: Install system dependencies (Ubuntu)
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update -y && sudo apt-get install -y cmake build-essential --no-install-recommends
+
+      - name: Install system dependencies (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install cmake
+
+      - name: Install system dependencies (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          choco install cmake -y
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
@@ -118,16 +142,15 @@ jobs:
           cd tests/api_test
           uv pip install -r requirements.txt
 
-      - name: Create OpenViking config file
-        id: create-config
+      - name: Create OpenViking config file (Unix)
+        if: runner.os != 'Windows'
+        id: create-config-unix
         env:
           VLM_API_KEY: ${{ secrets.VLM_API_KEY }}
           EMBEDDING_API_KEY: ${{ secrets.EMBEDDING_API_KEY }}
         run: |
-          # 创建配置目录
-          mkdir -p /home/runner/.openviking
+          mkdir -p $HOME/.openviking
           
-          # 检查是否有有效的 API keys
           HAS_SECRETS=false
           if [ -n "$VLM_API_KEY" ] && [ -n "$EMBEDDING_API_KEY" ]; then
             HAS_SECRETS=true
@@ -139,8 +162,7 @@ jobs:
           echo "HAS_SECRETS=$HAS_SECRETS" >> $GITHUB_ENV
           
           if [ "$HAS_SECRETS" = "true" ]; then
-            # 完整配置（含 VLM 和 Embedding
-            cat > /home/runner/.openviking/ov.conf << EOF
+            cat > $HOME/.openviking/ov.conf << EOF
           {
             "server": {
               "root_api_key": "test-root-api-key"
@@ -166,8 +188,7 @@ jobs:
           }
           EOF
           else
-            # 最小配置（使用 dummy API keys，不会实际调用）
-            cat > /home/runner/.openviking/ov.conf << EOF
+            cat > $HOME/.openviking/ov.conf << EOF
           {
             "server": {
               "root_api_key": "test-root-api-key"
@@ -194,12 +215,90 @@ jobs:
           EOF
           fi
           
-          echo "Config file created at /home/runner/.openviking/ov.conf"
+          echo "Config file created at $HOME/.openviking/ov.conf"
 
-      - name: Find available port and start OpenViking Server
-        id: start-server
+      - name: Create OpenViking config file (Windows)
+        if: runner.os == 'Windows'
+        id: create-config-windows
+        env:
+          VLM_API_KEY: ${{ secrets.VLM_API_KEY }}
+          EMBEDDING_API_KEY: ${{ secrets.EMBEDDING_API_KEY }}
+        shell: pwsh
         run: |
-          # 找到可用的随机端口
+          $configDir = "$env:USERPROFILE\.openviking"
+          New-Item -ItemType Directory -Force -Path $configDir | Out-Null
+          
+          $hasSecrets = "false"
+          if ($env:VLM_API_KEY -and $env:EMBEDDING_API_KEY) {
+            $hasSecrets = "true"
+            Write-Host "Using full configuration with VLM and Embedding"
+          } else {
+            Write-Host "Using minimal configuration (no VLM/Embedding)"
+          }
+          
+          echo "HAS_SECRETS=$hasSecrets" >> $env:GITHUB_ENV
+          
+          if ($hasSecrets -eq "true") {
+            $config = @"
+          {
+            "server": {
+              "root_api_key": "test-root-api-key"
+            },
+            "vlm": {
+              "provider": "volcengine",
+              "api_key": "$env:VLM_API_KEY",
+              "model": "doubao-seed-2-0-mini-260215",
+              "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+              "temperature": 0.1,
+              "max_retries": 3
+            },
+            "embedding": {
+              "dense": {
+                "provider": "volcengine",
+                "api_key": "$env:EMBEDDING_API_KEY",
+                "model": "doubao-embedding-vision-251215",
+                "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+                "dimension": 1024,
+                "input": "multimodal"
+              }
+            }
+          }
+          "@
+          } else {
+            $config = @"
+          {
+            "server": {
+              "root_api_key": "test-root-api-key"
+            },
+            "vlm": {
+              "provider": "volcengine",
+              "api_key": "dummy-vlm-api-key",
+              "model": "doubao-seed-2-0-mini-260215",
+              "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+              "temperature": 0.1,
+              "max_retries": 3
+            },
+            "embedding": {
+              "dense": {
+                "provider": "volcengine",
+                "api_key": "dummy-embedding-api-key",
+                "model": "doubao-embedding-vision-251215",
+                "api_base": "https://ark.cn-beijing.volces.com/api/v3",
+                "dimension": 1024,
+                "input": "multimodal"
+              }
+            }
+          }
+          "@
+          }
+          
+          $config | Out-File -FilePath "$configDir\ov.conf" -Encoding utf8
+          Write-Host "Config file created at $configDir\ov.conf"
+
+      - name: Find available port and start OpenViking Server (Unix)
+        if: runner.os != 'Windows'
+        id: start-server-unix
+        run: |
           find_available_port() {
             local port=1933
             while true; do
@@ -232,7 +331,6 @@ jobs:
             sleep 2
           done
           
-          # Check if server started successfully
           if ! curl -s http://127.0.0.1:$SERVER_PORT/health | grep -q '"healthy":true'; then
             echo "Server failed to start!"
             echo "Server logs:"
@@ -240,8 +338,71 @@ jobs:
             exit 1
           fi
 
-      - name: Run API Tests
-        id: run-tests
+      - name: Find available port and start OpenViking Server (Windows)
+        if: runner.os == 'Windows'
+        id: start-server-windows
+        shell: pwsh
+        run: |
+          $port = 1933
+          Write-Host "Using port: $port"
+          echo "SERVER_PORT=$port" >> $env:GITHUB_ENV
+          
+          Write-Host "Starting OpenViking Server on port $port..."
+          
+          $logFile = Join-Path $PWD "openviking-server.log"
+          $errFile = Join-Path $PWD "openviking-server-error.log"
+          $batchFile = Join-Path $PWD "start-server.bat"
+          
+          $batchContent = "@echo off`r`nset ROOT_API_KEY=test-root-api-key`r`nset SERVER_PORT=$port`r`nuv run python -m openviking.server.bootstrap`r`n"
+          Set-Content -Path $batchFile -Value $batchContent -Encoding ASCII
+          
+          Write-Host "Batch file created at: $batchFile"
+          Write-Host "Batch file content:"
+          Get-Content $batchFile
+          
+          $psi = New-Object System.Diagnostics.ProcessStartInfo
+          $psi.FileName = "cmd.exe"
+          $psi.Arguments = "/C `"$batchFile`""
+          $psi.UseShellExecute = $true
+          $psi.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+          $psi.WorkingDirectory = $PWD.Path
+          
+          $process = [System.Diagnostics.Process]::Start($psi)
+          
+          Write-Host "Server process started with PID: $($process.Id)"
+          echo "SERVER_PID=$($process.Id)" >> $env:GITHUB_ENV
+          
+          Write-Host "Waiting for server to start..."
+          $ready = $false
+          for ($i = 1; $i -le 30; $i++) {
+            Start-Sleep -Seconds 2
+            try {
+              $response = Invoke-WebRequest -Uri "http://127.0.0.1:$port/health" -UseBasicParsing -TimeoutSec 5
+              if ($response.Content -match '"healthy":true') {
+                Write-Host "Server is ready!"
+                $ready = $true
+                break
+              }
+            } catch {
+              Write-Host "Waiting... ($i/30)"
+            }
+          }
+          
+          if (-not $ready) {
+            Write-Host "Server failed to start!"
+            Write-Host "Checking if process is still running..."
+            $proc = Get-Process -Id $process.Id -ErrorAction SilentlyContinue
+            if ($proc) {
+              Write-Host "Process is still running with PID: $($proc.Id)"
+            } else {
+              Write-Host "Process has exited"
+            }
+            exit 1
+          }
+
+      - name: Run API Tests (Unix)
+        if: runner.os != 'Windows'
+        id: run-tests-unix
         run: |
           cd tests/api_test
           export OPENVIKING_API_KEY=test-root-api-key
@@ -258,26 +419,59 @@ jobs:
           fi
         continue-on-error: true
 
+      - name: Run API Tests (Windows)
+        if: runner.os == 'Windows'
+        id: run-tests-windows
+        shell: pwsh
+        run: |
+          cd tests/api_test
+          $env:OPENVIKING_API_KEY = "test-root-api-key"
+          $env:SERVER_URL = "http://127.0.0.1:${{ env.SERVER_PORT }}"
+          
+          if ($env:HAS_SECRETS -eq "true") {
+            Write-Host "Running full test suite with VLM/Embedding"
+            uv run python -m pytest . -v --html=api-test-report.html --self-contained-html
+          } else {
+            Write-Host "Running basic tests only (no VLM/Embedding)"
+            uv run python -m pytest . -v --html=api-test-report.html --self-contained-html --ignore=retrieval/ --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py -k "not test_observer"
+          }
+        continue-on-error: true
+
       - name: Upload test reports
         uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: api-test-reports-${{ github.run_id }}
+          name: api-test-reports-${{ matrix.os }}-${{ github.run_id }}
           path: |
             tests/api_test/api-test-report.html
             openviking-server.log
 
-      - name: Stop OpenViking Server
-        if: always()
+      - name: Stop OpenViking Server (Unix)
+        if: runner.os != 'Windows' && always()
         run: |
           if [ -f openviking-server.pid ]; then
             kill $(cat openviking-server.pid) 2>/dev/null || true
-            # 确保完全清理
             pkill -f "openviking.server.bootstrap" 2>/dev/null || true
           fi
 
-      - name: Check test results
-        if: steps.run-tests.outcome != 'success'
+      - name: Stop OpenViking Server (Windows)
+        if: runner.os == 'Windows' && always()
+        shell: pwsh
+        run: |
+          if ($env:SERVER_PID) {
+            Stop-Process -Id $env:SERVER_PID -Force -ErrorAction SilentlyContinue
+          }
+          Get-Process -Name python -ErrorAction SilentlyContinue | Stop-Process -Force
+
+      - name: Check test results (Unix)
+        if: runner.os != 'Windows' && steps.run-tests-unix.outcome != 'success'
         run: |
           echo "API tests failed!"
+          exit 1
+
+      - name: Check test results (Windows)
+        if: runner.os == 'Windows' && steps.run-tests-windows.outcome != 'success'
+        shell: pwsh
+        run: |
+          Write-Host "API tests failed!"
           exit 1

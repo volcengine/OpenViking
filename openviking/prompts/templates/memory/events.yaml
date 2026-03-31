@@ -8,20 +8,15 @@ description: |
   - Use a third-person perspective.
   - If possible, combine the user's current behavior and reactions to speculate on the user's possible thoughts or actions.
   - Describe the complete content of an event within a single event as much as possible; do not split one event into multiple parts.
-directory: "viking://user/{user_space}/memories/events"
-filename_template: "{event_time}_{event_name}.md"
+directory: "viking://user/{{ user_space }}/memories/events"
+filename_template: "{{ extract_context.get_first_message_time_from_ranges(ranges) }}_{{ event_name }}.md"
 enabled: true
 # 操作模式：add_only 表示只新增记忆，不需要查看之前的记忆列表
 # upsert 表示新增或更新（默认行为）
 operation_mode: "add_only"
 content_template: |
-  {% set msg_range = extract_context.read_message_ranges(ranges|default('')) if extract_context else None %}
-  {% set first_time = msg_range.first_message_time() if msg_range else None %}
-  time: {{event_time|default(first_time if first_time else 'N/A')}}
-  {% if extract_context %}
-  {{ msg_range.pretty_print() if msg_range else '' }}
-  {% endif %}
-
+  time: {{extract_context.get_first_message_time_with_weekday_from_ranges(ranges|default(''))|default('N/A')}}
+  {{ extract_context.read_message_ranges(ranges|default('')).pretty_print() if ranges else '' }}
 
 fields:
   - name: event_name
@@ -38,13 +33,8 @@ fields:
   - name: summary
     type: string
     description: |
-      Based on the content of the above fields, compile a description to outline the complete Fact content, in English
-
-  - name: event_time
-    type: string
-    description: |
-      Time when the event occurred, format “2026-03-17” / “2026-03” / “2026”. If unknown, use current time.
-    merge_op: immutable
+      Based on the content of the above fields, compile a description to outline the complete Fact content.
+      Use specific year-month-day dates instead of vague terms such as yesterday, last week, and tomorrow.
 
   - name: ranges
     type: string

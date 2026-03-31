@@ -5,8 +5,8 @@ description: |
   Relative path format: ../entities/entity_name.md
   - Example: [skin_itching](../entities/skin_itching.md) → see dermatologist
   - Cards should be rich and distributed - avoid putting all info in one card.
-directory: "viking://user/{user_space}/memories/entities"
-filename_template: "{name}.md"
+directory: "viking://user/{{ user_space }}/memories/entities"
+filename_template: "{{ name }}.md"
 enabled: true
 
 fields:

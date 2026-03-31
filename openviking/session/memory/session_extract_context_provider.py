@@ -33,6 +33,15 @@ class SessionExtractContextProvider(ExtractContextProvider):
         self._output_language = self._detect_language()
         self._registry = None  # 延迟加载
         self._schema_directories = None
+        self._extract_context = None  # 缓存 ExtractContext 实例
+
+    def get_extract_context(self) -> "ExtractContext":
+        """获取或创建 ExtractContext 实例（缓存）"""
+        from openviking.session.memory.memory_updater import ExtractContext
+
+        if self._extract_context is None and self.messages:
+            self._extract_context = ExtractContext(self.messages)
+        return self._extract_context
 
     def _detect_language(self) -> str:
         """检测输出语言"""
@@ -215,9 +224,10 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
             # Replace variables in directory path with actual user/agent space
             user_space = ctx.user.user_space_name() if ctx and ctx.user else "default"
             agent_space = ctx.user.agent_space_name() if ctx and ctx.user else "default"
-            dir_path = schema.directory.replace("{user_space}", user_space).replace(
-                "{agent_space}", agent_space
-            )
+            import jinja2
+            env = jinja2.Environment(autoescape=False)
+            template = env.from_string(schema.directory)
+            dir_path = template.render(user_space=user_space, agent_space=agent_space)
 
             # Always add .overview.md to read list
             overview_files.add(f"{dir_path}/.overview.md")
@@ -227,10 +237,10 @@ After exploring, analyze the conversation and output ALL memory write/edit/delet
                 # 只新增，不需要查看之前的记忆列表，只需要读取 .overview.md
                 continue
 
-            # Check if filename_template has variables (contains {xxx})
+            # Check if filename_template has variables (contains {{ xxx }})
             has_variables = False
             if schema.filename_template:
-                has_variables = "{" in schema.filename_template and "}" in schema.filename_template
+                has_variables = "{{" in schema.filename_template and "}}" in schema.filename_template
 
             if has_variables or not schema.filename_template:
                 # Multi-file schema or no filename template: ls the directory

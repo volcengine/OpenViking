@@ -118,6 +118,11 @@ class ExtractLoop:
 
         # 预计算 expected_fields
         self._expected_fields = ["reasoning", "edit_overview_uris", "delete_uris"]
+
+        # 获取 ExtractContext（整个流程复用）
+        self._extract_context = self.context_provider.get_extract_context()
+        if self._extract_context is None:
+            raise ValueError("Failed to get ExtractContext from provider")
         for schema in schemas:
             self._expected_fields.append(schema.memory_type)
 
@@ -185,7 +190,6 @@ See the complete JSON Schema below:
 
             if tool_calls:
                 await self._execute_tool_calls(messages, tool_calls, tools_used)
-                await self._mark_cache_breakpoint(messages)
                 continue
 
             # If model returned final operations, check if refetch is needed
@@ -201,7 +205,6 @@ See the complete JSON Schema below:
                         max_iterations += 1
                         logger.info(f"Extended max_iterations to {max_iterations} for refetch")
 
-                    await self._mark_cache_breakpoint(messages)
                     continue
 
                 final_operations = operations
@@ -280,12 +283,17 @@ See the complete JSON Schema below:
         registry = self.context_provider._get_registry()
         schemas = self.context_provider.get_memory_schemas(self.ctx)
 
+        # Use pre-initialized extract_context
+        if not hasattr(self, '_extract_context') or self._extract_context is None:
+            raise ValueError("ExtractContext not initialized")
+
         is_valid, errors = validate_operations_uris(
             operations,
             schemas,
             registry,
             user_space="default",
             agent_space="default",
+            extract_context=self._extract_context,
         )
         if not is_valid:
             error_msg = "Invalid memory operations:\n" + "\n".join(f"  - {err}" for err in errors)
@@ -307,6 +315,9 @@ See the complete JSON Schema below:
         Returns:
             Tuple of (tool_calls, operations) - one will be None, the other set
         """
+        # 标记 cache breakpoint
+        await self._mark_cache_breakpoint(messages)
+
         # Call LLM with tools - use tools from strategy
         tool_choice = "none" if force_final else None
 
@@ -367,8 +378,7 @@ See the complete JSON Schema below:
                 self._validate_operations(operations)
                 return (None, operations)
             except Exception as e:
-                print(f"Error parsing operations: {e}")
-                logger.warning(f"Unexpected error parsing memory operations: {e}")
+                logger.exception(f"Error parsing operations: {e}")
 
         # Case 3: No tool calls and no parsable operations
         print("No tool calls or operations parsed")

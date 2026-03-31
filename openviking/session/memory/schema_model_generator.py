@@ -399,11 +399,11 @@ class SchemaPromptGenerator:
 
                 # Add variable substitution info
                 lines.append("\n**Variable Substitution:**")
-                lines.append("- `{user_space}` → 'default'")
-                lines.append("- `{agent_space}` → 'default'")
+                lines.append("- `{{ user_space }}` → 'default'")
+                lines.append("- `{{ agent_space }}` → 'default'")
                 if mt.fields:
                     for field in mt.fields:
-                        lines.append(f"- `{field.name}` → use value from fields")
+                        lines.append(f"- `{{ {field.name} }}` → use value from fields")
 
             if mt.fields:
                 lines.append("\n**Fields:**")

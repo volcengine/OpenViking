@@ -8,11 +8,55 @@ import re
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Set, Tuple
 
+import jinja2
+
 from openviking.session.memory.dataclass import MemoryTypeSchema
 from openviking.session.memory.memory_type_registry import MemoryTypeRegistry
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
+
+
+def _render_jinja_template(template: str, context: Dict[str, Any]) -> str:
+    """Render a Jinja2 template with the given context."""
+    env = jinja2.Environment(
+        autoescape=False,
+        keep_trailing_newline=True,
+    )
+    jinja_template = env.from_string(template)
+    return jinja_template.render(**context)
+
+
+def render_template(
+    template: str,
+    fields: Dict[str, Any],
+    extract_context: Any = None,
+) -> str:
+    """
+    Generic Jinja2 template rendering method.
+
+    This is the same method used for rendering content_template in memory_updater.py.
+    Used for rendering filename_template, directory, etc.
+
+    Args:
+        template: The template string with Jinja2 placeholders
+        fields: Dictionary of field values for substitution
+        extract_context: ExtractContext instance for template access to message ranges
+
+    Returns:
+        Rendered template string
+    """
+    # 创建 Jinja2 环境，允许未定义的变量（打印警告但不报错）
+    env = jinja2.Environment(autoescape=False, undefined=jinja2.DebugUndefined)
+
+    # 创建模板变量
+    template_vars = fields.copy()
+    # 始终传入 extract_context，即使是 None，避免模板中访问时 undefined
+    template_vars["extract_context"] = extract_context
+
+    # 渲染模板
+    jinja_template = env.from_string(template)
+    return jinja_template.render(**template_vars).strip()
 
 
 @dataclass
@@ -29,6 +73,7 @@ def generate_uri(
     fields: Dict[str, Any],
     user_space: str = "default",
     agent_space: str = "default",
+    extract_context: Any = None,
 ) -> str:
     """
     Generate a full URI from memory type schema and field values.
@@ -36,8 +81,9 @@ def generate_uri(
     Args:
         memory_type: The memory type schema with directory and filename_template
         fields: The field values to use for template replacement
-        user_space: The user space to substitute for {user_space}
-        agent_space: The agent space to substitute for {agent_space}
+        user_space: The user space to substitute for {{ user_space }}
+        agent_space: The agent space to substitute for {{ agent_space }}
+        extract_context: ExtractContext instance for template rendering (same as content_template)
 
     Returns:
         The fully generated URI
@@ -58,27 +104,16 @@ def generate_uri(
     if not uri_template:
         raise ValueError("Memory type has neither directory nor filename_template")
 
-    # Build the replacement dictionary
-    replacements = {
+    # Build the context for Jinja2 rendering
+    context = {
         "user_space": user_space,
         "agent_space": agent_space,
     }
+    # Add all fields to context
+    context.update(fields)
 
-    # Add all fields to replacements
-    replacements.update(fields)
-
-    # Replace all template variables
-    def replace_var(match: re.Match) -> str:
-        var_name = match.group(1)
-        if var_name not in replacements:
-            raise ValueError(f"Missing template variable '{var_name}' in fields")
-        value = replacements[var_name]
-        if value is None:
-            raise ValueError(f"Template variable '{var_name}' has None value")
-        return str(value)
-
-    # Replace {variable} patterns
-    uri = re.sub(r"\{([^}]+)\}", replace_var, uri_template)
+    # Render using unified render_template method (same as content_template)
+    uri = render_template(uri_template, context, extract_context)
 
     return uri
 
@@ -99,9 +134,10 @@ def validate_uri_template(memory_type: MemoryTypeSchema) -> bool:
     # Check that all variables in filename_template exist in fields
     if memory_type.filename_template:
         field_names = {f.name for f in memory_type.fields}
-        template_vars = set(re.findall(r"\{([^}]+)\}", memory_type.filename_template))
+        # Match Jinja2 {{ variable }} patterns
+        template_vars = set(re.findall(r"\{\{\s*(\w+)\s*\}\}", memory_type.filename_template))
 
-        # {user_space} and {agent_space} are built-in, not from fields
+        # {{ user_space }} and {{ agent_space }} are built-in, not from fields
         built_in_vars = {"user_space", "agent_space"}
         required_field_vars = template_vars - built_in_vars
 
@@ -116,14 +152,16 @@ def collect_allowed_directories(
     schemas: List[MemoryTypeSchema],
     user_space: str = "default",
     agent_space: str = "default",
+    extract_context: Any = None,
 ) -> Set[str]:
     """
     Collect all allowed directories from activated schemas.
 
     Args:
         schemas: List of activated memory type schemas
-        user_space: User space to substitute for {user_space}
-        agent_space: Agent space to substitute for {agent_space}
+        user_space: User space to substitute for {{ user_space }}
+        agent_space: Agent space to substitute for {{ agent_space }}
+        extract_context: ExtractContext instance for template rendering
 
     Returns:
         Set of allowed directory paths with variables replaced
@@ -131,9 +169,9 @@ def collect_allowed_directories(
     allowed_dirs = set()
     for schema in schemas:
         if schema.directory:
-            dir_path = schema.directory.replace("{user_space}", user_space).replace(
-                "{agent_space}", agent_space
-            )
+            context = {"user_space": user_space, "agent_space": agent_space}
+            # Use unified render_template for consistent rendering
+            dir_path = render_template(schema.directory, context, extract_context)
             allowed_dirs.add(dir_path)
     return allowed_dirs
 
@@ -142,18 +180,20 @@ def collect_allowed_path_patterns(
     schemas: List[MemoryTypeSchema],
     user_space: str = "default",
     agent_space: str = "default",
+    extract_context: Any = None,
 ) -> Set[str]:
     """
     Collect all allowed full path patterns from activated schemas.
 
     Args:
         schemas: List of activated memory type schemas
-        user_space: User space to substitute for {user_space}
-        agent_space: Agent space to substitute for {agent_space}
+        user_space: User space to substitute for {{ user_space }}
+        agent_space: Agent space to substitute for {{ agent_space }}
+        extract_context: ExtractContext instance for template rendering
 
     Returns:
-        Set of allowed path patterns with {user_space} and {agent_space} replaced
-        (other variables like {topic}, {tool_name}, etc. remain as patterns)
+        Set of allowed path patterns with {{ user_space }} and {{ agent_space }} replaced
+        (other variables like {{ topic }}, {{ tool_name }}, etc. remain as patterns)
     """
     allowed_patterns = set()
     for schema in schemas:
@@ -166,24 +206,24 @@ def collect_allowed_path_patterns(
             pattern_parts.append(schema.filename_template)
         if pattern_parts:
             pattern = "/".join(pattern_parts)
-            pattern = pattern.replace("{user_space}", user_space).replace(
-                "{agent_space}", agent_space
-            )
+            context = {"user_space": user_space, "agent_space": agent_space}
+            # Use unified render_template for consistent rendering
+            pattern = render_template(pattern, context, extract_context)
             allowed_patterns.add(pattern)
     return allowed_patterns
 
 
 def _pattern_matches_uri(pattern: str, uri: str) -> bool:
     """
-    Check if a URI matches a pattern with variables like {topic}, {tool_name}, etc.
+    Check if a URI matches a pattern with variables like {{ topic }}, {{ tool_name }}, etc.
 
     The pattern matching is flexible:
-    - {variable} matches any sequence of characters except '/'
+    - {{ variable }} matches any sequence of characters except '/'
     - * matches any sequence of characters except '/' (shell-style)
     - ** matches any sequence of characters including '/' (shell-style)
 
     Args:
-        pattern: The pattern to match against (may contain {variables} or * wildcards)
+        pattern: The pattern to match against (may contain {{ variables }} or * wildcards)
         uri: The URI to check
 
     Returns:
@@ -196,7 +236,9 @@ def _pattern_matches_uri(pattern: str, uri: str) -> bool:
     pattern = re.escape(pattern)
     # Unescape {, }, * that we need to handle specially
     pattern = pattern.replace(r"\{", "{").replace(r"\}", "}").replace(r"\*", "*")
-    # Convert {variable} to [^/]+
+    # Convert {{ variable }} to [^/]+
+    pattern = re.sub(r"\{\{\s*[^}]+\s*\}\}", r"[^/]+", pattern)
+    # Also support legacy {variable} format
     pattern = re.sub(r"\{[^}]+\}", r"[^/]+", pattern)
     # Convert ** to .* and * to [^/]*
     pattern = pattern.replace("**", ".*")
@@ -246,14 +288,14 @@ def is_uri_allowed_for_schema(
     Args:
         uri: The URI to check
         schemas: List of activated memory type schemas
-        user_space: User space to substitute for {user_space}
-        agent_space: Agent space to substitute for {agent_space}
+        user_space: User space to substitute for {{ user_space }}
+        agent_space: Agent space to substitute for {{ agent_space }}
 
     Returns:
         True if the URI is allowed
     """
-    allowed_dirs = collect_allowed_directories(schemas, user_space, agent_space)
-    allowed_patterns = collect_allowed_path_patterns(schemas, user_space, agent_space)
+    allowed_dirs = collect_allowed_directories(schemas, user_space, agent_space, extract_context)
+    allowed_patterns = collect_allowed_path_patterns(schemas, user_space, agent_space, extract_context)
     return is_uri_allowed(uri, allowed_dirs, allowed_patterns)
 
 
@@ -289,6 +331,7 @@ def resolve_flat_model_uri(
     user_space: str = "default",
     agent_space: str = "default",
     memory_type: Optional[str] = None,
+    extract_context: Any = None,
 ) -> str:
     """
     Resolve URI for a flat model (used for both write and edit operations).
@@ -299,6 +342,7 @@ def resolve_flat_model_uri(
         user_space: User space for substitution
         agent_space: Agent space for substitution
         memory_type: Optional memory_type - if provided, use it instead of reading from model
+        extract_context: ExtractContext instance for template rendering (same as content_template)
 
     Returns:
         Resolved URI
@@ -328,7 +372,7 @@ def resolve_flat_model_uri(
 
     # Extract URI fields and generate URI
     uri_fields = extract_uri_fields_from_flat_model(flat_model, schema)
-    return generate_uri(schema, uri_fields, user_space, agent_space)
+    return generate_uri(schema, uri_fields, user_space, agent_space, extract_context)
 
 
 def resolve_overview_edit_uri(
@@ -368,10 +412,9 @@ def resolve_overview_edit_uri(
     if not schema.directory:
         raise ValueError(f"Memory type {memory_type_str} has no directory configured")
 
-    # Substitute user_space and agent_space in directory
-    directory = schema.directory.replace("{user_space}", user_space).replace(
-        "{agent_space}", agent_space
-    )
+    # Render directory using Jinja2
+    context = {"user_space": user_space, "agent_space": agent_space}
+    directory = _render_jinja_template(schema.directory, context)
 
     # Return the .overview.md URI
     return f"{directory}/.overview.md"
@@ -398,6 +441,7 @@ def resolve_all_operations(
     registry: MemoryTypeRegistry,
     user_space: str = "default",
     agent_space: str = "default",
+    extract_context: Any = None,
 ) -> ResolvedOperations:
     """
     Resolve URIs for all operations.
@@ -409,6 +453,7 @@ def resolve_all_operations(
         registry: MemoryTypeRegistry to get schemas
         user_space: User space for substitution
         agent_space: Agent space for substitution
+        extract_context: ExtractContext instance for template rendering (same as content_template)
 
     Returns:
         ResolvedOperations with all URIs resolved
@@ -435,7 +480,8 @@ def resolve_all_operations(
                 item_dict = dict(item) if hasattr(item, "model_dump") else dict(item)
                 try:
                     uri = resolve_flat_model_uri(
-                        item_dict, registry, user_space, agent_space, memory_type=field_name
+                        item_dict, registry, user_space, agent_space,
+                        memory_type=field_name, extract_context=extract_context
                     )
                     if is_edit:
                         resolved.edit_operations.append(
@@ -454,7 +500,9 @@ def resolve_all_operations(
 
         for op in write_uris:
             try:
-                uri = resolve_flat_model_uri(op, registry, user_space, agent_space)
+                uri = resolve_flat_model_uri(
+                    op, registry, user_space, agent_space, extract_context=extract_context
+                )
                 # Legacy format: try to get memory_type from model, otherwise empty
                 memory_type = op.get("memory_type", "") if isinstance(op, dict) else ""
                 resolved.write_operations.append(
@@ -465,7 +513,9 @@ def resolve_all_operations(
 
         for op in edit_uris:
             try:
-                uri = resolve_flat_model_uri(op, registry, user_space, agent_space)
+                uri = resolve_flat_model_uri(
+                    op, registry, user_space, agent_space, extract_context=extract_context
+                )
                 memory_type = op.get("memory_type", "") if isinstance(op, dict) else ""
                 resolved.edit_operations.append(
                     ResolvedOperation(model=op, uri=uri, memory_type=memory_type)
@@ -500,6 +550,7 @@ def validate_operations_uris(
     registry: MemoryTypeRegistry,
     user_space: str = "default",
     agent_space: str = "default",
+    extract_context: Any = None,
 ) -> Tuple[bool, List[str]]:
     """
     Validate that all URIs in StructuredMemoryOperations are allowed.
@@ -508,19 +559,20 @@ def validate_operations_uris(
         operations: The StructuredMemoryOperations to validate
         schemas: List of activated memory type schemas
         registry: MemoryTypeRegistry for URI resolution
-        user_space: User space to substitute for {user_space}
-        agent_space: Agent space to substitute for {agent_space}
+        user_space: User space to substitute for {{ user_space }}
+        agent_space: Agent space to substitute for {{ agent_space }}
+        extract_context: ExtractContext instance for template rendering
 
     Returns:
         Tuple of (is_valid, list of error messages)
     """
-    allowed_dirs = collect_allowed_directories(schemas, user_space, agent_space)
-    allowed_patterns = collect_allowed_path_patterns(schemas, user_space, agent_space)
+    allowed_dirs = collect_allowed_directories(schemas, user_space, agent_space, extract_context)
+    allowed_patterns = collect_allowed_path_patterns(schemas, user_space, agent_space, extract_context)
 
     errors = []
 
     # First resolve all URIs
-    resolved = resolve_all_operations(operations, registry, user_space, agent_space)
+    resolved = resolve_all_operations(operations, registry, user_space, agent_space, extract_context)
 
     if resolved.has_errors():
         errors.extend(resolved.errors)

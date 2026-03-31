@@ -17,7 +17,14 @@ variables:
     description: "File content"
     required: true
 
+  - name: "output_language"
+    type: "string"
+    description: "Language code for output (e.g., 'en', 'zh-CN', 'ja', 'ko', 'ru', 'ar')"
+    required: true
+
 template: |
+  Output Language: {{ output_language }}
+
   Please generate a summary for the following file:
 
   【File Name】

@@ -35,6 +35,20 @@ class ExtractContext:
     def __init__(self, messages: List[Message]):
         self.messages = messages
 
+    def get_first_message_time_from_ranges(self, ranges_str: str) -> str | None:
+        """根据 ranges 字符串获取第一条消息的时间（YAML 日期格式）"""
+        if not ranges_str:
+            return None
+        msg_range = self.read_message_ranges(ranges_str)
+        return msg_range._first_message_time()
+
+    def get_first_message_time_with_weekday_from_ranges(self, ranges_str: str) -> str | None:
+        """根据 ranges 字符串获取第一条消息的时间，带周几"""
+        if not ranges_str:
+            return None
+        msg_range = self.read_message_ranges(ranges_str)
+        return msg_range._first_message_time_with_weekday()
+
     def read_message_ranges(self, ranges_str: str) -> "MessageRange":
         """Parse ranges string like "0-10,50-60" or "7,9,11,13" and return combined MessageRange.
 
@@ -100,13 +114,25 @@ class MessageRange:
                 result.append(f"[{elem.role}]: {elem.content}")
         return "\n".join(result)
 
-    def first_message_time(self) -> str | None:
-        """获取第一条消息的时间（YAML 日期格式），如果没有消息则返回 None"""
+    def _first_message_time(self) -> str | None:
+        """获取第一条消息的时间（内部方法）"""
         for elem in self.elements:
             if isinstance(elem, str):
                 continue
             if hasattr(elem, "created_at") and elem.created_at:
                 return elem.created_at.strftime("%Y-%m-%d")
+        return None
+
+    def _first_message_time_with_weekday(self) -> str | None:
+        """获取第一条消息的时间，带周几（内部方法）"""
+        for elem in self.elements:
+            if isinstance(elem, str):
+                continue
+            if hasattr(elem, "created_at") and elem.created_at:
+                # 获取周几的英文全称
+                weekday_en = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+                weekday = weekday_en[elem.created_at.weekday()]
+                return f"{elem.created_at.strftime('%Y-%m-%d')} ({weekday})"
         return None
 
 
@@ -205,12 +231,13 @@ class MemoryUpdater:
         user_space = ctx.user.user_space_name() if ctx and ctx.user else "default"
         agent_space = ctx.user.agent_space_name() if ctx and ctx.user else "default"
 
-        # Resolve all URIs first
+        # Resolve all URIs first (pass extract_context for template rendering)
         resolved_ops = resolve_all_operations(
             operations,
             resolved_registry,
             user_space=user_space,
             agent_space=agent_space,
+            extract_context=extract_context,
         )
 
         if resolved_ops.has_errors():

@@ -4,7 +4,7 @@ description: |
   Extract relatively stable personal attributes that define the user's identity, work style, and preferences.
   Include: profession, experience level, technical background, communication style, work habits, etc.
   Do NOT include transient conversation content or temporary mood states.
-directory: "viking://user/{user_space}/memories"
+directory: "viking://user/{{ user_space }}/memories"
 filename_template: "profile.md"
 enabled: true
 fields:
