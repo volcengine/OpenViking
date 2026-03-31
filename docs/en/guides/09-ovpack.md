@@ -114,6 +114,77 @@ openviking export viking://agent/default/memories/ ./exports/agent-memories.ovpa
 openviking import ./exports/agent-memories.ovpack viking://agent/default/ --force
 ```
 
+### Export/Import Memories (Python SDK)
+
+```python
+from openviking import AsyncOpenViking
+
+async def export_import_user_memories():
+    client = AsyncOpenViking()
+    await client.initialize()
+    try:
+        await client.export_ovpack(
+            uri="viking://user/default/memories/",
+            to="./exports/user-memories.ovpack",
+        )
+
+        await client.import_ovpack(
+            file_path="./exports/user-memories.ovpack",
+            parent="viking://user/default/",
+            force=True,
+            vectorize=True,
+        )
+    finally:
+        await client.close()
+
+async def export_import_agent_memories():
+    client = AsyncOpenViking()
+    await client.initialize()
+    try:
+        await client.export_ovpack(
+            uri="viking://agent/default/memories/",
+            to="./exports/agent-memories.ovpack",
+        )
+        await client.import_ovpack(
+            file_path="./exports/agent-memories.ovpack",
+            parent="viking://agent/default/",
+            force=True,
+            vectorize=True,
+        )
+    finally:
+        await client.close()
+```
+
+### Export/Import Memories (HTTP API)
+
+```bash
+# Export user memories
+curl -X POST http://localhost:1933/api/v1/pack/export \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "uri": "viking://user/default/memories/",
+    "to": "./exports/user-memories.ovpack"
+  }'
+
+# Import user memories (upload first, then import via temp_file_id)
+TEMP_FILE_ID=$(
+  curl -sS -X POST http://localhost:1933/api/v1/resources/temp_upload \
+    -H "X-API-Key: your-key" \
+    -F 'file=@./exports/user-memories.ovpack' \
+  | jq -r '.result.temp_file_id'
+)
+curl -X POST http://localhost:1933/api/v1/pack/import \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d "{
+    \"temp_file_id\": \"$TEMP_FILE_ID\",
+    \"parent\": \"viking://user/default/\",
+    \"force\": true,
+    \"vectorize\": true
+  }"
+```
+
 ### Vectorization on Import
 
 - Vectorization is enabled by default (useful for `find/search`).

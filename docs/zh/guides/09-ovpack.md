@@ -125,6 +125,77 @@ openviking export viking://agent/default/memories/ ./exports/agent-memories.ovpa
 openviking import ./exports/agent-memories.ovpack viking://agent/default/ --force
 ```
 
+### 导出/导入记忆（Python SDK）
+
+```python
+from openviking import AsyncOpenViking
+
+async def export_import_user_memories():
+    client = AsyncOpenViking()
+    await client.initialize()
+    try:
+        await client.export_ovpack(
+            uri="viking://user/default/memories/",
+            to="./exports/user-memories.ovpack",
+        )
+
+        await client.import_ovpack(
+            file_path="./exports/user-memories.ovpack",
+            parent="viking://user/default/",
+            force=True,
+            vectorize=True,
+        )
+    finally:
+        await client.close()
+
+async def export_import_agent_memories():
+    client = AsyncOpenViking()
+    await client.initialize()
+    try:
+        await client.export_ovpack(
+            uri="viking://agent/default/memories/",
+            to="./exports/agent-memories.ovpack",
+        )
+        await client.import_ovpack(
+            file_path="./exports/agent-memories.ovpack",
+            parent="viking://agent/default/",
+            force=True,
+            vectorize=True,
+        )
+    finally:
+        await client.close()
+```
+
+### 导出/导入记忆（HTTP API）
+
+```bash
+# 导出用户记忆
+curl -X POST http://localhost:1933/api/v1/pack/export \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d '{
+    "uri": "viking://user/default/memories/",
+    "to": "./exports/user-memories.ovpack"
+  }'
+
+# 导入用户记忆（先上传，再用 temp_file_id 导入）
+TEMP_FILE_ID=$(
+  curl -sS -X POST http://localhost:1933/api/v1/resources/temp_upload \
+    -H "X-API-Key: your-key" \
+    -F 'file=@./exports/user-memories.ovpack' \
+  | jq -r '.result.temp_file_id'
+)
+curl -X POST http://localhost:1933/api/v1/pack/import \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d "{
+    \"temp_file_id\": \"$TEMP_FILE_ID\",
+    \"parent\": \"viking://user/default/\",
+    \"force\": true,
+    \"vectorize\": true
+  }"
+```
+
 ### 导入后是否向量化
 
 - 默认会向量化（便于 `find/search` 检索）。
