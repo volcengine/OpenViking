@@ -582,7 +582,7 @@ class HierarchicalRetriever:
             expires_at = c.get("expires_at")
             if expires_at is None and isinstance(c.get("meta"), dict):
                 expires_at = c["meta"].get("expires_at")
-            setattr(matched, "expires_at", expires_at)
+            matched.expires_at = expires_at  # type: ignore[attr-defined]
             results.append(matched)
 
         # Re-sort by blended score so hotness boost can change ranking

@@ -458,9 +458,7 @@ class MemoryExtractor:
         memory_cfg = get_openviking_config().memory
         candidate_metadata = getattr(candidate, "metadata", None)
         override_ttl = (
-            candidate_metadata.get("ttl")
-            if isinstance(candidate_metadata, dict)
-            else None
+            candidate_metadata.get("ttl") if isinstance(candidate_metadata, dict) else None
         )
         ttl_str = override_ttl or memory_cfg.ttl_by_type.get(candidate.category.value)
         if ttl_str is None:
@@ -468,7 +466,9 @@ class MemoryExtractor:
         try:
             ttl_delta = MemoryConfig.parse_ttl(ttl_str)
         except ValueError:
-            logger.warning("Invalid memory TTL %r for category=%s", ttl_str, candidate.category.value)
+            logger.warning(
+                "Invalid memory TTL %r for category=%s", ttl_str, candidate.category.value
+            )
             ttl_delta = None
         expires_at = datetime.now(timezone.utc) + ttl_delta if ttl_delta else None
 
