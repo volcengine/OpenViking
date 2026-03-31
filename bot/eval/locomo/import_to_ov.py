@@ -15,21 +15,22 @@ import argparse
 import asyncio
 import csv
 import json
-import subprocess
 import sys
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple, Optional
 
 import openviking as ov
 from openviking.message.part import TextPart
 
-# 全局信号量用于控制并发
-semaphore: asyncio.Semaphore = None
+
+def _get_session_number(session_key: str) -> int:
+    """Extract session number from session key."""
+    return int(session_key.split("_")[1])
 
 
-def parse_test_file(path: str) -> list[dict]:
+def parse_test_file(path: str) -> List[Dict[str, Any]]:
     """Parse txt test file into sessions.
 
     Each session is a dict with:
@@ -57,7 +58,7 @@ def parse_test_file(path: str) -> list[dict]:
     return sessions
 
 
-def format_locomo_message(msg: dict) -> str:
+def format_locomo_message(msg: Dict[str, Any]) -> str:
     """Format a single LoCoMo message into a natural chat-style string.
 
     Output format:
@@ -85,24 +86,23 @@ def format_locomo_message(msg: dict) -> str:
 
 def load_locomo_data(
     path: str,
-    sample_index: int | None = None,
-) -> list[dict]:
+    sample_index: Optional[int] = None,
+) -> List[Dict[str, Any]]:
     """Load LoCoMo JSON and optionally filter to one sample."""
     with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
 
     if sample_index is not None:
         if sample_index < 0 or sample_index >= len(data):
-            print(f"Error: sample index {sample_index} out of range (0-{len(data)-1})", file=sys.stderr)
-            sys.exit(1)
+            raise ValueError(f"Sample index {sample_index} out of range (0-{len(data)-1})")
         return [data[sample_index]]
     return data
 
 
 def build_session_messages(
-    item: dict,
-    session_range: tuple[int, int] | None = None,
-) -> list[dict]:
+    item: Dict[str, Any],
+    session_range: Optional[Tuple[int, int]] = None,
+) -> List[Dict[str, Any]]:
     """Build bundled session messages for one LoCoMo sample.
 
     Returns list of dicts with keys: message, meta.
@@ -112,12 +112,12 @@ def build_session_messages(
 
     session_keys = sorted(
         [k for k in conv if k.startswith("session_") and not k.endswith("_date_time")],
-        key=lambda k: int(k.split("_")[1]),
+        key=_get_session_number,
     )
 
     sessions = []
     for sk in session_keys:
-        sess_num = int(sk.split("_")[1])
+        sess_num = _get_session_number(sk)
         if session_range:
             lo, hi = session_range
             if sess_num < lo or sess_num > hi:
@@ -196,7 +196,7 @@ def write_error_record(record: Dict[str, Any], error_path: str = "import_errors.
         f.write(f"[{timestamp}] ERROR [{sample_id}/{session}]: {error}\n")
 
 
-def load_ingest_record(record_path: str = "./result/.ingest_record.json") -> dict:
+def load_ingest_record(record_path: str = "./result/.ingest_record.json") -> Dict[str, Any]:
     """Load existing ingest record file, return empty dict if not exists."""
     try:
         with open(record_path, "r", encoding="utf-8") as f:
@@ -205,7 +205,7 @@ def load_ingest_record(record_path: str = "./result/.ingest_record.json") -> dic
         return {}
 
 
-def save_ingest_record(record: dict, record_path: str = "./result/.ingest_record.json") -> None:
+def save_ingest_record(record: Dict[str, Any], record_path: str = "./result/.ingest_record.json") -> None:
     """Save ingest record to file."""
     with open(record_path, "w", encoding="utf-8") as f:
         json.dump(record, f, indent=2, ensure_ascii=False)
@@ -214,8 +214,8 @@ def save_ingest_record(record: dict, record_path: str = "./result/.ingest_record
 def is_already_ingested(
     sample_id: str | int,
     session_key: str,
-    record: dict,
-    success_keys: set = None,
+    record: Dict[str, Any],
+    success_keys: Optional[set] = None,
 ) -> bool:
     """Check if a specific session has already been successfully ingested."""
     key = f"viking:{sample_id}:{session_key}"
@@ -227,8 +227,8 @@ def is_already_ingested(
 def mark_ingested(
     sample_id: str | int,
     session_key: str,
-    record: dict,
-    meta: dict | None = None,
+    record: Dict[str, Any],
+    meta: Optional[Dict[str, Any]] = None,
 ) -> None:
     """Mark a session as successfully ingested."""
     key = f"viking:{sample_id}:{session_key}"
@@ -242,7 +242,7 @@ def mark_ingested(
 # ---------------------------------------------------------------------------
 # OpenViking import
 # ---------------------------------------------------------------------------
-def _parse_token_usage(token_data: dict) -> dict:
+def _parse_token_usage(token_data: Dict[str, Any]) -> Dict[str, int]:
     """解析Token使用数据（仅支持新版token_usage格式）"""
     usage = token_data["token_usage"]
     return {
@@ -254,7 +254,7 @@ def _parse_token_usage(token_data: dict) -> dict:
     }
 
 
-async def viking_ingest(msg: str, openviking_url: str) -> dict:
+async def viking_ingest(msg: str, openviking_url: str, semaphore: asyncio.Semaphore) -> Dict[str, int]:
     """Save a message to OpenViking via OpenViking SDK client.
     Returns token usage dict with embedding and vlm token counts.
     """
@@ -295,7 +295,8 @@ async def viking_ingest(msg: str, openviking_url: str) -> dict:
                 elif task["status"] == "failed":
                     raise RuntimeError(f"Commit failed: {task.get('error', 'Unknown error')}")
 
-                await asyncio.sleep(1)
+                # 指数退避策略，避免频繁请求
+                await asyncio.sleep(min(1 << (waited // 10), 60))
                 waited += 1
             else:
                 raise RuntimeError(f"Commit timed out after {max_wait} seconds")
@@ -305,22 +306,18 @@ async def viking_ingest(msg: str, openviking_url: str) -> dict:
         finally:
             await client.close()
 
-async def task_status(task_id: str):
-    client = ov.AsyncHTTPClient(url="http://localhost:1933")
-    await client.initialize()
-    task = await client.get_task(task_id)
-    print(f"Task status: {task}")
 
-def sync_viking_ingest(msg: str) -> dict:
+def sync_viking_ingest(msg: str, openviking_url: str) -> Dict[str, int]:
     """Synchronous wrapper for viking_ingest to maintain existing API."""
-    return asyncio.run(viking_ingest(msg))
+    semaphore = asyncio.Semaphore(1)  # 同步调用时使用信号量为1
+    return asyncio.run(viking_ingest(msg, openviking_url, semaphore))
 
 
 # ---------------------------------------------------------------------------
 # Main import logic
 # ---------------------------------------------------------------------------
 
-def parse_session_range(s: str) -> tuple[int, int]:
+def parse_session_range(s: str) -> Tuple[int, int]:
     """Parse '1-4' or '3' into (lo, hi) inclusive tuple."""
     if "-" in s:
         lo, hi = s.split("-", 1)
@@ -335,12 +332,13 @@ async def process_single_session(
     session_key: str,
     meta: Dict[str, Any],
     run_time: str,
-    ingest_record: Dict,
+    ingest_record: Dict[str, Any],
     args: argparse.Namespace,
+    semaphore: asyncio.Semaphore
 ) -> Dict[str, Any]:
     """处理单个会话的导入任务"""
     try:
-        token_usage = await viking_ingest(msg, args.openviking_url)
+        token_usage = await viking_ingest(msg, args.openviking_url, semaphore)
         print(f"    -> [SUCCESS] [{sample_id}/{session_key}] imported to OpenViking", file=sys.stderr)
 
         # Extract token counts
@@ -388,7 +386,6 @@ async def process_single_session(
 
 
 async def run_import(args: argparse.Namespace) -> None:
-    global semaphore
     # 初始化信号量控制并发
     semaphore = asyncio.Semaphore(args.parallel)
 
@@ -454,6 +451,7 @@ async def run_import(args: argparse.Namespace) -> None:
                         run_time=run_time,
                         ingest_record=ingest_record,
                         args=args,
+                        semaphore=semaphore
                     )
                 )
                 tasks.append(task)
@@ -487,6 +485,7 @@ async def run_import(args: argparse.Namespace) -> None:
                     run_time=run_time,
                     ingest_record=ingest_record,
                     args=args,
+                    semaphore=semaphore
                 )
             )
             tasks.append(task)
@@ -588,7 +587,11 @@ def main():
     Path(args.success_csv).parent.mkdir(parents=True, exist_ok=True)
     Path(args.error_log).parent.mkdir(parents=True, exist_ok=True)
 
-    asyncio.run(run_import(args))
+    try:
+        asyncio.run(run_import(args))
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
