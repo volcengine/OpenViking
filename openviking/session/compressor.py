@@ -1,5 +1,5 @@
 # Copyright (c) 2026 Beijing Volcano Engine Technology Co., Ltd.
-# SPDX-License-Identifier: Apache-2.0
+# SPDX-License-Identifier: AGPL-3.0
 """
 Session Compressor for OpenViking.
 
@@ -18,7 +18,6 @@ from openviking.storage.viking_fs import get_viking_fs
 from openviking.telemetry import get_current_telemetry
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
-from openviking_cli.utils.config import get_openviking_config  # [liclaw] scope_mode 读取
 
 from .memory_deduplicator import DedupDecision, MemoryActionDecision, MemoryDeduplicator
 from .memory_extractor import (
@@ -124,6 +123,8 @@ class SessionCompressor:
                     "deleted": list(changes["deleted"]),
                 }
 
+                # [liclaw] capture enduser_tag from ContextVar for semantic queue
+                from openviking.server.enduser_context import get_enduser_tag as _get_et
                 msg = SemanticMsg(
                     uri=parent_uri,
                     context_type="memory",
@@ -132,6 +133,7 @@ class SessionCompressor:
                     agent_id=ctx.user.agent_id,
                     role=ctx.role.value,
                     changes=changes_dict,
+                    enduser_tag=_get_et() or "",  # [liclaw]
                 )
                 await semantic_queue.enqueue(msg)
                 logger.info(
@@ -188,6 +190,9 @@ class SessionCompressor:
 
         # Always enqueue the base record (uses abstract as vector text)
         embedding_msg = EmbeddingMsgConverter.from_context(memory)
+        # [liclaw] capture enduser_tag from ContextVar for embedding queue
+        from openviking.server.enduser_context import get_enduser_tag as _get_enduser_tag
+        embedding_msg.enduser_tag = _get_enduser_tag() or ""
         await self.vikingdb.enqueue_embedding_msg(embedding_msg)
         logger.info(f"Enqueued memory for vectorization: {memory.uri}")
 
@@ -293,15 +298,12 @@ class SessionCompressor:
         if not ctx:
             return []
 
-        # [liclaw] 从全局配置读取 scope_mode；若配置不存在或旧镜像不支持 memory 段，则默认走 agent isolation
-        try:
-            _ov_cfg = get_openviking_config()
-            memory_cfg = getattr(_ov_cfg, "memory", None)
-            scope_mode = getattr(memory_cfg, "scope_mode", "isolated")
-        except Exception:
-            scope_mode = "isolated"
-
         self._pending_semantic_changes.clear()
+
+        from openviking_cli.utils.config import get_openviking_config
+
+        scope_mode = get_openviking_config().memory.scope_mode
+
         telemetry = get_current_telemetry()
         telemetry.set("memory.extract.candidates.total", 0)
         telemetry.set("memory.extract.candidates.standard", 0)
@@ -351,7 +353,7 @@ class SessionCompressor:
                         with telemetry.measure("memory.extract.stage.profile_create"):
                             memory = await self.extractor.create_memory(
                                 candidate, user, session_id, ctx=ctx,
-                                scope_mode=scope_mode,  # [liclaw]
+                                scope_mode=scope_mode,
                             )
                         if memory:
                             memories.append(memory)
@@ -517,7 +519,7 @@ class SessionCompressor:
                         with telemetry.measure("memory.extract.stage.create_memory"):
                             memory = await self.extractor.create_memory(
                                 candidate, user, session_id, ctx=ctx,
-                                scope_mode=scope_mode,  # [liclaw]
+                                scope_mode=scope_mode,
                             )
                         if memory:
                             memories.append(memory)

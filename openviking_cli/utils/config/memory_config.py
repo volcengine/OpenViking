@@ -20,17 +20,13 @@ class MemoryConfig(BaseModel):
         ),
     )
 
-    # [liclaw] scope_mode: 控制记忆写入的 scope 路由策略
-    # "default" = 按类别分 scope（PROFILE/PREFERENCES/ENTITIES/EVENTS → user, CASES/PATTERNS → agent）
-    # "isolated" = 所有类别都写入 agent scope，实现 agent 间完全记忆隔离
     scope_mode: Literal["default", "isolated"] = Field(
-        default="isolated",
+        default="default",
         description=(
-            "Memory scope routing. [liclaw] default is 'isolated' so OpenClaw-integrated "
-            "deployments align with full agent memory isolation. 'default' routes user-level "
-            "memories (profile/preferences/entities/events) to shared user space and "
-            "agent-level memories (cases/patterns) to isolated agent space; "
-            "'isolated' routes ALL categories to agent space for full isolation."
+            "Memory scope routing strategy. 'default' routes user-level memories "
+            "(profile/preferences/entities/events) to shared user space and agent-level "
+            "memories (cases/patterns) to isolated agent space; 'isolated' routes ALL "
+            "categories to agent space for full per-agent memory isolation."
         ),
     )
 
@@ -41,6 +37,13 @@ class MemoryConfig(BaseModel):
     def validate_agent_scope_mode(cls, value: str) -> str:
         if value not in {"user+agent", "agent"}:
             raise ValueError("memory.agent_scope_mode must be 'user+agent' or 'agent'")
+        return value
+
+    @field_validator("scope_mode")
+    @classmethod
+    def validate_scope_mode(cls, value: str) -> str:
+        if value not in {"default", "isolated"}:
+            raise ValueError("memory.scope_mode must be 'default' or 'isolated'")
         return value
 
     @classmethod

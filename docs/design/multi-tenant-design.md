@@ -244,6 +244,27 @@ Agent 目录由 `memory.agent_scope_mode` 配置决定：
 
 因此，alice 和 bob 使用同一 agent_id 时，是否共享 agent 记忆和技能空间取决于 `memory.agent_scope_mode`。
 
+#### scope_mode 与 agent_scope_mode 的关系
+
+`memory` 配置段有两个独立的隔离维度：
+
+| 配置 | 控制维度 | 影响范围 |
+|------|----------|----------|
+| `agent_scope_mode` | agent space hash 的计算方式 | 决定 `agent_space_name()` 是按 `user_id + agent_id` 还是仅 `agent_id` 计算 |
+| `scope_mode` | 各记忆类别写入哪个 scope | 决定 PROFILE/PREFERENCES/ENTITIES/EVENTS 写入 user space 还是 agent space |
+
+- `scope_mode="default"`（默认）：用户级类别写入 `viking://user/{user_space}/memories/`，agent 级类别写入 `viking://agent/{agent_space}/memories/`。同一用户的不同 agent 共享 profile 等用户记忆。
+- `scope_mode="isolated"`：所有类别都写入 `viking://agent/{agent_space}/memories/`，切换 agent 后拥有完全独立的记忆集合。
+
+典型组合：
+
+| agent_scope_mode | scope_mode | 效果 |
+|-------------------|------------|------|
+| `user+agent` | `default` | 默认行为：用户记忆共享，agent 记忆按用户+agent 隔离 |
+| `user+agent` | `isolated` | 完全隔离：每个用户的每个 agent 都有独立的全部记忆 |
+| `agent` | `default` | 同一 agent 的不同用户共享 agent 记忆，用户记忆仍属各自 |
+| `agent` | `isolated` | 同一 agent 的所有用户共享全部记忆（含 profile），适合团队共用 agent |
+
 ### 4.4 Admin API
 
 新增 Router: `openviking/server/routers/admin.py`
@@ -288,8 +309,8 @@ def agent_space_name(self) -> str:
 
 | scope | AGFS 路径 | 隔离维度 | 说明 |
 |-------|-----------|----------|------|
-| `user/memories` | `/{account_id}/user/{user_space}/memories/` | account + user | 用户偏好、实体、事件属于用户本人 |
-| `agent/memories` | `/{account_id}/agent/{agent_space}/memories/` | account + agent scope | agent 的学习记忆，隔离粒度由 `memory.agent_scope_mode` 决定 |
+| `user/memories` | `/{account_id}/user/{user_space}/memories/` | account + user | 用户偏好、实体、事件属于用户本人（`scope_mode="default"` 时） |
+| `agent/memories` | `/{account_id}/agent/{agent_space}/memories/` | account + agent scope | agent 的学习记忆，隔离粒度由 `memory.agent_scope_mode` 决定；当 `scope_mode="isolated"` 时所有类别都写入此处 |
 | `agent/skills` | `/{account_id}/agent/{agent_space}/skills/` | account + agent scope | agent 的能力集，隔离粒度由 `memory.agent_scope_mode` 决定 |
 | `agent/instructions` | `/{account_id}/agent/{agent_space}/instructions/` | account + agent scope | agent 的行为规则，隔离粒度由 `memory.agent_scope_mode` 决定 |
 | `resources/` | `/{account_id}/resources/` | account | account 内共享的知识资源 |

@@ -740,7 +740,8 @@ openviking-server --config /path/to/ov.conf
 ```json
 {
   "memory": {
-    "agent_scope_mode": "user+agent"
+    "agent_scope_mode": "user+agent",
+    "scope_mode": "default"
   }
 }
 ```
@@ -748,8 +749,11 @@ openviking-server --config /path/to/ov.conf
 | 字段 | 说明 | 默认值 |
 |------|------|--------|
 | `agent_scope_mode` | Agent memory 命名空间模式：`"user+agent"` 按 `(user_id, agent_id)` 隔离；`"agent"` 仅按 `agent_id` 隔离，同一 agent 的不同用户共享 agent memory | `"user+agent"` |
+| `scope_mode` | 记忆 scope 路由策略：`"default"` 将用户级记忆（profile、preferences、entities、events）写入共享 user space，agent 级记忆（cases、patterns）写入 agent space；`"isolated"` 将所有类别都写入 agent space，实现 agent 间完全记忆隔离 | `"default"` |
 
 `agent_scope_mode` 只影响 `viking://agent/{agent_space}/memories/...` 这类 agent 级命名空间，不影响 `viking://user/{user_space}/memories/...` 下的 user memory。
+
+`scope_mode` 控制**各记忆类别写入哪个 scope**。`"default"` 模式下，用户级类别（profile、preferences、entities、events）在同一用户的不同 agent 之间共享；`"isolated"` 模式下，所有类别都写入 agent space，切换 agent 后拥有完全独立的记忆集合。注意 `scope_mode` 和 `agent_scope_mode` 是独立的：`agent_scope_mode` 控制 agent space hash 的计算方式，`scope_mode` 控制哪些记忆类别路由到 agent space 还是 user space。
 
 ### ovcli.conf
 
