@@ -128,7 +128,7 @@ class FaultTolerantBaseModel(BaseModel):
         origin = get_origin(annotation)
         if origin is Union:
             args = get_args(annotation)
-            if len(args) == 2 and args[1] == type(None):
+            if len(args) == 2 and args[1] is type(None):
                 return cls.get_origin_type(args[0])
         elif origin is list:
             return list
@@ -140,7 +140,7 @@ class FaultTolerantBaseModel(BaseModel):
         origin = get_origin(annotation)
         if origin is Union:
             args = get_args(annotation)
-            if len(args) == 2 and args[1] == type(None):
+            if len(args) == 2 and args[1] is type(None):
                 return cls.get_arg_type(args[0])
         elif origin is list:
             args = get_args(annotation)
