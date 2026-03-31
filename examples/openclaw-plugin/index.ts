@@ -414,6 +414,28 @@ const contextEnginePlugin = {
               },
               agentId,
             );
+          } else if (cfg.strictAgentIsolation) {
+            // strictAgentIsolation: only search agent-scoped memory for full isolation
+            const agentSettled = await recallClient.find(
+              query,
+              {
+                targetUri: "viking://agent/memories",
+                limit: requestLimit,
+                scoreThreshold: 0,
+              },
+              agentId,
+            );
+            const userResult = { memories: [] };
+            const agentResult = agentSettled;
+            const allMemories = [...(userResult.memories ?? []), ...(agentResult.memories ?? [])];
+            const uniqueMemories = allMemories.filter((memory, index, self) =>
+              index === self.findIndex((m) => m.uri === memory.uri)
+            );
+            const leafOnly = uniqueMemories.filter((m) => m.level === 2);
+            result = {
+              memories: leafOnly,
+              total: leafOnly.length,
+            };
           } else {
             // 默认同时检索 user 和 agent 两个位置的记忆
             const [userSettled, agentSettled] = await Promise.allSettled([
@@ -858,26 +880,42 @@ const contextEnginePlugin = {
             await withTimeout(
               (async () => {
                 const candidateLimit = Math.max(cfg.recallLimit * 4, 20);
-                const [userSettled, agentSettled] = await Promise.allSettled([
-                  client.find(queryText, {
-                    targetUri: "viking://user/memories",
-                    limit: candidateLimit,
-                    scoreThreshold: 0,
-                  }, agentId),
-                  client.find(queryText, {
+
+                // When strictAgentIsolation is enabled, skip user memories entirely
+                let userResult: { memories: FindResultItem[] };
+                let agentResult: { memories: FindResultItem[] };
+
+                if (cfg.strictAgentIsolation) {
+                  // Only search agent-scoped memory for full isolation
+                  userResult = { memories: [] };
+                  const agentSettled = await client.find(queryText, {
                     targetUri: "viking://agent/memories",
                     limit: candidateLimit,
                     scoreThreshold: 0,
-                  }, agentId),
-                ]);
+                  }, agentId);
+                  agentResult = agentSettled;
+                } else {
+                  const [userSettledResult, agentSettledResult] = await Promise.allSettled([
+                    client.find(queryText, {
+                      targetUri: "viking://user/memories",
+                      limit: candidateLimit,
+                      scoreThreshold: 0,
+                    }, agentId),
+                    client.find(queryText, {
+                      targetUri: "viking://agent/memories",
+                      limit: candidateLimit,
+                      scoreThreshold: 0,
+                    }, agentId),
+                  ]);
 
-                const userResult = userSettled.status === "fulfilled" ? userSettled.value : { memories: [] };
-                const agentResult = agentSettled.status === "fulfilled" ? agentSettled.value : { memories: [] };
-                if (userSettled.status === "rejected") {
-                  api.logger.warn(`openviking: user memories search failed: ${String(userSettled.reason)}`);
-                }
-                if (agentSettled.status === "rejected") {
-                  api.logger.warn(`openviking: agent memories search failed: ${String(agentSettled.reason)}`);
+                  userResult = userSettledResult.status === "fulfilled" ? userSettledResult.value : { memories: [] };
+                  agentResult = agentSettledResult.status === "fulfilled" ? agentSettledResult.value : { memories: [] };
+                  if (userSettledResult.status === "rejected") {
+                    api.logger.warn(`openviking: user memories search failed: ${String(userSettledResult.reason)}`);
+                  }
+                  if (agentSettledResult.status === "rejected") {
+                    api.logger.warn(`openviking: agent memories search failed: ${String(agentSettledResult.reason)}`);
+                  }
                 }
 
                 const allMemories = [...(userResult.memories ?? []), ...(agentResult.memories ?? [])];
