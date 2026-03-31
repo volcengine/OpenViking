@@ -11,7 +11,7 @@ import heapq
 import logging
 import math
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from openviking.models.embedder.base import EmbedResult
@@ -34,6 +34,18 @@ from openviking_cli.utils.logger import get_logger
 from openviking_cli.utils.rerank import RerankClient
 
 logger = get_logger(__name__)
+
+
+def _is_expired(expires_at: datetime) -> bool:
+    """Return True if ``expires_at`` is in the past."""
+    dt = (
+        parse_iso_datetime(expires_at)
+        if isinstance(expires_at, str)
+        else expires_at.replace(tzinfo=timezone.utc)
+        if isinstance(expires_at, datetime) and expires_at.tzinfo is None
+        else expires_at
+    )
+    return isinstance(dt, datetime) and dt <= datetime.now(timezone.utc)
 
 
 class RetrieverMode(str):
@@ -205,6 +217,9 @@ class HierarchicalRetriever:
         matched = await self._convert_to_matched_contexts(candidates, ctx=ctx)
 
         final = matched[:limit]
+        final = [
+            m for m in final if not getattr(m, "expires_at", None) or not _is_expired(m.expires_at)
+        ]
 
         # Record retrieval stats for the observer.
         elapsed_ms = (time.monotonic() - t0) * 1000
@@ -553,19 +568,22 @@ class HierarchicalRetriever:
             level = c.get("level", 2)
             display_uri = self._append_level_suffix(c.get("uri", ""), level)
 
-            results.append(
-                MatchedContext(
-                    uri=display_uri,
-                    context_type=ContextType(c["context_type"])
-                    if c.get("context_type")
-                    else ContextType.RESOURCE,
-                    level=level,
-                    abstract=c.get("abstract", ""),
-                    category=c.get("category", ""),
-                    score=final_score,
-                    relations=relations,
-                )
+            matched = MatchedContext(
+                uri=display_uri,
+                context_type=ContextType(c["context_type"])
+                if c.get("context_type")
+                else ContextType.RESOURCE,
+                level=level,
+                abstract=c.get("abstract", ""),
+                category=c.get("category", ""),
+                score=final_score,
+                relations=relations,
             )
+            expires_at = c.get("expires_at")
+            if expires_at is None and isinstance(c.get("meta"), dict):
+                expires_at = c["meta"].get("expires_at")
+            setattr(matched, "expires_at", expires_at)
+            results.append(matched)
 
         # Re-sort by blended score so hotness boost can change ranking
         results.sort(key=lambda x: x.score, reverse=True)

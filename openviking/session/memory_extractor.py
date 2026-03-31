@@ -10,6 +10,7 @@ Extracts 6 categories of memories from session:
 
 import re
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum
 from typing import List, Optional
 from uuid import uuid4
@@ -23,6 +24,7 @@ from openviking_cli.exceptions import NotFoundError
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.config import get_openviking_config
+from openviking_cli.utils.config.memory_config import MemoryConfig
 
 logger = get_logger(__name__)
 
@@ -453,6 +455,23 @@ class MemoryExtractor:
 
         owner_space = self._get_owner_space(candidate.category, ctx)
 
+        memory_cfg = get_openviking_config().memory
+        candidate_metadata = getattr(candidate, "metadata", None)
+        override_ttl = (
+            candidate_metadata.get("ttl")
+            if isinstance(candidate_metadata, dict)
+            else None
+        )
+        ttl_str = override_ttl or memory_cfg.ttl_by_type.get(candidate.category.value)
+        if ttl_str is None:
+            ttl_str = memory_cfg.default_ttl
+        try:
+            ttl_delta = MemoryConfig.parse_ttl(ttl_str)
+        except ValueError:
+            logger.warning("Invalid memory TTL %r for category=%s", ttl_str, candidate.category.value)
+            ttl_delta = None
+        expires_at = datetime.now(timezone.utc) + ttl_delta if ttl_delta else None
+
         # Special handling for profile: append to profile.md
         if candidate.category == MemoryCategory.PROFILE:
             payload = await self._append_to_profile(candidate, viking_fs, ctx=ctx)
@@ -472,6 +491,8 @@ class MemoryExtractor:
                 account_id=ctx.account_id,
                 owner_space=owner_space,
             )
+            if expires_at is not None:
+                memory.meta["expires_at"] = expires_at
             logger.info(f"uri {memory_uri} abstract: {payload.abstract} content: {payload.content}")
             memory.set_vectorize(Vectorize(text=payload.content))
             return memory
@@ -512,6 +533,8 @@ class MemoryExtractor:
             account_id=ctx.account_id,
             owner_space=owner_space,
         )
+        if expires_at is not None:
+            memory.meta["expires_at"] = expires_at
         logger.info(f"uri {memory_uri} abstract: {candidate.abstract} content: {candidate.content}")
         memory.set_vectorize(Vectorize(text=candidate.content))
         return memory
