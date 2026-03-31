@@ -14,6 +14,8 @@ logger = get_logger(__name__)
 # --- Error classification ---
 
 _PERMANENT_PATTERNS = ("403", "401", "Forbidden", "Unauthorized", "AccountOverdue")
+_PERMANENT_IO_ERRORS = (FileNotFoundError, PermissionError, IsADirectoryError, NotADirectoryError)
+
 _TRANSIENT_PATTERNS = (
     "429",
     "500",
@@ -40,6 +42,11 @@ def classify_api_error(error: Exception) -> str:
         "transient" — 429/5xx/timeout, safe to retry.
         "unknown"   — unrecognized, treated as transient by callers.
     """
+    # Check exception type first — filesystem/IO errors are always permanent
+    for exc in (error, getattr(error, "__cause__", None)):
+        if exc is not None and isinstance(exc, _PERMANENT_IO_ERRORS):
+            return "permanent"
+
     texts = [str(error)]
     if error.__cause__ is not None:
         texts.append(str(error.__cause__))
