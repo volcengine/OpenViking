@@ -1,0 +1,126 @@
+# OVPack Import and Export
+
+OVPack is OpenViking's resource packaging format for backup, migration, and sharing.
+
+## Quick Start
+
+### Export Resources
+
+Export OpenViking resources to an `.ovpack` file.
+
+**CLI**
+```bash
+openviking export viking://resources/my-project/ ./exports/my-project.ovpack
+```
+
+**Python SDK**
+```python
+from openviking import AsyncOpenViking
+
+async def export_example():
+    client = AsyncOpenViking()
+    await client.initialize()
+    try:
+        exported_path = await client.export_ovpack(
+            uri="viking://resources/my-project/",
+            to="./exports/my-project.ovpack"
+        )
+        print(f"Export successful: {exported_path}")
+    finally:
+        await client.close()
+```
+
+### Import Resources
+
+Import an `.ovpack` file into OpenViking.
+
+**CLI**
+```bash
+# Basic import
+openviking import ./exports/my-project.ovpack viking://resources/imported/
+
+# Force overwrite
+openviking import ./exports/my-project.ovpack viking://resources/imported/ --force
+
+# Skip vectorization (faster)
+openviking import ./exports/my-project.ovpack viking://resources/imported/ --no-vectorize
+```
+
+**Python SDK**
+```python
+from openviking import AsyncOpenViking
+
+async def import_example():
+    client = AsyncOpenViking()
+    await client.initialize()
+    try:
+        imported_uri = await client.import_ovpack(
+            file_path="./exports/my-project.ovpack",
+            parent="viking://resources/imported/",
+            force=True,
+            vectorize=True
+        )
+        print(f"Import successful: {imported_uri}")
+        await client.wait_processed()
+    finally:
+        await client.close()
+```
+
+**HTTP API**
+```bash
+# Step 1: Upload the local ovpack file
+TEMP_FILE_ID=$(
+  curl -sS -X POST http://localhost:1933/api/v1/resources/temp_upload \
+    -H "X-API-Key: your-key" \
+    -F 'file=@./exports/my-project.ovpack' \
+  | jq -r '.result.temp_file_id'
+)
+
+# Step 2: Import using temp_file_id
+curl -X POST http://localhost:1933/api/v1/pack/import \
+  -H "Content-Type: application/json" \
+  -H "X-API-Key: your-key" \
+  -d "{
+    \"temp_file_id\": \"$TEMP_FILE_ID\",
+    \"parent\": \"viking://resources/imported/\",
+    \"force\": true,
+    \"vectorize\": true
+  }"
+```
+
+## Use Cases
+
+### Resource Backup
+```bash
+DATE=$(date +%Y%m%d)
+openviking export viking://resources/ ./backups/backup_${DATE}.ovpack
+```
+
+### Resource Migration
+```bash
+# Export on Machine A
+openviking export viking://resources/my-project/ ./migration.ovpack
+
+# Import on Machine B
+openviking import ./migration.ovpack viking://resources/ --force
+```
+
+### Resource Sharing
+```bash
+# Export
+openviking export viking://resources/shared-docs/ ./shared-docs.ovpack
+
+# Recipient imports
+openviking import ./shared-docs.ovpack viking://resources/team-shared/
+```
+
+## FAQ
+
+**Q: Can I manually extract and view OVPack files?**
+A: Yes! OVPack is a standard ZIP format and can be opened with any compression tool.
+
+**Q: What if large OVPack imports are slow?**
+A: Use `--no-vectorize` for fast import, then vectorize later.
+
+**Q: How to handle duplicate resources during import?**
+A: Use `--force` to overwrite existing resources.
