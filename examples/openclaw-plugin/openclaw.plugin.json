@@ -122,6 +122,11 @@
       "label": "Log find requests",
       "help": "Log tenant routing: /search/find + session messages/commit (X-OpenViking-*; not apiKey). Or set env OPENVIKING_LOG_ROUTING=1 or OPENVIKING_DEBUG=1. Local mode: subprocess stderr at info when enabled.",
       "advanced": true
+    },
+    "strictAgentIsolation": {
+      "label": "Strict Agent Isolation",
+      "help": "When true, recall only searches agent-scoped memory (viking://agent/memories), ensuring full isolation between different agents on the same user account.",
+      "advanced": true
     }
   },
   "configSchema": {
@@ -195,6 +200,9 @@
         "type": "boolean"
       },
       "logFindRequests": {
+        "type": "boolean"
+      },
+      "strictAgentIsolation": {
         "type": "boolean"
       }
     }

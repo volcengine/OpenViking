@@ -34,6 +34,8 @@ export type MemoryOpenVikingConfig = {
   emitStandardDiagnostics?: boolean;
   /** When true, log tenant routing for semantic find and session writes (messages/commit) to the plugin logger. */
   logFindRequests?: boolean;
+  /** When true, recall only searches agent-scoped memory (viking://agent/memories), ensuring full isolation between different agents on the same user account. */
+  strictAgentIsolation?: boolean;
 };
 
 const DEFAULT_BASE_URL = "http://127.0.0.1:1933";
@@ -144,6 +146,7 @@ export const memoryOpenVikingConfigSchema = {
         "ingestReplyAssistMinChars",
         "emitStandardDiagnostics",
         "logFindRequests",
+        "strictAgentIsolation",
       ],
       "openviking config",
     );
@@ -236,6 +239,7 @@ export const memoryOpenVikingConfigSchema = {
         cfg.logFindRequests === true ||
         envFlag("OPENVIKING_LOG_ROUTING") ||
         envFlag("OPENVIKING_DEBUG"),
+      strictAgentIsolation: cfg.strictAgentIsolation === true,
     };
   },
   uiHints: {
@@ -360,6 +364,11 @@ export const memoryOpenVikingConfigSchema = {
       help:
         "Log tenant routing: POST /api/v1/search/find (query, target_uri) and session POST .../messages + .../commit (sessionId, X-OpenViking-*). Never logs apiKey. " +
         "Or set env OPENVIKING_LOG_ROUTING=1 or OPENVIKING_DEBUG=1 (no JSON edit). When on, local-mode OpenViking subprocess stderr is also logged at info.",
+      advanced: true,
+    },
+    strictAgentIsolation: {
+      label: "Strict Agent Isolation",
+      help: "When true, recall only searches agent-scoped memory (viking://agent/memories), ensuring full isolation between different agents on the same user account.",
       advanced: true,
     },
   },
