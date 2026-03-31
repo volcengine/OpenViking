@@ -29,7 +29,6 @@ from openviking.models.embedder.base import (
     EmbedResult,
     truncate_and_normalize,
 )
-from openviking.models.retry import transient_retry
 
 logger = logging.getLogger("gemini_embedders")
 
@@ -147,13 +146,15 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
             )
         if dimension is not None and not (1 <= dimension <= 3072):
             raise ValueError(f"dimension must be between 1 and 3072, got {dimension}")
-        # Disable SDK-level retry; we use transient_retry for unified retry logic
         if _HTTP_RETRY_AVAILABLE:
             self.client = genai.Client(
                 api_key=api_key,
                 http_options=HttpOptions(
                     retry_options=HttpRetryOptions(
-                        attempts=1,
+                        attempts=3,
+                        initial_delay=1.0,
+                        max_delay=30.0,
+                        exp_base=2.0,
                     )
                 ),
             )
@@ -208,16 +209,11 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
                 task_type = self.document_param
         # SDK accepts plain str; converts to REST Parts format internally.
         try:
-            embed_config = self._build_config(task_type=task_type, title=title)
-
-            def _call():
-                return self.client.models.embed_content(
-                    model=self.model_name,
-                    contents=text,
-                    config=embed_config,
-                )
-
-            result = transient_retry(_call, max_retries=self.max_retries)
+            result = self.client.models.embed_content(
+                model=self.model_name,
+                contents=text,
+                config=self._build_config(task_type=task_type, title=title),
+            )
             vector = truncate_and_normalize(list(result.embeddings[0].values), self._dimension)
             return EmbedResult(dense_vector=vector)
         except (APIError, ClientError) as e:
@@ -237,7 +233,7 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
         if titles is not None:
             return [
                 self.embed(text, is_query=is_query, task_type=task_type, title=title)
-                for text, title in zip(texts, titles, strict=False)
+                for text, title in zip(texts, titles)
             ]
         # Resolve effective task_type from is_query when no explicit override
         if task_type is None:
@@ -258,17 +254,13 @@ class GeminiDenseEmbedder(DenseEmbedderBase):
 
             non_empty_texts = [batch[j] for j in non_empty_indices]
             try:
-
-                def _batch_call(texts=non_empty_texts, cfg=config):
-                    return self.client.models.embed_content(
-                        model=self.model_name,
-                        contents=texts,
-                        config=cfg,
-                    )
-
-                response = transient_retry(_batch_call, max_retries=self.max_retries)
+                response = self.client.models.embed_content(
+                    model=self.model_name,
+                    contents=non_empty_texts,
+                    config=config,
+                )
                 batch_results = [None] * len(batch)
-                for j, emb in zip(non_empty_indices, response.embeddings, strict=False):
+                for j, emb in zip(non_empty_indices, response.embeddings):
                     batch_results[j] = EmbedResult(
                         dense_vector=truncate_and_normalize(list(emb.values), self._dimension)
                     )

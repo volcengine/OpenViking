@@ -13,7 +13,6 @@ from typing import Any, Dict, List, Optional
 import litellm
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
-from openviking.models.retry import transient_retry
 from openviking.telemetry import get_current_telemetry
 
 logger = logging.getLogger(__name__)
@@ -158,11 +157,7 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
         try:
             kwargs = self._build_kwargs(is_query=is_query)
             kwargs["input"] = [text]
-
-            def _call():
-                return litellm.embedding(**kwargs)
-
-            response = transient_retry(_call, max_retries=self.max_retries)
+            response = litellm.embedding(**kwargs)
             self._update_telemetry_token_usage(response)
             vector = response.data[0]["embedding"]
             return EmbedResult(dense_vector=vector)
@@ -188,11 +183,7 @@ class LiteLLMDenseEmbedder(DenseEmbedderBase):
         try:
             kwargs = self._build_kwargs(is_query=is_query)
             kwargs["input"] = texts
-
-            def _call():
-                return litellm.embedding(**kwargs)
-
-            response = transient_retry(_call, max_retries=self.max_retries)
+            response = litellm.embedding(**kwargs)
             self._update_telemetry_token_usage(response)
             return [EmbedResult(dense_vector=item["embedding"]) for item in response.data]
         except Exception as e:

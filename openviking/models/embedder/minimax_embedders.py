@@ -9,7 +9,6 @@ from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
-from openviking.models.retry import transient_retry
 from openviking_cli.utils.logger import default_logger as logger
 
 
@@ -90,8 +89,12 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
     def _create_session(self) -> requests.Session:
         """Create a requests session with retry logic"""
         session = requests.Session()
-        # Disable transport-level retry; we use transient_retry for unified retry logic
-        retry_strategy = Retry(total=0)
+        retry_strategy = Retry(
+            total=6,
+            backoff_factor=1,  # 1s, 2s, 4s, 8s, 16s, 32s
+            status_forcelist=[429, 500, 502, 503, 504],
+            allowed_methods=["POST"],
+        )
         adapter = HTTPAdapter(max_retries=retry_strategy)
         session.mount("https://", adapter)
         session.mount("http://", adapter)
@@ -160,10 +163,7 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
 
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
         """Perform dense embedding on text"""
-        vectors = transient_retry(
-            lambda: self._call_api([text], is_query=is_query),
-            max_retries=self.max_retries,
-        )
+        vectors = self._call_api([text], is_query=is_query)
         return EmbedResult(dense_vector=vectors[0])
 
     def embed_batch(self, texts: List[str], is_query: bool = False) -> List[EmbedResult]:
@@ -171,10 +171,9 @@ class MinimaxDenseEmbedder(DenseEmbedderBase):
         if not texts:
             return []
 
-        vectors = transient_retry(
-            lambda: self._call_api(texts, is_query=is_query),
-            max_retries=self.max_retries,
-        )
+        # MiniMax might have batch size limits, but let's assume the caller handles batching or use safe defaults
+        # For now, we pass through. If needed, we can implement internal chunking.
+        vectors = self._call_api(texts, is_query=is_query)
         return [EmbedResult(dense_vector=v) for v in vectors]
 
     def get_dimension(self) -> int:

@@ -74,7 +74,6 @@ class EmbedderBase(ABC):
         """
         self.model_name = model_name
         self.config = config or {}
-        self.max_retries = self.config.get("max_retries", 3) if self.config else 3
 
     @abstractmethod
     def embed(self, text: str, is_query: bool = False) -> EmbedResult:
@@ -256,7 +255,7 @@ class CompositeHybridEmbedder(HybridEmbedderBase):
 
         return [
             EmbedResult(dense_vector=d.dense_vector, sparse_vector=s.sparse_vector)
-            for d, s in zip(dense_results, sparse_results, strict=False)
+            for d, s in zip(dense_results, sparse_results)
         ]
 
     def get_dimension(self) -> int:

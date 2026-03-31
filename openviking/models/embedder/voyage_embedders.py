@@ -7,7 +7,6 @@ from typing import Any, Dict, List, Optional
 import openai
 
 from openviking.models.embedder.base import DenseEmbedderBase, EmbedResult
-from openviking.models.retry import transient_retry
 
 VOYAGE_MODEL_DIMENSIONS = {
     "voyage-3": 1024,
@@ -75,11 +74,9 @@ class VoyageDenseEmbedder(DenseEmbedderBase):
                 f"Supported dimensions: {supported}."
             )
 
-        # Disable SDK retry; we use transient_retry for unified retry logic
         self.client = openai.OpenAI(
             api_key=self.api_key,
             base_url=self.api_base,
-            max_retries=0,
         )
 
         self._dimension = dimension or get_voyage_model_default_dimension(normalized_model_name)
@@ -91,10 +88,7 @@ class VoyageDenseEmbedder(DenseEmbedderBase):
             if self.dimension is not None:
                 kwargs["extra_body"] = {"output_dimension": self.dimension}
 
-            def _call():
-                return self.client.embeddings.create(**kwargs)
-
-            response = transient_retry(_call, max_retries=self.max_retries)
+            response = self.client.embeddings.create(**kwargs)
             vector = response.data[0].embedding
             return EmbedResult(dense_vector=vector)
         except openai.APIError as e:
@@ -112,10 +106,7 @@ class VoyageDenseEmbedder(DenseEmbedderBase):
             if self.dimension is not None:
                 kwargs["extra_body"] = {"output_dimension": self.dimension}
 
-            def _call():
-                return self.client.embeddings.create(**kwargs)
-
-            response = transient_retry(_call, max_retries=self.max_retries)
+            response = self.client.embeddings.create(**kwargs)
             return [EmbedResult(dense_vector=item.embedding) for item in response.data]
         except openai.APIError as e:
             raise RuntimeError(f"Voyage API error: {e.message}") from e

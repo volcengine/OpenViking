@@ -12,7 +12,6 @@ from openviking.models.embedder.base import (
     HybridEmbedderBase,
     SparseEmbedderBase,
 )
-from openviking.models.retry import transient_retry
 from openviking.models.vlm.registry import DEFAULT_AZURE_API_VERSION
 from openviking.telemetry import get_current_telemetry
 
@@ -119,10 +118,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
         if not self.api_key and not self.api_base:
             raise ValueError("api_key is required")
 
-        client_kwargs: Dict[str, Any] = {
-            "api_key": self.api_key or "no-key",
-            "max_retries": 0,  # Disable SDK retry; we use transient_retry
-        }
+        client_kwargs: Dict[str, Any] = {"api_key": self.api_key or "no-key"}
         if self._provider == "azure":
             if not self.api_base:
                 raise ValueError("api_base (Azure endpoint) is required for Azure provider")
@@ -246,10 +242,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             if extra_body:
                 kwargs["extra_body"] = extra_body
 
-            def _call():
-                return self.client.embeddings.create(**kwargs)
-
-            response = transient_retry(_call, max_retries=self.max_retries)
+            response = self.client.embeddings.create(**kwargs)
             self._update_telemetry_token_usage(response)
             vector = response.data[0].embedding
 
@@ -284,10 +277,7 @@ class OpenAIDenseEmbedder(DenseEmbedderBase):
             if extra_body:
                 kwargs["extra_body"] = extra_body
 
-            def _call():
-                return self.client.embeddings.create(**kwargs)
-
-            response = transient_retry(_call, max_retries=self.max_retries)
+            response = self.client.embeddings.create(**kwargs)
             self._update_telemetry_token_usage(response)
 
             return [EmbedResult(dense_vector=item.embedding) for item in response.data]

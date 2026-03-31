@@ -58,7 +58,7 @@ class VLMBase(ABC):
         self.api_key = config.get("api_key")
         self.api_base = config.get("api_base")
         self.temperature = config.get("temperature", 0.0)
-        self.max_retries = config.get("max_retries", 3)
+        self.max_retries = config.get("max_retries", 2)
         self.max_tokens = config.get("max_tokens")
         self.extra_headers = config.get("extra_headers")
         self.stream = config.get("stream", False)
@@ -94,6 +94,7 @@ class VLMBase(ABC):
         self,
         prompt: str = "",
         thinking: bool = False,
+        max_retries: int = 0,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
@@ -103,6 +104,7 @@ class VLMBase(ABC):
         Args:
             prompt: Text prompt (used if messages not provided)
             thinking: Whether to enable thinking mode
+            max_retries: Maximum number of retries
             tools: Optional list of tool definitions in OpenAI function format
             tool_choice: Optional tool choice mode ("auto", "none", or specific tool name)
             messages: Optional list of message dicts (takes precedence over prompt)

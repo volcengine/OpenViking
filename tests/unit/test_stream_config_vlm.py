@@ -253,7 +253,7 @@ class TestVLMBaseStreamConfig:
             def get_completion(self, prompt, thinking=False):
                 return ""
 
-            async def get_completion_async(self, prompt, thinking=False):
+            async def get_completion_async(self, prompt, thinking=False, max_retries=0):
                 return ""
 
             def get_vision_completion(self, prompt, images, thinking=False):
@@ -277,7 +277,7 @@ class TestVLMBaseStreamConfig:
             def get_completion(self, prompt, thinking=False):
                 return ""
 
-            async def get_completion_async(self, prompt, thinking=False):
+            async def get_completion_async(self, prompt, thinking=False, max_retries=0):
                 return ""
 
             def get_vision_completion(self, prompt, images, thinking=False):

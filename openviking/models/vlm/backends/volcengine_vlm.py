@@ -9,7 +9,7 @@ from collections import OrderedDict
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple, Union
 
-from openviking.models.retry import transient_retry_async
+# Import run_async for sync-to-async calls
 from openviking_cli.utils import run_async
 
 from ..base import ToolCall, VLMResponse
@@ -266,20 +266,6 @@ class VolcEngineVLM(OpenAIVLM):
             )
         return
 
-    def _parse_tool_calls(self, message) -> List[ToolCall]:
-        """Parse tool calls from VolcEngine response message."""
-        tool_calls = []
-        if hasattr(message, "tool_calls") and message.tool_calls:
-            for tc in message.tool_calls:
-                args = tc.function.arguments
-                if isinstance(args, str):
-                    try:
-                        args = json.loads(args)
-                    except json.JSONDecodeError:
-                        args = {"raw": args}
-                tool_calls.append(ToolCall(id=tc.id, name=tc.function.name, arguments=args))
-        return tool_calls
-
     def _build_vlm_response(self, response, has_tools: bool) -> Union[str, VLMResponse]:
         """Build response from VolcEngine Responses API response.
 
@@ -293,10 +279,10 @@ class VolcEngineVLM(OpenAIVLM):
         # logger.info(f"[VolcEngineVLM] Full response: {response}")
         if hasattr(response, "output"):
             # logger.debug(f"[VolcEngineVLM] Output items: {len(response.output)}")
-            for _i, _item in enumerate(response.output):
-                # logger.debug(f"[VolcEngineVLM]   Item {_i}: type={getattr(_item, 'type', 'unknown')}")
+            for i, item in enumerate(response.output):
+                # logger.debug(f"[VolcEngineVLM]   Item {i}: type={getattr(item, 'type', 'unknown')}")
                 # Print full item for debugging
-                # logger.info(f"[VolcEngineVLM]   Item {_i} full: {_item}")
+                # logger.info(f"[VolcEngineVLM]   Item {i} full: {item}")
                 pass
 
         # Extract content from Responses API format
@@ -450,7 +436,7 @@ class VolcEngineVLM(OpenAIVLM):
                                     url = image_url.get("url", "")
                                     if url:
                                         image_urls.append(url)
-                                has_images = True  # noqa: F841
+                                has_images = True
                             # Handle other block types
                             else:
                                 # Try to extract text from any dict block
@@ -553,6 +539,7 @@ class VolcEngineVLM(OpenAIVLM):
         self,
         prompt: str = "",
         thinking: bool = False,
+        max_retries: int = 0,
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
@@ -574,19 +561,32 @@ class VolcEngineVLM(OpenAIVLM):
         # If we have static segments, try prefix cache
         response_format = None  # Can be extended for structured output
 
-        async def _call():
-            return await self.responseapi_prefixcache_completion(
+        try:
+            # Use prefix cache with multiple segments
+            response = await self.responseapi_prefixcache_completion(
                 static_segments=static_segments,
                 dynamic_messages=dynamic_messages,
                 response_format=response_format,
                 tools=tools,
                 tool_choice=tool_choice,
             )
+            elapsed = 0  # Timing handled in responseapi methods
+            self._update_token_usage_from_response(response, duration_seconds=elapsed)
+            return self._build_vlm_response(response, has_tools=bool(tools))
 
-        response = await transient_retry_async(_call, max_retries=self.max_retries)
-        elapsed = 0  # Timing handled in responseapi methods
-        self._update_token_usage_from_response(response, duration_seconds=elapsed)
-        return self._build_vlm_response(response, has_tools=bool(tools))
+        except Exception as e:
+            last_error = e
+            # Log token info from error response if available
+            error_response = getattr(e, "response", None)
+            if error_response and hasattr(error_response, "usage"):
+                u = error_response.usage
+                prompt_tokens = getattr(u, "input_tokens", 0) or 0
+                completion_tokens = getattr(u, "output_tokens", 0) or 0
+                logger.info(
+                    f"[VolcEngineVLM] Error response - Input tokens: {prompt_tokens}, Output tokens: {completion_tokens}"
+                )
+            logger.warning(f"[VolcEngineVLM] Request failed: {e}")
+            raise last_error
 
     def _detect_image_format(self, data: bytes) -> str:
         """Detect image format from magic bytes.

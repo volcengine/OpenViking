@@ -10,7 +10,6 @@ from openviking.models.embedder.base import (
     DenseEmbedderBase,
     EmbedResult,
 )
-from openviking.models.retry import transient_retry
 
 # Default dimensions for Jina embedding models
 JINA_MODEL_DIMENSIONS = {
@@ -114,11 +113,9 @@ class JinaDenseEmbedder(DenseEmbedderBase):
             raise ValueError("api_key is required")
 
         # Initialize OpenAI-compatible client with Jina base URL
-        # Disable SDK retry; we use transient_retry for unified retry logic
         self.client = openai.OpenAI(
             api_key=self.api_key,
             base_url=self.api_base,
-            max_retries=0,
         )
 
         # Determine dimension
@@ -177,10 +174,7 @@ class JinaDenseEmbedder(DenseEmbedderBase):
             if extra_body:
                 kwargs["extra_body"] = extra_body
 
-            def _call():
-                return self.client.embeddings.create(**kwargs)
-
-            response = transient_retry(_call, max_retries=self.max_retries)
+            response = self.client.embeddings.create(**kwargs)
             vector = response.data[0].embedding
 
             return EmbedResult(dense_vector=vector)
@@ -215,10 +209,7 @@ class JinaDenseEmbedder(DenseEmbedderBase):
             if extra_body:
                 kwargs["extra_body"] = extra_body
 
-            def _call():
-                return self.client.embeddings.create(**kwargs)
-
-            response = transient_retry(_call, max_retries=self.max_retries)
+            response = self.client.embeddings.create(**kwargs)
 
             return [EmbedResult(dense_vector=item.embedding) for item in response.data]
         except openai.APIError as e:

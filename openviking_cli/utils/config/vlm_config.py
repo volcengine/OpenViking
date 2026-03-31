@@ -12,7 +12,7 @@ class VLMConfig(BaseModel):
     api_key: Optional[str] = Field(default=None, description="API key")
     api_base: Optional[str] = Field(default=None, description="API base URL")
     temperature: float = Field(default=0.0, description="Generation temperature")
-    max_retries: int = Field(default=3, description="Maximum retry attempts")
+    max_retries: int = Field(default=2, description="Maximum retry attempts")
 
     provider: Optional[str] = Field(default=None, description="Provider type")
     backend: Optional[str] = Field(
@@ -181,26 +181,19 @@ class VLMConfig(BaseModel):
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, Any]:
         """Get LLM completion."""
-        return self.get_vlm_instance().get_completion(
-            prompt=prompt,
-            thinking=thinking,
-            tools=tools,
-            messages=messages,
-        )
+        return self.get_vlm_instance().get_completion(prompt, thinking, tools, messages)
 
     async def get_completion_async(
         self,
         prompt: str = "",
         thinking: bool = False,
+        max_retries: int = 0,
         tools: Optional[List[Dict[str, Any]]] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
     ) -> Union[str, Any]:
-        """Get LLM completion asynchronously."""
+        """Get LLM completion asynchronously, max_retries=0 means no retry."""
         return await self.get_vlm_instance().get_completion_async(
-            prompt=prompt,
-            thinking=thinking,
-            tools=tools,
-            messages=messages,
+            prompt, thinking, max_retries, tools, messages
         )
 
     def is_available(self) -> bool:
@@ -217,11 +210,7 @@ class VLMConfig(BaseModel):
     ) -> Union[str, Any]:
         """Get LLM completion with images."""
         return self.get_vlm_instance().get_vision_completion(
-            prompt=prompt,
-            images=images,
-            thinking=thinking,
-            tools=tools,
-            messages=messages,
+            prompt, images, thinking, tools, messages
         )
 
     async def get_vision_completion_async(
@@ -234,9 +223,5 @@ class VLMConfig(BaseModel):
     ) -> Union[str, Any]:
         """Get LLM completion with images asynchronously."""
         return await self.get_vlm_instance().get_vision_completion_async(
-            prompt=prompt,
-            images=images,
-            thinking=thinking,
-            tools=tools,
-            messages=messages,
+            prompt, images, thinking, tools, messages
         )

@@ -262,7 +262,6 @@ class EmbeddingConfig(BaseModel):
     sparse: Optional[EmbeddingModelConfig] = Field(default=None)
     hybrid: Optional[EmbeddingModelConfig] = Field(default=None)
 
-    max_retries: int = Field(default=3, description="Maximum retry attempts for transient errors")
     max_concurrent: int = Field(
         default=10, description="Maximum number of concurrent embedding requests"
     )
@@ -510,13 +509,6 @@ class EmbeddingConfig(BaseModel):
 
         embedder_class, param_builder = factory_registry[key]
         params = param_builder(config)
-
-        # Inject max_retries into the config dict so embedders pick it up
-        existing_config = params.get("config") or {}
-        if isinstance(existing_config, dict):
-            existing_config["max_retries"] = self.max_retries
-            params["config"] = existing_config
-
         return embedder_class(**params)
 
     def get_embedder(self):
