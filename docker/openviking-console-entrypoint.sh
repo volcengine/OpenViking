@@ -5,8 +5,42 @@ SERVER_URL="http://127.0.0.1:1933"
 SERVER_HEALTH_URL="${SERVER_URL}/health"
 CONSOLE_PORT="${OPENVIKING_CONSOLE_PORT:-8020}"
 CONSOLE_HOST="${OPENVIKING_CONSOLE_HOST:-0.0.0.0}"
+WITH_BOT="${OPENVIKING_WITH_BOT:-1}"
 SERVER_PID=""
 CONSOLE_PID=""
+
+normalize_with_bot() {
+    case "$1" in
+        1|true|TRUE|yes|YES|on|ON)
+            WITH_BOT="1"
+            ;;
+        0|false|FALSE|no|NO|off|OFF)
+            WITH_BOT="0"
+            ;;
+        *)
+            echo "[openviking-console-entrypoint] invalid OPENVIKING_WITH_BOT=${1}" >&2
+            exit 2
+            ;;
+    esac
+}
+
+if [ "$#" -gt 0 ]; then
+    for arg in "$@"; do
+        case "${arg}" in
+            --with-bot)
+                WITH_BOT="1"
+                ;;
+            --without-bot)
+                WITH_BOT="0"
+                ;;
+            *)
+                exec "$@"
+                ;;
+        esac
+    done
+fi
+
+normalize_with_bot "${WITH_BOT}"
 
 forward_signal() {
     if [ -n "${SERVER_PID}" ] && kill -0 "${SERVER_PID}" 2>/dev/null; then
@@ -19,7 +53,11 @@ forward_signal() {
 
 trap 'forward_signal' INT TERM
 
-openviking-server &
+if [ "${WITH_BOT}" = "1" ]; then
+    openviking-server --with-bot &
+else
+    openviking-server &
+fi
 SERVER_PID=$!
 
 attempt=0

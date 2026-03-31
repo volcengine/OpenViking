@@ -17,20 +17,30 @@ def test_dockerfile_defaults_to_console_entrypoint_runtime():
         "COPY docker/openviking-console-entrypoint.sh /usr/local/bin/openviking-console-entrypoint"
         in dockerfile
     )
+    assert "uv sync --locked --no-editable --extra bot" in dockerfile
     assert "EXPOSE 1933 8020" in dockerfile
-    assert 'CMD ["openviking-console-entrypoint"]' in dockerfile
+    assert 'ENTRYPOINT ["openviking-console-entrypoint"]' in dockerfile
 
 
 def test_console_entrypoint_starts_server_then_console():
     entrypoint = _read_text("docker/openviking-console-entrypoint.sh")
 
-    assert "openviking-server" in entrypoint
+    assert 'WITH_BOT="${OPENVIKING_WITH_BOT:-1}"' in entrypoint
+    assert "--without-bot" in entrypoint
+    assert "openviking-server --with-bot" in entrypoint
     assert 'SERVER_URL="http://127.0.0.1:1933"' in entrypoint
     assert 'SERVER_HEALTH_URL="${SERVER_URL}/health"' in entrypoint
     assert 'CONSOLE_PORT="${OPENVIKING_CONSOLE_PORT:-8020}"' in entrypoint
     assert "python -m openviking.console.bootstrap" in entrypoint
     assert '--port "${CONSOLE_PORT}"' in entrypoint
     assert '--openviking-url "${SERVER_URL}"' in entrypoint
+
+
+def test_console_entrypoint_passthroughs_custom_runtime_commands():
+    entrypoint = _read_text("docker/openviking-console-entrypoint.sh")
+
+    assert 'exec "$@"' in entrypoint
+    assert '"openviking"' not in entrypoint
 
 
 def test_docker_compose_exposes_console_port():

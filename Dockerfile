@@ -50,13 +50,13 @@ COPY third_party/ third_party/
 RUN --mount=type=cache,target=/root/.cache/uv,id=uv-${TARGETPLATFORM} \
     case "${UV_LOCK_STRATEGY}" in \
         locked) \
-            uv sync --locked --no-editable \
+            uv sync --locked --no-editable --extra bot \
             ;; \
         auto) \
             if ! uv lock --check; then \
                 uv lock; \
             fi; \
-            uv sync --locked --no-editable \
+            uv sync --locked --no-editable --extra bot \
             ;; \
         *) \
             echo "Unsupported UV_LOCK_STRATEGY: ${UV_LOCK_STRATEGY}" >&2; \
@@ -88,4 +88,4 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=30s --retries=3 \
 
 # Default runs server + console; override command to run CLI, e.g.:
 # docker run --rm <image> -v "$HOME/.openviking/ovcli.conf:/root/.openviking/ovcli.conf" openviking --help
-CMD ["openviking-console-entrypoint"]
+ENTRYPOINT ["openviking-console-entrypoint"]
