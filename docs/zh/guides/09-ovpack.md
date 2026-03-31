@@ -99,6 +99,41 @@ curl -X POST http://localhost:1933/api/v1/pack/import \
   }"
 ```
 
+## 记忆导入导出
+
+OpenViking 的记忆会写入固定的目录结构中：
+
+- 用户记忆：`viking://user/{user_space}/memories/`
+- Agent 记忆：`viking://agent/{agent_space}/memories/`
+
+使用 OVPack 迁移记忆时，必须把 `.ovpack` 导入到对应 space 的父目录（而不是随便一个目录），否则会变成例如 `.../memories/memories/...` 的路径，OpenViking 将无法按“记忆”语义访问和使用这些文件。
+
+### 导出/导入用户记忆（CLI）
+
+```bash
+# 导出：整个用户 memories 子树
+openviking export viking://user/default/memories/ ./exports/user-memories.ovpack
+
+# 导入：注意 parent 需要是 user space 根目录（导入后会生成 viking://user/default/memories/）
+openviking import ./exports/user-memories.ovpack viking://user/default/ --force
+```
+
+### 导出/导入 Agent 记忆（CLI）
+
+```bash
+openviking export viking://agent/default/memories/ ./exports/agent-memories.ovpack
+openviking import ./exports/agent-memories.ovpack viking://agent/default/ --force
+```
+
+### 导入后是否向量化
+
+- 默认会向量化（便于 `find/search` 检索）。
+- 如果只做快速恢复、稍后再统一处理，可使用 `--no-vectorize`：
+
+```bash
+openviking import ./exports/user-memories.ovpack viking://user/default/ --force --no-vectorize
+```
+
 ## 使用场景
 
 ### 资源备份

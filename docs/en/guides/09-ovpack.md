@@ -88,6 +88,41 @@ curl -X POST http://localhost:1933/api/v1/pack/import \
   }"
 ```
 
+## Memory Import and Export
+
+OpenViking memories are stored under fixed directory structures:
+
+- User memories: `viking://user/{user_space}/memories/`
+- Agent memories: `viking://agent/{agent_space}/memories/`
+
+When migrating memories with OVPack, you must import the `.ovpack` into the parent of the corresponding space (not an arbitrary directory). Otherwise you may end up with paths like `.../memories/memories/...`, and OpenViking will not be able to access and use them as memories.
+
+### Export/Import User Memories (CLI)
+
+```bash
+# Export the whole user memories subtree
+openviking export viking://user/default/memories/ ./exports/user-memories.ovpack
+
+# Import into the user space root (imports to viking://user/default/memories/)
+openviking import ./exports/user-memories.ovpack viking://user/default/ --force
+```
+
+### Export/Import Agent Memories (CLI)
+
+```bash
+openviking export viking://agent/default/memories/ ./exports/agent-memories.ovpack
+openviking import ./exports/agent-memories.ovpack viking://agent/default/ --force
+```
+
+### Vectorization on Import
+
+- Vectorization is enabled by default (useful for `find/search`).
+- For faster restore, you can disable it and process later with `--no-vectorize`:
+
+```bash
+openviking import ./exports/user-memories.ovpack viking://user/default/ --force --no-vectorize
+```
+
 ## Use Cases
 
 ### Resource Backup
