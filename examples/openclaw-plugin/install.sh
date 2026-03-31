@@ -1669,6 +1669,14 @@ configure_openviking_conf() {
   local embedding_api_key="${OPENVIKING_EMBEDDING_API_KEY:-${OPENVIKING_ARK_API_KEY:-}}"
   local conf_path="${OPENVIKING_DIR}/ov.conf"
 
+  if [[ "$INSTALL_YES" == "1" && -f "${conf_path}" ]]; then
+    SELECTED_SERVER_PORT="$(readPortFromOvConf "${conf_path}" || true)"
+    [[ -z "${SELECTED_SERVER_PORT}" ]] && SELECTED_SERVER_PORT="${DEFAULT_SERVER_PORT}"
+    SELECTED_CONFIG_PATH="${conf_path}"
+    info "$(tr "Preserved existing config: ${conf_path}" "已保留现有配置: ${conf_path}")"
+    return 0
+  fi
+
   if [[ "$INSTALL_YES" != "1" ]]; then
     echo ""
     read -r -p "$(tr "OpenViking workspace path [${workspace}]: " "OpenViking 数据目录 [${workspace}]: ")" _workspace < /dev/tty || true

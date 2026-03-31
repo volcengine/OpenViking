@@ -1106,6 +1106,18 @@ async function installOpenViking() {
 async function configureOvConf() {
   await mkdir(OPENVIKING_DIR, { recursive: true });
 
+  const configPath = join(OPENVIKING_DIR, "ov.conf");
+  if (installYes && existsSync(configPath)) {
+    selectedServerPort = await readPortFromOvConf(configPath) || DEFAULT_SERVER_PORT;
+    info(
+      tr(
+        `Preserved existing config: ${configPath}`,
+        `已保留现有配置: ${configPath}`,
+      ),
+    );
+    return;
+  }
+
   let workspace = join(OPENVIKING_DIR, "data");
   let serverPort = String(DEFAULT_SERVER_PORT);
   let agfsPort = String(DEFAULT_AGFS_PORT);
@@ -1173,7 +1185,6 @@ async function configureOvConf() {
     },
   };
 
-  const configPath = join(OPENVIKING_DIR, "ov.conf");
   await writeFile(configPath, JSON.stringify(config, null, 2) + "\n", "utf8");
   info(tr(`Config generated: ${configPath}`, `已生成配置: ${configPath}`));
 }
