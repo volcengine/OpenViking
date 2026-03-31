@@ -51,6 +51,19 @@ pub async fn reindex(
     Ok(())
 }
 
+pub async fn compress(
+    client: &HttpClient,
+    uri: &str,
+    max_abstract_length: u32,
+    dry_run: bool,
+    output_format: OutputFormat,
+    compact: bool,
+) -> Result<()> {
+    let result = client.compress(uri, max_abstract_length, dry_run).await?;
+    crate::output::output_success(result, output_format, compact);
+    Ok(())
+}
+
 pub async fn get(client: &HttpClient, uri: &str, local_path: &str) -> Result<()> {
     // Check if target path already exists
     let path = Path::new(local_path);

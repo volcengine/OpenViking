@@ -28,6 +28,14 @@ class ReindexRequest(BaseModel):
     wait: bool = True
 
 
+class CompressRequest(BaseModel):
+    """Request to compress memory abstracts in a directory."""
+
+    uri: str
+    max_abstract_length: int = 128
+    dry_run: bool = False
+
+
 router = APIRouter(prefix="/api/v1/content", tags=["content"])
 
 
@@ -170,6 +178,33 @@ async def reindex(
                 "message": "Reindex is processing in the background",
             },
         )
+
+
+@router.post("/compress")
+async def compress(
+    request: CompressRequest = Body(...),
+    _ctx: RequestContext = Depends(get_request_context),
+):
+    """Compress verbose memory abstracts in a directory.
+
+    Scans the target directory for memory files with abstracts exceeding
+    max_abstract_length and truncates them. Use dry_run=True to preview
+    what would be compressed without modifying anything.
+    """
+    from openviking.utils.compress_service import CompressService
+
+    service = CompressService(max_abstract_length=request.max_abstract_length)
+    result = await service.compress_directory(
+        uri=request.uri,
+        ctx=_ctx,
+        dry_run=request.dry_run,
+    )
+    if result.get("status") == "error":
+        return Response(
+            status="error",
+            error=ErrorInfo(code="COMPRESS_FAILED", message=result.get("message", "")),
+        )
+    return Response(status="ok", result=result)
 
 
 async def _do_reindex(

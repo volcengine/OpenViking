@@ -332,6 +332,17 @@ enum Commands {
         #[arg(long, default_value = "true")]
         wait: bool,
     },
+    /// Compress verbose memory abstracts in a directory
+    Compress {
+        /// Viking URI (directory to scan)
+        uri: String,
+        /// Maximum abstract length in characters
+        #[arg(long, default_value = "128")]
+        max_abstract_length: u32,
+        /// Preview changes without modifying anything
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Download file to local path (supports binaries/images)
     Get {
         /// Viking URI
@@ -750,6 +761,11 @@ async fn main() {
             regenerate,
             wait,
         } => handle_reindex(uri, regenerate, wait, ctx).await,
+        Commands::Compress {
+            uri,
+            max_abstract_length,
+            dry_run,
+        } => handle_compress(uri, max_abstract_length, dry_run, ctx).await,
         Commands::Get { uri, local_path } => handle_get(uri, local_path, ctx).await,
         Commands::Find {
             query,
@@ -1187,6 +1203,24 @@ async fn handle_reindex(uri: String, regenerate: bool, wait: bool, ctx: CliConte
         &uri,
         regenerate,
         wait,
+        ctx.output_format,
+        ctx.compact,
+    )
+    .await
+}
+
+async fn handle_compress(
+    uri: String,
+    max_abstract_length: u32,
+    dry_run: bool,
+    ctx: CliContext,
+) -> Result<()> {
+    let client = ctx.get_client();
+    commands::content::compress(
+        &client,
+        &uri,
+        max_abstract_length,
+        dry_run,
         ctx.output_format,
         ctx.compact,
     )
