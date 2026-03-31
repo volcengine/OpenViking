@@ -1,6 +1,6 @@
-# OVPack 资源导入导出
+# OVPack 导入导出
 
-OVPack 是 OpenViking 的资源打包格式，用于资源备份、迁移和分享。
+OVPack 是 OpenViking 的打包格式，用于导出/导入任意上下文子树（例如资源、记忆），以便备份、迁移和分享。
 
 ## 快速开始
 

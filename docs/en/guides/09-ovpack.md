@@ -1,6 +1,6 @@
 # OVPack Import and Export
 
-OVPack is OpenViking's resource packaging format for backup, migration, and sharing.
+OVPack is OpenViking's packaging format for exporting/importing context subtrees (e.g., resources and memories) for backup, migration, and sharing.
 
 ## Quick Start
 
