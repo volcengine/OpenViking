@@ -244,5 +244,5 @@ curl http://localhost:1933/ready
 ## 相关文档
 
 - [认证](04-authentication.md) - API Key 设置
-- [监控](05-monitoring.md) - 健康检查与可观测性
+- [可观测性与排障](05-observability.md) - 健康检查、追踪与排障
 - [API 概览](../api/01-overview.md) - 完整 API 参考

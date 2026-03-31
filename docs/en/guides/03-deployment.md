@@ -246,5 +246,5 @@ Use `/health` for Kubernetes liveness probes and `/ready` for readiness probes.
 ## Related Documentation
 
 - [Authentication](04-authentication.md) - API key setup
-- [Monitoring](05-monitoring.md) - Health checks and observability
+- [Observability & Diagnostics](05-observability.md) - Health checks, tracing, and debugging
 - [API Overview](../api/01-overview.md) - Complete API reference
