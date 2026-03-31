@@ -263,7 +263,75 @@ class OpenVikingClient {
   }
 }
 
-function formatMemoryResults(items: FindResultItem[]): string {
+function isNotFoundError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err)
+  return message.includes("NOT_FOUND") || message.includes("File not found")
+}
+
+async function waitForMemoryDeletion(
+  client: OpenVikingClient,
+  uri: string,
+  timeoutMs = 6_000,
+  intervalMs = 250,
+): Promise<void> {
+  const startedAt = Date.now()
+
+  while (Date.now() - startedAt <= timeoutMs) {
+    try {
+      await client.read(uri)
+    } catch (err) {
+      if (isNotFoundError(err)) {
+        return
+      }
+      throw err
+    }
+
+    await new Promise((resolve) => setTimeout(resolve, intervalMs))
+  }
+
+  throw new Error(`OpenViking delete for ${uri} did not settle within ${timeoutMs}ms`)
+}
+
+// ---------------------------------------------------------------------------
+// Memory ranking helpers (ported from openclaw-plugin/memory-ranking.ts)
+// ---------------------------------------------------------------------------
+
+function clampScore(value: number | undefined): number {
+  if (typeof value !== "number" || Number.isNaN(value)) return 0;
+  return Math.max(0, Math.min(1, value));
+}
+
+function normalizeDedupeText(text: string): string {
+  return text.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+function getMemoryDedupeKey(item: FindResultItem): string {
+  const abstract = normalizeDedupeText(item.abstract ?? item.overview ?? "");
+  const category = (item.category ?? "").toLowerCase() || "unknown";
+  if (abstract) return `abstract:${category}:${abstract}`;
+  return `uri:${item.uri}`;
+}
+
+function postProcessMemories(
+  items: FindResultItem[],
+  options: { limit: number; scoreThreshold: number; leafOnly?: boolean },
+): FindResultItem[] {
+  const deduped: FindResultItem[] = [];
+  const seen = new Set<string>();
+  const sorted = [...items].sort((a, b) => clampScore(b.score) - clampScore(a.score));
+  for (const item of sorted) {
+    if (options.leafOnly && item.level !== 2) continue;
+    if (clampScore(item.score) < options.scoreThreshold) continue;
+    const key = getMemoryDedupeKey(item);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    deduped.push(item);
+    if (deduped.length >= options.limit) break;
+  }
+  return deduped;
+}
+
+function formatMemoryLines(items: FindResultItem[]): string {
   return items
     .map((item, index) => {
       const summary = item.abstract?.trim() || item.overview?.trim() || item.uri
@@ -363,6 +431,7 @@ server.tool(
     }
 
     await client.deleteUri(uri)
+    await waitForMemoryDeletion(client, uri)
     return { content: [{ type: "text" as const, text: `Deleted memory: ${uri}` }] }
   },
 )

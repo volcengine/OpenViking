@@ -248,6 +248,26 @@ class OpenVikingClient {
         });
     }
 }
+function isNotFoundError(err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return message.includes("NOT_FOUND") || message.includes("File not found");
+}
+async function waitForMemoryDeletion(client, uri, timeoutMs = 6_000, intervalMs = 250) {
+    const startedAt = Date.now();
+    while (Date.now() - startedAt <= timeoutMs) {
+        try {
+            await client.read(uri);
+        }
+        catch (err) {
+            if (isNotFoundError(err)) {
+                return;
+            }
+            throw err;
+        }
+        await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+    throw new Error(`OpenViking delete for ${uri} did not settle within ${timeoutMs}ms`);
+}
 // ---------------------------------------------------------------------------
 // Memory ranking helpers (ported from openclaw-plugin/memory-ranking.ts)
 // ---------------------------------------------------------------------------
@@ -493,6 +513,7 @@ server.tool("memory_forget", "Delete a memory from OpenViking. Provide an exact 
             return { content: [{ type: "text", text: `Refusing to delete non-memory URI: ${uri}` }] };
         }
         await client.deleteUri(uri);
+        await waitForMemoryDeletion(client, uri);
         return { content: [{ type: "text", text: `Deleted memory: ${uri}` }] };
     }
     if (!query) {
@@ -524,6 +545,7 @@ server.tool("memory_forget", "Delete a memory from OpenViking. Provide an exact 
     const top = candidates[0];
     if (candidates.length === 1 && clampScore(top.score) >= 0.85) {
         await client.deleteUri(top.uri);
+        await waitForMemoryDeletion(client, top.uri);
         return { content: [{ type: "text", text: `Deleted memory: ${top.uri}` }] };
     }
     // List candidates for confirmation
