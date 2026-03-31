@@ -37,7 +37,9 @@ const pluginVersionEnv = (process.env.PLUGIN_VERSION || process.env.BRANCH || ""
 let PLUGIN_VERSION = pluginVersionEnv;
 let pluginVersionExplicit = Boolean(pluginVersionEnv);
 const NPM_REGISTRY = process.env.NPM_REGISTRY || "https://registry.npmmirror.com";
-const PIP_INDEX_URL = process.env.PIP_INDEX_URL || "https://mirrors.volces.com/pypi/simple/";
+const DEFAULT_PIP_INDEX_URL = "https://mirrors.volces.com/pypi/simple/";
+const OFFICIAL_PIP_INDEX_URL = "https://pypi.org/simple/";
+const PIP_INDEX_URL = process.env.PIP_INDEX_URL || DEFAULT_PIP_INDEX_URL;
 
 const IS_WIN = process.platform === "win32";
 const HOME = process.env.HOME || process.env.USERPROFILE || "";
@@ -432,6 +434,34 @@ function runLiveCapture(cmd, args, opts = {}) {
       resolve({ code, out: out.trim(), err: errOut.trim() });
     });
   });
+}
+
+function shouldFallbackToOfficialPypi(output) {
+  if (process.env.PIP_INDEX_URL?.trim()) return false;
+  if (PIP_INDEX_URL !== DEFAULT_PIP_INDEX_URL) return false;
+
+  return /Could not find a version that satisfies the requirement|No matching distribution found|HTTP error 404|too many 502 error responses|Temporary failure in name resolution|Failed to establish a new connection|Connection (?:timed out|reset by peer)|Read timed out|ProxyError|SSLError|TLSV1_ALERT|Remote end closed connection/i.test(output);
+}
+
+async function runPipInstallWithFallback(py, pipArgs, opts = {}) {
+  const shell = opts.shell ?? false;
+  const primaryResult = await runLiveCapture(py, [...pipArgs, "-i", PIP_INDEX_URL], { shell });
+  if (primaryResult.code === 0) {
+    return { result: primaryResult, usedFallback: false };
+  }
+
+  const primaryOutput = `${primaryResult.out}\n${primaryResult.err}`;
+  if (!shouldFallbackToOfficialPypi(primaryOutput)) {
+    return { result: primaryResult, usedFallback: false };
+  }
+
+  warn(tr(
+    `Install from mirror failed. Retrying with official PyPI: ${OFFICIAL_PIP_INDEX_URL}`,
+    `镜像源安装失败，正在回退到官方 PyPI: ${OFFICIAL_PIP_INDEX_URL}`,
+  ));
+
+  const fallbackResult = await runLiveCapture(py, [...pipArgs, "-i", OFFICIAL_PIP_INDEX_URL], { shell });
+  return { result: fallbackResult, usedFallback: true, primaryResult, fallbackResult };
 }
 
 function question(prompt, defaultValue = "") {
@@ -1013,9 +1043,9 @@ async function installOpenViking() {
 
   info(`Package: ${pkgSpec}`);
   await runCapture(py, ["-m", "pip", "install", "--upgrade", "pip", "-q", "-i", PIP_INDEX_URL], { shell: false });
-  const installResult = await runLiveCapture(
+  const { result: installResult } = await runPipInstallWithFallback(
     py,
-    ["-m", "pip", "install", "--upgrade", "--progress-bar", "on", pkgSpec, "-i", PIP_INDEX_URL],
+    ["-m", "pip", "install", "--upgrade", "--progress-bar", "on", pkgSpec],
     { shell: false },
   );
   if (installResult.code === 0) {
@@ -1033,11 +1063,16 @@ async function installOpenViking() {
     if (existsSync(venvPy)) {
       const reuseCheck = await runCapture(venvPy, ["-c", "import openviking"], { shell: false });
       if (reuseCheck.code === 0) {
-        await runLiveCapture(
+        const { result: venvReuseInstall } = await runPipInstallWithFallback(
           venvPy,
-          ["-m", "pip", "install", "--progress-bar", "on", "-U", pkgSpec, "-i", PIP_INDEX_URL],
+          ["-m", "pip", "install", "--progress-bar", "on", "-U", pkgSpec],
           { shell: false },
         );
+        if (venvReuseInstall.code !== 0) {
+          err(tr("OpenViking install failed in venv.", "在虚拟环境中安装 OpenViking 失败。"));
+          console.log(venvReuseInstall.err || venvReuseInstall.out);
+          process.exit(1);
+        }
         openvikingPythonPath = venvPy;
         info(tr("OpenViking installed ✓ (venv)", "OpenViking 安装完成 ✓（虚拟环境）"));
         return;
@@ -1069,9 +1104,9 @@ async function installOpenViking() {
     }
 
     await runCapture(venvPy, ["-m", "pip", "install", "--upgrade", "pip", "-q", "-i", PIP_INDEX_URL], { shell: false });
-    const venvInstall = await runLiveCapture(
+    const { result: venvInstall } = await runPipInstallWithFallback(
       venvPy,
-      ["-m", "pip", "install", "--upgrade", "--progress-bar", "on", pkgSpec, "-i", PIP_INDEX_URL],
+      ["-m", "pip", "install", "--upgrade", "--progress-bar", "on", pkgSpec],
       { shell: false },
     );
     if (venvInstall.code === 0) {
@@ -1086,9 +1121,9 @@ async function installOpenViking() {
   }
 
   if (process.env.OPENVIKING_ALLOW_BREAK_SYSTEM_PACKAGES === "1") {
-    const systemInstall = await runLiveCapture(
+    const { result: systemInstall } = await runPipInstallWithFallback(
       py,
-      ["-m", "pip", "install", "--upgrade", "--progress-bar", "on", "--break-system-packages", pkgSpec, "-i", PIP_INDEX_URL],
+      ["-m", "pip", "install", "--upgrade", "--progress-bar", "on", "--break-system-packages", pkgSpec],
       { shell: false },
     );
     if (systemInstall.code === 0) {
