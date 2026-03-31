@@ -596,9 +596,9 @@ export function createMemoryOpenVikingContextEngine(params: {
           agentId,
         );
 
-        const hasArchives = !!ctx?.latest_archive_id;
-        const activeCount = ctx?.messages?.length ?? 0;
         const preAbstracts = ctx?.pre_archive_abstracts ?? [];
+        const hasArchives = !!ctx?.latest_archive_overview || preAbstracts.length > 0;
+        const activeCount = ctx?.messages?.length ?? 0;
 
         if (!ctx || (!hasArchives && activeCount === 0)) {
           diag("assemble_result", OVSessionId, {
@@ -633,15 +633,10 @@ export function createMemoryOpenVikingContextEngine(params: {
           });
         }
 
-        if (preAbstracts.length > 0 || ctx.latest_archive_id) {
+        if (preAbstracts.length > 0) {
           const lines: string[] = preAbstracts.map(
             (a) => `${a.archive_id}: ${a.abstract}`,
           );
-          if (ctx.latest_archive_id) {
-            lines.push(
-              `(latest: ${ctx.latest_archive_id} — see [Session History Summary] above)`,
-            );
-          }
           assembled.push({
             role: "user" as const,
             content: `[Archive Index]\n${lines.join("\n")}`,
@@ -656,7 +651,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         if (sanitized.length === 0 && messages.length > 0) {
           diag("assemble_result", OVSessionId, {
             passthrough: true, reason: "sanitized_empty",
-            archiveCount: preAbstracts.length + (ctx.latest_archive_id ? 1 : 0),
+            archiveCount: preAbstracts.length,
             activeCount,
             outputMessagesCount: messages.length,
             inputTokenEstimate: originalTokens,
@@ -667,7 +662,7 @@ export function createMemoryOpenVikingContextEngine(params: {
         }
 
         const assembledTokens = roughEstimate(sanitized);
-        const archiveCount = preAbstracts.length + (ctx.latest_archive_id ? 1 : 0);
+        const archiveCount = preAbstracts.length;
         const tokensSaved = originalTokens - assembledTokens;
         const savingPct = originalTokens > 0 ? Math.round((tokensSaved / originalTokens) * 100) : 0;
 
@@ -680,7 +675,6 @@ export function createMemoryOpenVikingContextEngine(params: {
           estimatedTokens: assembledTokens,
           tokensSaved,
           savingPct,
-          latestArchiveId: ctx.latest_archive_id ?? null,
           messages: messageDigest(sanitized),
         });
 

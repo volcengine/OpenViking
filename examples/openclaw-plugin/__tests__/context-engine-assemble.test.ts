@@ -66,8 +66,12 @@ describe("context-engine assemble()", () => {
   it("assembles summary archive and completed tool parts into agent messages", async () => {
     const { engine, client, resolveAgentId } = makeEngine({
       latest_archive_overview: "# Session Summary\nPreviously discussed repository setup.",
-      latest_archive_id: "archive_001",
-      pre_archive_abstracts: [],
+      pre_archive_abstracts: [
+        {
+          archive_id: "archive_001",
+          abstract: "Previously discussed repository setup.",
+        },
+      ],
       messages: [
         {
           id: "msg_1",
@@ -104,14 +108,18 @@ describe("context-engine assemble()", () => {
       tokenBudget: 4096,
     });
 
-    expect(resolveAgentId).toHaveBeenCalledWith("session-1");
+    expect(resolveAgentId).toHaveBeenCalledWith("session-1", undefined, "session-1");
     expect(client.getSessionContext).toHaveBeenCalledWith("session-1", 4096, "agent:session-1");
     expect(result.estimatedTokens).toBe(321);
-    expect(result.systemPromptAddition).toContain("Compressed Context");
+    expect(result.systemPromptAddition).toContain("Session Context Guide");
     expect(result.messages).toEqual([
       {
         role: "user",
-        content: "# Session Summary\nPreviously discussed repository setup.",
+        content: "[Session History Summary]\n# Session Summary\nPreviously discussed repository setup.",
+      },
+      {
+        role: "user",
+        content: "[Archive Index]\narchive_001: Previously discussed repository setup.",
       },
       {
         role: "assistant",
@@ -139,7 +147,6 @@ describe("context-engine assemble()", () => {
   it("emits a non-error toolResult for a running tool (not a synthetic error)", async () => {
     const { engine } = makeEngine({
       latest_archive_overview: "",
-      latest_archive_id: "",
       pre_archive_abstracts: [],
       messages: [
         {
@@ -191,7 +198,7 @@ describe("context-engine assemble()", () => {
     });
     const text = (result.messages[1] as any).content?.[0]?.text ?? "";
     expect(text).toContain("interrupted");
-    expect((result.messages[1] as { content: Array<{ text: string }> }).content[0]?.text).toContain(
+    expect((result.messages[1] as { content: Array<{ text: string }> }).content[0]?.text).not.toContain(
       "missing tool result",
     );
   });
@@ -199,7 +206,6 @@ describe("context-engine assemble()", () => {
   it("degrades tool parts without tool_id into assistant text blocks", async () => {
     const { engine } = makeEngine({
       latest_archive_overview: "",
-      latest_archive_id: "",
       pre_archive_abstracts: [],
       messages: [
         {
@@ -248,7 +254,6 @@ describe("context-engine assemble()", () => {
   it("falls back to live messages when assembled active messages look truncated", async () => {
     const { engine } = makeEngine({
       latest_archive_overview: "",
-      latest_archive_id: "",
       pre_archive_abstracts: [],
       messages: [
         {

@@ -86,7 +86,6 @@ export type PreArchiveAbstract = {
 
 export type SessionContextResult = {
   latest_archive_overview: string;
-  latest_archive_id: string;
   pre_archive_abstracts: PreArchiveAbstract[];
   messages: OVMessage[];
   estimatedTokens: number;
