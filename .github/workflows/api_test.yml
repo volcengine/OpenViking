@@ -429,11 +429,11 @@ jobs:
           $env:SERVER_URL = "http://127.0.0.1:${{ env.SERVER_PORT }}"
           
           if ($env:HAS_SECRETS -eq "true") {
-            Write-Host "Running full test suite with VLM/Embedding"
-            uv run python -m pytest . -v --html=api-test-report.html --self-contained-html
+            Write-Host "Running full test suite with VLM/Embedding (Windows: skipping filesystem tests)"
+            uv run python -m pytest . -v --html=api-test-report.html --self-contained-html --ignore=filesystem/
           } else {
-            Write-Host "Running basic tests only (no VLM/Embedding)"
-            uv run python -m pytest . -v --html=api-test-report.html --self-contained-html --ignore=retrieval/ --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py -k "not test_observer"
+            Write-Host "Running basic tests only (no VLM/Embedding, Windows: skipping filesystem tests)"
+            uv run python -m pytest . -v --html=api-test-report.html --self-contained-html --ignore=retrieval/ --ignore=resources/test_pack.py --ignore=resources/test_wait_processed.py --ignore=admin/ --ignore=skills/ --ignore=system/test_system_status.py --ignore=system/test_is_healthy.py --ignore=system/test_system_wait.py --ignore=filesystem/ -k "not test_observer"
           }
         continue-on-error: true
 
