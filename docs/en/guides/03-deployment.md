@@ -199,6 +199,38 @@ OpenViking provides pre-built Docker images published to GitHub Container Regist
 docker run -d \
   --name openviking \
   -p 1933:1933 \
+  -p 8020:8020 \
+  -v ~/.openviking/ov.conf:/app/ov.conf \
+  -v /var/lib/openviking/data:/app/data \
+  --restart unless-stopped \
+  ghcr.io/volcengine/openviking:main
+```
+
+By default, the Docker image starts:
+- OpenViking HTTP server on `1933`
+- OpenViking Console on `8020`
+- `vikingbot` gateway
+
+If you want to disable `vikingbot` for a specific container run, use either of the following:
+
+```bash
+docker run -d \
+  --name openviking \
+  -p 1933:1933 \
+  -p 8020:8020 \
+  -v ~/.openviking/ov.conf:/app/ov.conf \
+  -v /var/lib/openviking/data:/app/data \
+  --restart unless-stopped \
+  ghcr.io/volcengine/openviking:main \
+  --without-bot
+```
+
+```bash
+docker run -d \
+  --name openviking \
+  -e OPENVIKING_WITH_BOT=0 \
+  -p 1933:1933 \
+  -p 8020:8020 \
   -v ~/.openviking/ov.conf:/app/ov.conf \
   -v /var/lib/openviking/data:/app/data \
   --restart unless-stopped \
@@ -210,6 +242,10 @@ You can also use Docker Compose with the `docker-compose.yml` provided in the pr
 ```bash
 docker compose up -d
 ```
+
+After startup, you can access:
+- API server: `http://localhost:1933`
+- Console UI: `http://localhost:8020`
 
 To build the image yourself: `docker build -t openviking:latest .`
 

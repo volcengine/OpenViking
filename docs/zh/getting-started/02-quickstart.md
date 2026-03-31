@@ -40,6 +40,7 @@ pip install openviking --upgrade --force-reinstall
        container_name: openviking
        ports:
          - "1933:1933"
+         - "8020:8020"
        volumes:
          - ~/.openviking/ov.conf:/app/ov.conf
          - ~/.openviking/data:/app/data
@@ -49,6 +50,8 @@ pip install openviking --upgrade --force-reinstall
    ```bash
    docker-compose up -d
    ```
+
+   默认情况下，容器会同时启动 OpenViking API 服务（`1933`）、Console 界面（`8020`）以及内置的 `vikingbot` gateway。如果你需要关闭 `vikingbot`，可以在 Compose 里增加 `command: ["--without-bot"]`，或者设置 `environment: ["OPENVIKING_WITH_BOT=0"]`。
 
 > **💡 Mac 本地网络访问提示 (Connection reset 报错)：**
 >
@@ -61,6 +64,7 @@ pip install openviking --upgrade --force-reinstall
 >   openviking:
 >     image: ghcr.io/volcengine/openviking:main
 >     ports:
+>       - "8020:8020"
 >       - "1933:1934" # 将宿主机 1933 映射到容器 1934
 >     volumes:
 >       - ~/.openviking/ov.conf:/app/ov.conf

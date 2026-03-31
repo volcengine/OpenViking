@@ -40,6 +40,7 @@ If you prefer to run OpenViking as a standalone service, Docker is recommended.
        container_name: openviking
        ports:
          - "1933:1933"
+         - "8020:8020"
        volumes:
          - ~/.openviking/ov.conf:/app/ov.conf
          - ~/.openviking/data:/app/data
@@ -49,6 +50,8 @@ If you prefer to run OpenViking as a standalone service, Docker is recommended.
    ```bash
    docker-compose up -d
    ```
+
+   By default, the container starts the OpenViking API server on `1933`, the Console UI on `8020`, and the bundled `vikingbot` gateway. If you need to disable `vikingbot`, add either `command: ["--without-bot"]` or `environment: ["OPENVIKING_WITH_BOT=0"]`.
 
 > **💡 Mac Local Network Access Tip (Connection reset error):**
 >
@@ -61,6 +64,7 @@ If you prefer to run OpenViking as a standalone service, Docker is recommended.
 >   openviking:
 >     image: ghcr.io/volcengine/openviking:main
 >     ports:
+>       - "8020:8020"
 >       - "1933:1934" # Map host 1933 to container 1934
 >     volumes:
 >       - ~/.openviking/ov.conf:/app/ov.conf

@@ -185,6 +185,7 @@ exclude = ["tests*", "docs*", "examples*"]
 [tool.setuptools.package-data]
 openviking = [
     "prompts/templates/**/*.yaml",
+    "console/static/**/*",
     "bin/agfs-server",
     "bin/agfs-server.exe",
     "lib/libagfsbinding.so",
@@ -199,7 +200,6 @@ vikingbot = [
     "**/*.mjs",
     "skills/**/*.md",
     "skills/**/*.sh",
-    "console/static/**/*",
     "bridge/**/*",
 ]
 
