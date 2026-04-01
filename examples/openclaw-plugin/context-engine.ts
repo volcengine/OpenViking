@@ -460,6 +460,7 @@ export function createMemoryOpenVikingContextEngine(params: {
   cfg: Required<MemoryOpenVikingConfig>;
   logger: Logger;
   getClient: () => Promise<OpenVikingClient>;
+  quickPrecheck?: () => Promise<{ ok: true } | { ok: false; reason: string }>;
   /** Extra args help match hook-populated routing when OpenClaw provides sessionKey / OV session id. */
   resolveAgentId: (sessionId: string, sessionKey?: string, ovSessionId?: string) => string;
   rememberSessionAgentId?: (ctx: {
@@ -476,6 +477,7 @@ export function createMemoryOpenVikingContextEngine(params: {
     cfg,
     logger,
     getClient,
+    quickPrecheck,
     resolveAgentId,
     rememberSessionAgentId,
   } = params;
@@ -543,6 +545,30 @@ export function createMemoryOpenVikingContextEngine(params: {
     return typeof agentId === "string" && agentId.trim() ? agentId.trim() : undefined;
   }
 
+  async function runLocalPrecheck(
+    stage: "assemble" | "afterTurn",
+    sessionId: string,
+    extra: Record<string, unknown> = {},
+  ): Promise<boolean> {
+    if (cfg.mode !== "local" || !quickPrecheck) {
+      return true;
+    }
+    const result = await quickPrecheck();
+    if (result.ok) {
+      return true;
+    }
+    warnOrInfo(
+      logger,
+      `openviking: ${stage} precheck failed for session=${sessionId}: ${result.reason}`,
+    );
+    diag(`${stage}_skip`, sessionId, {
+      reason: "precheck_failed",
+      precheckReason: result.reason,
+      ...extra,
+    });
+    return false;
+  }
+
   return {
     info: {
       id,
@@ -586,6 +612,11 @@ export function createMemoryOpenVikingContextEngine(params: {
       });
 
       try {
+        if (!(await runLocalPrecheck("assemble", OVSessionId, {
+          tokenBudget,
+        }))) {
+          return { messages, estimatedTokens: roughEstimate(messages) };
+        }
         const client = await getClient();
         const routingRef =
           assembleParams.sessionId ?? sessionKey ?? OVSessionId;
@@ -767,6 +798,13 @@ export function createMemoryOpenVikingContextEngine(params: {
           messages: newMsgFull,
         });
 
+        if (!(await runLocalPrecheck("afterTurn", OVSessionId, {
+          totalMessages: messages.length,
+          newMessageCount: newCount,
+          prePromptMessageCount: start,
+        }))) {
+          return;
+        }
         const client = await getClient();
         const turnText = newTexts.join("\n");
         const sanitized = turnText.replace(/<relevant-memories>[\s\S]*?<\/relevant-memories>/gi, " ").replace(/\s+/g, " ").trim();

@@ -23,7 +23,7 @@ import {
 } from "./memory-ranking.js";
 import {
   IS_WIN,
-  waitForHealth,
+  waitForHealthOrExit,
   quickHealthCheck,
   quickRecallPrecheck,
   withTimeout,
@@ -343,6 +343,10 @@ const contextEnginePlugin = {
             entry.resolve = resolve;
             entry.reject = reject;
           });
+          // Service startup can reject this shared promise before any hook/tool
+          // awaits it. Attach a sink now so expected local-startup failures do
+          // not surface as process-level unhandled rejections.
+          void entry.promise.catch(() => {});
           clientPromise = entry.promise;
           localClientPendingPromises.set(localCacheKey, entry);
         }
@@ -990,6 +994,10 @@ const contextEnginePlugin = {
           cfg,
           logger: api.logger,
           getClient,
+          quickPrecheck:
+            cfg.mode === "local"
+              ? () => quickRecallPrecheck(cfg.mode, cfg.baseUrl, cfg.port, localProcess)
+              : undefined,
           resolveAgentId,
           rememberSessionAgentId,
         });
@@ -1094,7 +1102,7 @@ const contextEnginePlugin = {
             api.logger.warn(`openviking: subprocess exited (code=${code}, signal=${signal})${out}`);
           });
           try {
-            await waitForHealth(baseUrl, timeoutMs, intervalMs);
+            await waitForHealthOrExit(baseUrl, timeoutMs, intervalMs, child);
             const client = new OpenVikingClient(
               baseUrl,
               cfg.apiKey,
@@ -1171,7 +1179,7 @@ const contextEnginePlugin = {
                 api.logger.warn(`openviking: re-spawned subprocess exited (code=${code}, signal=${signal})`);
               });
               try {
-                await waitForHealth(baseUrl, timeoutMs, intervalMs);
+                await waitForHealthOrExit(baseUrl, timeoutMs, intervalMs, child);
                 const client = new OpenVikingClient(baseUrl, cfg.apiKey, cfg.agentId, cfg.timeoutMs);
                 localClientCache.set(localCacheKey, { client, process: child });
                 if (resolveLocalClient) {
