@@ -2,197 +2,197 @@
 
 使用 [OpenViking](https://github.com/volcengine/OpenViking) 作为 [OpenClaw](https://github.com/openclaw/openclaw) 的长期记忆后端。在 OpenClaw 中，此插件注册为 `openviking` 上下文引擎。
 
+本文档不是安装教程，而是面向集成方和工程师的“当前实现设计说明”。它基于 `examples/openclaw-plugin` 里的现有代码，重点解释这套插件今天实际上如何工作，而不是未来可能的重构方向。
+
 ## 文档入口
 
 - 安装与升级：[INSTALL-ZH.md](./INSTALL-ZH.md)
 - English install guide: [INSTALL.md](./INSTALL.md)
 - Agent 专用操作文档：[INSTALL-AGENT.md](./INSTALL-AGENT.md)
 
-## 技术架构
+## 设计定位
 
-### 插件承担了什么职责
+- OpenClaw 仍然负责 agent runtime、prompt 编排和工具执行。
+- OpenViking 负责长期记忆检索、session 归档、archive summary 和记忆抽取。
+- `examples/openclaw-plugin` 不是一个单一职责的“记忆查询插件”，而是一组围绕 OpenClaw 生命周期工作的集成层。
 
-这个插件不只是“查记忆”的一层封装。按代码职责看，它同时扮演四个角色：
+按当前代码职责看，插件同时扮演四个角色：
 
-- `context-engine` 插件：实现 `assemble`、`afterTurn`、`compact`
+- `context-engine`：实现 `assemble`、`afterTurn`、`compact`
 - Hook 层：接管 `before_prompt_build`、`session_start`、`session_end`、`agent_end`、`before_reset`
 - Tool 提供者：注册 `memory_recall`、`memory_store`、`memory_forget`、`ov_archive_expand`
-- 运行时管理器：在 `local` 模式下负责拉起并监控 OpenViking 子进程
+- 运行时管理器：在 `local` 模式下拉起并监控 OpenViking 子进程
 
-OpenClaw 仍然负责 agent 运行时和 prompt 编排，OpenViking 负责长期记忆检索、会话归档和记忆抽取。
+## 总体架构
 
-### 身份与路由
+![OpenClaw 与 OpenViking 插件总体架构](./images/openclaw-plugin-engine-overview.png)
 
-插件并不是把所有请求都打到一个固定的 agent ID 上，而是尽量保持 OpenClaw 会话身份和 OpenViking 路由一致：
+上图对应的是当前实现里的整体边界：
 
-- `sessionId` 或 `sessionKey` 会被映射成 OpenViking 可接受的 session ID
-- UUID 会直接复用；不安全的 ID 会退化成稳定的 SHA-256
-- `X-OpenViking-Agent` 是按会话解析的，不是按进程写死的
-- 如果 `plugins.entries.openviking.config.agentId` 不是 `default`，它会作为前缀，形成 `<configAgentId>_<sessionAgent>`
-- 实际 HTTP 请求由 client 层补全 `X-OpenViking-*` 头，打开 `logFindRequests` 后可以看到详细路由日志
+- OpenClaw 在左侧，仍然是主运行时；插件并不接管 agent 执行本身。
+- 插件中间层把 Hook、Context Engine、Tools、Runtime Manager 四部分合并在一个注册单元里。
+- 所有 HTTP 调用最终都走 `OpenVikingClient`，由 client 层统一补 `X-OpenViking-*` 头和路由日志。
+- OpenViking 服务端承接 session、memory、archive 和 Phase 2 抽取，底层存储落在 `viking://user/*`、`viking://agent/*`、`viking://session/*`。
 
-这样做的目的，是支持多 agent、多 session 场景下的记忆隔离，避免不同会话串到一起。
+这套拆分的意义，是让 OpenClaw 继续专注推理与编排，让 OpenViking 成为长期上下文的事实源。
 
-### Session 生命周期
+## 身份与路由
 
-Session 是这套设计的核心，不只是“保留一段历史”这么简单。
+这套插件不是把所有请求都打到一个固定 agent ID 上，而是尽量保持 OpenClaw 会话身份和 OpenViking 路由一致。
 
-1. OpenClaw 会话标识先被映射成 OpenViking session ID。
-2. `assemble()` 按 token budget 向 OpenViking 拉取会话上下文。
-3. 归档摘要会被改写成 `[Session History Summary]` 和 `[Archive Index]`。
-4. 当前活跃消息会重新转换回 OpenClaw 可消费的消息格式。
-5. tool call / tool result 会做一次修复，保证 transcript 对各模型提供方更稳。
-6. `afterTurn()` 只提取当前这一轮新增内容，清洗后追加进 OpenViking session。
-7. 当 `pending_tokens` 超过 `commitTokenThreshold`，插件会提交 session，后端异步跑 Phase 2 记忆抽取。
-8. `compact()` 会阻塞等待归档完成，再回读压缩后的上下文。
+核心规则如下：
 
-因此，OpenClaw 侧拿到的是适合推理的精简上下文，OpenViking 侧保存的是长会话归档和抽取后的长期记忆。
+- `sessionId` 是 UUID 时直接复用。
+- `sessionKey` 存在时优先用它生成稳定的 `ovSessionId`。
+- 非安全路径字符会被规整或退化成稳定的 SHA-256。
+- `X-OpenViking-Agent` 按 session 解析，不按进程写死。
+- 若 `plugins.entries.openviking.config.agentId` 不是 `default`，会形成 `<configAgentId>_<sessionAgent>` 的前缀形式。
+- client 层统一补全 `X-OpenViking-Account`、`X-OpenViking-User`、`X-OpenViking-Agent` 这些 header。
 
-### `assemble()` 实际组装了什么
+这样做是为了支持多 agent、多 session 并发时的记忆隔离，避免不同 OpenClaw 会话串用同一套长期上下文。
 
-这里并不是简单地“把旧聊天记录塞回来”。
+## Prompt 前召回链路
 
-- archive overview 会变成压缩后的 session summary
-- 历史 archive 会变成有顺序的 archive index
-- 当前活跃消息保持未压缩状态
-- 如果摘要不够精确，模型可以调用 `ov_archive_expand` 打开某个 archive 的原始消息
+![Prompt 前的自动召回流程](./images/openclaw-plugin-recall-flow.png)
 
-这也是插件能撑长会话的原因：它不会把整段原始 transcript 永远重复喂回 OpenClaw。
+当前主召回路径仍然挂在 `before_prompt_build`，流程是：
 
-### 记忆召回与写入链路
+1. 从 `messages` 或 `prompt` 中提取最后一条用户文本。
+2. 基于当前 `sessionId/sessionKey` 解析本轮的 agent 路由。
+3. 先做一次快速可用性检查，避免在 OpenViking 不可用时把 prompt 前链路拖死。
+4. 并行检索 `viking://user/memories` 和 `viking://agent/memories`。
+5. 在插件侧做去重、阈值筛选、重排和 token budget 裁剪。
+6. 把最终记忆块以 `<relevant-memories>` 形式 prepend 到 prompt。
 
-每一轮对话前后，其实有两条记忆链路。
+这里的重排不是单纯依赖向量分数。当前实现还会额外考虑：
 
-生成前：
+- 是否是 `level == 2` 的叶子记忆
+- 是否属于偏好类记忆
+- 是否属于事件类记忆
+- 与当前 query 的词面重合度
 
-- `before_prompt_build` 提取最后一条用户文本
-- 同时检索 `viking://user/memories` 和 `viking://agent/memories`
-- 结果会先去重，再重排，再按 token budget 截断
-- 最终以 `<relevant-memories>` 的形式注入上下文
+### Transcript ingest assist
 
-生成后：
+除了普通 recall，这条链路还包含一个“转录文本辅助分支”。
 
-- `afterTurn` 把本轮新增内容格式化成可写入文本
-- assistant 文本、`toolUse`、`toolResult` 都会保留
-- 注入过的记忆块和元数据噪音会先被剥掉
-- OpenViking session commit 会触发 archive + memory extraction
+如果最后一条用户输入看起来像多说话人的转录文本：
 
-这里的重排不是纯看向量分数。代码里还会额外提升 preference、event、leaf memory 以及 query 词面重合度。
+- 会先清理 metadata block、命令文本、纯提问文本等噪音
+- 再按说话人数和文本长度做 transcript-like 判断
+- 命中后 prepend 一个很轻量的 `<ingest-reply-assist>` 指令
 
-### Transcript Ingest Assist
+它的目标不是改写记忆逻辑，而是降低模型在“用户粘贴聊天记录/会议纪要/对话转录”这类场景里直接返回 `NO_REPLY` 的概率。
 
-插件对“用户贴了一段多说话人转录文本”这种场景也单独做了处理。
+## Session 生命周期
 
-- 通过说话人数阈值和文本长度判断是否像 transcript
-- 命令文本、元数据块、纯提问型文本会被排除
-- 一旦判断为 transcript-like ingest，会额外注入一段轻量提示，减少模型直接返回 `NO_REPLY`
+![Session 生命周期与压缩边界](./images/openclaw-plugin-session-lifecycle.png)
 
-这主要服务于“把聊天记录、会议记录、对话转录灌进记忆系统”这类使用方式。
+Session 是这套设计的主轴。当前实现里，它覆盖了“历史组装、增量写入、异步提交、阻塞压缩回读”四个动作。
 
-### Local 和 Remote 运行模式
+### `assemble()` 负责什么
 
-#### Local 模式
+`assemble()` 并不是简单地把旧聊天记录塞回来，而是按 token budget 从 OpenViking 回读当前 session context，然后重新组装成 OpenClaw 可消费的消息：
 
-`local` 模式下，插件自己拉起 OpenViking。
+- `latest_archive_overview` 被改写成 `[Session History Summary]`
+- `pre_archive_abstracts` 被改写成 `[Archive Index]`
+- 当前活跃消息保持 message block 形式回放
+- assistant 的 tool part 会被还原成 `toolUse`
+- tool output 会被拆成独立的 `toolResult`
+- 之后再做一轮 `toolUse/toolResult` 配对修复，降低 transcript 结构不稳定的风险
 
-- 会从 `OPENVIKING_PYTHON`、env 文件或系统默认值解析 Python
-- 启动前先处理端口
-- 如果端口上残留旧 OpenViking，会主动清理
-- 如果端口被别的进程占用，会自动找下一个空闲端口
-- 只有 `/health` 检查通过后，才认为服务可用
-- 会缓存 local client，避免多个 OpenClaw 插件上下文重复拉起运行时
+因此，OpenClaw 拿到的是“压缩后的历史摘要 + archive 索引 + 当前活跃消息”，而不是无限增长的原始 transcript。
 
-#### Remote 模式
+### `afterTurn()` 负责什么
 
-`remote` 模式下，插件只走 HTTP API。
+`afterTurn()` 的职责更窄，专门处理本轮增量写入：
 
-- 不会启动本地子进程
-- `baseUrl` 和可选的 `apiKey` 来自 OpenClaw 插件配置
-- session、召回、archive、tool 的整体逻辑保持不变
+- 只切出本轮新增消息，不重写整段对话
+- 只保留 `user` / `assistant` 相关文本内容
+- 会把 `toolUse` / `toolResult` 格式化进 capture 文本
+- 会先剥掉注入过的 `<relevant-memories>` 和元数据噪音
+- 最终把清洗后的增量内容追加到 OpenViking session
 
-### 工具与运维入口
+之后插件会读取 session 的 `pending_tokens`。当它超过 `commitTokenThreshold` 时，会触发一次 `commit(wait=false)`：
 
-除了自动记忆行为，插件还直接暴露了几类工具：
+- archive 和 Phase 2 记忆抽取在服务端异步继续跑
+- 当前 turn 不会因为等待抽取而阻塞
+- 如果打开 `logFindRequests`，日志里能看到 task id 和后续抽取结果
+
+### `compact()` 负责什么
+
+`compact()` 走的是另一条更严格的同步边界：
+
+- 它调用 `commit(wait=true)`，阻塞等待 commit 完成
+- 如果有 archive 生成，会再回读 `latest_archive_overview`
+- 返回新的 token 估算、latest archive id 和 summary
+- 如果摘要不够精确，模型可以再调用 `ov_archive_expand` 读取某个 archive 的原始消息
+
+所以 `afterTurn()` 更像“增量写入 + 条件触发异步提交”，而 `compact()` 才是“明确等待压缩与归档完成”的正式边界。
+
+## 工具层与可展开能力
+
+这套插件除了自动行为，还直接暴露了 4 个工具：
 
 - `memory_recall`：显式检索长期记忆
-- `memory_store`：写入文本到 OpenViking session 并立即触发抽取
+- `memory_store`：把文本写入 OpenViking session 并立即触发 commit
 - `memory_forget`：按 URI 删除，或先搜索再删除唯一高置信候选
-- `ov_archive_expand`：当摘要不够时，展开某个压缩 archive 的原始消息
+- `ov_archive_expand`：展开某个 archive 的原始消息
 
-对运维和调试来说，常用入口有：
+它们各自的作用不同：
 
-- Web Console：看 OpenViking 文件和记忆状态
-- `ov tui`：在终端里浏览本地数据
-- `ov-install --current-version`：查看插件版本和 OpenViking 版本
-- `openclaw config get plugins.entries.openviking.config`：查看当前插件配置
+- 自动 recall 解决“模型不知道该先查什么”的默认场景。
+- `memory_recall` 给模型一个显式补查入口。
+- `memory_store` 适合把一段明确的重要信息立刻落入记忆管线。
+- `ov_archive_expand` 负责在 summary 不够细时回到 archive 级原文。
 
-## 工具
+其中 `ov_archive_expand` 是 `assemble()` 的重要补充，因为 `assemble()` 默认给的是压缩后的索引和摘要，而不是完整历史正文。
 
-### Web Console
+## Local / Remote 运行模式
 
-OpenViking 自带 Web Console，可用于查看存储文件、调试写入和观察记忆状态。
+![运行模式与路由解析](./images/openclaw-plugin-runtime-routing.png)
 
-示例启动命令：
+当前实现支持两种运行方式，但 session、memory、archive 的上层逻辑是一致的。
 
-```bash
-python -m openviking.console.bootstrap --host 0.0.0.0 --port 8020 --openviking-url http://127.0.0.1:1933
-```
+### Local 模式
 
-### `ov tui`
+`local` 模式下，插件自己管理 OpenViking 子进程：
 
-可以用终端界面浏览本地 OpenViking 文件：
+- 解析 `OPENVIKING_PYTHON`、env 文件或系统默认 Python
+- 启动前先做端口准备
+- 若目标端口上残留旧 OpenViking，会尝试清理
+- 若端口被其他进程占用，会自动寻找下一个空闲端口
+- 只有 `/health` 成功后，才把服务视为可用
+- 会缓存 local client，避免同一环境里重复拉起多个运行时
 
-```bash
-ov tui
-```
+这也是为什么插件不仅是“查记忆的逻辑层”，还是一个本地运行时管理器。
 
-### 查看版本
+### Remote 模式
 
-查看当前已安装的插件版本和 OpenViking 版本：
+`remote` 模式下，插件只作为 HTTP 客户端工作：
 
-```bash
-ov-install --current-version
-```
+- 不会启动本地子进程
+- `baseUrl` 和可选 `apiKey` 由插件配置提供
+- session context、memory find/read、commit、archive expand 这些行为保持不变
 
-### 查看插件配置
+换句话说，`local` 和 `remote` 的差异主要在“谁负责把 OpenViking 服务启动起来”，不在上层的上下文模型本身。
 
-查看当前 OpenClaw 插件整体配置：
+## 与旧设计稿的关系
 
-```bash
-openclaw config get plugins.entries.openviking.config
-```
+仓库里还有一份更偏“未来演进方向”的设计稿：`docs/design/openclaw-context-engine-refactor.md`。阅读时需要区分两者的口径：
 
-### 日志
+- 本文描述的是当前实现已经落地的行为。
+- 旧设计稿讨论的是“进一步把更多主链路迁入 context-engine 生命周期”的目标态。
+- 当前版本里，自动 recall 的主入口仍然在 `before_prompt_build`，并没有完全迁到 `assemble()`。
+- 当前版本里，`afterTurn()` 已经负责增量写入 OpenViking session，但它仍然依赖阈值触发异步 commit。
+- 当前版本里，`compact()` 已经走 `commit(wait=true)`，但它的职责仍以“同步提交 + 结果回读”为主，而不是承载一切上层编排。
 
-OpenClaw 插件侧日志：
+这段区分很重要，否则很容易把未来设计误读成现状。
 
-```bash
-openclaw logs --follow
-```
+## 运维与调试入口
 
-OpenViking 服务侧日志，默认本地路径：
+如果你要排查这套插件，优先看这几类入口：
 
-```bash
-cat ~/.openviking/data/log/openviking.log
-```
-
-## 故障排查
-
-| 现象 | 常见原因 | 排查方式 |
-| --- | --- | --- |
-| `plugins.slots.contextEngine` 不是 `openviking` | 插件槽位未设置，或被其它插件占用 | `openclaw config get plugins.slots.contextEngine` |
-| `local` 模式启动异常 | Python 路径、env 文件或 `ov.conf` 有问题 | `source ~/.openclaw/openviking.env && openclaw gateway restart` |
-| `port occupied` | 本地 OpenViking 端口已被占用 | 修改 `plugins.entries.openviking.config.port` 或释放端口 |
-| 不同 session 的 recall 表现不稳定 | agent/session 路由和预期不一致 | 打开 `logFindRequests`，再看 `openclaw logs --follow` |
-| 长对话后没有继续写入记忆 | `pending_tokens` 没达到阈值，或服务端抽取失败 | 检查插件配置、OpenClaw 日志和 `~/.openviking/data/log/openviking.log` |
-| session summary 过于模糊 | 你需要 archive 级别细节，不是只看摘要 | 用 `[Archive Index]` 里的 ID 调用 `ov_archive_expand` |
-| 当前版本和预期不一致 | 插件版本和 OpenViking 运行时版本未对齐 | 运行 `ov-install --current-version` |
-
-## 使用教程
-
-### 查看当前整体状态
-
-建议一起执行：
+### 查看当前配置
 
 ```bash
 ov-install --current-version
@@ -200,51 +200,41 @@ openclaw config get plugins.entries.openviking.config
 openclaw config get plugins.slots.contextEngine
 ```
 
-### 观察召回和写入链路
+### 看日志
 
-先看 OpenClaw 侧日志：
+OpenClaw 插件侧日志：
 
 ```bash
 openclaw logs --follow
 ```
 
-再看 OpenViking 侧日志：
+OpenViking 服务侧日志：
 
 ```bash
 cat ~/.openviking/data/log/openviking.log
 ```
 
-这是判断 session commit、archive 生成、记忆召回和记忆抽取是否正常的最快方式。
-
-### 切换到 Remote 模式
-
-如果已经有远端 OpenViking 服务：
+### Web Console
 
 ```bash
-openclaw config set plugins.entries.openviking.config.mode remote
-openclaw config set plugins.entries.openviking.config.baseUrl http://your-server:1933
-openclaw config set plugins.entries.openviking.config.apiKey your-api-key
-openclaw config set plugins.entries.openviking.config.agentId your-agent-id
-openclaw gateway restart
+python -m openviking.console.bootstrap --host 0.0.0.0 --port 8020 --openviking-url http://127.0.0.1:1933
 ```
 
-### 查看压缩会话的原始细节
-
-当模型只拿到了摘要，但你需要更精确的命令、路径或代码内容时：
-
-```text
-使用 [Archive Index] 里的 archive ID 调用 ov_archive_expand
-```
-
-### 浏览记忆内容
-
-可以使用本地终端界面：
+### `ov tui`
 
 ```bash
 ov tui
 ```
 
-如果希望用浏览器查看，也可以使用 Web Console。
+### 常见排查点
+
+| 现象 | 更可能的原因 | 优先检查 |
+| --- | --- | --- |
+| `plugins.slots.contextEngine` 不是 `openviking` | 插件槽位未设置或被其他插件覆盖 | `openclaw config get plugins.slots.contextEngine` |
+| `local` 模式启动失败 | Python 路径、env 文件或 `ov.conf` 不对 | `source ~/.openclaw/openviking.env && openclaw gateway restart` |
+| recall 在不同 session 间不稳定 | 路由身份和预期不一致 | 打开 `logFindRequests`，再看 `openclaw logs --follow` |
+| 长对话后没有持续抽取记忆 | `pending_tokens` 未过阈值，或服务端 Phase 2 失败 | 检查插件配置和 `~/.openviking/data/log/openviking.log` |
+| summary 太粗，不够回答细节问题 | 你要的是 archive 级明细，不是摘要 | 用 `[Archive Index]` 里的 ID 调用 `ov_archive_expand` |
 
 ---
 

@@ -2,197 +2,197 @@
 
 Use [OpenViking](https://github.com/volcengine/OpenViking) as the long-term memory backend for [OpenClaw](https://github.com/openclaw/openclaw). In OpenClaw, this plugin is registered as the `openviking` context engine.
 
+This document is not an installation guide. It is an implementation-focused design note for integrators and engineers. It describes how the plugin works today based on the code under `examples/openclaw-plugin`, not a future refactor target.
+
 ## Documentation
 
 - Install and upgrade: [INSTALL.md](./INSTALL.md)
-- Chinese install guide: [INSTALL-ZH.md](./INSTALL-ZH.md)
+- Chinese design and install guide: [INSTALL-ZH.md](./INSTALL-ZH.md)
 - Agent-oriented operator guide: [INSTALL-AGENT.md](./INSTALL-AGENT.md)
 
-## Technical Architecture
+## Design Positioning
 
-### Plugin Responsibilities
+- OpenClaw still owns the agent runtime, prompt orchestration, and tool execution.
+- OpenViking owns long-term memory retrieval, session archiving, archive summaries, and memory extraction.
+- `examples/openclaw-plugin` is not a narrow “memory lookup” plugin. It is an integration layer that spans the OpenClaw lifecycle.
 
-This plugin is not only a memory retriever. In code it plays four roles at once:
+In the current implementation, the plugin plays four roles at once:
 
-- a `context-engine` plugin that implements `assemble`, `afterTurn`, and `compact`
-- a hook layer that runs `before_prompt_build`, `session_start`, `session_end`, `agent_end`, and `before_reset`
-- a tool provider that registers `memory_recall`, `memory_store`, `memory_forget`, and `ov_archive_expand`
-- a runtime manager that can start and monitor a local OpenViking subprocess in `local` mode
+- `context-engine`: implements `assemble`, `afterTurn`, and `compact`
+- hook layer: handles `before_prompt_build`, `session_start`, `session_end`, `agent_end`, and `before_reset`
+- tool provider: registers `memory_recall`, `memory_store`, `memory_forget`, and `ov_archive_expand`
+- runtime manager: starts and monitors an OpenViking subprocess in `local` mode
 
-OpenClaw still owns the agent runtime and prompt orchestration. OpenViking owns long-term memory retrieval, session archiving, and memory extraction.
+## Overall Architecture
 
-### Identity and Routing
+![Overall OpenClaw and OpenViking plugin architecture](./images/openclaw-plugin-engine-overview.png)
 
-The plugin does not send a single global agent ID to OpenViking. It keeps OpenClaw session identity and OpenViking routing aligned:
+The diagram above reflects the current implementation boundary:
 
-- `sessionId` or `sessionKey` is converted into an OpenViking-safe session ID
-- UUID session IDs are reused directly; other IDs fall back to a stable SHA-256 form when needed
-- `X-OpenViking-Agent` is resolved per session, not per process
-- if `plugins.entries.openviking.config.agentId` is not `default`, it becomes a prefix like `<configAgentId>_<sessionAgent>`
-- routing and tenant headers are emitted by the client layer, and can be logged with `logFindRequests`
+- OpenClaw remains the primary runtime on the left. The plugin does not take over agent execution.
+- The middle layer combines hooks, the context engine, tools, and runtime management in one plugin registration.
+- All HTTP traffic goes through `OpenVikingClient`, which centralizes `X-OpenViking-*` headers and routing logs.
+- The OpenViking service owns sessions, memories, archives, and Phase 2 extraction, with storage under `viking://user/*`, `viking://agent/*`, and `viking://session/*`.
 
-This matters because the plugin supports multi-agent and multi-session OpenClaw flows without mixing memory across sessions.
+That split lets OpenClaw stay focused on reasoning and orchestration while OpenViking becomes the source of truth for long-lived context.
 
-### Session Lifecycle
+## Identity and Routing
 
-Session handling is the core design, and it spans both hooks and the context engine.
+The plugin does not send one fixed agent ID to OpenViking. It tries to keep OpenClaw session identity and OpenViking routing aligned.
 
-1. OpenClaw session identity is mapped to an OpenViking session ID.
-2. `assemble()` asks OpenViking for session context with a token budget.
-3. Returned archive summaries are rewritten into `[Session History Summary]` and `[Archive Index]`.
-4. Active OpenViking messages are converted back into OpenClaw messages.
-5. Tool calls and tool results are repaired so transcript structure stays provider-safe.
-6. `afterTurn()` extracts only the new turn, sanitizes it, and appends it to the OpenViking session.
-7. Once pending session tokens cross `commitTokenThreshold`, the plugin commits the OpenViking session and lets Phase 2 memory extraction continue asynchronously.
-8. `compact()` performs a blocking commit, waits for archive generation, then re-reads compacted session context.
+The main rules are:
 
-The result is a session model where OpenClaw sees a reduced working context, while OpenViking keeps the long-form archive and extracted memories.
+- reuse `sessionId` directly when it is already a UUID
+- prefer `sessionKey` when deriving a stable `ovSessionId`
+- normalize unsafe path characters, or fall back to a stable SHA-256 when needed
+- resolve `X-OpenViking-Agent` per session, not per process
+- when `plugins.entries.openviking.config.agentId` is not `default`, prefix the session agent as `<configAgentId>_<sessionAgent>`
+- add `X-OpenViking-Account`, `X-OpenViking-User`, and `X-OpenViking-Agent` in the client layer
 
-### What `assemble()` Actually Builds
+This matters because the plugin is built to support multi-agent and multi-session OpenClaw usage without mixing memories across sessions.
 
-The assembled context is more than “old chat history”.
+## Prompt-Front Recall Flow
 
-- archive overviews become a compact session summary block
-- earlier archives are exposed as an ordered archive index
-- active session messages stay uncompressed
-- when precise details are missing, the model can call `ov_archive_expand` to reopen a specific archive
+![Automatic recall flow before prompt build](./images/openclaw-plugin-recall-flow.png)
 
-This is why the plugin can survive long sessions: it does not keep replaying the entire raw transcript into OpenClaw.
+Today the main recall path still lives in `before_prompt_build`:
 
-### Recall and Capture Pipeline
+1. Extract the latest user text from `messages` or `prompt`.
+2. Resolve the agent routing for the current `sessionId/sessionKey`.
+3. Run a quick availability precheck so prompt building does not stall when OpenViking is unavailable.
+4. Query both `viking://user/memories` and `viking://agent/memories` in parallel.
+5. Deduplicate, threshold-filter, rerank, and trim the results under a token budget.
+6. Prepend the selected memories as a `<relevant-memories>` block.
 
-There are two memory loops around each turn.
+The reranking logic is not pure vector-score sorting. The current implementation also considers:
 
-Before generation:
+- whether a result is a leaf memory with `level == 2`
+- whether it looks like a preference memory
+- whether it looks like an event memory
+- lexical overlap with the current query
 
-- `before_prompt_build` extracts the latest user text
-- it searches both `viking://user/memories` and `viking://agent/memories`
-- results are deduplicated, reranked, and trimmed to a token budget
-- the selected memories are injected as a `<relevant-memories>` block
+### Transcript ingest assist
 
-After generation:
+This path also includes a special transcript-oriented branch.
 
-- `afterTurn` formats the new turn into capture text
-- assistant text, `toolUse`, and `toolResult` content are preserved
-- metadata noise and injected memory blocks are stripped before capture
-- OpenViking session commit triggers archive + extraction
+When the latest user input looks like pasted multi-speaker transcript content:
 
-The reranking logic is query-aware. It boosts preferences, events, leaf memories, and lexical overlap instead of trusting vector score alone.
+- metadata blocks, command text, and pure question text are filtered out
+- the cleaned text is checked against speaker-turn and length thresholds
+- if it matches, the plugin prepends a lightweight `<ingest-reply-assist>` instruction
 
-### Transcript Ingest Assist
+The goal is not to change memory logic. It is to reduce the chance that the model responds with `NO_REPLY` when the user pastes chat history, meeting notes, or conversation transcripts for ingestion.
 
-The plugin also has a special path for transcript-like user input.
+## Session Lifecycle
 
-- multi-speaker text is detected with speaker-turn and length thresholds
-- command text, metadata blocks, and pure question prompts are filtered out
-- when a transcript-like ingest is detected, the plugin prepends a lightweight instruction so the model returns a short usable reply instead of `NO_REPLY`
+![Session lifecycle and compaction boundary](./images/openclaw-plugin-session-lifecycle.png)
 
-This is aimed at memory ingestion workflows where the user pastes chat transcripts or conversation dumps.
+Session handling is the main axis of this design. In the current implementation it covers history assembly, incremental append, asynchronous commit, and blocking compaction readback.
 
-### Local and Remote Runtime
+### What `assemble()` does
 
-#### Local Mode
+`assemble()` is not just replaying old chat history. It reads session context back from OpenViking under a token budget, then rebuilds OpenClaw-facing messages:
 
-In `local` mode, the plugin starts OpenViking itself.
+- `latest_archive_overview` becomes `[Session History Summary]`
+- `pre_archive_abstracts` becomes `[Archive Index]`
+- active session messages stay in message-block form
+- assistant tool parts become `toolUse`
+- tool output becomes separate `toolResult`
+- the final message list goes through a tool-use/result pairing repair pass
 
-- resolves Python from `OPENVIKING_PYTHON`, env files, or system defaults
-- prepares the port before boot
-- kills stale OpenViking processes on the same port
-- auto-picks the next free port if the configured port is occupied by another process
-- waits for `/health` before treating the service as ready
-- caches the local client so multiple OpenClaw plugin contexts do not spawn duplicate runtimes
+That means OpenClaw sees “compressed history summary + archive index + active messages”, not an ever-growing raw transcript.
 
-#### Remote Mode
+### What `afterTurn()` does
 
-In `remote` mode, the plugin only uses the HTTP API.
+`afterTurn()` has a narrower job: append only the new turn into the OpenViking session.
 
-- no subprocess is started
-- `baseUrl` and optional `apiKey` come from OpenClaw plugin config
-- the same session, recall, archive, and tool flow still applies
+- it slices only the newly added messages
+- it keeps only `user` / `assistant` capture text
+- it preserves `toolUse` / `toolResult` content in the serialized turn text
+- it strips injected `<relevant-memories>` blocks and metadata noise before capture
+- it appends the sanitized turn text into the OpenViking session
 
-### Tools and Operator Surfaces
+After that, the plugin checks `pending_tokens`. Once the session crosses `commitTokenThreshold`, it triggers `commit(wait=false)`:
 
-The plugin exposes more than automatic memory behavior.
+- archive generation and Phase 2 memory extraction continue asynchronously on the server
+- the current turn is not blocked waiting for extraction
+- if `logFindRequests` is enabled, the logs include the task id and follow-up extraction detail
 
-- `memory_recall`: search long-term memory explicitly
-- `memory_store`: write text into an OpenViking session and force extraction
-- `memory_forget`: delete a known memory URI or search and delete a strong single match
-- `ov_archive_expand`: reopen a compressed session archive when the summary is not enough
+### What `compact()` does
 
-For operators, the main surfaces are:
+`compact()` is the stricter synchronous boundary:
 
-- Web Console: inspect OpenViking files and memory state
-- `ov tui`: browse local OpenViking data in terminal
-- `ov-install --current-version`: show installed plugin version and OpenViking version
-- `openclaw config get plugins.entries.openviking.config`: inspect current plugin config
+- it calls `commit(wait=true)` and blocks for completion
+- when an archive exists, it re-reads `latest_archive_overview`
+- it returns updated token estimates, the latest archive id, and summary content
+- if the summary is too coarse, the model can call `ov_archive_expand` to reopen a specific archive
 
-## Tools
+So `afterTurn()` is closer to “incremental append plus threshold-triggered async commit”, while `compact()` is the explicit “wait for archive and compaction to finish” boundary.
 
-### Web Console
+## Tools and Expandability
 
-OpenViking includes a Web Console for inspecting stored files, debugging ingestion, and checking memory state.
+Beyond automatic behavior, the plugin exposes four tools directly:
 
-Example startup:
+- `memory_recall`: explicit long-term memory search
+- `memory_store`: write text into an OpenViking session and trigger commit
+- `memory_forget`: delete by URI, or search first and remove a single strong match
+- `ov_archive_expand`: expand a concrete archive back into raw messages
 
-```bash
-python -m openviking.console.bootstrap --host 0.0.0.0 --port 8020 --openviking-url http://127.0.0.1:1933
-```
+They serve different roles:
 
-### `ov tui`
+- automatic recall covers the default case where the model does not know what to search yet
+- `memory_recall` gives the model an explicit follow-up search path
+- `memory_store` is for immediately persisting clearly important information
+- `ov_archive_expand` is the “go back to archive detail” escape hatch when summaries are not enough
 
-Use the terminal UI to browse OpenViking files locally:
+`ov_archive_expand` is especially important because `assemble()` normally returns archive summaries and indexes, not the full raw transcript.
 
-```bash
-ov tui
-```
+## Local / Remote Runtime Modes
 
-### Version Inspection
+![Runtime modes and routing behavior](./images/openclaw-plugin-runtime-routing.png)
 
-Show the installed plugin version and OpenViking version:
+The current implementation supports two runtime modes. The upper-layer session, memory, and archive model stays the same in both.
 
-```bash
-ov-install --current-version
-```
+### Local mode
 
-### Plugin Config Inspection
+In `local` mode, the plugin manages the OpenViking subprocess itself:
 
-Print the full current OpenClaw plugin config:
+- resolve Python from `OPENVIKING_PYTHON`, env files, or system defaults
+- prepare the port before startup
+- kill stale OpenViking processes on the target port
+- move to the next free port if another process owns the configured one
+- wait for `/health` before marking the service ready
+- cache the local client so multiple plugin registrations do not spawn duplicates
 
-```bash
-openclaw config get plugins.entries.openviking.config
-```
+That is why this plugin is not only “memory logic”. It is also a local runtime manager.
 
-### Logs
+### Remote mode
 
-OpenClaw plugin log stream:
+In `remote` mode, the plugin behaves as a pure HTTP client:
 
-```bash
-openclaw logs --follow
-```
+- no local subprocess is started
+- `baseUrl` and optional `apiKey` come from plugin config
+- session context, memory find/read, commit, and archive expansion behavior stays the same
 
-OpenViking service log, default local path:
+The main difference between `local` and `remote` is who is responsible for bringing up the OpenViking service, not the higher-level context model.
 
-```bash
-cat ~/.openviking/data/log/openviking.log
-```
+## Relationship to the Older Design Draft
 
-## Troubleshooting
+The repo also contains a more future-looking design draft at `docs/design/openclaw-context-engine-refactor.md`. It is important not to conflate the two:
 
-| Symptom | Likely Cause | What to Check |
-| --- | --- | --- |
-| `plugins.slots.contextEngine` is not `openviking` | Plugin slot was not set or was replaced | `openclaw config get plugins.slots.contextEngine` |
-| Local mode does not start correctly | Python path, env file, or `ov.conf` is wrong | `source ~/.openclaw/openviking.env && openclaw gateway restart` |
-| `port occupied` | Local OpenViking port is already used | Change `plugins.entries.openviking.config.port` or free the port |
-| Recall works inconsistently across sessions | Agent/session routing is not what you expected | Enable `logFindRequests` and check `openclaw logs --follow` |
-| Memory is not being captured after long chats | Pending tokens stay below `commitTokenThreshold` or extraction failed server-side | Check plugin config, OpenClaw logs, and `~/.openviking/data/log/openviking.log` |
-| Session summaries are too lossy | You need archive expansion instead of summary-only context | Use `ov_archive_expand` with an ID from `[Archive Index]` |
-| Installed versions are not what you expected | Plugin and OpenViking runtime versions diverged | Run `ov-install --current-version` |
+- this README describes current implemented behavior
+- the older draft discusses a stronger future move into context-engine-owned lifecycle control
+- in the current version, the main automatic recall path still lives in `before_prompt_build`, not fully in `assemble()`
+- in the current version, `afterTurn()` already appends to the OpenViking session, but commit remains threshold-triggered and asynchronous on that path
+- in the current version, `compact()` already uses `commit(wait=true)`, but it is still focused on synchronous commit plus readback rather than owning every orchestration concern
 
-## Usage Tutorials
+That distinction matters, otherwise the future design draft is easy to misread as already shipped behavior.
 
-### Inspect the Current Setup
+## Operator and Debugging Surfaces
 
-Use these commands together:
+If you need to debug this plugin, start with these entry points.
+
+### Inspect the current setup
 
 ```bash
 ov-install --current-version
@@ -200,51 +200,41 @@ openclaw config get plugins.entries.openviking.config
 openclaw config get plugins.slots.contextEngine
 ```
 
-### Follow Recall and Capture
+### Watch logs
 
-Watch the OpenClaw side:
+OpenClaw plugin logs:
 
 ```bash
 openclaw logs --follow
 ```
 
-Then inspect the OpenViking side:
+OpenViking service logs:
 
 ```bash
 cat ~/.openviking/data/log/openviking.log
 ```
 
-This is the fastest way to see session commit, archive generation, memory recall, and memory extraction.
-
-### Switch to Remote Mode
-
-If you already have a remote OpenViking service:
+### Web Console
 
 ```bash
-openclaw config set plugins.entries.openviking.config.mode remote
-openclaw config set plugins.entries.openviking.config.baseUrl http://your-server:1933
-openclaw config set plugins.entries.openviking.config.apiKey your-api-key
-openclaw config set plugins.entries.openviking.config.agentId your-agent-id
-openclaw gateway restart
+python -m openviking.console.bootstrap --host 0.0.0.0 --port 8020 --openviking-url http://127.0.0.1:1933
 ```
 
-### Inspect Archived Session Details
-
-When the model only has a session summary, reopen a concrete archive:
-
-```text
-Use ov_archive_expand with an archive ID from [Archive Index]
-```
-
-### Browse Stored Memory
-
-Use the local terminal UI:
+### `ov tui`
 
 ```bash
 ov tui
 ```
 
-Or use Web Console if you want a browser-based view of the stored memory data.
+### Common things to check
+
+| Symptom | More likely cause | First check |
+| --- | --- | --- |
+| `plugins.slots.contextEngine` is not `openviking` | The plugin slot was never set, or another plugin replaced it | `openclaw config get plugins.slots.contextEngine` |
+| `local` mode fails to start | Python path, env file, or `ov.conf` is wrong | `source ~/.openclaw/openviking.env && openclaw gateway restart` |
+| recall behaves inconsistently across sessions | Routing identity is not what you expected | Enable `logFindRequests`, then inspect `openclaw logs --follow` |
+| long chats stop extracting memory | `pending_tokens` never crosses the threshold, or Phase 2 fails server-side | Check plugin config and `~/.openviking/data/log/openviking.log` |
+| summaries are too coarse for detailed questions | You need archive-level detail, not just summary | Use an ID from `[Archive Index]` with `ov_archive_expand` |
 
 ---
 
