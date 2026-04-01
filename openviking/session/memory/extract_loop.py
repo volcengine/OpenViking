@@ -29,6 +29,7 @@ from openviking.session.memory.utils import (
     validate_operations_uris,
 )
 from openviking.storage.viking_fs import VikingFS, get_viking_fs
+from openviking.telemetry import tracer
 from openviking_cli.utils import get_logger
 
 logger = get_logger(__name__)
@@ -170,7 +171,7 @@ See the complete JSON Schema below:
 
         while iteration < max_iterations:
             iteration += 1
-            logger.info(f"ReAct iteration {iteration}/{max_iterations}")
+            tracer.info(f"ReAct iteration {iteration}/{max_iterations}")
 
             # Check if this is the last iteration - force final result
             is_last_iteration = iteration >= max_iterations
@@ -197,13 +198,13 @@ See the complete JSON Schema below:
                 # Check if any write_uris target existing files that weren't read
                 refetch_uris = await self._check_unread_existing_files(operations)
                 if refetch_uris:
-                    logger.info(f"Found unread existing files: {refetch_uris}, refetching...")
+                    tracer.info(f"Found unread existing files: {refetch_uris}, refetching...")
                     # Add refetch results to messages and continue loop
                     await self._add_refetch_results_to_messages(messages, refetch_uris)
                     # Allow one extra iteration for refetch
                     if iteration >= max_iterations:
                         max_iterations += 1
-                        logger.info(f"Extended max_iterations to {max_iterations} for refetch")
+                        tracer.info(f"Extended max_iterations to {max_iterations} for refetch")
 
                     continue
 
@@ -226,10 +227,11 @@ See the complete JSON Schema below:
             else:
                 raise RuntimeError("ReAct loop completed but no operations generated")
 
-        logger.info(f"final_operations={final_operations.model_dump_json(indent=4)}")
+        tracer.info(f"final_operations={final_operations.model_dump_json(indent=4)}")
 
         return final_operations, tools_used
 
+    @tracer("extract_loop.execute_tool_calls")
     async def _execute_tool_calls(self, messages, tool_calls, tools_used):
         # Execute all tool calls in parallel
         async def execute_single_tool_call(idx: int, tool_call):
@@ -339,11 +341,11 @@ See the complete JSON Schema below:
             )
             if prompt_tokens > 0:
                 cache_hit_rate = (cached_tokens / prompt_tokens) * 100
-                logger.info(
+                tracer.info(
                     f"[KVCache] prompt_tokens={prompt_tokens}, cached_tokens={cached_tokens}, cache_hit_rate={cache_hit_rate:.1f}%"
                 )
             else:
-                logger.info(
+                tracer.info(
                     f"[KVCache] prompt_tokens={prompt_tokens}, cached_tokens={cached_tokens}"
                 )
 
@@ -351,8 +353,8 @@ See the complete JSON Schema below:
         if response.has_tool_calls:
             # Format tool calls nicely for debug logging
             for tc in response.tool_calls:
-                logger.info(f"[assistant tool_call] (id={tc.id}, name={tc.name})")
-                logger.info(f"  {json.dumps(tc.arguments, indent=2, ensure_ascii=False)}")
+                tracer.info(f"[assistant tool_call] (id={tc.id}, name={tc.name})")
+                tracer.info(f"  {json.dumps(tc.arguments, indent=2, ensure_ascii=False)}")
             return (response.tool_calls, None)
 
         # Case 2: Try to parse MemoryOperations from content with stability
@@ -384,6 +386,7 @@ See the complete JSON Schema below:
         print("No tool calls or operations parsed")
         return (None, None)
 
+    @tracer("extract_loop.execute_tool", ignore_result=False)
     async def _execute_tool(
         self,
         tool_call,
@@ -402,7 +405,9 @@ See the complete JSON Schema below:
         tool_ctx = ToolContext(request_ctx=self.ctx, transaction_handle=self._transaction_handle)
 
         try:
+            tracer.info(f'tool_call.arguments={tool_call.arguments}')
             result = await tool.execute(self.viking_fs, tool_ctx, **tool_call.arguments)
+
             return result
         except Exception as e:
             logger.error(f"Failed to execute {tool_call.name}: {e}")
@@ -439,7 +444,8 @@ See the complete JSON Schema below:
                 item_dict = dict(item) if hasattr(item, "model_dump") else dict(item)
                 try:
                     uri = resolve_flat_model_uri(
-                        item_dict, registry, "default", "default", memory_type=field_name
+                        item_dict, registry, "default", "default",
+                        memory_type=field_name, extract_context=self._extract_context
                     )
                 except Exception as e:
                     logger.warning(f"Failed to resolve URI for {item}: {e}")

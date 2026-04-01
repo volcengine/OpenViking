@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Union
 import litellm
 from litellm import acompletion, completion
 
+from openviking.telemetry import tracer
 from ..base import ToolCall, VLMBase, VLMResponse
 
 logger = logging.getLogger(__name__)
@@ -300,6 +301,7 @@ class LiteLLMVLMProvider(VLMBase):
         self._update_token_usage_from_response(response, duration_seconds=elapsed)
         return self._build_vlm_response(response, has_tools=bool(tools))
 
+    @tracer("vlm.call", ignore_result=False, ignore_args=["messages"])
     async def get_completion_async(
         self,
         prompt: str = "",
@@ -315,6 +317,9 @@ class LiteLLMVLMProvider(VLMBase):
             kwargs_messages = messages
         else:
             kwargs_messages = [{"role": "user", "content": prompt}]
+
+        # 用 tracer.info 打印请求
+        tracer.info(f"request: {json.dumps(kwargs_messages, ensure_ascii=False, indent=2)}")
 
         kwargs = self._build_kwargs(model, kwargs_messages, tools, tool_choice, thinking=thinking)
 

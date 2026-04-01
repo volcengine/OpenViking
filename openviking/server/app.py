@@ -120,6 +120,11 @@ def create_app(
         task_tracker = get_task_tracker()
         task_tracker.start_cleanup_loop()
 
+        # Initialize tracer
+        from openviking.telemetry import tracer_module
+
+        tracer_module.init_tracer_from_config()
+
         yield
 
         # Cleanup

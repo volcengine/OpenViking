@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 # Import run_async for sync-to-async calls
 from openviking_cli.utils import run_async
 
+from openviking.telemetry import tracer
 from ..base import ToolCall, VLMResponse
 from .openai_vlm import OpenAIVLM
 
@@ -91,8 +92,8 @@ class VolcEngineVLM(OpenAIVLM):
             static_segment = messages[: first_breakpoint_idx + 1]
             dynamic_messages = messages[first_breakpoint_idx + 1 :]
             static_segments = [static_segment]
-            print(f"static_segment={len(static_segment)}")
-            print(f"dynamic_messages={len(dynamic_messages)}")
+            tracer.info(f"static_segment={len(static_segment)}")
+            tracer.info(f"dynamic_messages={len(dynamic_messages)}")
         else:
             # 没有 cache_control 或在第一个位置，全部作为 dynamic
             static_segments = []
@@ -274,22 +275,11 @@ class VolcEngineVLM(OpenAIVLM):
         - response.id: response ID
         - response.usage: token usage
         """
-        # Debug: print response structure
-        # logger.debug(f"[VolcEngineVLM] Response type: {type(response)}")
-        # logger.info(f"[VolcEngineVLM] Full response: {response}")
-        if hasattr(response, "output"):
-            # logger.debug(f"[VolcEngineVLM] Output items: {len(response.output)}")
-            for i, item in enumerate(response.output):
-                # logger.debug(f"[VolcEngineVLM]   Item {i}: type={getattr(item, 'type', 'unknown')}")
-                # Print full item for debugging
-                # logger.info(f"[VolcEngineVLM]   Item {i} full: {item}")
-                pass
-
         # Extract content from Responses API format
         content = ""
         tool_calls = []
         finish_reason = "stop"
-
+        tracer.info(f'response.output={response.output}')
         if hasattr(response, "output") and response.output:
             for item in response.output:
                 item_type = getattr(item, "type", None)
@@ -535,6 +525,7 @@ class VolcEngineVLM(OpenAIVLM):
 
         return converted
 
+    @tracer("vlm.call")
     async def get_completion_async(
         self,
         prompt: str = "",
@@ -557,6 +548,9 @@ class VolcEngineVLM(OpenAIVLM):
         # Parse messages into multiple static segments and dynamic messages
         # Each segment ends with cache_control, dynamic is the rest
         static_segments, dynamic_messages = self._parse_messages_with_breakpoints(kwargs_messages)
+
+        # 用 tracer.info 打印请求
+        tracer.info(f"request: {json.dumps(kwargs_messages, ensure_ascii=False, indent=2)}")
 
         # If we have static segments, try prefix cache
         response_format = None  # Can be extended for structured output

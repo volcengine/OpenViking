@@ -23,6 +23,7 @@ from openviking.session.memory.utils import (
     serialize_with_metadata,
 )
 from openviking.storage.viking_fs import get_viking_fs
+from openviking.telemetry import tracer
 from openviking_cli.exceptions import NotFoundError
 from openviking_cli.utils import get_logger
 
@@ -257,11 +258,11 @@ class MemoryUpdater:
                 )
                 result.add_written(resolved_op.uri)
             except Exception as e:
-                logger.info(
+                tracer.info(
                     f"Failed to write memory: {e}, op={resolved_op.model}, op type={type(resolved_op.model)}"
                 )
                 if hasattr(resolved_op.model, "model_dump"):
-                    logger.info(f"Op dump: {resolved_op.model.model_dump()}")
+                    tracer.info(f"Op dump: {resolved_op.model.model_dump()}")
                 result.add_error(resolved_op.uri, e)
 
         # Apply edit operations
@@ -270,7 +271,7 @@ class MemoryUpdater:
                 await self._apply_edit(resolved_op.model, resolved_op.uri, ctx)
                 result.add_edited(resolved_op.uri)
             except Exception as e:
-                logger.error(f"Failed to edit memory {resolved_op.uri}: {e}")
+                tracer.error(f"Failed to edit memory {resolved_op.uri}",e)
                 result.add_error(resolved_op.uri, e)
 
         # Apply edit_overview operations
@@ -279,7 +280,7 @@ class MemoryUpdater:
                 await self._apply_edit_overview(op, uri, ctx)
                 result.add_edited(uri)
             except Exception as e:
-                logger.error(f"Failed to edit overview {uri}: {e}")
+                tracer.error(f"Failed to edit overview {uri}",e)
                 result.add_error(uri, e)
 
         # Apply delete operations
@@ -288,13 +289,13 @@ class MemoryUpdater:
                 await self._apply_delete(uri, ctx)
                 result.add_deleted(uri)
             except Exception as e:
-                logger.error(f"Failed to delete memory {uri}: {e}")
+                tracer.error(f"Failed to delete memory {uri}",e)
                 result.add_error(uri, e)
 
         # Vectorize written and edited memories
         await self._vectorize_memories(result, ctx)
 
-        logger.info(f"Memory operations applied: {result.summary()}")
+        tracer.info(f"Memory operations applied: {result.summary()}")
         return result
 
     async def _apply_write(
@@ -340,7 +341,7 @@ class MemoryUpdater:
                         if rendered_content:
                             content = rendered_content
                     except Exception as e:
-                        logger.warning(
+                        tracer.warning(
                             f"Failed to render content template for memory type {memory_type_str}: {e}"
                         )
                         # 渲染失败时保留原始 content，确保写入操作继续进行
@@ -354,7 +355,7 @@ class MemoryUpdater:
         # Write content to VikingFS
         # VikingFS automatically handles L0/L1/L2 and vector index updates
         await viking_fs.write_file(uri, full_content, ctx=ctx)
-        logger.debug(f"Written memory: {uri}")
+
 
     def _render_content_template(
         self, template: str, fields: Dict[str, Any], extract_context: Any = None
@@ -390,7 +391,7 @@ class MemoryUpdater:
             jinja_template = env.from_string(template)
             return jinja_template.render(**template_vars).strip()
         except Exception as e:
-            logger.error(f"Template rendering failed: {e}")
+            tracer.error(f"Template rendering failed: {e}")
             raise
 
     def _is_patch_format(self, content: Any) -> bool:
@@ -414,11 +415,10 @@ class MemoryUpdater:
             # If no StrPatch fields, treat as write operation
             has_str_patch = any(self._is_patch_format(v) for v in model_dict.values())
             if not has_str_patch:
-                logger.debug(f"Memory not found for edit, treating as write: {uri}")
                 await self._apply_write(flat_model, uri, ctx)
                 return
             # Has StrPatch field but file doesn't exist - cannot apply
-            logger.warning(f"Memory not found for edit: {uri}")
+            tracer.error(f"Memory not found for edit: {uri}")
             return
 
         # Deserialize content and metadata
@@ -474,7 +474,6 @@ class MemoryUpdater:
         self._print_diff(uri, current_plain_content, new_plain_content)
 
         await viking_fs.write_file(uri, new_full_content, ctx=ctx)
-        logger.debug(f"Edited memory: {uri}")
 
     async def _apply_delete(self, uri: str, ctx: RequestContext) -> None:
         """Apply delete operation (uri is already a string)."""
@@ -484,9 +483,8 @@ class MemoryUpdater:
         # VikingFS automatically handles vector index cleanup
         try:
             await viking_fs.rm(uri, recursive=False, ctx=ctx)
-            logger.debug(f"Deleted memory: {uri}")
         except NotFoundError:
-            logger.warning(f"Memory not found for delete: {uri}")
+            tracer.error(f"Memory not found for delete: {uri}")
             # Idempotent - deleting non-existent file succeeds
 
     async def _apply_edit_overview(
@@ -516,13 +514,12 @@ class MemoryUpdater:
             current_overview = await viking_fs.read_file(uri, ctx=ctx) or ""
         except NotFoundError:
             # File doesn't exist yet, start with empty content
-            logger.debug(f"Overview file does not exist yet: {uri}")
+            pass
 
         # Apply patch or replace based on overview_value type
         new_overview = current_overview
         if overview_value is None:
             # No overview provided, nothing to do
-            logger.debug("No overview value provided, skipping edit")
             return
         elif isinstance(overview_value, str):
             # 空字符串保持原值
@@ -553,7 +550,6 @@ class MemoryUpdater:
 
         # Write new overview
         await viking_fs.write_file(uri, new_overview, ctx=ctx)
-        logger.debug(f"Edited overview: {uri}")
 
         # Extract and write .abstract.md
         await self._write_abstract_from_overview(uri, new_overview, ctx)
@@ -600,9 +596,8 @@ class MemoryUpdater:
 
         try:
             await viking_fs.write_file(abstract_uri, abstract, ctx=ctx)
-            logger.debug(f"Wrote abstract: {abstract_uri}")
         except Exception as e:
-            logger.warning(f"Failed to write abstract {abstract_uri}: {e}")
+            tracer.error(f"Failed to write abstract {abstract_uri}: {e}")
 
     def _print_diff(self, uri: str, old_content: str, new_content: str) -> None:
         """Print a diff of the memory edit using diff_match_patch."""
@@ -637,12 +632,12 @@ class MemoryUpdater:
             lines.append(f"{'=' * 60}\n")
 
             # Print directly
-            print("\n".join(lines))
+            tracer.info(f'diff={"\n".join(lines)}')
         except ImportError:
             # Fallback: just show file name
-            logger.debug(f"diff_match_patch not available, skipping diff for {uri}")
+            tracer.error(f"diff_match_patch not available, skipping diff for {uri}")
         except Exception as e:
-            logger.debug(f"Failed to print diff for {uri}: {e}")
+            tracer.error(f"Failed to print diff for {uri}: {e}")
 
     async def _vectorize_memories(
         self,

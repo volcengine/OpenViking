@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from urllib.parse import urlparse
 
+from openviking.telemetry import tracer
 from ..base import ToolCall, VLMBase, VLMResponse
 from ..registry import DEFAULT_AZURE_API_VERSION
 
@@ -124,6 +125,7 @@ class OpenAIVLM(VLMBase):
         duration_seconds: float = 0.0,
     ):
         if hasattr(response, "usage") and response.usage:
+            tracer.info(f'response.usage={response.usage}')
             prompt_tokens = response.usage.prompt_tokens
             completion_tokens = response.usage.completion_tokens
             self.update_token_usage(
@@ -153,7 +155,7 @@ class OpenAIVLM(VLMBase):
         """Build response from OpenAI response. Returns str or VLMResponse based on has_tools."""
         choice = response.choices[0]
         message = choice.message
-
+        tracer.info(f'result={message.content}')
         if has_tools:
             usage = {}
             if hasattr(response, "usage") and response.usage:
@@ -305,6 +307,7 @@ class OpenAIVLM(VLMBase):
 
         return self._clean_response(content)
 
+    @tracer("vlm.call", ignore_result=True, ignore_args=["messages"])
     async def get_completion_async(
         self,
         prompt: str = "",
@@ -334,6 +337,9 @@ class OpenAIVLM(VLMBase):
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = tool_choice or "auto"
+
+        # 用 tracer.info 打印请求
+        tracer.info(f"messages={json.dumps(kwargs_messages, ensure_ascii=False, indent=2)}")
 
         last_error = None
         for attempt in range(max_retries + 1):

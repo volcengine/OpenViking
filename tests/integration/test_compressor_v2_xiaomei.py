@@ -132,6 +132,8 @@ def run_ingest(client: ov.SyncHTTPClient, session_id: str, wait_seconds: float):
     console.print("  [yellow]提交 Session（触发记忆抽取）...[/yellow]")
     commit_result = client.commit_session(session_id)
     task_id = commit_result.get("task_id")
+    trace_id = commit_result.get("trace_id")
+    console.print(f"  [bold cyan]trace_id: {trace_id}[/bold cyan]")
     console.print(f"  Commit 结果: {commit_result}")
 
     # 轮询后台任务直到完成
