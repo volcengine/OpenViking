@@ -328,6 +328,20 @@ impl HttpClient {
         self.post("/api/v1/content/reindex", &body).await
     }
 
+    pub async fn compress(
+        &self,
+        uri: &str,
+        max_abstract_length: u32,
+        dry_run: bool,
+    ) -> Result<serde_json::Value> {
+        let body = serde_json::json!({
+            "uri": uri,
+            "max_abstract_length": max_abstract_length,
+            "dry_run": dry_run,
+        });
+        self.post("/api/v1/content/compress", &body).await
+    }
+
     /// Download file as raw bytes
     pub async fn get_bytes(&self, uri: &str) -> Result<Vec<u8>> {
         let url = format!("{}/api/v1/content/download", self.base_url);
