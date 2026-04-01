@@ -210,6 +210,7 @@ class AsyncOpenViking:
         build_index: bool = True,
         summarize: bool = False,
         watch_interval: float = 0,
+        tags: Optional[Union[str, List[str]]] = None,
         telemetry: TelemetryRequest = False,
         **kwargs,
     ) -> Dict[str, Any]:
@@ -242,6 +243,7 @@ class AsyncOpenViking:
             timeout=timeout,
             build_index=build_index,
             summarize=summarize,
+            tags=tags,
             telemetry=telemetry,
             watch_interval=watch_interval,
             **kwargs,
@@ -308,6 +310,7 @@ class AsyncOpenViking:
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        tags: Optional[Union[str, List[str]]] = None,
         telemetry: TelemetryRequest = False,
     ):
         """
@@ -333,6 +336,7 @@ class AsyncOpenViking:
             limit=limit,
             score_threshold=score_threshold,
             filter=filter,
+            tags=tags,
             telemetry=telemetry,
         )
 
@@ -343,6 +347,7 @@ class AsyncOpenViking:
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict] = None,
+        tags: Optional[Union[str, List[str]]] = None,
         telemetry: TelemetryRequest = False,
     ):
         """Semantic search"""
@@ -353,6 +358,7 @@ class AsyncOpenViking:
             limit=limit,
             score_threshold=score_threshold,
             filter=filter,
+            tags=tags,
             telemetry=telemetry,
         )
 

@@ -244,6 +244,7 @@ class TypedQuery:
         intent: Query intent description
         priority: Priority (1-5, 1 is highest)
         target_directories: Directory URIs located by LLM
+        tags: Explicit tag constraints supplied by the caller
     """
 
     query: str
@@ -251,6 +252,7 @@ class TypedQuery:
     intent: str
     priority: int = 3
     target_directories: List[str] = field(default_factory=list)
+    tags: List[str] = field(default_factory=list)
 
 
 @dataclass

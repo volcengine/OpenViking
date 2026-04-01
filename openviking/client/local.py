@@ -14,6 +14,7 @@ from openviking.telemetry.execution import (
     attach_telemetry_payload,
     run_with_telemetry,
 )
+from openviking.utils.tag_utils import parse_tags
 from openviking_cli.client.base import BaseClient
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils import run_async
@@ -83,6 +84,7 @@ class LocalClient(BaseClient):
         summarize: bool = False,
         telemetry: TelemetryRequest = False,
         watch_interval: float = 0,
+        tags: Optional[Union[str, List[str]]] = None,
         **kwargs,
     ) -> Dict[str, Any]:
         """Add resource to OpenViking."""
@@ -104,6 +106,7 @@ class LocalClient(BaseClient):
                 build_index=build_index,
                 summarize=summarize,
                 watch_interval=watch_interval,
+                tags=parse_tags(tags),
                 **kwargs,
             ),
         )
@@ -263,6 +266,7 @@ class LocalClient(BaseClient):
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
+        tags: Optional[Union[str, List[str]]] = None,
         telemetry: TelemetryRequest = False,
     ) -> Any:
         """Semantic search without session context."""
@@ -276,6 +280,7 @@ class LocalClient(BaseClient):
                 limit=limit,
                 score_threshold=score_threshold,
                 filter=filter,
+                tags=parse_tags(tags),
             ),
         )
         return attach_telemetry_payload(
@@ -291,6 +296,7 @@ class LocalClient(BaseClient):
         limit: int = 10,
         score_threshold: Optional[float] = None,
         filter: Optional[Dict[str, Any]] = None,
+        tags: Optional[Union[str, List[str]]] = None,
         telemetry: TelemetryRequest = False,
     ) -> Any:
         """Semantic search with optional session context."""
@@ -308,6 +314,7 @@ class LocalClient(BaseClient):
                 limit=limit,
                 score_threshold=score_threshold,
                 filter=filter,
+                tags=parse_tags(tags),
             )
 
         execution = await run_with_telemetry(

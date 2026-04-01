@@ -860,6 +860,7 @@ class VikingFS:
         target_uri: str = "",
         limit: int = 10,
         score_threshold: Optional[float] = None,
+        tags: Optional[List[str]] = None,
         filter: Optional[Dict] = None,
         ctx: Optional[RequestContext] = None,
     ):
@@ -908,6 +909,7 @@ class VikingFS:
             context_type=context_type,
             intent="",
             target_directories=[target_uri] if target_uri else None,
+            tags=tags or [],
         )
 
         real_ctx = self._ctx_or_default(ctx)
@@ -948,6 +950,7 @@ class VikingFS:
         session_info: Optional[Dict] = None,
         limit: int = 10,
         score_threshold: Optional[float] = None,
+        tags: Optional[List[str]] = None,
         filter: Optional[Dict] = None,
         ctx: Optional[RequestContext] = None,
     ):
@@ -1008,6 +1011,8 @@ class VikingFS:
                 target_abstract=target_abstract,
             )
             typed_queries = query_plan.queries
+            for tq in typed_queries:
+                tq.tags = list(tags or [])
             # Set target_directories
             if target_uri_list:
                 for tq in typed_queries:
@@ -1023,6 +1028,7 @@ class VikingFS:
                         intent="",
                         priority=1,
                         target_directories=target_uri_list,
+                        tags=tags or [],
                     )
                 ]
             else:
@@ -1034,6 +1040,7 @@ class VikingFS:
                         intent="",
                         priority=1,
                         target_directories=target_uri_list,
+                        tags=tags or [],
                     )
                     for ctx_type in [ContextType.MEMORY, ContextType.RESOURCE, ContextType.SKILL]
                 ]

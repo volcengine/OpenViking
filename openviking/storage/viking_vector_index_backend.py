@@ -19,8 +19,10 @@ logger = get_logger(__name__)
 
 RETRIEVAL_OUTPUT_FIELDS = [
     "uri",
+    "parent_uri",
     "level",
     "context_type",
+    "tags",
     "abstract",
     "active_count",
     "updated_at",
@@ -777,6 +779,7 @@ class VikingVectorIndexBackend:
             ctx=ctx,
             context_type=context_type,
             target_directories=target_directories,
+            tags=None,
             extra_filter=extra_filter,
         )
         return await self.search(
@@ -796,6 +799,7 @@ class VikingVectorIndexBackend:
         sparse_query_vector: Optional[Dict[str, float]] = None,
         context_type: Optional[str] = None,
         target_directories: Optional[List[str]] = None,
+        tags: Optional[List[str]] = None,
         extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
         limit: int = 10,
     ) -> List[Dict[str, Any]]:
@@ -807,6 +811,7 @@ class VikingVectorIndexBackend:
                 ctx=ctx,
                 context_type=context_type,
                 target_directories=target_directories,
+                tags=tags,
                 extra_filter=extra_filter,
             ),
             In("level", [0, 1, 2]),  # TODO: smj fix this
@@ -837,6 +842,7 @@ class VikingVectorIndexBackend:
                 ctx=ctx,
                 context_type=context_type,
                 target_directories=target_directories,
+                tags=None,
                 extra_filter=extra_filter,
             ),
         )
@@ -846,6 +852,38 @@ class VikingVectorIndexBackend:
             filter=merged_filter,
             limit=limit,
             output_fields=RETRIEVAL_OUTPUT_FIELDS,
+            ctx=ctx,
+        )
+
+    async def search_by_tags_in_tenant(
+        self,
+        ctx: RequestContext,
+        tags: List[str],
+        context_type: Optional[str] = None,
+        target_directories: Optional[List[str]] = None,
+        extra_filter: Optional[FilterExpr | Dict[str, Any]] = None,
+        levels: Optional[List[int]] = None,
+        limit: int = 10,
+    ) -> List[Dict[str, Any]]:
+        if not tags:
+            return []
+
+        merged_filter = self._build_scope_filter(
+            ctx=ctx,
+            context_type=context_type,
+            target_directories=target_directories,
+            tags=tags,
+            extra_filter=extra_filter,
+        )
+        if levels:
+            merged_filter = self._merge_filters(merged_filter, In("level", levels))
+
+        return await self.filter(
+            filter=merged_filter,
+            limit=limit,
+            output_fields=RETRIEVAL_OUTPUT_FIELDS,
+            order_by="active_count",
+            order_desc=True,
             ctx=ctx,
         )
 
@@ -1014,6 +1052,7 @@ class VikingVectorIndexBackend:
         ctx: RequestContext,
         context_type: Optional[str],
         target_directories: Optional[List[str]],
+        tags: Optional[List[str]],
         extra_filter: Optional[FilterExpr | Dict[str, Any]],
     ) -> Optional[FilterExpr]:
         filters: List[FilterExpr] = []
@@ -1033,6 +1072,10 @@ class VikingVectorIndexBackend:
             if uri_conds:
                 filters.append(Or(uri_conds))
 
+        tag_filter = self._build_tag_filter(tags)
+        if tag_filter:
+            filters.append(tag_filter)
+
         if extra_filter:
             if isinstance(extra_filter, dict):
                 filters.append(RawDSL(extra_filter))
@@ -1041,6 +1084,17 @@ class VikingVectorIndexBackend:
 
         merged = self._merge_filters(*filters)
         return merged
+
+    @staticmethod
+    def _build_tag_filter(tags: Optional[List[str]]) -> Optional[FilterExpr]:
+        normalized = [tag for tag in tags or [] if tag]
+        if not normalized:
+            return None
+
+        tag_filters = [In("tags", [tag]) for tag in normalized]
+        if len(tag_filters) == 1:
+            return tag_filters[0]
+        return Or(tag_filters)
 
     @staticmethod
     def _tenant_filter(

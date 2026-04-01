@@ -14,6 +14,7 @@ from openviking.server.identity import RequestContext
 from openviking.server.models import Response
 from openviking.server.telemetry import run_operation
 from openviking.telemetry import TelemetryRequest
+from openviking.utils.tag_utils import parse_tags
 
 
 def _sanitize_floats(obj: Any) -> Any:
@@ -40,6 +41,7 @@ class FindRequest(BaseModel):
     limit: int = 10
     node_limit: Optional[int] = None
     score_threshold: Optional[float] = None
+    tags: Optional[str] = None
     filter: Optional[Dict[str, Any]] = None
     include_provenance: bool = False
     telemetry: TelemetryRequest = False
@@ -54,6 +56,7 @@ class SearchRequest(BaseModel):
     limit: int = 10
     node_limit: Optional[int] = None
     score_threshold: Optional[float] = None
+    tags: Optional[str] = None
     filter: Optional[Dict[str, Any]] = None
     include_provenance: bool = False
     telemetry: TelemetryRequest = False
@@ -93,6 +96,7 @@ async def find(
             target_uri=request.target_uri,
             limit=actual_limit,
             score_threshold=request.score_threshold,
+            tags=parse_tags(request.tags),
             filter=request.filter,
         ),
     )
@@ -128,6 +132,7 @@ async def search(
             session=session,
             limit=actual_limit,
             score_threshold=request.score_threshold,
+            tags=parse_tags(request.tags),
             filter=request.filter,
         )
 

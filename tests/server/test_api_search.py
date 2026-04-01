@@ -65,6 +65,30 @@ async def test_find_no_results(client: httpx.AsyncClient):
     assert resp.json()["status"] == "ok"
 
 
+async def test_find_forwards_tags_to_service(client_with_resource, service, monkeypatch):
+    client, _ = client_with_resource
+    captured = {}
+
+    async def fake_find(**kwargs):
+        captured.update(kwargs)
+
+        class _Result:
+            def to_dict(self, include_provenance: bool = False):
+                return {"resources": [], "memories": [], "skills": []}
+
+        return _Result()
+
+    monkeypatch.setattr(service.search, "find", fake_find)
+
+    resp = await client.post(
+        "/api/v1/search/find",
+        json={"query": "sample", "tags": "machine-learning;feature-store"},
+    )
+
+    assert resp.status_code == 200
+    assert captured["tags"] == ["machine-learning", "feature-store"]
+
+
 async def test_search_basic(client_with_resource):
     client, uri = client_with_resource
     resp = await client.post(

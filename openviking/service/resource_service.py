@@ -105,6 +105,7 @@ class ResourceService:
         instruction: str = "",
         wait: bool = False,
         timeout: Optional[float] = None,
+        tags: Optional[List[str]] = None,
         build_index: bool = True,
         summarize: bool = False,
         watch_interval: float = 0,
@@ -187,6 +188,7 @@ class ResourceService:
                 scope="resources",
                 to=to,
                 parent=parent,
+                tags=tags,
                 build_index=build_index,
                 summarize=summarize,
                 allow_local_path_resolution=allow_local_path_resolution,
@@ -219,6 +221,8 @@ class ResourceService:
                     if watch_interval > 0:
                         try:
                             processor_kwargs = self._sanitize_watch_processor_kwargs(kwargs)
+                            if tags:
+                                processor_kwargs["tags"] = tags
                             await self._handle_watch_task_creation(
                                 path=path,
                                 to_uri=to,
