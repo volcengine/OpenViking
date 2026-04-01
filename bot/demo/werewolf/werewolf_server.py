@@ -55,6 +55,8 @@ class GameState:
     router_task: Optional[asyncio.Task] = None
     pending_replies: Dict[str, PendingReply] = field(default_factory=dict)
     message_queue: List[Dict[str, Any]] = field(default_factory=list)
+    game_ended: bool = False
+    force_restarted: bool = False
 
 
 # ============================================================================
@@ -667,15 +669,40 @@ def create_fastapi_app(state: GameState) -> FastAPI:
         """Serve the debug page."""
         return HTMLResponse(content=debug_html)
 
+    @fastapi_app.get("/fonts/{filename}")
+    async def serve_font(filename: str):
+        """Serve font files."""
+        font_path = Path(__file__).parent / filename
+        if font_path.exists():
+            return FileResponse(font_path)
+        return HTMLResponse(content="", status_code=404)
+
     @fastapi_app.get("/api/status")
     async def get_status():
         """Get current game status."""
+        # Check if game has ended by looking at GAME_RECORD.md
+        if not state.game_ended:
+            god_record_path = state.storage_path / "bot" / "workspace" / "bot_api__god" / "GAME_RECORD.md"
+            if god_record_path.exists():
+                try:
+                    content = god_record_path.read_text(encoding="utf-8")
+                    if "游戏结束" in content:
+                        state.game_ended = True
+                        # Also set running to False when game ends
+                        if state.running:
+                            state.running = False
+                except Exception:
+                    pass
+
         return JSONResponse(content={
             "game_id": state.game_id,
             "session_id": state.session_id,
             "running": state.running,
             "channels": state.channels,
             "message_count": len(state.messages),
+            "smart_buttons": state.config.get("smart_buttons", False),
+            "game_ended": state.game_ended,
+            "force_restarted": state.force_restarted,
         })
 
     @fastapi_app.get("/api/messages")
@@ -732,6 +759,7 @@ def create_fastapi_app(state: GameState) -> FastAPI:
             return JSONResponse(content={"success": False, "error": "god channel not found"})
 
         state.running = True
+        state.game_ended = False
         state.router_task = asyncio.create_task(
             message_router_loop(state, initial_channel="god", initial_message="开始")
         )
@@ -752,6 +780,8 @@ def create_fastapi_app(state: GameState) -> FastAPI:
         # Generate new session ID and clear messages
         state.session_id = generate_session_id()
         state.messages.clear()
+        state.game_ended = False
+        state.force_restarted = True
 
         if "god" not in state.channels:
             return JSONResponse(content={"success": False, "error": "god channel not found"})
@@ -1012,6 +1042,78 @@ def create_fastapi_app(state: GameState) -> FastAPI:
         except Exception as e:
             return JSONResponse(content={"error": str(e)}, status_code=500)
 
+    def get_leaderboard_path() -> Path:
+        """Get the path to the leaderboard file."""
+        leaderboard_dir = state.storage_path / "bot" / "workspace" / "werewolf"
+        leaderboard_dir.mkdir(parents=True, exist_ok=True)
+        return leaderboard_dir / "LEADERBOARD.json"
+
+    def load_leaderboard() -> Dict[str, Any]:
+        """Load leaderboard data from file."""
+        leaderboard_path = get_leaderboard_path()
+        if leaderboard_path.exists():
+            try:
+                return json.loads(leaderboard_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        return {"games": [], "players": {}}
+
+    def save_leaderboard(data: Dict[str, Any]):
+        """Save leaderboard data to file."""
+        leaderboard_path = get_leaderboard_path()
+        leaderboard_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    @fastapi_app.get("/api/leaderboard")
+    async def get_leaderboard():
+        """Get leaderboard data."""
+        return JSONResponse(content=load_leaderboard())
+
+    @fastapi_app.post("/api/leaderboard/save")
+    async def save_game_to_leaderboard(game_data: Dict[str, Any]):
+        """Save a completed game to leaderboard."""
+        leaderboard = load_leaderboard()
+
+        # Add game record
+        game_record = {
+            "session_id": game_data.get("session_id", state.session_id),
+            "timestamp": time.time(),
+            "winner": game_data.get("winner", ""),
+            "players": game_data.get("players", [])
+        }
+        leaderboard["games"].append(game_record)
+
+        # Update player stats
+        players_data = game_data.get("players", [])
+        for player in players_data:
+            player_id = player.get("id", "")
+            if not player_id:
+                continue
+
+            if player_id not in leaderboard["players"]:
+                leaderboard["players"][player_id] = {
+                    "id": player_id,
+                    "games_played": 0,
+                    "games_won": 0,
+                    "total_score": 0,
+                    "roles": {}
+                }
+
+            player_stats = leaderboard["players"][player_id]
+            player_stats["games_played"] += 1
+
+            if player.get("won", False):
+                player_stats["games_won"] += 1
+
+            player_stats["total_score"] += player.get("score", 0)
+
+            role = player.get("role", "未知")
+            if role not in player_stats["roles"]:
+                player_stats["roles"][role] = 0
+            player_stats["roles"][role] += 1
+
+        save_leaderboard(leaderboard)
+        return JSONResponse(content={"success": True, "leaderboard": leaderboard})
+
     def scan_directory_tree(root_path: Path, relative_path: str) -> List[Dict[str, Any]]:
         """Recursively scan a directory and build a tree structure."""
         result = []
@@ -1126,6 +1228,7 @@ def main(
         help="Config file path"
     ),
     game_id: str = typer.Option("default", "--game-id", help="Game ID"),
+    smart_buttons: bool = typer.Option(False, "--smart-buttons", "-s", help="Enable smart button visibility control"),
 ):
     """Start the werewolf game server."""
     import uvicorn
@@ -1167,6 +1270,9 @@ def main(
         storage_path=storage_path,
         session_id=initial_session_id,
     )
+
+    # Store smart_buttons in config for easy access
+    state.config["smart_buttons"] = smart_buttons
 
     # Load messages if available
     if previous_messages:

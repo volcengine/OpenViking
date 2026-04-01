@@ -367,6 +367,8 @@
     .searchRow { display: flex; gap: 8px; align-items: center; }
     .searchInput { flex: 1; padding: 8px 10px; border-radius: 10px; border: 2px solid rgba(43, 51, 80, 0.6); background: rgba(9, 11, 21, 0.6); color: rgba(233, 237, 247, 0.95); font-family: inherit; font-size: 13px; }
     .selectInput { padding: 8px 10px; border-radius: 10px; border: 2px solid rgba(43, 51, 80, 0.6); background: rgba(9, 11, 21, 0.6); color: rgba(233, 237, 247, 0.95); font-family: inherit; font-size: 13px; }
+    .panelHeader .hint .btn { margin: 0 2px; padding: 3px 8px; font-size: 10px; }
+    .panelHeader .hint .btn.active { border-color: rgba(56, 189, 248, 0.75); background: rgba(56, 189, 248, 0.15); }
     .endOverlay {
       position: fixed;
       inset: 0;
@@ -521,7 +523,6 @@
       <div class="navBar">
         <button class="navBtn active" id="navGame">游戏</button>
         <button class="navBtn" id="navMemory">记忆</button>
-        <button class="navBtn" id="navReplay">回放</button>
         <button class="navBtn" id="navRank">排行榜</button>
       </div>
       <button class="btn" id="navForceRestart" style="margin-right: 12px; padding: 4px 12px; font-size: 13px; height: 26px;">强制重开</button>
@@ -602,25 +603,6 @@
       </div>
     </div>
   </section>
-  <section class="page replayPage" id="page-replay" style="display: none;">
-    <div class="wrap" style="height: calc(100vh - 80px); display: block;">
-      <div class="panel" style="width: 100%; height: 100%; display: flex; flex-direction: column;">
-        <div class="panelHeader">
-          <h2>对局回放</h2>
-          <div class="hint">从 GAME_RECORD 生成时间线</div>
-        </div>
-        <div class="memoryBody" style="flex: 1; display: flex; flex-direction: column; overflow: hidden; min-height: 0;">
-          <div class="searchRow">
-            <button class="btn" id="replayPlay">播放</button>
-            <button class="btn" id="replayPause">暂停</button>
-            <button class="btn" id="replayStep">下一条</button>
-            <div class="pill" id="replayStatus">0/0</div>
-          </div>
-          <div class="timeline" id="replayTimeline" style="flex: 1; overflow-y: auto; margin-top: 16px; padding-right: 8px; max-height: none;"></div>
-        </div>
-      </div>
-    </div>
-  </section>
   <section class="page rankPage" id="page-rank" style="display: none;">
     <div class="wrap" style="height: calc(100vh - 80px); grid-template-columns: 1fr 1fr; gap: 16px;">
       <div class="panel" style="width: 100%; height: 100%; display: flex; flex-direction: column;">
@@ -634,8 +616,8 @@
       </div>
       <div class="panel" style="width: 100%; height: 100%; display: flex; flex-direction: column;">
         <div class="panelHeader">
-          <h2>关系图谱</h2>
-          <div class="hint">基于记录共现</div>
+          <h2>Agent 架构</h2>
+          <div class="hint">消息流向图</div>
         </div>
         <div class="memoryBody" style="flex: 1; display: flex; justify-content: center; align-items: center; overflow: hidden;">
           <div id="relationGraph" style="width: 100%; height: 100%;"></div>
@@ -1605,7 +1587,6 @@
       httpBase: '/data',
       lastArenaSpeechKey: '',
       lastSpeechKey: '',
-      replay: { index: 0, timer: null, items: [] },
       loading: false,
       openvikingTree: null,
       selectedOpenvikingPath: null,
@@ -1777,7 +1758,7 @@
       if (info.day === 1 && !data.game_record.includes('警长当选') && data.game_record.includes('警长竞选：候选人')) {
          badgeCandidates = extractBadgeCandidates(data.game_record);
       }
-      const totalSeats = Math.max(8, players.length);
+      const totalSeats = players.length;
       const center = { x: 50, y: 50 };
       const radius = { x: 38, y: 34 };
 
@@ -2032,7 +2013,6 @@
         await loadOpenvikingTree();
 
         renderMemoryPage(data);
-        renderReplay(data);
         renderRank(data, info);
       } finally {
         uiState.loading = false;
@@ -2366,7 +2346,6 @@
       document.querySelectorAll('.navBtn').forEach(b => b.classList.remove('active'));
       if (id === 'page-game') document.getElementById('navGame').classList.add('active');
       if (id === 'page-memory') document.getElementById('navMemory').classList.add('active');
-      if (id === 'page-replay') document.getElementById('navReplay').classList.add('active');
       if (id === 'page-rank') document.getElementById('navRank').classList.add('active');
 
       if (id === 'page-memory') {
@@ -2384,69 +2363,6 @@
         // 否则使用旧的渲染方式
         renderMemoryTree(data);
       }
-    }
-
-    function buildReplayItems(recordText) {
-      const record = String(recordText || '');
-      const lines = record.split(/\r?\n/);
-      const events = [];
-      for (const line of lines) {
-        if (!line) continue;
-        if (/^##\s+/.test(line)) {
-          events.push({ type: 'section', text: line.replace(/^##\s+/, '') });
-        } else if (/(昨夜死亡|放逐|警长当选|游戏结束|狼人投票结果)/.test(line)) {
-          events.push({ type: 'event', text: line });
-        }
-      }
-      return events;
-    }
-
-    function renderReplay(data) {
-      const items = buildReplayItems(data.game_record || '');
-      uiState.replay = uiState.replay || { index: 0, timer: null, items: [] };
-      uiState.replay.items = items;
-      uiState.replay.index = Math.min(uiState.replay.index, items.length);
-      const root = document.getElementById('replayTimeline');
-      const status = document.getElementById('replayStatus');
-      root.innerHTML = '';
-      items.slice(0, uiState.replay.index).forEach((e) => {
-        const div = document.createElement('div');
-        div.className = 'event';
-        div.textContent = e.text;
-        root.appendChild(div);
-      });
-      if (status) status.textContent = `${uiState.replay.index}/${items.length}`;
-    }
-
-    function bindReplay() {
-      const play = document.getElementById('replayPlay');
-      const pause = document.getElementById('replayPause');
-      const step = document.getElementById('replayStep');
-      if (!play || !pause || !step) return;
-      play.addEventListener('click', () => {
-        if (!uiState.replay) uiState.replay = { index: 0, timer: null, items: [] };
-        if (uiState.replay.timer) return;
-        uiState.replay.timer = setInterval(() => {
-          uiState.replay.index += 1;
-          if (uiState.replay.index > (uiState.replay.items || []).length) {
-            uiState.replay.index = (uiState.replay.items || []).length;
-            clearInterval(uiState.replay.timer);
-            uiState.replay.timer = null;
-          }
-          renderReplay(uiState.lastData || { game_record: '' });
-        }, 600);
-      });
-      pause.addEventListener('click', () => {
-        if (uiState.replay && uiState.replay.timer) {
-          clearInterval(uiState.replay.timer);
-          uiState.replay.timer = null;
-        }
-      });
-      step.addEventListener('click', () => {
-        if (!uiState.replay) uiState.replay = { index: 0, timer: null, items: [] };
-        uiState.replay.index = Math.min((uiState.replay.items || []).length, uiState.replay.index + 1);
-        renderReplay(uiState.lastData || { game_record: '' });
-      });
     }
 
     function computeLeaderboard(data, info) {
@@ -2558,98 +2474,292 @@
         item.appendChild(right);
         list.appendChild(item);
       });
-      renderRelation(data.game_record || '');
+      renderRelation();
     }
 
-    function renderRelation(recordText) {
-      const text = String(recordText || '');
-      const lines = text.split(/\r?\n/);
-      const edges = new Map();
-      
-      // 优化图谱逻辑：只提取有意义的互动（投票、刀人、验人等明确指出两个座位的互动）
-      for (const line of lines) {
-        // 匹配类似 "1号投票给2号" 或 "1号验了2号" 这种明确的主客体关系
-        const voteMatch = line.match(/(\d{1,2})号.*?(?:投|验|刀|杀).*?(\d{1,2})号/);
-        if (voteMatch) {
-          const a = parseInt(voteMatch[1], 10);
-          const b = parseInt(voteMatch[2], 10);
-          if (a !== b && !Number.isNaN(a) && !Number.isNaN(b)) {
-            const min = Math.min(a, b);
-            const max = Math.max(a, b);
-            const key = `${min}-${max}`;
-            edges.set(key, (edges.get(key) || 0) + 1);
-          }
-        }
-      }
-      
-      const root = document.getElementById('relationGraph');
-      root.innerHTML = '';
-      const width = 420;
-      const height = 240;
-      const cx = width / 2;
-      const cy = height / 2;
-      const r = 85;
-      const nodes = Array.from({ length: 8 }).map((_, i) => {
-        const angle = (-90 + (360 / 8) * i) * (Math.PI / 180);
-        return {
-          seat: i + 1,
-          x: cx + r * Math.cos(angle),
-          y: cy + r * Math.sin(angle),
-        };
-      });
-      const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-      svg.setAttribute('width', '100%');
-      svg.setAttribute('height', '100%');
-      svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
-      svg.style.display = 'block';
-      
-      // 过滤掉只有 1 次偶然提及的弱关系，减少杂乱
-      const maxWeight = Math.max(1, ...Array.from(edges.values()));
-      const threshold = maxWeight > 2 ? 1 : 0;
-      
-      edges.forEach((w, key) => {
-        if (w <= threshold) return; // 剔除弱关系
-        
-        const [a, b] = key.split('-').map(n => parseInt(n, 10));
-        const na = nodes[a - 1];
-        const nb = nodes[b - 1];
-        if (!na || !nb) return;
-        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
-        line.setAttribute('x1', String(na.x));
-        line.setAttribute('y1', String(na.y));
-        line.setAttribute('x2', String(nb.x));
-        line.setAttribute('y2', String(nb.y));
-        const alpha = Math.min(0.9, 0.4 + (w / maxWeight) * 0.5);
-        line.setAttribute('stroke', `rgba(56,189,248,${alpha})`);
-        line.setAttribute('stroke-width', String(1.5 + (w / maxWeight) * 2.5));
-        svg.appendChild(line);
-      });
-      nodes.forEach((n) => {
-        const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
-        circle.setAttribute('cx', String(n.x));
-        circle.setAttribute('cy', String(n.y));
-        circle.setAttribute('r', '16');
-        circle.setAttribute('fill', 'rgba(14,18,35,0.9)');
-        circle.setAttribute('stroke', 'rgba(56,189,248,0.8)');
-        circle.setAttribute('stroke-width', '2');
-        svg.appendChild(circle);
-        const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
-        text.setAttribute('x', String(n.x));
-        text.setAttribute('y', String(n.y + 4));
-        text.setAttribute('text-anchor', 'middle');
-        text.setAttribute('fill', 'rgba(233,237,247,0.95)');
-        text.setAttribute('font-size', '9');
-        text.textContent = String(n.seat);
-        svg.appendChild(text);
-      });
-      root.appendChild(svg);
-    }
+    function renderRelation() {
+  var root = document.getElementById('relationGraph');
+  root.innerHTML = '';
+  var svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('width', '100%');
+  svg.setAttribute('height', '100%');
+  svg.setAttribute('viewBox', '0 0 420 420');
+  svg.style.display = 'block';
 
-    function bindNav() {
+  var defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+
+  var filter = document.createElementNS('http://www.w3.org/2000/svg', 'filter');
+  filter.setAttribute('id', 'glow');
+  var feGaussianBlur = document.createElementNS('http://www.w3.org/2000/svg', 'feGaussianBlur');
+  feGaussianBlur.setAttribute('stdDeviation', '3');
+  feGaussianBlur.setAttribute('result', 'coloredBlur');
+  var feMerge = document.createElementNS('http://www.w3.org/2000/svg', 'feMerge');
+  var feMergeNode1 = document.createElementNS('http://www.w3.org/2000/svg', 'feMergeNode');
+  feMergeNode1.setAttribute('in', 'coloredBlur');
+  var feMergeNode2 = document.createElementNS('http://www.w3.org/2000/svg', 'feMergeNode');
+  feMergeNode2.setAttribute('in', 'SourceGraphic');
+  feMerge.appendChild(feMergeNode1);
+  feMerge.appendChild(feMergeNode2);
+  filter.appendChild(feGaussianBlur);
+  filter.appendChild(feMerge);
+  defs.appendChild(filter);
+
+  var marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+  marker.setAttribute('id', 'arrow');
+  marker.setAttribute('markerWidth', '5');
+  marker.setAttribute('markerHeight', '4');
+  marker.setAttribute('refX', '4');
+  marker.setAttribute('refY', '2');
+  marker.setAttribute('orient', 'auto');
+  var arrowPath = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  arrowPath.setAttribute('d', 'M 0 0 L 0 4 L 4 2 Z');
+  arrowPath.setAttribute('fill', '#38bdf8');
+  marker.appendChild(arrowPath);
+  defs.appendChild(marker);
+
+  var markerPurple = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+  markerPurple.setAttribute('id', 'arrowPurple');
+  markerPurple.setAttribute('markerWidth', '5');
+  markerPurple.setAttribute('markerHeight', '4');
+  markerPurple.setAttribute('refX', '4');
+  markerPurple.setAttribute('refY', '2');
+  markerPurple.setAttribute('orient', 'auto');
+  var arrowPathPurple = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  arrowPathPurple.setAttribute('d', 'M 0 0 L 0 4 L 4 2 Z');
+  arrowPathPurple.setAttribute('fill', '#a78bfa');
+  markerPurple.appendChild(arrowPathPurple);
+  defs.appendChild(markerPurple);
+
+  svg.appendChild(defs);
+
+  var bg = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  bg.setAttribute('x', '0');
+  bg.setAttribute('y', '0');
+  bg.setAttribute('width', '420');
+  bg.setAttribute('height', '420');
+  bg.setAttribute('fill', '#070913');
+  svg.appendChild(bg);
+
+  var border = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+  border.setAttribute('x', '4');
+  border.setAttribute('y', '4');
+  border.setAttribute('width', '412');
+  border.setAttribute('height', '412');
+  border.setAttribute('fill', 'none');
+  border.setAttribute('stroke', '#2b3350');
+  border.setAttribute('stroke-width', '2');
+  svg.appendChild(border);
+
+  function addNode(x, y, label, icon, color, isBig) {
+    var w = isBig ? 78 : 50;
+    var h = isBig ? 56 : 38;
+    var nx = x - w/2;
+    var ny = y - h/2;
+
+    var glow = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+    glow.setAttribute('cx', String(x));
+    glow.setAttribute('cy', String(y));
+    glow.setAttribute('r', isBig ? '42' : '30');
+    glow.setAttribute('fill', 'none');
+    glow.setAttribute('stroke', color);
+    glow.setAttribute('stroke-width', '1');
+    glow.setAttribute('opacity', '0.25');
+    svg.appendChild(glow);
+
+    var anim = document.createElementNS('http://www.w3.org/2000/svg', 'animate');
+    anim.setAttribute('attributeName', 'opacity');
+    anim.setAttribute('values', '0.15;0.35;0.15');
+    anim.setAttribute('dur', '2s');
+    anim.setAttribute('repeatCount', 'indefinite');
+    glow.appendChild(anim);
+
+    var outer = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    outer.setAttribute('x', String(nx - 2));
+    outer.setAttribute('y', String(ny - 2));
+    outer.setAttribute('width', String(w + 4));
+    outer.setAttribute('height', String(h + 4));
+    outer.setAttribute('fill', color);
+    outer.setAttribute('opacity', '0.2');
+    svg.appendChild(outer);
+
+    var inner = document.createElementNS('http://www.w3.org/2000/svg', 'rect');
+    inner.setAttribute('x', String(nx));
+    inner.setAttribute('y', String(ny));
+    inner.setAttribute('width', String(w));
+    inner.setAttribute('height', String(h));
+    inner.setAttribute('fill', '#0b0f1c');
+    inner.setAttribute('stroke', color);
+    inner.setAttribute('stroke-width', '2');
+    inner.setAttribute('rx', '6');
+    inner.setAttribute('filter', 'url(#glow)');
+    svg.appendChild(inner);
+
+    var iconText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    iconText.setAttribute('x', String(x));
+    var iconY = isBig ? 8 : 5;
+    iconText.setAttribute('y', String(y - iconY));
+    iconText.setAttribute('text-anchor', 'middle');
+    iconText.setAttribute('fill', color);
+    var iconSize = isBig ? '18' : '14';
+    iconText.setAttribute('font-size', iconSize);
+    iconText.setAttribute('font-family', 'monospace');
+    iconText.textContent = icon;
+    svg.appendChild(iconText);
+
+    var labelText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    labelText.setAttribute('x', String(x));
+    var labelY = isBig ? 18 : 14;
+    labelText.setAttribute('y', String(y + labelY));
+    labelText.setAttribute('text-anchor', 'middle');
+    labelText.setAttribute('fill', color);
+    var labelSize = isBig ? '11' : '10';
+    labelText.setAttribute('font-size', labelSize);
+    labelText.setAttribute('font-family', 'monospace');
+    labelText.textContent = label;
+    svg.appendChild(labelText);
+
+    if (isBig) {
+      var subText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+      subText.setAttribute('x', String(x));
+      subText.setAttribute('y', String(y + 34));
+      subText.setAttribute('text-anchor', 'middle');
+      subText.setAttribute('fill', 'rgba(167,139,250,0.65)');
+      subText.setAttribute('font-size', '8');
+      subText.setAttribute('font-family', 'monospace');
+      subText.textContent = 'MEMORY';
+      svg.appendChild(subText);
+    }
+  }
+
+  function addLine(x1, y1, x2, y2, color, usePurpleArrow) {
+    var line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+    line.setAttribute('x1', String(x1));
+    line.setAttribute('y1', String(y1));
+    line.setAttribute('x2', String(x2));
+    line.setAttribute('y2', String(y2));
+    line.setAttribute('stroke', color);
+    line.setAttribute('stroke-width', '1.5');
+    var markerId = usePurpleArrow ? 'arrowPurple' : 'arrow';
+    line.setAttribute('marker-end', 'url(#' + markerId + ')');
+    svg.appendChild(line);
+  }
+
+  function addLabel(x, y, text, color) {
+    var t = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    t.setAttribute('x', String(x));
+    t.setAttribute('y', String(y));
+    t.setAttribute('text-anchor', 'middle');
+    t.setAttribute('fill', color);
+    t.setAttribute('font-size', '8');
+    t.setAttribute('font-family', 'monospace');
+    t.textContent = text;
+    svg.appendChild(t);
+  }
+
+  addLine(105, 75, 105, 105, '#6ee7b7', false);
+  addLine(105, 152, 105, 188, '#38bdf8', false);
+  addLine(100, 188, 100, 152, '#38bdf8', false);
+  addLine(92, 228, 70, 278, '#38bdf8', false);
+  addLine(118, 228, 140, 278, '#38bdf8', false);
+  addLine(70, 282, 92, 232, '#f87171', false);
+  addLine(140, 282, 118, 232, '#f87171', false);
+
+  addLine(125, 208, 265, 190, '#a78bfa', true);
+  addLine(265, 200, 125, 218, '#a78bfa', true);
+  addLabel(195, 199, 'R/W', '#a78bfa');
+
+  addLine(80, 300, 265, 215, '#a78bfa', true);
+  addLine(265, 225, 80, 310, '#a78bfa', true);
+  addLabel(175, 252, 'R/W', '#a78bfa');
+
+  addLine(130, 300, 265, 235, '#a78bfa', true);
+  addLine(265, 245, 130, 310, '#a78bfa', true);
+  addLabel(197, 267, 'R/W', '#a78bfa');
+
+  addNode(105, 48, 'ADMIN', '◆', '#6ee7b7', false);
+  addNode(105, 130, 'SERVER', '◇', '#38bdf8', false);
+  addNode(105, 210, 'GOD', '★', '#fbbf24', false);
+  addNode(60, 300, 'P1', '●', '#f87171', false);
+  addNode(150, 300, 'P2', '●', '#f87171', false);
+  addNode(300, 205, 'OpenViking', '◈', '#a78bfa', true);
+
+  root.appendChild(svg);
+}
+function bindNav() {
       document.getElementById('navGame').addEventListener('click', () => switchPage('page-game'));
       document.getElementById('navMemory').addEventListener('click', () => switchPage('page-memory'));
-      document.getElementById('navReplay').addEventListener('click', () => switchPage('page-replay'));
-      document.getElementById('navRank').addEventListener('click', () => switchPage('page-rank'));
+      document.getElementById('navRank').addEventListener('click', () => {
+        switchPage('page-rank');
+        // Load history leaderboard when switching to rank page
+        loadHistoryLeaderboard();
+      });
+
+      // Rank tab buttons
+      const tabCurrent = document.getElementById('rankTabCurrent');
+      const tabHistory = document.getElementById('rankTabHistory');
+      const listCurrent = document.getElementById('rankList');
+      const listHistory = document.getElementById('rankListHistory');
+
+      if (tabCurrent && tabHistory) {
+        tabCurrent.classList.add('active');
+        tabCurrent.addEventListener('click', () => {
+          tabCurrent.classList.add('active');
+          tabHistory.classList.remove('active');
+          if (listCurrent) listCurrent.style.display = '';
+          if (listHistory) listHistory.style.display = 'none';
+        });
+
+        tabHistory.addEventListener('click', () => {
+          tabHistory.classList.add('active');
+          tabCurrent.classList.remove('active');
+          if (listCurrent) listCurrent.style.display = 'none';
+          if (listHistory) listHistory.style.display = '';
+          loadHistoryLeaderboard();
+        });
+      }
+    }
+
+    async function loadHistoryLeaderboard() {
+      const listHistory = document.getElementById('rankListHistory');
+      if (!listHistory) return;
+
+      try {
+        const res = await fetch('/api/leaderboard', { cache: 'no-store' });
+        if (!res.ok) return;
+
+        const leaderboard = await res.json();
+        const players = leaderboard.players || {};
+
+        const playerList = Object.values(players).sort((a, b) => b.total_score - a.total_score);
+
+        listHistory.innerHTML = '';
+        playerList.forEach((p, idx) => {
+          const item = document.createElement('div');
+          item.className = 'rankItem';
+
+          const winRate = p.games_played > 0 ? Math.round((p.games_won / p.games_played) * 100) : 0;
+          const roles = Object.entries(p.roles || {}).map(([role, count]) => `${role}(${count})`).join(', ');
+
+          const left = document.createElement('div');
+          left.textContent = `${idx === 0 ? '🏆 ' : ''}${idx + 1}. ${String(p.id || '').replace('player_', '')}`;
+
+          const right = document.createElement('div');
+          right.innerHTML = `<span style="color: rgba(154,164,178,0.8); margin-right: 8px;">胜率: ${winRate}% (${p.games_won}/${p.games_played})</span> <strong style="color: #6ee7b7;">总分: ${p.total_score}</strong>`;
+
+          if (roles) {
+            const rolesDiv = document.createElement('div');
+            rolesDiv.style.cssText = 'font-size: 11px; color: rgba(154,164,178,0.7); margin-top: 4px;';
+            rolesDiv.textContent = `角色: ${roles}`;
+            right.appendChild(rolesDiv);
+          }
+
+          item.appendChild(left);
+          item.appendChild(right);
+          listHistory.appendChild(item);
+        });
+      } catch (e) {
+        console.error('Failed to load history leaderboard:', e);
+      }
     }
 
     // Search is handled by the first bindSearch implementation
@@ -2922,7 +3032,6 @@
       bindNav();
       bindSearch();
       bindDrawer();
-      bindReplay();
       refreshFromHttp();
       setInterval(() => {
         if (uiState.httpBase) {
@@ -2963,6 +3072,94 @@
       headerRight.insertBefore(btnStart, btnStop);
     }
 
+    function updateButtonVisibility(status) {
+      const smartButtons = status.smart_buttons || false;
+      const running = status.running || false;
+      const gameEnded = status.game_ended || false;
+      const forceRestarted = status.force_restarted || false;
+
+      const btnStart = document.getElementById('btnStart');
+      const btnStop = document.getElementById('btnStop');
+      const forceBtn = document.getElementById('navForceRestart');
+
+      if (!smartButtons) {
+        if (btnStart) btnStart.style.display = '';
+        if (btnStop) btnStop.style.display = '';
+        if (forceBtn) forceBtn.style.display = '';
+        return;
+      }
+
+      if (btnStart) {
+        if (gameEnded) {
+          btnStart.style.display = 'none';
+        } else if (running) {
+          btnStart.style.display = 'none';
+        } else {
+          btnStart.style.display = '';
+        }
+      }
+
+      if (btnStop) {
+        btnStop.style.display = 'none';
+      }
+
+      if (forceBtn) {
+        if (gameEnded) {
+          forceBtn.style.display = '';
+          forceBtn.textContent = '重新开始';
+        } else {
+          forceBtn.style.display = 'none';
+        }
+      }
+    }
+
+    async function saveGameToLeaderboard(data, info, status) {
+      if (!info.winner) return;
+
+      const players = data.players || [];
+      const isWolfWin = info.winner.includes('狼人');
+      const dead = info.dead || new Set();
+
+      const gamePlayers = players.map((p, i) => {
+        const role = String(p.role || '');
+        const isWolf = role === 'Werewolf' || role === 'WhiteWolfKing' || role === 'WolfCub' || role === 'WolfBeauty';
+        const won = (isWolfWin && isWolf) || (!isWolfWin && !isWolf);
+        const isDead = dead.has(i);
+
+        let score = 0;
+        if (won) score += 3;
+        if (!isDead) score += 1;
+        else score -= 1;
+
+        return {
+          id: p.id || `player_${i + 1}`,
+          role: role,
+          won: won,
+          dead: isDead,
+          score: score
+        };
+      });
+
+      const gameData = {
+        session_id: status ? status.session_id : '',
+        winner: info.winner,
+        players: gamePlayers
+      };
+
+      try {
+        const res = await fetch('/api/leaderboard/save', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(gameData)
+        });
+        if (res.ok) {
+          console.log('Game saved to leaderboard');
+        }
+      } catch (e) {
+        console.error('Failed to save to leaderboard:', e);
+      }
+    }
+
     async function refreshFromHttp() {
       if (uiState.loading) return;
       uiState.loading = true;
@@ -2973,6 +3170,15 @@
         const data = await loadDataFromHttp(uiState.httpBase);
         console.log('loadDataFromHttp result:', data);
         uiState.lastData = data;
+
+        // Load status from API for button control
+        const statusRes = await fetch('/api/status');
+        const statusData = await statusRes.json();
+        console.log('/api/status result:', statusData);
+        uiState.lastStatus = statusData;
+
+        // Update button visibility based on status
+        updateButtonVisibility(statusData);
 
         // Load messages from API
         const messagesRes = await fetch('/api/messages');
@@ -3020,8 +3226,16 @@
         updateEndOverlay(info);
         renderChatFromMessages(messagesData.messages, info, data);
         renderMemoryPage(data);
-        renderReplay(data);
         renderRank(data, info);
+
+        // Check if game just ended and save to leaderboard
+        if (info.winner && !uiState.lastGameWinner) {
+          uiState.lastGameWinner = info.winner;
+          saveGameToLeaderboard(data, info, statusData);
+        } else if (!info.winner) {
+          uiState.lastGameWinner = null;
+        }
+
         console.log('refreshFromHttp completed');
       } catch (e) {
         console.error('refreshFromHttp error:', e);
