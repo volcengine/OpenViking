@@ -108,7 +108,8 @@ jobs:
 
       - name: Install system dependencies (Windows)
         if: runner.os == 'Windows'
-        uses: lukka/get-cmake@latest
+        run: |
+          echo "cmake is pre-installed on Windows runner and will also be installed via pip"
 
       - name: Install uv
         uses: astral-sh/setup-uv@v7
