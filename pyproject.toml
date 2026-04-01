@@ -69,6 +69,11 @@ dependencies = [
     "tree-sitter-go>=0.23.0",
     "tree-sitter-c-sharp>=0.23.0",
     "tree-sitter-php>=0.23.0",
+    # OpenTelemetry
+    "opentelemetry-api>=1.14",
+    "opentelemetry-sdk>=1.14",
+    "opentelemetry-exporter-otlp-proto-grpc>=1.14",
+    "opentelemetry-instrumentation-asyncio>=0.61b0",
     "loguru>=0.7.3",
     "cryptography>=42.0.0",
     "argon2-cffi>=23.0.0",
