@@ -2021,11 +2021,6 @@ configure_openclaw_plugin() {
     return 0
   fi
 
-  # Set gateway mode
-  if [[ "${skip_gateway_mode}" != "1" ]]; then
-    "${oc_env[@]}" openclaw config set gateway.mode "${SELECTED_MODE}"
-  fi
-
   # Set plugin config for the selected mode
   if [[ "$SELECTED_MODE" == "local" ]]; then
     local ov_conf_path="${SELECTED_CONFIG_PATH:-${OPENVIKING_DIR}/ov.conf}"

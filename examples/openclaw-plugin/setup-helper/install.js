@@ -2094,10 +2094,6 @@ async function configureOpenClawPlugin({
       : { mode: "local", configPath: join(OPENVIKING_DIR, "ov.conf"), port: selectedServerPort }
   );
 
-  if (!skipGatewayMode) {
-    await oc(["config", "set", "gateway.mode", effectiveRuntimeConfig.mode === "remote" ? "remote" : "local"]);
-  }
-
   // Set plugin config for the selected mode
   if (effectiveRuntimeConfig.mode === "local") {
     const ovConfPath = effectiveRuntimeConfig.configPath || join(OPENVIKING_DIR, "ov.conf");
