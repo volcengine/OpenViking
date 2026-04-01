@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Dict, List, Optional
 
+from openviking.core.directories import get_context_type_for_uri
 from openviking.server.identity import RequestContext
 from openviking.storage.viking_fs import get_viking_fs
 from openviking_cli.utils import VikingURI
@@ -440,7 +441,7 @@ class SemanticDagExecutor:
                 task = VectorizeTask(
                     task_type="file",
                     uri=file_path,
-                    context_type=self._context_type,
+                    context_type=get_context_type_for_uri(file_path),
                     ctx=self._ctx,
                     semantic_msg_id=self._semantic_msg_id,
                     file_path=file_path,
@@ -560,7 +561,7 @@ class SemanticDagExecutor:
                     task = VectorizeTask(
                         task_type="directory",
                         uri=dir_uri,
-                        context_type=self._context_type,
+                        context_type=get_context_type_for_uri(dir_uri),
                         ctx=self._ctx,
                         semantic_msg_id=self._semantic_msg_id,
                         abstract=abstract,
