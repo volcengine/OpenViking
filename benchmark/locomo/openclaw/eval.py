@@ -25,6 +25,13 @@ import time
 
 import requests
 
+# Configuration constants
+DEFAULT_BASE_URL = "http://127.0.0.1:18789"
+DEFAULT_SESSION_KEY = "eval-test-2"
+DEFAULT_AGENT_ID = "locomo-eval"
+DEFAULT_INGEST_RECORD_PATH = ".ingest_record.json"
+DEFAULT_OV_COMMAND = ["ov", "add-memory"]
+
 
 # ---------------------------------------------------------------------------
 # Txt-based test file parsing (original format)
@@ -37,8 +44,15 @@ def parse_test_file(path: str) -> list[dict]:
         - messages: list of user message strings
         - evals: list of eval expectation strings
     """
-    with open(path, "r", encoding="utf-8") as f:
-        content = f.read()
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            content = f.read()
+    except FileNotFoundError:
+        print(f"Error: Test file not found: {path}", file=sys.stderr)
+        sys.exit(1)
+    except IOError as e:
+        print(f"Error reading test file: {e}", file=sys.stderr)
+        sys.exit(1)
 
     raw_sessions = content.split("---\n")
     sessions = []
@@ -97,8 +111,18 @@ def load_locomo_data(
     sample_index: int | None = None,
 ) -> list[dict]:
     """Load LoCoMo JSON and optionally filter to one sample."""
-    with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        print(f"Error: LoCoMo JSON file not found: {path}", file=sys.stderr)
+        sys.exit(1)
+    except json.JSONDecodeError as e:
+        print(f"Error parsing LoCoMo JSON file: {e}", file=sys.stderr)
+        sys.exit(1)
+    except IOError as e:
+        print(f"Error reading LoCoMo JSON file: {e}", file=sys.stderr)
+        sys.exit(1)
 
     if sample_index is not None:
         if sample_index < 0 or sample_index >= len(data):
@@ -160,19 +184,28 @@ def build_session_messages(
 # Ingest record helpers (avoid duplicate ingestion)
 # ---------------------------------------------------------------------------
 
-def load_ingest_record(record_path: str = ".ingest_record.json") -> dict:
+def load_ingest_record(record_path: str = DEFAULT_INGEST_RECORD_PATH) -> dict:
     """Load existing ingest record file, return empty dict if not exists."""
     try:
         with open(record_path, "r", encoding="utf-8") as f:
             return json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError):
+    except FileNotFoundError:
+        return {}
+    except json.JSONDecodeError as e:
+        print(f"Warning: Error parsing ingest record: {e}, starting fresh", file=sys.stderr)
+        return {}
+    except IOError as e:
+        print(f"Warning: Error reading ingest record: {e}, starting fresh", file=sys.stderr)
         return {}
 
 
-def save_ingest_record(record: dict, record_path: str = ".ingest_record.json") -> None:
+def save_ingest_record(record: dict, record_path: str = DEFAULT_INGEST_RECORD_PATH) -> None:
     """Save ingest record to file."""
-    with open(record_path, "w", encoding="utf-8") as f:
-        json.dump(record, f, indent=2, ensure_ascii=False)
+    try:
+        with open(record_path, "w", encoding="utf-8") as f:
+            json.dump(record, f, indent=2, ensure_ascii=False)
+    except IOError as e:
+        print(f"Warning: Error saving ingest record: {e}", file=sys.stderr)
 
 
 def is_already_ingested(
@@ -222,8 +255,8 @@ def extract_response_text(response_json: dict) -> str:
             for content in item.get("content", []):
                 if "text" in content:
                     return content["text"]
-    except (KeyError, TypeError, IndexError):
-        pass
+    except (KeyError, TypeError, IndexError) as e:
+        print(f"Warning: Error extracting response text: {e}", file=sys.stderr)
     return f"[ERROR: could not extract text from response: {response_json}]"
 
 
@@ -235,8 +268,14 @@ def get_session_id(user: str, agent_id: str = "main") -> str | None:
             data = json.load(f)
         key = f"agent:{agent_id}:openresponses-user:{user}"
         return data.get(key, {}).get("sessionId")
-    except Exception as e:
-        print(f"    [reset] could not read session ID: {e}", file=sys.stderr)
+    except FileNotFoundError:
+        print(f"    [reset] Session ID file not found: {sessions_file}", file=sys.stderr)
+        return None
+    except json.JSONDecodeError as e:
+        print(f"    [reset] Error parsing session ID file: {e}", file=sys.stderr)
+        return None
+    except IOError as e:
+        print(f"    [reset] Error reading session ID file: {e}", file=sys.stderr)
         return None
 
 
@@ -252,7 +291,10 @@ def reset_session(session_id: str, agent_id: str = "main") -> str | None:
         new_filename = os.path.basename(dst)
         print(f"    [reset] archived {session_id}.jsonl -> {new_filename}", file=sys.stderr)
         return new_filename
-    except Exception as e:
+    except FileNotFoundError:
+        print(f"    [reset] Session file not found: {src}", file=sys.stderr)
+        return None
+    except IOError as e:
         print(f"    [reset] could not archive session file: {e}", file=sys.stderr)
         return None
 
@@ -261,7 +303,7 @@ def viking_ingest(msg: str) -> None:
     """Save a message to OpenViking via `ov add-memory`."""
     import subprocess
     result = subprocess.run(
-        ["ov", "add-memory", msg],
+        DEFAULT_OV_COMMAND + [msg],
         capture_output=True,
         text=True,
     )
@@ -270,7 +312,7 @@ def viking_ingest(msg: str) -> None:
 
 
 def send_message_with_retry(
-    base_url: str, token: str, user: str, message: str, retries: int = 2, agent_id: str = "locomo-eval"
+    base_url: str, token: str, user: str, message: str, retries: int = 2, agent_id: str = DEFAULT_AGENT_ID
 ) -> tuple[str, dict]:
     """Call send_message with up to `retries` retries on failure."""
     last_exc = None
@@ -285,7 +327,7 @@ def send_message_with_retry(
 
 
 def send_message(
-    base_url: str, token: str, user: str, message: str, agent_id: str = "locomo-eval"
+    base_url: str, token: str, user: str, message: str, agent_id: str = DEFAULT_AGENT_ID
 ) -> tuple[str, dict]:
     """Send a single message to the OpenClaw responses API.
 
@@ -296,7 +338,7 @@ def send_message(
         "Content-Type": "application/json",
         "Authorization": f"Bearer {token}",
         "X-OpenClaw-Agent-ID": agent_id,
-        "X-OpenClaw-Session-Key": "eval-test-2"
+        "X-OpenClaw-Session-Key": DEFAULT_SESSION_KEY
     }
     payload = {
         "model": "openclaw",
@@ -306,9 +348,19 @@ def send_message(
     if user:
         payload["user"] = user
 
-    resp = requests.post(url, json=payload, headers=headers, timeout=6000)
-    resp.raise_for_status()
-    body = resp.json()
+    try:
+        resp = requests.post(url, json=payload, headers=headers, timeout=6000)
+        resp.raise_for_status()
+        body = resp.json()
+    except requests.exceptions.ConnectionError as e:
+        raise RuntimeError(f"Connection error to {base_url}: {e}")
+    except requests.exceptions.Timeout as e:
+        raise RuntimeError(f"Request timeout to {base_url}: {e}")
+    except requests.exceptions.HTTPError as e:
+        raise RuntimeError(f"HTTP error {e.response.status_code} from {base_url}: {e}")
+    except json.JSONDecodeError as e:
+        raise RuntimeError(f"Error parsing response from {base_url}: {e}")
+
     print(body)
     usage = body.get("usage", {"input_tokens": 0, "output_tokens": 0, "cacheRead": 0, "total_tokens": 0})
     return extract_response_text(body), usage
@@ -419,16 +471,19 @@ def run_ingest(
                         reset_session(session_id, args.agent_id)
 
         if args.output:
-            with open(args.output, "w", encoding="utf-8") as f:
-                for r in results:
-                    f.write(f"[{r['sample_id']}/{r['session']}] user={r['user']}\n")
-                    f.write(f"  {r['reply']}\n\n")
-            print(f"Results written to {args.output}", file=sys.stderr)
+            try:
+                with open(args.output, "w", encoding="utf-8") as f:
+                    for r in results:
+                        f.write(f"[{r['sample_id']}/{r['session']}] user={r['user']}\n")
+                        f.write(f"  {r['reply']}\n\n")
+                print(f"Results written to {args.output}", file=sys.stderr)
 
-            json_path = args.output + ".json"
-            with open(json_path, "w", encoding="utf-8") as f:
-                json.dump(results, f, indent=2, ensure_ascii=False)
-            print(f"Results (JSON) written to {json_path}", file=sys.stderr)
+                json_path = args.output + ".json"
+                with open(json_path, "w", encoding="utf-8") as f:
+                    json.dump(results, f, indent=2, ensure_ascii=False)
+                print(f"Results (JSON) written to {json_path}", file=sys.stderr)
+            except IOError as e:
+                print(f"Warning: Error writing output files: {e}", file=sys.stderr)
 
         # Save ingest record
         save_ingest_record(ingest_record)
@@ -471,15 +526,18 @@ def run_ingest(
             results.append({"index": idx, "turns": turns, "evals": session["evals"]})
 
         if args.output:
-            with open(args.output, "w", encoding="utf-8") as f:
-                for r in results:
-                    f.write(f"=== Session {r['index']} ===\n")
-                    for role, text in r["turns"]:
-                        f.write(f"[{role}] {text}\n")
-                    for ev in r["evals"]:
-                        f.write(f"[eval] {ev}\n")
-                    f.write("\n")
-            print(f"\nResults written to {args.output}", file=sys.stderr)
+            try:
+                with open(args.output, "w", encoding="utf-8") as f:
+                    for r in results:
+                        f.write(f"=== Session {r['index']} ===\n")
+                        for role, text in r["turns"]:
+                            f.write(f"[{role}] {text}\n")
+                        for ev in r["evals"]:
+                            f.write(f"[eval] {ev}\n")
+                        f.write("\n")
+                print(f"\nResults written to {args.output}", file=sys.stderr)
+            except IOError as e:
+                print(f"Warning: Error writing output file: {e}", file=sys.stderr)
 
 
 # ---------------------------------------------------------------------------
@@ -523,7 +581,13 @@ def run_sample_qa(
     print(f"\n=== Sample {sample_id} [{sample_idx}] (user={user_key}) ===", file=sys.stderr)
     print(f"    Running {len(qas)} QA question(s)...", file=sys.stderr)
 
-    jsonl_file = open(jsonl_path, "w", encoding="utf-8") if jsonl_path else None
+    jsonl_file = None
+    if jsonl_path:
+        try:
+            jsonl_file = open(jsonl_path, "w", encoding="utf-8")
+        except IOError as e:
+            print(f"Warning: Could not open JSONL file {jsonl_path}: {e}", file=sys.stderr)
+
     try:
         for original_qi, qa in qas:
             question = qa["question"]
@@ -584,7 +648,10 @@ def run_sample_qa(
                                 "total_tokens": total_total_tokens,
                             }
                             print(f"  [{sample_idx}]   tokens (from JSONL): in={total_input} out={total_output} cacheRead={total_cache_read} cacheWrite={total_cache_write} total={total_total_tokens}", file=sys.stderr)
-                        except Exception as e:
+                        except json.JSONDecodeError as e:
+                            print(f"  [{sample_idx}]   Error parsing JSONL file: {e}, using API usage", file=sys.stderr)
+                            print(f"  [{sample_idx}]   tokens (from API): in={usage.get('input_tokens',0)} out={usage.get('output_tokens',0)} cacheRead={usage.get('cacheRead',0)} cacheWrite={usage.get('cacheWrite',0)} total={usage.get('total_tokens',0)}", file=sys.stderr)
+                        except IOError as e:
                             print(f"  [{sample_idx}]   Error reading JSONL file: {e}, using API usage", file=sys.stderr)
                             print(f"  [{sample_idx}]   tokens (from API): in={usage.get('input_tokens',0)} out={usage.get('output_tokens',0)} cacheRead={usage.get('cacheRead',0)} cacheWrite={usage.get('cacheWrite',0)} total={usage.get('total_tokens',0)}", file=sys.stderr)
                     else:
@@ -620,8 +687,11 @@ def run_sample_qa(
             print(f"  [{sample_idx}]   Saved to CSV: Q{original_qi}", file=sys.stderr)
 
             if jsonl_file:
-                jsonl_file.write(json.dumps(record, ensure_ascii=False) + "\n")
-                jsonl_file.flush()
+                try:
+                    jsonl_file.write(json.dumps(record, ensure_ascii=False) + "\n")
+                    jsonl_file.flush()
+                except IOError as e:
+                    print(f"Warning: Error writing to JSONL file: {e}", file=sys.stderr)
 
     finally:
         if jsonl_file:
@@ -635,12 +705,18 @@ def load_executed_records(csv_path: str) -> set:
     """Load already executed records from CSV file, returns set of (sample_id, qi) tuples."""
     executed = set()
     if os.path.exists(csv_path):
-        with open(csv_path, "r", encoding="utf-8") as f:
-            reader = csv.DictReader(f)
-            for row in reader:
-                # Use sample_id and question index as unique identifier
-                executed.add((row["sample_id"], int(row["qi"])))
+        try:
+            with open(csv_path, "r", encoding="utf-8") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    # Use sample_id and question index as unique identifier
+                    executed.add((row["sample_id"], int(row["qi"])))
+        except csv.Error as e:
+            print(f"Warning: Error reading CSV file {csv_path}: {e}", file=sys.stderr)
+        except IOError as e:
+            print(f"Warning: Error reading CSV file {csv_path}: {e}", file=sys.stderr)
     return executed
+
 
 def save_record_to_csv(csv_path: str, record: dict) -> None:
     """Save a single QA record to CSV file."""
@@ -663,12 +739,18 @@ def save_record_to_csv(csv_path: str, record: dict) -> None:
     flat_record["timestamp"] = time.strftime("%Y-%m-%d %H:%M:%S")
     flat_record["jsonl_filename"] = flat_record.get("jsonl_filename", "")
 
-    with open(csv_path, "a", encoding="utf-8", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=fieldnames)
-        if not file_exists:
-            writer.writeheader()
-        writer.writerow(flat_record)
-        f.flush()
+    try:
+        with open(csv_path, "a", encoding="utf-8", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            if not file_exists:
+                writer.writeheader()
+            writer.writerow(flat_record)
+            f.flush()
+    except csv.Error as e:
+        print(f"Warning: Error writing to CSV file {csv_path}: {e}", file=sys.stderr)
+    except IOError as e:
+        print(f"Warning: Error writing to CSV file {csv_path}: {e}", file=sys.stderr)
+
 
 def run_qa(
     args: argparse.Namespace,
@@ -711,12 +793,15 @@ def run_qa(
     print(f"\n    total tokens: in={total_usage['input_tokens']} out={total_usage['output_tokens']} total={total_usage['total_tokens']}", file=sys.stderr)
 
     if args.output:
-        with open(args.output, "w", encoding="utf-8") as f:
-            f.write("=== TOTAL USAGE ===\n")
-            f.write(f"input_tokens: {total_usage['input_tokens']}\n")
-            f.write(f"output_tokens: {total_usage['output_tokens']}\n")
-            f.write(f"total_tokens: {total_usage['total_tokens']}\n")
-        print(f"Summary written to {args.output}", file=sys.stderr)
+        try:
+            with open(args.output, "w", encoding="utf-8") as f:
+                f.write("=== TOTAL USAGE ===\n")
+                f.write(f"input_tokens: {total_usage['input_tokens']}\n")
+                f.write(f"output_tokens: {total_usage['output_tokens']}\n")
+                f.write(f"total_tokens: {total_usage['total_tokens']}\n")
+            print(f"Summary written to {args.output}", file=sys.stderr)
+        except IOError as e:
+            print(f"Warning: Error writing output file: {e}", file=sys.stderr)
     else:
         print("\nDone (no output file requested).", file=sys.stderr)
 
@@ -745,12 +830,12 @@ def main():
     )
     parser.add_argument(
         "--base-url",
-        default="http://127.0.0.1:18789",
+        default=DEFAULT_BASE_URL,
         help="OpenClaw gateway base URL (default: http://127.0.0.1:18789)",
     )
     parser.add_argument(
         "--token",
-        default=os.environ.get("OPENCLAW_GATEWAY_TOKEN", "xxx"),
+        default=os.environ.get("OPENCLAW_GATEWAY_TOKEN"),
         help="Auth token (or set OPENCLAW_GATEWAY_TOKEN env var)",
     )
     parser.add_argument(
@@ -795,13 +880,13 @@ def main():
     )
     parser.add_argument(
         "--agent-id",
-        default="locomo-eval",
+        default=DEFAULT_AGENT_ID,
         help="X-OpenClaw-Agent-ID header value for API requests (default: locomo-eval)",
     )
     parser.add_argument(
         "--session-id",
         default=None,
-        help="X-OpenClaw-Session-Key header value for API requests. If provided, will use this session ID and calculate token usage from corresponding JSONL file.",
+        help="Session ID for API requests. If provided, will use this session ID and calculate token usage from corresponding JSONL file.",
     )
     parser.add_argument(
         "--force-ingest",
