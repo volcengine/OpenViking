@@ -1,0 +1,14 @@
+[Unit]
+Description=OpenViking WeChat Archive HTTP Service
+After=network-online.target openviking-local-embed.service openviking-local-rerank.service
+Wants=network-online.target openviking-local-embed.service openviking-local-rerank.service
+
+[Service]
+Type=simple
+Environment=OPENVIKING_REPO_DIR=%h/github/OpenViking
+ExecStart=%h/github/my-skills-repo/wechat-archive/scripts/run_wechat_archive_http_service.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

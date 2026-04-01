@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily OpenViking WeChat archive index refresh
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+Persistent=true
+Unit=openviking-wechat-archive-index.service
+
+[Install]
+WantedBy=timers.target

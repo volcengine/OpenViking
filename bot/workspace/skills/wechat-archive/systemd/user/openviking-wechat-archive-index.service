@@ -1,0 +1,17 @@
+[Unit]
+Description=Refresh OpenViking WeChat archive index
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=%h/github/OpenViking
+Environment=PYTHONUNBUFFERED=1
+Environment=OPENVIKING_REPO_DIR=%h/github/OpenViking
+ExecStart=%h/github/my-skills-repo/wechat-archive/scripts/run_wechat_archive_daily_index.sh
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7
+
+[Install]
+WantedBy=default.target
