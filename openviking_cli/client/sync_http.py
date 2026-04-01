@@ -237,13 +237,13 @@ class SyncHTTPClient:
         """Semantic search without session context."""
         return run_async(
             self._async_client.find(
-                query,
-                target_uri,
-                limit,
-                node_limit,
-                score_threshold,
-                filter,
-                tags,
+                query=query,
+                target_uri=target_uri,
+                limit=limit,
+                node_limit=node_limit,
+                score_threshold=score_threshold,
+                filter=filter,
+                tags=tags,
                 telemetry=telemetry,
             )
         )

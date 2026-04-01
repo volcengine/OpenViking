@@ -89,6 +89,29 @@ async def test_find_forwards_tags_to_service(client_with_resource, service, monk
     assert captured["tags"] == ["machine-learning", "feature-store"]
 
 
+async def test_search_forwards_tags_to_service(client, service, monkeypatch):
+    captured = {}
+
+    async def fake_search(**kwargs):
+        captured.update(kwargs)
+
+        class _Result:
+            def to_dict(self, include_provenance: bool = False):
+                return {"resources": [], "memories": [], "skills": []}
+
+        return _Result()
+
+    monkeypatch.setattr(service.search, "search", fake_search)
+
+    resp = await client.post(
+        "/api/v1/search/search",
+        json={"query": "sample", "tags": "machine-learning;feature-store"},
+    )
+
+    assert resp.status_code == 200
+    assert captured["tags"] == ["machine-learning", "feature-store"]
+
+
 async def test_search_basic(client_with_resource):
     client, uri = client_with_resource
     resp = await client.post(

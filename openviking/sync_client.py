@@ -163,15 +163,15 @@ class SyncOpenViking:
         """Execute complex retrieval (intent analysis, hierarchical retrieval)."""
         return run_async(
             self._async_client.search(
-                query,
-                target_uri,
-                session,
-                session_id,
-                limit,
-                score_threshold,
-                filter,
-                tags,
-                telemetry,
+                query=query,
+                target_uri=target_uri,
+                session=session,
+                session_id=session_id,
+                limit=limit,
+                score_threshold=score_threshold,
+                filter=filter,
+                tags=tags,
+                telemetry=telemetry,
             )
         )
 
@@ -188,13 +188,13 @@ class SyncOpenViking:
         """Quick retrieval"""
         return run_async(
             self._async_client.find(
-                query,
-                target_uri,
-                limit,
-                score_threshold,
-                filter,
-                tags,
-                telemetry,
+                query=query,
+                target_uri=target_uri,
+                limit=limit,
+                score_threshold=score_threshold,
+                filter=filter,
+                tags=tags,
+                telemetry=telemetry,
             )
         )
 
