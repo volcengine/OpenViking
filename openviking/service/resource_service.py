@@ -11,7 +11,10 @@ import time
 from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 from openviking.server.identity import RequestContext
-from openviking.server.local_input_guard import is_remote_resource_source, require_remote_resource_source
+from openviking.server.local_input_guard import (
+    is_remote_resource_source,
+    require_remote_resource_source,
+)
 from openviking.storage import VikingDBManager
 from openviking.storage.queuefs import get_queue_manager
 from openviking.storage.viking_fs import VikingFS
@@ -22,6 +25,7 @@ from openviking.telemetry.resource_summary import (
     register_wait_telemetry,
     unregister_wait_telemetry,
 )
+from openviking.utils.network_guard import ensure_public_remote_target
 from openviking.utils.resource_processor import ResourceProcessor
 from openviking.utils.skill_processor import SkillProcessor
 from openviking_cli.exceptions import (
@@ -30,7 +34,6 @@ from openviking_cli.exceptions import (
     InvalidArgumentError,
     NotInitializedError,
 )
-from openviking.utils.network_guard import ensure_public_remote_target
 from openviking_cli.utils import get_logger
 from openviking_cli.utils.uri import VikingURI
 
