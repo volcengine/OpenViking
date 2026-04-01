@@ -172,7 +172,7 @@ def _extract_text_tags(texts: Iterable[str]) -> List[str]:
         ]
         for token in english_tokens:
             words[token] += 1
-        for left, right in zip(english_tokens, english_tokens[1:]):
+        for left, right in zip(english_tokens, english_tokens[1:], strict=False):
             if left == right:
                 continue
             bigrams[f"{left}-{right}"] += 1

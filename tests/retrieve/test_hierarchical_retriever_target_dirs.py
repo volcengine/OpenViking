@@ -57,7 +57,7 @@ class DummyStorage:
         target_directories=None,
         extra_filter=None,
         limit: int = 10,
-        ):
+    ):
         self.child_search_calls.append(
             {
                 "ctx": ctx,

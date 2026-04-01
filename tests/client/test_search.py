@@ -6,9 +6,9 @@
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
+from openviking.message import TextPart
 from openviking.sync_client import SyncOpenViking
 from openviking_cli.client.sync_http import SyncHTTPClient
-from openviking.message import TextPart
 
 
 class TestFind:

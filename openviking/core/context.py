@@ -7,8 +7,8 @@ from enum import Enum
 from typing import Any, Dict, List, Optional
 from uuid import uuid4
 
-from openviking.utils.time_utils import format_iso8601, parse_iso_datetime
 from openviking.utils.tag_utils import parse_tags
+from openviking.utils.time_utils import format_iso8601, parse_iso_datetime
 from openviking_cli.session.user_id import UserIdentifier
 from openviking_cli.utils.uri import VikingURI
 

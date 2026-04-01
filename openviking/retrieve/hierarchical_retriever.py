@@ -295,7 +295,7 @@ class HierarchicalRetriever:
             return fallback_scores
 
         normalized_scores: List[float] = []
-        for score, fallback in zip(scores, fallback_scores):
+        for score, fallback in zip(scores, fallback_scores, strict=True):
             if isinstance(score, (int, float)):
                 normalized_scores.append(float(score))
             else:
@@ -470,7 +470,7 @@ class HierarchicalRetriever:
         else:
             query_scores = default_scores
 
-        for candidate, score in zip(initial_candidates, query_scores):
+        for candidate, score in zip(initial_candidates, query_scores, strict=True):
             candidate["_score"] = score
 
         return initial_candidates
@@ -571,7 +571,7 @@ class HierarchicalRetriever:
                 documents = [str(r.get("abstract", "")) for r in results]
                 query_scores = self._rerank_scores(query, documents, query_scores)
 
-            for r, score in zip(results, query_scores):
+            for r, score in zip(results, query_scores, strict=True):
                 uri = r.get("uri", "")
                 final_score = (
                     alpha * score + (1 - alpha) * current_score if current_score else score
