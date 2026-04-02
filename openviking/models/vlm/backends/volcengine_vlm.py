@@ -138,7 +138,6 @@ class VolcEngineVLM(OpenAIVLM):
         tools: Optional[List[Dict[str, Any]]] = None,
         tool_choice: Optional[str] = None,
         messages: Optional[List[Dict[str, Any]]] = None,
-        max_retries: int = 0,
     ) -> Union[str, VLMResponse]:
         """Get text completion asynchronously via Chat Completions API."""
         kwargs_messages = messages or [{"role": "user", "content": prompt}]
@@ -160,7 +159,7 @@ class VolcEngineVLM(OpenAIVLM):
         client = self.get_async_client()
 
         last_error = None
-        for attempt in range(max_retries + 1):
+        for attempt in range(self.max_retries + 1):
             try:
                 t0 = time.perf_counter()
                 response = await client.chat.completions.create(**kwargs)
@@ -172,7 +171,7 @@ class VolcEngineVLM(OpenAIVLM):
                 return self._clean_response(str(result))
             except Exception as e:
                 last_error = e
-                if attempt < max_retries:
+                if attempt < self.max_retries:
                     await asyncio.sleep(2**attempt)
 
         if last_error:

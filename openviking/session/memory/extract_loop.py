@@ -327,7 +327,6 @@ See the complete JSON Schema below:
             messages=messages,
             tools=self._tool_schemas,
             tool_choice=tool_choice,
-            max_retries=self.vlm.max_retries,
         )
         # print(f'response={response}')
         # Log cache hit info

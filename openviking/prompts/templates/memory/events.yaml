@@ -52,5 +52,6 @@ fields:
     type: string
     description: |
       Conversation message index ranges to extract, format: "start-end,start-end,..."
-      Example: "0-10,50-60" means extract messages 0-10 and 50-60.
+      Example: "0-3,40-45" means extract messages 0-3 and 40-45.
+      Limit each event to 15 messages max. Save only important parts or split into multiple events.
     merge_op: immutable
